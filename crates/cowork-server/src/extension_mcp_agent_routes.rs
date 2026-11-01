@@ -13,14 +13,15 @@ use cowork_harness::agents::profiles::AgentProfileUpsertInput;
 use cowork_harness::extensions::types::MarketplaceSourceInput;
 use cowork_harness::{
     AgentControl, AgentControlConfig, AgentProfileScope, AgentProfilesStore, AgentSpawnRequest,
-    ChildTurnExecutor, ChildTurnInput, ChildTurnResult, ExtensionManager, HarnessEventSink,
-    InteractionManager, SkillMutationBus, SteerCoordinator, SystemPromptBuildOptions,
-    TurnRunConfig, TurnStepRunner, build_layered_system_prompt,
+    ChildTurnError, ChildTurnExecutor, ChildTurnInput, ChildTurnResult, ExtensionManager,
+    HarnessEventSink, InteractionManager, SkillMutationBus, SteerCoordinator,
+    SystemPromptBuildOptions, TurnRunConfig, TurnStepRunner, build_layered_system_prompt,
 };
 use cowork_inference::{BudgetThresholds, ContentBlock, MessageRole, SessionCostTracker};
 use cowork_mcp::{
-    McpConfigSource, McpOAuthChallengeResult, McpServerConfig, complete_mcp_oauth_callback,
-    delete_mcp_server, read_mcp_servers_snapshot, set_mcp_server_api_key, set_mcp_server_enabled,
+    HydratedMcpServer, McpAuthMode, McpConfigSource, McpOAuthChallengeResult, McpServerAuthConfig,
+    McpServerConfig, complete_mcp_oauth_callback, delete_mcp_server, read_mcp_servers_snapshot,
+    resolve_target_mcp_server, set_mcp_server_api_key, set_mcp_server_enabled,
     start_mcp_oauth_authorization, upsert_mcp_server, validate_mcp_server_with_env,
     wait_and_complete_auto_mcp_oauth,
 };
@@ -77,11 +78,14 @@ struct ServerChildTurnExecutor {
 
 #[async_trait]
 impl ChildTurnExecutor for ServerChildTurnExecutor {
-    async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+    async fn run_child_turn(
+        &self,
+        input: ChildTurnInput,
+    ) -> Result<ChildTurnResult, ChildTurnError> {
         let runtime = self
             .runtime
             .upgrade()
-            .ok_or_else(|| "Server runtime has shut down.".to_owned())?;
+            .ok_or_else(|| ChildTurnError::from("Server runtime has shut down."))?;
 
         let (live_parent_cwd, parent_provider_opts, parent_enable_mcp, parent_yolo_override) =
             match runtime.get_live_thread(&input.parent_session_id) {
@@ -116,6 +120,14 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         let mut agent_cfg = runtime
             .load_workspace_config(&canonical_cwd)
             .map_err(|e| e.to_string())?;
+        // Children inherit the parent's stored dirs (`modelRouter.ts` `...parentConfig`).
+        let (parent_output_dir, parent_uploads_dir) =
+            runtime.session_io_dirs(&input.parent_session_id);
+        crate::turn_runner::apply_session_io_dirs(
+            &mut agent_cfg,
+            parent_output_dir.as_deref(),
+            parent_uploads_dir.as_deref(),
+        );
         let (output_dir, uploads_dir) =
             crate::turn_runner::workspace_io_dirs(Some(&agent_cfg), &canonical_cwd);
         agent_cfg.provider = input.provider;
@@ -488,11 +500,22 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             .await;
         let _ = done_tx.send(());
 
-        if outcome.status == "interrupted" {
-            return Err("Child agent turn interrupted.".to_owned());
-        }
-        if outcome.status == "failed" {
-            return Err("Child agent turn failed.".to_owned());
+        let failure = match outcome.status.as_str() {
+            "interrupted" => Some("Child agent turn interrupted."),
+            "failed" => Some("Child agent turn failed."),
+            _ => None,
+        };
+        if let Some(message) = failure {
+            // Hand back the partial history (request, completed steps, tool results) and usage:
+            // those steps' side effects already happened, so the child must not lose them.
+            return Err(ChildTurnError::with_partial(
+                message,
+                ChildTurnResult {
+                    messages: outcome.messages,
+                    latest_assistant_text: None,
+                    usage: outcome.usage,
+                },
+            ));
         }
 
         let latest_assistant_text = outcome.last_assistant_text.or_else(|| {
@@ -1614,7 +1637,22 @@ impl ServerRuntimeState {
             "cowork/mcp/server/auth/authorize" => {
                 let name = req_str(method, &params_obj, "name")?;
                 let (source, plugin_id, plugin_scope) = parse_mcp_lookup(method, &params_obj)?;
-                let challenge: McpOAuthChallengeResult = start_mcp_oauth_authorization(
+                // TS `McpServerResolver.resolveByName`: an unknown server is a session error
+                // (JSON-RPC error); every later failure is an `mcp_server_auth_result` outcome.
+                let resolved = resolve_target_mcp_server(
+                    &cfg,
+                    &name,
+                    source,
+                    plugin_id.as_deref(),
+                    plugin_scope.as_deref(),
+                )
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                if !is_oauth_mcp_server(&resolved) {
+                    return Ok(json!({
+                        "event": mcp_oauth_unsupported_event(&session_id, &resolved.config.name)
+                    }));
+                }
+                let challenge: McpOAuthChallengeResult = match start_mcp_oauth_authorization(
                     &cfg,
                     &name,
                     source,
@@ -1622,7 +1660,20 @@ impl ServerRuntimeState {
                     plugin_scope.as_deref(),
                 )
                 .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                {
+                    Ok(challenge) => challenge,
+                    Err(err) => {
+                        return Ok(json!({
+                            "event": mcp_server_auth_result_event(
+                                &session_id,
+                                &name,
+                                false,
+                                McpAuthMode::Error,
+                                &format!("MCP OAuth authorization failed: {err}"),
+                            )
+                        }));
+                    }
+                };
                 if let Ok(snap) = read_mcp_servers_snapshot(&cfg) {
                     self.broadcast_control_event(
                         &cwd,
@@ -1635,10 +1686,15 @@ impl ServerRuntimeState {
                     let cwd_bg = cwd.clone();
                     let sid_bg = session_id.clone();
                     let name_bg = name.clone();
+                    let server_name_bg = challenge.name.clone();
                     let plugin_id_bg = plugin_id.clone();
                     let plugin_scope_bg = plugin_scope.clone();
                     tokio::spawn(async move {
-                        if let Ok(Some(_res)) = wait_and_complete_auto_mcp_oauth(
+                        // TS `McpAuthFlow.completeAutoOAuthWhenReady`: success emits
+                        // `mcp_server_auth_result` (`mode: "oauth"`) then `mcp_servers`; a failed
+                        // exchange emits `ok: false, mode: "error"`. A superseded, manually
+                        // completed or expired challenge (`Ok(None)`) ends silently.
+                        match wait_and_complete_auto_mcp_oauth(
                             &cfg_bg,
                             &name_bg,
                             source,
@@ -1647,14 +1703,39 @@ impl ServerRuntimeState {
                         )
                         .await
                         {
-                            rt_bg.mcp_tool_cache.invalidate_all().await;
-                            if let Ok(snap) = read_mcp_servers_snapshot(&cfg_bg) {
+                            Ok(None) => {}
+                            Ok(Some(res)) => {
+                                rt_bg.mcp_tool_cache.invalidate_all().await;
                                 rt_bg.broadcast_control_event(
                                     &cwd_bg,
-                                    &build_mcp_servers_event(
+                                    &mcp_server_auth_result_event(
                                         &sid_bg,
-                                        snap,
-                                        cfg_bg.trust_workspace_mcp,
+                                        &res.name,
+                                        res.ok,
+                                        res.mode,
+                                        &res.message,
+                                    ),
+                                );
+                                if let Ok(snap) = read_mcp_servers_snapshot(&cfg_bg) {
+                                    rt_bg.broadcast_control_event(
+                                        &cwd_bg,
+                                        &build_mcp_servers_event(
+                                            &sid_bg,
+                                            snap,
+                                            cfg_bg.trust_workspace_mcp,
+                                        ),
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                rt_bg.broadcast_control_event(
+                                    &cwd_bg,
+                                    &mcp_server_auth_result_event(
+                                        &sid_bg,
+                                        &server_name_bg,
+                                        false,
+                                        McpAuthMode::Error,
+                                        &format!("MCP OAuth callback failed: {err}"),
                                     ),
                                 );
                             }
@@ -1674,7 +1755,22 @@ impl ServerRuntimeState {
                 let name = req_str(method, &params_obj, "name")?;
                 let (source, plugin_id, plugin_scope) = parse_mcp_lookup(method, &params_obj)?;
                 let code = opt_str(&params_obj, "code");
-                let res = complete_mcp_oauth_callback(
+                // Unknown server -> JSON-RPC error (TS resolver session error); everything else
+                // is reported as an `mcp_server_auth_result` outcome like TS `McpAuthFlow.callback`.
+                let resolved = resolve_target_mcp_server(
+                    &cfg,
+                    &name,
+                    source,
+                    plugin_id.as_deref(),
+                    plugin_scope.as_deref(),
+                )
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                if !is_oauth_mcp_server(&resolved) {
+                    return Ok(json!({
+                        "event": mcp_oauth_unsupported_event(&session_id, &resolved.config.name)
+                    }));
+                }
+                let res = match complete_mcp_oauth_callback(
                     &cfg,
                     &name,
                     source,
@@ -1683,7 +1779,18 @@ impl ServerRuntimeState {
                     code.as_deref(),
                 )
                 .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                {
+                    Ok(res) => res,
+                    Err(err) => {
+                        return Ok(json!({
+                            "event": mcp_oauth_callback_failure_event(
+                                &session_id,
+                                &resolved.config.name,
+                                &err,
+                            )
+                        }));
+                    }
+                };
                 self.mcp_tool_cache.invalidate_all().await;
                 if let Ok(snap) = read_mcp_servers_snapshot(&cfg) {
                     self.broadcast_control_event(
@@ -1692,14 +1799,13 @@ impl ServerRuntimeState {
                     );
                 }
                 Ok(json!({
-                    "event": {
-                        "type": "mcp_server_auth_result",
-                        "sessionId": session_id,
-                        "name": res.name,
-                        "ok": res.ok,
-                        "mode": res.mode,
-                        "message": res.message,
-                    }
+                    "event": mcp_server_auth_result_event(
+                        &session_id,
+                        &res.name,
+                        res.ok,
+                        res.mode,
+                        &res.message,
+                    )
                 }))
             }
             "cowork/mcp/server/auth/setApiKey" => {
@@ -2143,6 +2249,74 @@ impl ServerRuntimeState {
             )),
         }
     }
+}
+
+/// Builds an `mcp_server_auth_result` event with the exact TS `McpAuthFlow` shape
+/// (`src/server/session/mcp/McpAuthFlow.ts`).
+fn mcp_server_auth_result_event(
+    session_id: &str,
+    name: &str,
+    ok: bool,
+    mode: McpAuthMode,
+    message: &str,
+) -> Value {
+    json!({
+        "type": "mcp_server_auth_result",
+        "sessionId": session_id,
+        "name": name,
+        "ok": ok,
+        "mode": mode,
+        "message": message,
+    })
+}
+
+fn is_oauth_mcp_server(server: &HydratedMcpServer) -> bool {
+    matches!(server.config.auth, Some(McpServerAuthConfig::OAuth { .. }))
+}
+
+/// TS `McpAuthFlow.authorize` / `callback` outcome for a server without `auth.type: "oauth"`.
+fn mcp_oauth_unsupported_event(session_id: &str, name: &str) -> Value {
+    mcp_server_auth_result_event(
+        session_id,
+        name,
+        false,
+        McpAuthMode::Missing,
+        &format!("MCP server \"{name}\" does not support OAuth authorization."),
+    )
+}
+
+/// Maps a `complete_mcp_oauth_callback` failure onto the TS `McpAuthFlow.callback` outcomes:
+/// no pending challenge -> `missing`, no captured/pasted code yet -> `oauth_pending` (`ok: true`),
+/// anything else (state mismatch, expiry, token exchange) -> `error`.
+///
+/// The prefixes are the error texts `cowork_mcp::oauth` returns for those cases;
+/// `tests/mcp_oauth_auth_result_events.rs` pins each mapping.
+fn mcp_oauth_callback_failure_event(session_id: &str, name: &str, err: &str) -> Value {
+    if err.starts_with("No pending OAuth") {
+        return mcp_server_auth_result_event(
+            session_id,
+            name,
+            false,
+            McpAuthMode::Missing,
+            "No pending OAuth challenge found. Start authorization first.",
+        );
+    }
+    if err.starts_with("Authorization code has not been received yet") {
+        return mcp_server_auth_result_event(
+            session_id,
+            name,
+            true,
+            McpAuthMode::OauthPending,
+            "OAuth callback is still pending. Paste a code to continue manually.",
+        );
+    }
+    mcp_server_auth_result_event(
+        session_id,
+        name,
+        false,
+        McpAuthMode::Error,
+        &format!("MCP OAuth callback failed: {err}"),
+    )
 }
 
 pub(crate) fn build_mcp_servers_event(

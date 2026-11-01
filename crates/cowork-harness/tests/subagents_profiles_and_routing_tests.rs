@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use cowork_config::{ChildModelRoutingMode, LoadConfigOptions, ProviderName, load_config};
 use cowork_harness::agents::{
     AgentControl, AgentControlConfig, AgentProfileDefinition, AgentProfileScope,
-    AgentProfileUpsertInput, AgentProfilesStore, AgentSpawnRequest, ChildTurnExecutor,
-    ChildTurnInput, ChildTurnResult, MAX_ACTIVE_CHILDREN_PER_PARENT, MAX_SPAWN_DEPTH,
-    inspect_child_agent_report, resolve_child_model_selection,
+    AgentProfileUpsertInput, AgentProfilesStore, AgentSpawnRequest, ChildTurnError,
+    ChildTurnExecutor, ChildTurnInput, ChildTurnResult, MAX_ACTIVE_CHILDREN_PER_PARENT,
+    MAX_SPAWN_DEPTH, inspect_child_agent_report, resolve_child_model_selection,
 };
 use cowork_inference::{
     CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, TurnUsage,
@@ -279,7 +279,10 @@ async fn enforces_atomic_16_child_cap_max_depth_1_context_modes_target_paths_and
 
     #[async_trait]
     impl ChildTurnExecutor for MockExecutor {
-        async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+        async fn run_child_turn(
+            &self,
+            input: ChildTurnInput,
+        ) -> Result<ChildTurnResult, ChildTurnError> {
             let cur = self.active_now.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak_active.fetch_max(cur, Ordering::SeqCst);
             self.recorded_inputs.lock().push(input.clone());
@@ -293,7 +296,7 @@ async fn enforces_atomic_16_child_cap_max_depth_1_context_modes_target_paths_and
                         }
                     } => {
                         self.active_now.fetch_sub(1, Ordering::SeqCst);
-                        return Err("interrupted".to_owned());
+                        return Err("interrupted".into());
                     }
                 }
             }
@@ -781,7 +784,10 @@ async fn restarted_children_keep_scope_and_transcript_and_fail_closed() {
     }
     #[async_trait]
     impl ChildTurnExecutor for EchoExecutor {
-        async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+        async fn run_child_turn(
+            &self,
+            input: ChildTurnInput,
+        ) -> Result<ChildTurnResult, ChildTurnError> {
             self.inputs.lock().push(input.clone());
             let text = format!("echo: {}", input.prompt);
             let mut messages = input.initial_messages;
@@ -967,7 +973,10 @@ async fn empty_profile_allowlists_deny_all_instead_of_granting_everything() {
     struct Recorder(Mutex<Vec<ChildTurnInput>>);
     #[async_trait]
     impl ChildTurnExecutor for Recorder {
-        async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+        async fn run_child_turn(
+            &self,
+            input: ChildTurnInput,
+        ) -> Result<ChildTurnResult, ChildTurnError> {
             self.0.lock().push(input.clone());
             Ok(ChildTurnResult {
                 messages: input.initial_messages,

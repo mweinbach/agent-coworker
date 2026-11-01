@@ -89,8 +89,10 @@ impl ServerRuntimeState {
         let entry = store
             .upsert(scope, id, &params.content, mode)
             .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string()))?;
+        // `AgentSession.upsertMemory` re-emits every scope (`emitMemories()` without a scope);
+        // clients replace their whole memory list with this result.
         let entries = store
-            .list(Some(scope))
+            .list(None)
             .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string()))?;
         Ok(json!({
             "event": {
@@ -125,8 +127,9 @@ impl ServerRuntimeState {
         let deleted = store
             .remove(scope, id)
             .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string()))?;
+        // `AgentSession.deleteMemory` parity: the result lists every scope, not just `scope`.
         let entries = store
-            .list(Some(scope))
+            .list(None)
             .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string()))?;
         Ok(json!({
             "event": {
@@ -434,20 +437,43 @@ impl ServerRuntimeState {
                 "thread/fork: threadId is required",
             ));
         }
-        if self.task_coordinator.is_task_thread(src_id) {
-            return Err(JsonRpcLiteError::new(
-                error_codes::INVALID_PARAMS,
-                "Task-owned threads are not managed by thread-management tools",
+        // `LocalThreadHost.forkThread` parity: every guard below throws, and the `thread/fork`
+        // route maps the thrown message to `invalidParams`.
+        let invalid = |message: String| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, message);
+        let prompt = params.prompt.as_deref().map(str::trim);
+        if prompt.is_some_and(str::is_empty) {
+            return Err(invalid(
+                "fork_thread prompt must be non-empty when provided".to_owned(),
             ));
         }
-        let Some(src_arc) = self.load_thread(src_id) else {
-            return Err(JsonRpcLiteError::new(
-                error_codes::INVALID_PARAMS,
-                format!("Unknown thread: {src_id}"),
+        // `loadForkSource`: task ownership, task locks (including a parent's), existence,
+        // busy state, then root-thread shape.
+        if self.task_coordinator.is_task_thread(src_id) {
+            return Err(invalid(
+                "Task-owned threads are not managed by thread-management tools".to_owned(),
             ));
+        }
+        if let Some(lock) = self.get_session_task_lock(src_id) {
+            return Err(invalid(lock.message));
+        }
+        let Some(src_arc) = self.load_thread(src_id) else {
+            return Err(invalid(format!("Unknown thread: {src_id}")));
         };
-
-        let src_snapshot = src_arc.lock().clone();
+        let src_snapshot = {
+            let live = src_arc.lock();
+            if live.busy || self.active_turns.contains_key(src_id) {
+                return Err(invalid(
+                    "Cannot fork a thread while it is running".to_owned(),
+                ));
+            }
+            if live.session_kind != SessionKind::Root
+                || live.parent_session_id.is_some()
+                || live.role.is_some()
+            {
+                return Err(invalid("Only root threads can be forked".to_owned()));
+            }
+            live.clone()
+        };
         let src_cwd = PathBuf::from(&src_snapshot.cwd);
         let fork_title = params
             .title
@@ -565,6 +591,8 @@ impl ServerRuntimeState {
             subscribers.insert(cid.to_owned());
         }
 
+        let (output_directory, uploads_directory) =
+            self.new_session_io_dirs(std::path::Path::new(&target_cwd));
         let forked_live = LiveSession {
             id: new_id.clone(),
             session_kind: SessionKind::Root,
@@ -581,6 +609,8 @@ impl ServerRuntimeState {
             execution_state: None,
             sandbox: None,
             cwd: target_cwd,
+            output_directory,
+            uploads_directory,
             provider: fork_provider,
             model: fork_model,
             title: fork_title,
@@ -652,13 +682,11 @@ impl ServerRuntimeState {
             );
         }
 
-        let mut queued = false;
-        if let Some(prompt_text) = params
-            .prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        // TS fires the initial prompt and forgets it (`void sendUserMessage(...).catch(...)`):
+        // the fork is already persisted and announced, so a failed kickoff must not fail the
+        // call, and `queued` reflects only that a prompt was supplied.
+        let queued = prompt.is_some();
+        if let Some(prompt_text) = prompt {
             let start_params = TurnStartParams {
                 thread_id: new_id.clone(),
                 input: TurnInput::Text(prompt_text.to_owned()),
@@ -666,10 +694,18 @@ impl ServerRuntimeState {
                 references: None,
                 retry: None,
             };
-            let _ = self
+            if let Err(err) = self
                 .handle_turn_start(connection_id.unwrap_or("internal"), false, &start_params)
-                .await?;
-            queued = true;
+                .await
+            {
+                tracing::warn!(
+                    source_thread_id = %src_id,
+                    thread_id = %new_id,
+                    code = err.code,
+                    error = %err.message,
+                    "thread/fork: initial prompt kickoff failed"
+                );
+            }
         }
 
         let refreshed_thread = self.build_thread_from_live(&forked_arc.lock());

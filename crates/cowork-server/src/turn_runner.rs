@@ -731,6 +731,41 @@ pub(crate) fn workspace_io_dirs(
     (output, uploads)
 }
 
+/// `(outputDirectory, uploadsDirectory)` to record on a new session: the resolved workspace
+/// config values, `None` when defaulted (`SessionSnapshotBuilder.ts` persists
+/// `config.outputDirectory` only when set).
+pub(crate) fn config_io_dir_strings(cfg: &AgentConfig) -> (Option<String>, Option<String>) {
+    let as_string = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
+    (
+        as_string(&cfg.output_directory),
+        as_string(&cfg.uploads_directory),
+    )
+}
+
+/// Layers a session's stored `outputDirectory` / `uploadsDirectory` over `cfg` so a resumed
+/// session keeps the dirs it was created with (`AgentSessionFromPersisted.ts` parity). An
+/// absent value keeps the config value (rows written before these were persisted). Like
+/// configured dirs, a stored dir must resolve inside the workspace; one that does not is
+/// ignored.
+pub(crate) fn apply_session_io_dirs(
+    cfg: &mut AgentConfig,
+    output_directory: Option<&str>,
+    uploads_directory: Option<&str>,
+) {
+    let canonical_cwd = canonicalize_sync(&cfg.working_directory);
+    let resolve = |raw: Option<&str>| {
+        let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
+        let dir = canonical_cwd.join(raw);
+        cowork_config::is_inside(&canonical_cwd, &dir).then_some(dir)
+    };
+    if let Some(dir) = resolve(output_directory) {
+        cfg.output_directory = Some(dir);
+    }
+    if let Some(dir) = resolve(uploads_directory) {
+        cfg.uploads_directory = Some(dir);
+    }
+}
+
 /// Read roots for file tools, shared by root sessions and (scoped) child agents: the bundled
 /// install dir, the non-secret Cowork-home allowlist (`cowork_tools::cowork_home_read_roots`:
 /// `~/.cowork/skills` and `~/.cowork/plugins` only), and every enabled discovered skill
@@ -1206,9 +1241,21 @@ impl ServerRuntimeState {
 
         // Effective session config: `cowork/session/config/set` overrides layered over the
         // workspace config, so prompt, tool context and memory generation all see them.
-        let session_config_overrides = live_arc.lock().config_overrides.clone();
+        let (session_config_overrides, session_output_dir, session_uploads_dir) = {
+            let live = live_arc.lock();
+            (
+                live.config_overrides.clone(),
+                live.output_directory.clone(),
+                live.uploads_directory.clone(),
+            )
+        };
         let mut workspace_cfg = self.load_workspace_config(&cwd_path).ok().map(|mut cfg| {
             apply_session_config_overrides(&mut cfg, &session_config_overrides);
+            apply_session_io_dirs(
+                &mut cfg,
+                session_output_dir.as_deref(),
+                session_uploads_dir.as_deref(),
+            );
             cfg
         });
         // A direct `turn/start` on a persisted child agent session must keep the child's
@@ -2499,9 +2546,15 @@ impl ServerRuntimeState {
 
         // Materialize attachments exactly like `turn/start` so the steered user message carries
         // the same media blocks and upload notes.
-        let Some(cwd) = self
-            .get_live_thread(&params.thread_id)
-            .map(|live| PathBuf::from(&live.lock().cwd))
+        let Some((cwd, session_output_dir, session_uploads_dir)) =
+            self.get_live_thread(&params.thread_id).map(|live| {
+                let live = live.lock();
+                (
+                    PathBuf::from(&live.cwd),
+                    live.output_directory.clone(),
+                    live.uploads_directory.clone(),
+                )
+            })
         else {
             return Err(JsonRpcLiteError::new(
                 error_codes::INVALID_PARAMS,
@@ -2509,10 +2562,18 @@ impl ServerRuntimeState {
             ));
         };
         let canonical_cwd = canonicalize_sync(&cwd);
-        let (_, uploads_dir) = workspace_io_dirs(
-            self.load_workspace_config(&canonical_cwd).ok().as_ref(),
-            &canonical_cwd,
-        );
+        let steer_cfg = self
+            .load_workspace_config(&canonical_cwd)
+            .ok()
+            .map(|mut cfg| {
+                apply_session_io_dirs(
+                    &mut cfg,
+                    session_output_dir.as_deref(),
+                    session_uploads_dir.as_deref(),
+                );
+                cfg
+            });
+        let (_, uploads_dir) = workspace_io_dirs(steer_cfg.as_ref(), &canonical_cwd);
         let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let dedupe_key = match &references_key {

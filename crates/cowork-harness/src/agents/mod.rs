@@ -173,9 +173,71 @@ pub struct ChildTurnResult {
     pub usage: TurnUsage,
 }
 
+/// A child turn that ended interrupted or failed. `partial` carries whatever the turn produced
+/// before it stopped (the user request, completed assistant/tool steps, and the usage those steps
+/// incurred) so the child's history and cost tracker reflect side effects that already happened,
+/// matching how root turns persist partial results on interrupt.
+#[derive(Debug, Clone)]
+pub struct ChildTurnError {
+    pub message: String,
+    pub partial: Option<ChildTurnResult>,
+}
+
+impl ChildTurnError {
+    pub fn with_partial(message: impl Into<String>, partial: ChildTurnResult) -> Self {
+        Self {
+            message: message.into(),
+            partial: Some(partial),
+        }
+    }
+}
+
+impl From<String> for ChildTurnError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            partial: None,
+        }
+    }
+}
+
+impl From<&str> for ChildTurnError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+impl std::fmt::Display for ChildTurnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 #[async_trait]
 pub trait ChildTurnExecutor: Send + Sync {
-    async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String>;
+    async fn run_child_turn(
+        &self,
+        input: ChildTurnInput,
+    ) -> Result<ChildTurnResult, ChildTurnError>;
+}
+
+/// Stores a child turn's resulting history and folds its usage into the child's cost tracker.
+fn record_child_turn_history_and_usage(
+    entry: &mut ChildRuntimeEntry,
+    messages: Vec<CanonicalMessage>,
+    usage: &TurnUsage,
+) {
+    let turn_id = Uuid::new_v4().to_string();
+    entry.cost_tracker.record_turn(
+        &turn_id,
+        entry.provider,
+        &entry.model_id,
+        usage.clone(),
+        None,
+    );
+    entry.summary.session_usage = serde_json::to_value(entry.cost_tracker.get_snapshot()).ok();
+    entry.summary.last_turn_usage = serde_json::to_value(usage).ok();
+    entry.messages = messages;
 }
 
 pub type AgentEventSink = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -808,18 +870,7 @@ impl AgentControl {
                     entry.summary.updated_at = Utc::now().to_rfc3339();
                     match outcome {
                         Ok(res) => {
-                            let turn_id = Uuid::new_v4().to_string();
-                            entry.cost_tracker.record_turn(
-                                &turn_id,
-                                entry.provider,
-                                &entry.model_id,
-                                res.usage.clone(),
-                                None,
-                            );
-                            entry.summary.session_usage =
-                                serde_json::to_value(entry.cost_tracker.get_snapshot()).ok();
-                            entry.summary.last_turn_usage = serde_json::to_value(&res.usage).ok();
-                            entry.messages = res.messages;
+                            record_child_turn_history_and_usage(entry, res.messages, &res.usage);
                             entry.latest_assistant_text = res.latest_assistant_text.clone();
                             entry.summary.last_message_preview = res
                                 .latest_assistant_text
@@ -842,6 +893,16 @@ impl AgentControl {
                             }
                         }
                         Err(err) => {
+                            // Keep the interrupted/failed turn's request, completed steps and
+                            // their usage so a follow-up resumes from what actually happened.
+                            if let Some(partial) = err.partial {
+                                record_child_turn_history_and_usage(
+                                    entry,
+                                    partial.messages,
+                                    &partial.usage,
+                                );
+                            }
+                            let err = err.message;
                             if entry.summary.lifecycle_state != "closed" {
                                 if let Some(queued) = entry.pending_inputs.pop_front() {
                                     let tok = CancellationToken::new();

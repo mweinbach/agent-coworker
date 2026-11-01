@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use cowork_config::{AgentConfig, LoadConfigOptions, ProviderName, load_config};
 use cowork_harness::{
-    AgentControl, AgentControlConfig, ChildTurnExecutor, ChildTurnInput, ChildTurnResult,
-    HarnessEventSink, InteractionManager, SteerCoordinator, TurnRunConfig, TurnStepRunner,
+    AgentControl, AgentControlConfig, ChildTurnError, ChildTurnExecutor, ChildTurnInput,
+    ChildTurnResult, HarnessEventSink, InteractionManager, SteerCoordinator, TurnRunConfig,
+    TurnStepRunner,
 };
 use cowork_inference::{
     BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta,
@@ -158,7 +159,10 @@ struct WorkflowChildExecutor {
 
 #[async_trait]
 impl ChildTurnExecutor for WorkflowChildExecutor {
-    async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+    async fn run_child_turn(
+        &self,
+        input: ChildTurnInput,
+    ) -> Result<ChildTurnResult, ChildTurnError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.recorded_role_prompts.lock().push(input.role_prompt);
         let reply = r#"<workflow_result>{"answer":"QuickJS isolate verified","confidence":0.99}</workflow_result>"#;

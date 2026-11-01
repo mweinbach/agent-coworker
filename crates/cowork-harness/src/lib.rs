@@ -32,7 +32,7 @@ pub mod turn_runner;
 pub use agents::{
     AgentControl, AgentControlConfig, AgentEventSink, AgentInspectionPayload, AgentProfileScope,
     AgentProfileSnapshot, AgentProfilesCatalog, AgentProfilesStore, AgentSpawnRequest,
-    AgentWaitInspection, AgentWaitOutcome, BUILTIN_AGENT_ROLES, ChildAgentReport,
+    AgentWaitInspection, AgentWaitOutcome, BUILTIN_AGENT_ROLES, ChildAgentReport, ChildTurnError,
     ChildTurnExecutor, ChildTurnInput, ChildTurnResult, MAX_ACTIVE_CHILDREN_PER_PARENT,
     MAX_SPAWN_DEPTH, PersistentAgentSummary,
 };

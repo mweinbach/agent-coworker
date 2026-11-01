@@ -184,6 +184,11 @@ pub struct LiveSession {
     pub execution_state: Option<cowork_storage::AgentExecutionState>,
     pub sandbox: Option<cowork_config::SandboxConfig>,
     pub cwd: String,
+    /// Session `outputDirectory` / `uploadsDirectory` as stored in `sessions.db`: the resolved
+    /// workspace config values recorded at creation (`None` when defaulted). Resumed sessions
+    /// keep them (`AgentSessionFromPersisted.ts` parity); see `apply_session_io_dirs`.
+    pub output_directory: Option<String>,
+    pub uploads_directory: Option<String>,
     pub provider: ProviderName,
     pub model: String,
     pub title: String,
@@ -281,8 +286,8 @@ impl LiveSession {
             provider: self.provider,
             model: self.model.clone(),
             working_directory: self.cwd.clone(),
-            output_directory: None,
-            uploads_directory: None,
+            output_directory: self.output_directory.clone(),
+            uploads_directory: self.uploads_directory.clone(),
             provider_options: self.config_overrides.get("providerOptions").cloned(),
             sandbox: self.sandbox.clone(),
             enable_mcp: self.enable_mcp,
@@ -367,6 +372,8 @@ impl LiveSession {
             execution_state: record.execution_state,
             sandbox: record.sandbox,
             cwd: record.working_directory,
+            output_directory: record.output_directory,
+            uploads_directory: record.uploads_directory,
             provider: record.provider,
             model,
             title: record.title,
@@ -1489,6 +1496,7 @@ impl ServerRuntimeState {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let mut subscribers = HashSet::new();
         subscribers.insert(connection_id.to_owned());
+        let (output_directory, uploads_directory) = crate::turn_runner::config_io_dir_strings(&cfg);
 
         let live = LiveSession {
             id: winning_id.clone(),
@@ -1506,6 +1514,8 @@ impl ServerRuntimeState {
             execution_state: None,
             sandbox: None,
             cwd: cwd_str,
+            output_directory,
+            uploads_directory,
             provider,
             model,
             title: "New session".to_owned(),
@@ -1557,6 +1567,33 @@ impl ServerRuntimeState {
             .await;
 
         Ok((thread, true))
+    }
+
+    /// `(outputDirectory, uploadsDirectory)` to record on a session created in `cwd`: the
+    /// workspace config values at creation (forks also start from the target workspace config,
+    /// `localThreadHost.forkThread` parity).
+    pub(crate) fn new_session_io_dirs(&self, cwd: &Path) -> (Option<String>, Option<String>) {
+        self.load_workspace_config(cwd)
+            .map(|cfg| crate::turn_runner::config_io_dir_strings(&cfg))
+            .unwrap_or_default()
+    }
+
+    /// Stored `(outputDirectory, uploadsDirectory)` of a live or persisted session (child
+    /// agents inherit their parent's, `modelRouter.ts` `...parentConfig` parity).
+    pub(crate) fn session_io_dirs(&self, session_id: &str) -> (Option<String>, Option<String>) {
+        if let Some(live) = self.get_live_thread(session_id) {
+            let live = live.lock();
+            return (
+                live.output_directory.clone(),
+                live.uploads_directory.clone(),
+            );
+        }
+        self.session_db
+            .get_session_record(session_id)
+            .ok()
+            .flatten()
+            .map(|r| (r.output_directory, r.uploads_directory))
+            .unwrap_or_default()
     }
 
     pub fn get_live_thread(&self, thread_id: &str) -> Option<Arc<Mutex<LiveSession>>> {

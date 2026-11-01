@@ -657,6 +657,7 @@ impl ServerRuntimeState {
             SessionTitleSource::Default
         };
 
+        let (output_directory, uploads_directory) = crate::turn_runner::config_io_dir_strings(&cfg);
         let live = LiveSession {
             id: session_id.clone(),
             session_kind: SessionKind::Root,
@@ -673,6 +674,8 @@ impl ServerRuntimeState {
             execution_state: None,
             sandbox: None,
             cwd: cwd_str,
+            output_directory,
+            uploads_directory,
             provider,
             model,
             title: clean_title.to_owned(),

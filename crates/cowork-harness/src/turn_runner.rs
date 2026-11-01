@@ -17,10 +17,9 @@ use cowork_providers::{ProviderStepRequest, ProviderTransport};
 use cowork_sandbox::{SandboxPolicy, policy_allows_network};
 use cowork_tools::{
     ApprovalDecisionRequest, ApprovalHandler, CatalogToolSearchTool, CodeModeTool,
-    CostTrackerBridge, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS, DeferredToolCatalog,
-    StructuredQuestionOption, StructuredUserQuestion, ToolBatchCall, ToolExecutionContext, ToolMap,
-    ToolOutput, assert_write_path_allowed, create_builtin_tools, execute_tool_batch,
-    maybe_spill_tool_output_with_inner,
+    CostTrackerBridge, DeferredToolCatalog, StructuredQuestionOption, StructuredUserQuestion,
+    ToolBatchCall, ToolExecutionContext, ToolMap, ToolOutput, assert_write_path_allowed,
+    create_builtin_tools, execute_tool_batch, maybe_spill_tool_output_with_inner,
 };
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
@@ -48,6 +47,9 @@ pub struct TurnRunConfig {
     pub deferred_tool_search: bool,
     pub max_steps: usize,
     pub step_timeout_ms: u64,
+    /// Inline tool-output spill threshold, already resolved from config. `None` means spilling
+    /// is disabled (`toolOutputOverflowChars: null`); the 25,000-char default for an absent
+    /// setting is applied at config resolution, never here.
     pub overflow_threshold_chars: Option<usize>,
     pub tool_retry_lineage: bool,
     pub initial_user_message: Option<(String, Option<String>)>,
@@ -745,9 +747,7 @@ impl TurnStepRunner {
                         },
                         raw_res,
                         tool_ctx,
-                        self.cfg
-                            .overflow_threshold_chars
-                            .or(Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS)),
+                        self.cfg.overflow_threshold_chars,
                         &mut projector,
                         &emit_stream_event,
                     ));
@@ -780,9 +780,7 @@ impl TurnStepRunner {
                         },
                         b_res.output,
                         tool_ctx,
-                        self.cfg
-                            .overflow_threshold_chars
-                            .or(Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS)),
+                        self.cfg.overflow_threshold_chars,
                         &mut projector,
                         &emit_stream_event,
                     ));

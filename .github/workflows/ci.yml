@@ -15,6 +15,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Full debuginfo makes each workspace test binary ~0.5 GB, which exhausted the
+  # ubuntu-latest disk during `cargo test --workspace`. Line tables keep panic
+  # backtraces readable; dependencies need none.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_DEV_PACKAGE____DEBUG: "false"
+
 jobs:
   complexity:
     name: Complexity comparison

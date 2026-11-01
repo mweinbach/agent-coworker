@@ -322,7 +322,30 @@ pub fn process_alive(pid: u32) -> bool {
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         errno != libc::ESRCH
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_ACCESS_DENIED, GetLastError, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: plain Win32 calls; the handle is closed before returning.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                // A process we may not query still exists; any other failure (notably
+                // ERROR_INVALID_PARAMETER) means there is no such PID.
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            let mut exit_code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut exit_code);
+            CloseHandle(handle);
+            // A handle can outlive the process; only STILL_ACTIVE means it is running.
+            ok == 0 || exit_code == STILL_ACTIVE as u32
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         true

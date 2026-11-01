@@ -258,7 +258,8 @@ describe("web dev process lifecycle", () => {
     const binary = buildWorkspaceBinary(fixture.root, "cowork-server", fixture.env);
     expect(path.relative(fixture.root, binary).split(path.sep)[0]).toBe("cargo output");
     expect(Bun.spawnSync([binary]).stdout.toString().trim()).toBe("updated source");
-  });
+    // Two real (tiny) Cargo builds: allow for a cold toolchain on a loaded CI runner.
+  }, 120_000);
 
   test("uses a host-triple build under an absolute CARGO_TARGET_DIR without compiling", () => {
     const fixture = createLauncherFixture({ staged: false });

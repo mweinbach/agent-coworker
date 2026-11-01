@@ -72,11 +72,17 @@ async fn artifact_version_store_enforces_private_perms_integrity_and_live_file_c
 
     let blob_path = store.get_blob_path(&v1.sha256).unwrap();
     assert!(blob_path.exists());
-    assert!(blob_path.to_string_lossy().contains(&format!(
-        "objects/sha256/{}/{}",
-        &v1.sha256[..2],
-        v1.sha256
-    )));
+    // Compare components so the check holds with `\\` separators on Windows.
+    assert!(
+        blob_path.ends_with(
+            std::path::Path::new("objects")
+                .join("sha256")
+                .join(&v1.sha256[..2])
+                .join(&v1.sha256)
+        ),
+        "unexpected blob path {}",
+        blob_path.display()
+    );
 
     #[cfg(unix)]
     {

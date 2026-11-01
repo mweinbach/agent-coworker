@@ -377,6 +377,8 @@ async fn background_runtime_bootstrap_is_non_blocking_and_surfaces_redacted_star
         home.to_string_lossy().into_owned(),
     );
     env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "0".to_owned());
+    env.insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
+    env.insert("OPENAI_API_KEY".into(), "offline-test-key".into());
     env.insert(
         "COWORK_RUNTIME_DIR".to_owned(),
         broken_rt.to_string_lossy().into_owned(),
@@ -423,6 +425,30 @@ async fn background_runtime_bootstrap_is_non_blocking_and_surfaces_redacted_star
             .unwrap_or("")
             .contains("runtime.json"),
         "expected startup.error mentioning broken runtime.json, got {startup}"
+    );
+
+    let (_, preflight) = rpc_post(
+        &client,
+        &rpc_url,
+        cid,
+        &json!({ "id": 21, "method": "cowork/creation/preflight", "params": {
+            "kind": "chat", "provider": "openai", "model": "gpt-5.4"
+        } }),
+    )
+    .await;
+    assert_eq!(preflight["result"]["ready"], false);
+    let runtime_check = preflight["result"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "runtime_ready")
+        .unwrap();
+    assert_eq!(runtime_check["status"], "blocked");
+    assert!(
+        runtime_check["message"]
+            .as_str()
+            .unwrap()
+            .contains(startup["error"].as_str().unwrap())
     );
 
     server.shutdown().await;

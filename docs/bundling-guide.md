@@ -71,7 +71,7 @@ const child = spawn("./cowork-server", [
 
 **Wait for the startup event:**
 
-When launched with `--json`, the server emits newline-delimited JSON (`server_startup_progress` during optional runtime bootstrap, followed by `server_listening` once bound):
+With `--json`, wait for `server_listening` to discover the bound listener. This does not mean the runtime is installed: verification and downloads run in the background. With `COWORK_DESKTOP_STARTUP_EVENTS=1`, the server also emits `server_startup_progress` for actual installer progress, which may arrive before or after `server_listening`. A disabled or skipped bootstrap need not emit any progress. After connecting, use `cowork/runtime/diagnostics/read` to check the latest progress or startup error.
 
 ```json
 {

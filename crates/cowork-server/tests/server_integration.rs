@@ -71,6 +71,23 @@ impl IsolatedServerEnv {
         }
     }
 
+    fn spawn_json_sidecar(&self) -> tokio::process::Child {
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_cowork-server"))
+            .arg("--dir")
+            .arg(&self.workspace_dir)
+            .args(["--host", "127.0.0.1", "--port", "0", "--json"])
+            .env_clear()
+            .envs(&self.env)
+            .env("COWORK_DESKTOP_PARENT_MANAGED", "1")
+            .env("COWORK_DESKTOP_STARTUP_EVENTS", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
     fn server_options(&self) -> ServerOptions {
         ServerOptions {
             working_directory: self.workspace_dir.clone(),
@@ -833,51 +850,17 @@ async fn binary_cold_starts_under_100ms_emits_ndjson_and_exits_0_on_stdin_eof() 
         .await;
 
     let t0 = Instant::now();
-    let mut child = tokio::process::Command::new(bin)
-        .args([
-            "--dir",
-            iso.workspace_dir.to_str().unwrap(),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--json",
-        ])
-        .env_clear()
-        .envs(&iso.env)
-        .env("COWORK_DESKTOP_PARENT_MANAGED", "1")
-        .env("COWORK_DESKTOP_STARTUP_EVENTS", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
+    let mut child = iso.spawn_json_sidecar();
     let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let mut lines = tokio::io::BufReader::new(stdout).lines();
-
-    let mut saw_progress = false;
-    let mut listening_payload: Option<Value> = None;
-
-    while let Some(line) = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+    let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
         .await
         .unwrap()
         .unwrap()
-    {
-        let parsed: Value = serde_json::from_str(&line).unwrap();
-        if parsed["type"] == "server_startup_progress" {
-            saw_progress = true;
-            assert_eq!(parsed["component"], "cowork-runtime");
-            assert_eq!(parsed["progress"]["phase"], "ready");
-        } else if parsed["type"] == "server_listening" {
-            listening_payload = Some(parsed);
-            break;
-        }
-    }
-
-    let listening = listening_payload.expect("expected server_listening NDJSON");
-    assert!(saw_progress, "expected server_startup_progress NDJSON");
+        .expect("expected server_listening NDJSON");
+    let listening: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(listening["type"], "server_listening", "runtime is disabled");
     let port = listening["port"].as_u64().unwrap();
     assert!(port > 0);
     assert!(
@@ -915,6 +898,71 @@ async fn binary_cold_starts_under_100ms_emits_ndjson_and_exits_0_on_stdin_eof() 
         .unwrap();
     assert!(status.success(), "expected exit 0, got {status}");
     assert!(shutdown_t0.elapsed() < Duration::from_secs(10));
+    assert!(
+        lines.next_line().await.unwrap().is_none(),
+        "runtime is disabled"
+    );
+}
+
+#[tokio::test]
+async fn sidecar_reports_real_download_progress_without_delaying_server_listening() {
+    // Hold the checksum request open: the runtime cannot become ready during this test.
+    let release = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut iso = IsolatedServerEnv::new();
+    iso.env.remove("COWORK_DISABLE_RUNTIME");
+    iso.env
+        .insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "1".into());
+    iso.env.insert(
+        "COWORK_RUNTIME_BASE_URL".into(),
+        format!("http://{}", release.local_addr().unwrap()),
+    );
+    let mut child = iso.spawn_json_sidecar();
+    let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let expected = json!({
+        "phase": "downloading", "version": cowork_env::DEFAULT_COWORK_RUNTIME_VERSION,
+        "transferredBytes": 0, "totalBytes": null, "percent": null,
+    });
+    let port = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut port = None;
+        let mut saw_download = false;
+        loop {
+            let event: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            match event["type"].as_str() {
+                Some("server_listening") => port = event["port"].as_u64(),
+                Some("server_startup_progress") => {
+                    assert_eq!(event["component"], "cowork-runtime");
+                    assert_eq!(event["progress"], expected);
+                    saw_download = true;
+                }
+                _ => panic!("unexpected startup event: {event}"),
+            }
+            if let Some(port) = port
+                && saw_download
+            {
+                break port;
+            }
+        }
+    })
+    .await
+    .expect("listening and real download progress must arrive before checksum response");
+
+    let health: Value = reqwest::get(format!("http://127.0.0.1:{port}/cowork/health"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["startup"]["ready"], false);
+    assert_eq!(health["startup"]["progress"], expected);
+    drop(child.stdin.take());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
 }
 
 #[tokio::test]

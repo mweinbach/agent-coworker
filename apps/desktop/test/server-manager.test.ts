@@ -581,7 +581,7 @@ describe("desktop server manager startup mode", () => {
             });
             expect(started.url).toContain("ws://127.0.0.1:");
             expect(started.url).toContain("coworkBrowserToken=");
-            expect(progressEvents.length).toBeGreaterThanOrEqual(1);
+            expect(progressEvents).toEqual([]); // A disabled runtime has no bootstrap progress.
             const handle = getServerManagerTestInternals(devManager).servers.get("ws-rust-dev");
             devPid = (handle?.child as unknown as { pid?: number } | undefined)?.pid;
             expect(devPid).toBeGreaterThan(0);

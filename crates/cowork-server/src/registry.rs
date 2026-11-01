@@ -2701,10 +2701,24 @@ impl ServerRuntimeState {
             });
         }
 
+        let startup = self.startup_snapshot();
+        let (status, message) = if let Some(error) = startup.error {
+            (
+                "blocked",
+                format!("Cowork runtime failed to start: {error}"),
+            )
+        } else if startup.ready {
+            ("ok", "Runtime is ready.".to_owned())
+        } else {
+            (
+                "pending",
+                "Cowork is finishing setup in the background.".to_owned(),
+            )
+        };
         checks.push(CreationReadinessCheck {
             id: "runtime_ready".to_owned(),
-            status: "ok".to_owned(),
-            message: "Runtime is ready.".to_owned(),
+            status: status.to_owned(),
+            message,
             repair_action: None,
         });
 
@@ -2747,6 +2761,7 @@ impl ServerRuntimeState {
     pub fn start_background_runtime_bootstrap(
         self: &Arc<Self>,
         trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
+        on_runtime_progress: Option<cowork_env::RuntimeProgressCallback>,
     ) {
         let already_settled = {
             let st = self.startup_state.lock();
@@ -2769,14 +2784,16 @@ impl ServerRuntimeState {
 
         let handle = tokio::spawn(async move {
             let on_progress: cowork_env::RuntimeProgressCallback = Arc::new(move |evt| {
-                let mut guard = progress_target.startup_state.lock();
-                guard.progress = Some(RuntimeDiagnosticsProgress {
+                progress_target.startup_state.lock().progress = Some(RuntimeDiagnosticsProgress {
                     phase: evt.progress.phase.as_str().to_owned(),
-                    version: evt.progress.version,
+                    version: evt.progress.version.clone(),
                     transferred_bytes: evt.progress.transferred_bytes,
                     total_bytes: evt.progress.total_bytes,
                     percent: evt.progress.percent,
                 });
+                if let Some(report) = &on_runtime_progress {
+                    report(evt);
+                }
             });
 
             let outcome =

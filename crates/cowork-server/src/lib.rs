@@ -73,9 +73,6 @@ pub const DEFAULT_BIND_PORT: u16 = 7337;
 /// Default bind host for `--mobile-h3`.
 pub const DEFAULT_MOBILE_H3_HOST: &str = "0.0.0.0";
 
-/// Default runtime bootstrap version stamp (`^\d{4}-\d{2}-\d{2}$`).
-pub const DEFAULT_RUNTIME_BOOTSTRAP_VERSION: &str = "2026-01-01";
-
 /// Command-line interface for the `cowork-server` sidecar and standalone daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(
@@ -282,8 +279,16 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<ServerHandle> {
 
 /// Boots `cowork-server` with an optional runtime `TrustedKeyRing` override (for deterministic offline tests).
 pub async fn start_server_with_trusted_keys(
+    opts: ServerOptions,
+    trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
+) -> anyhow::Result<ServerHandle> {
+    start_server_inner(opts, trusted_keys_override, None).await
+}
+
+async fn start_server_inner(
     mut opts: ServerOptions,
     trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
+    on_runtime_progress: Option<cowork_env::RuntimeProgressCallback>,
 ) -> anyhow::Result<ServerHandle> {
     opts.env.remove("COWORK_DESKTOP_PARENT_MANAGED");
 
@@ -408,7 +413,7 @@ pub async fn start_server_with_trusted_keys(
         max_pending_requests,
     ));
     runtime.init_task_coordinator().await;
-    runtime.start_background_runtime_bootstrap(trusted_keys_override);
+    runtime.start_background_runtime_bootstrap(trusted_keys_override, on_runtime_progress);
 
     if mobile_h3_enabled {
         let mobile_host_hints = resolve_listening_hints(&opts.mobile_h3_host);
@@ -507,29 +512,36 @@ pub async fn run_from_cli_with_parent_flag(
         None => std::env::current_dir()?,
     };
 
-    if cli.json && env.get("COWORK_DESKTOP_STARTUP_EVENTS").map(String::as_str) == Some("1") {
-        let version = env
-            .get("COWORK_RUNTIME_VERSION")
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_RUNTIME_BOOTSTRAP_VERSION.to_owned());
-        let evt = StartupProgressEvent::ready(version);
-        let mut out = std::io::stdout().lock();
-        writeln!(out, "{}", serde_json::to_string(&evt)?)?;
-        out.flush()?;
-    }
+    let on_runtime_progress: Option<cowork_env::RuntimeProgressCallback> =
+        if cli.json && env.get("COWORK_DESKTOP_STARTUP_EVENTS").map(String::as_str) == Some("1") {
+            Some(Arc::new(|event| {
+                // An unpinned local archive has no desktop-compatible version until verified.
+                if cowork_env::validate_runtime_version(&event.progress.version).is_ok() {
+                    let mut out = std::io::stdout().lock();
+                    let _ = writeln!(out, "{}", cowork_env::format_ndjson_progress_event(&event))
+                        .and_then(|()| out.flush());
+                }
+            }))
+        } else {
+            None
+        };
 
-    let handle = start_server(ServerOptions {
-        working_directory,
-        host: cli.host,
-        port: cli.port,
-        yolo: cli.yolo,
-        mobile_h3: cli.mobile_h3,
-        mobile_h3_host: cli.mobile_h3_host,
-        mobile_h3_port: cli.mobile_h3_port,
-        homedir: None,
-        built_in_dir: None,
-        env: env.clone(),
-    })
+    let handle = start_server_inner(
+        ServerOptions {
+            working_directory,
+            host: cli.host,
+            port: cli.port,
+            yolo: cli.yolo,
+            mobile_h3: cli.mobile_h3,
+            mobile_h3_host: cli.mobile_h3_host,
+            mobile_h3_port: cli.mobile_h3_port,
+            homedir: None,
+            built_in_dir: None,
+            env,
+        },
+        None,
+        on_runtime_progress,
+    )
     .await?;
 
     if shutdown.is_triggered() {

@@ -9,40 +9,7 @@ use tokio::sync::Notify;
 
 pub type MobileH3AdminState = crate::mobile_h3::server::MobileH3Server;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeBootstrapProgress {
-    pub phase: String,
-    pub version: String,
-    pub transferred_bytes: Option<u64>,
-    pub total_bytes: Option<u64>,
-    pub percent: Option<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StartupProgressEvent {
-    #[serde(rename = "type")]
-    pub event_type: &'static str,
-    pub component: &'static str,
-    pub progress: RuntimeBootstrapProgress,
-}
-
-impl StartupProgressEvent {
-    pub fn ready(version: impl Into<String>) -> Self {
-        Self {
-            event_type: "server_startup_progress",
-            component: "cowork-runtime",
-            progress: RuntimeBootstrapProgress {
-                phase: "ready".to_owned(),
-                version: version.into(),
-                transferred_bytes: None,
-                total_bytes: None,
-                percent: Some(100),
-            },
-        }
-    }
-}
+pub use cowork_env::{RuntimeBootstrapProgress, StartupProgressEvent};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

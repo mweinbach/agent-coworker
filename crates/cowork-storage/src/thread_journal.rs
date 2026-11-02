@@ -81,6 +81,16 @@ struct ThreadJournalInner {
     queues: Mutex<HashMap<String, ThreadQueue>>,
     failures: Mutex<HashMap<String, FailureState>>,
     closed: AtomicBool,
+    /// Test-only pause point in `wait_for_idle` after the queue lock is released and before the
+    /// idle notification is awaited, used to force the release/flush interleaving.
+    #[cfg(test)]
+    wait_gate: Mutex<Option<WaitGate>>,
+}
+
+#[cfg(test)]
+struct WaitGate {
+    reached: oneshot::Sender<()>,
+    resume: oneshot::Receiver<()>,
 }
 
 impl ThreadJournal {
@@ -91,6 +101,8 @@ impl ThreadJournal {
                 queues: Mutex::new(HashMap::new()),
                 failures: Mutex::new(HashMap::new()),
                 closed: AtomicBool::new(false),
+                #[cfg(test)]
+                wait_gate: Mutex::new(None),
             }),
         }
     }
@@ -136,7 +148,9 @@ impl ThreadJournal {
 
     pub async fn wait_for_idle(&self, thread_id: &str) {
         loop {
-            let notify = {
+            let notify: Arc<Notify>;
+            let mut notified = std::pin::pin!(None);
+            {
                 let queues = self.inner.queues.lock();
                 let Some(q) = queues.get(thread_id) else {
                     return;
@@ -144,9 +158,33 @@ impl ThreadJournal {
                 if q.pending.is_empty() && q.in_flight_count == 0 {
                     return;
                 }
-                Arc::clone(&q.idle_notify)
-            };
-            notify.notified().await;
+                // Register for the idle notification while still holding the queue lock: the
+                // worker removes the drained queue and calls `notify_waiters()` under this same
+                // lock, and that call only wakes `Notified` futures that already exist. Creating
+                // and enabling the future here means a flush that completes right after the lock
+                // is released can no longer be missed.
+                notify = Arc::clone(&q.idle_notify);
+                notified.set(Some(notify.notified()));
+                if let Some(registered) = notified.as_mut().as_pin_mut() {
+                    registered.enable();
+                }
+            }
+            #[cfg(test)]
+            self.pause_at_wait_gate().await;
+            if let Some(registered) = notified.as_pin_mut() {
+                registered.await;
+            }
+            // Loop to re-check: the queue may have been removed (idle) or refilled by new events,
+            // possibly under a fresh queue with a different notifier.
+        }
+    }
+
+    #[cfg(test)]
+    async fn pause_at_wait_gate(&self) {
+        let gate = self.inner.wait_gate.lock().take();
+        if let Some(gate) = gate {
+            let _ = gate.reached.send(());
+            let _ = gate.resume.await;
         }
     }
 
@@ -524,4 +562,211 @@ async fn record_failure(
         .session_db
         .record_thread_journal_failure(&persisted)
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::types::SessionDbOptions;
+
+    struct TempRoot(PathBuf);
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn open_journal(prefix: &str) -> (TempRoot, Arc<SessionDb>, ThreadJournal) {
+        let root = std::env::temp_dir().join(format!(
+            "cowork-thread-journal-{prefix}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let sessions_dir = root.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).expect("create temp sessions dir");
+        let db = Arc::new(
+            SessionDb::open(SessionDbOptions {
+                root_dir: root.clone(),
+                sessions_dir,
+                db_path: None,
+                busy_timeout_ms: Some(5_000),
+            })
+            .await
+            .expect("open session db"),
+        );
+        let journal = ThreadJournal::new(Arc::clone(&db));
+        (TempRoot(root), db, journal)
+    }
+
+    fn journal_event(thread_id: &str, idx: usize) -> ThreadJournalEventInput {
+        ThreadJournalEventInput {
+            thread_id: thread_id.to_string(),
+            ts: "2026-04-17T12:00:00.000Z".to_string(),
+            event_type: "item/agentMessage/delta".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("msg-1".to_string()),
+            request_id: None,
+            payload: json!({ "delta": format!("chunk-{idx}") }),
+        }
+    }
+
+    /// Arms the test gate and returns (reached, resume) handles for the paused waiter.
+    fn arm_wait_gate(journal: &ThreadJournal) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (reached_tx, reached_rx) = oneshot::channel();
+        let (resume_tx, resume_rx) = oneshot::channel();
+        *journal.inner.wait_gate.lock() = Some(WaitGate {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        (reached_rx, resume_tx)
+    }
+
+    /// The worker drains the queue (removing it and calling `notify_waiters`) after
+    /// `wait_for_idle` released the queue lock but before it awaited the notification.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_idle_observes_idle_notification_sent_after_lock_release() {
+        let (_root, db, journal) = open_journal("drain-race").await;
+        let journal = Arc::new(journal);
+        let (done_tx, done_rx) = oneshot::channel();
+        journal.inner.queues.lock().insert(
+            "thread-race".to_string(),
+            ThreadQueue {
+                pending: vec![PendingItem {
+                    event: journal_event("thread-race", 1),
+                    done: done_tx,
+                }],
+                in_flight_count: 0,
+                idle_notify: Arc::new(Notify::new()),
+            },
+        );
+        let (reached, resume) = arm_wait_gate(&journal);
+
+        let waiter = tokio::spawn({
+            let journal = Arc::clone(&journal);
+            async move { journal.wait_for_idle("thread-race").await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), reached)
+            .await
+            .expect("waiter reached the gate")
+            .expect("gate sender alive");
+
+        // Worker appends the batch, then removes the drained queue and calls `notify_waiters`.
+        flush_thread_queue(Arc::clone(&journal.inner), "thread-race".to_string()).await;
+        assert!(done_rx.await.expect("batch completed").is_ok());
+        assert!(journal.inner.queues.lock().get("thread-race").is_none());
+        assert_eq!(db.get_thread_journal_tail_seq("thread-race").unwrap(), 1);
+
+        // A later event creates a fresh queue with a different notifier.
+        let (later_tx, _later_rx) = oneshot::channel();
+        journal.inner.queues.lock().insert(
+            "thread-race".to_string(),
+            ThreadQueue {
+                pending: vec![PendingItem {
+                    event: journal_event("thread-race", 2),
+                    done: later_tx,
+                }],
+                in_flight_count: 0,
+                idle_notify: Arc::new(Notify::new()),
+            },
+        );
+
+        resume.send(()).expect("waiter still paused at gate");
+        // The later queue drains too; a waiter stuck on the first queue's notifier would never
+        // be woken by it.
+        flush_thread_queue(Arc::clone(&journal.inner), "thread-race".to_string()).await;
+        assert!(journal.inner.queues.lock().get("thread-race").is_none());
+        assert_eq!(db.get_thread_journal_tail_seq("thread-race").unwrap(), 2);
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("wait_for_idle must not hang after a missed idle notification")
+            .expect("waiter task panicked");
+    }
+
+    /// Same interleaving through the empty-queue exit of the worker loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_idle_observes_empty_queue_removal_after_lock_release() {
+        let (_root, _db, journal) = open_journal("empty-race").await;
+        let journal = Arc::new(journal);
+        journal.inner.queues.lock().insert(
+            "thread-empty".to_string(),
+            ThreadQueue {
+                pending: Vec::new(),
+                in_flight_count: 1,
+                idle_notify: Arc::new(Notify::new()),
+            },
+        );
+        let (reached, resume) = arm_wait_gate(&journal);
+
+        let waiter = tokio::spawn({
+            let journal = Arc::clone(&journal);
+            async move { journal.wait_for_idle("thread-empty").await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), reached)
+            .await
+            .expect("waiter reached the gate")
+            .expect("gate sender alive");
+
+        journal
+            .inner
+            .queues
+            .lock()
+            .get_mut("thread-empty")
+            .expect("queue present")
+            .in_flight_count = 0;
+        flush_thread_queue(Arc::clone(&journal.inner), "thread-empty".to_string()).await;
+        assert!(journal.inner.queues.lock().get("thread-empty").is_none());
+
+        resume.send(()).expect("waiter still paused at gate");
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("wait_for_idle must not hang after a missed idle notification")
+            .expect("waiter task panicked");
+    }
+
+    /// Many concurrent waiters racing real enqueue/flush cycles on a multi-thread runtime.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_wait_for_idle_and_enqueue_never_hang() {
+        let (_root, db, journal) = open_journal("stress").await;
+        let journal = Arc::new(journal);
+        let rounds = 200_usize;
+        let mut tasks = Vec::new();
+        for writer in 0..4_usize {
+            let journal = Arc::clone(&journal);
+            tasks.push(tokio::spawn(async move {
+                for idx in 0..rounds {
+                    journal
+                        .enqueue(journal_event("thread-stress", writer * rounds + idx))
+                        .await
+                        .expect("enqueue");
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+        for _ in 0..8 {
+            let journal = Arc::clone(&journal);
+            tasks.push(tokio::spawn(async move {
+                for _ in 0..rounds {
+                    journal.wait_for_idle("thread-stress").await;
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for task in tasks {
+                task.await.expect("task panicked");
+            }
+            journal.close().await;
+        })
+        .await
+        .expect("wait_for_idle/close hung under concurrent enqueue/flush");
+        assert_eq!(
+            db.get_thread_journal_tail_seq("thread-stress").unwrap(),
+            (4 * rounds) as u64
+        );
+    }
 }

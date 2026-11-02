@@ -426,6 +426,105 @@ async fn glob_batches_up_to_four_in_parallel_preserving_call_order_and_grep_runs
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }
 
+/// TS `assertCanSpill`: the concrete spill file must pass the write/read path gates for this
+/// turn. A child scoped by `targetPaths: ["src"]` may not write `.cowork/.cowork-scratchpad`, so an
+/// oversized result is truncated inline and no scratchpad directory is created; an unscoped
+/// workspace-write turn still spills, and read-only turns keep the read-only inline fallback.
+#[test]
+fn overflow_spill_is_authorized_against_scoped_writable_roots_and_target_paths() {
+    let (home, ws) = isolated_test_dirs("spill-scope");
+    let src = ws.join("src");
+    fs::create_dir_all(&src).unwrap();
+    let big = "scoped-output-0123456789\n".repeat(1500);
+    assert!(big.len() > DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
+    let cowork_dir = ws.join(".cowork");
+
+    // Scoped child: workspace-write whose writable roots are only the validated targets.
+    let mut scoped = make_ctx(&home, &ws);
+    scoped.target_paths = Some(vec![src.clone()]);
+    scoped.sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![src.clone()],
+        writable_root_kinds: Default::default(),
+        network: true,
+    };
+    let out = maybe_spill_tool_output(
+        "bash",
+        "call-scoped",
+        ToolOutput::Text(big.clone()),
+        &scoped,
+        Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS),
+    )
+    .unwrap()
+    .to_json_value();
+    assert_eq!(out["overflow"], Value::Bool(true));
+    assert_eq!(out["spilledToDisk"], Value::Bool(false));
+    assert!(
+        out.get("filePath").is_none(),
+        "must not report a spill file: {out}"
+    );
+    assert_eq!(out["totalChars"], json!(big.chars().count()));
+    assert_eq!(
+        out["preview"].as_str().unwrap().chars().count(),
+        cowork_tools::TOOL_OUTPUT_PREVIEW_CHARS
+    );
+    assert!(
+        out["hint"]
+            .as_str()
+            .unwrap()
+            .contains("cannot write and read the spill file"),
+        "{out}"
+    );
+    assert!(
+        !cowork_dir.exists(),
+        "scoped child must not create {}",
+        cowork_dir.display()
+    );
+
+    // Read-only: unchanged inline fallback, nothing created.
+    let mut read_only = make_ctx(&home, &ws);
+    read_only.sandbox_policy = SandboxPolicy::ReadOnly { network: false };
+    let out = maybe_spill_tool_output(
+        "bash",
+        "call-ro",
+        ToolOutput::Text(big.clone()),
+        &read_only,
+        Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS),
+    )
+    .unwrap()
+    .to_json_value();
+    assert_eq!(out["spilledToDisk"], Value::Bool(false));
+    assert!(
+        out["hint"]
+            .as_str()
+            .unwrap()
+            .contains("workspace scratchpad is read-only"),
+        "{out}"
+    );
+    assert!(!cowork_dir.exists());
+
+    // Unscoped workspace-write: the spill still lands in the scratchpad.
+    let mut unscoped = make_ctx(&home, &ws);
+    unscoped.sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![ws.clone()],
+        writable_root_kinds: Default::default(),
+        network: true,
+    };
+    let out = maybe_spill_tool_output(
+        "bash",
+        "call-unscoped",
+        ToolOutput::Text(big.clone()),
+        &unscoped,
+        Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS),
+    )
+    .unwrap()
+    .to_json_value();
+    let file_path = PathBuf::from(out["filePath"].as_str().expect("spilled filePath"));
+    assert!(file_path.starts_with(cowork_dir.join(".cowork-scratchpad")));
+    assert_eq!(fs::read_to_string(&file_path).unwrap(), big);
+
+    let _ = fs::remove_dir_all(ws.parent().unwrap());
+}
+
 #[tokio::test]
 async fn scratchpad_overflow_spills_to_cowork_scratchpad_with_exemptions_and_deferred_tool_search_works()
  {
@@ -437,17 +536,18 @@ async fn scratchpad_overflow_spills_to_cowork_scratchpad_with_exemptions_and_def
     assert!(big.len() > DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
 
     // 1. `bash` / `grep` spill to `<workspace>/.cowork/.cowork-scratchpad/`
+    let mut spill_ctx = make_ctx(&home, &ws);
+    spill_ctx.sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![ws.clone()],
+        writable_root_kinds: Default::default(),
+        network: true,
+    };
     let spilled = maybe_spill_tool_output(
         "grep",
         "call-grep-1",
         ToolOutput::Text(big.clone()),
-        &ws,
+        &spill_ctx,
         Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS),
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![ws.clone()],
-            writable_root_kinds: Default::default(),
-            network: true,
-        },
     )
     .unwrap();
     let spilled_json = spilled.to_json_value();
@@ -482,16 +582,17 @@ async fn scratchpad_overflow_spills_to_cowork_scratchpad_with_exemptions_and_def
     );
 
     // 2. `read` and `skill` (and `toolCall` wrapping `read`/`skill`) are strictly exempt
+    let mut full_access_ctx = make_ctx(&home, &ws);
+    full_access_ctx.sandbox_policy = SandboxPolicy::DangerFullAccess {
+        network: Some(true),
+    };
     for exempt in ["read", "skill"] {
         let kept = maybe_spill_tool_output(
             exempt,
             "call-exempt",
             ToolOutput::Text(big.clone()),
-            &ws,
+            &full_access_ctx,
             Some(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS),
-            &SandboxPolicy::DangerFullAccess {
-                network: Some(true),
-            },
         )
         .unwrap();
         assert_eq!(kept.as_text().unwrap().len(), big.len());

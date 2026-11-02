@@ -1046,12 +1046,50 @@ pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Too
     assert_write_path_allowed_with(path, ctx, &canonicalize_with_missing_tail)
 }
 
+/// TS `assertCanSpill` (`src/runtime/pi/tools.ts`): authorizes a harness tool-output overflow
+/// spill to `path`. Read-only / no-project-write turns are refused outright; otherwise the
+/// concrete path must pass the same write gate as the `write`/`edit` tools (writable roots and
+/// `targetPaths` scope) and the read gate, so a scoped child never spills outside its targets.
+/// The only difference from [`assert_write_path_allowed`] is that the harness-owned
+/// `<workspace>/.cowork/.cowork-scratchpad` is exempt from the protected-`.cowork` rule, since
+/// that is where spills live.
+pub fn assert_spill_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> ToolResult<PathBuf> {
+    if ctx.read_only_role
+        || matches!(
+            ctx.sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::NoProjectWrite { .. }
+        )
+    {
+        let kind = if ctx.read_only_role {
+            "no-project-write"
+        } else {
+            ctx.sandbox_policy.kind_str()
+        };
+        return Err(ToolError::PathDenied(format!(
+            "Tool output spill blocked: sandbox mode is {kind}."
+        )));
+    }
+    let resolved =
+        assert_write_path_allowed_impl(path, ctx, &canonicalize_with_missing_tail, true)?;
+    assert_read_path_allowed(path, ctx)?;
+    Ok(resolved)
+}
+
 /// `assert_write_path_allowed` with the target's canonicalization injected (see
 /// [`assert_read_path_allowed_with`]).
 fn assert_write_path_allowed_with(
     path: &Path,
     ctx: &ToolExecutionContext,
     canonicalize: &dyn Fn(&Path) -> PathBuf,
+) -> ToolResult<PathBuf> {
+    assert_write_path_allowed_impl(path, ctx, canonicalize, false)
+}
+
+fn assert_write_path_allowed_impl(
+    path: &Path,
+    ctx: &ToolExecutionContext,
+    canonicalize: &dyn Fn(&Path) -> PathBuf,
+    allow_harness_scratchpad: bool,
 ) -> ToolResult<PathBuf> {
     // 1. Purely lexical checks (no filesystem access for the target).
     let lexical = normalize_lexical_path(path);
@@ -1111,7 +1149,11 @@ fn assert_write_path_allowed_with(
             resolved.display()
         )));
     }
-    if let Some(protected) = has_git_or_cowork_segment(&resolved, &ctx.working_directory) {
+    let in_harness_scratchpad =
+        allow_harness_scratchpad && is_within(&resolved, &scratchpad_dir(ctx));
+    if !in_harness_scratchpad
+        && let Some(protected) = has_git_or_cowork_segment(&resolved, &ctx.working_directory)
+    {
         return Err(ToolError::PathDenied(format!(
             "Write access to protected '{protected}' directory is blocked: {}",
             resolved.display()

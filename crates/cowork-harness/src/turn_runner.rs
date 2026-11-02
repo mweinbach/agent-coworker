@@ -1106,9 +1106,8 @@ where
                 inner_tool_name,
                 call_id,
                 out,
-                &tool_ctx.working_directory,
+                tool_ctx,
                 overflow_threshold,
-                &tool_ctx.sandbox_policy,
             )
             .unwrap_or_else(|e| ToolOutput::Text(format!("Tool output error: {e}")));
 
@@ -1613,9 +1612,8 @@ impl DynamicToolHandler for CodexDynamicBridge {
                     None,
                     &Uuid::new_v4().to_string(),
                     out,
-                    &self.tool_ctx.working_directory,
+                    &self.tool_ctx,
                     self.overflow_threshold,
-                    &self.tool_ctx.sandbox_policy,
                 )
                 .unwrap_or_else(|e| ToolOutput::Text(e.to_string()));
                 DynamicToolCallOutput {

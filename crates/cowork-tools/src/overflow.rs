@@ -1,11 +1,13 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cowork_sandbox::SandboxPolicy;
 use serde_json::json;
 
-use crate::context::{ToolError, ToolOutput, ToolResult};
+use crate::context::{
+    ToolError, ToolExecutionContext, ToolOutput, ToolResult, assert_spill_path_allowed,
+};
 
 pub const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS: usize = 25_000;
 pub const TOOL_OUTPUT_PREVIEW_CHARS: usize = 5_000;
@@ -61,7 +63,10 @@ fn slice_char_boundary(s: &str, max_chars: usize) -> &str {
     }
 }
 
-fn ensure_non_symlink_private_dir(dir: &Path) -> Result<(), String> {
+/// Ensures `dir` is a real (non-symlink) directory, creating it when missing. Returns whether
+/// this call created it, so a later failure can remove it again.
+fn ensure_non_symlink_private_dir(dir: &Path) -> Result<bool, String> {
+    let mut created = false;
     match fs::symlink_metadata(dir) {
         Ok(meta) => {
             if meta.file_type().is_symlink() {
@@ -79,6 +84,7 @@ fn ensure_non_symlink_private_dir(dir: &Path) -> Result<(), String> {
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir(dir).map_err(|e| e.to_string())?;
+            created = true;
         }
         Err(err) => return Err(err.to_string()),
     }
@@ -87,26 +93,89 @@ fn ensure_non_symlink_private_dir(dir: &Path) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
     }
-    Ok(())
+    Ok(created)
 }
 
+/// Why a spill was not written to disk.
+enum SpillFailure {
+    /// The turn may not write and read the spill file (TS `assertCanSpill` threw).
+    PolicyDenied,
+    /// Refused because a scratchpad path component is a symlink.
+    Symlink(String),
+    /// Any other I/O failure.
+    Io,
+}
+
+/// TS `maybeSpillToolOutputToWorkspace` write sequence: authorize the concrete spill file before
+/// creating any directory, re-authorize once the directories exist and before writing, and
+/// remove directories this call created if a later step fails.
+fn write_spill_file(
+    ctx: &ToolExecutionContext,
+    target: &Path,
+    contents: &str,
+) -> Result<PathBuf, SpillFailure> {
+    let scratchpad_dir = target.parent().ok_or(SpillFailure::Io)?;
+    let cowork_dir = scratchpad_dir.parent().ok_or(SpillFailure::Io)?;
+    let authorize = || {
+        assert_spill_path_allowed(target, ctx)
+            .map(|_| ())
+            .map_err(|_| SpillFailure::PolicyDenied)
+    };
+    let classify = |err: String| {
+        if err.contains("symlink") {
+            SpillFailure::Symlink(err)
+        } else {
+            SpillFailure::Io
+        }
+    };
+
+    authorize()?;
+    let mut created: Vec<&Path> = Vec::new();
+    let result = (|| -> Result<(), SpillFailure> {
+        for dir in [cowork_dir, scratchpad_dir] {
+            if ensure_non_symlink_private_dir(dir).map_err(classify)? {
+                created.push(dir);
+            }
+        }
+        authorize()?;
+        if let Ok(meta) = fs::symlink_metadata(target)
+            && meta.file_type().is_symlink()
+        {
+            return Err(SpillFailure::Symlink(
+                "Refusing to overwrite symlink in scratchpad".to_owned(),
+            ));
+        }
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(target).map_err(|_| SpillFailure::Io)?;
+        f.write_all(contents.as_bytes())
+            .map_err(|_| SpillFailure::Io)
+    })();
+    if let Err(err) = result {
+        for dir in created.iter().rev() {
+            let _ = fs::remove_dir(dir);
+        }
+        return Err(err);
+    }
+    Ok(target.to_path_buf())
+}
+
+/// Spills an oversized tool result to `<workspace>/.cowork/.cowork-scratchpad/` when the turn
+/// described by `ctx` may write and read that concrete file (see
+/// [`assert_spill_path_allowed`]); otherwise returns an inline truncated preview.
 pub fn maybe_spill_tool_output(
     tool_name: &str,
     call_id: &str,
     output: ToolOutput,
-    working_directory: &Path,
+    ctx: &ToolExecutionContext,
     threshold_chars: Option<usize>,
-    sandbox_policy: &SandboxPolicy,
 ) -> ToolResult<ToolOutput> {
-    maybe_spill_tool_output_with_inner(
-        tool_name,
-        None,
-        call_id,
-        output,
-        working_directory,
-        threshold_chars,
-        sandbox_policy,
-    )
+    maybe_spill_tool_output_with_inner(tool_name, None, call_id, output, ctx, threshold_chars)
 }
 
 pub fn maybe_spill_tool_output_with_inner(
@@ -114,9 +183,8 @@ pub fn maybe_spill_tool_output_with_inner(
     inner_tool_name: Option<&str>,
     call_id: &str,
     output: ToolOutput,
-    working_directory: &Path,
+    ctx: &ToolExecutionContext,
     threshold_chars: Option<usize>,
-    sandbox_policy: &SandboxPolicy,
 ) -> ToolResult<ToolOutput> {
     let Some(threshold) = threshold_chars else {
         return Ok(output);
@@ -148,42 +216,28 @@ pub fn maybe_spill_tool_output_with_inner(
     }
 
     let preview = slice_char_boundary(&serialized, TOOL_OUTPUT_PREVIEW_CHARS);
-    let can_write_workspace = matches!(
-        sandbox_policy,
-        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::DangerFullAccess { .. }
+    let can_write_workspace = !ctx.read_only_role
+        && matches!(
+            ctx.sandbox_policy,
+            SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::DangerFullAccess { .. }
+        );
+
+    let mut hint = format!(
+        "Output exceeded {threshold} chars and workspace scratchpad is read-only; narrow your query or filter output."
     );
-
     if can_write_workspace {
-        let cowork_dir = working_directory.join(".cowork");
-        let scratchpad_dir = cowork_dir.join(".cowork-scratchpad");
-        let write_attempt = (|| -> Result<std::path::PathBuf, String> {
-            ensure_non_symlink_private_dir(&cowork_dir)?;
-            ensure_non_symlink_private_dir(&scratchpad_dir)?;
-            let file_name = format!(
-                "{}-{}.{ext}",
-                sanitize_filename_segment(inner_tool_name.unwrap_or(tool_name)),
-                sanitize_filename_segment(call_id)
-            );
-            let target = scratchpad_dir.join(file_name);
-            if let Ok(meta) = fs::symlink_metadata(&target)
-                && meta.file_type().is_symlink()
-            {
-                return Err("Refusing to overwrite symlink in scratchpad".to_owned());
-            }
-            let mut opts = OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut f = opts.open(&target).map_err(|e| e.to_string())?;
-            f.write_all(serialized.as_bytes())
-                .map_err(|e| e.to_string())?;
-            Ok(target)
-        })();
+        let file_name = format!(
+            "{}-{}.{ext}",
+            sanitize_filename_segment(inner_tool_name.unwrap_or(tool_name)),
+            sanitize_filename_segment(call_id)
+        );
+        let target = ctx
+            .working_directory
+            .join(".cowork")
+            .join(".cowork-scratchpad")
+            .join(file_name);
 
-        match write_attempt {
+        match write_spill_file(ctx, &target, &serialized) {
             Ok(spilled_path) => {
                 let total_lines = serialized.lines().count();
                 return Ok(ToolOutput::Json(json!({
@@ -199,11 +253,18 @@ pub fn maybe_spill_tool_output_with_inner(
                     )
                 })));
             }
-            Err(err) if err.contains("symlink") => {
+            Err(SpillFailure::Symlink(err)) => {
                 return Err(ToolError::PathDenied(err));
             }
-            Err(_) => {
-                // Fall through to read-only inline truncation fallback.
+            Err(SpillFailure::PolicyDenied) => {
+                // TS `assertCanSpill` denial: truncate inline instead of writing outside the
+                // turn's authorized write scope (e.g. a child scoped by `targetPaths`).
+                hint = format!(
+                    "Tool output truncated ({char_count} chars). Full output was not saved because this turn cannot write and read the spill file; narrow your query or filter output."
+                );
+            }
+            Err(SpillFailure::Io) => {
+                // Fall through to the inline truncation fallback.
             }
         }
     }
@@ -214,8 +275,6 @@ pub fn maybe_spill_tool_output_with_inner(
         "tool": inner_tool_name.unwrap_or(tool_name),
         "totalChars": char_count,
         "preview": preview,
-        "hint": format!(
-            "Output exceeded {threshold} chars and workspace scratchpad is read-only; narrow your query or filter output."
-        )
+        "hint": hint
     })))
 }

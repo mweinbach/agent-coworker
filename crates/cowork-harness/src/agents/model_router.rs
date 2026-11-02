@@ -139,30 +139,27 @@ pub fn resolve_child_model_selection(
             format!("{}:{parent_model}", parent_provider.as_str()),
         ),
         Some(raw) => {
-            if raw.contains(':') {
-                let Some((prov, model_id, full_ref, explicit)) = parse_child_model_ref(raw, None)
-                else {
-                    return Err(format!("Invalid child model reference '{raw}'."));
-                };
-                if !explicit {
-                    return Err(format!(
-                        "Invalid provider prefix in child model reference '{raw}'."
-                    ));
-                }
-                (prov, model_id, full_ref)
-            } else {
-                if raw == parent_model || is_selectable_model(&registry, cfg, parent_provider, raw)
-                {
-                    let (_, eff, full_ref, _) =
-                        parse_child_model_ref(raw, Some(parent_provider)).unwrap();
-                    (parent_provider, eff, full_ref)
-                } else {
-                    return Err(format!(
-                        "Model '{raw}' is not supported by parent provider '{}'. Specify a 'provider:model' ref if cross-provider routing is enabled.",
-                        parent_provider.as_str()
-                    ));
-                }
+            // `parseChildModelRef(requestedModel, parentConfig.provider, ...)` in
+            // `routeAgentConfig` (`src/server/agents/modelRouter.ts`): only a known provider
+            // name before the first `:` selects a provider. Any other colon-bearing string
+            // (Bedrock `amazon.nova-micro-v1:0`, inference-profile ARNs, Ollama-style
+            // `llama3:8b`) is a model ID on the parent provider.
+            let Some((prov, model_id, full_ref, explicit)) =
+                parse_child_model_ref(raw, Some(parent_provider))
+            else {
+                return Err(format!("Invalid child model reference '{raw}'."));
+            };
+            if !explicit
+                && raw != parent_model
+                && model_id != parent_model
+                && !is_selectable_model(&registry, cfg, parent_provider, &model_id)
+            {
+                return Err(format!(
+                    "Model '{raw}' is not supported by parent provider '{}'. Specify a 'provider:model' ref if cross-provider routing is enabled.",
+                    parent_provider.as_str()
+                ));
             }
+            (prov, model_id, full_ref)
         }
     };
 

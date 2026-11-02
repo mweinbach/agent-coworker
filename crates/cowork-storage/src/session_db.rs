@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cowork_config::{ProviderName, SandboxConfig, same_workspace_path};
+use cowork_config::{ProviderName, SandboxConfig, SandboxMode, same_workspace_path};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -1953,10 +1953,10 @@ pub(crate) fn read_session_record_from_conn(
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .filter(|v: &Value| !v.is_null());
-    let sandbox: Option<SandboxConfig> = raw
+    let sandbox = raw
         .sandbox_json
         .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok());
+        .and_then(|s| parse_persisted_sandbox(&raw.session_id, s));
     let harness_context: Option<Value> = raw
         .harness_context_json
         .as_deref()
@@ -2071,4 +2071,33 @@ struct RawJournalRow {
     item_id: Option<String>,
     request_id: Option<String>,
     payload_json: String,
+}
+
+/// Fail-closed policy for a stored `sandbox_json` that cannot be parsed: read-only, no network,
+/// and an enforcing backend required.
+const UNPARSEABLE_SANDBOX_FALLBACK: SandboxConfig = SandboxConfig {
+    mode: SandboxMode::ReadOnly,
+    network: false,
+    require_backend: true,
+};
+
+/// Parses a session's stored `sandbox_json`. Optional `network` / `requireBackend` take their
+/// TS defaults (see [`SandboxConfig`]), so legacy policies like `{"mode":"read-only"}` keep
+/// their restrictions. JSON `null` means no stored policy. Anything else that fails to parse
+/// (unknown mode, wrong field types, malformed JSON) must not silently become `None`: the
+/// resumed session would then fall back to the (possibly wider) workspace defaults. TS refuses
+/// to load such a record (`parseJsonStringWithSchema` throws); here the record still loads
+/// (so listing/reading it keeps working) but runs under [`UNPARSEABLE_SANDBOX_FALLBACK`].
+fn parse_persisted_sandbox(session_id: &str, raw: &str) -> Option<SandboxConfig> {
+    match serde_json::from_str::<Option<SandboxConfig>>(raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                %error,
+                "stored session sandbox is invalid; applying fail-closed read-only policy"
+            );
+            Some(UNPARSEABLE_SANDBOX_FALLBACK)
+        }
+    }
 }

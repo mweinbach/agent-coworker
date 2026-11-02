@@ -192,12 +192,23 @@ impl SandboxMode {
     }
 }
 
+/// Shell sandbox settings. `network` and `requireBackend` are optional in the TS
+/// `SandboxConfig` (and in the `sandbox_json` persistence schema), so a stored policy such as
+/// `{"mode":"read-only"}` deserializes with the TS defaults rather than failing: a missing
+/// `network` is enabled (`resolveSandboxPolicy`: `config.network ?? true`) and a missing
+/// `requireBackend` is off (`DEFAULT_SANDBOX_CONFIG`), matching `merge::resolve_sandbox_config`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxConfig {
     pub mode: SandboxMode,
+    #[serde(default = "default_sandbox_network")]
     pub network: bool,
+    #[serde(default)]
     pub require_backend: bool,
+}
+
+fn default_sandbox_network() -> bool {
+    SandboxConfig::default().network
 }
 
 impl Default for SandboxConfig {
@@ -243,5 +254,35 @@ impl SkillImprovementScope {
             "all" => Some(Self::All),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod sandbox_config_tests {
+    use super::*;
+
+    #[test]
+    fn missing_optional_sandbox_fields_take_ts_defaults() {
+        let ro: SandboxConfig = serde_json::from_str(r#"{"mode":"read-only"}"#).unwrap();
+        assert_eq!(
+            ro,
+            SandboxConfig {
+                mode: SandboxMode::ReadOnly,
+                network: true,
+                require_backend: false,
+            }
+        );
+        let ww: SandboxConfig =
+            serde_json::from_str(r#"{"mode":"workspace-write","network":false}"#).unwrap();
+        assert_eq!(
+            ww,
+            SandboxConfig {
+                mode: SandboxMode::WorkspaceWrite,
+                network: false,
+                require_backend: false,
+            }
+        );
+        // `mode` stays required, like the TS persistence schema.
+        assert!(serde_json::from_str::<SandboxConfig>(r#"{"network":false}"#).is_err());
     }
 }

@@ -25,6 +25,9 @@ use cowork_inference::{
 };
 use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
 use cowork_providers::chat_completions::lmstudio::resolve_lmstudio_options;
+use cowork_providers::codex_app_server::{
+    CodexSandboxRestrictions, DynamicToolCallOutput, DynamicToolHandler,
+};
 use cowork_providers::{
     AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
     CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
@@ -669,6 +672,111 @@ fn require_string_arg<'a>(
     Ok(val)
 }
 
+/// Mutable outcome of one improver run, shared by the per-step tool loop and the Codex
+/// dynamic-tool handler so both report the same `changed` / `finish` state.
+#[derive(Default)]
+struct SkillImproverRunState {
+    mutated_paths: BTreeSet<PathBuf>,
+    finish_message: String,
+}
+
+/// Executes the improver's confined tools (`list_files`, `read_file`, `write_file`, `edit_file`,
+/// `webSearch`, `finish`) against the target skill directory. Used directly by the outer step loop
+/// and, for `codex-cli`, from the app-server's in-turn `item/tool/call` requests (TS runs the same
+/// tool set through the Codex runtime's dynamic tools).
+struct SkillImproverToolExecutor {
+    editor: ConfinedSkillDirectoryEditor,
+    skill_root_dir: PathBuf,
+    web_tool_ctx: ToolExecutionContext,
+    state: parking_lot::Mutex<SkillImproverRunState>,
+}
+
+impl SkillImproverToolExecutor {
+    fn relative_display(&self, target: &Path) -> String {
+        target
+            .strip_prefix(&self.skill_root_dir)
+            .unwrap_or(target)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    async fn execute(&self, name: &str, args: Map<String, Value>) -> Result<String, String> {
+        match name {
+            "list_files" => require_exact_keys(&args, &[]).and_then(|()| {
+                serde_json::to_string_pretty(&json!({ "files": self.editor.list_files() }))
+                    .map_err(|e| e.to_string())
+            }),
+            "read_file" => require_exact_keys(&args, &["path"]).and_then(|()| {
+                let rel = require_string_arg(&args, "path", true)?;
+                self.editor.read_file(rel)
+            }),
+            "write_file" => require_exact_keys(&args, &["path", "content"]).and_then(|()| {
+                let rel = require_string_arg(&args, "path", true)?;
+                let content = require_string_arg(&args, "content", false)?;
+                let target = self.editor.write_file(rel, content)?;
+                let rel_disp = self.relative_display(&target);
+                self.state.lock().mutated_paths.insert(target);
+                Ok(format!("Wrote {rel_disp}"))
+            }),
+            "edit_file" => {
+                require_exact_keys(&args, &["path", "oldText", "newText"]).and_then(|()| {
+                    let rel = require_string_arg(&args, "path", true)?;
+                    let old_text = require_string_arg(&args, "oldText", true)?;
+                    let new_text = require_string_arg(&args, "newText", false)?;
+                    let target = self.editor.edit_file(rel, old_text, new_text)?;
+                    let rel_disp = self.relative_display(&target);
+                    self.state.lock().mutated_paths.insert(target);
+                    Ok(format!("Edited {rel_disp}"))
+                })
+            }
+            "webSearch" => BuiltinTool::execute(&WebSearchTool, args, &self.web_tool_ctx)
+                .await
+                .map(|out| match out.to_json_value() {
+                    Value::String(s) => s,
+                    other => {
+                        serde_json::to_string_pretty(&other).unwrap_or_else(|_| other.to_string())
+                    }
+                })
+                .map_err(|e| e.to_string()),
+            "finish" => require_exact_keys(&args, &["summary"]).and_then(|()| {
+                let summary = require_string_arg(&args, "summary", true)?
+                    .trim()
+                    .to_owned();
+                self.state.lock().finish_message = summary.clone();
+                Ok(summary)
+            }),
+            other => Err(format!("Unsupported skill improver tool: {other}")),
+        }
+    }
+
+    fn changed(&self) -> bool {
+        !self.state.lock().mutated_paths.is_empty()
+    }
+}
+
+/// Codex app-server bridge: the app-server runs its own agent loop and calls the advertised
+/// improver tools back through `item/tool/call`, so they must execute here (the Codex step
+/// result carries only text). Native approvals keep the fail-closed default.
+struct SkillImproverCodexToolHandler {
+    executor: Arc<SkillImproverToolExecutor>,
+}
+
+#[async_trait]
+impl DynamicToolHandler for SkillImproverCodexToolHandler {
+    async fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> DynamicToolCallOutput {
+        match self.executor.execute(name, arguments).await {
+            Ok(text) => DynamicToolCallOutput {
+                text,
+                is_error: false,
+            },
+            Err(text) => DynamicToolCallOutput {
+                text,
+                is_error: true,
+            },
+        }
+    }
+}
+
 struct ResolvedImproverTransport {
     transport: Arc<dyn ProviderTransport>,
     base_url: Option<String>,
@@ -682,6 +790,7 @@ fn resolve_improver_transport_and_endpoint(
     conn_store: Option<&cowork_config::ConnectionStore>,
     provider_opts: &Map<String, Value>,
     built_in_dir: &Path,
+    codex_tool_handler: Arc<dyn DynamicToolHandler>,
 ) -> Result<ResolvedImproverTransport, String> {
     let api_key = resolve_provider_api_key(provider, conn_store, env);
     let bedrock_auth = if provider == ProviderName::Bedrock {
@@ -747,8 +856,18 @@ fn resolve_improver_transport_and_endpoint(
             )),
         },
         ProviderName::CodexCli => Arc::new(
-            CodexAppServerTransport::with_env(env.clone())
-                .with_built_in_dir(Some(built_in_dir.to_path_buf())),
+            CodexAppServerTransport::with_env_and_bridges(
+                env.clone(),
+                Some(codex_tool_handler),
+                None,
+            )
+            // Skill edits must go through the confined dynamic tools (which also track what
+            // changed); Codex's native shell/patch tools stay read-only.
+            .with_sandbox_restrictions(CodexSandboxRestrictions {
+                read_only_role: true,
+                ..CodexSandboxRestrictions::default()
+            })
+            .with_built_in_dir(Some(built_in_dir.to_path_buf())),
         ),
         other => ChatCompletionsTransport::new(other)
             .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
@@ -878,6 +997,29 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             Value::String(cfg.working_directory.to_string_lossy().into_owned()),
         );
 
+        let mut web_tool_ctx = ToolExecutionContext::new_for_tests(
+            homedir.clone(),
+            cfg.working_directory.clone(),
+            provider,
+            model_id.clone(),
+        );
+        web_tool_ctx.session_id = format!("skill-improvement:{}", input.skill_name);
+        web_tool_ctx.cowork_home = ai_paths.root_dir.clone();
+        web_tool_ctx.env = eff_env.clone();
+        web_tool_ctx.provider_options = merged_provider_opts.clone();
+        web_tool_ctx.agent_config = Some(Arc::new(cfg.clone()));
+
+        let executor = Arc::new(SkillImproverToolExecutor {
+            editor,
+            skill_root_dir: input.skill_root_dir.clone(),
+            web_tool_ctx,
+            state: parking_lot::Mutex::new(SkillImproverRunState::default()),
+        });
+        let codex_tool_handler: Arc<dyn DynamicToolHandler> =
+            Arc::new(SkillImproverCodexToolHandler {
+                executor: Arc::clone(&executor),
+            });
+
         let ResolvedImproverTransport {
             transport,
             base_url,
@@ -889,6 +1031,7 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             conn_store.as_ref(),
             &merged_provider_opts,
             &cfg.built_in_dir,
+            codex_tool_handler,
         ) {
             Ok(resolved) => resolved,
             Err(err) => {
@@ -924,18 +1067,6 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
         let tools = build_skill_improver_tool_definitions();
         let authorized_tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
 
-        let mut web_tool_ctx = ToolExecutionContext::new_for_tests(
-            homedir.clone(),
-            cfg.working_directory.clone(),
-            provider,
-            model_id.clone(),
-        );
-        web_tool_ctx.session_id = format!("skill-improvement:{}", input.skill_name);
-        web_tool_ctx.cowork_home = ai_paths.root_dir.clone();
-        web_tool_ctx.env = eff_env;
-        web_tool_ctx.provider_options = merged_provider_opts.clone();
-        web_tool_ctx.agent_config = Some(Arc::new(cfg.clone()));
-
         let mut messages = vec![CanonicalMessage {
             id: Uuid::new_v4().to_string(),
             role: MessageRole::User,
@@ -954,8 +1085,6 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             created_at: Utc::now().to_rfc3339(),
         }];
 
-        let mut mutated_paths: BTreeSet<PathBuf> = BTreeSet::new();
-        let mut finish_message = String::new();
         let mut continuation: Option<ProviderContinuationState> = None;
 
         for _step in 0..MAX_SKILL_IMPROVER_STEPS {
@@ -984,7 +1113,7 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
                 Err(err) => {
                     return SkillImproverRunResult {
                         ok: false,
-                        changed: !mutated_paths.is_empty(),
+                        changed: executor.changed(),
                         message: "Skill improvement run failed.".to_owned(),
                         error: Some(err.to_string()),
                     };
@@ -1015,59 +1144,9 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             let mut did_finish = false;
 
             for (call_id, call_name, call_args) in tool_calls {
-                let exec_res: Result<String, String> = match call_name.as_str() {
-                    "list_files" => require_exact_keys(&call_args, &[]).and_then(|()| {
-                        serde_json::to_string_pretty(&json!({ "files": editor.list_files() }))
-                            .map_err(|e| e.to_string())
-                    }),
-                    "read_file" => require_exact_keys(&call_args, &["path"]).and_then(|()| {
-                        let rel = require_string_arg(&call_args, "path", true)?;
-                        editor.read_file(rel)
-                    }),
-                    "write_file" => {
-                        require_exact_keys(&call_args, &["path", "content"]).and_then(|()| {
-                            let rel = require_string_arg(&call_args, "path", true)?;
-                            let content = require_string_arg(&call_args, "content", false)?;
-                            let target = editor.write_file(rel, content)?;
-                            let rel_disp = target
-                                .strip_prefix(&input.skill_root_dir)
-                                .unwrap_or(&target)
-                                .to_string_lossy()
-                                .replace('\\', "/");
-                            mutated_paths.insert(target);
-                            Ok(format!("Wrote {rel_disp}"))
-                        })
-                    }
-                    "edit_file" => require_exact_keys(&call_args, &["path", "oldText", "newText"])
-                        .and_then(|()| {
-                            let rel = require_string_arg(&call_args, "path", true)?;
-                            let old_text = require_string_arg(&call_args, "oldText", true)?;
-                            let new_text = require_string_arg(&call_args, "newText", false)?;
-                            let target = editor.edit_file(rel, old_text, new_text)?;
-                            let rel_disp = target
-                                .strip_prefix(&input.skill_root_dir)
-                                .unwrap_or(&target)
-                                .to_string_lossy()
-                                .replace('\\', "/");
-                            mutated_paths.insert(target);
-                            Ok(format!("Edited {rel_disp}"))
-                        }),
-                    "webSearch" => BuiltinTool::execute(&WebSearchTool, call_args, &web_tool_ctx)
-                        .await
-                        .map(|out| match out.to_json_value() {
-                            Value::String(s) => s,
-                            other => serde_json::to_string_pretty(&other)
-                                .unwrap_or_else(|_| other.to_string()),
-                        })
-                        .map_err(|e| e.to_string()),
-                    "finish" => require_exact_keys(&call_args, &["summary"]).and_then(|()| {
-                        let summary = require_string_arg(&call_args, "summary", true)?;
-                        finish_message = summary.trim().to_owned();
-                        did_finish = true;
-                        Ok(finish_message.clone())
-                    }),
-                    other => Err(format!("Unsupported skill improver tool: {other}")),
-                };
+                let is_finish = call_name == "finish";
+                let exec_res = executor.execute(&call_name, call_args).await;
+                did_finish |= is_finish && exec_res.is_ok();
 
                 let (text, is_error) = match exec_res {
                     Ok(t) => (t, false),
@@ -1101,7 +1180,13 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             }
         }
 
-        let changed = !mutated_paths.is_empty();
+        let (changed, finish_message) = {
+            let state = executor.state.lock();
+            (
+                !state.mutated_paths.is_empty(),
+                state.finish_message.clone(),
+            )
+        };
         if let Err(err) = validate_improved_skill_frontmatter(&input.skill_path, &initial_name) {
             return SkillImproverRunResult {
                 ok: false,

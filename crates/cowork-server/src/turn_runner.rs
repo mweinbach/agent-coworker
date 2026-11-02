@@ -940,11 +940,12 @@ pub(crate) fn apply_session_config_overrides(
         }
         None => {}
     }
-    // A session `userName` / `userProfile` override is rendered into the system prompt (TS
-    // `prepareConfigUpdate` refreshed `state.system` from the patched config for every session
-    // kind). Root sessions also persist it to the workspace first, but a child agent's override
-    // is session-only, so it must be layered here. The stored profile holds only the fields the
-    // session set; the others keep the workspace values
+    // A session `userName` / `userProfile` override is part of the effective config the profile
+    // is rendered from (TS `prepareConfigUpdate` refreshed `state.system` from the patched config
+    // for every session kind). Root sessions also persist it to the workspace first, but a child
+    // agent's override is session-only, so it must be layered here; a child's prompt section is
+    // rendered from this config by `set_session_config`. The stored profile holds only the fields
+    // the session set; the others keep the workspace values
     // (`{ ...effectiveUserProfile(), ...patch }`).
     if let Some(v) = overrides.get("userName").and_then(Value::as_str) {
         cfg.user_name = v.to_owned();
@@ -1794,16 +1795,31 @@ impl ServerRuntimeState {
             .filter(|s| !s.is_empty());
 
         let session_model = self.model_registry().get(provider, &model_id);
-        let resolved_prompt_template = session_model
-            .map(|m| m.prompt_template.trim().to_owned())
-            .filter(|t| !t.is_empty() && t != "default")
-            .or_else(|| {
-                if provider == ProviderName::Lmstudio {
-                    Some("system-models/local.md".to_owned())
-                } else {
-                    None
-                }
-            });
+        // A child agent runs with its own saved prompt (TS used `state.system`, which only root
+        // sessions regenerate), as the child executor does with `role_prompt`; a legacy child
+        // saved without one gets its role/profile prompt rebuilt as `AgentControl` restores it.
+        // Root sessions rebuild the model's template every turn.
+        let child_system_prompt = (session_kind == cowork_storage::SessionKind::Agent).then(|| {
+            let live = live_arc.lock();
+            cowork_harness::agents::persisted_child_system_prompt(
+                &self.built_in_dir,
+                &live.system_prompt,
+                live.role.as_deref(),
+                live.profile.as_ref(),
+            )
+        });
+        let resolved_prompt_template = child_system_prompt.or_else(|| {
+            session_model
+                .map(|m| m.prompt_template.trim().to_owned())
+                .filter(|t| !t.is_empty() && t != "default")
+                .or_else(|| {
+                    if provider == ProviderName::Lmstudio {
+                        Some("system-models/local.md".to_owned())
+                    } else {
+                        None
+                    }
+                })
+        });
 
         let available_skills_for_usage = available_skills.clone();
         let read_roots = tool_read_roots(

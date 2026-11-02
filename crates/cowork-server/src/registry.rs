@@ -2667,20 +2667,62 @@ impl ServerRuntimeState {
                 .map_err(|e| e.to_string())?;
         }
         let backups_toggled = patch.get("backupsEnabled").and_then(Value::as_bool);
-        let (event, meta_for_backup) = {
+        let refreshes_prompt = SYSTEM_PROMPT_REFRESH_CONFIG_KEYS
+            .iter()
+            .any(|k| patch.contains_key(*k));
+        let (event, meta_for_backup, refreshed_child_prompt) = {
             let mut live = live_arc.lock();
+            let before =
+                self.build_session_config_event(&live.id, &cfg, Some(&live.config_overrides));
             merge_session_config_overrides(&mut live.config_overrides, patch);
             live.updated_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let evt = self.build_session_config_event(&live.id, &cfg, Some(&live.config_overrides));
+            // Only root sessions rebuild their prompt every turn; a child keeps its saved prompt,
+            // so a change to a key TS refreshed `state.system` on re-renders the child's profile
+            // section into it (keeping its role/profile prompt and `systemPromptSuffix`) and it
+            // is persisted below, surviving later turns and restarts.
+            let refreshed_child_prompt = (refreshes_prompt
+                && live.session_kind != SessionKind::Root
+                && before["config"] != evt["config"])
+                .then(|| {
+                    let mut effective = cfg.clone();
+                    crate::turn_runner::apply_session_config_overrides(
+                        &mut effective,
+                        &live.config_overrides,
+                    );
+                    let base = cowork_harness::agents::persisted_child_system_prompt(
+                        &self.built_in_dir,
+                        &live.system_prompt,
+                        live.role.as_deref(),
+                        live.profile.as_ref(),
+                    );
+                    live.system_prompt = cowork_harness::agents::with_child_user_profile_section(
+                        &base,
+                        &effective.user_name,
+                        &effective.user_profile,
+                    );
+                    (live.parent_session_id.clone(), live.system_prompt.clone())
+                });
             let meta = (
                 live.id.clone(),
                 live.title.clone(),
                 live.provider.as_str().to_owned(),
                 live.model.clone(),
             );
-            (evt, meta)
+            (evt, meta, refreshed_child_prompt)
         };
+        // The parent's hydrated controller runs the child's executor turns and persists the
+        // child with its own copy of the prompt; update it before persisting so neither path
+        // writes back the stale one.
+        if let Some((Some(parent_id), prompt)) = refreshed_child_prompt
+            && let Some(ctrl) = self
+                .agent_controls
+                .get(&parent_id)
+                .map(|c| Arc::clone(c.value()))
+        {
+            ctrl.set_child_system_prompt(thread_id, &prompt);
+        }
         self.persist_live_session(&live_arc, "session_config")
             .await
             .map_err(|e| e.to_string())?;
@@ -4355,6 +4397,16 @@ const CHILD_ROUTING_CONFIG_KEYS: [&str; 4] = [
     "childModelRoutingMode",
     "preferredChildModelRef",
     "allowedChildModelRefs",
+];
+
+/// Session config keys on which TS `prepareConfigUpdate` re-rendered the session's system
+/// prompt; for a child agent the saved prompt's user-profile section is re-rendered.
+const SYSTEM_PROMPT_REFRESH_CONFIG_KEYS: [&str; 5] = [
+    "userName",
+    "userProfile",
+    "enableMemory",
+    "advancedMemory",
+    "providerOptions",
 ];
 
 /// Applies a session config patch to a thread's live overrides: `clear*` sentinels remove the

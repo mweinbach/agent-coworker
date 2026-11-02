@@ -4,13 +4,13 @@ pub mod report_parser;
 pub mod roles;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use cowork_config::{AgentConfig, ProviderName, SandboxConfig, SandboxMode};
+use cowork_config::{AgentConfig, ProviderName, SandboxConfig, SandboxMode, UserProfile};
 use cowork_inference::{
     CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, SessionCostTracker,
     SessionUsageSnapshot, TurnUsage, migrate_stored_message,
@@ -458,19 +458,12 @@ impl AgentControl {
                         .and_then(|s| s.turns.last())
                         .and_then(|turn| serde_json::to_value(&turn.usage).ok()),
                 };
-                let role_prompt = if row.system_prompt.trim().is_empty() {
-                    load_role_prompt(
-                        &cfg.agent_config.built_in_dir,
-                        role_spec.name,
-                        summary
-                            .profile
-                            .as_ref()
-                            .map(|p| p.prompt.as_str())
-                            .filter(|s| !s.trim().is_empty()),
-                    )
-                } else {
-                    row.system_prompt.clone()
-                };
+                let role_prompt = persisted_child_system_prompt(
+                    &cfg.agent_config.built_in_dir,
+                    &row.system_prompt,
+                    row.role.as_deref(),
+                    row.profile.as_ref(),
+                );
                 // Restore the persisted transcript so later resume/close/turns never overwrite
                 // stored history with an empty one. Children written by the TS server carry
                 // AI-SDK / pi-ai shaped messages (no `id`/`createdAt`, string content, legacy
@@ -1278,6 +1271,15 @@ impl AgentControl {
         })
     }
 
+    /// Replaces a hydrated child's system prompt after its session regenerated it (a
+    /// `cowork/session/config/set` on the child), so the executor's next turn runs with it and
+    /// its next persist writes it back rather than the stale prompt. No-op for unknown children.
+    pub fn set_child_system_prompt(&self, agent_id: &str, prompt: &str) {
+        if let Some(entry) = self.state.lock().children.get_mut(agent_id) {
+            entry.role_prompt = prompt.to_owned();
+        }
+    }
+
     pub async fn resume(&self, agent_id: &str) -> Result<PersistentAgentSummary, String> {
         self.set_lifecycle(agent_id, SessionPersistenceStatus::Active)
             .await
@@ -1823,6 +1825,67 @@ pub fn restore_persisted_child_restrictions(
         allowed_mcp_servers: scope.allowed_mcp_servers,
         allowed_skill_names: scope.allowed_skill_names,
     })
+}
+
+/// The system prompt a persisted child agent runs with (TS `state.system`): its stored prompt
+/// (role/profile prompt, any spawn-time `systemPromptSuffix`, any session user-profile
+/// section), or, for a legacy row saved without one, its role/profile prompt rebuilt as `spawn`
+/// built it. An unknown role falls back to the `default` role's prompt.
+pub fn persisted_child_system_prompt(
+    built_in_dir: &Path,
+    stored: &str,
+    role: Option<&str>,
+    profile: Option<&Value>,
+) -> String {
+    if !stored.trim().is_empty() {
+        return stored.to_owned();
+    }
+    let role_name = role
+        .and_then(|r| lookup_builtin_role(r).ok())
+        .unwrap_or(&BUILTIN_AGENT_ROLES[0])
+        .name;
+    let profile_prompt = profile
+        .and_then(|v| serde_json::from_value::<AgentProfileSnapshot>(v.clone()).ok())
+        .map(|p| p.prompt)
+        .filter(|s| !s.trim().is_empty());
+    load_role_prompt(built_in_dir, role_name, profile_prompt.as_deref())
+}
+
+const CHILD_USER_PROFILE_HEADING: &str = "## Session User Profile";
+
+/// Re-renders the user-profile section of a child agent's system prompt after its session
+/// changed `userName`/`userProfile` (or another key TS refreshed the prompt on).
+///
+/// TS `SessionMetadataManager.prepareConfigUpdate` replaced `state.system` with the root
+/// template (`loadSystemPromptWithSkills`) for every session kind, which dropped a child's
+/// role/profile prompt and `systemPromptSuffix` while its own skills refresh kept them for
+/// non-root sessions. This keeps the child's prompt and carries the profile the root template
+/// would have shown as a trailing section instead. A section from an earlier update is
+/// replaced; the section is omitted when every profile field is empty.
+pub fn with_child_user_profile_section(
+    prompt: &str,
+    user_name: &str,
+    profile: &UserProfile,
+) -> String {
+    let marker = format!("\n\n{CHILD_USER_PROFILE_HEADING}\n");
+    let base = prompt.rfind(&marker).map_or(prompt, |at| &prompt[..at]);
+    let lines: Vec<String> = [
+        ("User name", user_name),
+        ("User profile work/job", profile.work.as_str()),
+        ("User profile instructions", profile.instructions.as_str()),
+        (
+            "User profile details the agent should know",
+            profile.details.as_str(),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.trim().is_empty())
+    .map(|(label, v)| format!("- {label}: {}", v.trim()))
+    .collect();
+    if lines.is_empty() {
+        return base.to_owned();
+    }
+    format!("{base}{marker}{}", lines.join("\n"))
 }
 
 /// Decodes a persisted child transcript, migrating legacy (TS-server) message shapes into the

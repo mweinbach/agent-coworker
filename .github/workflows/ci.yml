@@ -181,9 +181,22 @@ jobs:
     name: Rust tests
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      # Every integration test file links its own binary; full debuginfo made the
+      # workspace test build outgrow the runner's disk. Line tables keep panic
+      # locations and backtraces readable at a fraction of the size.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # The hosted image ships ~20+ GB of toolchains this job never uses.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Setup Linux sandbox
         uses: ./.github/actions/setup-linux-sandbox

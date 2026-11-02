@@ -7,7 +7,9 @@ use cowork_inference::{
 use cowork_providers::{ProviderStepRequest, ProviderTransport};
 use cowork_storage::{MemoryScope, MemoryStore, MemoryWriteMode};
 use cowork_tools::AdvancedMemoryStore;
+use cowork_tools::memory::slugify_memory_name;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// Cap on each transcript batch handed to the memory generation model, measured in UTF-16
@@ -228,31 +230,94 @@ fn write_notes(
     }
 }
 
+/// Characters of a generated note shown as its memory name. Display only: the note's storage
+/// identity comes from [`generated_note_slug`], so notes sharing this prefix never collide.
+const GENERATED_NOTE_TITLE_CHARS: usize = 40;
+
 fn write_note(
     note: &str,
     sqlite_store: Option<&MemoryStore>,
     advanced_store: Option<&AdvancedMemoryStore>,
 ) {
+    let body = note.trim();
+    if body.is_empty() {
+        return;
+    }
     if let Some(adv) = advanced_store {
-        let title: String = note.chars().take(40).collect();
-        let _ = adv.upsert_entry(
+        let title: String = body.chars().take(GENERATED_NOTE_TITLE_CHARS).collect();
+        let slug = generated_note_slug(adv, &title, body);
+        if let Err(err) = adv.upsert_entry(
             "workspace",
             None,
-            &title,
+            &slug,
             &title,
             "Auto-extracted conversation preference",
             "feedback",
-            note,
-        );
+            body,
+        ) {
+            tracing::warn!(error = %err, slug, "failed to save generated memory note");
+        }
     } else if let Some(sql) = sqlite_store {
-        let key = format!("auto-{}", &Uuid::new_v4().simple().to_string()[..8]);
-        let _ = sql.upsert(
+        let existing = sql.list(Some(MemoryScope::Workspace)).unwrap_or_default();
+        // Re-saving a note that is already stored refreshes that entry instead of duplicating it.
+        let key = match existing.iter().find(|e| e.content.trim() == body) {
+            Some(same) => same.id.clone(),
+            None => unique_identity(&format!("auto-{}", content_digest(body)), |candidate| {
+                existing
+                    .iter()
+                    .any(|e| e.id.eq_ignore_ascii_case(candidate))
+            }),
+        };
+        if let Err(err) = sql.upsert(
             MemoryScope::Workspace,
             Some(&key),
-            note,
+            body,
             MemoryWriteMode::Upsert,
-        );
+        ) {
+            tracing::warn!(error = %err, key, "failed to save generated memory note");
+        }
     }
+}
+
+/// Storage slug for a generated advanced-memory note whose display title is `title`.
+///
+/// TS lets the generator model pick a slug and overwrite only when it deliberately updates an
+/// existing memory. The deterministic port has no such intent signal, so identity follows the
+/// content: a note whose exact body is already stored reuses that entry's slug (update in place,
+/// including entries saved under the older bare-title slug); any other note gets
+/// `<slug(title)>-<content hash>`, suffixed `-2`, `-3`, … if that slug already holds a different
+/// body (for example a generated memory the user later edited), so it never replaces another note.
+fn generated_note_slug(store: &AdvancedMemoryStore, title: &str, body: &str) -> String {
+    let existing = store
+        .resolve_scope_dir("workspace", None)
+        .and_then(|dir| store.list_entries_in_dir(&dir, "workspace"))
+        .unwrap_or_default();
+    if let Some(same) = existing.iter().find(|e| e.body.trim() == body) {
+        return same.slug.clone();
+    }
+    let base = format!("{}-{}", slugify_memory_name(title), content_digest(body));
+    // Case-insensitive so a differently cased file never aliases the target on macOS/Windows.
+    unique_identity(&base, |candidate| {
+        existing
+            .iter()
+            .any(|e| e.slug.eq_ignore_ascii_case(candidate))
+    })
+}
+
+/// Short, stable hash of a note's content used to make its storage identity collision-resistant.
+fn content_digest(body: &str) -> String {
+    hex::encode(&Sha256::digest(body.as_bytes())[..4])
+}
+
+/// `base`, or the first of `base-2`, `base-3`, … that `taken` does not claim.
+fn unique_identity(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(base) {
+        return base.to_owned();
+    }
+    (2usize..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|candidate| !taken(candidate))
+        .expect("an unused suffix exists")
 }
 
 fn extract_text_from_json_message(msg: &Value) -> String {

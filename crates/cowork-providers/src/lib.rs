@@ -24,6 +24,7 @@ pub mod sse;
 pub mod transport;
 pub mod web_search_options;
 
+use cowork_config::{ProviderName, ProviderWireProtocol};
 use serde::{Deserialize, Serialize};
 
 pub use anthropic_messages::AnthropicMessagesTransport;
@@ -50,23 +51,23 @@ pub use transport::{
     ToolDefinition, candidate_continuation_splits, split_after_last_assistant,
 };
 
-/// All 14 registered provider identifiers matching `config/models/<provider>/`.
-pub const REGISTERED_PROVIDER_IDS: [&str; 14] = [
-    "anthropic",
-    "bedrock",
-    "baseten",
-    "together",
-    "fireworks",
-    "firepass",
-    "nvidia",
-    "lmstudio",
-    "minimax",
-    "opencode-go",
-    "opencode-zen",
-    "codex-cli",
-    "google",
-    "openai",
-];
+/// Every registered provider identifier, in canonical order (`config/providers.json`, matching
+/// `config/models/<provider>/`).
+pub fn registered_provider_ids() -> impl Iterator<Item = &'static str> {
+    cowork_config::provider_specs()
+        .iter()
+        .map(|spec| spec.id.as_str())
+}
+
+/// Default inference endpoint of `provider` (`inferenceBaseUrl` in `config/providers.json`), or
+/// `""` for providers without an HTTP endpoint (Bedrock resolves per region, Codex is stdio).
+pub fn default_inference_base_url(provider: ProviderName) -> &'static str {
+    provider
+        .spec()
+        .inference_base_url
+        .as_deref()
+        .unwrap_or_default()
+}
 
 /// Native wire transport families implemented by `cowork-providers`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,20 +81,23 @@ pub enum ProviderTransportKind {
     CodexAppServerStdio,
 }
 
-/// Maps a registered provider ID to its native wire transport family.
-pub fn transport_for_provider(provider_id: &str) -> Option<ProviderTransportKind> {
-    match provider_id {
-        "openai" => Some(ProviderTransportKind::OpenAiResponsesSse),
-        "anthropic" => Some(ProviderTransportKind::AnthropicMessagesSse),
-        "google" => Some(ProviderTransportKind::GeminiInteractionsSse),
-        "bedrock" => Some(ProviderTransportKind::BedrockConverseStream),
-        "codex-cli" => Some(ProviderTransportKind::CodexAppServerStdio),
-        "together" | "fireworks" | "firepass" | "nvidia" | "lmstudio" | "minimax"
-        | "opencode-go" | "opencode-zen" | "baseten" => {
-            Some(ProviderTransportKind::ChatCompletionsSse)
+impl From<ProviderWireProtocol> for ProviderTransportKind {
+    fn from(protocol: ProviderWireProtocol) -> Self {
+        match protocol {
+            ProviderWireProtocol::OpenaiResponses => Self::OpenAiResponsesSse,
+            ProviderWireProtocol::AnthropicMessages => Self::AnthropicMessagesSse,
+            ProviderWireProtocol::GeminiInteractions => Self::GeminiInteractionsSse,
+            ProviderWireProtocol::ChatCompletions => Self::ChatCompletionsSse,
+            ProviderWireProtocol::BedrockConverse => Self::BedrockConverseStream,
+            ProviderWireProtocol::CodexAppServer => Self::CodexAppServerStdio,
         }
-        _ => None,
     }
+}
+
+/// Maps a registered provider ID to its native wire transport family (`transport` in
+/// `config/providers.json`).
+pub fn transport_for_provider(provider_id: &str) -> Option<ProviderTransportKind> {
+    ProviderName::parse(provider_id).map(|provider| provider.spec().transport.into())
 }
 
 #[cfg(test)]
@@ -101,14 +105,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_fourteen_providers_map_to_a_native_transport() {
-        assert_eq!(REGISTERED_PROVIDER_IDS.len(), 14);
-        for provider_id in REGISTERED_PROVIDER_IDS {
+    fn every_registered_provider_maps_to_a_native_transport() {
+        assert_eq!(registered_provider_ids().count(), ProviderName::ALL.len());
+        for provider_id in registered_provider_ids() {
             assert!(
                 transport_for_provider(provider_id).is_some(),
                 "missing transport mapping for {provider_id}"
             );
         }
         assert_eq!(transport_for_provider("unknown"), None);
+        assert_eq!(
+            transport_for_provider("fireworks"),
+            Some(ProviderTransportKind::ChatCompletionsSse)
+        );
+        assert_eq!(
+            transport_for_provider("codex-cli"),
+            Some(ProviderTransportKind::CodexAppServerStdio)
+        );
     }
 }

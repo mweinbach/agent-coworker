@@ -1,9 +1,7 @@
-use cowork_config::ProviderName;
+use cowork_config::{ProviderName, ProviderWireProtocol};
 use cowork_inference::InferenceModelRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-pub const USER_FACING_DISABLED_PROVIDERS: [ProviderName; 1] = [ProviderName::Baseten];
 
 const OPENCODE_GO_MODELS: &[&str] = &[
     "minimax-m3",
@@ -94,7 +92,7 @@ pub enum ThinkingFormat {
 pub struct ProviderQuirks {
     pub provider: ProviderName,
     pub default_base_url: &'static str,
-    pub env_api_keys: &'static [&'static str],
+    pub env_api_keys: &'static [String],
     pub max_tokens_field: MaxTokensField,
     pub thinking_format: ThinkingFormat,
     pub supports_store: bool,
@@ -109,159 +107,68 @@ pub struct ProviderQuirks {
 }
 
 impl ProviderQuirks {
+    /// Quirks for a `chat-completions` provider: endpoint, API-key env vars and user-facing state
+    /// come from `config/providers.json`; behavioural flags default to plain OpenAI Chat
+    /// Completions and are overridden per provider below. `None` for other wire protocols.
     pub fn for_provider(provider: ProviderName) -> Option<Self> {
-        match provider {
-            ProviderName::Together => Some(Self {
-                provider,
-                default_base_url: "https://api.together.xyz/v1",
-                env_api_keys: &["TOGETHER_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxTokens,
-                thinking_format: ThinkingFormat::Together,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: false,
-                split_inline_think_tags: false,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: false,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::Fireworks => Some(Self {
-                provider,
-                default_base_url: "https://api.fireworks.ai/inference/v1",
-                env_api_keys: &["FIREWORKS_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: true,
-                split_inline_think_tags: false,
-                fireworks_schema_budget: true,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: false,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::Firepass => Some(Self {
-                provider,
-                default_base_url: "https://api.fireworks.ai/inference/v1",
-                env_api_keys: &["FIREPASS_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: true,
-                split_inline_think_tags: false,
-                fireworks_schema_budget: true,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: false,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::Nvidia => Some(Self {
-                provider,
-                default_base_url: "https://integrate.api.nvidia.com/v1",
-                env_api_keys: &["NVIDIA_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxTokens,
-                thinking_format: ThinkingFormat::Qwen,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: false,
-                split_inline_think_tags: false,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: true,
-                is_user_facing_enabled: true,
-                is_public_catalog: false,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::Minimax => Some(Self {
-                provider,
-                default_base_url: "https://api.minimax.io/v1",
-                env_api_keys: &["MINIMAX_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxCompletionTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: false,
-                split_inline_think_tags: true,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: false,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::Lmstudio => Some(Self {
-                provider,
-                default_base_url: "http://localhost:1234/v1",
-                env_api_keys: &["LM_STUDIO_API_KEY", "LM_STUDIO_API_TOKEN"],
-                max_tokens_field: MaxTokensField::MaxTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: true,
-                split_inline_think_tags: true,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: true,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::OpencodeGo => Some(Self {
-                provider,
-                default_base_url: "https://opencode.ai/zen/go/v1",
-                env_api_keys: &["OPENCODE_GO_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxCompletionTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: true,
-                split_inline_think_tags: true,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: true,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::OpencodeZen => Some(Self {
-                provider,
-                default_base_url: "https://opencode.ai/zen/v1",
-                env_api_keys: &["OPENCODE_ZEN_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxCompletionTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: true,
-                split_inline_think_tags: true,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: true,
-                is_public_catalog: true,
-                discovery_auth_prefix: "Bearer",
-            }),
-            ProviderName::Baseten => Some(Self {
-                provider,
-                default_base_url: "https://inference.baseten.co/v1",
-                env_api_keys: &["BASETEN_API_KEY"],
-                max_tokens_field: MaxTokensField::MaxTokens,
-                thinking_format: ThinkingFormat::OpenAi,
-                supports_store: false,
-                supports_developer_role: false,
-                supports_reasoning_effort: false,
-                split_inline_think_tags: false,
-                fireworks_schema_budget: false,
-                nvidia_payload_normalization: false,
-                is_user_facing_enabled: false,
-                is_public_catalog: false,
-                discovery_auth_prefix: "Api-Key",
-            }),
-            _ => None,
+        let spec = provider.spec();
+        if spec.transport != ProviderWireProtocol::ChatCompletions {
+            return None;
         }
+        let mut quirks = Self {
+            provider,
+            default_base_url: spec.inference_base_url.as_deref()?,
+            env_api_keys: &spec.api_key_env_vars,
+            max_tokens_field: MaxTokensField::MaxTokens,
+            thinking_format: ThinkingFormat::OpenAi,
+            supports_store: false,
+            supports_developer_role: false,
+            supports_reasoning_effort: false,
+            split_inline_think_tags: false,
+            fireworks_schema_budget: false,
+            nvidia_payload_normalization: false,
+            is_user_facing_enabled: spec.user_facing,
+            is_public_catalog: false,
+            discovery_auth_prefix: "Bearer",
+        };
+        match provider {
+            ProviderName::Together => {
+                quirks.thinking_format = ThinkingFormat::Together;
+            }
+            ProviderName::Fireworks | ProviderName::Firepass => {
+                quirks.supports_reasoning_effort = true;
+                quirks.fireworks_schema_budget = true;
+            }
+            ProviderName::Nvidia => {
+                quirks.thinking_format = ThinkingFormat::Qwen;
+                quirks.nvidia_payload_normalization = true;
+            }
+            ProviderName::Minimax => {
+                quirks.max_tokens_field = MaxTokensField::MaxCompletionTokens;
+                quirks.split_inline_think_tags = true;
+            }
+            ProviderName::Lmstudio => {
+                quirks.supports_reasoning_effort = true;
+                quirks.split_inline_think_tags = true;
+                quirks.is_public_catalog = true;
+            }
+            ProviderName::OpencodeGo | ProviderName::OpencodeZen => {
+                quirks.max_tokens_field = MaxTokensField::MaxCompletionTokens;
+                quirks.supports_reasoning_effort = true;
+                quirks.split_inline_think_tags = true;
+                quirks.is_public_catalog = true;
+            }
+            ProviderName::Baseten => {
+                quirks.discovery_auth_prefix = "Api-Key";
+            }
+            _ => {}
+        }
+        Some(quirks)
     }
 }
 
 pub fn is_user_facing_provider_enabled(provider: ProviderName) -> bool {
-    !USER_FACING_DISABLED_PROVIDERS.contains(&provider)
+    provider.is_user_facing()
 }
 
 pub fn is_opencode_model_supported(

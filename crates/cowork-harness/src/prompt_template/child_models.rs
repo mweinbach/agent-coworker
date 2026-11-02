@@ -205,7 +205,7 @@ pub(super) fn list_child_agent_models_with_info(
     built_in_dir: Option<&Path>,
     provider: ProviderName,
 ) -> Vec<RegistryChildModel> {
-    if provider == ProviderName::Lmstudio {
+    if provider.is_runtime_discovery_provider() {
         return Vec::new();
     }
     let Some(dir) = built_in_dir.map(|d| d.join("config").join("models").join(provider.as_str()))
@@ -296,7 +296,7 @@ fn is_model_id_foreign_to_provider(
     }
     ProviderName::ALL
         .into_iter()
-        .filter(|candidate| *candidate != provider && *candidate != ProviderName::Lmstudio)
+        .filter(|candidate| *candidate != provider && !candidate.is_runtime_discovery_provider())
         .any(|candidate| {
             list_child_agent_models_with_info(built_in_dir, candidate)
                 .iter()

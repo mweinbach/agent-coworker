@@ -23,6 +23,7 @@ pub mod migration;
 pub mod models;
 pub mod patch_store;
 pub mod paths;
+pub mod provider_specs;
 pub mod providers;
 pub mod stores;
 
@@ -64,6 +65,10 @@ pub use paths::{
     is_inside, is_inside_with_options, is_path_inside_one_off_chats_root, normalize_lexical_path,
     path_has_link_component, project_memory_cowork_dir, project_memory_db_path, resolve_home_dir,
     same_path, same_workspace_path, user_memory_db_path, write_text_file_atomic,
+};
+pub use provider_specs::{
+    ProviderAuthMethod, ProviderAuthMethodField, ProviderDiscoveryMode, ProviderSpec,
+    ProviderWireProtocol, provider_spec, provider_specs,
 };
 pub use providers::{
     ChildModelRoutingMode, ProviderName, RuntimeName, SandboxConfig, SandboxMode,

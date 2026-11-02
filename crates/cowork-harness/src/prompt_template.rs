@@ -121,29 +121,10 @@ const SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER: &str = "{{spawnAgentToolSection}}";
 const SPAWN_AGENT_XML_SECTION_PLACEHOLDER: &str = "{{spawnAgentXmlSection}}";
 const SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER: &str = "{{spawnAgentPromptBody}}";
 
-/// Legacy `PROVIDER_DISPLAY_NAMES` in `src/prompt.ts`.
+/// Provider name used in prompt copy (`promptDisplayName`, else `displayName`, in
+/// `config/providers.json`).
 fn provider_prompt_label(provider: ProviderName) -> &'static str {
-    match provider {
-        ProviderName::Google => "Google",
-        ProviderName::Openai => "OpenAI",
-        ProviderName::Anthropic => "Anthropic",
-        ProviderName::Bedrock => "Amazon Bedrock",
-        ProviderName::Baseten => "Baseten",
-        ProviderName::Together => "Together AI",
-        ProviderName::Fireworks => "Fireworks AI",
-        ProviderName::Firepass => "Fire Pass",
-        ProviderName::Nvidia => "NVIDIA",
-        ProviderName::Lmstudio => "LM Studio",
-        ProviderName::Minimax => "MiniMax",
-        ProviderName::OpencodeGo => "OpenCode Go",
-        ProviderName::OpencodeZen => "OpenCode Zen",
-        ProviderName::CodexCli => "Codex CLI",
-    }
-}
-
-/// Legacy `isUserFacingProviderEnabled` (`USER_FACING_DISABLED_PROVIDERS = ["baseten"]`).
-fn is_user_facing_provider(provider: ProviderName) -> bool {
-    provider != ProviderName::Baseten
+    provider.spec().prompt_display_name()
 }
 
 /// `new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long",
@@ -455,7 +436,7 @@ fn current_provider_model_lines(opts: &SystemPromptBuildOptions) -> String {
     if opts.provider == ProviderName::Lmstudio {
         return "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`.".to_owned();
     }
-    if !is_user_facing_provider(opts.provider) {
+    if !opts.provider.is_user_facing() {
         return "- No user-facing child model overrides are available for this provider."
             .to_owned();
     }
@@ -538,7 +519,7 @@ fn build_spawn_agent_prompt_body(opts: &SystemPromptBuildOptions) -> String {
         lines.push("Available allowed child target refs for this workspace:".to_owned());
         lines.extend(cross_provider_lines);
     }
-    lines.push(if is_user_facing_provider(opts.provider) {
+    lines.push(if opts.provider.is_user_facing() {
         format!(
             "- If you omit `model`, the child stays on **{}** (`{}`).",
             model_display_name(opts),

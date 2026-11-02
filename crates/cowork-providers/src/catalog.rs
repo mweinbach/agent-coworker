@@ -7,11 +7,12 @@ use chrono::Utc;
 use cowork_config::{
     AiCoworkerPaths, CachedModelDiscoveryModel, CachedModelReasoning, ConnectionMode,
     ConnectionStore, CustomModelEntry, ModelDiscoveryCacheFile, ModelDiscoveryResult,
-    ModelDiscoverySource, ModelPreferenceEntry, ModelRegistry, ProviderName, SupportedModel,
-    get_ai_coworker_paths, is_model_discovery_cache_fresh, read_connection_store,
-    read_custom_model_store, read_model_discovery_cache, read_model_preferences_store,
-    write_model_discovery_cache,
+    ModelDiscoverySource, ModelPreferenceEntry, ModelRegistry, ProviderDiscoveryMode, ProviderName,
+    ProviderWireProtocol, SupportedModel, get_ai_coworker_paths, is_model_discovery_cache_fresh,
+    read_connection_store, read_custom_model_store, read_model_discovery_cache,
+    read_model_preferences_store, write_model_discovery_cache,
 };
+pub use cowork_config::{ProviderAuthMethod, ProviderAuthMethodField};
 use regex::Regex;
 use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
@@ -22,15 +23,13 @@ use crate::bedrock::{
     compute_bedrock_auth_fingerprint, discover_bedrock_models, mask_bedrock_field_values,
     resolve_bedrock_auth_config,
 };
-use crate::chat_completions::{LmStudioControlClient, resolve_lmstudio_options};
+use crate::chat_completions::{LmStudioControlClient, ProviderQuirks, resolve_lmstudio_options};
 use crate::codex_app_server::{
     CodexAppServerClient, list_codex_models, resolve_codex_app_server_status,
 };
 use crate::sse::build_http_client;
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS: u64 = 10_000;
-const GOOGLE_MODEL_LIST_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
-const ANTHROPIC_MODEL_LIST_URL: &str = "https://api.anthropic.com/v1/models";
 
 pub fn mask_api_key(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
@@ -42,173 +41,14 @@ pub fn mask_api_key(value: &str) -> String {
     format!("{first4}...{last4}")
 }
 
+/// User-facing provider name (`displayName` in `config/providers.json`).
 pub fn provider_display_label(provider: ProviderName) -> &'static str {
-    match provider {
-        ProviderName::Google => "Google",
-        ProviderName::Openai => "OpenAI",
-        ProviderName::Anthropic => "Anthropic",
-        ProviderName::Bedrock => "Amazon Bedrock",
-        ProviderName::Baseten => "Baseten",
-        ProviderName::Together => "Together AI",
-        ProviderName::Fireworks => "Fireworks AI",
-        ProviderName::Firepass => "Fire Pass",
-        ProviderName::Nvidia => "NVIDIA",
-        ProviderName::Lmstudio => "LM Studio",
-        ProviderName::Minimax => "MiniMax",
-        ProviderName::OpencodeGo => "OpenCode Go",
-        ProviderName::OpencodeZen => "OpenCode Zen",
-        ProviderName::CodexCli => "Codex",
-    }
+    provider.spec().display_name.as_str()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderAuthMethodField {
-    pub id: String,
-    pub label: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub placeholder: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderAuthMethod {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub method_type: String,
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oauth_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<ProviderAuthMethodField>>,
-}
-
-fn bedrock_region_field(required: bool) -> ProviderAuthMethodField {
-    ProviderAuthMethodField {
-        id: "region".into(),
-        label: "AWS region".into(),
-        kind: "text".into(),
-        required: required.then_some(true),
-        secret: None,
-        placeholder: Some("us-east-1".into()),
-    }
-}
-
+/// Static auth methods of `provider` (`authMethods` in `config/providers.json`).
 pub fn default_provider_auth_methods_for(provider: ProviderName) -> Vec<ProviderAuthMethod> {
-    let simple_api = |id: &str, label: &str| ProviderAuthMethod {
-        id: id.into(),
-        method_type: "api".into(),
-        label: label.into(),
-        oauth_mode: None,
-        fields: None,
-    };
-
-    match provider {
-        ProviderName::Google => vec![
-            simple_api("api_key", "API key"),
-            simple_api("exa_api_key", "Exa API key (web search)"),
-            simple_api("parallel_api_key", "Parallel API key (web search)"),
-        ],
-        ProviderName::Openai
-        | ProviderName::Anthropic
-        | ProviderName::Baseten
-        | ProviderName::Together
-        | ProviderName::Fireworks
-        | ProviderName::Nvidia
-        | ProviderName::Minimax
-        | ProviderName::OpencodeGo
-        | ProviderName::OpencodeZen => vec![simple_api("api_key", "API key")],
-        ProviderName::Firepass => vec![simple_api("api_key", "Fire Pass API key")],
-        ProviderName::Lmstudio => vec![simple_api("api_key", "API token (optional)")],
-        ProviderName::Bedrock => vec![
-            ProviderAuthMethod {
-                id: "aws_default".into(),
-                method_type: "api".into(),
-                label: "AWS default credentials".into(),
-                oauth_mode: None,
-                fields: Some(vec![bedrock_region_field(false)]),
-            },
-            ProviderAuthMethod {
-                id: "aws_profile".into(),
-                method_type: "api".into(),
-                label: "AWS profile".into(),
-                oauth_mode: None,
-                fields: Some(vec![
-                    ProviderAuthMethodField {
-                        id: "profile".into(),
-                        label: "AWS profile".into(),
-                        kind: "text".into(),
-                        required: Some(true),
-                        secret: None,
-                        placeholder: Some("default".into()),
-                    },
-                    bedrock_region_field(false),
-                ]),
-            },
-            ProviderAuthMethod {
-                id: "aws_keys".into(),
-                method_type: "api".into(),
-                label: "AWS access keys".into(),
-                oauth_mode: None,
-                fields: Some(vec![
-                    ProviderAuthMethodField {
-                        id: "accessKeyId".into(),
-                        label: "Access key ID".into(),
-                        kind: "text".into(),
-                        required: Some(true),
-                        secret: None,
-                        placeholder: Some("AKIA...".into()),
-                    },
-                    ProviderAuthMethodField {
-                        id: "secretAccessKey".into(),
-                        label: "Secret access key".into(),
-                        kind: "password".into(),
-                        required: Some(true),
-                        secret: Some(true),
-                        placeholder: None,
-                    },
-                    ProviderAuthMethodField {
-                        id: "sessionToken".into(),
-                        label: "Session token".into(),
-                        kind: "password".into(),
-                        required: None,
-                        secret: Some(true),
-                        placeholder: None,
-                    },
-                    bedrock_region_field(true),
-                ]),
-            },
-            ProviderAuthMethod {
-                id: "api_key".into(),
-                method_type: "api".into(),
-                label: "Bedrock API key".into(),
-                oauth_mode: None,
-                fields: Some(vec![
-                    ProviderAuthMethodField {
-                        id: "apiKey".into(),
-                        label: "Bedrock API key".into(),
-                        kind: "password".into(),
-                        required: Some(true),
-                        secret: Some(true),
-                        placeholder: None,
-                    },
-                    bedrock_region_field(true),
-                ]),
-            },
-        ],
-        ProviderName::CodexCli => vec![ProviderAuthMethod {
-            id: "oauth_cli".into(),
-            method_type: "oauth".into(),
-            label: "Sign in with ChatGPT (browser)".into(),
-            oauth_mode: Some("auto".into()),
-            fields: None,
-        }],
-    }
+    provider.spec().auth_methods.clone()
 }
 
 pub fn default_provider_auth_methods() -> Map<String, Value> {
@@ -314,21 +154,9 @@ fn env_non_empty<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a 
         .filter(|s| !s.is_empty())
 }
 
+/// Providers whose catalog comes from generic HTTP model-list discovery (`discovery: "api"`).
 pub fn is_api_discovery_provider(provider: ProviderName) -> bool {
-    matches!(
-        provider,
-        ProviderName::Openai
-            | ProviderName::Anthropic
-            | ProviderName::Google
-            | ProviderName::Baseten
-            | ProviderName::Together
-            | ProviderName::Fireworks
-            | ProviderName::Firepass
-            | ProviderName::Nvidia
-            | ProviderName::Minimax
-            | ProviderName::OpencodeGo
-            | ProviderName::OpencodeZen
-    )
+    provider.spec().discovery == ProviderDiscoveryMode::Api
 }
 
 pub fn resolve_provider_api_key(
@@ -342,25 +170,11 @@ pub fn resolve_provider_api_key(
         return Some(saved);
     }
 
-    let from_env = match provider {
-        ProviderName::Openai => env_non_empty(env, "OPENAI_API_KEY"),
-        ProviderName::Anthropic => env_non_empty(env, "ANTHROPIC_API_KEY")
-            .or_else(|| env_non_empty(env, "ANTHROPIC_OAUTH_TOKEN")),
-        ProviderName::Google => env_non_empty(env, "GOOGLE_GENERATIVE_AI_API_KEY")
-            .or_else(|| env_non_empty(env, "GEMINI_API_KEY"))
-            .or_else(|| env_non_empty(env, "GOOGLE_API_KEY")),
-        ProviderName::Baseten => env_non_empty(env, "BASETEN_API_KEY"),
-        ProviderName::Together => env_non_empty(env, "TOGETHER_API_KEY"),
-        ProviderName::Fireworks => env_non_empty(env, "FIREWORKS_API_KEY"),
-        ProviderName::Firepass => env_non_empty(env, "FIREPASS_API_KEY"),
-        ProviderName::Nvidia => env_non_empty(env, "NVIDIA_API_KEY"),
-        ProviderName::Minimax => env_non_empty(env, "MINIMAX_API_KEY"),
-        ProviderName::OpencodeGo => env_non_empty(env, "OPENCODE_API_KEY"),
-        ProviderName::OpencodeZen => env_non_empty(env, "OPENCODE_ZEN_API_KEY"),
-        ProviderName::Lmstudio => env_non_empty(env, "LM_STUDIO_API_KEY")
-            .or_else(|| env_non_empty(env, "LM_STUDIO_API_TOKEN")),
-        ProviderName::Bedrock | ProviderName::CodexCli => None,
-    };
+    let from_env = provider
+        .spec()
+        .api_key_env_vars
+        .iter()
+        .find_map(|key| env_non_empty(env, key));
 
     from_env.map(ToOwned::to_owned)
 }
@@ -545,7 +359,7 @@ fn static_reasoning_for_supported(model: &SupportedModel) -> Option<ProviderCata
 
 fn static_catalog_entry(built_in_dir: &Path, provider: ProviderName) -> ProviderCatalogEntry {
     let supported = load_builtin_models_for(built_in_dir, provider);
-    let default_model = if provider == ProviderName::Lmstudio {
+    let default_model = if provider.is_runtime_discovery_provider() {
         String::new()
     } else {
         supported
@@ -667,21 +481,13 @@ fn should_include_openai_compat_model(
     }
 }
 
+/// Default model-list endpoint (`discoveryBaseUrl` in `config/providers.json`).
 fn default_discovery_base_url(provider: ProviderName) -> &'static str {
-    match provider {
-        ProviderName::Openai => "https://api.openai.com/v1",
-        ProviderName::Baseten => "https://inference.baseten.co/v1",
-        ProviderName::Together => "https://api.together.xyz/v1",
-        ProviderName::Fireworks | ProviderName::Firepass => "https://api.fireworks.ai/inference/v1",
-        ProviderName::Nvidia => "https://integrate.api.nvidia.com/v1",
-        ProviderName::Minimax => "https://api.minimax.io/v1",
-        ProviderName::OpencodeGo => "https://opencode.ai/zen/go/v1",
-        ProviderName::OpencodeZen => "https://opencode.ai/zen/v1",
-        ProviderName::Anthropic => ANTHROPIC_MODEL_LIST_URL,
-        ProviderName::Google => GOOGLE_MODEL_LIST_URL,
-        ProviderName::Lmstudio => "http://localhost:1234",
-        ProviderName::Bedrock | ProviderName::CodexCli => "",
-    }
+    provider
+        .spec()
+        .discovery_base_url
+        .as_deref()
+        .unwrap_or_default()
 }
 
 fn extract_records_from_payload(payload: &Value) -> Vec<Map<String, Value>> {
@@ -724,7 +530,7 @@ async fn discover_api_models_http(
     if provider == ProviderName::Google {
         let key =
             api_key.ok_or_else(|| "Google API key unavailable for model discovery.".to_string())?;
-        let endpoint = base_url_override.unwrap_or(GOOGLE_MODEL_LIST_URL);
+        let endpoint = base_url_override.unwrap_or_else(|| default_discovery_base_url(provider));
         let url = format!("{endpoint}?pageSize=1000");
         let resp = client
             .get(&url)
@@ -802,7 +608,7 @@ async fn discover_api_models_http(
     if provider == ProviderName::Anthropic {
         let key = api_key
             .ok_or_else(|| "Anthropic API key unavailable for model discovery.".to_string())?;
-        let endpoint = base_url_override.unwrap_or(ANTHROPIC_MODEL_LIST_URL);
+        let endpoint = base_url_override.unwrap_or_else(|| default_discovery_base_url(provider));
         let url = format!("{endpoint}?limit=100");
         let resp = client
             .get(&url)
@@ -858,10 +664,8 @@ async fn discover_api_models_http(
         });
     }
 
-    let is_public = matches!(
-        provider,
-        ProviderName::OpencodeGo | ProviderName::OpencodeZen
-    );
+    let quirks = ProviderQuirks::for_provider(provider);
+    let is_public = quirks.as_ref().is_some_and(|q| q.is_public_catalog);
     if !is_public && api_key.is_none() {
         return Err(format!(
             "{} API key unavailable for model discovery.",
@@ -881,11 +685,9 @@ async fn discover_api_models_http(
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
     if let Some(k) = api_key {
-        let prefix = if provider == ProviderName::Baseten {
-            "Api-Key"
-        } else {
-            "Bearer"
-        };
+        let prefix = quirks
+            .as_ref()
+            .map_or("Bearer", |q| q.discovery_auth_prefix);
         if let Ok(hv) = HeaderValue::from_str(&format!("{prefix} {k}")) {
             headers.insert(AUTHORIZATION, hv);
         }
@@ -1239,18 +1041,12 @@ fn is_curated_open_model_default(model_id: &str) -> bool {
     patterns.iter().any(|re| re.is_match(last_segment))
 }
 
+/// OpenAI-compatible aggregators with API discovery: their catalogs are curated to the
+/// bundled registry plus the curated open-model defaults.
 fn is_curated_aggregator(provider: ProviderName) -> bool {
-    matches!(
-        provider,
-        ProviderName::Together
-            | ProviderName::Nvidia
-            | ProviderName::Minimax
-            | ProviderName::Baseten
-            | ProviderName::Fireworks
-            | ProviderName::Firepass
-            | ProviderName::OpencodeGo
-            | ProviderName::OpencodeZen
-    )
+    let spec = provider.spec();
+    spec.transport == ProviderWireProtocol::ChatCompletions
+        && spec.discovery == ProviderDiscoveryMode::Api
 }
 
 fn merge_custom_models_and_preferences(

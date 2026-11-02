@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(MAX_SUBAGENT_DEPTH, 1);
         assert_eq!(MAX_ACTIVE_SUBAGENTS, 16);
         assert_eq!(MIN_TASK_REVIEW_ROUNDS, 3);
-        assert_eq!(cowork_providers::REGISTERED_PROVIDER_IDS.len(), 14);
+        assert_eq!(cowork_providers::registered_provider_ids().count(), 14);
         assert_eq!(cowork_tools::CANONICAL_BUILTIN_TOOL_IDS.len(), 27);
     }
 }

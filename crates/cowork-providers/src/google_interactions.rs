@@ -24,7 +24,6 @@ use crate::transport::{
     ToolDefinition, candidate_continuation_splits,
 };
 
-const DEFAULT_GOOGLE_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 const DEFAULT_GOOGLE_API_VERSION: &str = "v1beta";
 
 const GOOGLE_FLASH_MODELS: &[&str] = &[
@@ -429,7 +428,9 @@ impl ProviderTransport for GoogleInteractionsTransport {
         let base_url = request
             .base_url
             .as_deref()
-            .unwrap_or(DEFAULT_GOOGLE_BASE_URL)
+            .unwrap_or_else(|| {
+                crate::default_inference_base_url(cowork_config::ProviderName::Google)
+            })
             .trim_end_matches('/');
         let endpoint = if base_url.ends_with("/v1beta") || base_url.ends_with("/v1alpha") {
             format!("{base_url}/interactions")

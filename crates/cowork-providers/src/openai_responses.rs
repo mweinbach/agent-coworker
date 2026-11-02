@@ -24,7 +24,6 @@ use crate::transport::{
     ToolDefinition, candidate_continuation_splits,
 };
 
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENAI_PROVIDER: &str = "openai";
 const OPENAI_RESPONSES_API: &str = "openai-responses";
 
@@ -94,7 +93,9 @@ impl ProviderTransport for OpenAiResponsesTransport {
         let base_url = request
             .base_url
             .as_deref()
-            .unwrap_or(DEFAULT_OPENAI_BASE_URL)
+            .unwrap_or_else(|| {
+                crate::default_inference_base_url(cowork_config::ProviderName::Openai)
+            })
             .trim_end_matches('/');
         let endpoint = format!("{base_url}/responses");
 

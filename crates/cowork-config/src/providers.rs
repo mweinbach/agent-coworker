@@ -1,36 +1,29 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::LazyLock;
 
-/// All 14 supported inference providers matching `src/types.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+use crate::provider_specs::{
+    ProviderDiscoveryMode, ProviderSpec, ProviderWireProtocol, provider_spec,
+};
+
+/// All 14 supported inference providers. Identity strings, display names and all other static
+/// metadata come from `config/providers.json` (`crate::provider_specs`); declaration order must
+/// match that file's order (enforced by `provider_specs` tests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProviderName {
-    #[serde(rename = "google")]
     Google,
-    #[serde(rename = "openai")]
     Openai,
-    #[serde(rename = "anthropic")]
     Anthropic,
-    #[serde(rename = "bedrock")]
     Bedrock,
-    #[serde(rename = "baseten")]
     Baseten,
-    #[serde(rename = "together")]
     Together,
-    #[serde(rename = "fireworks")]
     Fireworks,
-    #[serde(rename = "firepass")]
     Firepass,
-    #[serde(rename = "nvidia")]
     Nvidia,
-    #[serde(rename = "lmstudio")]
     Lmstudio,
-    #[serde(rename = "minimax")]
     Minimax,
-    #[serde(rename = "opencode-go")]
     OpencodeGo,
-    #[serde(rename = "opencode-zen")]
     OpencodeZen,
-    #[serde(rename = "codex-cli")]
     CodexCli,
 }
 
@@ -52,43 +45,23 @@ impl ProviderName {
         Self::CodexCli,
     ];
 
+    /// The provider id (`config/providers.json` `id`).
     pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Google => "google",
-            Self::Openai => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Bedrock => "bedrock",
-            Self::Baseten => "baseten",
-            Self::Together => "together",
-            Self::Fireworks => "fireworks",
-            Self::Firepass => "firepass",
-            Self::Nvidia => "nvidia",
-            Self::Lmstudio => "lmstudio",
-            Self::Minimax => "minimax",
-            Self::OpencodeGo => "opencode-go",
-            Self::OpencodeZen => "opencode-zen",
-            Self::CodexCli => "codex-cli",
-        }
+        provider_spec(*self).id.as_str()
     }
 
+    /// Parses a provider id, ignoring surrounding whitespace.
     pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "google" => Some(Self::Google),
-            "openai" => Some(Self::Openai),
-            "anthropic" => Some(Self::Anthropic),
-            "bedrock" => Some(Self::Bedrock),
-            "baseten" => Some(Self::Baseten),
-            "together" => Some(Self::Together),
-            "fireworks" => Some(Self::Fireworks),
-            "firepass" => Some(Self::Firepass),
-            "nvidia" => Some(Self::Nvidia),
-            "lmstudio" => Some(Self::Lmstudio),
-            "minimax" => Some(Self::Minimax),
-            "opencode-go" => Some(Self::OpencodeGo),
-            "opencode-zen" => Some(Self::OpencodeZen),
-            "codex-cli" => Some(Self::CodexCli),
-            _ => None,
-        }
+        Self::from_id(raw.trim())
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == id)
+    }
+
+    /// The static `config/providers.json` metadata of this provider.
+    pub fn spec(&self) -> &'static ProviderSpec {
+        provider_spec(*self)
     }
 
     /// Providers supporting user-defined custom model IDs (`src/shared/customModels.ts`).
@@ -101,9 +74,29 @@ impl ProviderName {
         !matches!(self, Self::Lmstudio)
     }
 
+    /// Whether the provider is offered to users (`userFacing` in `config/providers.json`).
+    pub fn is_user_facing(&self) -> bool {
+        self.spec().user_facing
+    }
+
     /// Whether the provider uses runtime discovery as primary model catalog (`lmstudio`).
     pub fn is_runtime_discovery_provider(&self) -> bool {
-        matches!(self, Self::Lmstudio)
+        self.spec().discovery == ProviderDiscoveryMode::Local
+    }
+}
+
+impl Serialize for ProviderName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        static IDS: LazyLock<Vec<&'static str>> =
+            LazyLock::new(|| ProviderName::ALL.iter().map(ProviderName::as_str).collect());
+        let raw = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        Self::from_id(&raw).ok_or_else(|| serde::de::Error::unknown_variant(&raw, &IDS))
     }
 }
 
@@ -141,24 +134,30 @@ impl RuntimeName {
     }
 }
 
-pub fn default_runtime_name_for_provider(provider: ProviderName) -> RuntimeName {
-    match provider {
-        ProviderName::CodexCli => RuntimeName::CodexAppServer,
-        ProviderName::Openai => RuntimeName::OpenaiResponses,
-        ProviderName::Google => RuntimeName::GoogleInteractions,
-        _ => RuntimeName::Pi,
+/// The runtime a provider's wire protocol pins, if any (Codex app-server, OpenAI Responses,
+/// Gemini Interactions); every other protocol runs on the generic `pi` runtime.
+fn pinned_runtime_name(provider: ProviderName) -> Option<RuntimeName> {
+    match provider.spec().transport {
+        ProviderWireProtocol::CodexAppServer => Some(RuntimeName::CodexAppServer),
+        ProviderWireProtocol::OpenaiResponses => Some(RuntimeName::OpenaiResponses),
+        ProviderWireProtocol::GeminiInteractions => Some(RuntimeName::GoogleInteractions),
+        ProviderWireProtocol::ChatCompletions
+        | ProviderWireProtocol::AnthropicMessages
+        | ProviderWireProtocol::BedrockConverse => None,
     }
+}
+
+pub fn default_runtime_name_for_provider(provider: ProviderName) -> RuntimeName {
+    pinned_runtime_name(provider).unwrap_or(RuntimeName::Pi)
 }
 
 pub fn normalize_runtime_name_for_provider(
     provider: ProviderName,
     runtime: Option<RuntimeName>,
 ) -> RuntimeName {
-    match provider {
-        ProviderName::CodexCli => RuntimeName::CodexAppServer,
-        ProviderName::Openai => RuntimeName::OpenaiResponses,
-        ProviderName::Google => RuntimeName::GoogleInteractions,
-        _ => match runtime {
+    match pinned_runtime_name(provider) {
+        Some(pinned) => pinned,
+        None => match runtime {
             Some(
                 RuntimeName::OpenaiResponses
                 | RuntimeName::GoogleInteractions

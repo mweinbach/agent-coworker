@@ -49,23 +49,10 @@ pub fn legacy_model_alias(provider: ProviderName, model_id: &str) -> Option<&'st
     }
 }
 
+/// The provider's fallback default model (`defaultModel` in `config/providers.json`), used when
+/// the bundled registry has no default for it.
 pub fn fallback_default_model_id(provider: ProviderName) -> &'static str {
-    match provider {
-        ProviderName::Google => "gemini-3.1-pro-preview",
-        ProviderName::Openai => "gpt-5.4",
-        ProviderName::Anthropic => "claude-opus-4-8",
-        ProviderName::Bedrock => "amazon.nova-lite-v1:0",
-        ProviderName::Baseten => "moonshotai/Kimi-K2.5",
-        ProviderName::Together => "moonshotai/Kimi-K2.5",
-        ProviderName::Fireworks => "accounts/fireworks/models/kimi-k2p6",
-        ProviderName::Firepass => "accounts/fireworks/routers/kimi-k2p6-turbo",
-        ProviderName::Nvidia => "nvidia/nemotron-3-super-120b-a12b",
-        ProviderName::Minimax => "MiniMax-M3",
-        ProviderName::OpencodeGo => "glm-5",
-        ProviderName::OpencodeZen => "glm-5",
-        ProviderName::CodexCli => "gpt-5.6-sol",
-        ProviderName::Lmstudio => "local-model",
-    }
+    provider.spec().default_model.as_str()
 }
 
 fn fallback_supported_model(provider: ProviderName, id: &str) -> SupportedModel {
@@ -298,10 +285,7 @@ impl ModelRegistry {
 /// Providers whose non-bundled models resolve through the generic discovery cache in
 /// `getResolvedModelMetadataSync`; lmstudio/bedrock/codex-cli take their own branches there.
 fn uses_generic_discovery_cache(provider: ProviderName) -> bool {
-    !matches!(
-        provider,
-        ProviderName::Lmstudio | ProviderName::Bedrock | ProviderName::CodexCli
-    )
+    provider.spec().discovery == crate::provider_specs::ProviderDiscoveryMode::Api
 }
 
 /// Drops model-gated reasoning/thinking keys carried over from a previous model when the

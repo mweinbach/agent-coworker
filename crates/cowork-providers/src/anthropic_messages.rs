@@ -19,7 +19,6 @@ use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback, ToolDefinition,
 };
 
-const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
@@ -98,7 +97,9 @@ impl ProviderTransport for AnthropicMessagesTransport {
         let raw_base = request
             .base_url
             .as_deref()
-            .unwrap_or(DEFAULT_ANTHROPIC_BASE_URL)
+            .unwrap_or_else(|| {
+                crate::default_inference_base_url(cowork_config::ProviderName::Anthropic)
+            })
             .trim_end_matches('/');
         let endpoint = if raw_base.ends_with("/v1") {
             format!("{raw_base}/messages")

@@ -314,19 +314,17 @@ fn is_pricing_override_key(key: &str) -> bool {
     if provider.is_empty() || model.is_empty() {
         return false;
     }
-    matches!(
-        provider,
-        "google"
-            | "openai"
-            | "anthropic"
-            | "baseten"
-            | "together"
-            | "fireworks"
-            | "firepass"
-            | "minimax"
-            | "opencode-zen"
-            | "codex-cli"
-    )
+    // Every registered provider except those without local pricing estimation.
+    ProviderName::parse(provider).is_some_and(|p| {
+        p.as_str() == provider
+            && !matches!(
+                p,
+                ProviderName::Bedrock
+                    | ProviderName::Nvidia
+                    | ProviderName::Lmstudio
+                    | ProviderName::OpencodeGo
+            )
+    })
 }
 
 fn parse_non_neg_f64(val: Option<&Value>) -> Result<Option<f64>, ()> {

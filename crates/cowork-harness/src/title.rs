@@ -12,23 +12,11 @@ use uuid::Uuid;
 
 const MAX_TITLE_CHARS: usize = 60;
 
-/// Returns the fast dedicated title model for a provider (`TITLE_MODELS_BY_PROVIDER` parity),
-/// or `None` for local single-slot providers (`lmstudio`, `ollama`) that should not contend
-/// with active turns.
+/// Returns the fast dedicated title model for a provider (`titleModel` in
+/// `config/providers.json`), or `None` for providers without one — including local single-slot
+/// providers (`lmstudio`) that should not contend with active turns.
 pub fn preferred_title_model_for_provider(provider: ProviderName) -> Option<&'static str> {
-    match provider {
-        ProviderName::Anthropic => Some("claude-haiku-4-5"),
-        ProviderName::Baseten => Some("moonshotai/Kimi-K2.5"),
-        ProviderName::CodexCli => Some("gpt-5.4-mini"),
-        ProviderName::Google => Some("gemini-3-flash-preview"),
-        ProviderName::Nvidia => Some("nvidia/nemotron-3-super-120b-a12b"),
-        ProviderName::Openai => Some("gpt-5-mini"),
-        ProviderName::Together => Some("moonshotai/Kimi-K2.5"),
-        ProviderName::Fireworks => Some("accounts/fireworks/models/kimi-k2p6"),
-        ProviderName::Firepass => Some("accounts/fireworks/routers/kimi-k2p6-turbo"),
-        ProviderName::OpencodeGo | ProviderName::OpencodeZen => Some("glm-5"),
-        _ => None,
-    }
+    provider.spec().title_model.as_deref()
 }
 
 /// Produces an immediate clean 3..8 word session title from the first user prompt,

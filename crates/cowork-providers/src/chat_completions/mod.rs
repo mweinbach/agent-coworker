@@ -31,8 +31,8 @@ pub use lmstudio::{
     resolve_lmstudio_options,
 };
 pub use quirks::{
-    MaxTokensField, ProviderQuirks, ThinkingFormat, USER_FACING_DISABLED_PROVIDERS,
-    is_opencode_model_supported, is_user_facing_provider_enabled, normalize_null_tool_arguments,
+    MaxTokensField, ProviderQuirks, ThinkingFormat, is_opencode_model_supported,
+    is_user_facing_provider_enabled, normalize_null_tool_arguments,
     normalize_nvidia_chat_completions_body,
 };
 pub use schema_sanitizer::{
@@ -84,10 +84,7 @@ impl ChatCompletionsTransport {
             }
         }
         // Local LM Studio and public OpenCode catalogs permit unauthenticated requests
-        if matches!(
-            self.provider,
-            ProviderName::Lmstudio | ProviderName::OpencodeGo | ProviderName::OpencodeZen
-        ) {
+        if self.quirks.is_public_catalog {
             return Ok(None);
         }
         Err(ProviderTransportError::protocol(format!(

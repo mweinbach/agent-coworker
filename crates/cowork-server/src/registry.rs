@@ -3870,25 +3870,6 @@ pub fn expand_command_template(template: &str, arguments: &str) -> String {
 /// Upper bound on how long `cowork/session/delete` waits for a cancelled turn to settle.
 const DELETE_SESSION_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub fn provider_display_name(provider: ProviderName) -> &'static str {
-    match provider {
-        ProviderName::Google => "Google",
-        ProviderName::Openai => "OpenAI",
-        ProviderName::Anthropic => "Anthropic",
-        ProviderName::Bedrock => "Amazon Bedrock",
-        ProviderName::Baseten => "Baseten",
-        ProviderName::Together => "Together AI",
-        ProviderName::Fireworks => "Fireworks AI",
-        ProviderName::Firepass => "Fire Pass",
-        ProviderName::Nvidia => "NVIDIA",
-        ProviderName::Lmstudio => "LM Studio",
-        ProviderName::Minimax => "MiniMax",
-        ProviderName::OpencodeGo => "OpenCode Go",
-        ProviderName::OpencodeZen => "OpenCode Zen",
-        ProviderName::CodexCli => "Codex",
-    }
-}
-
 // `src/shared/openaiCompatibleOptions.ts` value sets for the editable provider options.
 const EDITABLE_REASONING_EFFORT_VALUES: [&str; 8] = [
     "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",

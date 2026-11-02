@@ -219,10 +219,14 @@ async fn persist_config_patch_file(
                                 .and_then(Value::as_object)
                                 .cloned()
                                 .unwrap_or_default();
-                            let merged = deep_merge_objects(
-                                &deep_merge_objects(&runtime_sec, &current_sec),
-                                section_patch,
-                            );
+                            // Shallow per-section merge (lowest -> highest priority: runtime,
+                            // persisted config, incoming patch), as `ConfigPatchStore.ts` spread
+                            // them: a nested value in the patch (`google.thinkingConfig`,
+                            // `codex-cli.webSearch`) replaces the stored one wholesale, so an
+                            // explicit nested clear such as `thinkingConfig: {}` is kept.
+                            let mut merged = runtime_sec;
+                            merged.extend(current_sec);
+                            merged.extend(section_patch.clone());
                             current_po.insert(prov.to_string(), Value::Object(merged));
                         }
                     }

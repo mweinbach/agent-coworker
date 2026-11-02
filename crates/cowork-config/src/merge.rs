@@ -426,14 +426,75 @@ pub fn strip_provider_option_endpoints(provider_options: &mut Map<String, Value>
 /// Endpoint overrides are honored only from trusted tiers (built-in defaults, user config,
 /// environment, desktop session settings). The single exception is the schema-permitted
 /// `providerOptions.lmstudio.baseUrl` (local LM Studio server), kept for parity with the
-/// legacy TypeScript config schema.
+/// legacy TypeScript config schema — but only when it names a loopback server, so a cloned
+/// repository cannot route prompts (and the saved LM Studio token) to a remote host.
 pub(crate) fn strip_untrusted_provider_endpoints(
     mut project_config: Map<String, Value>,
 ) -> Map<String, Value> {
     if let Some(Value::Object(provider_options)) = project_config.get_mut("providerOptions") {
         strip_provider_option_endpoints(provider_options);
+        if let Some(Value::Object(lmstudio)) = provider_options.get_mut("lmstudio")
+            && lmstudio
+                .get("baseUrl")
+                .is_some_and(|url| !url.as_str().is_some_and(is_loopback_base_url))
+        {
+            lmstudio.remove("baseUrl");
+        }
     }
     project_config
+}
+
+/// Whether `raw` is an `http(s)` URL whose host is `localhost`, `127.0.0.1` or `::1`
+/// (`isLoopbackBaseUrl` in `src/providers/lmstudio/local.ts`).
+///
+/// A deliberately strict local parse (no `url` dependency): anything a WHATWG parser might
+/// read differently — userinfo, backslashes, embedded whitespace/control characters,
+/// percent-encoded or shorthand IPv4 hosts — is rejected rather than interpreted.
+fn is_loopback_base_url(raw: &str) -> bool {
+    let url = raw.trim();
+    if url
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return false;
+    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    if authority.contains('@') {
+        return false;
+    }
+    let (host_ok, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((inner, tail)) = bracketed.split_once(']') else {
+            return false;
+        };
+        let port = match tail {
+            "" => None,
+            _ => match tail.strip_prefix(':') {
+                Some(port) => Some(port),
+                None => return false,
+            },
+        };
+        let is_v6_loopback = inner
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip == std::net::Ipv6Addr::LOCALHOST);
+        (is_v6_loopback, port)
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        let host = host.to_ascii_lowercase();
+        (host == "localhost" || host == "127.0.0.1", port)
+    };
+    let port_ok = port.is_none_or(|p| {
+        p.is_empty() || (p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok())
+    });
+    host_ok && port_ok
 }
 
 /// Loads and merges configuration across all 4 tiers (`defaults < user < workspace < env`)

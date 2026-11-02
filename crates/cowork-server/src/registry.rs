@@ -44,15 +44,22 @@ const THREAD_READ_JOURNAL_BATCH_SIZE: usize = 250;
 /// (matches the TS thread-management `readThread` "seed" turn).
 const SEED_TURN_ID: &str = "seed";
 
-/// `thread.messageCount` from a `thread/started` journal payload: how many conversation
-/// messages the thread was created with. Non-zero for forks, which copy the source's messages
-/// without journaling them.
+/// Journal marker recording how many stored messages a thread already had when its first
+/// journaled turn started, for threads created without a `thread/started` marker (legacy
+/// `sessions/*.json` imports, external conversation imports, sessions persisted before any
+/// journaling). `internal/` events are never replayed to clients.
+const THREAD_SEED_EVENT: &str = "internal/threadSeed";
+
+/// How many conversation messages precede the journal: `thread.messageCount` from a
+/// `thread/started` payload (non-zero for forks, which copy the source's messages without
+/// journaling them) or `messageCount` from a [`THREAD_SEED_EVENT`] marker.
 fn journal_seed_message_count(event_type: &str, payload: &Value) -> Option<usize> {
-    if event_type != "thread/started" {
-        return None;
-    }
-    payload
-        .pointer("/thread/messageCount")
+    let count = match event_type {
+        "thread/started" => payload.pointer("/thread/messageCount"),
+        THREAD_SEED_EVENT => payload.get("messageCount"),
+        _ => return None,
+    };
+    count
         .and_then(Value::as_u64)
         .and_then(|n| usize::try_from(n).ok())
 }
@@ -67,10 +74,11 @@ struct SeedMessage {
 
 /// Persisted user/assistant text messages the journal does not cover.
 ///
-/// Before any journal activity the whole history is shown. Afterwards only the prefix the
-/// thread was created with (the `thread/started` `messageCount`, i.e. a fork's copied
-/// conversation) is kept; later messages are already represented by journal items, so they
-/// are never duplicated. Messages are append-only, so that prefix is stable.
+/// Before any journal activity the whole history is shown. Afterwards only the prefix that
+/// predates the journal (the `thread/started` `messageCount` of a fork's copied conversation,
+/// or the [`THREAD_SEED_EVENT`] count of an imported/pre-journal thread) is kept; later
+/// messages are already represented by journal items, so they are never duplicated. Messages
+/// are append-only, so that prefix is stable.
 fn unjournaled_seed_messages(
     thread_id: &str,
     messages: &[Value],
@@ -1457,6 +1465,37 @@ impl ServerRuntimeState {
             self.session_db.delete_session(&session_id).await?;
         }
         Ok(())
+    }
+
+    /// Journals a [`THREAD_SEED_EVENT`] marker before the first journaled turn of a thread that
+    /// has stored messages but an empty journal (imported or pre-journal threads never got a
+    /// `thread/started` marker). Without it, once the turn journals items the stored prefix would
+    /// be treated as covered by the journal and vanish from `thread/read` and the snapshot feed.
+    /// Threads created by this server already start their journal with `thread/started`.
+    pub(crate) async fn ensure_journal_seed_marker(&self, live_arc: &Arc<Mutex<LiveSession>>) {
+        let (thread_id, message_count) = {
+            let live = live_arc.lock();
+            (live.id.clone(), live.messages.len())
+        };
+        if message_count == 0 {
+            return;
+        }
+        self.journal.wait_for_idle(&thread_id).await;
+        if !matches!(self.journal.list(&thread_id, 0, Some(1)), Ok(events) if events.is_empty()) {
+            return;
+        }
+        let _ = self
+            .journal
+            .enqueue(ThreadJournalEventInput {
+                thread_id: thread_id.clone(),
+                ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                event_type: THREAD_SEED_EVENT.to_owned(),
+                turn_id: None,
+                item_id: None,
+                request_id: None,
+                payload: json!({ "threadId": thread_id, "messageCount": message_count }),
+            })
+            .await;
     }
 
     pub(crate) fn is_session_deleted(&self, session_id: &str) -> bool {

@@ -1401,6 +1401,9 @@ impl ServerRuntimeState {
         let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
 
+        // Imported / pre-journal threads: record the stored prefix before this turn journals.
+        self.ensure_journal_seed_marker(&live_arc).await;
+
         let proposed_turn_id = Uuid::new_v4().to_string();
         let idem_outcome = match ledger.check_or_record_with_journal(
             params.client_message_id.as_deref().unwrap_or(""),

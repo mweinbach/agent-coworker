@@ -1,7 +1,7 @@
 //! Regression coverage for thread model reconciliation, fork model refs, skill read roots,
 //! turn-usage notifications, `task/*` cwd authorization, persisted child-agent restrictions,
-//! legacy model alias hydration, fork seed messages surviving journal-backed follow-ups, and
-//! session child-model routing overrides reaching agent spawns.
+//! legacy model alias hydration, fork and imported-thread seed messages surviving
+//! journal-backed follow-ups, and session child-model routing overrides reaching agent spawns.
 
 #![recursion_limit = "256"]
 
@@ -1050,6 +1050,178 @@ async fn forked_thread_keeps_seed_conversation_after_follow_up_turn() {
             .all(|t| t["id"] != "seed"),
         "{delta}"
     );
+}
+
+/// `internal/threadSeed` marker events in a thread's journal.
+fn seed_marker_events(runtime: &cowork_server::ServerRuntimeState, thread_id: &str) -> Vec<Value> {
+    runtime
+        .journal
+        .list(thread_id, 0, None)
+        .unwrap()
+        .into_iter()
+        .filter(|ev| ev.event_type == "internal/threadSeed")
+        .map(|ev| ev.payload)
+        .collect()
+}
+
+/// An imported thread (stored messages, no journal and no `thread/started` marker) keeps its
+/// prior conversation in `thread/read` turns and the snapshot feed after resumed turns
+/// journal items, in order and without duplicating the journaled follow-ups.
+#[tokio::test]
+async fn imported_thread_keeps_prior_messages_after_resumed_turns() {
+    let mut iso = Iso::new("cowork-imported-seed-");
+    // Every model call (turns and title generation) answers with the default "Done.".
+    start_mock(&mut iso).await;
+    let server = start_server(iso.options()).await.unwrap();
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let runtime = server.runtime();
+
+    let mut imported = persist_snapshot(
+        "imported-1",
+        "root",
+        None,
+        None,
+        "openai",
+        "gpt-5.4",
+        &cwd,
+        Value::Null,
+    );
+    imported.snapshot.messages = vec![
+        json!({ "role": "user", "content": "imported question" }),
+        json!({ "role": "assistant", "content": [{ "type": "text", "text": "imported answer" }] }),
+        json!({ "role": "user", "content": "imported follow-up" }),
+    ];
+    runtime
+        .session_db
+        .persist_session_mutation(imported)
+        .await
+        .unwrap();
+    assert!(
+        runtime
+            .journal
+            .list("imported-1", 0, None)
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut ws = connect(server.ws_url()).await;
+    run_turn(&mut ws, "imported-1", "resumed one", "resume-turn-1").await;
+    run_turn(&mut ws, "imported-1", "resumed two", "resume-turn-2").await;
+
+    let msg = |role: &str, text: &str| (role.to_owned(), text.to_owned());
+    let expected_feed = vec![
+        msg("user", "imported question"),
+        msg("assistant", "imported answer"),
+        msg("user", "imported follow-up"),
+        msg("user", "resumed one"),
+        msg("assistant", "Done."),
+        msg("user", "resumed two"),
+        msg("assistant", "Done."),
+    ];
+    let expected_seed = json!({
+        "id": "seed",
+        "status": "completed",
+        "items": [
+            { "type": "user", "text": "imported question" },
+            { "type": "assistant", "text": "imported answer" },
+            { "type": "user", "text": "imported follow-up" }
+        ]
+    });
+    let assert_read = |read: &Value| {
+        assert_eq!(feed_messages(&read["coworkSnapshot"]), expected_feed);
+        let turns = compact_turns(&read["thread"]["turns"]);
+        assert_eq!(turns.len(), 3, "{turns:?}");
+        assert_eq!(turns[0], expected_seed);
+        assert_eq!(
+            turns[1]["items"],
+            json!([
+                { "type": "user", "text": "resumed one" },
+                { "type": "assistant", "text": "Done." }
+            ])
+        );
+        assert_eq!(
+            turns[2]["items"],
+            json!([
+                { "type": "user", "text": "resumed two" },
+                { "type": "assistant", "text": "Done." }
+            ])
+        );
+    };
+
+    let mut ignored = Vec::new();
+    let read = call(
+        &mut ws,
+        "read",
+        "thread/read",
+        json!({ "threadId": "imported-1", "includeTurns": true }),
+        &mut ignored,
+    )
+    .await;
+    assert!(read.get("error").is_none(), "{read}");
+    assert_read(&read["result"]);
+
+    // The marker is written once, before the first journaled turn, with the imported count.
+    assert_eq!(
+        seed_marker_events(runtime, "imported-1"),
+        vec![json!({ "threadId": "imported-1", "messageCount": 3 })]
+    );
+
+    // After idle eviction, the persisted snapshot and stored messages read the same history.
+    let unsub = call(
+        &mut ws,
+        "unsub",
+        "thread/unsubscribe",
+        json!({ "threadId": "imported-1" }),
+        &mut ignored,
+    )
+    .await;
+    assert!(unsub.get("error").is_none(), "{unsub}");
+    runtime.evict_idle_sessions(Duration::ZERO);
+    assert!(runtime.get_live_thread("imported-1").is_none());
+    let rehydrated = runtime
+        .read_or_hydrate_thread("imported-1", 0, true)
+        .await
+        .unwrap();
+    assert_read(&rehydrated);
+}
+
+/// Threads created by the server start their journal with `thread/started`, so their turns
+/// never get a seed marker or a duplicated seed turn.
+#[tokio::test]
+async fn new_thread_turns_do_not_duplicate_as_seed_messages() {
+    let mut iso = Iso::new("cowork-new-thread-seed-");
+    start_mock(&mut iso).await;
+    let server = start_server(iso.options()).await.unwrap();
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let mut ws = connect(server.ws_url()).await;
+    let thread_id = start_thread(&mut ws, &cwd, "openai", "gpt-5.4").await;
+    run_turn(&mut ws, &thread_id, "first", "turn-1").await;
+    run_turn(&mut ws, &thread_id, "second", "turn-2").await;
+
+    let mut ignored = Vec::new();
+    let read = call(
+        &mut ws,
+        "read",
+        "thread/read",
+        json!({ "threadId": thread_id, "includeTurns": true }),
+        &mut ignored,
+    )
+    .await;
+    assert!(read.get("error").is_none(), "{read}");
+    let msg = |role: &str, text: &str| (role.to_owned(), text.to_owned());
+    assert_eq!(
+        feed_messages(&read["result"]["coworkSnapshot"]),
+        vec![
+            msg("user", "first"),
+            msg("assistant", "Done."),
+            msg("user", "second"),
+            msg("assistant", "Done."),
+        ]
+    );
+    let turns = compact_turns(&read["result"]["thread"]["turns"]);
+    assert_eq!(turns.len(), 2, "{turns:?}");
+    assert!(turns.iter().all(|t| t["id"] != "seed"), "{turns:?}");
+    assert!(seed_marker_events(server.runtime(), &thread_id).is_empty());
 }
 
 /// `cowork/session/config/set` child routing overrides reach the thread's cached child-agent

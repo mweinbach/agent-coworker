@@ -432,6 +432,120 @@ pub fn split_yaml_frontmatter(raw: &str) -> (Option<String>, String) {
     (None, normalized.to_owned())
 }
 
+/// True when the canonical `child` lies strictly below the canonical `root`. Compared lexically
+/// (no re-resolution), so a link swapped in after `child` was resolved cannot move the boundary.
+fn canonical_strictly_within(root: &Path, child: &Path) -> bool {
+    if cfg!(windows) {
+        let root_low = PathBuf::from(root.to_string_lossy().to_lowercase());
+        let child_low = PathBuf::from(child.to_string_lossy().to_lowercase());
+        child_low != root_low && child_low.starts_with(&root_low)
+    } else {
+        child != root && child.starts_with(root)
+    }
+}
+
+/// Resolves `skill_dir` to its canonical path and requires it to be a directory strictly inside
+/// the canonical skills root `root_canon`. A symlinked skill directory that resolves outside its
+/// root (or onto the root itself) is refused.
+pub fn confine_skill_dir(root_canon: &Path, skill_dir: &Path) -> Option<PathBuf> {
+    let canon = fs::canonicalize(skill_dir).ok()?;
+    (canon.is_dir() && canonical_strictly_within(root_canon, &canon)).then_some(canon)
+}
+
+/// Reads the regular file at `path` without following a symlink (Windows: reparse point) in its
+/// final component, then requires the real path of the opened handle to lie strictly inside the
+/// canonical `root_canon` (catches a parent directory swapped for a link after the check). FIFOs,
+/// devices and directories are refused. `max_bytes` bounds the read when set.
+pub fn read_confined_file_bytes(
+    root_canon: &Path,
+    path: &Path,
+    max_bytes: Option<u64>,
+) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = crate::fs_tools::open_no_follow(path).map_err(|err| {
+        if crate::fs_tools::is_symlink_open_error(&err) {
+            std::io::Error::other(format!(
+                "refusing to follow a symbolic link at {}",
+                path.display()
+            ))
+        } else {
+            err
+        }
+    })?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(std::io::Error::other(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+    if let Some(max) = max_bytes
+        && meta.len() > max
+    {
+        return Err(std::io::Error::other(format!(
+            "{} exceeds {max} bytes",
+            path.display()
+        )));
+    }
+    let real = crate::fs_tools::opened_file_real_path(&file, path)?;
+    if !canonical_strictly_within(root_canon, &real) {
+        return Err(std::io::Error::other(format!(
+            "{} resolves outside {}",
+            path.display(),
+            root_canon.display()
+        )));
+    }
+    crate::fs_tools::restore_blocking_mode(&file);
+    let mut out = Vec::new();
+    match max_bytes {
+        Some(max) => {
+            file.take(max.saturating_add(1)).read_to_end(&mut out)?;
+            if out.len() as u64 > max {
+                return Err(std::io::Error::other(format!(
+                    "{} exceeds {max} bytes",
+                    path.display()
+                )));
+            }
+        }
+        None => {
+            let mut file = file;
+            file.read_to_end(&mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+/// UTF-8 text variant of [`read_confined_file_bytes`].
+pub fn read_confined_text_file(root_canon: &Path, path: &Path) -> std::io::Result<String> {
+    let bytes = read_confined_file_bytes(root_canon, path, None)?;
+    String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Reads `<skill_dir>/SKILL.md` confined to the skill's root (the directory containing
+/// `skill_dir`): the skill directory must resolve strictly inside that root, and `SKILL.md` must
+/// be a regular file (never a followed symlink) whose opened real path stays inside the
+/// canonical skill directory. Every discovery scan and every later re-read of a discovered skill
+/// goes through here, so a skill swapped for a link after discovery is refused as well.
+pub fn read_skill_md_confined(skill_dir: &Path) -> std::io::Result<String> {
+    let root = skill_dir
+        .parent()
+        .ok_or_else(|| std::io::Error::other("skill directory has no parent"))?;
+    let root_canon = fs::canonicalize(root)?;
+    let dir_canon = confine_skill_dir(&root_canon, skill_dir).ok_or_else(|| {
+        std::io::Error::other(format!(
+            "skill directory {} resolves outside {}",
+            skill_dir.display(),
+            root_canon.display()
+        ))
+    })?;
+    read_confined_text_file(&dir_canon, &dir_canon.join("SKILL.md")).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!("SKILL.md must be a regular file inside its skill directory: {err}"),
+        )
+    })
+}
+
 /// Strictly validates and parses a `SKILL.md` file using `serde-saphyr` (`2.0`).
 pub fn parse_and_validate_skill_md(
     dir_path: &Path,
@@ -586,19 +700,21 @@ fn default_triggers_for_skill(name: &str) -> Vec<String> {
 }
 
 pub fn read_skill_agent_interface_metadata(skill_dir: &Path) -> Option<SkillInterfaceMetadata> {
-    let agents_dir = skill_dir.join("agents");
-    if !agents_dir.is_dir() {
+    let skill_canon = fs::canonicalize(skill_dir).ok()?;
+    // `agents/` and every file read below must stay inside the canonical skill directory.
+    let agents_dir = fs::canonicalize(skill_canon.join("agents")).ok()?;
+    if !agents_dir.is_dir() || !canonical_strictly_within(&skill_canon, &agents_dir) {
         return None;
     }
     let mut yaml_files: Vec<PathBuf> = fs::read_dir(&agents_dir)
         .ok()?
         .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.path())
         .filter(|p| {
-            p.is_file()
-                && p.extension().and_then(|x| x.to_str()).is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
-                })
+            p.extension().and_then(|x| x.to_str()).is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
+            })
         })
         .collect();
     if yaml_files.is_empty() {
@@ -610,9 +726,8 @@ pub fn read_skill_agent_interface_metadata(skill_dir: &Path) -> Option<SkillInte
         b_pref.cmp(&a_pref).then_with(|| a.cmp(b))
     });
 
-    let skill_canon = cowork_config::canonicalize_sync(skill_dir);
     for yf in yaml_files {
-        let Ok(raw) = fs::read_to_string(&yf) else {
+        let Ok(raw) = read_confined_text_file(&skill_canon, &yf) else {
             continue;
         };
         let Ok(parsed) = serde_saphyr::from_str::<RawAgentYamlFile>(&raw) else {
@@ -665,8 +780,10 @@ pub fn encode_confined_icon_data_url(root_canon: &Path, raw_ref: &str) -> Option
     if !cowork_config::is_inside(root_canon, &canon) || !canon.is_file() {
         return None;
     }
-    let bytes = fs::read(&canon).ok()?;
-    if bytes.is_empty() || bytes.len() > 256 * 1024 {
+    // No-follow open, re-checked against the root, so an icon swapped for a link after the
+    // canonical check cannot pull in a file from outside the skill.
+    let bytes = read_confined_file_bytes(root_canon, &canon, Some(256 * 1024)).ok()?;
+    if bytes.is_empty() {
         return None;
     }
     let ext = canon
@@ -713,18 +830,19 @@ pub fn discover_skills_for_config(
         );
     }
 
-    // 2. User / global skills (`~/.cowork/skills` and `~/.agents/skills`)
+    // 2. User / global skills (`~/.cowork/skills` and `~/.agents/skills`). Like TS catalog
+    // parsing (and `collect_skill_installations`), non-bundled skills need valid frontmatter.
     scan_skill_dir_into(
         &config.user_agents_dir.join("skills"),
         SkillScope::Global,
-        false,
+        true,
         None,
         &mut map,
     );
     scan_skill_dir_into(
         &config.user_cowork_dir.join("skills"),
         SkillScope::Global,
-        false,
+        true,
         None,
         &mut map,
     );
@@ -764,16 +882,19 @@ pub fn discover_skills_for_config(
                 if !cowork_config::is_inside(&root_canon, &dir_canon) {
                     continue;
                 }
-                let skill_md = dir_canon.join("SKILL.md");
-                let Ok(raw) = fs::read_to_string(&skill_md) else {
+                // Confined to the plugin's skills directory, no-follow `SKILL.md` open.
+                let Ok(raw) = read_skill_md_confined(&dir_path) else {
                     continue;
                 };
+                let skill_md = dir_canon.join("SKILL.md");
                 let skill_scope = match target_scope {
                     cowork_mcp::PluginScope::Workspace => SkillScope::Project,
                     cowork_mcp::PluginScope::User => SkillScope::User,
                 };
+                // TS `parseSkillDocument(..., { mode: "catalog" })`: plugin skills need valid
+                // frontmatter (kebab `name` matching the directory, non-empty `description`).
                 if let Ok(mut disc) =
-                    parse_and_validate_skill_md(&dir_canon, &skill_md, &raw, skill_scope, false)
+                    parse_and_validate_skill_md(&dir_canon, &skill_md, &raw, skill_scope, true)
                 {
                     let ov_key = cowork_mcp::plugin_skill_override_key(&plugin.id, &disc.raw_name);
                     if overrides.skills.get(&ov_key).is_some_and(|o| !o.enabled) {
@@ -796,7 +917,7 @@ pub fn discover_skills_for_config(
         config.workspace_agents_dir.join("skills"),
         config.project_cowork_dir.join("skills"),
     ] {
-        scan_skill_dir_into(&ws_dir, SkillScope::Project, false, None, &mut map);
+        scan_skill_dir_into(&ws_dir, SkillScope::Project, true, None, &mut map);
     }
 
     map
@@ -825,10 +946,12 @@ fn scan_skill_dir_into(
         .collect();
     dirs.sort();
     for dir_path in dirs {
-        let skill_md = dir_path.join("SKILL.md");
-        let Ok(raw) = fs::read_to_string(&skill_md) else {
+        // The skill directory must resolve inside `root`, and `SKILL.md` is opened without
+        // following links, so a workspace cannot point a skill at an arbitrary file.
+        let Ok(raw) = read_skill_md_confined(&dir_path) else {
             continue;
         };
+        let skill_md = dir_path.join("SKILL.md");
         let Ok(disc) = parse_and_validate_skill_md(&dir_path, &skill_md, &raw, scope, strict)
         else {
             continue;
@@ -855,7 +978,7 @@ pub fn discover_skills(
     scan_skill_dir_into(
         &cowork_home.join("skills"),
         SkillScope::Global,
-        false,
+        true,
         None,
         &mut map,
     );
@@ -864,7 +987,7 @@ pub fn discover_skills(
         working_directory.join(".agents").join("skills"),
         working_directory.join(".cowork").join("skills"),
     ] {
-        scan_skill_dir_into(&ws_dir, SkillScope::Project, false, None, &mut map);
+        scan_skill_dir_into(&ws_dir, SkillScope::Project, true, None, &mut map);
     }
     map
 }
@@ -926,7 +1049,9 @@ fn defang_untrusted_skill_markers(body: &str) -> String {
 }
 
 pub fn render_skill_body_for_model(skill: &DiscoveredSkill) -> ToolResult<String> {
-    let raw = fs::read_to_string(&skill.skill_md_path).map_err(|e| {
+    // Re-read under the same confinement as discovery: the skill may have been swapped for a
+    // link since it was discovered.
+    let raw = read_skill_md_confined(&skill.dir_path).map_err(|e| {
         ToolError::Execution(format!(
             "Failed to read skill '{}': {e}",
             skill.skill_md_path.display()

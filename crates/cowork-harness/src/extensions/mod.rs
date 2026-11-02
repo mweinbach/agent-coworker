@@ -17,7 +17,8 @@ use cowork_mcp::plugin_overrides::{
     plugin_skill_override_key, read_plugin_overrides,
 };
 use cowork_tools::{
-    DiscoveredSkill, SkillScope, discover_skills_for_config, parse_and_validate_skill_md,
+    DiscoveredSkill, SkillScope, confine_skill_dir, discover_skills_for_config,
+    parse_and_validate_skill_md, read_confined_text_file, read_skill_md_confined,
 };
 use data_encoding::BASE64;
 use serde::{Deserialize, Serialize};
@@ -425,7 +426,11 @@ impl ExtensionManager {
             .into_iter()
             .find(|s| s.name == skill_name)
             .ok_or_else(|| format!("Skill '{skill_name}' not found."))?;
-        let raw = fs::read_to_string(&entry.path)
+        // Re-read under discovery's confinement (no-follow `SKILL.md` inside its skill root).
+        let skill_dir = Path::new(&entry.path)
+            .parent()
+            .ok_or_else(|| format!("Failed reading skill '{}': invalid path", entry.name))?;
+        let raw = read_skill_md_confined(skill_dir)
             .map_err(|e| format!("Failed reading skill '{}': {e}", entry.name))?;
         Ok((entry, raw))
     }
@@ -445,7 +450,8 @@ impl ExtensionManager {
         let content = entry
             .skill_path
             .as_deref()
-            .and_then(|p| fs::read_to_string(p).ok());
+            .and_then(|p| Path::new(p).parent())
+            .and_then(|dir| read_skill_md_confined(dir).ok());
         (Some(entry), content)
     }
 
@@ -573,6 +579,9 @@ impl ExtensionManager {
         writable: bool,
         out: &mut Vec<SkillInstallationEntry>,
     ) {
+        let Ok(root_canon) = fs::canonicalize(dir) else {
+            return;
+        };
         let Ok(rd) = fs::read_dir(dir) else {
             return;
         };
@@ -609,11 +618,17 @@ impl ExtensionManager {
                 }
             }
 
+            // A skill directory linked outside its scope root is not a skill of this scope
+            // (TS listed only real `Dirent` directories).
+            let Some(skill_canon) = confine_skill_dir(&root_canon, &skill_dir) else {
+                continue;
+            };
             let skill_md = skill_dir.join("SKILL.md");
             let manifest_file = skill_dir.join(".cowork-skill.json");
-            let manifest = fs::read_to_string(&manifest_file)
-                .ok()
-                .and_then(|s| serde_json::from_str::<SkillInstallManifest>(&s).ok());
+            let manifest =
+                read_confined_text_file(&skill_canon, &skill_canon.join(".cowork-skill.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<SkillInstallManifest>(&s).ok());
 
             let installation_id = manifest
                 .as_ref()
@@ -649,7 +664,8 @@ impl ExtensionManager {
                 .is_some()
                 .then(|| manifest_file.to_string_lossy().into_owned());
 
-            if !skill_md.is_file() {
+            // A symlinked or otherwise non-regular `SKILL.md` is reported as unreadable below.
+            if !matches!(fs::symlink_metadata(&skill_md), Ok(m) if !m.is_dir()) {
                 out.push(SkillInstallationEntry {
                     installation_id,
                     name: dir_name,
@@ -687,7 +703,7 @@ impl ExtensionManager {
                 continue;
             }
 
-            let raw = match fs::read_to_string(&skill_md) {
+            let raw = match read_skill_md_confined(&skill_dir) {
                 Ok(s) => s,
                 Err(e) => {
                     out.push(SkillInstallationEntry {
@@ -829,7 +845,7 @@ impl ExtensionManager {
             };
             for sdir in dirs {
                 let skill_md = sdir.join("SKILL.md");
-                let Ok(raw) = fs::read_to_string(&skill_md) else {
+                let Ok(raw) = read_skill_md_confined(&sdir) else {
                     continue;
                 };
                 let Ok(parsed) =
@@ -2765,7 +2781,7 @@ fn build_plugin_skill_summaries(
     let mut out = Vec::new();
     for dir in list_plugin_skill_dirs(skills_dirs) {
         let md = dir.join("SKILL.md");
-        let Ok(raw) = fs::read_to_string(&md) else {
+        let Ok(raw) = read_skill_md_confined(&dir) else {
             continue;
         };
         let Ok(parsed) = parse_and_validate_skill_md(&dir, &md, &raw, SkillScope::Project, true)

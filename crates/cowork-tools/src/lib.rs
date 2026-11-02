@@ -48,10 +48,12 @@ pub use context::{
 pub use fs_tools::{EditTool, ReadTool, WriteTool};
 pub use interactive::{
     AskUserQuestionTool, DiscoveredSkill, ParsedSkillFrontmatter, SkillInterfaceMetadata,
-    SkillScope, SkillTool, TodoWriteTool, discover_skills, discover_skills_for_config,
-    encode_confined_icon_data_url, frame_untrusted_skill_body, is_builtin_skill_feature_gated,
-    is_valid_skill_slug, parse_and_validate_skill_md, read_skill_agent_interface_metadata,
-    render_skill_body_for_model, skill_policy_overlay, split_yaml_frontmatter,
+    SkillScope, SkillTool, TodoWriteTool, confine_skill_dir, discover_skills,
+    discover_skills_for_config, encode_confined_icon_data_url, frame_untrusted_skill_body,
+    is_builtin_skill_feature_gated, is_valid_skill_slug, parse_and_validate_skill_md,
+    read_confined_file_bytes, read_confined_text_file, read_skill_agent_interface_metadata,
+    read_skill_md_confined, render_skill_body_for_model, skill_policy_overlay,
+    split_yaml_frontmatter,
 };
 pub use mcp_tools::{
     DEFAULT_TOOL_SEARCH_LIMIT, LoadedMcpBuiltinToolAdapter, MAX_TOOL_SEARCH_LIMIT, McpCallTool,

@@ -166,7 +166,7 @@ pub fn open_read_checked(ctx: &ToolExecutionContext, path: &Path) -> ToolResult<
 }
 
 #[cfg(unix)]
-fn open_no_follow(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     // O_NONBLOCK: a FIFO swapped in after the check must not block the open; the handle's
     // fstat then rejects it. It has no effect on regular-file reads and is cleared afterwards.
@@ -177,7 +177,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(windows)]
-fn open_no_follow(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     // Open a reparse point (symlink/junction) itself instead of its target; its metadata is
     // then not a regular file and the read is refused.
@@ -188,14 +188,14 @@ fn open_no_follow(path: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_no_follow(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<File> {
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(std::io::Error::other("symbolic link"));
     }
     File::open(path)
 }
 
-fn is_symlink_open_error(err: &std::io::Error) -> bool {
+pub(crate) fn is_symlink_open_error(err: &std::io::Error) -> bool {
     #[cfg(unix)]
     {
         // Linux/macOS report ELOOP for O_NOFOLLOW on a symlink; FreeBSD reports EMLINK.
@@ -209,7 +209,7 @@ fn is_symlink_open_error(err: &std::io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn restore_blocking_mode(file: &File) {
+pub(crate) fn restore_blocking_mode(file: &File) {
     use std::os::fd::AsRawFd;
     let fd = file.as_raw_fd();
     // SAFETY: `fd` is a valid open descriptor owned by `file` for the duration of these calls.
@@ -222,7 +222,7 @@ fn restore_blocking_mode(file: &File) {
 }
 
 #[cfg(not(unix))]
-fn restore_blocking_mode(_file: &File) {}
+pub(crate) fn restore_blocking_mode(_file: &File) {}
 
 /// The real path of the file `file` has open (`/proc/self/fd` on Linux, `F_GETPATH` on macOS,
 /// `GetFinalPathNameByHandleW` on Windows; elsewhere the canonical `requested` path, only if it

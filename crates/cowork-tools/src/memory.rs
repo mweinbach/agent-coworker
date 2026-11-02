@@ -590,32 +590,46 @@ impl AdvancedMemoryStore {
     pub fn read_index_summary(&self) -> String {
         let mut sections = Vec::new();
         for (scope, dir) in self.readable_scope_dirs() {
-            let idx_path = dir.join("MEMORY.md");
-            if let Ok(content) = fs::read_to_string(idx_path) {
-                let trimmed = content.trim();
-                if !trimmed.is_empty() {
-                    let label = scope_display_label(scope);
-                    sections.push(format!("### {label} Memories\n{trimmed}"));
-                }
+            if let Ok(index) = self.render_index(&dir, scope)
+                && !index.is_empty()
+            {
+                let label = scope_display_label(scope);
+                sections.push(format!("### {label} Memories\n{index}"));
             }
         }
         sections.join("\n\n")
     }
 
+    /// The memory index for `dir`, rendered from its entry files (TS `renderIndex`), so it
+    /// reflects the files even when the generated `MEMORY.md` is missing or stale; `""` when
+    /// the folder has no entries.
+    pub fn render_index(&self, dir: &Path, scope_label: &str) -> ToolResult<String> {
+        let entries = self.list_entries_in_dir(dir, scope_label)?;
+        if entries.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(render_memory_index(&entries))
+    }
+
     fn rebuild_index_locked(&self, dir: &Path, scope_label: &str) -> ToolResult<()> {
         let entries = self.list_entries_in_dir(dir, scope_label)?;
-        let mut lines = Vec::with_capacity(entries.len() + 2);
-        lines.push("# Memory Index".to_owned());
-        lines.push(String::new());
-        for e in entries {
-            lines.push(format!(
-                "- **{}** (`{}` [{}]): {}",
-                e.name, e.slug, e.memory_type, e.description
-            ));
-        }
-        fs::write(dir.join("MEMORY.md"), lines.join("\n") + "\n")
+        fs::write(dir.join("MEMORY.md"), render_memory_index(&entries) + "\n")
             .map_err(|e| ToolError::Execution(format!("Failed to update MEMORY.md: {e}")))
     }
+}
+
+/// `MEMORY.md` contents for a folder's entries (without the trailing newline).
+fn render_memory_index(entries: &[AdvancedMemoryEntry]) -> String {
+    let mut lines = Vec::with_capacity(entries.len() + 2);
+    lines.push("# Memory Index".to_owned());
+    lines.push(String::new());
+    for e in entries {
+        lines.push(format!(
+            "- **{}** (`{}` [{}]): {}",
+            e.name, e.slug, e.memory_type, e.description
+        ));
+    }
+    lines.join("\n")
 }
 
 fn yaml_quote(s: &str) -> String {

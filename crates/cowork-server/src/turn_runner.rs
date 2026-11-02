@@ -971,15 +971,14 @@ pub(crate) fn build_memory_prompt_section(
     let mut parts = Vec::new();
     if advanced_enabled {
         // The session's own folder, the shared `(chats)` folder (TS `renderPromptSection`
-        // injected it into project sessions too), then `_global`.
+        // injected it into project sessions too), then `_global`. Each index is rendered from
+        // the entry files (TS `renderIndex`), not read from a possibly missing/stale MEMORY.md.
         for (scope, dir) in adv_store.readable_scope_dirs() {
-            let idx_path = dir.join("MEMORY.md");
-            if let Ok(raw) = std::fs::read_to_string(&idx_path) {
-                let trimmed = raw.trim();
-                if !trimmed.is_empty() {
-                    let label = cowork_tools::memory::scope_display_label(scope);
-                    parts.push(format!("### {label} Memory Index\n{trimmed}"));
-                }
+            if let Ok(index) = adv_store.render_index(&dir, scope)
+                && !index.is_empty()
+            {
+                let label = cowork_tools::memory::scope_display_label(scope);
+                parts.push(format!("### {label} Memory Index\n{index}"));
             }
         }
     } else {

@@ -320,3 +320,30 @@ fn readable_scope_dirs_list_chats_once_for_one_off_chats() {
         ]
     );
 }
+
+#[test]
+fn render_index_reflects_entry_files_not_a_stale_memory_md() {
+    let f = fixture();
+    let chats = f.chats_dir();
+    assert_eq!(f.store.render_index(&chats, "chats").unwrap(), "");
+    write_ts_memory(&chats, "kept", "Kept", "kept-desc", "feedback", "k");
+    fs::write(
+        chats.join("MEMORY.md"),
+        "# Memory Index\n\n- [Ghost](ghost.md) \u{2014} ghost-desc\n",
+    )
+    .unwrap();
+    let index = f.store.render_index(&chats, "chats").unwrap();
+    assert!(index.starts_with("# Memory Index\n\n"), "{index}");
+    assert!(index.contains("kept-desc"), "{index}");
+    assert!(index.contains("[feedback]"), "{index}");
+    assert!(!index.contains("ghost-desc"), "{index}");
+    // Rendering is read-only; the generated file is left for the next write to regenerate.
+    assert!(
+        fs::read_to_string(chats.join("MEMORY.md"))
+            .unwrap()
+            .contains("ghost-desc")
+    );
+    let summary = f.store.read_index_summary();
+    assert!(summary.contains("### Shared (chats) Memories"), "{summary}");
+    assert!(summary.contains("kept-desc"), "{summary}");
+}

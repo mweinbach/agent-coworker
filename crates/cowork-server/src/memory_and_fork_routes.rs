@@ -232,12 +232,19 @@ impl ServerRuntimeState {
         let entries = store
             .list_entries_in_dir(&dir, "workspace")
             .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string()))?;
-        let global_dir = store
-            .resolve_scope_dir("global", None)
-            .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string()))?;
-        let global_entries = store
-            .list_entries_in_dir(&global_dir, "global")
-            .unwrap_or_default();
+        // `folder` / `folders` / `memories` is the TS `advanced_memory_list` event: `memories`
+        // is the listed folder only, and the shared `(chats)` folder is reached (and edited) by
+        // name through `folders` + the `folder/*` routes. `globalEntries` (Rust addition) holds
+        // the session's cross-workspace memories the way `recallMemory` scope `global` reads
+        // them: the shared `(chats)` folder, then `_global`, minus the folder already listed.
+        let global_entries: Vec<_> = store
+            .readable_scope_dirs()
+            .into_iter()
+            .filter(|(scope, other)| {
+                *scope != cowork_tools::memory::WORKSPACE_SCOPE_LABEL && *other != dir
+            })
+            .flat_map(|(scope, other)| store.list_entries_in_dir(&other, scope).unwrap_or_default())
+            .collect();
         let folders = store.list_folders().unwrap_or_default();
         Ok(json!({
             "event": {

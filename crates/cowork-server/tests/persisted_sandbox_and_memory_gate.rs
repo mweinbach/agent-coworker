@@ -788,21 +788,48 @@ async fn memory_generation_runs_when_advanced_memory_is_on() {
     server.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn project_session_prompt_injects_the_shared_chats_memory_index() {
-    let env = Env::new().await;
-    // A `(chats)` folder as the TS store left it: an entry with nested `metadata` and the
-    // generated `MEMORY.md` (TS `renderMemoryIndex`).
+/// The `(chats)` folder as the TS store left it (entries with nested `metadata`), with a
+/// stale `MEMORY.md` that lists a deleted entry and misses a newer one.
+fn write_ts_chats_folder(env: &Env) -> PathBuf {
     let chats = env.home.join(".cowork").join("memories").join("(chats)");
     fs::create_dir_all(&chats).unwrap();
     fs::write(
         chats.join("commit-style.md"),
-        "---\nname: \"Commit style\"\ndescription: \"chats-shared-pref-marker\"\nmetadata:\n  node_type: memory\n  type: \"feedback\"\n---\n\nUse conventional commits.\n",
+        "---\nname: \"Commit style\"\ndescription: \"chats-shared-pref-marker\"\nmetadata:\n  node_type: memory\n  type: \"feedback\"\n  originSessionId: \"sess-ts-1\"\n---\n\nUse conventional commits.\n",
+    )
+    .unwrap();
+    fs::write(
+        chats.join("newer.md"),
+        "---\nname: \"Newer\"\ndescription: \"unindexed-pref-marker\"\nmetadata:\n  node_type: memory\n  type: \"note\"\n---\n\nnewer body\n",
     )
     .unwrap();
     fs::write(
         chats.join("MEMORY.md"),
-        "# Memory Index\n\n- [Commit style](commit-style.md) \u{2014} chats-shared-pref-marker\n",
+        "# Memory Index\n\n- [Commit style](commit-style.md) \u{2014} chats-shared-pref-marker\n- [Ghost](ghost.md) \u{2014} ghost-index-marker\n",
+    )
+    .unwrap();
+    chats
+}
+
+/// The workspace's own advanced-memory folder (TS `resolveMemoryFolderName`).
+fn workspace_memory_dir(env: &Env) -> PathBuf {
+    let key = cowork_tools::AdvancedMemoryStore::folder_key_for_workspace(
+        &env.workspace,
+        &env.home.join(".cowork").join("workspaces").join("chats"),
+    );
+    env.home.join(".cowork").join("memories").join(key)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_session_prompt_injects_the_shared_chats_memory_index() {
+    let env = Env::new().await;
+    write_ts_chats_folder(&env);
+    // A workspace entry with no generated MEMORY.md at all.
+    let own = workspace_memory_dir(&env);
+    fs::create_dir_all(&own).unwrap();
+    fs::write(
+        own.join("build.md"),
+        "---\nname: Build\ndescription: workspace-own-marker\ntype: project\n---\n\nb\n",
     )
     .unwrap();
 
@@ -816,7 +843,97 @@ async fn project_session_prompt_injects_the_shared_chats_memory_index() {
         prompt.contains("### Shared (chats) Memory Index"),
         "project sessions keep the shared (chats) index (TS renderPromptSection): {prompt}"
     );
+    // The injected indexes are rendered from the entry files (TS `renderIndex`), not from a
+    // missing or stale MEMORY.md.
     assert!(prompt.contains("chats-shared-pref-marker"), "{prompt}");
+    assert!(prompt.contains("unindexed-pref-marker"), "{prompt}");
+    assert!(!prompt.contains("ghost-index-marker"), "{prompt}");
+    assert!(prompt.contains("workspace-own-marker"), "{prompt}");
+    let own_at = prompt.find("### Workspace Memory Index").unwrap();
+    let shared_at = prompt.find("### Shared (chats) Memory Index").unwrap();
+    assert!(own_at < shared_at, "{prompt}");
+    drop(ws);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_workspace_advanced_list_exposes_and_edits_the_shared_chats_folder() {
+    let env = Env::new().await;
+    let chats = write_ts_chats_folder(&env);
+    let cwd = env.workspace.to_string_lossy().into_owned();
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let listed = call(
+        &mut ws,
+        "adv-list",
+        "cowork/memory/advanced/list",
+        json!({ "cwd": cwd }),
+    )
+    .await;
+    let event = &listed["result"]["event"];
+    assert_eq!(event["type"], json!("advanced_memory_list"), "{listed}");
+    // TS `advanced_memory_list`: `memories` is the workspace's own folder only.
+    assert_eq!(event["memories"], json!([]), "{listed}");
+    assert!(
+        event["folders"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("(chats)")),
+        "{listed}"
+    );
+    let shared = event["globalEntries"].as_array().unwrap();
+    let commit = shared
+        .iter()
+        .find(|e| e["slug"] == "commit-style")
+        .unwrap_or_else(|| panic!("(chats) entry missing from globalEntries: {listed}"));
+    assert_eq!(commit["scope"], json!("chats"));
+    assert_eq!(commit["type"], json!("feedback"));
+    assert_eq!(commit["originSessionId"], json!("sess-ts-1"));
+    assert!(shared.iter().any(|e| e["slug"] == "newer"), "{listed}");
+
+    // Editable from the project workspace through the explicit-folder routes (TS
+    // `cowork/memory/advanced/folder/upsert`), keeping its classification.
+    let edited = call(
+        &mut ws,
+        "adv-edit",
+        "cowork/memory/advanced/folder/upsert",
+        json!({
+            "cwd": cwd,
+            "folder": "(chats)",
+            "slug": "commit-style",
+            "name": "Commit style",
+            "description": "edited-description",
+            "type": commit["type"],
+            "body": "Use conventional commits.",
+        }),
+    )
+    .await;
+    let event = &edited["result"]["event"];
+    assert_eq!(event["folder"], json!("(chats)"), "{edited}");
+    let entry = event["memories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["slug"] == "commit-style")
+        .unwrap_or_else(|| panic!("{edited}"));
+    assert_eq!(entry["type"], json!("feedback"));
+    assert_eq!(entry["description"], json!("edited-description"));
+    assert_eq!(entry["originSessionId"], json!("sess-ts-1"));
+    // The listed folder is not repeated under `globalEntries`.
+    assert!(
+        !event["globalEntries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["slug"] == "commit-style"),
+        "{edited}"
+    );
+    assert!(
+        fs::read_to_string(chats.join("commit-style.md"))
+            .unwrap()
+            .contains("edited-description")
+    );
     drop(ws);
     server.shutdown().await;
 }

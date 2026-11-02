@@ -57,13 +57,13 @@ pub use patch_store::{
     ProjectConfigPatch, UserProfilePatch, merge_config_patch, persist_project_config_patch,
 };
 pub use paths::{
-    AiCoworkerPaths, CaseSensitivity, PROTECTED_METADATA_DIR_NAMES, assert_within_roots,
-    canonical_key, canonicalize_sync, cowork_home, crosses_protected_metadata,
+    AiCoworkerPaths, CaseSensitivity, MEMORY_DB_FILE_NAME, PROTECTED_METADATA_DIR_NAMES,
+    assert_within_roots, canonical_key, canonicalize_sync, cowork_home, crosses_protected_metadata,
     ensure_ai_coworker_home, ensure_private_dir_sync, env_map_from_process, fs_case_sensitivity,
     get_ai_coworker_paths, get_one_off_chats_root, harden_private_file_sync, host_platform,
     is_inside, is_inside_with_options, is_path_inside_one_off_chats_root, normalize_lexical_path,
-    path_has_link_component, resolve_home_dir, same_path, same_workspace_path,
-    write_text_file_atomic,
+    path_has_link_component, project_memory_cowork_dir, project_memory_db_path, resolve_home_dir,
+    same_path, same_workspace_path, user_memory_db_path, write_text_file_atomic,
 };
 pub use providers::{
     ChildModelRoutingMode, ProviderName, RuntimeName, SandboxConfig, SandboxMode,

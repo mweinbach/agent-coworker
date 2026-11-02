@@ -390,6 +390,31 @@ pub fn is_path_inside_one_off_chats_root(cwd: &Path, homedir: &Path) -> bool {
     is_inside_with_options(&root, cwd, host_platform(), false)
 }
 
+/// File name of the SQLite memory store (`src/memoryStore.ts`): `<project>/.cowork/memory.sqlite`
+/// and `~/.cowork/memory.sqlite`. Existing installs keep their memories in these files.
+pub const MEMORY_DB_FILE_NAME: &str = "memory.sqlite";
+
+/// `.cowork` directory owning a workspace's project memory (`src/config.ts`
+/// `projectMemoryCoworkDir`): one-off chat workspaces share `<home>/.cowork/chats/.cowork`;
+/// every other workspace uses its own `<cwd>/.cowork`.
+pub fn project_memory_cowork_dir(cwd: &Path, homedir: &Path) -> PathBuf {
+    if is_path_inside_one_off_chats_root(cwd, homedir) {
+        get_one_off_chats_root(homedir).join(".cowork")
+    } else {
+        cwd.join(".cowork")
+    }
+}
+
+/// Workspace-scope SQLite memory database (`AgentConfig::project_memory_db_path`).
+pub fn project_memory_db_path(cwd: &Path, homedir: &Path) -> PathBuf {
+    project_memory_cowork_dir(cwd, homedir).join(MEMORY_DB_FILE_NAME)
+}
+
+/// User-scope SQLite memory database (`AgentSession`: `${userCoworkDir}/memory.sqlite`).
+pub fn user_memory_db_path(user_cowork_dir: &Path) -> PathBuf {
+    user_cowork_dir.join(MEMORY_DB_FILE_NAME)
+}
+
 /// Writes `contents` atomically via a sibling temporary file and applies optional POSIX mode.
 pub fn write_text_file_atomic(target: &Path, contents: &str, mode: Option<u32>) -> Result<()> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));

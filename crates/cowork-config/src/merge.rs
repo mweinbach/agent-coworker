@@ -14,8 +14,8 @@ use crate::models::{
     ModelRegistry, normalize_child_routing_config, reconcile_reasoning_provider_options,
 };
 use crate::paths::{
-    canonicalize_sync, env_map_from_process, get_ai_coworker_paths, get_one_off_chats_root,
-    host_platform, is_inside, is_path_inside_one_off_chats_root, resolve_home_dir,
+    MEMORY_DB_FILE_NAME, canonicalize_sync, env_map_from_process, get_ai_coworker_paths,
+    host_platform, is_inside, project_memory_cowork_dir, resolve_home_dir,
 };
 use crate::providers::{
     ChildModelRoutingMode, ProviderName, RuntimeName, SandboxConfig, SandboxMode,
@@ -517,14 +517,9 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
     let built_in_config_dir = built_in_dir.join("config");
     let cowork_paths = get_ai_coworker_paths(Some(&homedir), &env);
     let user_cowork_dir = cowork_paths.root_dir.clone();
-    let one_off_chats_root = get_one_off_chats_root(&homedir);
-    let project_memory_cowork_dir = if is_path_inside_one_off_chats_root(&cwd, &homedir) {
-        one_off_chats_root.join(".cowork")
-    } else {
-        project_cowork_dir.clone()
-    };
+    let project_memory_cowork_dir = project_memory_cowork_dir(&cwd, &homedir);
     let project_memory_dir = project_memory_cowork_dir.join("memory");
-    let project_memory_db_path = project_memory_cowork_dir.join("memory.sqlite");
+    let project_memory_db_path = project_memory_cowork_dir.join(MEMORY_DB_FILE_NAME);
     let workspace_plugins_dir = project_cowork_dir.join("plugins");
     let user_plugins_dir = user_cowork_dir.join("plugins");
     let user_config_dir = cowork_paths.config_dir.clone();

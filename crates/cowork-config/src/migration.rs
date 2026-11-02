@@ -327,7 +327,7 @@ fn migrate_scope(paths: ScopePaths) -> Result<AgentConfigMigrationScopeResult> {
         res.entries_skipped_conflicts += skip;
     }
 
-    for file_name in ["AGENT.md", "memory.sqlite"] {
+    for file_name in ["AGENT.md", crate::paths::MEMORY_DB_FILE_NAME] {
         let src_file = paths.source_dir.join(file_name);
         let dst_file = paths.target_dir.join(file_name);
         if !src_file.exists() {

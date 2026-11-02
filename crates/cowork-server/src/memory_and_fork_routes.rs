@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cowork_config::{
     AgentConfig, ProviderName, SupportedModel, canonicalize_sync, get_ai_coworker_paths,
     get_one_off_chats_root, normalize_child_routing_config, parse_child_model_ref,
-    read_connection_store,
+    project_memory_db_path, read_connection_store, user_memory_db_path,
 };
 use cowork_harness::{
     GeneratedNoteTarget, MemoryGenerator, RemoteMemoryModel, generated_note_target,
@@ -99,11 +99,16 @@ impl ServerRuntimeState {
         self.memory_generation_locks.len()
     }
 
+    /// The SQLite memory store every memory RPC, tool, and turn prompt reads. Paths match
+    /// `AgentSession` / `AgentConfig::project_memory_db_path`: `<cwd>/.cowork/memory.sqlite`
+    /// (the shared `<home>/.cowork/chats/.cowork/memory.sqlite` for one-off chats) and
+    /// `~/.cowork/memory.sqlite`, so memories saved by earlier installs stay visible.
     pub fn memory_store_for_workspace(&self, cwd: &Path) -> MemoryStore {
         let ai_paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        let workspace_db = cwd.join(".cowork").join("memory.db");
-        let user_db = ai_paths.root_dir.join("memory.db");
-        MemoryStore::new(workspace_db, user_db)
+        MemoryStore::new(
+            project_memory_db_path(cwd, &self.homedir),
+            user_memory_db_path(&ai_paths.root_dir),
+        )
     }
 
     pub fn advanced_memory_store_for_workspace(&self, cwd: &Path) -> AdvancedMemoryStore {

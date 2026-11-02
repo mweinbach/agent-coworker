@@ -1,5 +1,6 @@
 pub mod client;
 pub mod connectors;
+pub mod installer;
 pub mod isolation;
 pub mod policy;
 pub mod tool_activity;
@@ -42,9 +43,14 @@ pub use connectors::{
     logout_codex_account, parse_codex_chatgpt_login_challenge, read_codex_account,
     read_openai_native_connectors, set_openai_native_connector_enabled, start_codex_chatgpt_login,
 };
+pub use installer::{
+    CodexRuntimeInstallOptions, CodexRuntimeTarget, install_codex_app_server,
+    update_managed_codex_app_server,
+};
 pub use isolation::{
     CODEX_APP_SERVER_MANAGED_VERSION, CodexInstallStatus, build_codex_spawn_env,
-    resolve_codex_app_server_status, resolve_codex_home, sync_codex_windows_sandbox_setup_state,
+    codex_app_server_override_configured, resolve_codex_app_server_status, resolve_codex_home,
+    sync_codex_windows_sandbox_setup_state,
 };
 pub use policy::{
     CodexSandboxNarrowingInput, CodexSandboxNarrowingOutput, filter_codex_dynamic_tools,

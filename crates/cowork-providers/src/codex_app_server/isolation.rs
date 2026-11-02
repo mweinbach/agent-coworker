@@ -6,6 +6,11 @@ use cowork_config::{ensure_private_dir_sync, harden_private_file_sync, write_tex
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::installer::{
+    CodexRuntimeTarget, managed_codex_current_path, managed_codex_root,
+    resolve_installed_managed_command,
+};
+
 pub const CODEX_APP_SERVER_MANAGED_VERSION: &str = "0.160.0";
 const WINDOWS_SANDBOX_SETUP_VERSION: u64 = 5;
 
@@ -226,29 +231,32 @@ fn parse_override_args(raw: Option<&str>) -> Vec<String> {
     out
 }
 
-pub fn resolve_codex_app_server_status(
-    cowork_home: &Path,
-    env: &HashMap<String, String>,
-) -> CodexInstallStatus {
-    let managed_bin_name = if cfg!(windows) {
-        "codex-app-server.exe"
-    } else {
-        "codex-app-server"
-    };
-    let managed_path = cowork_home
-        .join("runtimes")
-        .join("codex-app-server")
-        .join("current")
-        .join(managed_bin_name);
-    let managed_str = managed_path.to_string_lossy().into_owned();
+/// True when `COWORK_CODEX_APP_SERVER_BIN`/`COWORK_CODEX_APP_SERVER_COMMAND` pins an explicit
+/// Codex binary, which wins over the managed and system runtimes.
+pub fn codex_app_server_override_configured(env: &HashMap<String, String>) -> bool {
+    codex_app_server_override(env).is_some()
+}
 
-    if let Some(override_bin) = env
-        .get("COWORK_CODEX_APP_SERVER_BIN")
+fn codex_app_server_override(env: &HashMap<String, String>) -> Option<&str> {
+    env.get("COWORK_CODEX_APP_SERVER_BIN")
         .or_else(|| env.get("COWORK_CODEX_APP_SERVER_COMMAND"))
         .map(String::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
+}
+
+pub fn resolve_codex_app_server_status(
+    cowork_home: &Path,
+    env: &HashMap<String, String>,
+) -> CodexInstallStatus {
+    let target = CodexRuntimeTarget::host().ok();
+    let managed_default = target
+        .as_ref()
+        .map(|t| managed_codex_current_path(cowork_home, t))
+        .unwrap_or_else(|| managed_codex_root(cowork_home));
+    let managed_str = managed_default.to_string_lossy().into_owned();
+
+    if let Some(override_bin) = codex_app_server_override(env) {
         let args = parse_override_args(env.get("COWORK_CODEX_APP_SERVER_ARGS").map(String::as_str));
         return CodexInstallStatus {
             available: true,
@@ -263,28 +271,26 @@ pub fn resolve_codex_app_server_status(
         };
     }
 
-    if managed_path.is_file() {
-        let version_file = cowork_home
-            .join("runtimes")
-            .join("codex-app-server")
-            .join("current")
-            .join("version.txt");
-        let current_ver = std::fs::read_to_string(version_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| CODEX_APP_SERVER_MANAGED_VERSION.to_string());
-        let matches = current_ver == CODEX_APP_SERVER_MANAGED_VERSION;
+    if let Some((managed_path, version)) = target
+        .as_ref()
+        .and_then(|t| resolve_installed_managed_command(cowork_home, t))
+    {
+        let managed_str = managed_path.to_string_lossy().into_owned();
+        let matches = version.as_deref() == Some(CODEX_APP_SERVER_MANAGED_VERSION);
+        let message = format!(
+            "Using Cowork-managed Codex runtime {}.",
+            version.as_deref().unwrap_or("(unknown version)")
+        );
         return CodexInstallStatus {
             available: true,
             source: "managed".to_string(),
             command: Some(managed_str.clone()),
             args: Some(Vec::new()),
-            version: Some(current_ver),
+            version,
             pinned_version: Some(CODEX_APP_SERVER_MANAGED_VERSION.to_string()),
             pin_matches_current: Some(matches),
             managed_path: Some(managed_str),
-            message: "Managed Codex app-server runtime is installed.".to_string(),
+            message,
         };
     }
 

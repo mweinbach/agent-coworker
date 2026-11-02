@@ -25,10 +25,11 @@ use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, is_loopback_lmstudio_url, resolve_lmstudio_options,
 };
 use cowork_providers::codex_app_server::{
-    CodexAppServerClient, CodexNotification, await_codex_chatgpt_login_completion,
+    CodexAppServerClient, CodexNotification, CodexRuntimeInstallOptions,
+    await_codex_chatgpt_login_completion, codex_app_server_override_configured,
     logout_codex_account, parse_codex_chatgpt_login_challenge, read_openai_native_connectors,
     resolve_codex_app_server_status, resolve_codex_home, set_openai_native_connector_enabled,
-    start_codex_chatgpt_login,
+    start_codex_chatgpt_login, update_managed_codex_app_server,
 };
 use cowork_providers::oauth::{OAuthMode, PkceOAuthConfig};
 use serde_json::{Map, Value, json};
@@ -277,11 +278,22 @@ impl ServerRuntimeState {
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let codex_home = resolve_codex_home(&paths.root_dir);
+        // Like TS, release pooled app-servers before replacing their binary (a running `current`
+        // executable cannot be overwritten on Windows); they respawn from the new install.
         self.codex_pool.close_for_home(&codex_home).await;
-        let mut status = resolve_codex_app_server_status(&paths.root_dir, &self.env);
-        if status.message.trim().is_empty() {
-            status.message = "Codex runtime status checked.".to_owned();
+        if codex_app_server_override_configured(&self.env) {
+            // An explicit binary override wins over any managed install, so downloading the
+            // managed runtime would never be used; report the runtime actually in effect.
+            let status = resolve_codex_app_server_status(&paths.root_dir, &self.env);
+            return Ok(json!({ "status": status }));
         }
+        let status = update_managed_codex_app_server(
+            &paths.root_dir,
+            params.force.unwrap_or(false),
+            &CodexRuntimeInstallOptions::from_env(&self.env),
+        )
+        .await
+        .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?;
         Ok(json!({ "status": status }))
     }
 

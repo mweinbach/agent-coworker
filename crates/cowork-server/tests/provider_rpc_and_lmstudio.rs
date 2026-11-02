@@ -2140,3 +2140,111 @@ async fn bedrock_server_turn_runner_honors_saved_region_isolated_env_and_nested_
         seen[3].1
     );
 }
+
+/// Without an explicit binary override, `codexAppServer/update` must run the managed installer
+/// (release metadata + asset download) and fail closed when the asset does not match the
+/// repo-pinned SHA-256, instead of reporting success for an unchanged missing runtime.
+#[tokio::test]
+async fn codex_app_server_update_runs_managed_installer_and_fails_closed_on_checksum_mismatch() {
+    let iso = IsolatedEnv::new();
+    let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_base = format!("http://{}", listener.local_addr().unwrap());
+    let version = cowork_providers::codex_app_server::CODEX_APP_SERVER_MANAGED_VERSION;
+    let release_assets: Vec<Value> = ["codex-app-server", "codex-code-mode-host"]
+        .iter()
+        .map(|basename| {
+            let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
+                ("macos", "aarch64") => "aarch64-apple-darwin",
+                ("macos", _) => "x86_64-apple-darwin",
+                ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+                _ => "x86_64-unknown-linux-musl",
+            };
+            let name = format!("{basename}-{triple}.tar.gz");
+            json!({ "name": name, "browser_download_url": format!("{mock_base}/download/{name}") })
+        })
+        .collect();
+    let app = Router::new()
+        .route(
+            &format!("/repos/openai/codex/releases/tags/rust-v{version}"),
+            axum::routing::get({
+                let requests = Arc::clone(&requests);
+                let body =
+                    json!({ "tag_name": format!("rust-v{version}"), "assets": release_assets });
+                move || async move {
+                    requests.lock().unwrap().push("metadata".into());
+                    axum::Json(body)
+                }
+            }),
+        )
+        .route(
+            "/download/{name}",
+            axum::routing::get({
+                let requests = Arc::clone(&requests);
+                move |axum::extract::Path(name): axum::extract::Path<String>| async move {
+                    requests.lock().unwrap().push(format!("download:{name}"));
+                    b"not the pinned codex release bytes".to_vec()
+                }
+            }),
+        );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut iso = iso;
+    iso.env
+        .insert("COWORK_GITHUB_API_BASE_URL".into(), mock_base.clone());
+    let server = start_server(iso.server_options()).await.unwrap();
+    let mut ws = connect_initialized_ws(server.ws_url()).await;
+    let cwd = iso.workspace_dir.to_string_lossy().into_owned();
+
+    let before = ws_rpc(
+        &mut ws,
+        "c1",
+        "cowork/provider/codexAppServer/status",
+        json!({ "cwd": cwd }),
+    )
+    .await;
+    assert_eq!(before["result"]["status"]["available"], json!(false));
+
+    let update = ws_rpc(
+        &mut ws,
+        "c2",
+        "cowork/provider/codexAppServer/update",
+        json!({ "cwd": cwd, "force": true }),
+    )
+    .await;
+    assert!(update.get("result").is_none(), "{update}");
+    assert_eq!(update["error"]["code"], json!(-32603));
+    let message = update["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("failed checksum verification"),
+        "unexpected update error: {message}"
+    );
+
+    let seen = requests.lock().unwrap().clone();
+    assert_eq!(
+        seen.first().map(String::as_str),
+        Some("metadata"),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|r| r.starts_with("download:")),
+        "installer must download the pinned asset: {seen:?}"
+    );
+    assert!(
+        !iso.home_dir
+            .join(".cowork/codex-app-server/current")
+            .exists(),
+        "unverified bytes must never be promoted"
+    );
+
+    let after = ws_rpc(
+        &mut ws,
+        "c3",
+        "cowork/provider/codexAppServer/status",
+        json!({ "cwd": cwd }),
+    )
+    .await;
+    assert_eq!(after["result"]["status"]["available"], json!(false));
+}

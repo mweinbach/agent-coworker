@@ -1580,8 +1580,23 @@ impl ServerRuntimeState {
             idle_since: None,
         };
 
-        let live_arc = Arc::new(Mutex::new(live));
-        self.sessions.insert(winning_id.clone(), live_arc.clone());
+        // Concurrent `thread/start`s with the same `clientThreadId` all bind the same id; the
+        // first to install its session owns creation and the rest join it.
+        let created = match self.sessions.entry(winning_id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(_) => None,
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                let live_arc = Arc::new(Mutex::new(live));
+                slot.insert(live_arc.clone());
+                Some(live_arc)
+            }
+        };
+        let Some(live_arc) = created else {
+            let existing = self
+                .subscribe(connection_id, &winning_id)
+                .ok_or_else(|| format!("Unknown thread: {winning_id}"))?;
+            let thread = self.build_thread_from_live(&existing.lock());
+            return Ok((thread, false));
+        };
         self.persist_live_session(&live_arc, "thread/started")
             .await
             .map_err(|e| format!("Failed to persist thread: {e}"))?;
@@ -1657,10 +1672,27 @@ impl ServerRuntimeState {
         {
             live.workflow_runs = runs.clone();
         }
-        let rehydrated = Arc::new(Mutex::new(live));
-        self.sessions
-            .insert(thread_id.to_owned(), rehydrated.clone());
-        Some(rehydrated)
+        let hydrated = Arc::new(Mutex::new(live));
+        // Requests run concurrently, so another caller may have hydrated (or created) this
+        // thread since the miss above. Keep whichever instance was installed first so every
+        // caller shares one subscriber set and one `busy` reservation; a losing hydration is
+        // plain data with no side effects and is simply dropped.
+        let installed = self
+            .sessions
+            .entry(thread_id.to_owned())
+            .or_insert_with(|| Arc::clone(&hydrated))
+            .value()
+            .clone();
+        // A delete tombstones before it drops the live entry; re-check so a hydration that
+        // raced past the check above cannot leave a deleted thread live.
+        if self.is_session_deleted(thread_id) {
+            if Arc::ptr_eq(&installed, &hydrated) {
+                self.sessions
+                    .remove_if(thread_id, |_, v| Arc::ptr_eq(v, &installed));
+            }
+            return None;
+        }
+        Some(installed)
     }
 
     pub fn subscribe(
@@ -1668,13 +1700,23 @@ impl ServerRuntimeState {
         connection_id: &str,
         thread_id: &str,
     ) -> Option<Arc<Mutex<LiveSession>>> {
-        let live_arc = self.load_thread(thread_id)?;
-        {
-            let mut live = live_arc.lock();
-            live.subscribers.insert(connection_id.to_owned());
-            live.idle_since = None;
+        loop {
+            let live_arc = self.load_thread(thread_id)?;
+            {
+                let mut live = live_arc.lock();
+                live.subscribers.insert(connection_id.to_owned());
+                live.idle_since = None;
+            }
+            // Idle eviction checks `subscribers` and removes atomically, so if the instance is
+            // still installed the registration is visible to every later caller. Otherwise it
+            // was evicted before we registered: rehydrate and register on the new instance.
+            if self
+                .get_live_thread(thread_id)
+                .is_some_and(|current| Arc::ptr_eq(&current, &live_arc))
+            {
+                return Some(live_arc);
+            }
         }
-        Some(live_arc)
     }
 
     pub fn unsubscribe(&self, connection_id: &str, thread_id: &str) -> &'static str {
@@ -1729,12 +1771,17 @@ impl ServerRuntimeState {
                 .agent_controls
                 .get(&id)
                 .is_some_and(|ctrl| ctrl.list(false).iter().any(|a| a.busy));
-            let should_remove = !has_running_children
-                && self.sessions.get(&id).is_some_and(|e| {
-                    let l = e.value().lock();
-                    l.subscribers.is_empty() && !l.busy
-                });
-            if should_remove && self.sessions.remove(&id).is_some() {
+            // Check and remove under the map's shard lock so a concurrent `subscribe` either
+            // registers first (and keeps the session) or observes the eviction and rehydrates.
+            if !has_running_children
+                && self
+                    .sessions
+                    .remove_if(&id, |_, v| {
+                        let l = v.lock();
+                        l.subscribers.is_empty() && !l.busy
+                    })
+                    .is_some()
+            {
                 let cache = Arc::clone(&self.mcp_tool_cache);
                 let evicted_id = id.clone();
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {

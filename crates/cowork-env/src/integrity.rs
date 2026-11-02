@@ -465,74 +465,21 @@ pub fn seal_tree_readonly(root_dir: &Path) -> Result<()> {
 
 /// Restores owner write permissions top-down so a sealed runtime tree can be removed cleanly.
 pub fn unseal_tree_for_removal(root_dir: &Path) -> Result<()> {
-    if !root_dir.exists() {
-        return Ok(());
-    }
-    let mut dirs_by_depth: Vec<(usize, PathBuf)> = Vec::new();
-    let mut files: Vec<PathBuf> = Vec::new();
-
-    // First make root_dir itself writable so WalkDir can traverse/mutate inside if needed.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::symlink_metadata(root_dir)
-            && meta.file_type().is_dir()
-        {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o700);
-            let _ = std::fs::set_permissions(root_dir, perms);
-        }
-    }
-
-    for item in WalkDir::new(root_dir).follow_links(false) {
-        let Ok(de) = item else {
-            continue;
-        };
-        let ft = de.file_type();
-        if ft.is_symlink() {
-            continue;
-        }
-        if ft.is_dir() {
-            dirs_by_depth.push((de.depth(), de.path().to_path_buf()));
-        } else if ft.is_file() {
-            files.push(de.path().to_path_buf());
-        }
-    }
-
-    dirs_by_depth.sort_by_key(|a| a.0);
-    for (_, dir_path) in &dirs_by_depth {
+    // A version directory can contain damaged or replaced entries. Never traverse links,
+    // including a symlink passed as the root. On Unix only directories need write permission
+    // to unlink their entries; chmod on a hardlinked file would change the external inode.
+    for entry in WalkDir::new(root_dir).follow_root_links(false) {
+        let Ok(entry) = entry else { continue };
         #[cfg(unix)]
-        {
+        if entry.file_type().is_dir() {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::symlink_metadata(dir_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o700);
-                let _ = std::fs::set_permissions(dir_path, perms);
-            }
+            std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o700))?;
         }
         #[cfg(not(unix))]
-        {
-            let _ = dir_path;
-        }
-    }
-
-    for file_path in &files {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::symlink_metadata(file_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o600);
-                let _ = std::fs::set_permissions(file_path, perms);
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            if let Ok(meta) = std::fs::metadata(file_path) {
-                let mut perms = meta.permissions();
-                perms.set_readonly(false);
-                let _ = std::fs::set_permissions(file_path, perms);
-            }
+        if entry.file_type().is_file() {
+            let mut perms = std::fs::symlink_metadata(entry.path())?.permissions();
+            perms.set_readonly(false);
+            std::fs::set_permissions(entry.path(), perms)?;
         }
     }
     Ok(())
@@ -577,6 +524,8 @@ pub fn verify_installed_runtime(
             manifest.schema_version
         )));
     }
+
+    crate::manifest::validate_runtime_version(&manifest.version)?;
 
     if !is_asset_compatible_with_host(
         &manifest.asset,

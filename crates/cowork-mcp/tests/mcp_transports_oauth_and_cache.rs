@@ -655,7 +655,11 @@ rl.on("line", (line) => {
             name: "http-srv".to_owned(),
             transport: McpServerTransport::Http {
                 url: format!("http://{addr}/mcp"),
-                headers: None,
+                headers: Some(
+                    (0..12)
+                        .map(|i| (format!("x-config-{i}"), i.to_string()))
+                        .collect(),
+                ),
             },
             enabled: None,
             required: None,

@@ -6,7 +6,7 @@ use cowork_config::path_has_link_component;
 #[test]
 fn plain_directories_have_no_link_component() {
     let tmp = tempfile::tempdir().unwrap();
-    let nested = tmp.path().join("a").join("b");
+    let nested = tmp.path().canonicalize().unwrap().join("a").join("b");
     std::fs::create_dir_all(&nested).unwrap();
     assert!(!path_has_link_component(&nested));
     // Missing tail components are not links either.
@@ -17,9 +17,10 @@ fn plain_directories_have_no_link_component() {
 #[test]
 fn symlinked_ancestor_is_a_link_component() {
     let tmp = tempfile::tempdir().unwrap();
-    let real = tmp.path().join("real");
+    let root = tmp.path().canonicalize().unwrap();
+    let real = root.join("real");
     std::fs::create_dir_all(real.join("inner")).unwrap();
-    let link = tmp.path().join("link");
+    let link = root.join("link");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     assert!(path_has_link_component(&link));
     assert!(path_has_link_component(&link.join("inner")));

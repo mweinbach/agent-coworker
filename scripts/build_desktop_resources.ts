@@ -24,6 +24,7 @@ import {
   rmrf,
 } from "./releaseBuildUtils";
 import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
+import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
 const CACHE_VERSION = 14;
 const LEGACY_BUN_EXECUTABLE_NAME = "bun.exe";
@@ -446,6 +447,7 @@ async function main() {
     path.join(root, "apps", "desktop", "electron", "services", "sidecar.ts"),
     path.join(root, "scripts", "build_desktop_resources.ts"),
     path.join(root, "scripts", "releaseBuildUtils.ts"),
+    path.join(root, "scripts", "workspaceRustBinary.ts"),
   ];
   const promptsSrc = path.join(root, "prompts");
   const configSrc = path.join(root, "config");
@@ -520,23 +522,12 @@ async function main() {
       });
     }
 
-    await runner(["cargo", "build", "--release", "-p", "cowork-server", "--target", rustTarget], {
-      cwd: root,
-      env: process.env,
-    });
-
-    const cargoTargetDir = process.env.CARGO_TARGET_DIR?.trim()
-      ? path.resolve(root, process.env.CARGO_TARGET_DIR.trim())
-      : path.join(root, "target");
-    const builtSidecarPath = path.join(
-      cargoTargetDir,
+    const [builtSidecarPath] = await buildWorkspaceReleaseBinaries(
+      root,
       rustTarget,
-      "release",
-      platform === "win32" ? "cowork-server.exe" : "cowork-server",
+      ["cowork-server"],
+      runner,
     );
-    if (!(await pathExists(builtSidecarPath))) {
-      throw new Error(`Cargo build did not produce ${builtSidecarPath}`);
-    }
 
     await fs.rm(sidecarOutfile, { force: true });
     await fs.copyFile(builtSidecarPath, sidecarOutfile);

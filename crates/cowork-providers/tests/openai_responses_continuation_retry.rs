@@ -290,6 +290,33 @@ async fn rejected_previous_response_id_retries_once_from_full_history() {
 }
 
 #[tokio::test]
+async fn http_continuation_error_code_triggers_full_history_replay() {
+    let (base_url, mock) = spawn_mock(|body, index| {
+        if index == 0 {
+            return text_reply("resp_stale", "Hi there.");
+        }
+        if previous_response_id(body).is_some() {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                json!({"code": "previous_response_not_found", "message": "The requested item does not exist."}),
+            );
+        }
+        text_reply("resp_fresh", "ok")
+    }).await;
+    let (history, stale) = seed_stale_continuation(&base_url).await;
+    let (result, _) = step(
+        &OpenAiResponsesTransport::new(),
+        request(&base_url, history, stale),
+    )
+    .await;
+
+    assert_eq!(response_id_of(&result.unwrap().continuation), "resp_fresh");
+    let requests = mock.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[2]["input"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn failed_fallback_never_resends_the_rejected_handle_from_the_same_transport() {
     let (base_url, mock) = spawn_mock(rejecting_responder(|_, index| {
         if index == 2 {

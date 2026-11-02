@@ -211,15 +211,11 @@ async fn runtime_diagnostics_and_unavailable_libreoffice_rpc_match_strict_wire_c
     server.shutdown().await;
 }
 
-#[tokio::test]
-async fn runtime_libreoffice_check_succeeds_with_smoke_true_against_verified_sealed_runtime() {
-    let (_tmp, root) = canonical_temp_dir("cowork-srv-rt-lo-");
-    let home = root.join("home");
-    let workspace = root.join("workspace");
+fn install_signed_runtime(
+    root: &Path,
+    home: &Path,
+) -> (cowork_env::PreparedRuntime, TrustedKeyRing) {
     let staging = root.join("staging");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-
     write_executable(
         &staging.join("dependencies/node/bin/node"),
         "#!/bin/bash\necho v22.12.0\n",
@@ -285,8 +281,8 @@ printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/
     let installed = install_v1_zip_runtime(
         &zip_path,
         &RuntimeInstallOptions {
-            homedir: home.clone(),
-            trusted_keys: ring,
+            homedir: home.to_owned(),
+            trusted_keys: ring.clone(),
             expected_version: Some("2026-06-22".to_owned()),
             expected_archive_sha256: None,
             force: false,
@@ -295,6 +291,64 @@ printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/
         },
     )
     .unwrap();
+
+    (installed, ring)
+}
+
+#[tokio::test]
+async fn a_managed_lease_failure_blocks_startup_and_keeps_the_tool_environment_unpublished() {
+    let (_tmp, root) = canonical_temp_dir("cowork-srv-rt-lease-");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (runtime, ring) = install_signed_runtime(&root, &home);
+    let lease = cowork_env::consumer_lease_lock_path(&runtime.root_dir);
+    std::fs::remove_file(&lease).unwrap();
+    std::fs::create_dir(&lease).unwrap();
+    let server = cowork_server::start_server_with_trusted_keys(
+        ServerOptions {
+            working_directory: workspace,
+            host: "127.0.0.1".to_owned(),
+            port: 0,
+            yolo: false,
+            mobile_h3: false,
+            mobile_h3_host: "127.0.0.1".to_owned(),
+            mobile_h3_port: 0,
+            homedir: Some(home),
+            built_in_dir: None,
+            env: HashMap::from([("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "0".to_owned())]),
+        },
+        Some(ring),
+    )
+    .await
+    .unwrap();
+    server.runtime().wait_for_startup_ready().await;
+    let startup = server.runtime().startup_snapshot();
+    assert!(!startup.ready, "{startup:?}");
+    assert!(
+        startup
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains(".lease.lock")),
+        "{startup:?}"
+    );
+    assert!(
+        !server
+            .runtime()
+            .effective_tool_env()
+            .contains_key("COWORK_RUNTIME_SOFFICE")
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn runtime_libreoffice_check_succeeds_with_smoke_true_against_verified_sealed_runtime() {
+    let (_tmp, root) = canonical_temp_dir("cowork-srv-rt-lo-");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let (installed, _) = install_signed_runtime(&root, &home);
 
     let mut env = HashMap::new();
     env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());

@@ -135,9 +135,7 @@ impl WorkspaceProtectedPathsCache {
 
         let mut guard = self.entries.lock();
         // Drain pending watcher events on all active entries first.
-        for entry in guard.values_mut() {
-            self.drain_entry_events(entry);
-        }
+        guard.retain(|_, entry| self.drain_entry_events(entry));
 
         for root in canonical_roots {
             // Check if `root` itself or an ancestor of `root` is already cached & non-symlink.
@@ -173,7 +171,9 @@ impl WorkspaceProtectedPathsCache {
                 &mut out_seen,
                 &mut out,
             );
-            guard.insert(root, entry);
+            if entry.rx.is_some() {
+                guard.insert(root, entry);
+            }
         }
 
         out
@@ -229,22 +229,30 @@ impl WorkspaceProtectedPathsCache {
             rx: if watcher.is_some() { Some(rx) } else { None },
             _watcher: watcher,
         };
-        self.drain_entry_events(&mut entry);
+        if entry.rx.is_some() && !self.drain_entry_events(&mut entry) {
+            entry.rx = None;
+            entry._watcher = None;
+            entry.candidates = scan_protected_subpaths_parallel(canonical_root, &self.dirs_walked);
+        }
         entry
     }
 
-    fn drain_entry_events(&self, entry: &mut WatchedRootEntry) {
+    // If the subscription fails or its root is replaced, discard the snapshot. The next
+    // query scans the requested root and registers a fresh watcher if the host permits it.
+    fn drain_entry_events(&self, entry: &mut WatchedRootEntry) -> bool {
         let Some(rx) = entry.rx.as_ref() else {
-            return;
+            return false;
         };
         let mut events = Vec::new();
-        while let Ok(res) = rx.try_recv() {
-            if let Ok(ev) = res {
-                events.push(ev);
+        loop {
+            match rx.try_recv() {
+                Ok(Ok(ev)) => events.push(ev),
+                Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => return false,
+                Err(mpsc::TryRecvError::Empty) => break,
             }
         }
         if events.is_empty() {
-            return;
+            return true;
         }
         self.notify_events_processed
             .fetch_add(events.len(), Ordering::AcqRel);
@@ -275,16 +283,17 @@ impl WorkspaceProtectedPathsCache {
                 });
 
                 if ev_path == entry.canonical_root {
+                    if matches!(
+                        ev.kind,
+                        EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+                    ) {
+                        return false;
+                    }
                     continue;
                 }
 
                 // 2. Check if `ev_path` itself crosses a `.git` / `.cowork` segment relative to `canonical_root`.
-                if let Some(protected_prefix) =
-                    first_protected_descendant_prefix(&entry.canonical_root, &ev_path)
-                {
-                    if is_valid_nonsymlink_descendant(&entry.canonical_root, &protected_prefix) {
-                        entry.candidates.insert(protected_prefix);
-                    }
+                if record_protected_prefixes(entry, &ev_path) {
                     continue;
                 }
 
@@ -306,6 +315,7 @@ impl WorkspaceProtectedPathsCache {
                 }
             }
         }
+        true
     }
 }
 
@@ -416,7 +426,11 @@ fn scan_protected_subpaths_parallel(root: &Path, dirs_walked: &AtomicUsize) -> B
             let name = entry.file_name().to_string_lossy();
             if is_protected_metadata_name(&name, true) {
                 found_ref.lock().insert(entry.path().to_path_buf());
-                return WalkState::Skip;
+                // A mixed-case ancestor is ordinary on Linux. Look inside it for exact
+                // .git/.cowork names before sharing this scan across platform queries.
+                if is_protected_metadata_name(&name, false) {
+                    return WalkState::Skip;
+                }
             }
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 dirs_walked.fetch_add(1, Ordering::Relaxed);
@@ -485,20 +499,28 @@ fn map_event_path_to_root(canonical_root: &Path, raw_path: &Path) -> Option<Path
     None
 }
 
-fn first_protected_descendant_prefix(canonical_root: &Path, ev_path: &Path) -> Option<PathBuf> {
-    let rel = ev_path.strip_prefix(canonical_root).ok()?;
-    let mut cur = canonical_root.to_path_buf();
+// Returns true when an exact protected ancestor covers the subtree on every platform.
+fn record_protected_prefixes(entry: &mut WatchedRootEntry, ev_path: &Path) -> bool {
+    let Ok(rel) = ev_path.strip_prefix(&entry.canonical_root) else {
+        return false;
+    };
+    let mut cur = entry.canonical_root.clone();
     for comp in rel.components() {
         let Component::Normal(os) = comp else {
-            return None;
+            return false;
         };
         cur.push(os);
         let name = os.to_string_lossy();
         if is_protected_metadata_name(&name, true) {
-            return Some(cur);
+            if is_valid_nonsymlink_descendant(&entry.canonical_root, &cur) {
+                entry.candidates.insert(cur.clone());
+            }
+            if is_protected_metadata_name(&name, false) {
+                return true;
+            }
         }
     }
-    None
+    false
 }
 
 fn is_valid_nonsymlink_descendant(canonical_root: &Path, target: &Path) -> bool {
@@ -537,4 +559,35 @@ fn is_lexical_inside(root: &Path, target: &Path) -> bool {
 
 fn is_strictly_inside(root: &Path, target: &Path) -> bool {
     target != root && target.strip_prefix(root).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lost_watch_does_not_leave_new_metadata_writable() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(workspace.path()).unwrap();
+        let nested = root.join("submodule").join(".git");
+        let cache = WorkspaceProtectedPathsCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.entries.lock().insert(
+            root.clone(),
+            WatchedRootEntry {
+                canonical_root: root.clone(),
+                candidates: BTreeSet::new(),
+                rx: Some(rx),
+                _watcher: None,
+            },
+        );
+        std::fs::create_dir_all(&nested).unwrap();
+        tx.send(Err(notify::Error::generic("watch failed")))
+            .unwrap();
+        assert!(
+            cache
+                .protected_paths_for_roots(&[root], Some("linux"))
+                .contains(&nested)
+        );
+    }
 }

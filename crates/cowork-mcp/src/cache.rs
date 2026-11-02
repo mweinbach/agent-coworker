@@ -124,7 +124,11 @@ impl WorkspaceMcpToolCache {
     }
 
     fn server_fingerprint(srv: &HydratedMcpServer) -> String {
-        serde_json::to_string(&(&srv.config, srv.source, srv.auth_scope)).unwrap_or_default()
+        // Transport headers and stdio environment variables are HashMaps. Their iteration
+        // order can change on each load even when the effective configuration is identical.
+        let mut value = serde_json::json!([srv.config, srv.source, srv.auth_scope]);
+        value.sort_all_objects();
+        value.to_string()
     }
 
     fn desired_generation_fingerprint(servers: &[HydratedMcpServer]) -> String {

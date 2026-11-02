@@ -120,6 +120,16 @@ impl ReplRpcClient {
     }
 
     pub async fn request(&mut self, method: &str, params: Option<Value>) -> anyhow::Result<Value> {
+        self.request_with_timeout(method, params, Duration::from_secs(30))
+            .await
+    }
+
+    pub(crate) async fn request_with_timeout(
+        &mut self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> anyhow::Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -132,7 +142,7 @@ impl ReplRpcClient {
         self.ws.send(WsMessage::Text(raw.into())).await?;
 
         loop {
-            let next_msg = tokio::time::timeout(Duration::from_secs(30), self.ws.next())
+            let next_msg = tokio::time::timeout(timeout, self.ws.next())
                 .await
                 .map_err(|_| RpcRequestError::TimedOut {
                     method: method.to_owned(),

@@ -147,14 +147,18 @@ export async function runCommand(
   options: {
     cwd: string;
     env?: NodeJS.ProcessEnv;
+    onStdout?: (output: string) => void;
   },
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd: options.cwd,
-    stdout: "inherit",
+    stdout: options.onStdout ? "pipe" : "inherit",
     stderr: "inherit",
     env: options.env ?? process.env,
   });
+  if (options.onStdout) {
+    options.onStdout(await new Response(proc.stdout).text());
+  }
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     throw new Error(`Command failed (${exitCode}): ${command.join(" ")}`);

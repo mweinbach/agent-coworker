@@ -1012,6 +1012,7 @@ async fn fetch_container_credentials(
 ) -> Result<Credentials, String> {
     let client = reqwest::Client::builder()
         .no_proxy()
+        .redirect(crate::sse::same_origin_redirect_policy())
         .connect_timeout(CONTAINER_CONNECT_TIMEOUT)
         .timeout(CONTAINER_REQUEST_TIMEOUT)
         .build()

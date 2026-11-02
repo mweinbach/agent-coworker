@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cowork_config::{AgentConfig, ProviderName, SandboxConfig, SandboxMode};
 use cowork_inference::{
-    CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, TurnUsage,
-    migrate_stored_message,
+    CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, SessionCostTracker,
+    SessionUsageSnapshot, TurnUsage, migrate_stored_message,
 };
 use cowork_storage::{
     AgentExecutionState, PersistedSessionMutation, PersistedSessionSnapshotData, SessionDb,
@@ -287,8 +287,11 @@ struct ChildRuntimeEntry {
     latest_assistant_text: Option<String>,
     pending_inputs: VecDeque<String>,
     cancel_token: Option<CancellationToken>,
+    /// Signals that the active turn loop finished persisting its final history after cancellation.
+    loop_finished: Option<CancellationToken>,
+    lifecycle_lock: Arc<tokio::sync::Mutex<()>>,
     report_required: bool,
-    cost_tracker: cowork_inference::SessionCostTracker,
+    cost_tracker: SessionCostTracker,
 }
 
 struct ParentSlotTracker {
@@ -302,11 +305,11 @@ impl ParentSlotTracker {
             .children
             .values()
             .filter(|c| {
-                c.summary.lifecycle_state == "active"
-                    && matches!(
-                        c.summary.execution_state.as_str(),
-                        "pending_init" | "running"
-                    )
+                matches!(
+                    c.summary.execution_state.as_str(),
+                    "pending_init" | "running"
+                ) || (c.summary.lifecycle_state == "closed"
+                    && c.loop_finished.as_ref().is_some_and(|t| !t.is_cancelled()))
             })
             .count();
         self.reserved_spawns + running
@@ -415,6 +418,10 @@ impl AgentControl {
                     .effective_model
                     .clone()
                     .unwrap_or_else(|| format!("{}:{}", row.provider.as_str(), row.model));
+                let saved_usage = row
+                    .cost_tracker
+                    .as_ref()
+                    .and_then(|v| SessionUsageSnapshot::deserialize(v).ok());
                 let summary = PersistentAgentSummary {
                     agent_id: row.session_id.clone(),
                     parent_session_id: cfg.parent_session_id.clone(),
@@ -440,8 +447,13 @@ impl AgentControl {
                     execution_state: wire_exec,
                     busy: false,
                     last_message_preview: row.last_message_preview.clone(),
-                    session_usage: None,
-                    last_turn_usage: None,
+                    session_usage: saved_usage
+                        .as_ref()
+                        .and_then(|s| serde_json::to_value(s).ok()),
+                    last_turn_usage: saved_usage
+                        .as_ref()
+                        .and_then(|s| s.turns.last())
+                        .and_then(|turn| serde_json::to_value(&turn.usage).ok()),
                 };
                 let role_prompt = if row.system_prompt.trim().is_empty() {
                     load_role_prompt(
@@ -488,6 +500,8 @@ impl AgentControl {
                         row.session_id
                     )
                 });
+                let latest_assistant_text =
+                    restore_latest_assistant_text(&messages, row.last_message_preview);
                 hydrated_children.insert(
                     row.session_id.clone(),
                     ChildRuntimeEntry {
@@ -507,14 +521,15 @@ impl AgentControl {
                         messages,
                         todos: row.todos,
                         harness_context: row.harness_context,
-                        latest_assistant_text: row.last_message_preview,
+                        latest_assistant_text,
                         pending_inputs: VecDeque::new(),
                         cancel_token: None,
+                        loop_finished: None,
+                        lifecycle_lock: Arc::default(),
                         report_required: row.task_type.is_some() || role_spec.name != "default",
-                        cost_tracker: cowork_inference::SessionCostTracker::new(
-                            &row.session_id,
-                            None,
-                        ),
+                        cost_tracker: saved_usage
+                            .map(SessionCostTracker::from_snapshot)
+                            .unwrap_or_else(|| SessionCostTracker::new(&row.session_id, None)),
                     },
                 );
             }
@@ -805,6 +820,7 @@ impl AgentControl {
         }
 
         let cancel_token = CancellationToken::new();
+        let loop_finished = CancellationToken::new();
         {
             let mut guard = self.state.lock();
             reservation.install(&mut guard);
@@ -830,13 +846,17 @@ impl AgentControl {
                     latest_assistant_text: None,
                     pending_inputs: VecDeque::new(),
                     cancel_token: Some(cancel_token.clone()),
+                    loop_finished: Some(loop_finished.clone()),
+                    lifecycle_lock: Arc::default(),
                     report_required: !has_prompt_suffix
                         && (summary.task_type.is_some() || prep.role_spec.name != "default"),
-                    cost_tracker: cowork_inference::SessionCostTracker::new(&agent_id, None),
+                    cost_tracker: SessionCostTracker::new(&agent_id, None),
                 },
             );
         }
 
+        // A quiesce that saw only the reservation can now cancel the installed child.
+        self.status_bus.notify_waiters();
         self.emit_event(
             "cowork/session/agentSpawned",
             json!({
@@ -847,7 +867,7 @@ impl AgentControl {
         );
         self.emit_agent_list();
 
-        self.launch_turn_loop(agent_id, req.message, cancel_token);
+        self.launch_turn_loop(agent_id, req.message, cancel_token, loop_finished);
         Ok(summary)
     }
 
@@ -856,6 +876,7 @@ impl AgentControl {
         agent_id: String,
         initial_prompt: String,
         initial_cancel: CancellationToken,
+        loop_finished: CancellationToken,
     ) {
         let state = Arc::clone(&self.state);
         let status_bus = Arc::clone(&self.status_bus);
@@ -865,6 +886,7 @@ impl AgentControl {
         let event_sink = Arc::clone(&self.event_sink);
         let parent_id = self.cfg.parent_session_id.clone();
 
+        let finished = loop_finished.drop_guard();
         tokio::spawn(async move {
             let mut next_prompt = Some((initial_prompt, initial_cancel));
             while let Some((prompt, cancel_token)) = next_prompt.take() {
@@ -916,7 +938,7 @@ impl AgentControl {
                                 .as_deref()
                                 .map(str::trim)
                                 .filter(|s| !s.is_empty())
-                                .map(|s| s.chars().take(240).collect());
+                                .map(|s| s.chars().take(CHILD_PREVIEW_CHARS).collect());
                             if entry.summary.lifecycle_state != "closed" {
                                 if let Some(queued) = entry.pending_inputs.pop_front() {
                                     let tok = CancellationToken::new();
@@ -999,6 +1021,8 @@ impl AgentControl {
                 );
                 status_bus.notify_waiters();
             }
+            drop(finished);
+            status_bus.notify_waiters();
         });
     }
 
@@ -1018,72 +1042,69 @@ impl AgentControl {
         message: &str,
         interrupt: bool,
     ) -> Result<PersistentAgentSummary, String> {
-        self.ensure_not_task_locked()?;
         let trimmed = message.trim();
         if trimmed.is_empty() {
             return Err("Message must not be empty.".to_owned());
         }
 
-        let mut launch_now: Option<(String, CancellationToken)> = None;
-        let summary = {
-            let mut guard = self.state.lock();
-            let is_currently_running = guard
-                .children
-                .get(agent_id)
-                .map(|c| {
-                    matches!(
-                        c.summary.execution_state.as_str(),
-                        "pending_init" | "running"
-                    )
-                })
-                .unwrap_or(false);
-            if !is_currently_running
-                && guard.active_or_reserved_count() >= MAX_ACTIVE_CHILDREN_PER_PARENT
-            {
-                return Err(format!(
-                    "Maximum active child agents per parent ({MAX_ACTIVE_CHILDREN_PER_PARENT}) reached."
-                ));
-            }
-
-            let entry = guard
-                .children
-                .get_mut(agent_id)
-                .ok_or_else(|| format!("Child agent '{agent_id}' not found."))?;
-            if entry.summary.lifecycle_state == "closed" {
-                return Err(format!(
-                    "Child agent '{agent_id}' is closed. Call resumeAgent first."
-                ));
-            }
-            if let Some(err) = &entry.restore_error {
-                return Err(err.clone());
-            }
-            if is_currently_running {
-                entry.pending_inputs.push_back(trimmed.to_owned());
-                if interrupt && let Some(ref tok) = entry.cancel_token {
-                    tok.cancel();
+        let (summary, tok, finished) = loop {
+            self.ensure_not_task_locked()?;
+            let previous = {
+                let mut guard = self.state.lock();
+                let at_capacity =
+                    guard.active_or_reserved_count() >= MAX_ACTIVE_CHILDREN_PER_PARENT;
+                let entry = guard
+                    .children
+                    .get_mut(agent_id)
+                    .ok_or_else(|| format!("Child agent '{agent_id}' not found."))?;
+                if entry.summary.lifecycle_state == "closed" {
+                    return Err(format!(
+                        "Child agent '{agent_id}' is closed. Call resumeAgent first."
+                    ));
                 }
-            } else {
-                let tok = CancellationToken::new();
-                entry.cancel_token = Some(tok.clone());
-                entry.summary.execution_state = "running".to_owned();
-                entry.summary.busy = true;
-                entry.summary.updated_at = Utc::now().to_rfc3339();
-                launch_now = Some((trimmed.to_owned(), tok));
-            }
-            entry.summary.clone()
+                if let Some(err) = &entry.restore_error {
+                    return Err(err.clone());
+                }
+                if matches!(
+                    entry.summary.execution_state.as_str(),
+                    "pending_init" | "running"
+                ) {
+                    entry.pending_inputs.push_back(trimmed.to_owned());
+                    if interrupt && let Some(tok) = &entry.cancel_token {
+                        tok.cancel();
+                    }
+                    return Ok(entry.summary.clone());
+                }
+                if let Some(previous) = entry.loop_finished.as_ref().filter(|t| !t.is_cancelled()) {
+                    previous.clone()
+                } else {
+                    if at_capacity {
+                        return Err(format!(
+                            "Maximum active child agents per parent ({MAX_ACTIVE_CHILDREN_PER_PARENT}) reached."
+                        ));
+                    }
+                    let tok = CancellationToken::new();
+                    let finished = CancellationToken::new();
+                    entry.cancel_token = Some(tok.clone());
+                    entry.loop_finished = Some(finished.clone());
+                    entry.summary.execution_state = "running".to_owned();
+                    entry.summary.busy = true;
+                    entry.summary.updated_at = Utc::now().to_rfc3339();
+                    break (entry.summary.clone(), tok, finished);
+                }
+            };
+            previous.cancelled().await;
         };
 
-        if let Some((prompt, tok)) = launch_now {
-            self.emit_event(
-                "cowork/session/agentStatus",
-                json!({
-                    "type": "agent_status",
-                    "sessionId": self.cfg.parent_session_id,
-                    "agent": summary,
-                }),
-            );
-            self.launch_turn_loop(agent_id.to_owned(), prompt, tok);
-        }
+        self.emit_event(
+            "cowork/session/agentStatus",
+            json!({
+                "type": "agent_status",
+                "sessionId": self.cfg.parent_session_id,
+                "agent": summary,
+            }),
+        );
+        self.launch_turn_loop(agent_id.to_owned(), trimmed.to_owned(), tok, finished);
         Ok(summary)
     }
 
@@ -1252,88 +1273,91 @@ impl AgentControl {
     }
 
     pub async fn resume(&self, agent_id: &str) -> Result<PersistentAgentSummary, String> {
-        self.ensure_not_task_locked()?;
-        let (summary, role_prompt, serialized, todos, hctx, sb_mode) = {
-            let mut guard = self.state.lock();
-            let entry = guard
-                .children
-                .get_mut(agent_id)
-                .ok_or_else(|| format!("Child agent '{agent_id}' not found."))?;
-            entry.summary.lifecycle_state = "active".to_owned();
-            if entry.summary.execution_state == "closed" {
-                entry.summary.execution_state = "completed".to_owned();
-            }
-            entry.summary.busy = false;
-            entry.summary.updated_at = Utc::now().to_rfc3339();
-            (
-                entry.summary.clone(),
-                entry.role_prompt.clone(),
-                serialize_child_messages(entry),
-                entry.todos.clone(),
-                entry.harness_context.clone(),
-                entry.sandbox_mode,
-            )
-        };
-        let mutation = build_child_session_mutation(
-            &self.agent_config(),
-            &summary,
-            &role_prompt,
-            &serialized,
-            &todos,
-            hctx.as_ref(),
-            sb_mode,
-            "agent_resumed",
-        );
-        let _ = self.cfg.session_db.persist_session_mutation(mutation).await;
-
-        self.emit_event(
-            "cowork/session/agentStatus",
-            json!({
-                "type": "agent_status",
-                "sessionId": self.cfg.parent_session_id,
-                "agent": summary,
-            }),
-        );
-        self.emit_agent_list();
-        Ok(summary)
+        self.set_lifecycle(agent_id, SessionPersistenceStatus::Active)
+            .await
     }
 
     pub async fn close(&self, agent_id: &str) -> Result<PersistentAgentSummary, String> {
-        let (summary, role_prompt, serialized, todos, hctx, sb_mode) = {
-            let mut guard = self.state.lock();
-            let entry = guard
-                .children
-                .get_mut(agent_id)
-                .ok_or_else(|| format!("Child agent '{agent_id}' not found."))?;
-            entry.pending_inputs.clear();
-            if let Some(tok) = entry.cancel_token.take() {
-                tok.cancel();
-            }
-            entry.summary.lifecycle_state = "closed".to_owned();
-            entry.summary.execution_state = "closed".to_owned();
-            entry.summary.busy = false;
-            entry.summary.updated_at = Utc::now().to_rfc3339();
-            (
-                entry.summary.clone(),
-                entry.role_prompt.clone(),
-                serialize_child_messages(entry),
-                entry.todos.clone(),
-                entry.harness_context.clone(),
-                entry.sandbox_mode,
-            )
-        };
-        let mutation = build_child_session_mutation(
-            &self.agent_config(),
-            &summary,
-            &role_prompt,
-            &serialized,
-            &todos,
-            hctx.as_ref(),
-            sb_mode,
-            "agent_closed",
-        );
-        let _ = self.cfg.session_db.persist_session_mutation(mutation).await;
+        self.set_lifecycle(agent_id, SessionPersistenceStatus::Closed)
+            .await
+    }
 
+    async fn set_lifecycle(
+        &self,
+        agent_id: &str,
+        status: SessionPersistenceStatus,
+    ) -> Result<PersistentAgentSummary, String> {
+        let missing = || format!("Child agent '{agent_id}' not found.");
+        let lifecycle_lock = {
+            let guard = self.state.lock();
+            let entry = guard.children.get(agent_id).ok_or_else(missing)?;
+            Arc::clone(&entry.lifecycle_lock)
+        };
+        let _transition = lifecycle_lock.lock().await;
+        if status == SessionPersistenceStatus::Active {
+            self.ensure_not_task_locked()?;
+        }
+        let finished = {
+            let mut guard = self.state.lock();
+            let entry = guard.children.get_mut(agent_id).ok_or_else(missing)?;
+            if status == SessionPersistenceStatus::Closed {
+                entry.pending_inputs.clear();
+                if let Some(tok) = entry.cancel_token.take() {
+                    tok.cancel();
+                }
+                // Stop admitting input immediately. Let the executor finish storing its
+                // partial transcript before committing the closed snapshot or reopening.
+                entry.summary.lifecycle_state = "closed".to_owned();
+                entry.summary.execution_state = "closed".to_owned();
+                entry.summary.busy = false;
+            } else if entry.summary.lifecycle_state != "closed" {
+                return Ok(entry.summary.clone());
+            }
+            entry.loop_finished.clone()
+        };
+        if let Some(finished) = finished {
+            finished.cancelled().await;
+        }
+        if status == SessionPersistenceStatus::Active {
+            self.ensure_not_task_locked()?;
+        }
+
+        let (summary, mutation) = {
+            let guard = self.state.lock();
+            let entry = guard.children.get(agent_id).ok_or_else(missing)?;
+            let mut summary = entry.summary.clone();
+            let event = match status {
+                SessionPersistenceStatus::Active => {
+                    summary.lifecycle_state = "active".to_owned();
+                    summary.execution_state = "completed".to_owned();
+                    "agent_resumed"
+                }
+                SessionPersistenceStatus::Closed => "agent_closed",
+            };
+            summary.updated_at = Utc::now().to_rfc3339();
+            let mutation = build_child_session_mutation(
+                &self.agent_config(),
+                &summary,
+                &entry.role_prompt,
+                &serialize_child_messages(entry),
+                &entry.todos,
+                entry.harness_context.as_ref(),
+                entry.sandbox_mode,
+                event,
+            );
+            (summary, mutation)
+        };
+        self.cfg
+            .session_db
+            .persist_session_mutation(mutation)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.state
+            .lock()
+            .children
+            .get_mut(agent_id)
+            .ok_or_else(missing)?
+            .summary = summary.clone();
         self.status_bus.notify_waiters();
         self.emit_event(
             "cowork/session/agentStatus",
@@ -1378,7 +1402,11 @@ impl AgentControl {
                     {
                         tok.cancel();
                     }
-                    if entry.summary.busy
+                    if entry
+                        .loop_finished
+                        .as_ref()
+                        .is_some_and(|t| !t.is_cancelled())
+                        || entry.summary.busy
                         || matches!(
                             entry.summary.execution_state.as_str(),
                             "pending_init" | "running"
@@ -1764,6 +1792,42 @@ pub fn restore_persisted_child_restrictions(
 
 /// Decodes a persisted child transcript, migrating legacy (TS-server) message shapes into the
 /// canonical AST. Fails when any record can't be migrated, naming the first such index.
+const CHILD_PREVIEW_CHARS: usize = 240;
+
+/// A failed follow-up or forked parent history can also contain assistant text. Only recover
+/// a full reply when the saved preview identifies it, including legacy TS 800-unit previews.
+fn restore_latest_assistant_text(
+    messages: &[CanonicalMessage],
+    preview: Option<String>,
+) -> Option<String> {
+    let preview = preview?;
+    let prefix = if preview.chars().count() == CHILD_PREVIEW_CHARS {
+        Some(preview.as_str())
+    } else if preview.encode_utf16().count() == 800 {
+        preview.strip_suffix('…')
+    } else {
+        None
+    };
+    let mut matching = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Assistant)
+        .flat_map(|m| &m.content)
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. }
+                if text.trim() == preview || prefix.is_some_and(|p| text.trim().starts_with(p)) =>
+            {
+                Some(text)
+            }
+            _ => None,
+        });
+    if let Some(text) = matching.next()
+        && matching.all(|other| other == text)
+    {
+        return Some(text.clone());
+    }
+    Some(preview)
+}
+
 fn restore_child_transcript(
     stored: &[Value],
     fallback_created_at: &str,
@@ -1893,7 +1957,7 @@ fn build_child_session_mutation(
             provider_state: None,
             todos: todos.to_vec(),
             harness_context: harness_context.cloned(),
-            cost_tracker: None,
+            cost_tracker: summary.session_usage.clone(),
         },
     }
 }

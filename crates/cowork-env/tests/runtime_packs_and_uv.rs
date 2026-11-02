@@ -266,6 +266,98 @@ fn v1_zip_runtime_install_verifies_ed25519_and_rayon_digests_and_seals_readonly(
 }
 
 #[test]
+fn pruning_removes_only_version_directories_and_preserves_external_file_modes() {
+    let (_tmp, root) = canonical_temp_dir("cowork-prune-");
+    let rt_root = root.join(".cowork/runtime");
+    let external = root.join("external");
+    let user_backup = rt_root.join("backup");
+    let retained = rt_root.join("2026-06-22");
+    let retired = rt_root.join("2026-01-01");
+    for dir in [&external, &user_backup, &retained, &retired] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("runtime.json"), "{}").unwrap();
+    }
+    let external_tool = external.join("tool");
+    write_executable(&external_tool, "#!/bin/sh\nexit 0\n");
+    std::fs::hard_link(&external_tool, retired.join("hard-link")).unwrap();
+    let alias = rt_root.join("2025-12-01");
+    std::os::unix::fs::symlink(&external, &alias).unwrap();
+
+    let removed = prune_installed_runtimes(&root, 1).unwrap();
+    assert_eq!(removed, [retired]);
+    assert!(retained.is_dir());
+    assert!(user_backup.is_dir());
+    assert!(alias.is_symlink());
+    assert_eq!(
+        std::fs::metadata(&external_tool)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+}
+
+#[test]
+fn v1_reinstall_restores_the_previous_runtime_if_activation_fails() {
+    let (_tmp, root) = canonical_temp_dir("cowork-v1-rollback-");
+    let staging = root.join("staging");
+    populate_full_runtime_staging(&staging);
+    let asset = resolve_host_asset().unwrap();
+    let (key_id, signing_key, trusted_keys) = test_keypair();
+    let archive = root.join("runtime.zip");
+    let opts = RuntimeInstallOptions {
+        homedir: root.join("home"),
+        trusted_keys,
+        expected_version: None,
+        expected_archive_sha256: None,
+        force: true,
+        keep_versions: 2,
+        on_progress: None,
+    };
+    build_signed_v1_zip_fixture(
+        &staging,
+        "2026-06-22",
+        &asset,
+        &key_id,
+        &signing_key,
+        &archive,
+    )
+    .unwrap();
+    let previous = install_v1_zip_runtime(&archive, &opts).unwrap();
+    let original_node = std::fs::read(&previous.paths.node).unwrap();
+    write_executable(
+        &staging.join("dependencies/node/bin/node"),
+        "#!/bin/sh\necho replacement\n",
+    );
+    build_signed_v1_zip_fixture(
+        &staging,
+        "2026-06-22",
+        &asset,
+        &key_id,
+        &signing_key,
+        &archive,
+    )
+    .unwrap();
+
+    let runtime_root = previous.root_dir.parent().unwrap();
+    let pointer = runtime_root.join("current.json");
+    std::fs::remove_file(&pointer).unwrap();
+    std::fs::create_dir(&pointer).unwrap();
+    install_v1_zip_runtime(&archive, &opts).expect_err("activation must fail");
+
+    let restored = verify_installed_runtime(&previous.root_dir, &opts.trusted_keys, true).unwrap();
+    assert_eq!(std::fs::read(restored.paths.node).unwrap(), original_node);
+    assert!(std::fs::read_dir(runtime_root).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name();
+        let name = name.to_string_lossy();
+        !name.starts_with(".replaced-")
+            && !name.starts_with(".staging-")
+            && !name.starts_with("current.json.tmp.")
+    }));
+}
+
+#[test]
 fn v1_zip_rejects_bad_signature_tampered_bytes_and_traversal_entries_fail_closed() {
     let (_tmp, root) = canonical_temp_dir("cowork-v1-tamper-");
     let home = root.join("home");
@@ -359,6 +451,32 @@ fn v1_zip_rejects_bad_signature_tampered_bytes_and_traversal_entries_fail_closed
         "unexpected tamper error: {tamper_err}"
     );
     assert!(!home.join(".cowork/runtime/current.json").exists());
+
+    let invalid_version_zip = root.join("invalid-version.zip");
+    build_signed_v1_zip_fixture(
+        &staging,
+        "../escaped",
+        &asset,
+        &key_id,
+        &signing_key,
+        &invalid_version_zip,
+    )
+    .unwrap();
+    let invalid_version = install_v1_zip_runtime(
+        &invalid_version_zip,
+        &RuntimeInstallOptions {
+            homedir: home.clone(),
+            trusted_keys: trusted_keys.clone(),
+            expected_version: None,
+            expected_archive_sha256: None,
+            force: true,
+            keep_versions: 2,
+            on_progress: None,
+        },
+    )
+    .expect_err("a signed version is still not an installation path");
+    assert!(invalid_version.to_string().contains("YYYY-MM-DD"));
+    assert!(!home.join(".cowork/escaped").exists());
 
     // 3. Path traversal `../escape.sh` zip entry -> rejected during extraction!
     let traversal_zip = root.join("traversal.zip");
@@ -675,6 +793,9 @@ async fn fs4_bootstrap_lock_serializes_concurrent_writers_emits_waiting_and_hono
     assert!(v2_dir.exists());
     assert!(v3_dir.exists());
 
+    // Another reader may have already opened the same file and be waiting on its lock.
+    let lease_file = cowork_env::consumer_lease_lock_path(&v1_dir);
+    let opened_before_prune = std::fs::File::open(&lease_file).unwrap();
     drop(lease);
     prune_installed_runtimes(&home, 2).expect("prune after lease drop");
     assert!(
@@ -683,6 +804,12 @@ async fn fs4_bootstrap_lock_serializes_concurrent_writers_emits_waiting_and_hono
     );
     assert!(v2_dir.exists());
     assert!(v3_dir.exists());
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(
+        std::fs::metadata(&lease_file).unwrap().ino(),
+        opened_before_prune.metadata().unwrap().ino()
+    );
+    assert!(RuntimeConsumerLease::acquire(&v1_dir).is_err());
 }
 
 /// Builds a raw published `mweinbach/cowork-runtime` v1 `.zip` archive using the EXACT JSON schema

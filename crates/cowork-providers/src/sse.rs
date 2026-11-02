@@ -18,11 +18,27 @@ pub struct SseFrame {
 pub type BoxedSseStream =
     Pin<Box<dyn Stream<Item = Result<SseFrame, ProviderTransportError>> + Send>>;
 
-/// Builds a shared `reqwest::Client` configured with `rustls` and disabled automatic redirects on
-/// POST bodies where not appropriate.
+/// A provider's endpoint can redirect within its own origin. Crossing origins would send
+/// custom API key headers and, on a 307/308, the authenticated request body to a different peer.
+pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt
+            .previous()
+            .first()
+            .is_some_and(|original| original.origin() == attempt.url().origin())
+        {
+            reqwest::redirect::Policy::default().redirect(attempt)
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
+/// Builds the shared HTTP client for provider requests.
 pub fn build_http_client() -> Result<reqwest::Client, ProviderTransportError> {
     reqwest::Client::builder()
         .use_rustls_tls()
+        .redirect(same_origin_redirect_policy())
         .build()
         .map_err(|err| {
             ProviderTransportError::network(format!("Failed to build HTTP client: {err}"))
@@ -71,12 +87,7 @@ pub async fn post_json_sse(
     if !status.is_success() {
         let header_map = extract_headers_lowercase(response.headers());
         let raw_body = response.text().await.unwrap_or_default();
-        let message = extract_error_message_from_body(status.as_u16(), &raw_body);
-        return Err(ProviderTransportError::http(
-            status.as_u16(),
-            message,
-            header_map,
-        ));
+        return Err(http_error_from_body(status.as_u16(), header_map, &raw_body));
     }
 
     let event_stream = response
@@ -115,29 +126,30 @@ fn extract_headers_lowercase(headers: &HeaderMap) -> HashMap<String, String> {
     map
 }
 
-fn extract_error_message_from_body(status: u16, body: &str) -> String {
+fn http_error_from_body(
+    status: u16,
+    headers: HashMap<String, String>,
+    body: &str,
+) -> ProviderTransportError {
     let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return format!("Provider HTTP {status}");
-    }
-    if let Ok(json_val) = serde_json::from_str::<Value>(trimmed) {
-        if let Some(msg) = json_val
-            .get("error")
-            .and_then(|e| e.get("message").or(Some(e)))
-            .and_then(Value::as_str)
-            .filter(|s| !s.trim().is_empty())
-        {
-            return format!("HTTP {status}: {msg}");
-        }
-        if let Some(msg) = json_val
-            .get("message")
-            .and_then(Value::as_str)
-            .filter(|s| !s.trim().is_empty())
-        {
-            return format!("HTTP {status}: {msg}");
-        }
-    }
-    format!("HTTP {status}: {trimmed}")
+    let payload = serde_json::from_str::<Value>(trimmed).unwrap_or(Value::Null);
+    let vendor_error = &payload["error"];
+    let message = [&vendor_error["message"], vendor_error, &payload["message"]]
+        .into_iter()
+        .filter_map(Value::as_str)
+        .find(|s| !s.trim().is_empty())
+        .unwrap_or(trimmed);
+    let description = if message.is_empty() {
+        format!("Provider HTTP {status}")
+    } else {
+        format!("HTTP {status}: {message}")
+    };
+    let mut error = ProviderTransportError::http(status, description, headers);
+    error.code = vendor_error["code"]
+        .as_str()
+        .or_else(|| payload["code"].as_str())
+        .map(str::to_owned);
+    error
 }
 
 #[cfg(test)]
@@ -242,6 +254,56 @@ mod tests {
             }
         })
         .await
+    }
+
+    #[tokio::test]
+    async fn provider_redirects_keep_credentials_and_request_bodies_on_the_original_origin() {
+        use axum::response::Redirect;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_url = format!("http://{}/collect", other.local_addr().unwrap());
+        let other_hits = Arc::new(AtomicUsize::new(0));
+        let hits = Arc::clone(&other_hits);
+        let receiver = Router::new().fallback(move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            async { "unexpected request" }
+        });
+        tokio::spawn(axum::serve(other, receiver).into_future());
+
+        let app = Router::new()
+            .route("/same", post(|| async { Redirect::temporary("/echo") }))
+            .route(
+                "/echo",
+                post(|headers: HeaderMap, body: String| async move {
+                    assert_eq!(headers["x-goog-api-key"], "fixture-key");
+                    body
+                }),
+            )
+            .route(
+                "/external",
+                post(move || async move { Redirect::temporary(&other_url) }),
+            );
+        let provider = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", provider.local_addr().unwrap());
+        tokio::spawn(axum::serve(provider, app).into_future());
+        let client = build_http_client().unwrap();
+        let send = |path: &str| {
+            client
+                .post(format!("{base}/{path}"))
+                .header("x-goog-api-key", "fixture-key")
+                .body("private transcript")
+                .send()
+        };
+
+        assert_eq!(
+            send("same").await.unwrap().text().await.unwrap(),
+            "private transcript"
+        );
+        let response = send("external").await.unwrap();
+        assert_eq!(other_hits.load(Ordering::SeqCst), 0);
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
     }
 
     #[tokio::test]

@@ -39,9 +39,9 @@ pub use installer::{
     DEFAULT_COWORK_RUNTIME_REPOSITORY, DEFAULT_COWORK_RUNTIME_VERSION, EnsureRuntimeOptions,
     RuntimeConsumerLease, RuntimeInstallOptions, bootstrap_lock_path, build_signed_v1_zip_fixture,
     build_signed_v2_pack_tar_zst_fixture, checksum_from_text, consumer_lease_lock_path,
-    ensure_cowork_runtime_ready, has_active_consumer_lease, install_v1_zip_runtime,
-    install_v2_pack_set, prune_installed_runtimes, read_current_pointer, runtime_root_dir,
-    with_runtime_bootstrap_lock, with_runtime_bootstrap_lock_sync,
+    ensure_cowork_runtime_ready, ensure_leased_cowork_runtime_ready, has_active_consumer_lease,
+    install_v1_zip_runtime, install_v2_pack_set, prune_installed_runtimes, read_current_pointer,
+    runtime_root_dir, with_runtime_bootstrap_lock, with_runtime_bootstrap_lock_sync,
 };
 pub use integrity::{
     attestation_sidecar_path, compute_tree_state_digest_parallel, hash_bytes_dual,

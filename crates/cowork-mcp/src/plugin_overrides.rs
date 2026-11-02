@@ -253,7 +253,7 @@ pub fn plugin_mcp_override_key(plugin_id: &str, server_name: &str) -> String {
 /// Strict read for read-modify-write: a missing file is the empty default, while an unreadable
 /// file or one that is not a JSON object is an error so it is never overwritten.
 pub fn try_read_plugin_overrides_file(path: &Path) -> Result<PluginOverridesFile, String> {
-    let raw = match fs::read_to_string(path) {
+    let raw = match crate::read_config_file(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PluginOverridesFile::default());
@@ -391,7 +391,7 @@ pub fn discover_installed_plugin_roots(
             // 1. Local `marketplace.json` inside `<base_dir>/marketplace.json` (if present)
             let local_mp_path = base_dir.join("marketplace.json");
             if local_mp_path.is_file() {
-                match fs::read_to_string(&local_mp_path)
+                match crate::read_config_file(&local_mp_path)
                     .ok()
                     .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
                 {
@@ -529,7 +529,7 @@ fn load_plugin_from_dir(
     ];
     let manifest_path = manifest_candidates.into_iter().find(|p| p.is_file())?;
 
-    let raw = match fs::read_to_string(&manifest_path) {
+    let raw = match crate::read_config_file(&manifest_path) {
         Ok(r) => r,
         Err(e) => {
             warnings.push(format!(
@@ -712,7 +712,7 @@ fn resolve_plugin_skills_dirs(
 fn read_install_marketplace_name(plugin_root: &Path) -> Option<Option<String>> {
     for rel in [".cowork-plugin/install.json", ".codex-plugin/install.json"] {
         let p = plugin_root.join(rel);
-        let Ok(raw) = fs::read_to_string(&p) else {
+        let Ok(raw) = crate::read_config_file(&p) else {
             continue;
         };
         let Ok(val) = serde_json::from_str::<Value>(&raw) else {

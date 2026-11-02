@@ -495,6 +495,26 @@ async fn web_fetch_pins_dns_blocks_ssrf_and_redirects_converts_html_and_web_sear
         }
     }));
 
+    let mut offline = pinned_ctx.clone();
+    offline.yolo = true;
+    offline.sandbox_policy = cowork_sandbox::SandboxPolicy::DangerFullAccess {
+        network: Some(false),
+    };
+    for (tool, args) in [
+        (
+            "webFetch",
+            json!({ "url": format!("http://docs.example.test:{}/article", mock_addr.port()) }),
+        ),
+        ("webSearch", json!({ "query": "rust async tokio" })),
+    ] {
+        let error = tools[tool]
+            .execute(serde_json::from_value(args).unwrap(), &offline)
+            .await
+            .expect_err("YOLO must keep the explicit network restriction");
+        assert!(matches!(error, cowork_tools::ToolError::PathDenied(_)));
+    }
+    assert_eq!(exa_hits.load(Ordering::SeqCst), 0);
+
     // HTML -> Markdown + untrusted framing + defanged nested end marker
     let html_res = web_fetch
         .execute(

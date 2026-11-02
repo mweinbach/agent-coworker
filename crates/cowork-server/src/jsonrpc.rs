@@ -57,6 +57,8 @@ pub struct ConnectionRpcState {
     flags: Mutex<HandshakeFlags>,
     pending_requests: Arc<AtomicUsize>,
     deferred_broadcasts: Mutex<Vec<JsonRpcLiteNotification>>,
+    /// A reply to a replayed request waits until resume installs the live subscription.
+    pub(crate) replay_gate: tokio::sync::Mutex<()>,
 }
 
 impl ConnectionRpcState {
@@ -95,6 +97,7 @@ impl ConnectionRpcState {
             }),
             pending_requests: Arc::new(AtomicUsize::new(0)),
             deferred_broadcasts: Mutex::new(Vec::new()),
+            replay_gate: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -200,6 +203,7 @@ pub async fn dispatch_client_message(
     match message {
         JsonRpcLiteClientMessage::ClientResponse(client_resp) => {
             // Client replies to server-initiated requests bypass pre-init guards.
+            let _replay = conn.replay_gate.lock().await;
             runtime.resolve_client_interaction_response(&conn.connection_id, &client_resp)
         }
         JsonRpcLiteClientMessage::Notification(notif) => {
@@ -410,7 +414,7 @@ async fn route_ready_request(
         "thread/resume" => {
             let p: ThreadResumeParams = parse_params_required(method, req.params.as_ref())?;
             let (thread, replay_health) = runtime
-                .resume_thread(&conn.connection_id, &p.thread_id, p.after_seq.unwrap_or(0))
+                .resume_thread(conn, &p.thread_id, p.after_seq.unwrap_or(0))
                 .await
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
             let mut out = Map::new();

@@ -27,6 +27,7 @@ use crate::http_fs::{
     handle_fs_rename_with_listener, handle_fs_trash_with_listener,
 };
 use crate::jsonrpc::{ConnectionRpcState, dispatch_client_message};
+use crate::mobile_h3::permissions::parse_http_jsonrpc_payload;
 use crate::registry::ServerRuntimeState;
 use crate::security::{
     ALLOWED_CORS_HEADERS, ALLOWED_CORS_METHODS, SecurityGateDecision, apply_cors_headers,
@@ -486,19 +487,9 @@ async fn handle_loopback_rpc(
         );
     };
 
-    if !raw_json.is_object() {
-        return json_resp(
-            StatusCode::BAD_REQUEST,
-            &json!({ "error": "JSON-RPC payload must be an object." }),
-        );
-    }
-
-    let client_msg = match decode_client_message_bytes(&body_bytes) {
+    let client_msg = match parse_http_jsonrpc_payload(&raw_json) {
         Ok(m) => m,
-        Err(err) => {
-            let val = serde_json::to_value(err.into_response()).unwrap_or_else(|_| json!({}));
-            return json_resp(StatusCode::OK, &val);
-        }
+        Err(err) => return json_resp(StatusCode::BAD_REQUEST, &json!({ "error": err })),
     };
 
     let conn_state = state
@@ -523,11 +514,11 @@ async fn handle_loopback_rpc(
     }
 
     match (is_request, maybe_resp) {
-        (_, Some(resp)) => {
+        (true, Some(resp)) => {
             let val = serde_json::to_value(resp).unwrap_or_else(|_| json!({}));
             json_resp(StatusCode::OK, &val)
         }
-        (false, None) => Response::builder()
+        (false, _) => Response::builder()
             .status(StatusCode::ACCEPTED)
             .body(Body::empty())
             .unwrap(),

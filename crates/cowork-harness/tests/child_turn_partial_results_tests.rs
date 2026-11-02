@@ -2,14 +2,14 @@
 //! on a later step) must keep its request, the completed tool call/result and the incurred usage,
 //! so a follow-up resumes from what actually happened.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cowork_config::{LoadConfigOptions, ProviderName, load_config};
+use cowork_config::{AgentConfig, LoadConfigOptions, load_config};
 use cowork_harness::agents::{
     AgentControl, AgentControlConfig, AgentSpawnRequest, ChildTurnError, ChildTurnExecutor,
     ChildTurnInput, ChildTurnResult,
@@ -136,9 +136,11 @@ fn history_after_tool_step(input: &ChildTurnInput, call_id: &str) -> Vec<Canonic
 
 /// Scripted executor: `INTERRUPT_ME` runs a tool step then blocks until cancelled, `FAIL_ME` runs a
 /// tool step then fails, anything else answers with text.
+#[derive(Default)]
 struct ScriptedExecutor {
     inputs: Mutex<Vec<ChildTurnInput>>,
     tool_step_done: Notify,
+    release_cleanup: Notify,
 }
 
 #[async_trait]
@@ -152,6 +154,9 @@ impl ChildTurnExecutor for ScriptedExecutor {
             let messages = history_after_tool_step(&input, "call_interrupt");
             self.tool_step_done.notify_one();
             input.cancel_token.cancelled().await;
+            if input.prompt.contains("HOLD_CLEANUP") {
+                self.release_cleanup.notified().await;
+            }
             return Err(ChildTurnError::with_partial(
                 "Child agent turn interrupted.",
                 ChildTurnResult {
@@ -170,6 +175,10 @@ impl ChildTurnExecutor for ScriptedExecutor {
                     usage: usage(20, 10),
                 },
             ));
+        }
+        if input.prompt.contains("HOLD_SUCCESS") {
+            self.tool_step_done.notify_one();
+            self.release_cleanup.notified().await;
         }
         let reply = format!("handled: {}", input.prompt);
         let mut messages = input.initial_messages;
@@ -259,25 +268,29 @@ fn stored_messages(db: &SessionDb, agent_id: &str) -> Vec<CanonicalMessage> {
         .collect()
 }
 
-#[tokio::test]
-async fn interrupted_and_failed_child_turns_keep_partial_history_and_usage() {
-    let (base, cfg, db) = setup_env("partial").await;
-    let executor = Arc::new(ScriptedExecutor {
-        inputs: Mutex::new(Vec::new()),
-        tool_step_done: Notify::new(),
-    });
-    let connected: BTreeSet<ProviderName> = [cfg.provider].into_iter().collect();
-    let control = AgentControl::new(
+fn open_parent(
+    cfg: &AgentConfig,
+    db: &Arc<SessionDb>,
+    executor: &Arc<ScriptedExecutor>,
+) -> AgentControl {
+    AgentControl::new(
         AgentControlConfig {
             parent_session_id: "root-partial".to_owned(),
             parent_depth: 0,
             agent_config: Arc::new(cfg.clone()),
-            session_db: Arc::clone(&db),
-            connected_providers: connected,
+            session_db: Arc::clone(db),
+            connected_providers: [cfg.provider].into_iter().collect(),
         },
-        Arc::clone(&executor) as Arc<dyn ChildTurnExecutor>,
+        Arc::clone(executor) as Arc<dyn ChildTurnExecutor>,
         Arc::new(|_, _| {}),
-    );
+    )
+}
+
+#[tokio::test]
+async fn interrupted_and_failed_child_turns_keep_partial_history_and_usage() {
+    let (base, cfg, db) = setup_env("partial").await;
+    let executor = Arc::new(ScriptedExecutor::default());
+    let control = open_parent(&cfg, &db, &executor);
 
     // Interrupt after the tool step: status semantics unchanged ("completed"), but the request,
     // tool call/result and step usage survive.
@@ -303,6 +316,12 @@ async fn interrupted_and_failed_child_turns_keep_partial_history_and_usage() {
         has_partial_step(&stored, interrupt_prompt, "call_interrupt"),
         "{stored:?}"
     );
+
+    // Reopening the parent must keep the usage that the interrupted turn already incurred.
+    let control = open_parent(&cfg, &db, &executor);
+    let restored = control.inspect(&a).unwrap();
+    assert_eq!(total_tokens(restored.session_usage.as_ref()), 30);
+    assert_eq!(total_tokens(restored.last_turn_usage.as_ref()), 30);
 
     // A follow-up continues from the partial history and accumulates usage.
     control.send_input(&a, "continue", false).await.unwrap();
@@ -354,6 +373,82 @@ async fn interrupted_and_failed_child_turns_keep_partial_history_and_usage() {
         has_partial_step(&stored, fail_prompt, "call_fail"),
         "{stored:?}"
     );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn close_and_resume_wait_for_the_interrupted_child_transcript() {
+    let (base, cfg, db) = setup_env("closing").await;
+    let executor = Arc::new(ScriptedExecutor::default());
+    let control = open_parent(&cfg, &db, &executor);
+    // Closing a running turn must preserve its partial tool history before a concurrent resume
+    // can admit another turn on the same transcript.
+    let held = "INTERRUPT_ME HOLD_CLEANUP";
+    let c = control
+        .spawn(spawn_req(held), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    executor.tool_step_done.notified().await;
+    let mut closing = Box::pin(control.close(&c));
+    assert!(futures::poll!(&mut closing).is_pending());
+    let mut resuming = Box::pin(control.resume(&c));
+    assert!(futures::poll!(&mut resuming).is_pending());
+    assert_eq!(control.inspect(&c).unwrap().agent.lifecycle_state, "closed");
+    executor.release_cleanup.notify_one();
+    let (closed, resumed) = tokio::join!(closing, resuming);
+    assert_eq!(closed.unwrap().lifecycle_state, "closed");
+    assert_eq!(resumed.unwrap().lifecycle_state, "active");
+    control.send_input(&c, "after close", false).await.unwrap();
+    wait_settled(&control, &c).await;
+    {
+        let inputs = executor.inputs.lock();
+        let follow_up = inputs
+            .iter()
+            .find(|i| i.agent_id == c && i.prompt == "after close")
+            .unwrap();
+        assert!(has_partial_step(
+            &follow_up.initial_messages,
+            held,
+            "call_interrupt"
+        ));
+    }
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn follow_up_waits_for_the_previous_status_to_reach_disk() {
+    let (base, cfg, db) = setup_env("finalizing").await;
+    let executor = Arc::new(ScriptedExecutor::default());
+    let control = open_parent(&cfg, &db, &executor);
+    // The executor returned, but the old loop still owes a durable completion and status event.
+    // Hold the DB lock there and check that a follow-up waits before starting a fresh loop.
+    let d = control
+        .spawn(spawn_req("HOLD_SUCCESS"), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    executor.tool_step_done.notified().await;
+    let mut follow_up = Box::pin(control.send_input(&d, "after persisted turn", false));
+    db.write_coordinator()
+        .run_exclusive("hold final status", || async {
+            executor.release_cleanup.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while control.inspect(&d).unwrap().agent.busy {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(futures::poll!(&mut follow_up).is_pending());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    follow_up.await.unwrap();
+    wait_settled(&control, &d).await;
 
     let _ = fs::remove_dir_all(&base);
 }

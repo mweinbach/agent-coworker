@@ -3,16 +3,28 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { hostArch, hostPlatform } from "../src/platform/host";
-import { resolveRustCompileTarget } from "./releaseBuildUtils";
+import { resolveRustCompileTarget, type runCommand } from "./releaseBuildUtils";
+
+type WorkspaceBinary = "cowork" | "cowork-server";
+
+function cargoPackage(name: WorkspaceBinary): string {
+  return name === "cowork" ? "cowork-cli" : "cowork-server";
+}
 
 /** Let Cargo check freshness and report the executable (including any custom target layout). */
 export function buildWorkspaceBinary(
   root: string,
-  name: "cowork" | "cowork-server",
+  name: WorkspaceBinary,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const pkg = name === "cowork" ? "cowork-cli" : "cowork-server";
-  const args = ["build", "-p", pkg, "--bin", name, "--message-format=json-render-diagnostics"];
+  const args = [
+    "build",
+    "-p",
+    cargoPackage(name),
+    "--bin",
+    name,
+    "--message-format=json-render-diagnostics",
+  ];
   const build = spawnSync("cargo", args, {
     cwd: root,
     env,
@@ -25,7 +37,11 @@ export function buildWorkspaceBinary(
       `Failed to build ${name} with cargo ${args.join(" ")}: ${build.error?.message ?? `exit ${build.status ?? build.signal}`}`,
     );
   }
-  for (const line of build.stdout.trim().split("\n")) {
+  return reportedExecutable(build.stdout, name);
+}
+
+function reportedExecutable(output: string, name: WorkspaceBinary): string {
+  for (const line of output.trim().split("\n")) {
     if (!line) continue;
     const event = JSON.parse(line);
     if (
@@ -38,6 +54,35 @@ export function buildWorkspaceBinary(
     }
   }
   throw new Error(`Cargo build succeeded but did not report an executable for ${name}.`);
+}
+
+export async function buildWorkspaceReleaseBinaries(
+  root: string,
+  target: string,
+  names: WorkspaceBinary[],
+  runner: typeof runCommand,
+): Promise<string[]> {
+  let output = "";
+  await runner(
+    [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      ...names.flatMap((name) => ["-p", cargoPackage(name)]),
+      "--target",
+      target,
+      "--message-format=json-render-diagnostics",
+    ],
+    {
+      cwd: root,
+      env: process.env,
+      onStdout: (text) => {
+        output = text;
+      },
+    },
+  );
+  return names.map((name) => reportedExecutable(output, name));
 }
 
 function cargoAvailable(root: string, env: NodeJS.ProcessEnv): boolean {

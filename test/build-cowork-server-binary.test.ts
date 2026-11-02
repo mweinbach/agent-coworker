@@ -93,20 +93,37 @@ describe("standalone server bundles", () => {
       try {
         await fs.mkdir(path.join(root, "prompts"));
         await fs.writeFile(path.join(root, "prompts", "system.md"), "bundled prompt");
+        const protectedFile = path.join(root, "Cargo.lock");
+        await fs.writeFile(protectedFile, "protected lockfile");
+        await fs.mkdir(path.dirname(outfile), { recursive: true });
+        await fs.link(
+          protectedFile,
+          path.join(path.dirname(outfile), "cowork-server-manifest.json"),
+        );
 
         await buildServerBinary({
           root,
           argv: ["--outfile", outfile, "--platform", "win32", "--arch", arch],
-          commandRunner: async (command) => {
+          commandRunner: async (command, { onStdout }) => {
             commands.push(command);
             if (command[0] === "cargo" && command.includes("cowork-server")) {
-              const workspaceReleaseDir = path.join(root, "target", rustTarget, "release");
+              const workspaceReleaseDir = path.join(root, "custom-target", rustTarget, "release");
               await fs.mkdir(workspaceReleaseDir, { recursive: true });
-              await fs.writeFile(
-                path.join(workspaceReleaseDir, "cowork-server.exe"),
-                "rust server",
-              );
-              await fs.writeFile(path.join(workspaceReleaseDir, "cowork.exe"), "rust cli");
+              const previousReleaseDir = path.join(root, "target", rustTarget, "release");
+              await fs.mkdir(previousReleaseDir, { recursive: true });
+              const events = [];
+              for (const [name, content] of [
+                ["cowork-server", "rust server"],
+                ["cowork", "rust cli"],
+              ]) {
+                const executable = path.join(workspaceReleaseDir, `${name}.exe`);
+                await fs.writeFile(executable, content);
+                await fs.writeFile(path.join(previousReleaseDir, `${name}.exe`), "stale binary");
+                events.push(
+                  JSON.stringify({ reason: "compiler-artifact", target: { name }, executable }),
+                );
+              }
+              onStdout?.(events.join("\n"));
             }
             if (command[0] === "cargo" && command.includes("--manifest-path")) {
               const releaseDir = path.join(
@@ -124,6 +141,7 @@ describe("standalone server bundles", () => {
         });
 
         const outputDir = path.dirname(outfile);
+        expect(await fs.readFile(protectedFile, "utf8")).toBe("protected lockfile");
         const manifest = JSON.parse(
           await fs.readFile(path.join(outputDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME), "utf8"),
         );
@@ -153,12 +171,14 @@ describe("standalone server bundles", () => {
           "cargo",
           "build",
           "--release",
+          "--locked",
           "-p",
           "cowork-server",
           "-p",
           "cowork-cli",
           "--target",
           rustTarget,
+          "--message-format=json-render-diagnostics",
         ]);
         expect(commands).toContainEqual(["rustup", "target", "add", rustTarget]);
       } finally {

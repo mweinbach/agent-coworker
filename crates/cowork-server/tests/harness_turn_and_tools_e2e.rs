@@ -731,18 +731,64 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
         "requestApproval must not include cwd: {approval_params}"
     );
 
-    // Approve the bash command so it spawns `sleep 120`!
     let app_id = approval_req_id.unwrap();
-    ws.send(WsMessage::Text(
-        json!({
-            "id": app_id,
-            "result": { "decision": "accept" }
-        })
-        .to_string()
-        .into(),
-    ))
-    .await
-    .unwrap();
+    // A connection outside this thread cannot answer even if it knows the request ID.
+    let mut second_client = connect_ready_ws(server.ws_url()).await;
+    second_client
+        .send(WsMessage::Text(
+            json!({ "id": app_id, "result": { "decision": "decline" } })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let rejected = tokio::time::timeout(Duration::from_secs(5), second_client.next())
+        .await
+        .expect("unknown interaction response")
+        .unwrap()
+        .unwrap();
+    let rejected: Value = serde_json::from_str(rejected.to_text().unwrap()).unwrap();
+    assert_eq!(rejected["id"], app_id);
+    assert_eq!(
+        rejected["error"]["data"]["category"],
+        "interaction_response_not_found"
+    );
+
+    // The same client can answer as soon as resume replays the pending approval.
+    second_client
+        .send(WsMessage::Text(
+            json!({
+                "id": "resume",
+                "method": "thread/resume",
+                "params": { "threadId": thread_id, "afterSeq": 1 }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(5), second_client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        if value["id"] == app_id && value["method"] == "item/commandExecution/requestApproval" {
+            break;
+        }
+    }
+    second_client
+        .send(WsMessage::Text(
+            json!({
+                "id": app_id,
+                "result": { "decision": "accept" }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
 
     // Wait for `child.pid` to appear on disk
     let mut spawned_pid: Option<i32> = None;

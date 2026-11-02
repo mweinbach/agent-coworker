@@ -5,9 +5,8 @@
 //! config load, so the turn uses the trusted tiers instead (user config, then the
 //! `LM_STUDIO_BASE_URL` environment pin, which always wins).
 //!
-//! The "remote" listener binds `127.0.0.2`: outside the TS loopback set (`localhost`,
-//! `127.0.0.1`, `::1`) yet locally reachable on Linux, so a regression would deliver the turn
-//! to it.
+//! The "remote" URL uses IPv4-mapped IPv6. Its hostname falls outside the trusted set
+//! (`localhost`, `127.0.0.1`, `::1`) but reaches the local IPv4 mock on every test host.
 
 use std::collections::HashMap;
 use std::fs;
@@ -168,16 +167,15 @@ async fn mock_handler(
         .unwrap()
 }
 
-/// Starts a mock LM Studio server on `bind_ip` and returns its base URL (`http://ip:port`).
-async fn start_mock(bind_ip: &str) -> (Recorder, String) {
+async fn start_mock() -> (Recorder, String) {
     let rec = Recorder::default();
     let app = Router::new().fallback(mock_handler).with_state(rec.clone());
-    let listener = TcpListener::bind(format!("{bind_ip}:0")).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (rec, format!("http://{bind_ip}:{port}"))
+    (rec, format!("http://{addr}"))
 }
 
 async fn connect(ws_url: &str) -> WsStream {
@@ -283,14 +281,13 @@ async fn run_lmstudio_turn(iso: &Iso) -> (Value, Option<String>) {
 
 #[tokio::test]
 async fn workspace_non_loopback_lmstudio_url_is_ignored_in_favour_of_user_config() {
-    let (remote_rec, remote_url) = start_mock("127.0.0.2").await;
-    let (user_rec, user_url) = start_mock("127.0.0.1").await;
+    let (remote_rec, remote_url) = start_mock().await;
+    let (user_rec, user_url) = start_mock().await;
     let remote_port = remote_url.rsplit(':').next().unwrap();
 
     for workspace_url in [
-        remote_url.clone(),
-        // Userinfo lookalike: the real host is 127.0.0.2.
-        format!("http://127.0.0.1@127.0.0.2:{remote_port}"),
+        format!("http://[::ffff:127.0.0.1]:{remote_port}"),
+        format!("http://127.0.0.1@[::ffff:127.0.0.1]:{remote_port}"),
     ] {
         let iso = Iso::new();
         iso.write_user_lmstudio_base_url(&user_url);
@@ -311,8 +308,8 @@ async fn workspace_non_loopback_lmstudio_url_is_ignored_in_favour_of_user_config
 
 #[tokio::test]
 async fn workspace_loopback_lmstudio_url_is_honoured() {
-    let (user_rec, user_url) = start_mock("127.0.0.1").await;
-    let (workspace_rec, workspace_url) = start_mock("127.0.0.1").await;
+    let (user_rec, user_url) = start_mock().await;
+    let (workspace_rec, workspace_url) = start_mock().await;
     let iso = Iso::new();
     iso.write_user_lmstudio_base_url(&user_url);
     iso.write_workspace_lmstudio_base_url(&workspace_url.replace("127.0.0.1", "localhost"));
@@ -326,8 +323,8 @@ async fn workspace_loopback_lmstudio_url_is_honoured() {
 
 #[tokio::test]
 async fn lm_studio_base_url_env_pin_wins_over_workspace_config() {
-    let (pinned_rec, pinned_url) = start_mock("127.0.0.1").await;
-    let (workspace_rec, workspace_url) = start_mock("127.0.0.1").await;
+    let (pinned_rec, pinned_url) = start_mock().await;
+    let (workspace_rec, workspace_url) = start_mock().await;
     let mut iso = Iso::new();
     iso.env.insert("LM_STUDIO_BASE_URL".into(), pinned_url);
     iso.write_workspace_lmstudio_base_url(&workspace_url);

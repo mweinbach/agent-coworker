@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use cowork_config::{
@@ -293,7 +292,7 @@ pub fn credential_key_for_server(server_name: &str) -> String {
 /// callers which write the store back never clobber credentials they could
 /// not read.
 pub fn try_read_credentials_file(path: &Path) -> Result<McpCredentialsFile, String> {
-    let raw = match fs::read_to_string(path) {
+    let raw = match crate::read_config_file(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(McpCredentialsFile::default());
@@ -305,7 +304,6 @@ pub fn try_read_credentials_file(path: &Path) -> Result<McpCredentialsFile, Stri
             ));
         }
     };
-    harden_private_file_sync(path);
     serde_json::from_str::<McpCredentialsFile>(&raw).map_err(|error| {
         format!(
             "Invalid MCP credential store at {}: {error}. Fix or remove the file to continue.",
@@ -492,6 +490,8 @@ pub fn compute_auth_state(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     /// Credential store exactly as the TypeScript v1 writer

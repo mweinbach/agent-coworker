@@ -786,6 +786,25 @@ async fn websocket_and_sticky_http_rpc_routes_and_idle_eviction() {
         .unwrap();
     assert_eq!(missing_cid.status(), 400);
 
+    let invalid_envelope = http
+        .post(&rpc_url)
+        .header("X-Cowork-Client-Id", "client-A")
+        .json(&json!({ "method": 17, "id": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_envelope.status(), 400);
+
+    let blocked_origin = http
+        .post(&rpc_url)
+        .header("X-Cowork-Client-Id", "client-A")
+        .header("Origin", "https://untrusted.example")
+        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "workspace/list" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked_origin.status(), 403);
+
     // Pre-init on client-A -> 200 with -32002
     let pre_http: Value = http
         .post(&rpc_url)
@@ -799,11 +818,12 @@ async fn websocket_and_sticky_http_rpc_routes_and_idle_eviction() {
         .unwrap();
     assert_eq!(pre_http["error"]["code"], -32002);
 
-    // Handshake on client-A
+    // HTTP also accepts callers that include the JSON-RPC version.
     let http_init: Value = http
         .post(&rpc_url)
         .header("X-Cowork-Client-Id", "client-A")
         .json(&json!({
+            "jsonrpc": "2.0",
             "id": 2,
             "method": "initialize",
             "params": { "clientInfo": { "name": "http-cli" } }
@@ -824,6 +844,16 @@ async fn websocket_and_sticky_http_rpc_routes_and_idle_eviction() {
         .await
         .unwrap();
     assert_eq!(http_inited.status(), 202);
+
+    let client_response = http
+        .post(&rpc_url)
+        .header("X-Cowork-Client-Id", "client-A")
+        .json(&json!({ "jsonrpc": "2.0", "id": "expired-request", "result": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(client_response.status(), 202);
+    assert!(client_response.bytes().await.unwrap().is_empty());
 
     let hydrated: Value = http
         .post(&rpc_url)

@@ -1030,7 +1030,10 @@ impl ServerRuntimeState {
             }
         }
 
-        let Some(mgr) = owner else {
+        let Some(mgr) = owner.filter(|mgr| {
+            self.get_live_thread(mgr.thread_id())
+                .is_some_and(|live| live.lock().subscribers.contains(connection_id))
+        }) else {
             return Some(JsonRpcLiteResponse::error(
                 Some(resp.id.clone()),
                 JsonRpcLiteError::with_data(

@@ -23,10 +23,11 @@ Native desktop clients that cannot speak WebSocket (for example the Native SDK T
 which only has buffered HTTP effects) use the same JSON-RPC-lite schema over the main sidecar:
 
 - `POST /rpc` accepts one JSON-RPC-lite request, notification, or client response per body.
+  HTTP callers may include `"jsonrpc": "2.0"`. Malformed JSON and invalid envelopes return HTTP `400`.
 - Sticky connection state is keyed by the required `X-Cowork-Client-Id` header (handshake and
   pending requests survive across POSTs for that id).
-- Notifications return HTTP `202` with an empty body; requests return the JSON-RPC response as
-  the HTTP body.
+- Notifications and client responses return HTTP `202` with an empty body. Requests return
+  HTTP `200` with the JSON-RPC result or method error.
 - `/rpc` rejects non-loopback remotes even when a browser token is present.
 - `initialize.result.transport` reports `{ "type": "http", "protocolMode": "jsonrpc" }`.
 

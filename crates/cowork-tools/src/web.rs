@@ -629,7 +629,7 @@ impl BuiltinTool for WebFetchTool {
         raw_args: Map<String, Value>,
         ctx: &ToolExecutionContext,
     ) -> ToolResult<ToolOutput> {
-        if !policy_allows_network(&ctx.sandbox_policy) && !ctx.yolo {
+        if !policy_allows_network(&ctx.sandbox_policy) {
             return Err(ToolError::PathDenied(
                 "Network access is disabled by the active sandbox policy.".to_owned(),
             ));
@@ -660,6 +660,8 @@ impl BuiltinTool for WebFetchTool {
                 .await?;
 
                 let client = reqwest::Client::builder()
+                    // A proxy would resolve the hostname itself, bypassing the validated address.
+                    .no_proxy()
                     .redirect(RedirectPolicy::none())
                     .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
                     .user_agent("Cowork-Agent/1.0")
@@ -1054,7 +1056,7 @@ impl BuiltinTool for WebSearchTool {
         mut raw_args: Map<String, Value>,
         ctx: &ToolExecutionContext,
     ) -> ToolResult<ToolOutput> {
-        if !policy_allows_network(&ctx.sandbox_policy) && !ctx.yolo {
+        if !policy_allows_network(&ctx.sandbox_policy) {
             return Err(ToolError::PathDenied(
                 "Network access is disabled by the active sandbox policy.".to_owned(),
             ));

@@ -27,6 +27,29 @@ fn canonical_temp_dir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test]
+fn linux_protects_exact_metadata_inside_mixed_case_directories() {
+    let (_temp, root) = canonical_temp_dir("cowork-cache-case-");
+    let mixed = root.join(".GIT");
+    let git = mixed.join("submodule").join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    let cache = WorkspaceProtectedPathsCache::new();
+    let roots = std::slice::from_ref(&root);
+    let linux = cache.protected_paths_for_roots(roots, Some("linux"));
+    assert!(linux.contains(&git));
+    assert!(!linux.contains(&mixed));
+
+    let cowork = mixed.join("project").join(".cowork");
+    std::fs::create_dir_all(&cowork).unwrap();
+    assert!(cache.wait_for_protected_path(
+        roots,
+        &cowork,
+        true,
+        Some("linux"),
+        Duration::from_secs(4),
+    ));
+}
+
+#[test]
 fn multi_thousand_file_workspace_avoids_repeated_walks_and_updates_via_notify() {
     let (_tmp, root) = canonical_temp_dir("cowork-cache-scale-");
     let ws = root.join("workspace");

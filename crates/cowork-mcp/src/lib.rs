@@ -42,6 +42,30 @@ pub use types::{
     McpValidationResult,
 };
 
+/// Configuration discovery runs before workspace MCP trust is evaluated. Reject special files
+/// without consuming a device stream or waiting for a writer on a repository-controlled FIFO.
+fn read_config_file(path: &std::path::Path) -> std::io::Result<String> {
+    use std::{fs, io};
+
+    let not_regular = || io::Error::new(io::ErrorKind::InvalidData, "expected a regular file");
+    if !fs::metadata(path)?.is_file() {
+        return Err(not_regular());
+    }
+    let mut options = fs::File::options();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    let file = options.open(path)?;
+    // Recheck the open handle in case the path changed after the initial metadata lookup.
+    if !file.metadata()?.is_file() {
+        return Err(not_regular());
+    }
+    io::read_to_string(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

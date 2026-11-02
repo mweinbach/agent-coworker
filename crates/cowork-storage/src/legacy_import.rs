@@ -38,7 +38,7 @@ pub fn import_legacy_snapshots_from_dir(conn: &mut Connection, sessions_dir: &Pa
         let Some(legacy) = parse_legacy_snapshot(&parsed) else {
             continue;
         };
-        let _ = import_single_legacy_snapshot(conn, &legacy);
+        import_single_legacy_snapshot(conn, &legacy)?;
     }
 
     Ok(())
@@ -601,24 +601,25 @@ pub fn create_legacy_session_snapshot(record: &PersistedSessionRecord) -> Value 
 }
 
 fn extract_message_text(content: Option<&Value>) -> String {
-    let Some(content) = content else {
-        return String::new();
-    };
-    if let Some(s) = content.as_str() {
-        return s.to_string();
+    match content {
+        Some(Value::String(text)) => text.trim().to_owned(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| {
+                [
+                    part.as_str(),
+                    part["text"].as_str(),
+                    part["inputText"].as_str(),
+                ]
+                .into_iter()
+                .flatten()
+                .map(str::trim)
+                .find(|text| !text.is_empty())
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
     }
-    if let Some(arr) = content.as_array() {
-        let mut parts = Vec::new();
-        for part in arr {
-            if let Some(text) = part.get("text").and_then(|v| v.as_str())
-                && !text.is_empty()
-            {
-                parts.push(text);
-            }
-        }
-        return parts.join("\n");
-    }
-    String::new()
 }
 
 /// `AgentRole` values (`agentRoleSchema` in `src/shared/agents.ts`).

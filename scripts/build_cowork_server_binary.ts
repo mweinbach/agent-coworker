@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { writeFileAtomic } from "../src/platform/fs";
 import { hostArch, hostPlatform } from "../src/platform/host";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
@@ -15,6 +16,7 @@ import {
 } from "./releaseBuildUtils";
 import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 import { computeSourceFingerprint } from "./winSandboxPrebuilt";
+import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
 const defaultRoot = path.resolve(import.meta.dirname, "..");
 const resourceDirs = ["prompts", "config", "docs", "skills", "workflows"] as const;
@@ -153,35 +155,13 @@ export async function buildServerBinary(
     });
   }
 
-  await runner(
-    [
-      "cargo",
-      "build",
-      "--release",
-      "-p",
-      "cowork-server",
-      "-p",
-      "cowork-cli",
-      "--target",
-      rustTarget,
-    ],
-    {
-      cwd: root,
-      env: process.env,
-    },
+  const [builtServerPath, builtCliPath] = await buildWorkspaceReleaseBinaries(
+    root,
+    rustTarget,
+    ["cowork-server", "cowork"],
+    runner,
   );
-
-  const cargoTargetDir =
-    !isMockedRunner && process.env.CARGO_TARGET_DIR?.trim()
-      ? path.resolve(root, process.env.CARGO_TARGET_DIR.trim())
-      : path.join(root, "target");
-  const releaseDir = path.join(cargoTargetDir, rustTarget, "release");
-  const serverExeName = target.platform === "win32" ? "cowork-server.exe" : "cowork-server";
   const cliExeName = target.platform === "win32" ? "cowork.exe" : "cowork";
-  const builtServerPath = path.join(releaseDir, serverExeName);
-  if (!(await pathExists(builtServerPath))) {
-    throw new Error(`Cargo build did not produce ${builtServerPath}`);
-  }
 
   await stageCompiledBinary({
     src: builtServerPath,
@@ -194,9 +174,8 @@ export async function buildServerBinary(
     label: "cowork-server",
   });
 
-  const builtCliPath = path.join(releaseDir, cliExeName);
   const cliOutfile = path.join(outDir, cliExeName);
-  if (path.resolve(cliOutfile) !== path.resolve(outfile) && (await pathExists(builtCliPath))) {
+  if (path.resolve(cliOutfile) !== path.resolve(outfile)) {
     await stageCompiledBinary({
       src: builtCliPath,
       dest: cliOutfile,
@@ -218,10 +197,9 @@ export async function buildServerBinary(
       path: path.basename(outfile),
     },
   };
-  await fs.writeFile(
+  await writeFileAtomic(
     path.join(outDir, SIDECAR_MANIFEST_NAME),
     `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
   );
 
   const bundledDirs = await copyBundledResourceDirs(root, outDir);

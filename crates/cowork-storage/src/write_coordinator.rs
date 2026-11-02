@@ -114,7 +114,7 @@ impl SessionDbWriteCoordinator {
         }
 
         let _local_guard = self.local_mutex.lock().await;
-        let handle = self.acquire(operation).await?;
+        let _handle = self.acquire(operation).await?;
 
         let mut next_locks = ACTIVE_WRITE_LOCKS
             .try_with(|locks| locks.clone())
@@ -128,7 +128,6 @@ impl SessionDbWriteCoordinator {
             self.diagnostics.lock().sqlite_lock_error_count += 1;
         }
 
-        handle.release();
         outcome
     }
 
@@ -152,7 +151,8 @@ impl SessionDbWriteCoordinator {
                         self.record_wait(waited_ms, stale_recoveries);
                     }
 
-                    let heartbeat = self.spawn_heartbeat(owner.clone());
+                    let owner = Arc::new(SyncMutex::new(Some(owner)));
+                    let heartbeat = self.spawn_heartbeat(Arc::clone(&owner));
                     return Ok(AcquiredLockHandle {
                         lock_dir: self.lock_dir.clone(),
                         owner_file_path: self.owner_file_path.clone(),
@@ -230,7 +230,7 @@ impl SessionDbWriteCoordinator {
         diag.max_wait_ms = diag.max_wait_ms.max(waited_ms);
     }
 
-    fn spawn_heartbeat(&self, owner: LockOwnerMetadata) -> JoinHandle<()> {
+    fn spawn_heartbeat(&self, owner: Arc<SyncMutex<Option<LockOwnerMetadata>>>) -> JoinHandle<()> {
         let owner_path = self.owner_file_path.clone();
         let interval_ms = self.heartbeat_ms;
         tokio::spawn(async move {
@@ -238,9 +238,10 @@ impl SessionDbWriteCoordinator {
             ticker.tick().await;
             loop {
                 ticker.tick().await;
-                let mut next = owner.clone();
-                next.updated_at = now_iso_millis();
-                let _ = write_owner_metadata(&owner_path, &next);
+                let mut guard = owner.lock();
+                let Some(owner) = guard.as_mut() else { break };
+                owner.updated_at = now_iso_millis();
+                let _ = write_owner_metadata(&owner_path, owner);
             }
         })
     }
@@ -249,17 +250,21 @@ impl SessionDbWriteCoordinator {
 struct AcquiredLockHandle {
     lock_dir: PathBuf,
     owner_file_path: PathBuf,
-    owner: LockOwnerMetadata,
+    owner: Arc<SyncMutex<Option<LockOwnerMetadata>>>,
     heartbeat: JoinHandle<()>,
 }
 
-impl AcquiredLockHandle {
-    fn release(self) {
+impl Drop for AcquiredLockHandle {
+    fn drop(&mut self) {
         self.heartbeat.abort();
+        // An already-running heartbeat must finish before another writer can claim this path.
+        let Some(owner) = self.owner.lock().take() else {
+            return;
+        };
         let live_owner = read_owner_metadata(&self.owner_file_path);
         let should_remove = match live_owner {
             None => true,
-            Some(live) => live.owner_id == self.owner.owner_id,
+            Some(live) => live.owner_id == owner.owner_id,
         };
         if should_remove {
             let _ = fs::remove_dir_all(&self.lock_dir);

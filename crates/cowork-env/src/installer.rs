@@ -149,6 +149,12 @@ impl RuntimeConsumerLease {
         let lease_path = consumer_lease_lock_path(&canonical);
         let file = open_lock_file(&lease_path)?;
         <File as fs4::FileExt>::lock_shared(&file)?;
+        if !canonical.is_dir() {
+            return Err(EnvError::Lock(format!(
+                "Cannot lease missing runtime {}",
+                canonical.display()
+            )));
+        }
         Ok(Self {
             file,
             runtime_dir: canonical,
@@ -166,24 +172,27 @@ impl Drop for RuntimeConsumerLease {
     }
 }
 
-/// Returns `true` if at least one live consumer holds a shared `RuntimeConsumerLease` on `runtime_dir`.
+// Keep the same lock file across pruning and reinstalling a version: a blocked reader
+// may already hold an open handle to its inode.
+fn try_lock_unused_runtime(runtime_dir: &Path) -> Result<Option<File>> {
+    let path = consumer_lease_lock_path(&canonicalize_sync(runtime_dir));
+    let file = open_lock_file(&path)?;
+    match <File as fs4::FileExt>::try_lock(&file) {
+        Ok(()) => Ok(Some(file)),
+        Err(fs4::TryLockError::WouldBlock) => Ok(None),
+        Err(fs4::TryLockError::Error(err)) => Err(err.into()),
+    }
+}
+
+/// Returns `true` when a live lease or a lock error prevents mutation.
 pub fn has_active_consumer_lease(runtime_dir: &Path) -> bool {
-    let canonical = canonicalize_sync(runtime_dir);
-    let lease_path = consumer_lease_lock_path(&canonical);
-    if !lease_path.exists() {
+    if matches!(
+        consumer_lease_lock_path(&canonicalize_sync(runtime_dir)).try_exists(),
+        Ok(false)
+    ) {
         return false;
     }
-    let Ok(file) = open_lock_file(&lease_path) else {
-        return true; // fail closed on unreadable lock file
-    };
-    match <File as fs4::FileExt>::try_lock(&file) {
-        Ok(()) => {
-            let _ = <File as fs4::FileExt>::unlock(&file);
-            false
-        }
-        Err(fs4::TryLockError::WouldBlock) => true,
-        Err(fs4::TryLockError::Error(_)) => true,
-    }
+    !matches!(try_lock_unused_runtime(runtime_dir), Ok(Some(_)))
 }
 
 /// Options controlling offline/local Cowork runtime installation and retention.
@@ -198,14 +207,20 @@ pub struct RuntimeInstallOptions {
     pub on_progress: Option<RuntimeProgressCallback>,
 }
 
-fn write_current_pointer(root: &Path, pointer: &InstalledRuntimePointer) -> Result<()> {
-    std::fs::create_dir_all(root)?;
-    let tmp = root.join(format!("current.json.tmp.{}", Uuid::new_v4().simple()));
-    let bytes = serde_json::to_vec_pretty(pointer)
-        .map_err(|e| EnvError::Manifest(format!("Failed serializing current.json: {e}")))?;
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, root.join("current.json"))?;
-    Ok(())
+fn write_current_pointer(root: &Path, runtime: &PreparedRuntime) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let payload = serde_json::to_string_pretty(&InstalledRuntimePointer {
+        schema_version: 1,
+        version: runtime.version.clone(),
+        asset: runtime.asset.clone(),
+        installed_at: now.clone(),
+        confirmed_at: Some(now),
+        runtime_dir: None,
+        installed_packs: runtime.installed_packs.clone(),
+    })
+    .map_err(|e| EnvError::Manifest(format!("Failed serializing current.json: {e}")))?;
+    cowork_config::write_text_file_atomic(&root.join("current.json"), &payload, None)
+        .map_err(|e| EnvError::Manifest(format!("Failed writing current.json: {e}")))
 }
 
 pub fn read_current_pointer(homedir: &Path) -> Option<InstalledRuntimePointer> {
@@ -264,6 +279,16 @@ pub fn checksum_from_text(text: &str, expected_file_name: &str) -> Result<String
 /// Prunes older installed runtime directories under `<homedir>/.cowork/runtime`, keeping `keep_versions`
 /// newest versions while always preserving `current.json` and any runtime with an active `RuntimeConsumerLease`.
 pub fn prune_installed_runtimes(homedir: &Path, keep_versions: usize) -> Result<Vec<PathBuf>> {
+    with_runtime_bootstrap_lock_sync(
+        homedir,
+        "retention",
+        DEFAULT_BOOTSTRAP_LOCK_TIMEOUT,
+        None,
+        || prune_installed_runtimes_locked(homedir, keep_versions),
+    )
+}
+
+fn prune_installed_runtimes_locked(homedir: &Path, keep_versions: usize) -> Result<Vec<PathBuf>> {
     let root = runtime_root_dir(homedir);
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -275,11 +300,11 @@ pub fn prune_installed_runtimes(homedir: &Path, keep_versions: usize) -> Result<
     for entry in std::fs::read_dir(&root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || name.ends_with(".json") || name.ends_with(".lock") {
+        if validate_runtime_version(&name).is_err() || !entry.file_type()?.is_dir() {
             continue;
         }
         let p = entry.path();
-        if p.is_dir() && p.join("runtime.json").is_file() {
+        if p.join("runtime.json").is_file() {
             version_dirs.push((name, p));
         }
     }
@@ -287,19 +312,25 @@ pub fn prune_installed_runtimes(homedir: &Path, keep_versions: usize) -> Result<
     // Newest version names sort lexicographically descending (`YYYY-MM-DD`).
     version_dirs.sort_by(|a, b| b.0.cmp(&a.0));
 
-    let mut kept = 0usize;
+    let mut kept = usize::from(
+        version_dirs
+            .iter()
+            .any(|(ver, _)| current_ver.as_ref() == Some(ver)),
+    );
     let mut removed = Vec::new();
     for (ver, dir_path) in version_dirs {
         let is_current = current_ver.as_deref() == Some(ver.as_str());
-        if is_current || kept < keep {
+        if is_current {
+            continue;
+        }
+        if kept < keep {
             kept += 1;
             continue;
         }
-        if has_active_consumer_lease(&dir_path) {
+        let Some(_lease) = try_lock_unused_runtime(&dir_path)? else {
             continue;
-        }
+        };
         remove_sealed_tree(&dir_path)?;
-        let _ = std::fs::remove_file(consumer_lease_lock_path(&dir_path));
         removed.push(dir_path);
     }
     Ok(removed)
@@ -359,70 +390,10 @@ pub fn install_v1_zip_runtime(
                     )));
                 }
 
-                let final_dir = rt_root.join(&staging_verified.version);
-                if final_dir.exists() {
-                    if !opts.force
-                        && let Ok(existing) =
-                            verify_installed_runtime(&final_dir, &opts.trusted_keys, false)
-                    {
-                        let _ = remove_sealed_tree(&staging_dir);
-                        let now = chrono::Utc::now().to_rfc3339();
-                        write_current_pointer(
-                            &rt_root,
-                            &InstalledRuntimePointer {
-                                schema_version: 1,
-                                version: existing.version.clone(),
-                                asset: existing.asset.clone(),
-                                installed_at: now.clone(),
-                                confirmed_at: Some(now),
-                                runtime_dir: None,
-                                installed_packs: existing.installed_packs.clone(),
-                            },
-                        )?;
-                        let _ = prune_installed_runtimes(&opts.homedir, opts.keep_versions);
-                        if let Some(cb) = &opts.on_progress {
-                            cb(StartupProgressEvent::ready(&existing.version));
-                        }
-                        return Ok(existing);
-                    }
-                    if has_active_consumer_lease(&final_dir) {
-                        return Err(EnvError::Lock(format!(
-                            "Cannot overwrite active leased runtime {}",
-                            final_dir.display()
-                        )));
-                    }
-                    remove_sealed_tree(&final_dir)?;
-                }
-
-                // Remove staging sidecar before moving + sealing final_dir, then verify+attest sealed final_dir.
-                let _ =
-                    std::fs::remove_file(crate::integrity::attestation_sidecar_path(&staging_dir));
-                std::fs::rename(&staging_dir, &final_dir)?;
-                seal_tree_readonly(&final_dir)?;
-                let final_verified =
-                    verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
-
-                let now = chrono::Utc::now().to_rfc3339();
-                write_current_pointer(
-                    &rt_root,
-                    &InstalledRuntimePointer {
-                        schema_version: 1,
-                        version: final_verified.version.clone(),
-                        asset: final_verified.asset.clone(),
-                        installed_at: now.clone(),
-                        confirmed_at: Some(now),
-                        runtime_dir: None,
-                        installed_packs: final_verified.installed_packs.clone(),
-                    },
-                )?;
-                let _ = prune_installed_runtimes(&opts.homedir, opts.keep_versions);
-                if let Some(cb) = &opts.on_progress {
-                    cb(StartupProgressEvent::ready(&final_verified.version));
-                }
-                Ok(final_verified)
+                promote_staged_runtime(&staging_dir, &staging_verified.version, opts)
             })();
 
-            if install_res.is_err() && staging_dir.exists() {
+            if staging_dir.exists() {
                 let _ = remove_sealed_tree(&staging_dir);
             }
             install_res
@@ -726,104 +697,7 @@ pub fn install_v2_pack_set(
                 // its own integrity checks while the composition still lacks a required
                 // entrypoint (e.g. a core-only set has no Python).
                 verify_installed_runtime(&merged_dir, &opts.trusted_keys, true)?;
-                let _ =
-                    std::fs::remove_file(crate::integrity::attestation_sidecar_path(&merged_dir));
-
-                let final_dir = rt_root.join(&version);
-                let mut backup_dir: Option<PathBuf> = None;
-                if final_dir.exists() {
-                    if !opts.force
-                        && let Ok(existing) =
-                            verify_installed_runtime(&final_dir, &opts.trusted_keys, false)
-                    {
-                        // Same as the v1 installer: an intact installation of this version is
-                        // kept unless `force` asks for a replacement.
-                        let now = chrono::Utc::now().to_rfc3339();
-                        write_current_pointer(
-                            &rt_root,
-                            &InstalledRuntimePointer {
-                                schema_version: 1,
-                                version: existing.version.clone(),
-                                asset: existing.asset.clone(),
-                                installed_at: now.clone(),
-                                confirmed_at: Some(now),
-                                runtime_dir: None,
-                                installed_packs: existing.installed_packs.clone(),
-                            },
-                        )?;
-                        let _ = prune_installed_runtimes(&opts.homedir, opts.keep_versions);
-                        if let Some(cb) = &opts.on_progress {
-                            cb(StartupProgressEvent::ready(&existing.version));
-                        }
-                        return Ok(existing);
-                    }
-                    if has_active_consumer_lease(&final_dir) {
-                        return Err(EnvError::Lock(format!(
-                            "Cannot overwrite active leased runtime {}",
-                            final_dir.display()
-                        )));
-                    }
-                    // TS: move the installed tree aside (dot-prefixed, so retention and fallback
-                    // discovery ignore it) instead of deleting it, so a failed promotion can be
-                    // rolled back.
-                    let backup =
-                        rt_root.join(format!(".replaced-{version}-{}", Uuid::new_v4().simple()));
-                    // macOS (unlike Linux) refuses to rename a directory the caller cannot
-                    // write, and the installed root is sealed `0555`: open its owner-write bit
-                    // for the move, and re-seal it if the move fails or is rolled back.
-                    set_dir_root_mode(&final_dir, 0o755);
-                    if let Err(err) = std::fs::rename(&final_dir, &backup) {
-                        set_dir_root_mode(&final_dir, 0o555);
-                        return Err(err.into());
-                    }
-                    backup_dir = Some(backup);
-                }
-
-                let promoted = (|| -> Result<PreparedRuntime> {
-                    std::fs::rename(&merged_dir, &final_dir)?;
-                    seal_tree_readonly(&final_dir)?;
-                    let final_verified =
-                        verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
-                    let now = chrono::Utc::now().to_rfc3339();
-                    write_current_pointer(
-                        &rt_root,
-                        &InstalledRuntimePointer {
-                            schema_version: 1,
-                            version: final_verified.version.clone(),
-                            asset: final_verified.asset.clone(),
-                            installed_at: now.clone(),
-                            confirmed_at: Some(now),
-                            runtime_dir: None,
-                            installed_packs: final_verified.installed_packs.clone(),
-                        },
-                    )?;
-                    Ok(final_verified)
-                })();
-                let final_verified = match promoted {
-                    Ok(verified) => verified,
-                    Err(err) => {
-                        // Discard the promoted tree and restore the previous installation; the
-                        // promotion failure stays the reported error.
-                        if final_dir.exists() {
-                            let _ = remove_sealed_tree(&final_dir);
-                        }
-                        if let Some(backup) = &backup_dir
-                            && std::fs::rename(backup, &final_dir).is_ok()
-                        {
-                            set_dir_root_mode(&final_dir, 0o555);
-                        }
-                        return Err(err);
-                    }
-                };
-                if let Some(backup) = &backup_dir {
-                    let _ = remove_sealed_tree(backup);
-                }
-
-                let _ = prune_installed_runtimes(&opts.homedir, opts.keep_versions);
-                if let Some(cb) = &opts.on_progress {
-                    cb(StartupProgressEvent::ready(&final_verified.version));
-                }
-                Ok(final_verified)
+                promote_staged_runtime(&merged_dir, &version, opts)
             })();
 
             if workspace_staging.exists() {
@@ -832,6 +706,93 @@ pub fn install_v2_pack_set(
             res
         },
     )
+}
+
+/// Promote a verified ZIP or composed pack set while its bootstrap lock is held.
+fn promote_staged_runtime(
+    staged_dir: &Path,
+    version: &str,
+    opts: &RuntimeInstallOptions,
+) -> Result<PreparedRuntime> {
+    let rt_root = runtime_root_dir(&opts.homedir);
+    let final_dir = rt_root.join(version);
+    let finish = |runtime: PreparedRuntime| {
+        let _ = prune_installed_runtimes_locked(&opts.homedir, opts.keep_versions);
+        if let Some(cb) = &opts.on_progress {
+            cb(StartupProgressEvent::ready(&runtime.version));
+        }
+        Ok(runtime)
+    };
+    let _ = std::fs::remove_file(crate::integrity::attestation_sidecar_path(staged_dir));
+
+    let existing_dir = match std::fs::symlink_metadata(&final_dir) {
+        Ok(meta) if meta.is_dir() => true,
+        Ok(_) => {
+            return Err(EnvError::Manifest(format!(
+                "Expected runtime directory at {}",
+                final_dir.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => return Err(err.into()),
+    };
+    if existing_dir
+        && !opts.force
+        && let Ok(existing) = verify_installed_runtime(&final_dir, &opts.trusted_keys, false)
+        && existing.version == version
+    {
+        write_current_pointer(&rt_root, &existing)?;
+        return finish(existing);
+    }
+    let writer_lease = try_lock_unused_runtime(&final_dir)?.ok_or_else(|| {
+        EnvError::Lock(format!(
+            "Cannot overwrite active leased runtime {}",
+            final_dir.display()
+        ))
+    })?;
+    let backup = if existing_dir {
+        let backup = rt_root.join(format!(".replaced-{version}-{}", Uuid::new_v4().simple()));
+        set_dir_root_mode(&final_dir, 0o755);
+        if let Err(err) = std::fs::rename(&final_dir, &backup) {
+            set_dir_root_mode(&final_dir, 0o555);
+            return Err(err.into());
+        }
+        Some(backup)
+    } else {
+        None
+    };
+    let promote = (|| {
+        std::fs::rename(staged_dir, &final_dir)?;
+        seal_tree_readonly(&final_dir)?;
+        let verified = verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
+        write_current_pointer(&rt_root, &verified)?;
+        Ok(verified)
+    })();
+    match promote {
+        Ok(verified) => {
+            drop(writer_lease);
+            if let Some(backup) = backup {
+                let _ = remove_sealed_tree(&backup);
+            }
+            finish(verified)
+        }
+        Err(err) => {
+            if !staged_dir.exists() {
+                let _ = remove_sealed_tree(&final_dir);
+            }
+            if let Some(backup) = backup {
+                std::fs::rename(&backup, &final_dir).map_err(|restore| {
+                    EnvError::Manifest(format!(
+                        "Runtime promotion failed ({err}); restoring {} from {} failed: {restore}",
+                        final_dir.display(),
+                        backup.display()
+                    ))
+                })?;
+                set_dir_root_mode(&final_dir, 0o555);
+            }
+            Err(err)
+        }
+    }
 }
 
 /// macOS (unlike Linux) refuses to rename a directory the caller cannot write, so a sealed
@@ -1352,6 +1313,63 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
     }
 }
 
+/// Keep a managed runtime stable for the lifetime of a server. Explicit external runtimes
+/// are outside installer retention and need no writable lease file.
+pub async fn ensure_leased_cowork_runtime_ready(
+    mut opts: EnsureRuntimeOptions,
+) -> Result<(PreparedRuntime, Option<RuntimeConsumerLease>)> {
+    let homedir = opts.homedir.clone();
+    let explicit_dir = opts
+        .env
+        .get("COWORK_RUNTIME_DIR")
+        .map(|s| PathBuf::from(s.trim()));
+    let trusted_keys = opts.trusted_keys.clone();
+    let on_progress = opts.on_progress.take();
+    if let Some(report) = on_progress.clone() {
+        opts.on_progress = Some(std::sync::Arc::new(move |evt| {
+            if evt.progress.phase != crate::manifest::RuntimeBootstrapPhase::Ready {
+                report(evt);
+            }
+        }));
+    }
+    let prepared = ensure_cowork_runtime_ready(opts).await?;
+    let (runtime, lease) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let home_runtime_root = canonicalize_sync(&runtime_root_dir(&homedir));
+        // A second home may open this version by its physical path outside either home's
+        // .cowork/runtime spelling. First installation creates this permanent lock file.
+        let has_installer_lease_file =
+            std::fs::symlink_metadata(consumer_lease_lock_path(&prepared.root_dir))
+                .is_ok_and(|meta| meta.is_file());
+        let managed = [Some(prepared.root_dir.as_path()), explicit_dir.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|path| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| validate_runtime_version(n).is_ok())
+                    && path.parent().is_some_and(|root| {
+                        has_installer_lease_file
+                            || root == home_runtime_root
+                            || root.ends_with(".cowork/runtime")
+                    })
+            });
+        if !managed {
+            return Ok((prepared, None));
+        }
+        let lease = RuntimeConsumerLease::acquire(&prepared.root_dir)?;
+        // Another installer may have replaced this version between bootstrap and lease
+        // acquisition. Use the entrypoints from the tree actually protected by our lease.
+        let runtime = verify_installed_runtime(lease.runtime_dir(), &trusted_keys, false)?;
+        Ok((runtime, Some(lease)))
+    })
+    .await
+    .map_err(|e| EnvError::Lock(format!("Runtime lease task failed: {e}")))??;
+    if let Some(report) = on_progress {
+        report(StartupProgressEvent::ready(&runtime.version));
+    }
+    Ok((runtime, lease))
+}
+
 /// Points `current.json` at an installed, verified runtime (TS `activateInstalledRuntime`),
 /// taking the bootstrap lock only when the pointer actually changes.
 fn activate_verified_runtime(homedir: &Path, runtime: &PreparedRuntime) -> Result<()> {
@@ -1366,21 +1384,7 @@ fn activate_verified_runtime(homedir: &Path, runtime: &PreparedRuntime) -> Resul
         &runtime.version,
         DEFAULT_BOOTSTRAP_LOCK_TIMEOUT,
         None,
-        || {
-            let now = chrono::Utc::now().to_rfc3339();
-            write_current_pointer(
-                &runtime_root_dir(homedir),
-                &InstalledRuntimePointer {
-                    schema_version: 1,
-                    version: runtime.version.clone(),
-                    asset: runtime.asset.clone(),
-                    installed_at: now.clone(),
-                    confirmed_at: Some(now),
-                    runtime_dir: None,
-                    installed_packs: runtime.installed_packs.clone(),
-                },
-            )
-        },
+        || write_current_pointer(&runtime_root_dir(homedir), runtime),
     )
 }
 

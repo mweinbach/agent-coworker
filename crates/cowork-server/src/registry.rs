@@ -1816,14 +1816,16 @@ impl ServerRuntimeState {
 
     pub async fn resume_thread(
         &self,
-        connection_id: &str,
+        conn: &crate::jsonrpc::ConnectionRpcState,
         thread_id: &str,
         after_seq: u64,
     ) -> Result<(JsonRpcThread, Option<ReplayHealth>), String> {
+        let connection_id = &conn.connection_id;
         let Some(live_arc) = self.load_thread(thread_id) else {
             return Err(format!("Unknown thread: {thread_id}"));
         };
         self.journal.wait_for_idle(thread_id).await;
+        let replay = conn.replay_gate.lock().await;
         let replay_health = self.build_replay_health(thread_id, after_seq);
 
         if after_seq > 0
@@ -1855,6 +1857,7 @@ impl ServerRuntimeState {
         }
 
         self.subscribe(connection_id, thread_id);
+        drop(replay);
         if let Some(im) = self.interaction_managers.get(thread_id) {
             im.replay_pending_requests();
         }
@@ -3092,7 +3095,7 @@ impl ServerRuntimeState {
             });
 
             let outcome =
-                cowork_env::ensure_cowork_runtime_ready(cowork_env::EnsureRuntimeOptions {
+                cowork_env::ensure_leased_cowork_runtime_ready(cowork_env::EnsureRuntimeOptions {
                     homedir: this.homedir.clone(),
                     env: this.env.clone(),
                     trusted_keys,
@@ -3101,11 +3104,8 @@ impl ServerRuntimeState {
                 .await;
 
             match outcome {
-                Ok(prepared) => {
-                    if let Ok(lease) = cowork_env::RuntimeConsumerLease::acquire(&prepared.root_dir)
-                    {
-                        *this.runtime_lease.lock() = Some(lease);
-                    }
+                Ok((prepared, lease)) => {
+                    *this.runtime_lease.lock() = lease;
                     let cowork_home = this.homedir.join(".cowork");
                     let canonical_env =
                         cowork_env::build_canonical_shell_env(cowork_env::ShellEnvOptions {

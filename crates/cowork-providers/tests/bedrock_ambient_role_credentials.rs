@@ -258,6 +258,24 @@ async fn ecs_container_full_uri_credentials_sign_bedrock_requests() {
 }
 
 #[test]
+fn container_credentials_reject_redirects_to_another_origin() {
+    let (other_uri, seen) = spawn_mock_container_endpoint(rfc3339_from_now(3600));
+    let endpoint = serve_on_thread(
+        Router::new()
+            .fallback(move || async move { axum::response::Redirect::temporary(&other_uri) }),
+    );
+    let (_tmp, home) = empty_home();
+    let env = env_for(&home, &[("AWS_CONTAINER_CREDENTIALS_FULL_URI", &endpoint)]);
+
+    let result = try_resolve_bedrock_auth_config(&home, &env, None);
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "contacted the redirected credential endpoint"
+    );
+    assert!(result.unwrap_err().contains("307"));
+}
+
+#[test]
 fn container_credentials_are_refreshed_as_they_approach_expiry() {
     // Credentials expiring in two minutes are inside the refresh margin, so every resolution
     // re-fetches instead of reusing them until they lapse.

@@ -156,7 +156,8 @@ pub fn assert_mutation_path_within_roots(
 
     let Some(containing_root) = canonical_roots
         .iter()
-        .find(|root| is_inside(root, &canonical_parent))
+        .filter(|root| is_inside(root, &canonical_parent))
+        .max_by_key(|root| root.components().count())
         .cloned()
     else {
         return Err(FsRouteError::forbidden(

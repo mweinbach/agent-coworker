@@ -136,6 +136,96 @@ impl Fixture {
     }
 }
 
+#[tokio::test]
+async fn servers_require_a_lease_for_relocated_managed_runtimes_and_skip_external_runtimes() {
+    let fx = fixture("cowork-leased-ready");
+    fx.install(STALE_VERSION);
+    // An existing pointer may select an older version under a symlinked runtime root.
+    let managed = cowork_env::runtime_root_dir(&fx.home);
+    let relocated = fx.root.join("relocated");
+    std::fs::rename(&managed, &relocated).unwrap();
+    std::os::unix::fs::symlink(&relocated, &managed).unwrap();
+    let phases = Arc::new(Mutex::new(Vec::new()));
+    let captured = phases.clone();
+    let opts = EnsureRuntimeOptions {
+        homedir: fx.home.clone(),
+        env: HashMap::from([("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "0".to_owned())]),
+        trusted_keys: fx.trusted_keys.clone(),
+        on_progress: Some(Arc::new(move |evt| {
+            captured.lock().push(evt.progress.phase)
+        })),
+    };
+    let physical_dir = relocated.join(STALE_VERSION);
+    let mut other_opts = EnsureRuntimeOptions {
+        homedir: fx.root.join("other-home"),
+        env: HashMap::from([(
+            "COWORK_RUNTIME_DIR".to_owned(),
+            physical_dir.to_string_lossy().into_owned(),
+        )]),
+        ..opts.clone()
+    };
+    // No consumer has run yet: a first install must already have the stable lock.
+    let (_, physical_lease) = cowork_env::ensure_leased_cowork_runtime_ready(other_opts.clone())
+        .await
+        .unwrap();
+    assert!(
+        physical_lease.is_some(),
+        "physical path to another home's managed version lost its lease"
+    );
+    assert!(cowork_env::has_active_consumer_lease(&physical_dir));
+    drop(physical_lease);
+
+    let (runtime, lease) = cowork_env::ensure_leased_cowork_runtime_ready(opts.clone())
+        .await
+        .unwrap();
+    assert_eq!(runtime.root_dir, relocated.join(STALE_VERSION));
+    assert!(lease.is_some());
+    assert!(cowork_env::has_active_consumer_lease(&runtime.root_dir));
+    assert_eq!(
+        phases.lock().last(),
+        Some(&cowork_env::RuntimeBootstrapPhase::Ready)
+    );
+    drop(lease);
+
+    let lock_path = cowork_env::consumer_lease_lock_path(&runtime.root_dir);
+    std::fs::remove_file(&lock_path).unwrap();
+    std::fs::create_dir(&lock_path).unwrap();
+    phases.lock().clear();
+    cowork_env::ensure_leased_cowork_runtime_ready(opts.clone())
+        .await
+        .expect_err("unwritable managed lease prevents readiness");
+    assert!(
+        !phases
+            .lock()
+            .contains(&cowork_env::RuntimeBootstrapPhase::Ready)
+    );
+
+    // Even a second home using the symlinked managed path must honor its lease.
+    other_opts.env.insert(
+        "COWORK_RUNTIME_DIR".to_owned(),
+        managed.join(STALE_VERSION).to_string_lossy().into_owned(),
+    );
+    cowork_env::ensure_leased_cowork_runtime_ready(other_opts.clone())
+        .await
+        .expect_err("managed override through another home's alias requires a lease");
+
+    // The external distribution contains the signed files, without installer metadata.
+    let external_parent = fx.root.join("external");
+    let external_dir = external_parent.join(STALE_VERSION);
+    cowork_env::extract_v1_zip_archive(&fx.build_zip(STALE_VERSION), &external_dir).unwrap();
+    std::fs::set_permissions(&external_parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+    other_opts.env.insert(
+        "COWORK_RUNTIME_DIR".to_owned(),
+        external_dir.to_string_lossy().into_owned(),
+    );
+    let result = cowork_env::ensure_leased_cowork_runtime_ready(other_opts).await;
+    std::fs::set_permissions(&external_parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (external, lease) = result.unwrap();
+    assert_eq!(external.root_dir, external_dir);
+    assert!(lease.is_none());
+    assert!(!cowork_env::consumer_lease_lock_path(&external_dir).exists());
+}
+
 /// Network-enabled env without `COWORK_RUNTIME_VERSION`, pointed at `base_url`.
 fn online_env(base_url: &str) -> HashMap<String, String> {
     HashMap::from([

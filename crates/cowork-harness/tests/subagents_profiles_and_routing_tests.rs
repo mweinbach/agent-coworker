@@ -851,8 +851,12 @@ async fn restarted_children_keep_scope_and_transcript_and_fail_closed() {
         inputs: Mutex::new(Vec::new()),
     });
     let control1 = make_control(Arc::clone(&exec1));
+    let first_task = format!(
+        "first task {}\n<agent_report>{{\"status\":\"completed\",\"summary\":\"Scoped review done\"}}</agent_report>",
+        "x".repeat(250)
+    );
     let a = control1
-        .spawn(spawn_req("first task", "src"), &[], &[], None)
+        .spawn(spawn_req(&first_task, "src"), &[], &[], None)
         .await
         .unwrap()
         .agent_id;
@@ -886,6 +890,20 @@ async fn restarted_children_keep_scope_and_transcript_and_fail_closed() {
         inputs: Mutex::new(Vec::new()),
     });
     let control2 = make_control(Arc::clone(&exec2));
+    let restored = control2.inspect(&a).unwrap();
+    let expected_reply = format!("echo: {first_task}");
+    assert_eq!(
+        restored.latest_assistant_text.as_deref(),
+        Some(expected_reply.as_str())
+    );
+    assert_eq!(
+        restored.parsed_report.unwrap().summary,
+        "Scoped review done"
+    );
+    assert_eq!(
+        restored.agent.last_message_preview.unwrap().chars().count(),
+        240
+    );
     control2.send_input(&a, "second task", false).await.unwrap();
     control2
         .wait(
@@ -1156,8 +1174,18 @@ async fn dropped_spawn_mid_persist_releases_its_reserved_slot() {
         .await
         .expect("dropped spawns must not keep the parent busy");
 
-    let _ = release_tx.send(());
+    // A spawn that survives the same write lock must wake a concurrent quiesce as soon as it
+    // installs a cancellable child. The executor cannot finish until quiesce cancels it.
+    let mut spawning = Box::pin(control.spawn(req(), &[], &[], None));
+    assert!(futures::poll!(&mut spawning).is_pending());
+    let mut quiescing = Box::pin(control.quiesce_children(Duration::from_secs(5)));
+    assert!(futures::poll!(&mut quiescing).is_pending());
+    release_tx.send(()).unwrap();
     holder.await.unwrap().unwrap();
+    let (spawned, quiesced) = tokio::join!(spawning, quiescing);
+    let agent = spawned.unwrap();
+    quiesced.expect("child installed during quiesce must be cancelled");
+    assert!(!control.inspect(&agent.agent_id).unwrap().agent.busy);
 
     // Full capacity is available again.
     for _ in 0..MAX_ACTIVE_CHILDREN_PER_PARENT {

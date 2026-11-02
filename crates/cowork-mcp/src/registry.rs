@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use cowork_config::{
@@ -184,7 +183,7 @@ fn parse_standard_layer_file(
         );
     }
 
-    let raw = match fs::read_to_string(path) {
+    let raw = match crate::read_config_file(path) {
         Ok(r) => r,
         Err(e) => {
             let msg = format!("Failed to read {}: {e}", path.display());
@@ -339,7 +338,7 @@ fn parse_plugin_mcp_file(
         ));
     }
 
-    let raw = match fs::read_to_string(&mcp_canon) {
+    let raw = match crate::read_config_file(&mcp_canon) {
         Ok(r) => r,
         Err(e) => {
             let msg = format!("Failed to read {}: {e}", mcp_canon.display());
@@ -963,7 +962,7 @@ where
         &path,
         || {
             let mut servers: Vec<McpServerConfig> = if path.exists() {
-                let raw = fs::read_to_string(&path)?;
+                let raw = crate::read_config_file(&path)?;
                 let val: Value = serde_json::from_str(&raw)?;
                 let arr = val
                     .as_object()

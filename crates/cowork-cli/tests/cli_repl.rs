@@ -922,16 +922,58 @@ async fn repl_keeps_running_after_a_failing_command_rpc() {
     assert!(output.contains("Goodbye."), "output={output}");
 }
 
-/// Runs the real `cowork "<prompt>"` binary in one-shot mode against an isolated home/workspace.
-async fn run_one_shot_binary(iso: &IsolatedCliEnv, prompt: &str) -> std::process::Output {
+fn isolated_cli(iso: &IsolatedCliEnv) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_cowork"));
-    cmd.arg("-d").arg(&iso.workspace_dir).arg(prompt);
+    cmd.arg("-d").arg(&iso.workspace_dir);
     cmd.env_clear();
     if let Ok(path) = std::env::var("PATH") {
         cmd.env("PATH", path);
     }
     cmd.envs(&iso.env);
-    cmd.stdin(std::process::Stdio::null());
+    cmd
+}
+
+#[tokio::test]
+async fn interactive_history_omits_provider_credentials() {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    let iso = IsolatedCliEnv::new();
+    let mut child = isolated_cli(&iso)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"/help\n/connect unknown dummy-history-secret\n/exit\n")
+        .await
+        .unwrap();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Goodbye."));
+    let history =
+        std::fs::read_to_string(cowork_cli::repl_history_file_path(&iso.home_dir, &iso.env))
+            .unwrap();
+    assert!(history.contains("/help"));
+    assert!(!history.contains("dummy-history-secret"));
+}
+
+/// Runs the real `cowork "<prompt>"` binary in one-shot mode against an isolated home/workspace.
+async fn run_one_shot_binary(iso: &IsolatedCliEnv, prompt: &str) -> std::process::Output {
+    let mut cmd = isolated_cli(iso);
+    cmd.arg(prompt).stdin(std::process::Stdio::null());
     tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output())
         .await
         .expect("one-shot cowork timed out")

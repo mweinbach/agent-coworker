@@ -1,3 +1,5 @@
+mod provider_auth;
+
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -752,9 +754,9 @@ impl ActiveReplSession {
             ParsedReplCommand::Connect(arg) => {
                 let cwd_str = self.cwd.to_string_lossy().into_owned();
                 let mut parts = arg.splitn(2, char::is_whitespace);
-                let first = parts.next().unwrap_or("").trim();
+                let provider = parts.next().unwrap_or("").trim().to_ascii_lowercase();
                 let rest = parts.next().unwrap_or("").trim();
-                if first.is_empty() || first == "list" || first == "help" {
+                if matches!(provider.as_str(), "" | "list" | "help") {
                     let cat = self
                         .rpc
                         .request(
@@ -776,30 +778,26 @@ impl ActiveReplSession {
                             sanitize(&connected.join(", "))
                         )?;
                     }
-                    writeln!(out, "Usage: /connect <provider> <api_key>")?;
-                } else if !rest.is_empty() {
-                    let res = self
+                    writeln!(out, "Usage: /connect <provider> [api_key]")?;
+                } else if rest.is_empty() {
+                    self.connect_provider(&provider, prompt_source, out).await?;
+                } else {
+                    let result = self
                         .rpc
                         .request(
                             "cowork/provider/auth/setApiKey",
-                            Some(json!({
-                                "cwd": cwd_str,
-                                "provider": first,
-                                "apiKey": rest,
-                            })),
+                            Some(json!({ "cwd": cwd_str, "provider": provider, "apiKey": rest })),
                         )
                         .await?;
                     writeln!(
                         out,
                         "{}",
                         sanitize(
-                            res["event"]["message"]
+                            result["event"]["message"]
                                 .as_str()
                                 .unwrap_or("Saved credentials.")
                         )
                     )?;
-                } else {
-                    writeln!(out, "usage: /connect {first} <api_key>")?;
                 }
                 out.flush()?;
                 Ok(LineOutcome::Continue)
@@ -1749,8 +1747,10 @@ pub async fn run_repl_interactive(
         // Run blocking rustyline readline inside spawn_blocking so Tokio background server tasks keep ticking smoothly!
         let (next_rl, read_res) = tokio::task::spawn_blocking(move || {
             let res = editor.readline("you> ");
+            // /connect accepts credentials inline, including when validation later fails.
             if let Ok(ref line) = res
-                && !line.trim().is_empty()
+                && let Some(cmd) = line.split_whitespace().next()
+                && !cmd.eq_ignore_ascii_case("/connect")
             {
                 let _ = editor.add_history_entry(line.as_str());
                 let _ = editor.save_history(&history_clone);

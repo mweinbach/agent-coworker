@@ -341,8 +341,22 @@ async fn migrations_1_to_28_fresh_and_incremental_with_retired_13_to_15_reconcil
 }
 
 #[tokio::test]
-async fn legacy_session_json_files_import_idempotently() {
+async fn legacy_session_json_files_retry_failed_imports_and_import_idempotently() {
     let iso = IsolatedStorageEnv::new("legacy-import");
+    let options = SessionDbOptions {
+        root_dir: iso.cowork_root.clone(),
+        sessions_dir: iso.sessions_dir.clone(),
+        db_path: None,
+        busy_timeout_ms: Some(5_000),
+    };
+    SessionDb::open(options.clone()).await.unwrap().close();
+    let conn = Connection::open(iso.cowork_root.join("sessions.db")).unwrap();
+    conn.execute_batch(
+        "DELETE FROM schema_migrations WHERE version = 2;
+         CREATE TRIGGER interrupt_import BEFORE INSERT ON session_state
+         BEGIN SELECT RAISE(ABORT, 'interrupted import'); END;",
+    )
+    .unwrap();
     let valid_v7 = json!({
         "version": 7,
         "sessionId": "legacy-json-1",
@@ -378,7 +392,7 @@ async fn legacy_session_json_files_import_idempotently() {
         "context": {
             "system": "System prompt",
             "messages": [
-                { "role": "user", "content": "Hello from legacy" },
+                { "role": "user", "content": [" Hello ", { "text": " ", "inputText": "from legacy " }] },
                 { "role": "assistant", "content": "Welcome back!" }
             ],
             "todos": [],
@@ -395,14 +409,19 @@ async fn legacy_session_json_files_import_idempotently() {
     .unwrap();
     fs::write(iso.sessions_dir.join("corrupt.json"), "{ invalid json").unwrap();
 
-    let db = SessionDb::open(SessionDbOptions {
-        root_dir: iso.cowork_root.clone(),
-        sessions_dir: iso.sessions_dir.clone(),
-        db_path: None,
-        busy_timeout_ms: Some(5_000),
-    })
-    .await
-    .unwrap();
+    assert!(SessionDb::open(options.clone()).await.is_err());
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM schema_migrations WHERE version = 2",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+    conn.execute_batch("DROP TRIGGER interrupt_import").unwrap();
+    drop(conn);
+    let db = SessionDb::open(options.clone()).await.unwrap();
 
     let rec = db
         .get_session_record("legacy-json-1")
@@ -411,18 +430,12 @@ async fn legacy_session_json_files_import_idempotently() {
     assert_eq!(rec.title, "Imported V7 Session");
     assert_eq!(rec.message_count, 2);
     assert_eq!(rec.last_event_seq, 1);
-    assert!(db.get_session_snapshot("legacy-json-1").unwrap().is_some());
+    let snapshot = db.get_session_snapshot("legacy-json-1").unwrap().unwrap();
+    assert_eq!(snapshot["feed"][0]["text"], "Hello\nfrom legacy");
     db.close();
 
     // Re-opening must NOT re-import or bump last_event_seq.
-    let db2 = SessionDb::open(SessionDbOptions {
-        root_dir: iso.cowork_root.clone(),
-        sessions_dir: iso.sessions_dir.clone(),
-        db_path: None,
-        busy_timeout_ms: Some(5_000),
-    })
-    .await
-    .unwrap();
+    let db2 = SessionDb::open(options).await.unwrap();
     let rec2 = db2.get_session_record("legacy-json-1").unwrap().unwrap();
     assert_eq!(rec2.last_event_seq, 1);
     assert_eq!(db2.list_sessions(None).unwrap().len(), 1);
@@ -689,6 +702,37 @@ async fn monotonic_thread_journal_replay_and_snapshot_fallback_on_gap_or_corrupt
 
     journal.close().await;
     db.close();
+}
+
+#[tokio::test]
+async fn cancelled_write_releases_the_lock_for_the_next_writer() {
+    let iso = IsolatedStorageEnv::new("cancel-write");
+    let coordinator = Arc::new(SessionDbWriteCoordinator::new(
+        SessionDbWriteCoordinatorOptions {
+            root_dir: iso.cowork_root.clone(),
+            acquire_timeout_ms: Some(0),
+            retry_delay_ms: None,
+            stale_lock_ms: None,
+            heartbeat_ms: None,
+        },
+    ));
+    let (entered, acquired) = tokio::sync::oneshot::channel();
+    let writer = Arc::clone(&coordinator);
+    let task = tokio::spawn(async move {
+        writer
+            .run_exclusive("cancelled", || async move {
+                entered.send(()).unwrap();
+                std::future::pending::<cowork_storage::Result<()>>().await
+            })
+            .await
+    });
+    acquired.await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    coordinator
+        .run_exclusive("next writer", || async { Ok(()) })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

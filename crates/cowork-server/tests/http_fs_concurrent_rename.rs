@@ -37,6 +37,36 @@ fn trash(root: &Path, src: &Path) -> Result<StatusCode, (StatusCode, String)> {
         .map_err(|err| (err.status, err.message))
 }
 
+#[test]
+fn trash_uses_the_innermost_workspace() {
+    let (_tmp, outer) = root();
+    let inner = outer.join("project");
+    std::fs::create_dir(&inner).unwrap();
+    let file = inner.join("notes.txt");
+    std::fs::write(&file, "nested workspace").unwrap();
+    let roots = [outer.clone(), inner.clone()];
+    let body = serde_json::to_vec(&serde_json::json!({ "path": file })).unwrap();
+    assert_eq!(
+        handle_fs_trash(&roots, &outer, &body).unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(!outer.join(".cowork-trash").exists());
+    let entry = std::fs::read_dir(inner.join(".cowork-trash"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(entry.path()).unwrap(),
+        "nested workspace"
+    );
+    let body = serde_json::to_vec(&serde_json::json!({ "path": entry.path() })).unwrap();
+    assert_eq!(
+        handle_fs_trash(&roots, &outer, &body).unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
 /// Runs `job(i)` on `WORKERS` threads released together by a barrier.
 fn run_concurrently<T: Send + 'static>(job: impl Fn(usize) -> T + Send + Sync + 'static) -> Vec<T> {
     let job = Arc::new(job);

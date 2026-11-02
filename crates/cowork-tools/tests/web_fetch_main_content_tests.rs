@@ -150,3 +150,23 @@ async fn web_fetch_returns_main_content_when_intro_exceeds_max_chars() {
     );
     assert!(!out.contains(SIDEBAR_MARKER), "sidebar leaked: {out}");
 }
+
+#[test]
+fn system_proxy_cannot_replace_the_validated_destination() {
+    // Set proxy variables only in the child. Port zero cannot accept a connection; the
+    // pinned fetch to the fixture's loopback listener must still return its article.
+    let name = "web_fetch_returns_main_content_when_intro_exceeds_max_chars";
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name])
+        .env("HTTP_PROXY", "http://127.0.0.1:0")
+        .env("NO_PROXY", "")
+        .env_remove("no_proxy")
+        .env_remove("REQUEST_METHOD")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("1 passed"),
+        "{stdout}"
+    );
+}

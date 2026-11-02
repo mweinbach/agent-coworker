@@ -63,6 +63,56 @@ fn fixture(servers: Value) -> Fixture {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn untrusted_workspace_discovery_rejects_a_pipe_without_consuming_it() {
+    use std::io::{Read, Write, pipe};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::symlink;
+
+    let fx = fixture(json!([]));
+    let (mut reader, mut writer) = pipe().unwrap();
+    let document =
+        r#"{"servers":[{"name":"from-pipe","transport":{"type":"stdio","command":"ignored"}}]}"#;
+    writer.write_all(document.as_bytes()).unwrap();
+    drop(writer);
+    let path = fx.cfg.project_cowork_dir.join("mcp-servers.json");
+    symlink(format!("/dev/fd/{}", reader.as_raw_fd()), &path).unwrap();
+
+    let snapshot = read_mcp_servers_snapshot(&fx.cfg).unwrap();
+    assert!(snapshot.servers.is_empty());
+    assert!(
+        snapshot
+            .files
+            .iter()
+            .any(|file| file.source == McpConfigSource::Workspace && file.parse_error.is_some())
+    );
+    let mut unread = String::new();
+    reader.read_to_string(&mut unread).unwrap();
+    assert_eq!(unread, document);
+}
+
+#[cfg(unix)]
+#[test]
+fn listing_mcp_servers_does_not_chmod_the_target_of_a_workspace_credentials_link() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fx = fixture(json!([]));
+    let executable = fx.home.join("outside-workspace");
+    fs::write(&executable, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    let auth_dir = fx.cfg.project_cowork_dir.join("auth");
+    fs::create_dir_all(&auth_dir).unwrap();
+    symlink(&executable, auth_dir.join("mcp-credentials.json")).unwrap();
+
+    read_mcp_servers_snapshot(&fx.cfg).unwrap();
+
+    assert_eq!(
+        fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}
+
 fn user_credentials_path(fx: &Fixture) -> PathBuf {
     fx.home.join(".cowork/auth/mcp-credentials.json")
 }

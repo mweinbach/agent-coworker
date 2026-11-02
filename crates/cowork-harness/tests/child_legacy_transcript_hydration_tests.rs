@@ -177,7 +177,12 @@ async fn spawn_finished_child(cfg: &cowork_config::AgentConfig, db: &Arc<Session
 }
 
 /// Replaces the child's stored transcript, as if the TS server had written it.
-async fn overwrite_stored_messages(db: &SessionDb, agent_id: &str, messages: Vec<Value>) {
+async fn overwrite_stored_messages(
+    db: &SessionDb,
+    agent_id: &str,
+    messages: Vec<Value>,
+    preview: Option<&str>,
+) {
     let r = db.get_session_record(agent_id).unwrap().unwrap();
     db.persist_session_mutation(PersistedSessionMutation {
         session_id: r.session_id.clone(),
@@ -200,7 +205,7 @@ async fn overwrite_stored_messages(db: &SessionDb, agent_id: &str, messages: Vec
             requested_reasoning_effort: r.requested_reasoning_effort,
             effective_reasoning_effort: r.effective_reasoning_effort,
             execution_state: r.execution_state,
-            last_message_preview: r.last_message_preview,
+            last_message_preview: preview.map(str::to_owned),
             title: r.title,
             title_source: r.title_source,
             title_model: r.title_model,
@@ -276,7 +281,13 @@ async fn ts_shaped_child_transcript_hydrates_and_accepts_send_input() {
         json!({ "role": "assistant", "content": "legacy answer" }),
         json!({ "role": "user", "content": [{ "type": "text", "text": "follow-up from TS" }] }),
     ];
-    overwrite_stored_messages(&db, &agent_id, legacy_transcript.clone()).await;
+    overwrite_stored_messages(
+        &db,
+        &agent_id,
+        legacy_transcript.clone(),
+        Some("legacy answer"),
+    )
+    .await;
 
     // Simulate the upgraded server reopening the parent.
     let exec = echo_executor();
@@ -367,7 +378,7 @@ async fn unmigratable_child_transcript_still_fails_closed_and_is_kept_verbatim()
         json!({ "role": "user", "content": "first task" }),
         json!({ "role": "oracle", "content": "no such role" }),
     ];
-    overwrite_stored_messages(&db, &agent_id, corrupt_transcript.clone()).await;
+    overwrite_stored_messages(&db, &agent_id, corrupt_transcript.clone(), None).await;
 
     let exec = echo_executor();
     let control = make_control(&cfg, &db, Arc::clone(&exec));
@@ -385,4 +396,33 @@ async fn unmigratable_child_transcript_still_fails_closed_and_is_kept_verbatim()
     assert_eq!(stored, corrupt_transcript);
 
     let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn imported_or_failed_assistant_messages_do_not_become_the_childs_final_reply() {
+    let (base, cfg, db) = setup_env("final-reply").await;
+    let agent_id = spawn_finished_child(&cfg, &db).await;
+    let accepted = format!(
+        "{}\n<agent_report>{{\"status\":\"completed\",\"summary\":\"done\"}}</agent_report>",
+        "x".repeat(250)
+    );
+    let transcript = vec![
+        json!({"role": "assistant", "content": "inherited parent output"}),
+        json!({"role": "user", "content": "first task"}),
+        json!({"role": "assistant", "content": accepted}),
+        json!({"role": "user", "content": "follow up"}),
+        json!({"role": "assistant", "content": "partial output from a failed follow-up"}),
+    ];
+    for preview in [None, Some(&accepted[..240])] {
+        overwrite_stored_messages(&db, &agent_id, transcript.clone(), preview).await;
+        let restored = make_control(&cfg, &db, echo_executor())
+            .inspect(&agent_id)
+            .unwrap();
+        assert_eq!(
+            restored.latest_assistant_text.as_deref(),
+            preview.map(|_| accepted.as_str())
+        );
+        assert_eq!(restored.report_valid, preview.is_some());
+    }
+    let _ = fs::remove_dir_all(base);
 }

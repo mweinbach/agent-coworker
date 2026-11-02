@@ -21,9 +21,9 @@ use crate::ast::{
 
 const LEGACY_EPOCH_CREATED_AT: &str = "1970-01-01T00:00:00.000Z";
 
-/// Message-level `providerMeta.extra` key holding raw assistant parts that have no canonical
+/// Message-level `providerMeta.extra` key holding raw user/assistant parts that have no canonical
 /// representation. They are kept so re-persisting the migrated message stays lossless, but no
-/// transport replays them (legacy Google replay skipped such parts the same way).
+/// transport replays them (legacy TS replay skipped such parts the same way).
 pub const LEGACY_UNMIGRATED_PARTS_KEY: &str = "legacyUnmigratedParts";
 
 /// Converts one stored message into a [`CanonicalMessage`].
@@ -31,10 +31,11 @@ pub const LEGACY_UNMIGRATED_PARTS_KEY: &str = "legacyUnmigratedParts";
 /// Canonical messages pass through unchanged. Legacy messages get a deterministic id derived from
 /// their position and content, and `createdAt` from their own timestamp when present (else
 /// `fallback_created_at`). Returns `None` when the message cannot be represented faithfully
-/// (unknown role, unknown user/tool part type, or no content); callers must then keep the raw
-/// value instead of dropping it. Unrecognized *assistant* parts are skipped instead, so one odd
-/// part does not hide the answer text from later turns; the skipped raw parts are preserved under
-/// [`LEGACY_UNMIGRATED_PARTS_KEY`] in the message's `provider_meta.extra`.
+/// (unknown role, unknown tool part type, or no representable content); callers must then keep
+/// the raw value instead of dropping it. Unrecognized *user/system/assistant* parts are skipped
+/// instead, so one odd part does not hide the prompt or answer text from later turns; the skipped
+/// raw parts are preserved under [`LEGACY_UNMIGRATED_PARTS_KEY`] in the message's
+/// `provider_meta.extra`.
 pub fn migrate_stored_message(
     raw: &Value,
     index: usize,
@@ -48,9 +49,18 @@ pub fn migrate_stored_message(
 
     let mut skipped_parts = Vec::new();
     let (role, content) = match role_raw {
-        "user" => (MessageRole::User, user_content(obj.get("content")?)?),
-        "system" => (MessageRole::System, user_content(obj.get("content")?)?),
-        "developer" => (MessageRole::Developer, user_content(obj.get("content")?)?),
+        "user" => (
+            MessageRole::User,
+            user_content(obj.get("content")?, &mut skipped_parts)?,
+        ),
+        "system" => (
+            MessageRole::System,
+            user_content(obj.get("content")?, &mut skipped_parts)?,
+        ),
+        "developer" => (
+            MessageRole::Developer,
+            user_content(obj.get("content")?, &mut skipped_parts)?,
+        ),
         "assistant" => (
             MessageRole::Assistant,
             assistant_content(obj.get("content")?, &mut skipped_parts)?,
@@ -134,8 +144,12 @@ fn media_kind_for_mime(mime: Option<&str>, hint: &str) -> MediaKind {
         Some("image") => MediaKind::Image,
         Some("audio") => MediaKind::Audio,
         Some("video") => MediaKind::Video,
-        _ if matches!(hint, "image" | "input_image" | "image_url") => MediaKind::Image,
-        _ => MediaKind::Document,
+        _ => match hint {
+            "image" | "input_image" | "image_url" => MediaKind::Image,
+            "audio" => MediaKind::Audio,
+            "video" => MediaKind::Video,
+            _ => MediaKind::Document,
+        },
     }
 }
 
@@ -174,13 +188,21 @@ fn media_block_from_part(part: &Map<String, Value>, part_type: &str) -> Option<C
     let mime = ["mimeType", "mediaType", "mime_type"]
         .iter()
         .find_map(|k| part.get(*k).and_then(Value::as_str));
-    let data = ["data", "image", "url", "imageUrl", "image_url", "file"]
-        .iter()
-        .find_map(|k| match part.get(*k) {
-            Some(Value::String(s)) => Some(s.as_str()),
-            Some(Value::Object(o)) => o.get("url").and_then(Value::as_str),
-            _ => None,
-        })?;
+    let data = [
+        "data",
+        "image",
+        "url",
+        "uri",
+        "imageUrl",
+        "image_url",
+        "file",
+    ]
+    .iter()
+    .find_map(|k| match part.get(*k) {
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(Value::Object(o)) => o.get("url").and_then(Value::as_str),
+        _ => None,
+    })?;
     let source = media_source(data, mime)?;
     Some(ContentBlock::Media {
         kind: media_kind_for_mime(source.mime_type(), part_type),
@@ -189,45 +211,53 @@ fn media_block_from_part(part: &Map<String, Value>, part_type: &str) -> Option<C
     })
 }
 
-/// User/system content: string, or parts of text / image / file.
-fn user_content(content: &Value) -> Option<Vec<ContentBlock>> {
-    match content {
-        Value::String(text) => Some(if text.is_empty() {
-            Vec::new()
-        } else {
-            vec![text_block(text, None)]
-        }),
-        Value::Array(parts) => {
-            let mut out = Vec::with_capacity(parts.len());
-            for part in parts {
-                match part {
-                    Value::String(text) => out.push(text_block(text, None)),
-                    Value::Object(obj) => {
-                        let ty = obj.get("type").and_then(Value::as_str).unwrap_or("text");
-                        match ty {
-                            "text" | "input_text" | "inputText" => {
-                                let text = obj
-                                    .get("text")
-                                    .or_else(|| obj.get("inputText"))
-                                    .and_then(Value::as_str)?;
-                                out.push(text_block(text, None));
-                            }
-                            "image" | "input_image" | "image_url" | "file" | "media" => {
-                                out.push(media_block_from_part(obj, ty).or_else(|| {
-                                    serde_json::from_value::<ContentBlock>(part.clone()).ok()
-                                })?);
-                            }
-                            _ => {
-                                out.push(serde_json::from_value::<ContentBlock>(part.clone()).ok()?)
-                            }
-                        }
-                    }
-                    _ => return None,
-                }
-            }
-            Some(out)
+/// User/system content: string, or parts of text / media. Media parts cover AI-SDK `image` /
+/// `file`, OpenAI `input_image` / `image_url`, and the TS server's Google multimodal attachment
+/// parts (`{ type: "audio" | "video" | "document", data, mimeType }`, see TS
+/// `googleMultimodalPartTypeForMime`). Parts with no canonical representation are moved to
+/// `skipped` (raw) instead of failing the whole message: TS replay skipped unknown user parts and
+/// still sent the text.
+fn user_content(content: &Value, skipped: &mut Vec<Value>) -> Option<Vec<ContentBlock>> {
+    let parts = match content {
+        Value::String(text) => {
+            return Some(if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![text_block(text, None)]
+            });
         }
-        _ => None,
+        Value::Array(parts) => parts,
+        _ => return None,
+    };
+    let mut out = Vec::with_capacity(parts.len());
+    for part in parts {
+        match user_part(part) {
+            Some(block) => out.push(block),
+            None => skipped.push(part.clone()),
+        }
+    }
+    Some(out)
+}
+
+fn user_part(part: &Value) -> Option<ContentBlock> {
+    let obj = match part {
+        Value::String(text) => return Some(text_block(text, None)),
+        Value::Object(obj) => obj,
+        _ => return None,
+    };
+    let ty = obj.get("type").and_then(Value::as_str).unwrap_or("text");
+    match ty {
+        "text" | "input_text" | "inputText" => {
+            let text = obj
+                .get("text")
+                .or_else(|| obj.get("inputText"))
+                .and_then(Value::as_str)?;
+            Some(text_block(text, None))
+        }
+        "image" | "input_image" | "image_url" | "audio" | "video" | "document" | "file"
+        | "media" => media_block_from_part(obj, ty)
+            .or_else(|| serde_json::from_value::<ContentBlock>(part.clone()).ok()),
+        _ => serde_json::from_value::<ContentBlock>(part.clone()).ok(),
     }
 }
 

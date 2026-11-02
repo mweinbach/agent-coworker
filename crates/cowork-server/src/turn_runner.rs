@@ -2890,4 +2890,53 @@ mod tests {
         assert!(r.read_only_role);
         assert_eq!(r.target_paths, vec![dir.join("src")]);
     }
+
+    /// Imported TS conversations carry Google attachments as legacy
+    /// `{ type: "audio" | "video" | "document", data, mimeType }` user parts; they must reach the
+    /// model history (not only the raw-preserved storage slots) together with their prompt text.
+    #[test]
+    fn parse_stored_history_keeps_legacy_google_media_user_messages_in_model_history() {
+        use cowork_inference::{MediaKind, MediaSource};
+
+        let cases = [
+            ("audio", "audio/wav", MediaKind::Audio),
+            ("video", "video/webm", MediaKind::Video),
+            ("document", "application/pdf", MediaKind::Document),
+        ];
+        let stored: Vec<Value> = cases
+            .iter()
+            .map(|(ty, mime, _)| {
+                serde_json::json!({
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": format!("describe the {ty}") },
+                        { "type": ty, "data": "QUJD", "mimeType": mime }
+                    ]
+                })
+            })
+            .collect();
+
+        let history = parse_stored_history(&stored, Some("2026-01-01T00:00:00.000Z"));
+        assert_eq!(history.unmigrated_count(), 0);
+        assert_eq!(history.messages.len(), 3);
+        for (msg, (ty, mime, kind)) in history.messages.iter().zip(cases) {
+            assert_eq!(msg.role, MessageRole::User);
+            assert_eq!(msg.content.len(), 2, "{ty}: text and media both survive");
+            assert!(
+                matches!(&msg.content[0], ContentBlock::Text { text, .. } if *text == format!("describe the {ty}"))
+            );
+            assert_eq!(
+                msg.content[1],
+                ContentBlock::Media {
+                    kind,
+                    source: MediaSource::Base64 {
+                        mime_type: mime.to_owned(),
+                        data: "QUJD".to_owned(),
+                    },
+                    provider_meta: ProviderOpaqueMeta::default(),
+                },
+                "{ty}"
+            );
+        }
+    }
 }

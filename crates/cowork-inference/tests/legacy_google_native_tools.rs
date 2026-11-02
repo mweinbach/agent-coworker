@@ -1,9 +1,11 @@
 //! Legacy TS Google Interactions history (`providerToolCall` / `providerToolResult` assistant
-//! parts) migrates into canonical `ProviderNativeTool` blocks without losing the answer text.
+//! parts) migrates into canonical `ProviderNativeTool` blocks without losing the answer text, and
+//! legacy Google user attachment parts (`audio` / `video` / `document`) migrate into `Media` blocks.
 
 use cowork_inference::legacy_messages::LEGACY_UNMIGRATED_PARTS_KEY;
 use cowork_inference::{
-    CanonicalMessage, ContentBlock, MessageRole, ProviderNativeToolRole, migrate_stored_message,
+    CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderNativeToolRole,
+    ProviderOpaqueMeta, migrate_stored_message,
 };
 use serde_json::{Value, json};
 
@@ -305,12 +307,106 @@ fn assistant_message_with_only_unrepresentable_parts_still_returns_none() {
 }
 
 #[test]
-fn unknown_user_parts_still_keep_the_raw_message() {
+fn unknown_user_parts_are_skipped_but_preserved_and_text_survives() {
+    // TS replay (`convertRichContentParts`, `modelMessagesToPiMessages`) skipped unknown user parts
+    // and still sent the prompt text, so migration must not drop the whole message.
     let raw = json!({
         "role": "user",
         "content": [{ "type": "text", "text": "hi" }, { "type": "futurePartType" }]
     });
+    let msg = migrate_stored_message(&raw, 0, None).expect("text keeps the user message alive");
+    assert_eq!(msg.role, MessageRole::User);
+    assert_eq!(msg.content.len(), 1);
+    assert!(matches!(&msg.content[0], ContentBlock::Text { text, .. } if text == "hi"));
+    assert_eq!(
+        msg.provider_meta.extra.get(LEGACY_UNMIGRATED_PARTS_KEY),
+        Some(&json!([{ "type": "futurePartType" }])),
+    );
+    let reparsed: CanonicalMessage =
+        serde_json::from_value(serde_json::to_value(&msg).unwrap()).unwrap();
+    assert_eq!(reparsed, msg);
+}
+
+#[test]
+fn user_message_with_only_unknown_parts_still_keeps_the_raw_message() {
+    let raw = json!({ "role": "user", "content": [{ "type": "futurePartType" }] });
     assert!(migrate_stored_message(&raw, 0, None).is_none());
+}
+
+/// User message as the TS server built it for a Google model with an uploaded attachment
+/// (`userMessageAttachments.ts`): a text prompt, a `[System: ...]` path note, then
+/// `{ type: googleMultimodalPartTypeForMime(mime), data: <base64>, mimeType }`.
+fn legacy_google_media_user(part_type: &str, mime: &str) -> Value {
+    json!({
+        "role": "user",
+        "content": [
+            { "type": "text", "text": "Summarize this attachment." },
+            { "type": "text", "text": "[System: The user uploaded a file which has been saved to /tmp/up/f]" },
+            { "type": part_type, "data": "QUJD", "mimeType": mime }
+        ]
+    })
+}
+
+#[test]
+fn legacy_google_audio_video_pdf_user_parts_migrate_with_text() {
+    for (part_type, mime, kind) in [
+        ("audio", "audio/mpeg", MediaKind::Audio),
+        ("video", "video/mp4", MediaKind::Video),
+        ("document", "application/pdf", MediaKind::Document),
+    ] {
+        let raw = legacy_google_media_user(part_type, mime);
+        let msg = migrate_stored_message(&raw, 0, None)
+            .unwrap_or_else(|| panic!("legacy {part_type} user message migrates"));
+        assert_eq!(msg.role, MessageRole::User);
+        assert_eq!(msg.content.len(), 3, "{part_type}: every part survives");
+        assert!(
+            matches!(&msg.content[0], ContentBlock::Text { text, .. } if text == "Summarize this attachment.")
+        );
+        assert!(matches!(&msg.content[1], ContentBlock::Text { .. }));
+        assert_eq!(
+            msg.content[2],
+            ContentBlock::Media {
+                kind,
+                source: MediaSource::Base64 {
+                    mime_type: mime.to_owned(),
+                    data: "QUJD".to_owned(),
+                },
+                provider_meta: ProviderOpaqueMeta::default(),
+            },
+            "{part_type}"
+        );
+        assert!(
+            msg.provider_meta
+                .extra
+                .get(LEGACY_UNMIGRATED_PARTS_KEY)
+                .is_none(),
+            "{part_type}: nothing skipped"
+        );
+    }
+}
+
+#[test]
+fn legacy_google_media_user_part_accepts_interactions_uri_and_snake_mime() {
+    // TS `buildBinaryContent` also replayed `{ uri, mime_type }` binary parts.
+    let raw = json!({
+        "role": "user",
+        "content": [
+            { "type": "text", "text": "Watch this." },
+            { "type": "video", "uri": "https://example.com/clip.mp4", "mime_type": "video/mp4" }
+        ]
+    });
+    let msg = migrate_stored_message(&raw, 0, None).expect("migrates");
+    assert_eq!(
+        msg.content[1],
+        ContentBlock::Media {
+            kind: MediaKind::Video,
+            source: MediaSource::Url {
+                url: "https://example.com/clip.mp4".to_owned(),
+                mime_type: Some("video/mp4".to_owned()),
+            },
+            provider_meta: ProviderOpaqueMeta::default(),
+        }
+    );
 }
 
 #[test]

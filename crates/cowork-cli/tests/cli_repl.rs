@@ -841,15 +841,44 @@ fn scripted_opts(iso: &IsolatedCliEnv) -> ReplOptions {
 }
 
 /// `/new` starts a thread on the workspace defaults (no provider/model overrides), so the REPL's
-/// provider/model must follow the new thread's descriptor rather than the previous thread's
-/// `/provider` selection (TS parity: `tryRequest("thread/start")` -> `applyThreadDescriptor`).
+/// provider/model must follow the new thread's descriptor rather than its own last local
+/// selection (TS parity: `tryRequest("thread/start")` -> `applyThreadDescriptor`).
+///
+/// A root thread's `/provider` persists to the workspace defaults (TS `persistModelSelectionImpl`),
+/// so a plain `/provider` + `/new` would land on the same selection either way. To tell "adopted
+/// the new thread's descriptor" from "kept local state", a turn rewrites the workspace defaults
+/// between `/provider` and `/new` -- and only if `/provider` persisted them first.
 #[tokio::test]
 async fn repl_new_thread_refreshes_provider_and_model_selection() {
-    let iso = IsolatedCliEnv::new();
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        responses_tool_calls_sse(
+            "resp_defaults_1",
+            &[(
+                "call_defaults_bash_1",
+                "bash",
+                json!({
+                    "command": "grep -q '\"provider\": *\"openai\"' .cowork/config.json && printf '{\"provider\":\"anthropic\",\"model\":\"claude-opus-4-8\"}' > .cowork/config.json",
+                    "description": "Rewrite the workspace defaults"
+                }),
+            )],
+        ),
+        responses_text_sse("resp_defaults_2", "Defaults rewritten."),
+    ])
+    .await;
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env.insert("OPENAI_BASE_URL".into(), base_url);
+    let opts = ReplOptions {
+        yolo: true,
+        ..scripted_opts(&iso)
+    };
+
     let output = run_repl_scripted(
-        scripted_opts(&iso),
+        opts,
         &[
-            "/provider anthropic",
+            "/provider openai",
+            "Rewrite the workspace defaults",
             "/new",
             "/model",
             "/reasoning high",
@@ -860,41 +889,44 @@ async fn repl_new_thread_refreshes_provider_and_model_selection() {
     .await
     .unwrap();
 
-    // Banner: "Cowork CLI vX — connected (<provider> / <model>)" for the workspace defaults.
+    // Banner: "Cowork CLI vX — connected (<provider> / <model>)" for the initial defaults.
     let banner = output
         .lines()
         .next()
         .and_then(|l| l.split("connected (").nth(1))
         .and_then(|l| l.strip_suffix(')'))
         .unwrap_or_else(|| panic!("missing banner; output={output}"));
-    let (default_provider, default_model) = banner
+    let (default_provider, _) = banner
         .split_once(" / ")
         .unwrap_or_else(|| panic!("bad banner; output={output}"));
+    assert_ne!(default_provider, "openai", "output={output}");
     assert_ne!(default_provider, "anthropic", "output={output}");
-    assert!(
-        output.contains("Provider set to anthropic"),
-        "output={output}"
-    );
+    assert!(output.contains("Provider set to openai"), "output={output}");
+    assert!(output.contains("Defaults rewritten."), "output={output}");
 
+    // The REPL's last local selection was openai; the new thread starts on the rewritten
+    // workspace defaults, and the REPL reports and uses those.
     let after_new = output
         .split("Started new thread:")
         .nth(1)
         .unwrap_or_else(|| panic!("missing /new notice; output={output}"));
     assert!(
-        after_new.contains(&format!(
-            "Current model: {default_model} ({default_provider})"
-        )),
+        after_new.contains("(anthropic / claude-opus-4-8)"),
         "output={output}"
     );
     assert!(
-        after_new.contains(&format!("{default_provider} reasoning effort set to high")),
+        after_new.contains("Current model: claude-opus-4-8 (anthropic)"),
         "output={output}"
     );
     assert!(
-        after_new.contains(&format!("{default_provider} verbosity set to low")),
+        after_new.contains("anthropic reasoning effort set to high"),
         "output={output}"
     );
-    assert!(!after_new.contains("anthropic"), "output={output}");
+    assert!(
+        after_new.contains("anthropic verbosity set to low"),
+        "output={output}"
+    );
+    assert!(!after_new.contains("openai"), "output={output}");
 }
 
 /// `/effort` (and `/reasoning`) accept the full canonical ladder, TS

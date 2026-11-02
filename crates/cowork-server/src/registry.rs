@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use base64_helper::decode_base64_permissive;
 use cowork_config::{
-    AgentConfig, LoadConfigOptions, ModelRegistry, ProjectConfigPatch, ProviderName,
-    canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside,
-    legacy_model_alias, load_config, normalize_lexical_path, persist_project_config_patch,
-    reconcile_reasoning_provider_options, same_workspace_path,
+    AgentConfig, ChildModelRoutingMode, LoadConfigOptions, ModelRegistry, ProjectConfigPatch,
+    ProviderName, canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside,
+    legacy_model_alias, load_config, normalize_child_routing_config, normalize_lexical_path,
+    persist_project_config_patch, reconcile_reasoning_provider_options, same_workspace_path,
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
@@ -173,6 +173,16 @@ mod base64_helper {
             .or_else(|_| BASE64URL_NOPAD.decode(cleaned.as_bytes()))
             .map_err(|e| format!("Invalid base64 payload: {e}"))
     }
+}
+
+/// A root session's model switch, captured under the session lock for the workspace write.
+struct RootModelSelection {
+    cwd: PathBuf,
+    prev_provider: ProviderName,
+    prev_model: String,
+    provider: ProviderName,
+    model: String,
+    overrides: Map<String, Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -2291,7 +2301,7 @@ impl ServerRuntimeState {
             return Err("Model ID must not be empty".to_owned());
         }
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let event = {
+        let (event, root_selection) = {
             let mut live = live_arc.lock();
             let prev_provider = live.provider;
             let prev_model = live.model.clone();
@@ -2301,14 +2311,27 @@ impl ServerRuntimeState {
                 live.provider = parsed;
             }
             live.model = trimmed_model.to_owned();
-            if live.provider != prev_provider || live.model != prev_model {
+            let changed = live.provider != prev_provider || live.model != prev_model;
+            if changed {
                 live.provider_state = None;
                 // Drop reasoning state the newly selected model does not support so the next
                 // turn never forwards a stale reasoning payload (`ProviderAuthManager.ts` parity).
                 self.reconcile_live_reasoning_state(&mut live);
             }
             live.updated_at = now;
-            json!({
+            // Only root sessions write their selection to the workspace defaults
+            // (`persistModelSelectionImpl` was root-only); an unchanged selection is a no-op
+            // (`setModel` returned before `applyPreparedModelSelection`).
+            let root_selection =
+                (changed && live.session_kind == SessionKind::Root).then(|| RootModelSelection {
+                    cwd: PathBuf::from(&live.cwd),
+                    prev_provider,
+                    prev_model,
+                    provider: live.provider,
+                    model: live.model.clone(),
+                    overrides: live.config_overrides.clone(),
+                });
+            let event = json!({
                 "type": "config_updated",
                 "sessionId": live.id,
                 "config": {
@@ -2316,12 +2339,99 @@ impl ServerRuntimeState {
                     "model": live.model,
                     "workingDirectory": live.cwd,
                 }
-            })
+            });
+            (event, root_selection)
         };
+        // TS `applyPreparedModelSelection` persisted the selection before queueing the session
+        // snapshot; a failed write keeps the session-local switch and reports an `error` event
+        // instead of failing the request.
+        let mut persist_error = None;
+        if let Some(selection) = &root_selection {
+            match self.persist_root_model_selection(selection).await {
+                Ok(()) => self.refresh_agent_control_config(thread_id),
+                Err(e) => persist_error = Some(e),
+            }
+        }
         self.persist_live_session(&live_arc, "config_updated")
             .await
             .map_err(|e| e.to_string())?;
+        if let Some(err) = persist_error {
+            self.broadcast_to_thread(
+                thread_id,
+                None,
+                &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                    method: "error".to_owned(),
+                    params: Some(json!({
+                        "type": "error",
+                        "sessionId": thread_id,
+                        "message": format!(
+                            "Model updated for this session, but failed to persist defaults: {err}"
+                        ),
+                        "code": "internal_error",
+                        "source": "session",
+                    })),
+                }),
+            );
+        }
         Ok(event)
+    }
+
+    /// Writes a root session's model selection to its workspace `.cowork/config.json`
+    /// (`SessionRegistry.persistModelSelectionImpl` → `persistProjectConfigPatch`): provider,
+    /// model and the child routing re-normalized for the new selection
+    /// (`ProviderAuthManager.prepareModelSelection`'s `persistSelection`).
+    async fn persist_root_model_selection(
+        &self,
+        selection: &RootModelSelection,
+    ) -> Result<(), String> {
+        let mut current = self
+            .load_workspace_config(&selection.cwd)
+            .map_err(|e| e.to_string())?;
+        current.provider = selection.prev_provider;
+        current.model = selection.prev_model.clone();
+        crate::extension_mcp_agent_routes::apply_session_child_routing_overrides(
+            &mut current,
+            &selection.overrides,
+        );
+        // A stale preferred child target must not survive a provider switch, and a child model
+        // that followed the main model keeps following it.
+        let preferred_ref =
+            if current.child_model_routing_mode == ChildModelRoutingMode::CrossProviderAllowlist {
+                current.preferred_child_model_ref.clone()
+            } else if current.provider != selection.provider
+                || current.preferred_child_model == current.model
+            {
+                format!("{}:{}", selection.provider.as_str(), selection.model)
+            } else if !current.preferred_child_model_ref.trim().is_empty() {
+                current.preferred_child_model_ref.clone()
+            } else {
+                current.preferred_child_model.clone()
+            };
+        let routing = normalize_child_routing_config(
+            selection.provider,
+            &selection.model,
+            current.child_model_routing_mode,
+            Some(&preferred_ref),
+            Some(&current.allowed_child_model_refs),
+        );
+        let patch = ProjectConfigPatch {
+            provider: Some(selection.provider),
+            model: Some(selection.model.clone()),
+            preferred_child_model: Some(routing.preferred_child_model),
+            child_model_routing_mode: Some(routing.child_model_routing_mode),
+            preferred_child_model_ref: Some(routing.preferred_child_model_ref),
+            allowed_child_model_refs: Some(routing.allowed_child_model_refs),
+            ..ProjectConfigPatch::default()
+        };
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        persist_project_config_patch(
+            &selection.cwd.join(".cowork"),
+            &patch,
+            None,
+            Some(&paths.config_dir),
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 
     /// Provider-option defaults the selected model declares, used to gate model-specific

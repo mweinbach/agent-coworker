@@ -63,6 +63,8 @@
     "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
     "docs:check": "bun packages/harness/src/check_docs.ts",
     "docs:generate-jsonrpc": "bun packages/harness/src/generate_ws_jsonrpc_schema.ts",
+    "providers:generate": "bun packages/harness/src/generate_provider_specs.ts",
+    "providers:check": "bun packages/harness/src/generate_provider_specs.ts --check",
     "harness:run": "bun packages/harness/src/run_raw_agent_loops.ts",
     "test": "bun scripts/run_tests.ts",
     "clean": "bun scripts/clean.ts",

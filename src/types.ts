@@ -1,21 +1,10 @@
 import { z } from "zod";
 
-export const PROVIDER_NAMES = [
-  "google",
-  "openai",
-  "anthropic",
-  "bedrock",
-  "baseten",
-  "together",
-  "fireworks",
-  "firepass",
-  "nvidia",
-  "lmstudio",
-  "minimax",
-  "opencode-go",
-  "opencode-zen",
-  "codex-cli",
-] as const;
+import { PROVIDER_NAMES } from "./generated/providerSpecs";
+
+// Provider ids come from config/providers.json via the generated module
+// (`bun run providers:generate`); canonical order is the JSON array order.
+export { PROVIDER_NAMES };
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 const providerNameSchema = z.enum(PROVIDER_NAMES);

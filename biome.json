@@ -30,6 +30,7 @@
       "!!.claude",
       "!!skills",
       "!!docs/generated",
+      "!!src/generated",
       "!!crates/cowork-protocol/src/ws_jsonrpc_schema.json",
       "!!crates/cowork-harness/tests/fixtures/conversation_import_parity"
     ]

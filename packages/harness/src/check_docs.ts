@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/shared/protocol";
+import { checkProviderSpecs } from "./generate_provider_specs";
 import {
   loadRustProtocolSchemaManifest,
   loadRustWebSocketJsonRpcSchemaJson,
@@ -407,6 +408,7 @@ async function main() {
     assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, protocolVersionNeedle(), "docs/websocket-protocol.md"),
     ...checkJsonRpcMethodDrift(wsProtocol),
+    ...(await checkProviderSpecs()).map((message) => ({ ok: false as const, message })),
   ];
 
   for (const docPath of CURATED_DOCS_WITH_PATH_CHECKS) {

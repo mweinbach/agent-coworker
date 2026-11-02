@@ -1,3 +1,4 @@
+import { PROVIDER_SPECS } from "../generated/providerSpecs";
 import type { ProviderName } from "../types";
 
 type ProviderAuthMethodType = "api" | "oauth";
@@ -20,120 +21,14 @@ export type ProviderAuthMethod = {
   fields?: ProviderAuthMethodField[];
 };
 
-const bedrockRegionField: ProviderAuthMethodField = {
-  id: "region",
-  label: "AWS region",
-  kind: "text",
-  placeholder: "us-east-1",
-};
+type StaticProviderAuthMethod = (typeof PROVIDER_SPECS)[ProviderName]["authMethods"][number];
 
-const bedrockProfileField: ProviderAuthMethodField = {
-  id: "profile",
-  label: "AWS profile",
-  kind: "text",
-  required: true,
-  placeholder: "default",
-};
-
-const bedrockAccessKeyIdField: ProviderAuthMethodField = {
-  id: "accessKeyId",
-  label: "Access key ID",
-  kind: "text",
-  required: true,
-  placeholder: "AKIA...",
-};
-
-const bedrockSecretAccessKeyField: ProviderAuthMethodField = {
-  id: "secretAccessKey",
-  label: "Secret access key",
-  kind: "password",
-  required: true,
-  secret: true,
-};
-
-const bedrockSessionTokenField: ProviderAuthMethodField = {
-  id: "sessionToken",
-  label: "Session token",
-  kind: "password",
-  secret: true,
-};
-
-const bedrockApiKeyField: ProviderAuthMethodField = {
-  id: "apiKey",
-  label: "Bedrock API key",
-  kind: "password",
-  required: true,
-  secret: true,
-};
-
-const DEFAULT_PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
-  google: [
-    { id: "api_key", type: "api", label: "API key" },
-    { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
-    { id: "parallel_api_key", type: "api", label: "Parallel API key (web search)" },
-  ],
-  openai: [{ id: "api_key", type: "api", label: "API key" }],
-  anthropic: [{ id: "api_key", type: "api", label: "API key" }],
-  bedrock: [
-    {
-      id: "aws_default",
-      type: "api",
-      label: "AWS default credentials",
-      fields: [bedrockRegionField],
-    },
-    {
-      id: "aws_profile",
-      type: "api",
-      label: "AWS profile",
-      fields: [bedrockProfileField, bedrockRegionField],
-    },
-    {
-      id: "aws_keys",
-      type: "api",
-      label: "AWS access keys",
-      fields: [
-        bedrockAccessKeyIdField,
-        bedrockSecretAccessKeyField,
-        bedrockSessionTokenField,
-        { ...bedrockRegionField, required: true },
-      ],
-    },
-    {
-      id: "api_key",
-      type: "api",
-      label: "Bedrock API key",
-      fields: [bedrockApiKeyField, { ...bedrockRegionField, required: true }],
-    },
-  ],
-  baseten: [{ id: "api_key", type: "api", label: "API key" }],
-  together: [{ id: "api_key", type: "api", label: "API key" }],
-  fireworks: [{ id: "api_key", type: "api", label: "API key" }],
-  firepass: [{ id: "api_key", type: "api", label: "Fire Pass API key" }],
-  nvidia: [{ id: "api_key", type: "api", label: "API key" }],
-  lmstudio: [{ id: "api_key", type: "api", label: "API token (optional)" }],
-  minimax: [{ id: "api_key", type: "api", label: "API key" }],
-  "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],
-  "opencode-zen": [{ id: "api_key", type: "api", label: "API key" }],
-  "codex-cli": [
-    { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-  ],
-};
-
-function cloneProviderAuthMethod(method: ProviderAuthMethod): ProviderAuthMethod {
-  return {
-    ...method,
-    ...(method.fields ? { fields: method.fields.map((field) => ({ ...field })) } : {}),
-  };
+function cloneProviderAuthMethod(method: StaticProviderAuthMethod): ProviderAuthMethod {
+  const { fields, ...rest } = method;
+  return { ...rest, ...(fields ? { fields: fields.map((field) => ({ ...field })) } : {}) };
 }
 
+/** Static auth methods from `config/providers.json` (fresh mutable copies). */
 export function getDefaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  return DEFAULT_PROVIDER_AUTH_METHODS[provider].map(cloneProviderAuthMethod);
-}
-
-function listDefaultProviderAuthMethods(): Record<string, ProviderAuthMethod[]> {
-  const out: Record<string, ProviderAuthMethod[]> = {};
-  for (const provider of Object.keys(DEFAULT_PROVIDER_AUTH_METHODS) as ProviderName[]) {
-    out[provider] = getDefaultProviderAuthMethods(provider);
-  }
-  return out;
+  return PROVIDER_SPECS[provider].authMethods.map(cloneProviderAuthMethod);
 }

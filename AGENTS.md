@@ -85,7 +85,7 @@ Task-specific docs — load the one that matches your task before starting:
 - `agent_docs/mobile-ui.md` — Expo/mobile patterns and verification
 - `agent_docs/model-selection.md` — which models to use for which work
 - `agent_docs/astra.md` — GPT-6 Astra prompting guidance, skill audit rules, and API migration constraints
-- `agent_docs/adding-models.md` — model registry metadata rules
+- `agent_docs/adding-models.md` — model registry metadata rules and the add-a-provider checklist
 - `agent_docs/cursor-cloud.md` — Cursor Cloud environment specifics
 - `docs/websocket-protocol.md` — WebSocket protocol source of truth
 - `docs/harness/index.md` — harness context/observability/SLO docs map

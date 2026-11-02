@@ -68,6 +68,11 @@ pub struct StoredPendingOAuthFlow {
     pub redirect_uri: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    /// The authorization server's `token_endpoint_auth_methods_supported` at challenge time, used
+    /// to pick the client authentication for the code exchange (absent on flows started before
+    /// it was recorded, which then fall back to the registered method / RFC 8414 default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     #[serde(deserialize_with = "deserialize_timestamp_ms")]

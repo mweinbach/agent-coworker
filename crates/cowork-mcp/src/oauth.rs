@@ -76,6 +76,8 @@ struct AuthServerMetadata {
     token_endpoint: Option<String>,
     #[serde(default)]
     registration_endpoint: Option<String>,
+    #[serde(default)]
+    token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,8 +86,146 @@ struct DiscoveredOAuthEndpoints {
     authorization_endpoint: String,
     token_endpoint: String,
     registration_endpoint: Option<String>,
+    /// AS metadata `token_endpoint_auth_methods_supported`; empty when the metadata omits it or
+    /// no metadata was found (MCP SDK `metadata?.token_endpoint_auth_methods_supported ?? []`).
+    token_endpoint_auth_methods_supported: Vec<String>,
     resource: String,
     default_scope: Option<String>,
+}
+
+/// OAuth token-endpoint client authentication methods (TS `mcpTokenEndpointAuthMethods`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientAuthMethod {
+    ClientSecretBasic,
+    ClientSecretPost,
+    None,
+}
+
+impl ClientAuthMethod {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "client_secret_basic" => Some(Self::ClientSecretBasic),
+            "client_secret_post" => Some(Self::ClientSecretPost),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientSecretBasic => "client_secret_basic",
+            Self::ClientSecretPost => "client_secret_post",
+            Self::None => "none",
+        }
+    }
+}
+
+/// The stored client secret, treating an empty one as absent (TS `storedClientInfoToSdk` only
+/// forwards a truthy `clientSecret`).
+fn client_secret_of(client: &StoredOAuthClientInfo) -> Option<&str> {
+    client.client_secret.as_deref().filter(|s| !s.is_empty())
+}
+
+/// MCP SDK `selectClientAuthMethod`: prefer the registered method when it is valid and either
+/// advertised by the server or the server advertises nothing; otherwise RFC 8414 §2's default of
+/// `client_secret_basic` (for a client with a secret) when the metadata omits the list, else the
+/// most secure advertised method.
+fn select_client_auth_method(
+    client: &StoredOAuthClientInfo,
+    supported_methods: &[String],
+) -> ClientAuthMethod {
+    let has_secret = client_secret_of(client).is_some();
+    let supports =
+        |method: ClientAuthMethod| supported_methods.iter().any(|m| m == method.as_str());
+    if let Some(registered) = client
+        .token_endpoint_auth_method
+        .as_deref()
+        .and_then(ClientAuthMethod::parse)
+        && (supported_methods.is_empty() || supports(registered))
+    {
+        return registered;
+    }
+    if supported_methods.is_empty() {
+        return if has_secret {
+            ClientAuthMethod::ClientSecretBasic
+        } else {
+            ClientAuthMethod::None
+        };
+    }
+    if has_secret && supports(ClientAuthMethod::ClientSecretBasic) {
+        return ClientAuthMethod::ClientSecretBasic;
+    }
+    if has_secret && supports(ClientAuthMethod::ClientSecretPost) {
+        return ClientAuthMethod::ClientSecretPost;
+    }
+    if supports(ClientAuthMethod::None) {
+        return ClientAuthMethod::None;
+    }
+    if has_secret {
+        ClientAuthMethod::ClientSecretPost
+    } else {
+        ClientAuthMethod::None
+    }
+}
+
+/// MCP SDK `applyClientAuthentication`: adds the client credentials for `method` to the token
+/// request form and returns the `Authorization` header value to send, if any.
+/// `client_secret_basic` sends `Basic base64(client_id:client_secret)` (SDK `applyBasicAuth`,
+/// which does not form-urlencode the id/secret) and keeps both out of the body.
+fn apply_client_authentication(
+    method: ClientAuthMethod,
+    client: &StoredOAuthClientInfo,
+    form: &mut Vec<(String, String)>,
+) -> Result<Option<String>, String> {
+    match method {
+        ClientAuthMethod::ClientSecretBasic => {
+            let secret = client_secret_of(client).ok_or_else(|| {
+                "client_secret_basic authentication requires a client_secret".to_owned()
+            })?;
+            let credentials =
+                data_encoding::BASE64.encode(format!("{}:{secret}", client.client_id).as_bytes());
+            Ok(Some(format!("Basic {credentials}")))
+        }
+        ClientAuthMethod::ClientSecretPost => {
+            form.push(("client_id".to_owned(), client.client_id.clone()));
+            if let Some(secret) = client_secret_of(client) {
+                form.push(("client_secret".to_owned(), secret.to_owned()));
+            }
+            Ok(None)
+        }
+        ClientAuthMethod::None => {
+            form.push(("client_id".to_owned(), client.client_id.clone()));
+            Ok(None)
+        }
+    }
+}
+
+/// Selects and applies the client authentication for one token-endpoint request, then sends it
+/// as `application/x-www-form-urlencoded` (MCP SDK `executeTokenRequest`).
+async fn send_token_request(
+    http_client: &reqwest::Client,
+    token_endpoint: &str,
+    mut form: Vec<(String, String)>,
+    client: &StoredOAuthClientInfo,
+    supported_methods: &[String],
+) -> Result<reqwest::Response, String> {
+    let method = select_client_auth_method(client, supported_methods);
+    let authorization = apply_client_authentication(method, client, &mut form)?;
+    let encoded_form: String = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(form.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .finish();
+    let mut request = http_client
+        .post(token_endpoint)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Accept", "application/json");
+    if let Some(value) = authorization {
+        request = request.header("Authorization", value);
+    }
+    request
+        .body(encoded_form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn check_resource_allowed(server_url: &Url, candidate_resource: &str) -> bool {
@@ -246,6 +386,9 @@ async fn discover_oauth_endpoints(
                 authorization_endpoint: auth_ep,
                 token_endpoint: tok_ep,
                 registration_endpoint: meta.registration_endpoint,
+                token_endpoint_auth_methods_supported: meta
+                    .token_endpoint_auth_methods_supported
+                    .unwrap_or_default(),
                 resource,
                 default_scope,
             });
@@ -259,6 +402,7 @@ async fn discover_oauth_endpoints(
         authorization_endpoint: format!("{base}/authorize"),
         token_endpoint: format!("{base}/token"),
         registration_endpoint: None,
+        token_endpoint_auth_methods_supported: Vec::new(),
         resource,
         default_scope,
     })
@@ -515,6 +659,9 @@ pub async fn start_mcp_oauth_authorization(
         redirect_uri,
         authorization_endpoint: endpoints.authorization_endpoint,
         token_endpoint: endpoints.token_endpoint,
+        token_endpoint_auth_methods_supported: Some(
+            endpoints.token_endpoint_auth_methods_supported,
+        ),
         resource: Some(endpoints.resource),
         expires_at,
     };
@@ -756,28 +903,25 @@ async fn complete_mcp_oauth_callback_locked(
     let mut form = vec![
         ("grant_type".to_owned(), "authorization_code".to_owned()),
         ("code".to_owned(), auth_code),
-        ("redirect_uri".to_owned(), pending.redirect_uri),
-        ("client_id".to_owned(), client_info.client_id.clone()),
         ("code_verifier".to_owned(), pending.code_verifier),
+        ("redirect_uri".to_owned(), pending.redirect_uri),
     ];
-    if let Some(secret) = client_info.client_secret.as_ref() {
-        form.push(("client_secret".to_owned(), secret.clone()));
-    }
     if let Some(res) = pending.resource.as_ref() {
         form.push(("resource".to_owned(), res.clone()));
     }
 
-    let encoded_form: String = url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(form.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .finish();
-
-    let tok_resp = http_client
-        .post(&pending.token_endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(encoded_form)
-        .send()
-        .await
-        .map_err(|e| format!("OAuth token exchange failed: {e}"))?;
+    let tok_resp = send_token_request(
+        &http_client,
+        &pending.token_endpoint,
+        form,
+        &client_info,
+        pending
+            .token_endpoint_auth_methods_supported
+            .as_deref()
+            .unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| format!("OAuth token exchange failed: {e}"))?;
     if !tok_resp.status().is_success() {
         let status = tok_resp.status();
         let body_txt = tok_resp.text().await.unwrap_or_default();
@@ -873,26 +1017,20 @@ pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<
     let mut form = vec![
         ("grant_type".to_owned(), "refresh_token".to_owned()),
         ("refresh_token".to_owned(), refresh_token.clone()),
-        ("client_id".to_owned(), client_info.client_id.clone()),
     ];
-    if let Some(secret) = client_info.client_secret.as_ref() {
-        form.push(("client_secret".to_owned(), secret.clone()));
-    }
     if let Some(res) = ctx.configured_resource.as_ref() {
         form.push(("resource".to_owned(), res.clone()));
     }
 
-    let encoded_form: String = url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(form.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .finish();
-
-    let resp = http_client
-        .post(&endpoints.token_endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(encoded_form)
-        .send()
-        .await
-        .map_err(|e| format!("OAuth token refresh failed: {e}"))?;
+    let resp = send_token_request(
+        &http_client,
+        &endpoints.token_endpoint,
+        form,
+        &client_info,
+        &endpoints.token_endpoint_auth_methods_supported,
+    )
+    .await
+    .map_err(|e| format!("OAuth token refresh failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!(
             "OAuth token refresh failed with HTTP {}",
@@ -940,4 +1078,137 @@ pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<
     })?;
 
     Ok(new_access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(secret: Option<&str>, method: Option<&str>) -> StoredOAuthClientInfo {
+        StoredOAuthClientInfo {
+            client_id: "client".to_owned(),
+            client_secret: secret.map(str::to_owned),
+            token_endpoint_auth_method: method.map(str::to_owned),
+            redirect_uris: None,
+        }
+    }
+
+    fn methods(list: &[&str]) -> Vec<String> {
+        list.iter().map(|m| (*m).to_owned()).collect()
+    }
+
+    /// Mirrors MCP SDK 1.30 `selectClientAuthMethod` branch by branch.
+    #[test]
+    fn selects_token_endpoint_auth_method_like_the_mcp_sdk() {
+        use ClientAuthMethod as M;
+        let cases = [
+            // Registered method wins when advertised, or when nothing is advertised.
+            (
+                Some("s"),
+                Some("client_secret_basic"),
+                &[][..],
+                M::ClientSecretBasic,
+            ),
+            (
+                Some("s"),
+                Some("client_secret_post"),
+                &[][..],
+                M::ClientSecretPost,
+            ),
+            (
+                Some("s"),
+                Some("client_secret_basic"),
+                &["client_secret_post", "client_secret_basic"][..],
+                M::ClientSecretBasic,
+            ),
+            // Registered method not advertised: fall back to the priority order.
+            (
+                Some("s"),
+                Some("client_secret_basic"),
+                &["client_secret_post"][..],
+                M::ClientSecretPost,
+            ),
+            // Unknown registered method is ignored.
+            (
+                Some("s"),
+                Some("private_key_jwt"),
+                &[][..],
+                M::ClientSecretBasic,
+            ),
+            // RFC 8414 default when the list is omitted.
+            (Some("s"), None, &[][..], M::ClientSecretBasic),
+            (None, None, &[][..], M::None),
+            (Some(""), None, &[][..], M::None),
+            // Most secure advertised method first.
+            (
+                Some("s"),
+                None,
+                &["none", "client_secret_post", "client_secret_basic"][..],
+                M::ClientSecretBasic,
+            ),
+            (None, None, &["client_secret_basic", "none"][..], M::None),
+            // Nothing usable advertised: use what we have.
+            (
+                Some("s"),
+                None,
+                &["private_key_jwt"][..],
+                M::ClientSecretPost,
+            ),
+            (None, None, &["client_secret_basic"][..], M::None),
+        ];
+        for (secret, method, supported, expected) in cases {
+            assert_eq!(
+                select_client_auth_method(&client(secret, method), &methods(supported)),
+                expected,
+                "secret={secret:?} method={method:?} supported={supported:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn applies_client_credentials_for_each_method() {
+        let confidential = client(Some("se:cret"), None);
+        let mut form = Vec::new();
+        let header = apply_client_authentication(
+            ClientAuthMethod::ClientSecretBasic,
+            &confidential,
+            &mut form,
+        )
+        .unwrap();
+        assert_eq!(
+            header.as_deref(),
+            Some(format!("Basic {}", data_encoding::BASE64.encode(b"client:se:cret")).as_str())
+        );
+        assert!(form.is_empty());
+
+        let mut form = Vec::new();
+        let header = apply_client_authentication(
+            ClientAuthMethod::ClientSecretPost,
+            &confidential,
+            &mut form,
+        )
+        .unwrap();
+        assert_eq!(header, None);
+        assert_eq!(
+            form,
+            [
+                ("client_id".to_owned(), "client".to_owned()),
+                ("client_secret".to_owned(), "se:cret".to_owned())
+            ]
+        );
+
+        let mut form = Vec::new();
+        let header =
+            apply_client_authentication(ClientAuthMethod::None, &confidential, &mut form).unwrap();
+        assert_eq!(header, None);
+        assert_eq!(form, [("client_id".to_owned(), "client".to_owned())]);
+
+        let err = apply_client_authentication(
+            ClientAuthMethod::ClientSecretBasic,
+            &client(None, Some("client_secret_basic")),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(err.contains("requires a client_secret"), "{err}");
+    }
 }

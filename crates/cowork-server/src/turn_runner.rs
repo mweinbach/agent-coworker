@@ -9,8 +9,8 @@ use cowork_config::{
 use cowork_harness::{
     CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
     MemoryGenerator, PromptTemplateContext, RemoteMemoryModel, RemoteTitleOptions,
-    SteerCoordinator, SystemPromptBuildOptions, ToolRetryTarget, TurnCancellationHandle,
-    TurnIdempotencyLedger, TurnReference, TurnRunConfig, TurnStepRunner,
+    SharedTurnCostTracker, SteerCoordinator, SystemPromptBuildOptions, ToolRetryTarget,
+    TurnCancellationHandle, TurnIdempotencyLedger, TurnReference, TurnRunConfig, TurnStepRunner,
     build_layered_system_prompt, generate_heuristic_session_title, generate_remote_session_title,
     is_failed_tool_outcome, materialize_turn_attachments, parse_turn_references,
     preferred_title_model_for_provider, resolve_turn_references,
@@ -1198,9 +1198,6 @@ impl ServerRuntimeState {
             cwd_path,
             session_provider_opts,
             session_kind,
-            warn_at_usd,
-            stop_at_usd,
-            cost_snapshot_val,
             stored_provider_state,
             harness_context_val,
             title_source_initial,
@@ -1229,9 +1226,6 @@ impl ServerRuntimeState {
                 // SECURITY BOUNDARY: endpoint/header/credential overrides are stripped here.
                 live.provider_options_override(),
                 live.session_kind,
-                live.warn_at_usd,
-                live.stop_at_usd,
-                live.cost_tracker_snapshot.clone(),
                 live.provider_state.clone(),
                 live.harness_context.clone(),
                 live.title_source,
@@ -2048,13 +2042,6 @@ impl ServerRuntimeState {
                 dns_override_for_tests: None,
             };
 
-            let mut cost_tracker = rehydrate_session_cost_tracker(
-                &thread_id,
-                cost_snapshot_val,
-                warn_at_usd,
-                stop_at_usd,
-            );
-
             let initial_continuation = stored_provider_state
                 .and_then(|v| serde_json::from_value::<ProviderContinuationState>(v).ok());
 
@@ -2077,18 +2064,43 @@ impl ServerRuntimeState {
 
             match transport_res {
                 Ok(transport) => {
+                    // Rehydrate and attach the turn's cost tracker in one critical section, so a
+                    // concurrent `cowork/session/usageBudget/set` updates either the stored
+                    // state read here or the tracker the turn runs with.
+                    let shared_cost = {
+                        let mut live = live_for_task.lock();
+                        let shared = SharedTurnCostTracker::new(rehydrate_session_cost_tracker(
+                            &thread_id,
+                            live.cost_tracker_snapshot.clone(),
+                            live.warn_at_usd,
+                            live.stop_at_usd,
+                        ));
+                        live.active_cost_tracker = Some(shared.clone());
+                        shared
+                    };
                     let outcome = runner
-                        .run_turn(
+                        .run_turn_with_shared_cost(
                             Arc::clone(&transport),
                             history,
                             &mut tool_ctx,
                             &interactions,
                             &steer,
-                            &mut cost_tracker,
+                            shared_cost.clone(),
                             initial_continuation.clone(),
                             Arc::clone(&sink),
                         )
                         .await;
+                    // Detach under the session lock: budget changes accepted until now are in
+                    // this tracker (and so in the final usage events); later ones land on the
+                    // stored snapshot written here, which already includes this turn's cost.
+                    let (cost_tracker, full_usage_snapshot) = {
+                        let mut live = live_for_task.lock();
+                        live.active_cost_tracker = None;
+                        let tracker = shared_cost.take();
+                        let snapshot = tracker.get_snapshot();
+                        live.cost_tracker_snapshot = serde_json::to_value(&snapshot).ok();
+                        (tracker, snapshot)
+                    };
 
                     let now =
                         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -2118,7 +2130,6 @@ impl ServerRuntimeState {
                                 .updated_continuation
                                 .and_then(|c| serde_json::to_value(c).ok())
                         };
-                    let full_usage_snapshot = cost_tracker.get_snapshot();
                     emit_turn_usage_notifications(
                         sink.as_ref(),
                         &thread_id,
@@ -2127,7 +2138,6 @@ impl ServerRuntimeState {
                         &full_usage_snapshot,
                         &cost_tracker,
                     );
-                    let cost_snap = serde_json::to_value(full_usage_snapshot).ok();
 
                     {
                         let mut live = live_for_task.lock();
@@ -2139,7 +2149,6 @@ impl ServerRuntimeState {
                         live.message_count = live.messages.len();
                         live.last_message_preview = Some(preview);
                         live.provider_state = next_provider_state;
-                        live.cost_tracker_snapshot = cost_snap;
                     }
                     runtime.active_turns.remove(&thread_id);
                     runtime.turn_settled_notify.notify_waiters();

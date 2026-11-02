@@ -693,6 +693,7 @@ impl ServerRuntimeState {
             warn_at_usd: None,
             stop_at_usd: None,
             cost_tracker_snapshot: None,
+            active_cost_tracker: None,
             provider_state: None,
             todos: Vec::new(),
             workflow_runs: Vec::new(),

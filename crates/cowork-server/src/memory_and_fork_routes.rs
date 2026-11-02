@@ -799,6 +799,7 @@ impl ServerRuntimeState {
             warn_at_usd: src_snapshot.warn_at_usd,
             stop_at_usd: src_snapshot.stop_at_usd,
             cost_tracker_snapshot: None,
+            active_cost_tracker: None,
             // Reset provider continuation state on fork so upstream thread IDs are never shared!
             provider_state: None,
             todos: src_snapshot.todos.clone(),

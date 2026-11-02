@@ -56,9 +56,10 @@ pub use title::{
     preferred_title_model_for_provider,
 };
 pub use turn_runner::{
-    CodexBridgeCatalog, MAX_TOOL_RETRY_TARGETS, TOOL_RETRY_TURN_ANNOTATION_TYPE, ToolRetryTarget,
-    TurnCancellationHandle, TurnRunConfig, TurnRunOutcome, TurnStepRunner, assistant_content_text,
-    digest_tool_input, is_failed_tool_outcome, tool_retry_turn_annotation,
+    CodexBridgeCatalog, MAX_TOOL_RETRY_TARGETS, SharedTurnCostTracker,
+    TOOL_RETRY_TURN_ANNOTATION_TYPE, ToolRetryTarget, TurnCancellationHandle, TurnRunConfig,
+    TurnRunOutcome, TurnStepRunner, assistant_content_text, digest_tool_input,
+    is_failed_tool_outcome, tool_retry_turn_annotation,
 };
 
 /// Maximum allowed subagent nesting depth (children cannot spawn grandchildren).

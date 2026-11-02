@@ -214,6 +214,10 @@ pub struct LiveSession {
     pub warn_at_usd: Option<f64>,
     pub stop_at_usd: Option<f64>,
     pub cost_tracker_snapshot: Option<Value>,
+    /// Cost tracker shared with the running turn, while one runs. Until that turn ends it, not
+    /// `cost_tracker_snapshot`, is the session's usage and budget state, so budget changes
+    /// govern the turn's remaining steps (TS parity: one tracker per session).
+    pub active_cost_tracker: Option<cowork_harness::SharedTurnCostTracker>,
     pub provider_state: Option<Value>,
     pub todos: Vec<Value>,
     pub workflow_runs: Vec<Value>,
@@ -229,7 +233,11 @@ pub struct LiveSession {
 
 impl LiveSession {
     pub(crate) fn effective_session_usage_snapshot(&self) -> Option<Value> {
-        if let Some(mut snap) = self.cost_tracker_snapshot.clone()
+        let current = match &self.active_cost_tracker {
+            Some(active) => active.with_tracker(|t| serde_json::to_value(t.get_snapshot()).ok()),
+            None => self.cost_tracker_snapshot.clone(),
+        };
+        if let Some(mut snap) = current
             && snap.get("sessionId").and_then(Value::as_str).is_some()
             && snap
                 .get("budgetStatus")
@@ -419,6 +427,7 @@ impl LiveSession {
             warn_at_usd,
             stop_at_usd,
             cost_tracker_snapshot,
+            active_cost_tracker: None,
             provider_state,
             todos: record.todos,
             workflow_runs: Vec::new(),
@@ -1611,6 +1620,7 @@ impl ServerRuntimeState {
             warn_at_usd: None,
             stop_at_usd: None,
             cost_tracker_snapshot: None,
+            active_cost_tracker: None,
             provider_state: None,
             todos: Vec::new(),
             workflow_runs: Vec::new(),
@@ -2323,29 +2333,44 @@ impl ServerRuntimeState {
         let Some(live_arc) = self.load_thread(thread_id) else {
             return Err("cowork/session/usageBudget/set requires threadId".to_owned());
         };
+        let update = cowork_inference::BudgetThresholdUpdate {
+            warn_at_usd,
+            stop_at_usd,
+        };
         let event = {
             let mut live = live_arc.lock();
-            let mut tracker = crate::turn_runner::rehydrate_session_cost_tracker(
-                &live.id,
-                live.cost_tracker_snapshot.clone(),
-                live.warn_at_usd,
-                live.stop_at_usd,
-            );
-            tracker
-                .update_budget(cowork_inference::BudgetThresholdUpdate {
-                    warn_at_usd,
-                    stop_at_usd,
+            // A running turn owns the session's tracker: update it in place so the change
+            // governs the turn's next step boundary and its final usage snapshot. The turn
+            // detaches it under this same lock, so the change cannot fall between the two.
+            let (budget, event) = if let Some(active) = live.active_cost_tracker.clone() {
+                active.update_budget(update).map_err(|e| e.to_string())?;
+                active.with_tracker(|tracker| {
+                    (
+                        tracker.get_budget_status(),
+                        crate::turn_runner::session_usage_event(&live.id, tracker),
+                    )
                 })
-                .map_err(|e| e.to_string())?;
-            let budget = tracker.get_budget_status();
+            } else {
+                let mut tracker = crate::turn_runner::rehydrate_session_cost_tracker(
+                    &live.id,
+                    live.cost_tracker_snapshot.clone(),
+                    live.warn_at_usd,
+                    live.stop_at_usd,
+                );
+                tracker.update_budget(update).map_err(|e| e.to_string())?;
+                if live.cost_tracker_snapshot.is_some() {
+                    live.cost_tracker_snapshot = serde_json::to_value(tracker.get_snapshot()).ok();
+                }
+                (
+                    tracker.get_budget_status(),
+                    crate::turn_runner::session_usage_event(&live.id, &tracker),
+                )
+            };
             live.warn_at_usd = budget.warn_at_usd;
             live.stop_at_usd = budget.stop_at_usd;
-            if live.cost_tracker_snapshot.is_some() {
-                live.cost_tracker_snapshot = serde_json::to_value(tracker.get_snapshot()).ok();
-            }
             live.updated_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            crate::turn_runner::session_usage_event(&live.id, &tracker)
+            event
         };
         self.persist_live_session(&live_arc, "session_usage")
             .await

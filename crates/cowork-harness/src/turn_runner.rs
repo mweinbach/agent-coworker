@@ -232,7 +232,7 @@ impl TurnStepRunner {
     pub async fn run_turn(
         &self,
         transport: Arc<dyn ProviderTransport>,
-        mut history: Vec<CanonicalMessage>,
+        history: Vec<CanonicalMessage>,
         tool_ctx: &mut ToolExecutionContext,
         interactions: &Arc<InteractionManager>,
         steer: &Arc<SteerCoordinator>,
@@ -240,20 +240,48 @@ impl TurnStepRunner {
         initial_continuation: Option<ProviderContinuationState>,
         sink: Arc<dyn HarnessEventSink>,
     ) -> TurnRunOutcome {
+        let shared = SharedTurnCostTracker::new(std::mem::replace(
+            cost_tracker,
+            SessionCostTracker::new(&self.cfg.thread_id, None),
+        ));
+        let _restore_cost = RestoreCostTrackerGuard {
+            target: cost_tracker,
+            shared: shared.clone(),
+        };
+        self.run_turn_with_shared_cost(
+            transport,
+            history,
+            tool_ctx,
+            interactions,
+            steer,
+            shared,
+            initial_continuation,
+            sink,
+        )
+        .await
+    }
+
+    /// Like [`Self::run_turn`], but records usage into (and checks the budget of) a cost tracker
+    /// shared with the session that owns the turn, so budget changes the session applies while
+    /// the turn runs govern its remaining step-boundary checks. The tracker stays in `cost`
+    /// when the turn ends; the caller takes it with [`SharedTurnCostTracker::take`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_turn_with_shared_cost(
+        &self,
+        transport: Arc<dyn ProviderTransport>,
+        mut history: Vec<CanonicalMessage>,
+        tool_ctx: &mut ToolExecutionContext,
+        interactions: &Arc<InteractionManager>,
+        steer: &Arc<SteerCoordinator>,
+        cost: SharedTurnCostTracker,
+        initial_continuation: Option<ProviderContinuationState>,
+        sink: Arc<dyn HarnessEventSink>,
+    ) -> TurnRunOutcome {
         self.install_cancellation(tool_ctx);
         tool_ctx.clear_stop_after_step();
 
-        let shared_cost = Arc::new(Mutex::new((
-            std::mem::replace(
-                cost_tracker,
-                SessionCostTracker::new(&self.cfg.thread_id, None),
-            ),
-            false,
-        )));
-        let _restore_cost = RestoreCostTrackerGuard {
-            target: cost_tracker,
-            shared: Arc::clone(&shared_cost),
-        };
+        let shared_cost = Arc::clone(&cost.state);
+        shared_cost.lock().1 = false;
         let installed_cost_bridge = if tool_ctx.cost_tracker_bridge.is_none() {
             tool_ctx.cost_tracker_bridge = Some(Arc::new(TurnSharedCostBridge {
                 state: Arc::clone(&shared_cost),
@@ -947,16 +975,69 @@ impl TurnStepRunner {
     }
 }
 
+/// A session cost tracker shared between a running turn and the session that owns it (TS
+/// parity: the session and its running turn use one `SessionCostTracker`). Budget changes
+/// applied here while the turn runs take effect at its next step-boundary budget check, and the
+/// turn records its usage here, so the owner never holds a second, diverging copy.
+#[derive(Clone)]
+pub struct SharedTurnCostTracker {
+    /// The tracker, plus whether this turn already announced `budgetExceeded`.
+    state: Arc<Mutex<(SessionCostTracker, bool)>>,
+}
+
+impl std::fmt::Debug for SharedTurnCostTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedTurnCostTracker")
+            .field(
+                "budget",
+                &self.with_tracker(SessionCostTracker::get_budget_status),
+            )
+            .finish()
+    }
+}
+
+impl SharedTurnCostTracker {
+    pub fn new(tracker: SessionCostTracker) -> Self {
+        Self {
+            state: Arc::new(Mutex::new((tracker, false))),
+        }
+    }
+
+    /// Applies a budget threshold change. Lowering the hard cap to or below the current cost
+    /// stops the turn at its next step boundary; clearing or raising it lets the turn continue,
+    /// and a later crossing is announced again.
+    pub fn update_budget(
+        &self,
+        update: cowork_inference::BudgetThresholdUpdate,
+    ) -> Result<(), cowork_inference::InferenceError> {
+        let mut guard = self.state.lock();
+        guard.0.update_budget(update)?;
+        if !guard.0.is_budget_exceeded() {
+            guard.1 = false;
+        }
+        Ok(())
+    }
+
+    /// Runs `f` against the current tracker state.
+    pub fn with_tracker<R>(&self, f: impl FnOnce(&SessionCostTracker) -> R) -> R {
+        f(&self.state.lock().0)
+    }
+
+    /// Moves the tracker out, leaving an empty placeholder behind for any stale clone.
+    pub fn take(&self) -> SessionCostTracker {
+        let placeholder = SessionCostTracker::new("restoring", None);
+        std::mem::replace(&mut self.state.lock().0, placeholder)
+    }
+}
+
 struct RestoreCostTrackerGuard<'a> {
     target: &'a mut SessionCostTracker,
-    shared: Arc<Mutex<(SessionCostTracker, bool)>>,
+    shared: SharedTurnCostTracker,
 }
 
 impl Drop for RestoreCostTrackerGuard<'_> {
     fn drop(&mut self) {
-        let dummy = SessionCostTracker::new("restoring", None);
-        let restored = std::mem::replace(&mut self.shared.lock().0, dummy);
-        *self.target = restored;
+        *self.target = self.shared.take();
     }
 }
 

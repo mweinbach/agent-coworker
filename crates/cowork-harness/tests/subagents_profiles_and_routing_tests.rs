@@ -1095,6 +1095,121 @@ async fn empty_profile_allowlists_deny_all_instead_of_granting_everything() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// `profileRef: "default"` without an explicit `contextMode` must inherit the parent's full
+/// context (TS `buildBuiltInProfileEntries` gives the main-agent profile
+/// `defaultContextMode: "full"`); other built-in profiles keep the `"none"` fallback.
+#[tokio::test]
+async fn default_profile_spawn_without_context_mode_inherits_full_parent_context() {
+    let (base, cfg, db) = setup_env("default_profile_ctx").await;
+
+    struct Recorder(Mutex<Vec<ChildTurnInput>>);
+    #[async_trait]
+    impl ChildTurnExecutor for Recorder {
+        async fn run_child_turn(
+            &self,
+            input: ChildTurnInput,
+        ) -> Result<ChildTurnResult, ChildTurnError> {
+            self.0.lock().push(input.clone());
+            Ok(ChildTurnResult {
+                messages: input.initial_messages,
+                latest_assistant_text: Some("done".to_owned()),
+                usage: TurnUsage::default(),
+            })
+        }
+    }
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let control = AgentControl::new(
+        AgentControlConfig {
+            parent_session_id: "root-default-profile-ctx".to_owned(),
+            parent_depth: 0,
+            agent_config: Arc::new(cfg.clone()),
+            session_db: Arc::clone(&db),
+            connected_providers: [cfg.provider].into_iter().collect(),
+        },
+        recorder.clone(),
+        Arc::new(|_, _| {}),
+    );
+    let parent_history = vec![CanonicalMessage {
+        id: Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: "Parent goal: ship the rewrite.".to_owned(),
+            phase: None,
+            citations: Vec::new(),
+            provider_meta: ProviderOpaqueMeta::default(),
+        }],
+        phase: None,
+        provider: None,
+        api: None,
+        model: None,
+        stop_reason: None,
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+    }];
+    let parent_todos =
+        vec![json!({"content":"Run tests","status":"pending","activeForm":"Running tests"})];
+    let parent_harness = json!({"goal":"rewrite"});
+    let mk = |profile_ref: &str| AgentSpawnRequest {
+        message: "go".to_owned(),
+        role: None,
+        profile_ref: Some(profile_ref.to_owned()),
+        model: None,
+        reasoning_effort: None,
+        nickname: None,
+        task_type: None,
+        target_paths: None,
+        context_mode: None,
+        briefing: None,
+        include_parent_todos: false,
+        include_harness_context: false,
+        fork_context: false,
+        system_prompt_suffix: None,
+    };
+
+    let mut ids = Vec::new();
+    for profile_ref in ["default", "global:default", "explorer", "worker"] {
+        let summary = control
+            .spawn(
+                mk(profile_ref),
+                &parent_history,
+                &parent_todos,
+                Some(&parent_harness),
+            )
+            .await
+            .unwrap();
+        ids.push((profile_ref, summary.agent_id));
+    }
+    let agent_ids: Vec<String> = ids.iter().map(|(_, id)| id.clone()).collect();
+    control
+        .wait(&agent_ids, Some(5_000), Some("all"), false, false)
+        .await
+        .unwrap();
+
+    let inputs = recorder.0.lock().clone();
+    for (profile_ref, agent_id) in &ids {
+        let input = inputs.iter().find(|i| &i.agent_id == agent_id).unwrap();
+        if profile_ref.ends_with("default") {
+            assert_eq!(input.initial_messages.len(), 1, "{profile_ref}");
+            let ContentBlock::Text { ref text, .. } = input.initial_messages[0].content[0] else {
+                panic!("expected cloned parent text for {profile_ref}");
+            };
+            assert!(text.contains("Parent goal: ship the rewrite."));
+            assert_eq!(input.todos, parent_todos, "{profile_ref}");
+            assert_eq!(
+                input.harness_context.as_ref(),
+                Some(&parent_harness),
+                "{profile_ref}"
+            );
+        } else {
+            assert!(input.initial_messages.is_empty(), "{profile_ref}");
+            assert!(input.todos.is_empty(), "{profile_ref}");
+            assert_eq!(input.harness_context, None, "{profile_ref}");
+        }
+    }
+
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// Stop/deadline races (`race_with_cancel_and_deadline` in workflow host agents) drop the spawn
 /// future while it awaits `persist_session_mutation`. The reserved slot must be released on drop,
 /// otherwise later spawns lose capacity and `quiesce_children` waits for phantom children.

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use cowork_config::{
@@ -10,6 +11,12 @@ use cowork_config::{
 use serde::{Deserialize, Serialize};
 
 use crate::agents::roles::{BUILTIN_AGENT_ROLES, lookup_builtin_role};
+
+/// The locked main-agent profile (`default`), matching TS `MAIN_AGENT_PROFILE_ID`.
+const MAIN_AGENT_PROFILE_ID: &str = "default";
+/// Reserved: `<workspace>/.cowork/agent-profiles/workspace-overrides.json` is the overrides file,
+/// not a profile (TS `WORKSPACE_OVERRIDES_PROFILE_ID`).
+const WORKSPACE_OVERRIDES_PROFILE_ID: &str = "workspace-overrides";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -186,6 +193,13 @@ impl AgentProfilesStore {
         self.workspace_profiles_dir.join("workspace-overrides.json")
     }
 
+    fn scope_dir(&self, scope: AgentProfileScope) -> &Path {
+        match scope {
+            AgentProfileScope::Global => &self.global_dir,
+            AgentProfileScope::Workspace => &self.workspace_profiles_dir,
+        }
+    }
+
     fn run_locked<R, F>(&self, target: &Path, f: F) -> Result<R, String>
     where
         F: FnOnce() -> Result<R, String>,
@@ -295,7 +309,10 @@ impl AgentProfilesStore {
                 model: None,
                 reasoning_effort: None,
                 default_task_type: None,
-                default_context_mode: None,
+                // The main-agent clone inherits the parent's full context by default (TS
+                // `buildBuiltInProfileEntries`); other built-ins leave it unset.
+                default_context_mode: (role.name == MAIN_AGENT_PROFILE_ID)
+                    .then(|| "full".to_owned()),
             };
             profiles.push(AgentProfileCatalogEntry {
                 scope: AgentProfileScope::Global,
@@ -404,11 +421,8 @@ impl AgentProfilesStore {
         }
         lookup_builtin_role(&input.profile.base_role)?;
 
-        let dir = match input.scope {
-            AgentProfileScope::Global => &self.global_dir,
-            AgentProfileScope::Workspace => &self.workspace_profiles_dir,
-        };
-        let path = dir.join(format!("{}.json", input.profile.id));
+        let dir = self.scope_dir(input.scope);
+        let path = profile_file_path(dir, &input.profile.id)?;
         self.run_locked(&path, || {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             let mut normalized = input.profile.clone();
@@ -434,14 +448,13 @@ impl AgentProfilesStore {
         scope: AgentProfileScope,
         id: &str,
     ) -> Result<AgentProfilesCatalog, String> {
-        if id == "default" {
+        // Validate before building any path: an unvalidated id such as `../auth/x` or an absolute
+        // path would otherwise resolve outside the profile directory and delete that file.
+        validate_profile_id(id)?;
+        if id == MAIN_AGENT_PROFILE_ID {
             return Err("Built-in 'default' profile is locked and cannot be deleted.".to_owned());
         }
-        let dir = match scope {
-            AgentProfileScope::Global => &self.global_dir,
-            AgentProfileScope::Workspace => &self.workspace_profiles_dir,
-        };
-        let path = dir.join(format!("{id}.json"));
+        let path = profile_file_path(self.scope_dir(scope), id)?;
         self.run_locked(&path, || {
             if path.exists() {
                 fs::remove_file(&path).map_err(|e| e.to_string())?;
@@ -486,7 +499,8 @@ impl AgentProfilesStore {
         global_profile_id: &str,
         enabled: bool,
     ) -> Result<AgentProfilesCatalog, String> {
-        if global_profile_id == "default" {
+        validate_profile_id(global_profile_id)?;
+        if global_profile_id == MAIN_AGENT_PROFILE_ID {
             return Err("Built-in 'default' profile cannot be disabled.".to_owned());
         }
         let ov_path = self.overrides_path();
@@ -541,6 +555,23 @@ fn to_profile_snapshot(
     }
 }
 
+/// Builds `<dir>/<id>.json` for a validated, non-reserved profile id and confirms the result is a
+/// direct child of `dir`, so no id can address a file outside the profile directory.
+fn profile_file_path(dir: &Path, id: &str) -> Result<PathBuf, String> {
+    validate_profile_id(id)?;
+    if id == WORKSPACE_OVERRIDES_PROFILE_ID {
+        return Err(format!("Reserved agent profile id: {id}"));
+    }
+    let file_name = format!("{id}.json");
+    let path = dir.join(&file_name);
+    let escapes = || format!("Agent profile id '{id}' resolves outside the profile directory.");
+    let mut rel = path.strip_prefix(dir).map_err(|_| escapes())?.components();
+    match (rel.next(), rel.next()) {
+        (Some(Component::Normal(name)), None) if name == OsStr::new(&file_name) => Ok(path),
+        _ => Err(escapes()),
+    }
+}
+
 fn validate_profile_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 80 {
         return Err("Profile id must be 1..=80 characters.".to_owned());
@@ -556,4 +587,216 @@ fn validate_profile_id(id: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fixture {
+        _tmp: tempfile::TempDir,
+        cowork_home: PathBuf,
+        workspace: PathBuf,
+        store: AgentProfilesStore,
+    }
+
+    fn fixture() -> Fixture {
+        let tmp = tempfile::tempdir().unwrap();
+        let cowork_home = tmp.path().join("home/.cowork");
+        let workspace = tmp.path().join("ws");
+        fs::create_dir_all(cowork_home.join("agent-profiles")).unwrap();
+        fs::create_dir_all(workspace.join(".cowork/agent-profiles")).unwrap();
+        let store = AgentProfilesStore::new(&cowork_home, &workspace);
+        Fixture {
+            _tmp: tmp,
+            cowork_home,
+            workspace,
+            store,
+        }
+    }
+
+    fn profile(id: &str) -> AgentProfileDefinition {
+        AgentProfileDefinition {
+            version: 1,
+            id: id.to_owned(),
+            display_name: id.to_owned(),
+            description: String::new(),
+            enabled: true,
+            base_role: "worker".to_owned(),
+            prompt: String::new(),
+            allowed_built_in_tools: Vec::new(),
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model: None,
+            reasoning_effort: None,
+            default_task_type: None,
+            default_context_mode: None,
+        }
+    }
+
+    /// Ids that must never be turned into a filesystem path.
+    fn traversal_ids(sentinel_stem: &Path) -> Vec<String> {
+        vec![
+            "../auth/codex-cli/auth".to_owned(),
+            "..\\auth\\codex-cli\\auth".to_owned(),
+            "../../ws/.cowork/agent-profiles/workspace-overrides".to_owned(),
+            sentinel_stem.to_string_lossy().into_owned(),
+            "/etc/passwd".to_owned(),
+            "C:\\Windows\\win".to_owned(),
+            "nested/profile".to_owned(),
+            "nested\\profile".to_owned(),
+            "..".to_owned(),
+            ".hidden".to_owned(),
+            String::new(),
+        ]
+    }
+
+    #[test]
+    fn delete_rejects_traversal_ids_and_leaves_outside_files_intact() {
+        let fx = fixture();
+        let sentinel = fx.cowork_home.join("auth/codex-cli/auth.json");
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        fs::write(&sentinel, "{\"secret\":true}").unwrap();
+        let sentinel_stem = sentinel.with_extension("");
+
+        for scope in [AgentProfileScope::Global, AgentProfileScope::Workspace] {
+            for id in traversal_ids(&sentinel_stem) {
+                let err = fx.store.delete(scope, &id).unwrap_err();
+                assert!(
+                    err.contains("Invalid profile id") || err.contains("1..=80"),
+                    "{scope:?} delete({id:?}) gave unexpected error: {err}"
+                );
+                assert!(
+                    sentinel.exists(),
+                    "{scope:?} delete({id:?}) removed sentinel"
+                );
+            }
+        }
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "{\"secret\":true}");
+    }
+
+    #[test]
+    fn delete_rejects_reserved_overrides_id_and_keeps_overrides_file() {
+        let fx = fixture();
+        fx.store
+            .upsert(AgentProfileUpsertInput {
+                scope: AgentProfileScope::Global,
+                profile: profile("helper"),
+            })
+            .unwrap();
+        fx.store
+            .set_workspace_availability("helper", false)
+            .unwrap();
+        let overrides = fx
+            .workspace
+            .join(".cowork/agent-profiles/workspace-overrides.json");
+        assert!(overrides.exists());
+
+        let err = fx
+            .store
+            .delete(AgentProfileScope::Workspace, WORKSPACE_OVERRIDES_PROFILE_ID)
+            .unwrap_err();
+        assert!(err.contains("Reserved"), "{err}");
+        assert!(overrides.exists());
+
+        let err = fx
+            .store
+            .upsert(AgentProfileUpsertInput {
+                scope: AgentProfileScope::Workspace,
+                profile: profile(WORKSPACE_OVERRIDES_PROFILE_ID),
+            })
+            .unwrap_err();
+        assert!(err.contains("Reserved"), "{err}");
+        let raw = fs::read_to_string(&overrides).unwrap();
+        assert!(raw.contains("disabledGlobalProfileIds"), "{raw}");
+    }
+
+    #[test]
+    fn delete_with_valid_id_still_removes_the_profile_file() {
+        let fx = fixture();
+        for scope in [AgentProfileScope::Global, AgentProfileScope::Workspace] {
+            fx.store
+                .upsert(AgentProfileUpsertInput {
+                    scope,
+                    profile: profile("sec-auditor.v2"),
+                })
+                .unwrap();
+            let path = fx.store.scope_dir(scope).join("sec-auditor.v2.json");
+            assert!(path.exists());
+            let cat = fx.store.delete(scope, "sec-auditor.v2").unwrap();
+            assert!(!path.exists());
+            assert!(
+                !cat.profiles
+                    .iter()
+                    .any(|p| p.scope == scope && p.profile.id == "sec-auditor.v2")
+            );
+        }
+        assert!(
+            fx.store
+                .delete(AgentProfileScope::Global, "default")
+                .unwrap_err()
+                .contains("locked")
+        );
+    }
+
+    #[test]
+    fn upsert_copy_and_workspace_availability_reject_traversal_ids() {
+        let fx = fixture();
+        let sentinel = fx.cowork_home.join("auth/codex-cli/auth.json");
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        fs::write(&sentinel, "keep").unwrap();
+        let overrides = fx
+            .workspace
+            .join(".cowork/agent-profiles/workspace-overrides.json");
+
+        for id in traversal_ids(&sentinel.with_extension("")) {
+            for scope in [AgentProfileScope::Global, AgentProfileScope::Workspace] {
+                assert!(
+                    fx.store
+                        .upsert(AgentProfileUpsertInput {
+                            scope,
+                            profile: profile(&id),
+                        })
+                        .is_err(),
+                    "upsert({id:?}) accepted"
+                );
+                assert!(
+                    fx.store
+                        .copy_profile("global:worker", scope, Some(&id), None)
+                        .is_err(),
+                    "copy to {id:?} accepted"
+                );
+            }
+            assert!(
+                fx.store.set_workspace_availability(&id, false).is_err(),
+                "set_workspace_availability({id:?}) accepted"
+            );
+        }
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "keep");
+        assert!(!overrides.exists());
+    }
+
+    #[test]
+    fn only_the_default_built_in_profile_defaults_to_full_context() {
+        let fx = fixture();
+        let cat = fx.store.read_catalog();
+        for role in BUILTIN_AGENT_ROLES {
+            let entry = cat
+                .profiles
+                .iter()
+                .find(|p| p.built_in == Some(true) && p.profile.id == role.name)
+                .unwrap();
+            let expected = (role.name == "default").then_some("full");
+            assert_eq!(
+                entry.profile.default_context_mode.as_deref(),
+                expected,
+                "built-in profile {}",
+                role.name
+            );
+        }
+        let snapshot = fx.store.resolve_profile("default").unwrap();
+        assert_eq!(snapshot.default_context_mode.as_deref(), Some("full"));
+        let explorer = fx.store.resolve_profile("explorer").unwrap();
+        assert_eq!(explorer.default_context_mode, None);
+    }
 }

@@ -1,5 +1,6 @@
 //! Regression coverage for `cowork/session/defaults/apply` persisting the full supported config
-//! patch (including `clear*` sentinels), `cowork/session/usageBudget/set` clearing a cap with an
+//! patch (including `clear*` sentinels), `cowork/session/config/set` persisting accepted settings
+//! across a restart, `cowork/session/usageBudget/set` clearing a cap with an
 //! explicit `null` and returning the real usage snapshot, and `turn/start` waiting for managed
 //! runtime startup before snapshotting the tool environment.
 
@@ -466,6 +467,122 @@ async fn defaults_apply_persists_full_patch_and_clear_sentinels() {
             .get("memoryGenerationModel")
             .is_none()
     );
+
+    server.shutdown().await;
+}
+
+/// `cowork/session/config/set` on a root session persists accepted settings the way
+/// `SessionMetadataManager.applyPreparedConfigUpdate` did (`persistProjectConfigPatchImpl`):
+/// workspace keys to `<workspace>/.cowork/config.json`, user-scoped memory keys to the user
+/// config, and `yolo` nowhere. A restart (fresh hydration from `sessions.db`) must not undo them.
+#[tokio::test]
+async fn session_config_set_persists_settings_across_restart() {
+    let iso = Iso::new("cowork-session-config-set-");
+    let project_cfg = iso.workspace.join(".cowork").join("config.json");
+    let global_cfg = iso.home.join(".cowork").join("config").join("config.json");
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let mut ignored = Vec::new();
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let thread_id = start_thread(&mut ws, &cwd).await;
+
+    // A patch that leaves the effective config unchanged writes nothing (`changed: false`).
+    let noop = call(
+        &mut ws,
+        "set-noop",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": { "enableMemory": true } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(noop.get("error").is_none(), "{noop}");
+    assert!(
+        !project_cfg.exists(),
+        "unchanged patch must not write config"
+    );
+
+    let set = call(
+        &mut ws,
+        "set-1",
+        "cowork/session/config/set",
+        json!({
+            "threadId": thread_id,
+            "config": {
+                "enableMemory": false,
+                "memoryRequireApproval": true,
+                "toolOutputOverflowChars": 4321,
+                "advancedMemory": true,
+                "yolo": true
+            }
+        }),
+        &mut ignored,
+    )
+    .await;
+    assert!(set.get("error").is_none(), "{set}");
+    let config = &set["result"]["event"]["config"];
+    assert_eq!(config["enableMemory"], false, "{config}");
+    assert_eq!(config["yolo"], true, "{config}");
+
+    let project = read_json(&project_cfg);
+    assert_eq!(project["enableMemory"], false, "{project}");
+    assert_eq!(project["memoryRequireApproval"], true, "{project}");
+    assert_eq!(project["toolOutputOverflowChars"], 4321, "{project}");
+    assert!(project.get("advancedMemory").is_none(), "{project}");
+    assert!(project.get("yolo").is_none(), "{project}");
+    assert_eq!(read_json(&global_cfg)["advancedMemory"], true);
+
+    // A clear sentinel deletes the persisted key and the live override.
+    let cleared = call(
+        &mut ws,
+        "set-clear",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": { "clearToolOutputOverflowChars": true } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(cleared.get("error").is_none(), "{cleared}");
+    assert_eq!(
+        cleared["result"]["event"]["config"]["toolOutputOverflowChars"],
+        25000
+    );
+    let project = read_json(&project_cfg);
+    assert!(
+        project.get("toolOutputOverflowChars").is_none(),
+        "{project}"
+    );
+    let set = call(
+        &mut ws,
+        "set-2",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": { "toolOutputOverflowChars": 999 } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(set.get("error").is_none(), "{set}");
+
+    drop(ws);
+    server.shutdown().await;
+
+    // Fresh server: the session hydrates from `sessions.db` with no in-memory overrides.
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let read = call(
+        &mut ws,
+        "read",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": {} }),
+        &mut ignored,
+    )
+    .await;
+    assert!(read.get("error").is_none(), "{read}");
+    let config = &read["result"]["event"]["config"];
+    assert_eq!(config["enableMemory"], false, "{config}");
+    assert_eq!(config["memoryRequireApproval"], true, "{config}");
+    assert_eq!(config["advancedMemory"], true, "{config}");
+    assert_eq!(config["toolOutputOverflowChars"], 999, "{config}");
+    // `yolo` is session state only (TS never persisted it).
+    assert_eq!(config["yolo"], false, "{config}");
 
     server.shutdown().await;
 }

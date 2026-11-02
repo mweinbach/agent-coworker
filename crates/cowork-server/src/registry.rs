@@ -2421,19 +2421,34 @@ impl ServerRuntimeState {
             return Err("cowork/session/config/set requires threadId and config".to_owned());
         };
         let cwd = PathBuf::from(live_arc.lock().cwd.clone());
-        let cfg = self
+        let mut cfg = self
             .load_workspace_config(&cwd)
             .map_err(|e| e.to_string())?;
+        // Validate and map the persistable fields before touching live state
+        // (`SessionMetadataManager.prepareConfigUpdate` / `buildPersistPatch` parity).
+        let mut proj_patch = ProjectConfigPatch::default();
+        apply_session_config_to_project_patch(&patch, &mut proj_patch)?;
+        if self.should_persist_session_config(&live_arc, &cfg, &patch, &mut proj_patch) {
+            // Root sessions persist accepted settings to the workspace (and, for user-scoped
+            // keys, the user) config before applying them, as `applyPreparedConfigUpdate` did
+            // through `persistProjectConfigPatchImpl`; a failed write rejects the update.
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            persist_project_config_patch(
+                &cwd.join(".cowork"),
+                &proj_patch,
+                None,
+                Some(&paths.config_dir),
+            )
+            .await
+            .map_err(|e| format!("Failed to persist config defaults: {e}"))?;
+            cfg = self
+                .load_workspace_config(&cwd)
+                .map_err(|e| e.to_string())?;
+        }
         let backups_toggled = patch.get("backupsEnabled").and_then(Value::as_bool);
         let (event, meta_for_backup) = {
             let mut live = live_arc.lock();
-            for (k, v) in patch {
-                if k == "providerOptions" {
-                    store_client_provider_options(&mut live.config_overrides, &v);
-                    continue;
-                }
-                live.config_overrides.insert(k, v);
-            }
+            merge_session_config_overrides(&mut live.config_overrides, patch);
             live.updated_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let evt = self.build_session_config_event(&live.id, &cfg, Some(&live.config_overrides));
@@ -2473,6 +2488,72 @@ impl ServerRuntimeState {
             self.emit_session_backup_state(&meta_for_backup.0, None, "requested", &state);
         }
         Ok(event)
+    }
+
+    /// Decides whether an accepted `cowork/session/config/set` patch is written to the config
+    /// files, and finalizes `proj_patch` for that write (`prepareConfigUpdate` /
+    /// `buildPersistPatch` parity):
+    /// - only root sessions persist (`persistProjectConfigPatchImpl` was root-only);
+    /// - nothing is written when the patch leaves the effective session config unchanged;
+    /// - `featureFlags`, `yolo` and `maxSteps` stay session-only;
+    /// - `backupsEnabled` is dropped when it equals the configured default;
+    /// - child routing is persisted normalized, together with the session's provider/model.
+    fn should_persist_session_config(
+        &self,
+        live_arc: &Arc<Mutex<LiveSession>>,
+        cfg: &AgentConfig,
+        patch: &Map<String, Value>,
+        proj_patch: &mut ProjectConfigPatch,
+    ) -> bool {
+        let live = live_arc.lock();
+        if live.session_kind != SessionKind::Root {
+            return false;
+        }
+        let mut next_overrides = live.config_overrides.clone();
+        merge_session_config_overrides(&mut next_overrides, patch.clone());
+        let before = self.build_session_config_event(&live.id, cfg, Some(&live.config_overrides));
+        let after = self.build_session_config_event(&live.id, cfg, Some(&next_overrides));
+        let clears = patch
+            .iter()
+            .any(|(k, v)| cleared_config_key(k).is_some() && v.as_bool() == Some(true));
+        if before["config"] == after["config"] && !clears {
+            return false;
+        }
+
+        proj_patch.feature_flags = None;
+        // SECURITY BOUNDARY: only the editable provider-option allowlist reaches the workspace
+        // config; endpoint, header and credential overrides are never written there.
+        proj_patch.provider_options = patch
+            .get("providerOptions")
+            .and_then(Value::as_object)
+            .and_then(pick_editable_provider_options)
+            .map(|mut po| {
+                cowork_config::strip_provider_option_endpoints(&mut po);
+                po
+            })
+            .filter(|po| !po.is_empty());
+        if proj_patch.backups_enabled == Some(cfg.backups_enabled) {
+            proj_patch.backups_enabled = None;
+        }
+        let routing_changed = CHILD_ROUTING_CONFIG_KEYS
+            .iter()
+            .any(|k| patch.get(*k).is_some_and(|v| !v.is_null()));
+        if routing_changed {
+            let mut routed = cfg.clone();
+            routed.provider = live.provider;
+            routed.model = live.model.clone();
+            crate::extension_mcp_agent_routes::apply_session_child_routing_overrides(
+                &mut routed,
+                &next_overrides,
+            );
+            proj_patch.provider = Some(routed.provider);
+            proj_patch.model = Some(routed.model);
+            proj_patch.child_model_routing_mode = Some(routed.child_model_routing_mode);
+            proj_patch.preferred_child_model = Some(routed.preferred_child_model);
+            proj_patch.preferred_child_model_ref = Some(routed.preferred_child_model_ref);
+            proj_patch.allowed_child_model_refs = Some(routed.allowed_child_model_refs);
+        }
+        true
     }
 
     pub fn get_harness_context(&self, thread_id: &str) -> Result<Value, String> {
@@ -2580,19 +2661,7 @@ impl ServerRuntimeState {
                     live.enable_mcp = mcp;
                 }
                 if let Some(cp) = config_patch {
-                    for (k, v) in cp {
-                        if let Some(cleared) = cleared_config_key(&k) {
-                            if v.as_bool() == Some(true) {
-                                live.config_overrides.remove(cleared);
-                            }
-                            continue;
-                        }
-                        if k == "providerOptions" {
-                            store_client_provider_options(&mut live.config_overrides, &v);
-                            continue;
-                        }
-                        live.config_overrides.insert(k, v);
-                    }
+                    merge_session_config_overrides(&mut live.config_overrides, cp);
                 }
                 self.build_session_config_event(
                     &live.id,
@@ -3972,6 +4041,37 @@ fn cleared_config_key(key: &str) -> Option<&'static str> {
         "clearSkillImprovementModel" => Some("skillImprovementModel"),
         "clearToolOutputOverflowChars" => Some("toolOutputOverflowChars"),
         _ => None,
+    }
+}
+
+/// Session config keys whose change re-normalizes and persists child model routing.
+const CHILD_ROUTING_CONFIG_KEYS: [&str; 4] = [
+    "preferredChildModel",
+    "childModelRoutingMode",
+    "preferredChildModelRef",
+    "allowedChildModelRefs",
+];
+
+/// Applies a session config patch to a thread's live overrides: `clear*` sentinels remove the
+/// key they clear, `providerOptions` merges through the editable allowlist, and a
+/// `preferredChildModel` sent without `preferredChildModelRef` supersedes a stored ref (as
+/// `prepareConfigUpdate` resolved it).
+fn merge_session_config_overrides(overrides: &mut Map<String, Value>, patch: Map<String, Value>) {
+    if patch.contains_key("preferredChildModel") && !patch.contains_key("preferredChildModelRef") {
+        overrides.remove("preferredChildModelRef");
+    }
+    for (k, v) in patch {
+        if let Some(cleared) = cleared_config_key(&k) {
+            if v.as_bool() == Some(true) {
+                overrides.remove(cleared);
+            }
+            continue;
+        }
+        if k == "providerOptions" {
+            store_client_provider_options(overrides, &v);
+            continue;
+        }
+        overrides.insert(k, v);
     }
 }
 

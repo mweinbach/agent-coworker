@@ -587,6 +587,175 @@ async fn session_config_set_persists_settings_across_restart() {
     server.shutdown().await;
 }
 
+/// `session_config.config.defaultToolOutputOverflowChars` carries the persisted workspace
+/// overflow override (TS `projectConfigOverrides.toolOutputOverflowChars`): omitted while the
+/// workspace inherits, a number for an explicit threshold, `null` for an explicit disable, and
+/// omitted again once `clearToolOutputOverflowChars` removes the override. The desktop reads
+/// this field to decide whether "Inherit default" is available and whether to send the clear.
+#[tokio::test]
+async fn session_config_reports_explicit_overflow_default_states() {
+    let iso = Iso::new("cowork-overflow-default-");
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let thread_id = start_thread(&mut ws, &cwd).await;
+    let mut ignored = Vec::new();
+
+    // Inherited: no project override, so the field is absent on both the thread-scoped
+    // `cowork/session/config/set` event and the workspace-scoped defaults result.
+    let read = call(
+        &mut ws,
+        "read-inherited",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": {} }),
+        &mut ignored,
+    )
+    .await;
+    let config = &read["result"]["event"]["config"];
+    assert!(
+        config.get("defaultToolOutputOverflowChars").is_none(),
+        "{config}"
+    );
+    assert_eq!(config["toolOutputOverflowChars"], 25000, "{config}");
+    let workspace = call(
+        &mut ws,
+        "ws-inherited",
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "config": {} }),
+        &mut ignored,
+    )
+    .await;
+    let config = &workspace["result"]["event"]["config"];
+    assert!(
+        config.get("defaultToolOutputOverflowChars").is_none(),
+        "{config}"
+    );
+
+    // Numeric workspace override.
+    let numeric = call(
+        &mut ws,
+        "apply-numeric",
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "threadId": thread_id, "config": { "toolOutputOverflowChars": 12000 } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(numeric.get("error").is_none(), "{numeric}");
+    let config = &numeric["result"]["event"]["config"];
+    assert_eq!(config["defaultToolOutputOverflowChars"], 12000, "{config}");
+    assert_eq!(config["toolOutputOverflowChars"], 12000, "{config}");
+    let workspace = call(
+        &mut ws,
+        "ws-numeric",
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "config": {} }),
+        &mut ignored,
+    )
+    .await;
+    assert_eq!(
+        workspace["result"]["event"]["config"]["defaultToolOutputOverflowChars"], 12000,
+        "{workspace}"
+    );
+
+    // Explicit disable persists as `null` and is reported as a present `null`.
+    let disabled = call(
+        &mut ws,
+        "apply-null",
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "threadId": thread_id, "config": { "toolOutputOverflowChars": null } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(disabled.get("error").is_none(), "{disabled}");
+    let config = &disabled["result"]["event"]["config"];
+    assert!(
+        config
+            .get("defaultToolOutputOverflowChars")
+            .is_some_and(Value::is_null),
+        "{config}"
+    );
+    let workspace = call(
+        &mut ws,
+        "ws-null",
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "config": {} }),
+        &mut ignored,
+    )
+    .await;
+    let config = &workspace["result"]["event"]["config"];
+    assert!(
+        config
+            .get("defaultToolOutputOverflowChars")
+            .is_some_and(Value::is_null),
+        "{config}"
+    );
+
+    // Clearing the override returns the workspace to inherited: the field disappears.
+    let cleared = call(
+        &mut ws,
+        "apply-clear",
+        "cowork/session/defaults/apply",
+        json!({
+            "cwd": cwd,
+            "threadId": thread_id,
+            "config": { "clearToolOutputOverflowChars": true }
+        }),
+        &mut ignored,
+    )
+    .await;
+    assert!(cleared.get("error").is_none(), "{cleared}");
+    let config = &cleared["result"]["event"]["config"];
+    assert!(
+        config.get("defaultToolOutputOverflowChars").is_none(),
+        "{config}"
+    );
+    assert_eq!(config["toolOutputOverflowChars"], 25000, "{config}");
+    let workspace = call(
+        &mut ws,
+        "ws-cleared",
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "config": {} }),
+        &mut ignored,
+    )
+    .await;
+    let config = &workspace["result"]["event"]["config"];
+    assert!(
+        config.get("defaultToolOutputOverflowChars").is_none(),
+        "{config}"
+    );
+
+    // A thread-scoped overflow patch is reported as the session's explicit default too.
+    let set = call(
+        &mut ws,
+        "set-numeric",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": { "toolOutputOverflowChars": 4321 } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(set.get("error").is_none(), "{set}");
+    assert_eq!(
+        set["result"]["event"]["config"]["defaultToolOutputOverflowChars"], 4321,
+        "{set}"
+    );
+    let set_cleared = call(
+        &mut ws,
+        "set-clear",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": { "clearToolOutputOverflowChars": true } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(set_cleared.get("error").is_none(), "{set_cleared}");
+    let config = &set_cleared["result"]["event"]["config"];
+    assert!(
+        config.get("defaultToolOutputOverflowChars").is_none(),
+        "{config}"
+    );
+
+    server.shutdown().await;
+}
+
 /// `stopAtUsd: null` clears the hard cap (desktop `clearThreadUsageHardCap`), an omitted field
 /// leaves it unchanged, and the result carries the real usage snapshot.
 #[tokio::test]

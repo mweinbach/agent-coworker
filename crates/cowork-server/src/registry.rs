@@ -2384,6 +2384,13 @@ impl ServerRuntimeState {
                 "details": cfg.user_profile.details,
             }
         });
+        // The persisted workspace overflow default (`projectConfigOverrides`), emitted only when
+        // the project config sets it: a number, or `null` for an explicit disable. Absent means
+        // the workspace inherits the built-in/user default (TS `getSessionConfigEvent` parity).
+        if let Some(project) = &cfg.project_config_overrides {
+            config_obj["defaultToolOutputOverflowChars"] =
+                json!(project.tool_output_overflow_chars);
+        }
         if let Some(m) = &cfg.memory_generation_model {
             config_obj["memoryGenerationModel"] = json!(m);
         }
@@ -2406,6 +2413,11 @@ impl ServerRuntimeState {
                         dst.remove("providerOptions");
                     }
                 } else {
+                    if k == "toolOutputOverflowChars" {
+                        // A session overflow patch is also the session's project override
+                        // (`prepareConfigUpdate` set both).
+                        dst.insert("defaultToolOutputOverflowChars".to_owned(), v.clone());
+                    }
                     dst.insert(k.clone(), v.clone());
                 }
             }

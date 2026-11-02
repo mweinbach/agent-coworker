@@ -1,6 +1,7 @@
 //! A scoped child (`targetPaths`) spawned under an explicitly read-only parent sandbox must stay
 //! read-only at spawn and after restore (TS children inherit `parentConfig.sandbox`, and the
-//! resolver's explicit read-only floor beats `targetPaths`). `AgentControl::wait` must honor the
+//! resolver's explicit read-only floor beats `targetPaths`). Children inherit the parent's whole
+//! sandbox (network, backend requirement) and are never wider than it on any axis. `AgentControl::wait` must honor the
 //! requested internal timeout (the independent task review asks for ten minutes) instead of
 //! clamping it to the public `waitForAgent` cap.
 
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cowork_config::{LoadConfigOptions, ProviderName, SandboxMode, load_config};
+use cowork_config::{LoadConfigOptions, ProviderName, SandboxConfig, SandboxMode, load_config};
 use cowork_harness::agents::{
     AgentControl, AgentControlConfig, AgentSpawnRequest, ChildTurnError, ChildTurnExecutor,
     ChildTurnInput, ChildTurnResult, child_wait_timeout, restore_persisted_child_restrictions,
@@ -161,10 +162,8 @@ async fn wait_idle(control: &AgentControl, agent_id: &str) {
 
 /// Resolves the policy the server child executor would apply for this turn input.
 fn resolve_child_policy(cfg: &cowork_config::AgentConfig, input: &ChildTurnInput) -> SandboxPolicy {
-    let mut sandbox = cfg.sandbox.clone();
-    sandbox.mode = input.sandbox_mode;
     resolve_sandbox_policy(&ResolveSandboxPolicyInput {
-        config: Some(sandbox),
+        config: Some(input.sandbox.clone()),
         working_directory: cfg.working_directory.clone(),
         project_root: Some(cfg.working_directory.clone()),
         output_directory: None,
@@ -202,7 +201,7 @@ async fn scoped_child_of_read_only_parent_stays_read_only_at_spawn_and_restore()
 
     let spawn_input = executor.inputs.lock()[0].clone();
     assert!(spawn_input.target_paths.is_some(), "child must be scoped");
-    assert_eq!(spawn_input.sandbox_mode, SandboxMode::ReadOnly);
+    assert_eq!(spawn_input.sandbox.mode, SandboxMode::ReadOnly);
     assert!(
         matches!(
             resolve_child_policy(&cfg, &spawn_input),
@@ -218,7 +217,7 @@ async fn scoped_child_of_read_only_parent_stays_read_only_at_spawn_and_restore()
         Some(SandboxMode::ReadOnly)
     );
     let restored = restore_persisted_child_restrictions(&cfg, &row).unwrap();
-    assert_eq!(restored.sandbox_mode, SandboxMode::ReadOnly);
+    assert_eq!(restored.sandbox.mode, SandboxMode::ReadOnly);
 
     // A restart under the same read-only parent rebuilds the child read-only.
     let executor2 = recording_executor();
@@ -230,13 +229,13 @@ async fn scoped_child_of_read_only_parent_stays_read_only_at_spawn_and_restore()
     wait_idle(&ctrl2, &child.agent_id).await;
     let restored_input = executor2.inputs.lock()[0].clone();
     assert!(restored_input.target_paths.is_some());
-    assert_eq!(restored_input.sandbox_mode, SandboxMode::ReadOnly);
+    assert_eq!(restored_input.sandbox.mode, SandboxMode::ReadOnly);
 
     // Even if the parent's config is later widened, the child's saved read-only is not.
     let mut widened = cfg.clone();
     widened.sandbox.mode = SandboxMode::WorkspaceWrite;
     let restored = restore_persisted_child_restrictions(&widened, &row).unwrap();
-    assert_eq!(restored.sandbox_mode, SandboxMode::ReadOnly);
+    assert_eq!(restored.sandbox.mode, SandboxMode::ReadOnly);
     let executor3 = recording_executor();
     let ctrl3 = control("root-ro", &widened, &db, &executor3);
     ctrl3
@@ -245,7 +244,7 @@ async fn scoped_child_of_read_only_parent_stays_read_only_at_spawn_and_restore()
         .unwrap();
     wait_idle(&ctrl3, &child.agent_id).await;
     assert_eq!(
-        executor3.inputs.lock()[0].sandbox_mode,
+        executor3.inputs.lock()[0].sandbox.mode,
         SandboxMode::ReadOnly
     );
 
@@ -275,7 +274,7 @@ async fn scoped_child_of_writable_parent_is_still_workspace_write() {
             .unwrap();
         wait_idle(&ctrl, &scoped.agent_id).await;
         let input = executor.inputs.lock()[0].clone();
-        assert_eq!(input.sandbox_mode, SandboxMode::WorkspaceWrite);
+        assert_eq!(input.sandbox.mode, SandboxMode::WorkspaceWrite);
         match resolve_child_policy(&cfg, &input) {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 assert_eq!(writable_roots.len(), 1);
@@ -285,7 +284,7 @@ async fn scoped_child_of_writable_parent_is_still_workspace_write() {
         }
         let row = db.get_session_record(&scoped.agent_id).unwrap().unwrap();
         let restored = restore_persisted_child_restrictions(&cfg, &row).unwrap();
-        assert_eq!(restored.sandbox_mode, SandboxMode::WorkspaceWrite);
+        assert_eq!(restored.sandbox.mode, SandboxMode::WorkspaceWrite);
 
         // Unscoped children keep inheriting the parent's mode.
         let unscoped = ctrl
@@ -293,10 +292,91 @@ async fn scoped_child_of_writable_parent_is_still_workspace_write() {
             .await
             .unwrap();
         wait_idle(&ctrl, &unscoped.agent_id).await;
-        assert_eq!(executor.inputs.lock()[1].sandbox_mode, parent_mode);
+        assert_eq!(executor.inputs.lock()[1].sandbox.mode, parent_mode);
 
         let _ = fs::remove_dir_all(base);
     }
+}
+
+#[tokio::test]
+async fn children_inherit_the_parents_complete_sandbox_and_are_never_wider() {
+    let (base, mut cfg, db) = setup_env("full-sandbox").await;
+    cfg.sandbox = SandboxConfig {
+        mode: SandboxMode::WorkspaceWrite,
+        network: false,
+        require_backend: true,
+    };
+    let executor = recording_executor();
+    let ctrl = control("root-full", &cfg, &db, &executor);
+
+    // Default worker: the parent's whole sandbox, not just its mode.
+    let worker = ctrl
+        .spawn(spawn_req("look around", None), &[], &[], None)
+        .await
+        .unwrap();
+    wait_idle(&ctrl, &worker.agent_id).await;
+    let input = executor.inputs.lock()[0].clone();
+    assert_eq!(input.sandbox, cfg.sandbox);
+    assert!(matches!(
+        resolve_child_policy(&cfg, &input),
+        SandboxPolicy::WorkspaceWrite { network: false, .. }
+    ));
+    // The child's full effective sandbox is persisted so a resumed child keeps it.
+    let row = db.get_session_record(&worker.agent_id).unwrap().unwrap();
+    assert_eq!(row.sandbox.as_ref(), Some(&cfg.sandbox));
+
+    // A read-only role narrows the mode but keeps the parent's other restrictions.
+    let mut explorer_req = spawn_req("explore", None);
+    explorer_req.role = Some("explorer".to_owned());
+    let explorer = ctrl.spawn(explorer_req, &[], &[], None).await.unwrap();
+    wait_idle(&ctrl, &explorer.agent_id).await;
+    let input = executor.inputs.lock()[1].clone();
+    assert_eq!(
+        input.sandbox,
+        SandboxConfig {
+            mode: SandboxMode::ReadOnly,
+            network: false,
+            require_backend: true,
+        }
+    );
+
+    // A child saved wider than its (now narrower) parent is clamped on every axis on restore.
+    let mut saved_wide = row.clone();
+    saved_wide.sandbox = Some(SandboxConfig {
+        mode: SandboxMode::DangerFullAccess,
+        network: true,
+        require_backend: false,
+    });
+    let mut read_only_parent = cfg.clone();
+    read_only_parent.sandbox.mode = SandboxMode::ReadOnly;
+    let restored = restore_persisted_child_restrictions(&read_only_parent, &saved_wide).unwrap();
+    assert_eq!(
+        restored.sandbox,
+        SandboxConfig {
+            mode: SandboxMode::ReadOnly,
+            network: false,
+            require_backend: true,
+        }
+    );
+    // ...and a parent widened after the spawn never widens the saved child.
+    let mut widened = cfg.clone();
+    widened.sandbox = SandboxConfig {
+        mode: SandboxMode::DangerFullAccess,
+        network: true,
+        require_backend: false,
+    };
+    let restored = restore_persisted_child_restrictions(&widened, &row).unwrap();
+    assert_eq!(restored.sandbox, cfg.sandbox);
+    let executor2 = recording_executor();
+    let ctrl2 = control("root-full", &widened, &db, &executor2);
+    ctrl2
+        .send_input(&worker.agent_id, "follow up", false)
+        .await
+        .unwrap();
+    wait_idle(&ctrl2, &worker.agent_id).await;
+    assert_eq!(executor2.inputs.lock()[0].sandbox, cfg.sandbox);
+
+    let _ = fs::remove_dir_all(base);
 }
 
 #[test]

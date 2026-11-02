@@ -165,7 +165,10 @@ pub struct ChildTurnInput {
     pub role: String,
     pub role_prompt: String,
     pub read_only_role: bool,
-    pub sandbox_mode: SandboxMode,
+    /// The child's complete effective sandbox (mode, network, backend requirement): the
+    /// parent's effective sandbox narrowed by the child's role and scope. Executors apply it
+    /// wholesale so no axis falls back to the workspace defaults.
+    pub sandbox: SandboxConfig,
     pub target_paths: Option<Vec<PathBuf>>,
     pub allowed_builtin_tools: BTreeSet<String>,
     pub allowed_mcp_servers: Option<BTreeSet<String>>,
@@ -267,7 +270,7 @@ struct ChildRuntimeEntry {
     summary: PersistentAgentSummary,
     role_prompt: String,
     read_only_role: bool,
-    sandbox_mode: SandboxMode,
+    sandbox: SandboxConfig,
     resolved_target_paths: Option<Vec<PathBuf>>,
     allowed_builtin_tools: BTreeSet<String>,
     allowed_mcp_servers: Option<BTreeSet<String>>,
@@ -485,7 +488,10 @@ impl AgentControl {
                     Err(e) => (
                         RestoredChildScope {
                             role_spec,
-                            sandbox_mode: SandboxMode::ReadOnly,
+                            sandbox: SandboxConfig {
+                                mode: SandboxMode::ReadOnly,
+                                ..cfg.agent_config.sandbox.clone()
+                            },
                             resolved_target_paths: None,
                             allowed_builtin_tools: BTreeSet::new(),
                             allowed_mcp_servers: Some(BTreeSet::new()),
@@ -508,7 +514,7 @@ impl AgentControl {
                         summary,
                         role_prompt,
                         read_only_role: role_spec.read_only,
-                        sandbox_mode: scope.sandbox_mode,
+                        sandbox: scope.sandbox,
                         resolved_target_paths: scope.resolved_target_paths,
                         allowed_builtin_tools: scope.allowed_builtin_tools,
                         allowed_mcp_servers: scope.allowed_mcp_servers,
@@ -718,8 +724,8 @@ impl AgentControl {
                 &self.cfg.connected_providers,
             )?;
 
-            let sandbox_mode = child_sandbox_mode(
-                agent_cfg.sandbox.mode,
+            let sandbox = child_sandbox(
+                &agent_cfg.sandbox,
                 role_spec.read_only,
                 resolved_targets.is_some(),
             );
@@ -761,7 +767,7 @@ impl AgentControl {
                     todos,
                     harness_ctx,
                     model_sel,
-                    sandbox_mode,
+                    sandbox,
                     role_prompt,
                     effective_task_type,
                 },
@@ -812,7 +818,7 @@ impl AgentControl {
             &[],
             &prep.todos,
             prep.harness_ctx.as_ref(),
-            prep.sandbox_mode,
+            &prep.sandbox,
             "agent_spawned",
         );
         if let Err(e) = self.cfg.session_db.persist_session_mutation(mutation).await {
@@ -830,7 +836,7 @@ impl AgentControl {
                     summary: summary.clone(),
                     role_prompt: prep.role_prompt,
                     read_only_role: prep.role_spec.read_only,
-                    sandbox_mode: prep.sandbox_mode,
+                    sandbox: prep.sandbox,
                     resolved_target_paths: prep.resolved_targets,
                     allowed_builtin_tools: prep.effective_tools,
                     allowed_mcp_servers: prep.allowed_mcp,
@@ -905,7 +911,7 @@ impl AgentControl {
                         role: entry.summary.role.clone(),
                         role_prompt: entry.role_prompt.clone(),
                         read_only_role: entry.read_only_role,
-                        sandbox_mode: entry.sandbox_mode,
+                        sandbox: entry.sandbox.clone(),
                         target_paths: entry.resolved_target_paths.clone(),
                         allowed_builtin_tools: entry.allowed_builtin_tools.clone(),
                         allowed_mcp_servers: entry.allowed_mcp_servers.clone(),
@@ -923,7 +929,7 @@ impl AgentControl {
                 let outcome = executor.run_child_turn(turn_input).await;
                 let was_cancelled = cancel_token.is_cancelled();
 
-                let (updated_summary, role_prompt, msgs, todos, hctx, sb_mode) = {
+                let (updated_summary, role_prompt, msgs, todos, hctx, sandbox) = {
                     let mut guard = state.lock();
                     let Some(entry) = guard.children.get_mut(&agent_id) else {
                         break;
@@ -991,7 +997,7 @@ impl AgentControl {
                         entry.messages.clone(),
                         entry.todos.clone(),
                         entry.harness_context.clone(),
-                        entry.sandbox_mode,
+                        entry.sandbox.clone(),
                     )
                 };
 
@@ -1006,7 +1012,7 @@ impl AgentControl {
                     &serialized_msgs,
                     &todos,
                     hctx.as_ref(),
-                    sb_mode,
+                    &sandbox,
                     "agent_status",
                 );
                 let _ = session_db.persist_session_mutation(mutation).await;
@@ -1342,7 +1348,7 @@ impl AgentControl {
                 &serialize_child_messages(entry),
                 &entry.todos,
                 entry.harness_context.as_ref(),
-                entry.sandbox_mode,
+                &entry.sandbox,
                 event,
             );
             (summary, mutation)
@@ -1635,7 +1641,7 @@ struct PreparedChildSpawn {
     todos: Vec<Value>,
     harness_ctx: Option<Value>,
     model_sel: ResolvedChildModel,
-    sandbox_mode: SandboxMode,
+    sandbox: SandboxConfig,
     role_prompt: String,
     effective_task_type: Option<String>,
 }
@@ -1698,10 +1704,47 @@ fn child_sandbox_mode(parent_mode: SandboxMode, read_only_role: bool, scoped: bo
     }
 }
 
+/// Filesystem breadth of a sandbox mode: `read-only` < `auto`/`workspace-write` (the resolver
+/// treats `auto` as workspace-write) < `danger-full-access`.
+const fn sandbox_mode_rank(mode: SandboxMode) -> u8 {
+    match mode {
+        SandboxMode::ReadOnly => 0,
+        SandboxMode::Auto | SandboxMode::WorkspaceWrite => 1,
+        SandboxMode::DangerFullAccess => 2,
+    }
+}
+
+/// `sandbox` clamped so it is never wider than `ceiling` on any axis: the narrower mode,
+/// network only when both allow it, and a backend requirement when either demands one.
+pub fn narrow_sandbox(sandbox: &SandboxConfig, ceiling: &SandboxConfig) -> SandboxConfig {
+    SandboxConfig {
+        mode: if sandbox_mode_rank(ceiling.mode) < sandbox_mode_rank(sandbox.mode) {
+            ceiling.mode
+        } else {
+            sandbox.mode
+        },
+        network: sandbox.network && ceiling.network,
+        require_backend: sandbox.require_backend || ceiling.require_backend,
+    }
+}
+
+/// Complete sandbox a child runs under: the parent's effective sandbox (mode, network and
+/// backend requirement, as TS children inherit `parentConfig.sandbox` wholesale) with the
+/// mode narrowed for the child's role and scope. Never wider than `parent` on any axis.
+fn child_sandbox(parent: &SandboxConfig, read_only_role: bool, scoped: bool) -> SandboxConfig {
+    narrow_sandbox(
+        &SandboxConfig {
+            mode: child_sandbox_mode(parent.mode, read_only_role, scoped),
+            ..parent.clone()
+        },
+        parent,
+    )
+}
+
 /// Spawn-time scope of a child agent, rebuilt from its persisted row after a restart.
 struct RestoredChildScope {
     role_spec: &'static BuiltinAgentRoleSpec,
-    sandbox_mode: SandboxMode,
+    sandbox: SandboxConfig,
     resolved_target_paths: Option<Vec<PathBuf>>,
     allowed_builtin_tools: BTreeSet<String>,
     allowed_mcp_servers: Option<BTreeSet<String>>,
@@ -1734,25 +1777,17 @@ fn restore_child_scope(
         ),
         None => None,
     };
-    // A child saved under an explicit read-only sandbox (`AgentSessionFromPersisted.ts` restores
-    // `persisted.sandbox`) keeps it even if the parent's config has since been widened.
-    let saved_read_only = row
-        .sandbox
-        .as_ref()
-        .is_some_and(|s| s.mode == SandboxMode::ReadOnly);
-    let parent_mode = if saved_read_only {
-        SandboxMode::ReadOnly
-    } else {
-        cfg.sandbox.mode
-    };
-    let sandbox_mode = child_sandbox_mode(
-        parent_mode,
-        role_spec.read_only,
-        resolved_target_paths.is_some(),
+    // A child keeps the sandbox it was saved with (`AgentSessionFromPersisted.ts` restores
+    // `persisted.sandbox`), so a later widening of the parent never widens it; it is also held
+    // under the parent's current effective sandbox so it is never wider than the parent.
+    let base = row.sandbox.as_ref().map_or_else(
+        || cfg.sandbox.clone(),
+        |saved| narrow_sandbox(saved, &cfg.sandbox),
     );
+    let sandbox = child_sandbox(&base, role_spec.read_only, resolved_target_paths.is_some());
     Ok(RestoredChildScope {
         role_spec,
-        sandbox_mode,
+        sandbox,
         resolved_target_paths,
         allowed_builtin_tools,
         allowed_mcp_servers,
@@ -1765,7 +1800,7 @@ fn restore_child_scope(
 #[derive(Debug, Clone)]
 pub struct PersistedChildRestrictions {
     pub read_only_role: bool,
-    pub sandbox_mode: SandboxMode,
+    pub sandbox: SandboxConfig,
     pub target_paths: Option<Vec<PathBuf>>,
     pub allowed_builtin_tools: BTreeSet<String>,
     pub allowed_mcp_servers: Option<BTreeSet<String>>,
@@ -1782,7 +1817,7 @@ pub fn restore_persisted_child_restrictions(
     let scope = restore_child_scope(cfg, row, &role_name)?;
     Ok(PersistedChildRestrictions {
         read_only_role: scope.role_spec.read_only,
-        sandbox_mode: scope.sandbox_mode,
+        sandbox: scope.sandbox,
         target_paths: scope.resolved_target_paths,
         allowed_builtin_tools: scope.allowed_builtin_tools,
         allowed_mcp_servers: scope.allowed_mcp_servers,
@@ -1880,7 +1915,7 @@ fn build_child_session_mutation(
     serialized_messages: &[Value],
     todos: &[Value],
     harness_context: Option<&Value>,
-    sandbox_mode: SandboxMode,
+    sandbox: &SandboxConfig,
     event_type: &str,
 ) -> PersistedSessionMutation {
     let provider = ProviderName::parse(&summary.provider).unwrap_or(cfg.provider);
@@ -1929,11 +1964,8 @@ fn build_child_session_mutation(
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
             provider_options: None,
-            sandbox: Some(SandboxConfig {
-                mode: sandbox_mode,
-                network: cfg.sandbox.network,
-                require_backend: cfg.sandbox.require_backend,
-            }),
+            // The child's complete effective sandbox, so a resumed child keeps it.
+            sandbox: Some(sandbox.clone()),
             enable_mcp: cfg.enable_mcp,
             backups_enabled_override: None,
             created_at: summary.created_at.clone(),

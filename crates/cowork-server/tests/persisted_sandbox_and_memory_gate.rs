@@ -2,7 +2,9 @@
 //!
 //! * A resumed session runs under its persisted `sandbox` (mode + network) rather than the
 //!   current workspace defaults (`AgentSessionFromPersisted.ts` parity), for root and child
-//!   agent sessions alike. The effective policy is observed through the system prompt's
+//!   agent sessions alike, and children spawned by a resumed parent inherit the parent's
+//!   persisted sandbox (mode, network, backend requirement) rather than the workspace
+//!   defaults. The effective policy is observed through the system prompt's
 //!   `Shell Execution Policy` line, which is rendered from the resolved sandbox policy.
 //! * Automatic memory generation after a turn is gated on `advancedMemory` (TS
 //!   `triggerMemoryGeneration` / `runMemoryGenerationOnce`): with it off, no memory-model
@@ -422,6 +424,110 @@ async fn persisted_child_agent_sandbox_survives_restart_with_permissive_workspac
         policy.contains("`read-only` OS sandbox (network: disabled)"),
         "child's saved sandbox must win over workspace defaults: {policy}"
     );
+    drop(ws);
+    server.shutdown().await;
+}
+
+/// Spawns a child of `parent_id` through `cowork/session/agent/spawn` and waits until its
+/// first turn has settled, returning the child's id.
+async fn spawn_child_and_wait(ws: &mut WsStream, parent_id: &str, params: Value) -> String {
+    let mut spawn_params = json!({ "threadId": parent_id });
+    for (k, v) in params.as_object().unwrap() {
+        spawn_params[k] = v.clone();
+    }
+    send(
+        ws,
+        json!({ "id": "spawn", "method": "cowork/session/agent/spawn", "params": spawn_params }),
+    )
+    .await;
+    let (mut responded, mut agent_id) = (false, None::<String>);
+    while !responded || agent_id.is_none() {
+        let val = next_json(ws).await;
+        if val.get("method").is_none() && val["id"] == "spawn" {
+            assert_eq!(val["result"], json!({}), "spawn failed: {val}");
+            responded = true;
+        } else if val["method"] == "cowork/session/agentSpawned" {
+            agent_id = val["params"]["agent"]["agentId"]
+                .as_str()
+                .map(str::to_owned);
+        }
+    }
+    let agent_id = agent_id.unwrap();
+    for i in 0..200 {
+        let res = call(
+            ws,
+            &format!("inspect-{i}"),
+            "cowork/session/agent/inspect",
+            json!({ "threadId": parent_id, "agentId": agent_id }),
+        )
+        .await;
+        if res["result"]["event"]["agent"]["busy"] == json!(false) {
+            return agent_id;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("child {agent_id} never went idle");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn children_of_a_resumed_parent_inherit_its_persisted_sandbox() {
+    const PARENT_SANDBOX: &str = r#"{"mode":"read-only","network":false,"requireBackend":true}"#;
+    let env = Env::new().await;
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_thread(&mut ws, "t-parent", &env.workspace).await;
+    drop(ws);
+    server.shutdown().await;
+
+    // The parent was saved read-only, offline and backend-required...
+    env.set_stored_sandbox(&parent, PARENT_SANDBOX);
+
+    // ...and resumes in a workspace whose defaults are workspace-write with network enabled.
+    let server = start_server(env.options(Some("workspace-write")))
+        .await
+        .unwrap();
+    let mut ws = connect(server.ws_url()).await;
+
+    // An ordinary (default-role, unscoped) child runs under the parent's whole sandbox, not
+    // the workspace defaults.
+    let child = spawn_child_and_wait(
+        &mut ws,
+        &parent,
+        json!({ "message": "child-sandbox-marker", "contextMode": "none" }),
+    )
+    .await;
+    let policy = env.last_shell_policy();
+    assert!(
+        env.bodies
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|b| b.to_string().contains("child-sandbox-marker")),
+        "the last turn request must be the child's"
+    );
+    assert!(
+        policy.contains("`read-only` OS sandbox (network: disabled)"),
+        "child must inherit the parent's saved sandbox, not the workspace defaults: {policy}"
+    );
+    // The child persists its complete effective sandbox, so a resumed child keeps it.
+    let expected: Value = serde_json::from_str(PARENT_SANDBOX).unwrap();
+    assert_eq!(env.stored_sandbox(&child), Some(expected.clone()));
+
+    // A direct turn on the persisted child after a restart stays read-only and offline.
+    drop(ws);
+    server.shutdown().await;
+    let server = start_server(env.options(Some("workspace-write")))
+        .await
+        .unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    run_turn(&mut ws, "turn-child", &child, "hello again").await;
+    let policy = env.last_shell_policy();
+    assert!(
+        policy.contains("`read-only` OS sandbox (network: disabled)"),
+        "{policy}"
+    );
+    assert_eq!(env.stored_sandbox(&child), Some(expected));
     drop(ws);
     server.shutdown().await;
 }

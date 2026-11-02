@@ -917,7 +917,7 @@ async fn restarted_children_keep_scope_and_transcript_and_fail_closed() {
         .unwrap();
     let resumed_input = exec2.inputs.lock()[0].clone();
     assert_eq!(resumed_input.target_paths, spawn_input.target_paths);
-    assert_eq!(resumed_input.sandbox_mode, spawn_input.sandbox_mode);
+    assert_eq!(resumed_input.sandbox, spawn_input.sandbox);
     assert_eq!(
         resumed_input.allowed_builtin_tools,
         spawn_input.allowed_builtin_tools

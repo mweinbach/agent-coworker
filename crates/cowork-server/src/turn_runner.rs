@@ -1292,15 +1292,11 @@ impl ServerRuntimeState {
                 });
             match restored {
                 Ok(r) => {
-                    // The restored scope was derived from the persisted sandbox applied above;
-                    // a saved read-only policy is never widened by the child's targetPaths.
-                    let saved_read_only = session_sandbox
-                        .as_ref()
-                        .is_some_and(|s| s.mode == ConfigSandboxMode::ReadOnly);
-                    if let Some(cfg) = workspace_cfg.as_mut()
-                        && !saved_read_only
-                    {
-                        cfg.sandbox.mode = r.sandbox_mode;
+                    // The restored sandbox was derived from (and is never wider than) the
+                    // persisted sandbox applied above, so a saved read-only policy or
+                    // `network: false` is never widened by the child's targetPaths.
+                    if let Some(cfg) = workspace_cfg.as_mut() {
+                        cfg.sandbox = r.sandbox.clone();
                     }
                     Some(r)
                 }

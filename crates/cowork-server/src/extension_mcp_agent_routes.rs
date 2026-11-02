@@ -147,7 +147,9 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             crate::turn_runner::workspace_io_dirs(Some(&agent_cfg), &canonical_cwd);
         agent_cfg.provider = input.provider;
         agent_cfg.model = input.model_id.clone();
-        agent_cfg.sandbox.mode = input.sandbox_mode;
+        // The child's complete sandbox (the parent's effective sandbox narrowed for its role and
+        // scope); mode, network and backend requirement all replace the workspace defaults.
+        agent_cfg.sandbox = input.sandbox.clone();
         if let Some(en) = parent_enable_mcp {
             agent_cfg.enable_mcp = en;
         }
@@ -827,20 +829,23 @@ impl ServerRuntimeState {
     }
 
     /// Effective parent config for a thread's child-agent controller: the workspace config
-    /// with the session's provider/model/MCP choice and `cowork/session/config/set` overrides
-    /// (memory, overflow and child model routing) layered on top.
+    /// with the session's provider/model/MCP choice, `cowork/session/config/set` overrides
+    /// (memory, overflow and child model routing) and persisted sandbox layered on top, exactly
+    /// as the parent's own turns see them (TS children route from the parent session's
+    /// `state.config`), so children never run under a wider sandbox than their parent.
     fn agent_control_config(
         &self,
         cwd: &Path,
         live_arc: &Arc<Mutex<LiveSession>>,
     ) -> Result<AgentConfig, String> {
-        let (provider, model, enable_mcp, overrides) = {
+        let (provider, model, enable_mcp, overrides, sandbox) = {
             let live = live_arc.lock();
             (
                 live.provider,
                 live.model.clone(),
                 live.enable_mcp,
                 live.config_overrides.clone(),
+                live.sandbox.clone(),
             )
         };
         let mut cfg = self.load_workspace_config(cwd).map_err(|e| e.to_string())?;
@@ -848,6 +853,7 @@ impl ServerRuntimeState {
         cfg.model = model;
         cfg.enable_mcp = enable_mcp;
         crate::turn_runner::apply_session_config_overrides(&mut cfg, &overrides);
+        crate::turn_runner::apply_session_sandbox(&mut cfg, sandbox.as_ref());
         apply_session_child_routing_overrides(&mut cfg, &overrides);
         // The parent's current provider options, merged exactly as its own turns merge them
         // (workspace + session `providerOptions` override, reconciled against the thread's

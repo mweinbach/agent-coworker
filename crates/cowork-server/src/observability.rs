@@ -27,8 +27,16 @@ const MAX_OBJECT_DEPTH: usize = 5;
 const MAX_OBJECT_KEYS: usize = 60;
 const MAX_ARRAY_LENGTH: usize = 30;
 const MAX_OTEL_ATTR_LEN: usize = 2048;
-/// Cap (in UTF-16 code units) applied to product-analytics string properties.
-const PRODUCT_ANALYTICS_MAX_STRING_LEN: usize = 120;
+/// TS `MAX_STRING_LENGTH`: cap (in UTF-16 code units) for product-analytics
+/// string properties, and the longest accepted `model` id.
+const PRODUCT_ANALYTICS_MAX_STRING_LEN: usize = 128;
+/// TS `MAX_STATUS_LENGTH`: cap (in UTF-16 code units) for `status` and
+/// `errorCategory`.
+const PRODUCT_ANALYTICS_MAX_STATUS_LEN: usize = 64;
+/// TS `MAX_COUNT`: upper clamp for `*Count` properties.
+const PRODUCT_ANALYTICS_MAX_COUNT: f64 = 1_000_000.0;
+/// TS `MAX_DURATION_MS`: upper clamp for `durationMs` (seven days).
+const PRODUCT_ANALYTICS_MAX_DURATION_MS: f64 = 7.0 * 24.0 * 60.0 * 60.0 * 1_000.0;
 const TELEMETRY_QUEUE_CAPACITY: usize = 256;
 const TELEMETRY_HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -80,8 +88,19 @@ const PRODUCT_ANALYTICS_BOOL_PROPS: &[&str] = &[
     "updateAvailable",
 ];
 
-const PRODUCT_ANALYTICS_NUMBER_PROPS: &[&str] = &[
+/// TS `PRODUCT_ANALYTICS_PROPERTY_NAMES`: every property key an event may
+/// carry. Any other key drops the whole event.
+const PRODUCT_ANALYTICS_PROPERTY_NAMES: &[&str] = &[
+    "appVersion",
+    "platform",
+    "arch",
+    "packaged",
+    "eventSource",
+    "provider",
+    "model",
     "durationMs",
+    "status",
+    "errorCategory",
     "workspaceCount",
     "threadCount",
     "providerCount",
@@ -91,6 +110,22 @@ const PRODUCT_ANALYTICS_NUMBER_PROPS: &[&str] = &[
     "toolCount",
     "attachmentCount",
     "referenceCount",
+    "productAnalyticsEnabled",
+    "crashReportsEnabled",
+    "aiTraceTelemetryEnabled",
+    "aiTracePayloadsEnabled",
+    "diagnosticsUploadEnabled",
+    "cloudSyncEnabled",
+    "mcpEnabled",
+    "yoloEnabled",
+    "quickChatIconEnabled",
+    "quickChatShortcutEnabled",
+    "mobilePairingEnabled",
+    "hasAttachments",
+    "hasReferences",
+    "remoteAccessEnabled",
+    "openAiNativeConnectorsEnabled",
+    "updateAvailable",
 ];
 
 const PRODUCT_ANALYTICS_STRING_PROPS: &[&str] = &[
@@ -1069,6 +1104,233 @@ fn build_sentry_envelope(
     )
 }
 
+// -----------------------------------------------------------------------------
+// Product analytics (PostHog) sanitization — port of `sanitizeProductEvent` in
+// the TS `src/telemetry/productAnalytics.ts`.
+//
+// JS regexes without the `u` flag treat `\w`, `\b` and `[A-Z]` under `i` as
+// ASCII-only, while `\s` is the ECMAScript WhiteSpace/LineTerminator set. The
+// Rust translations below therefore spell out ASCII classes, scope the `i`
+// flag to ASCII (`(?i-u:..)`), use ASCII word boundaries (`(?-u:\b)`), and use
+// an explicit class for JS `\s` (Rust's Unicode `\s` adds U+0085 and lacks
+// U+FEFF).
+// -----------------------------------------------------------------------------
+
+/// The ECMAScript `\s` set (WhiteSpace + LineTerminator), as regex class items.
+const JS_WS_CLASS: &str = r"\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";
+
+struct ProductAnalyticsPatterns {
+    /// TS `SENSITIVE_KEY_PATTERN`.
+    sensitive_key: Regex,
+    /// TS `EMAIL_PATTERN`.
+    email: Regex,
+    /// TS `URL_PATTERN`.
+    url: Regex,
+    /// TS `SECRET_VALUE_PATTERN`.
+    secret_value: Regex,
+    /// TS `ABSOLUTE_POSIX_PATH_PATTERN`.
+    absolute_posix_path: Regex,
+    /// TS `WINDOWS_PATH_PATTERN`.
+    windows_path: Regex,
+    /// TS `RELATIVE_PATH_PATTERN`.
+    relative_path: Regex,
+    /// TS `GENERIC_PATH_WITH_EXTENSION_PATTERN`.
+    generic_path_with_extension: Regex,
+    /// TS `SAFE_SLUG_PATTERN`.
+    safe_slug: Regex,
+    /// TS `SAFE_VERSION_PATTERN`.
+    safe_version: Regex,
+    /// TS `SAFE_MODEL_PATTERN`.
+    safe_model: Regex,
+}
+
+impl ProductAnalyticsPatterns {
+    fn compile() -> Option<Self> {
+        let ws = JS_WS_CLASS;
+        // `(?:^|[\s"'`])` prefix shared by the path patterns.
+        let lead = format!(r#"(?:^|[{ws}"'`])"#);
+        // `[^\s"'`<>{}[\]]` path-segment class shared by the path patterns.
+        let seg = format!(r#"[^{ws}"'`<>{{}}\[\]]"#);
+        Some(Self {
+            sensitive_key: Regex::new(
+                r"(?i-u:prompt|response|completion|transcript|content|contents|filename|fileName|file[_-]?name|repo|repository|path|command|stdout|stderr|api[_-]?key|apikey|provider[_-]?key|secret|token|email|username|user[_-]?name|machine|hostname)",
+            )
+            .ok()?,
+            email: Regex::new(
+                r"(?-u:\b)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?-u:\b)",
+            )
+            .ok()?,
+            url: Regex::new(r"(?-u:\b)(?i-u:https?|file)://").ok()?,
+            secret_value: Regex::new(&format!(
+                r"(?-u:\b)(?:(?i-u:sk-[A-Za-z0-9_-]{{16,}}|gh[pousr]_[A-Za-z0-9_]{{20,}}|xox[baprs]-[A-Za-z0-9-]{{16,}})|(?i-u:Bearer)[{ws}]+(?i-u:[A-Za-z0-9._~+/-]{{12,}}))(?-u:\b)"
+            ))
+            .ok()?,
+            absolute_posix_path: Regex::new(&format!(
+                r"{lead}/(?i-u:Users|home|tmp|private|var|Volumes|Applications|opt|etc)(?-u:\b)"
+            ))
+            .ok()?,
+            windows_path: Regex::new(&format!(r"{lead}(?:[A-Za-z]:[\\/]|\\\\){seg}*")).ok()?,
+            relative_path: Regex::new(&format!(r"{lead}(?:\.{{1,2}}[\\/]|~[\\/])")).ok()?,
+            generic_path_with_extension: Regex::new(&format!(
+                r"{lead}[A-Za-z0-9_.-]+[\\/]{seg}+\.[A-Za-z0-9]{{1,12}}(?-u:\b)"
+            ))
+            .ok()?,
+            safe_slug: Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$").ok()?,
+            safe_version: Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,127}$").ok()?,
+            safe_model: Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.:@/+ -]{0,127}$").ok()?,
+        })
+    }
+
+    /// TS `hasSensitiveStringValue`.
+    fn has_sensitive_string_value(&self, value: &str) -> bool {
+        self.email.is_match(value) || self.url.is_match(value) || self.secret_value.is_match(value)
+    }
+
+    /// TS `looksLikePath`.
+    fn looks_like_path(&self, value: &str) -> bool {
+        self.absolute_posix_path.is_match(value)
+            || self.windows_path.is_match(value)
+            || self.relative_path.is_match(value)
+            || self.generic_path_with_extension.is_match(value)
+            || value.contains('\\')
+    }
+
+    /// TS `isSafeModelId`.
+    fn is_safe_model_id(&self, value: &str) -> bool {
+        if utf16_len(value) > PRODUCT_ANALYTICS_MAX_STRING_LEN || !self.safe_model.is_match(value) {
+            return false;
+        }
+        if value.starts_with('.') || value.starts_with('~') || value.contains("..") {
+            return false;
+        }
+        !self.looks_like_local_model_path(value)
+    }
+
+    /// TS `looksLikeLocalModelPath`.
+    fn looks_like_local_model_path(&self, value: &str) -> bool {
+        self.absolute_posix_path.is_match(value)
+            || self.windows_path.is_match(value)
+            || self.relative_path.is_match(value)
+            || self.url.is_match(value)
+            || value.contains('\\')
+    }
+
+    /// TS `limitString(value, maxLength)` followed by `pattern.test(..)`.
+    ///
+    /// JS `slice` counts UTF-16 units and can cut a surrogate pair in half,
+    /// leaving a lone surrogate that no (ASCII-only) safe pattern accepts. The
+    /// char-safe prefix drops that character whole instead, so a split is
+    /// reported as a failed match to keep the TS accept/reject outcome.
+    fn limit_and_match<'a>(&self, pattern: &Regex, value: &'a str, max: usize) -> Option<&'a str> {
+        let limited = truncate_utf16_prefix(value, max);
+        let split_surrogate = limited.len() < value.len() && utf16_len(limited) < max;
+        (!split_surrogate && pattern.is_match(limited)).then_some(limited)
+    }
+}
+
+/// Compiled product-analytics patterns, or `None` if any failed to compile —
+/// in which case every event is dropped (fail closed) instead of panicking.
+fn product_analytics_patterns() -> Option<&'static ProductAnalyticsPatterns> {
+    static PATTERNS: OnceLock<Option<ProductAnalyticsPatterns>> = OnceLock::new();
+    PATTERNS
+        .get_or_init(ProductAnalyticsPatterns::compile)
+        .as_ref()
+}
+
+/// The ECMAScript WhiteSpace + LineTerminator code points `String.prototype.trim`
+/// strips (unlike `char::is_whitespace`, includes U+FEFF and excludes U+0085).
+fn is_js_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+    )
+}
+
+/// Port of TS `sanitizeStringProperty`. `Err(())` drops the whole event,
+/// `Ok(None)` omits the property (blank after trimming).
+fn sanitize_product_string_property(
+    p: &ProductAnalyticsPatterns,
+    key: &str,
+    value: &str,
+) -> Result<Option<String>, ()> {
+    let trimmed = value.trim_matches(is_js_whitespace);
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if p.has_sensitive_string_value(trimmed) {
+        return Err(());
+    }
+    if key == "model" {
+        if !p.is_safe_model_id(trimmed) {
+            return Err(());
+        }
+        // `isSafeModelId` already bounds the id to the cap, so this is a no-op
+        // kept for parity with `limitString(trimmed, MAX_STRING_LENGTH)`.
+        let limited = truncate_utf16_prefix(trimmed, PRODUCT_ANALYTICS_MAX_STRING_LEN);
+        return Ok(Some(limited.to_owned()));
+    }
+    if p.looks_like_path(trimmed) {
+        return Err(());
+    }
+    let (pattern, max) = match key {
+        "appVersion" => (&p.safe_version, PRODUCT_ANALYTICS_MAX_STRING_LEN),
+        "status" | "errorCategory" => (&p.safe_slug, PRODUCT_ANALYTICS_MAX_STATUS_LEN),
+        _ => (&p.safe_slug, PRODUCT_ANALYTICS_MAX_STRING_LEN),
+    };
+    p.limit_and_match(pattern, trimmed, max)
+        .map(|limited| Some(limited.to_owned()))
+        .ok_or(())
+}
+
+/// Port of TS `sanitizePropertyValue`. `Err(())` drops the whole event,
+/// `Ok(None)` omits the property.
+fn sanitize_product_property_value(
+    p: &ProductAnalyticsPatterns,
+    key: &str,
+    value: &Value,
+) -> Result<Option<Value>, ()> {
+    if value.is_null() {
+        return Ok(Some(Value::Null));
+    }
+    if PRODUCT_ANALYTICS_BOOL_PROPS.contains(&key) {
+        return value.as_bool().map(|b| Some(Value::Bool(b))).ok_or(());
+    }
+    // Non-finite inputs are rejected first; `clamp` only panics on bad bounds
+    // (ours are constant, ordered and finite) and `as u64` saturates, so the
+    // numeric paths cannot panic.
+    let finite_number = || value.as_f64().filter(|n| n.is_finite()).ok_or(());
+    if key == "durationMs" {
+        // JS `Math.round` rounds halves toward +inf and Rust `round` away from
+        // zero; they only differ on negative halves, which clamp to 0 anyway.
+        let n = finite_number()?
+            .round()
+            .clamp(0.0, PRODUCT_ANALYTICS_MAX_DURATION_MS);
+        return Ok(Some(json!(n as u64)));
+    }
+    if key.ends_with("Count") {
+        let n = finite_number()?
+            .floor()
+            .clamp(0.0, PRODUCT_ANALYTICS_MAX_COUNT);
+        return Ok(Some(json!(n as u64)));
+    }
+    if !PRODUCT_ANALYTICS_STRING_PROPS.contains(&key) {
+        return Err(());
+    }
+    let s = value.as_str().ok_or(())?;
+    Ok(sanitize_product_string_property(p, key, s)?.map(Value::String))
+}
+
+/// Port of TS `sanitizeProductEvent`: returns the safe property map, or
+/// `None` when the event must be dropped (unknown event name, unknown or
+/// sensitive key, wrong value type, or a sensitive/invalid string value).
+/// Blank strings are omitted; `null` is kept for any allowed key.
 pub fn sanitize_product_analytics_event(
     event_name: &str,
     properties: &BTreeMap<String, Value>,
@@ -1076,44 +1338,15 @@ pub fn sanitize_product_analytics_event(
     if !PRODUCT_ANALYTICS_EVENT_NAMES.contains(&event_name) {
         return None;
     }
-    let r = regexes();
+    let p = product_analytics_patterns()?;
     let mut out = Map::new();
     for (k, v) in properties {
-        if v.is_null() {
-            out.insert(k.clone(), Value::Null);
-            continue;
-        }
-        if r.secret_key.is_match(k) || r.body_key.is_match(k) {
+        // TS `sanitizePropertyKey`.
+        if !PRODUCT_ANALYTICS_PROPERTY_NAMES.contains(&k.as_str()) || p.sensitive_key.is_match(k) {
             return None;
         }
-        if PRODUCT_ANALYTICS_BOOL_PROPS.contains(&k.as_str()) {
-            let b = v.as_bool()?;
-            out.insert(k.clone(), Value::Bool(b));
-        } else if PRODUCT_ANALYTICS_NUMBER_PROPS.contains(&k.as_str()) {
-            let n = v.as_f64()?;
-            if !n.is_finite() {
-                return None;
-            }
-            let clamped = n.max(0.0).round() as u64;
-            out.insert(k.clone(), json!(clamped));
-        } else if PRODUCT_ANALYTICS_STRING_PROPS.contains(&k.as_str()) {
-            let s = v.as_str()?.trim();
-            if s.is_empty() {
-                continue;
-            }
-            // Reject any string value carrying credentials, emails, or filesystem paths.
-            if redact_sensitive_text(s) != s
-                || r.unix_local_path.is_match(s)
-                || r.win_local_path.is_match(s)
-                || s.starts_with('/')
-                || s.starts_with('~')
-            {
-                return None;
-            }
-            let limited = truncate_utf16_prefix(s, PRODUCT_ANALYTICS_MAX_STRING_LEN);
-            out.insert(k.clone(), Value::String(limited.to_owned()));
-        } else {
-            return None;
+        if let Some(safe) = sanitize_product_property_value(p, k, v).ok()? {
+            out.insert(k.clone(), safe);
         }
     }
     out.insert("$process_person_profile".to_owned(), Value::Bool(false));
@@ -1420,14 +1653,31 @@ impl ServerObservability {
 mod tests {
     use super::*;
 
-    fn model_props(model: &str) -> BTreeMap<String, Value> {
-        BTreeMap::from([("model".to_owned(), Value::String(model.to_owned()))])
+    /// Runs the sanitizer on a JSON object of properties and returns the
+    /// kept properties (minus the constant `$process_person_profile`), or
+    /// `None` when the event is dropped: the shape of the TS
+    /// `sanitizeProductEvent` result.
+    fn sanitize(event: &str, props: Value) -> Option<Value> {
+        let props: BTreeMap<String, Value> = props
+            .as_object()
+            .expect("props object")
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut out = sanitize_product_analytics_event(event, &props)?;
+        assert_eq!(
+            out.remove("$process_person_profile"),
+            Some(Value::Bool(false))
+        );
+        Some(Value::Object(out))
     }
 
-    fn sanitized_model(model: &str) -> String {
-        let out = sanitize_product_analytics_event("turn_started", &model_props(model))
-            .expect("model property should be accepted");
-        out["model"].as_str().expect("model is a string").to_owned()
+    fn one(key: &str, value: Value) -> Option<Value> {
+        sanitize("turn_completed", json!({ key: value }))
+    }
+
+    fn kept(key: &str, value: &str) -> Value {
+        json!({ key: value })
     }
 
     #[test]
@@ -1446,35 +1696,387 @@ mod tests {
         assert_eq!(utf16_len("a😀漢é"), 5);
     }
 
-    #[test]
-    fn product_analytics_model_with_multibyte_char_across_byte_120_does_not_panic() {
-        // 119 ASCII + `é` = 121 bytes but 120 UTF-16 units: kept intact (the old
-        // `&s[..120]` byte slice panicked here).
-        let model = format!("{}é", "a".repeat(119));
-        assert_eq!(sanitized_model(&model), model);
+    // Golden outputs below were produced by running the TS reference
+    // `__internal.sanitizeProductEvent` / `isSafeModelId` / `looksLikePath`
+    // (origin/main `src/telemetry/productAnalytics.ts`) under bun.
 
-        // 120 ASCII + `é`: the trailing char is past the 120-unit cap.
-        let model = format!("{}é", "a".repeat(120));
-        assert_eq!(sanitized_model(&model), "a".repeat(120));
+    #[test]
+    fn product_analytics_patterns_compile() {
+        assert!(product_analytics_patterns().is_some());
     }
 
     #[test]
-    fn product_analytics_emoji_at_the_limit_is_dropped_not_split() {
-        // The emoji would occupy UTF-16 units 120 and 121.
-        let model = format!("{}😀tail", "m".repeat(119));
-        assert_eq!(sanitized_model(&model), "m".repeat(119));
-
-        // Fits exactly when it ends at unit 120.
-        let model = format!("{}😀tail", "m".repeat(118));
-        assert_eq!(sanitized_model(&model), format!("{}😀", "m".repeat(118)));
+    fn product_analytics_event_and_key_allowlists() {
+        assert_eq!(sanitize("nope", json!({})), None);
+        assert_eq!(sanitize("turn_started", json!({})), Some(json!({})));
+        // Unknown keys drop the event, even with a `null` value.
+        assert_eq!(sanitize("turn_started", json!({ "bogus": null })), None);
+        assert_eq!(sanitize("turn_started", json!({ "bogus": 1 })), None);
+        // `null` is kept for any allowed key.
+        assert_eq!(
+            sanitize(
+                "turn_started",
+                json!({ "model": null, "status": null, "packaged": null })
+            ),
+            Some(json!({ "model": null, "status": null, "packaged": null }))
+        );
+        // `SENSITIVE_KEY_PATTERN` is applied to keys after the allowlist.
+        let p = product_analytics_patterns().expect("patterns");
+        // TS quirk kept for parity: `crashReportsEnabled` contains "repo", so
+        // it is the one allowlisted key that trips the pattern, and any event
+        // carrying it (even as `null`) is dropped.
+        for key in PRODUCT_ANALYTICS_PROPERTY_NAMES {
+            assert_eq!(
+                p.sensitive_key.is_match(key),
+                *key == "crashReportsEnabled",
+                "{key}"
+            );
+        }
+        assert_eq!(
+            sanitize("app_started", json!({ "crashReportsEnabled": true })),
+            None
+        );
+        assert_eq!(
+            sanitize("app_started", json!({ "crashReportsEnabled": null })),
+            None
+        );
+        for key in ["userPrompt", "FILE-NAME", "api_key", "hostName", "repoUrl"] {
+            assert!(p.sensitive_key.is_match(key), "{key}");
+        }
+        // Every bool/string key is allowlisted.
+        for key in PRODUCT_ANALYTICS_BOOL_PROPS
+            .iter()
+            .chain(PRODUCT_ANALYTICS_STRING_PROPS)
+        {
+            assert!(PRODUCT_ANALYTICS_PROPERTY_NAMES.contains(key), "{key}");
+        }
     }
 
     #[test]
-    fn product_analytics_cjk_is_capped_by_utf16_units_not_bytes() {
-        let model = "漢".repeat(130);
-        let out = sanitized_model(&model);
-        assert_eq!(out, "漢".repeat(120));
-        assert_eq!(utf16_len(&out), PRODUCT_ANALYTICS_MAX_STRING_LEN);
+    fn product_analytics_booleans_require_bool_values() {
+        assert_eq!(one("packaged", json!("true")), None);
+        assert_eq!(one("packaged", json!(1)), None);
+        assert_eq!(
+            sanitize(
+                "turn_started",
+                json!({ "packaged": true, "mcpEnabled": false })
+            ),
+            Some(json!({ "packaged": true, "mcpEnabled": false }))
+        );
+    }
+
+    #[test]
+    fn product_analytics_duration_is_rounded_and_clamped_to_seven_days() {
+        assert_eq!(
+            one("durationMs", json!(12.5)),
+            Some(json!({ "durationMs": 13 }))
+        );
+        assert_eq!(
+            one("durationMs", json!(12.4999)),
+            Some(json!({ "durationMs": 12 }))
+        );
+        assert_eq!(
+            one("durationMs", json!(-3)),
+            Some(json!({ "durationMs": 0 }))
+        );
+        assert_eq!(
+            one("durationMs", json!(1e12)),
+            Some(json!({ "durationMs": 604_800_000 }))
+        );
+        assert_eq!(
+            one("durationMs", json!(604_800_000)),
+            Some(json!({ "durationMs": 604_800_000 }))
+        );
+        assert_eq!(one("durationMs", json!("5")), None);
+        assert_eq!(
+            one("durationMs", json!(u64::MAX)),
+            Some(json!({ "durationMs": 604_800_000 }))
+        );
+        assert_eq!(
+            one("durationMs", json!(i64::MIN)),
+            Some(json!({ "durationMs": 0 }))
+        );
+    }
+
+    #[test]
+    fn product_analytics_counts_are_floored_and_clamped_to_one_million() {
+        assert_eq!(
+            one("toolCount", json!(3.9)),
+            Some(json!({ "toolCount": 3 }))
+        );
+        assert_eq!(
+            one("toolCount", json!(-1.5)),
+            Some(json!({ "toolCount": 0 }))
+        );
+        assert_eq!(
+            one("toolCount", json!(5e6)),
+            Some(json!({ "toolCount": 1_000_000 }))
+        );
+        assert_eq!(
+            one("toolCount", json!(1_000_000.7)),
+            Some(json!({ "toolCount": 1_000_000 }))
+        );
+        assert_eq!(one("toolCount", json!(true)), None);
+        assert_eq!(
+            sanitize(
+                "turn_completed",
+                json!({ "workspaceCount": 2, "threadCount": 0.2 })
+            ),
+            Some(json!({ "workspaceCount": 2, "threadCount": 0 }))
+        );
+    }
+
+    #[test]
+    fn product_analytics_strings_are_trimmed_like_js() {
+        assert_eq!(
+            one("status", json!("  completed  ")),
+            Some(kept("status", "completed"))
+        );
+        assert_eq!(
+            one("status", json!("ready\n")),
+            Some(kept("status", "ready"))
+        );
+        // Blank strings omit the property but keep the event.
+        assert_eq!(one("status", json!("   ")), Some(json!({})));
+        assert_eq!(one("status", json!("")), Some(json!({})));
+        // JS `trim` strips U+FEFF but not U+0085 (Rust `str::trim` is the reverse).
+        assert_eq!(
+            one("status", json!("\u{FEFF}ready\u{FEFF}")),
+            Some(kept("status", "ready"))
+        );
+        assert_eq!(one("status", json!("\u{0085}ready")), None);
+        assert_eq!(one("status", json!(5)), None);
+    }
+
+    #[test]
+    fn product_analytics_status_and_error_category_cap_at_64_units() {
+        let s64 = "s".repeat(64);
+        assert_eq!(one("status", json!(s64)), Some(kept("status", &s64)));
+        // Longer values are truncated to 64, then must match SAFE_SLUG_PATTERN.
+        assert_eq!(
+            one("status", json!("s".repeat(65))),
+            Some(kept("status", &s64))
+        );
+        assert_eq!(
+            one("status", json!("s".repeat(200))),
+            Some(kept("status", &s64))
+        );
+        assert_eq!(
+            one("errorCategory", json!("e".repeat(70))),
+            Some(kept("errorCategory", &"e".repeat(64)))
+        );
+        // A surrogate pair split by the JS slice leaves a lone surrogate that
+        // fails the pattern: the event is dropped, not shortened.
+        assert_eq!(one("status", json!(format!("{}😀", "s".repeat(63)))), None);
+        // An emoji wholly past the cut is just truncated away.
+        assert_eq!(
+            one("status", json!(format!("{s64}😀"))),
+            Some(kept("status", &s64))
+        );
+        // Sensitivity/path checks run on the untruncated value.
+        assert_eq!(one("status", json!(format!("{s64} /home/x"))), None);
+    }
+
+    #[test]
+    fn product_analytics_safe_slug_pattern() {
+        assert_eq!(
+            one("errorCategory", json!("rate_limit:429.x-y")),
+            Some(kept("errorCategory", "rate_limit:429.x-y"))
+        );
+        for bad in ["-leading", "has space", "a+b", "a@b", "café"] {
+            assert_eq!(one("errorCategory", json!(bad)), None, "{bad}");
+        }
+        assert_eq!(
+            one("provider", json!("openai")),
+            Some(kept("provider", "openai"))
+        );
+        assert_eq!(
+            one("status", json!("x.json")),
+            Some(kept("status", "x.json"))
+        );
+        assert_eq!(one("provider", json!("C:x")), Some(kept("provider", "C:x")));
+        // Non-status strings are cut at 128 but the slug allows only 64.
+        let p64 = "p".repeat(64);
+        assert_eq!(one("provider", json!(p64)), Some(kept("provider", &p64)));
+        assert_eq!(one("provider", json!("p".repeat(65))), None);
+        assert_eq!(one("provider", json!("p".repeat(129))), None);
+        assert_eq!(
+            sanitize(
+                "turn_completed",
+                json!({ "platform": "darwin", "arch": "arm64", "eventSource": "server" })
+            ),
+            Some(json!({ "platform": "darwin", "arch": "arm64", "eventSource": "server" }))
+        );
+        // Path-looking values are rejected before the slug check.
+        for bad in ["a/b.txt", "./x", "a\\b"] {
+            assert_eq!(one("provider", json!(bad)), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn product_analytics_safe_version_pattern_and_128_unit_cap() {
+        for ok in ["1.2.3", "1.2.3+build.5-beta:1"] {
+            assert_eq!(one("appVersion", json!(ok)), Some(kept("appVersion", ok)));
+        }
+        for bad in ["v1.2.3/x", ".1", "1.2.3 beta"] {
+            assert_eq!(one("appVersion", json!(bad)), None, "{bad}");
+        }
+        let v128 = "1".repeat(128);
+        assert_eq!(
+            one("appVersion", json!(v128)),
+            Some(kept("appVersion", &v128))
+        );
+        assert_eq!(
+            one("appVersion", json!("1".repeat(129))),
+            Some(kept("appVersion", &v128))
+        );
+        // Emoji straddling unit 128 is split by JS -> rejected.
+        assert_eq!(
+            one("appVersion", json!(format!("{}😀", "1".repeat(127)))),
+            None
+        );
+    }
+
+    #[test]
+    fn product_analytics_model_ids_use_safe_model_pattern() {
+        for ok in [
+            "moonshotai/Kimi-K2.5",
+            "anthropic/claude-sonnet-4@20250514",
+            "gpt 4o mini",
+            "openai/gpt-4.1+fast",
+            // The generic path-with-extension check does not apply to models.
+            "openai/gpt-4.1.json",
+            // `\b` after the directory keyword.
+            "m /homestead",
+            "m sk-aaaaaaaaaaaaaaa",
+            "ghx_aaaaaaaaaaaaaaaaaaaa",
+            "bearer  aaaaaaaaaaa",
+        ] {
+            assert_eq!(one("model", json!(ok)), Some(kept("model", ok)), "{ok}");
+        }
+        let m128 = "m".repeat(128);
+        assert_eq!(one("model", json!(m128)), Some(kept("model", &m128)));
+        assert_eq!(
+            one("model", json!(format!("  {m128}  "))),
+            Some(kept("model", &m128))
+        );
+        // Over 128 units drops the event (not truncated).
+        assert_eq!(one("model", json!("m".repeat(129))), None);
+        for bad in [
+            "a..b",
+            ".hidden",
+            "~/models/x",
+            "m /home/me/model",
+            "m /HOME/me",
+            "m C:/models",
+            "m ./x",
+            "/home/me/x",
+            "file://x",
+            "m https://x",
+            "m HTTPS://x",
+            "x@y.io",
+            "user@example.com",
+            "kimi-k2é",
+            "漢漢漢漢漢漢漢漢漢漢",
+        ] {
+            assert_eq!(one("model", json!(bad)), None, "{bad}");
+        }
+        let p = product_analytics_patterns().expect("patterns");
+        for (value, safe) in [
+            ("a b", true),
+            ("a\\b", false),
+            ("a/b", true),
+            ("a//b", true),
+            ("a:b", true),
+            ("x://y", false),
+        ] {
+            assert_eq!(p.is_safe_model_id(value), safe, "{value}");
+        }
+    }
+
+    #[test]
+    fn product_analytics_sensitive_values_drop_the_event() {
+        for bad in [
+            format!("m sk-{}", "a".repeat(16)),
+            format!("SK-{}", "a".repeat(16)),
+            format!("ghp_{}", "a".repeat(20)),
+            format!("xoxb-{}", "a".repeat(16)),
+            format!("Bearer {}", "a".repeat(12)),
+            format!("bearer\u{3000}{}", "a".repeat(12)),
+        ] {
+            assert_eq!(one("model", json!(bad)), None, "{bad}");
+        }
+        let p = product_analytics_patterns().expect("patterns");
+        // ASCII-only `i`: the long s / Kelvin sign do not case-fold to ASCII.
+        assert!(!p.secret_value.is_match(&format!("ſk-{}", "a".repeat(16))));
+        // JS `\s` covers U+3000 but not U+0085.
+        assert!(
+            p.secret_value
+                .is_match(&format!("bearer\u{3000}{}", "a".repeat(12)))
+        );
+        assert!(
+            !p.secret_value
+                .is_match(&format!("Bearer\u{0085}{}", "a".repeat(12)))
+        );
+        assert!(!p.email.is_match("a@b.\u{212A}\u{212A}"));
+    }
+
+    #[test]
+    fn product_analytics_looks_like_path_matches_ts() {
+        let p = product_analytics_patterns().expect("patterns");
+        for (value, expected) in [
+            ("a/b.txt", true),
+            ("a/b", false),
+            ("src/x.rs", true),
+            ("x .\\y", true),
+            ("\\\\server\\share", true),
+            ("D:\\x", true),
+            ("'/etc/passwd", true),
+            ("q\"/var", true),
+            ("/varnish", false),
+            ("v1.2/x.y", true),
+            // JS `\w` is ASCII: `é` breaks the leading segment.
+            ("word café/x.y", false),
+            // ...and counts as a non-word char for `\b`.
+            ("a/b.cé", true),
+        ] {
+            assert_eq!(p.looks_like_path(value), expected, "{value}");
+        }
+    }
+
+    #[test]
+    fn product_analytics_full_event_passes_through() {
+        let props = json!({
+            "provider": "openai", "model": "gpt-4o", "status": "completed",
+            "durationMs": 10, "toolCount": 2, "packaged": true, "appVersion": "1.0.0",
+            "platform": "linux", "arch": "x64", "eventSource": "server"
+        });
+        assert_eq!(sanitize("turn_completed", props.clone()), Some(props));
+        // One bad property drops the whole event.
+        assert_eq!(
+            sanitize(
+                "turn_completed",
+                json!({ "provider": "openai", "model": "/home/me/x" })
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn product_analytics_never_panics_on_awkward_strings() {
+        let inputs = [
+            "😀".repeat(100),
+            "漢".repeat(200),
+            format!("{}é", "a".repeat(127)),
+            format!("{}é", "a".repeat(63)),
+            "\u{FEFF}".repeat(10),
+            "\0".to_owned(),
+        ];
+        for key in PRODUCT_ANALYTICS_STRING_PROPS {
+            for input in &inputs {
+                let _ = one(key, json!(input));
+            }
+        }
     }
 
     #[test]

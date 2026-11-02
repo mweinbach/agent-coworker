@@ -232,6 +232,7 @@ fn layered_system_prompt_assembles_agents_claude_workspace_map_skills_and_mentio
         referenced_plugins: mentions.referenced_plugins,
         deferred_tool_search_enabled: true,
         code_mode_enabled: false,
+        template_context: Default::default(),
     });
 
     assert!(prompt.contains("Always follow AGENTS instructions."));
@@ -289,7 +290,8 @@ fn idempotency_ledger_and_multimodal_attachments_stage_and_rollback_cleanly() {
         }),
     ]);
     let extracted = input.extract_payload().unwrap();
-    let materialized = materialize_turn_attachments(&extracted, &uploads, &ws).unwrap();
+    let materialized =
+        materialize_turn_attachments(&extracted, &uploads, &ws, ProviderName::Openai).unwrap();
     assert_eq!(materialized.staged_files.len(), 1);
     assert!(materialized.staged_files[0].exists());
     assert!(materialized.staged_files[0].starts_with(uploads.join("User Uploads")));

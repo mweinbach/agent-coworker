@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cowork_config::ProviderName;
 use cowork_inference::{ContentBlock, MediaKind, MediaSource, ProviderOpaqueMeta};
 use cowork_protocol::{ExtractedTurnInput, TurnAttachmentInputPart};
 use data_encoding::{BASE64, BASE64_NOPAD};
@@ -278,7 +279,14 @@ fn decode_strict_base64(raw: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Invalid base64 file attachment: {e}"))
 }
 
-fn classify_media_kind(mime_type: &str, filename: &str) -> Option<(MediaKind, String)> {
+/// Classifies an attachment into a model media block, or `None` when it is only referenced by
+/// its saved path. Audio and video are attached only for Google, whose transport carries both
+/// media kinds (`googleMultimodalPartTypeForMime` parity); other providers get the path note.
+fn classify_media_kind(
+    mime_type: &str,
+    filename: &str,
+    provider: ProviderName,
+) -> Option<(MediaKind, String)> {
     let lower_mime = mime_type.trim().to_ascii_lowercase();
     if matches!(
         lower_mime.as_str(),
@@ -289,19 +297,55 @@ fn classify_media_kind(mime_type: &str, filename: &str) -> Option<(MediaKind, St
     if lower_mime == "application/pdf" {
         return Some((MediaKind::Document, lower_mime));
     }
+    let google = provider == ProviderName::Google;
+    if google && lower_mime.starts_with("audio/") {
+        return Some((MediaKind::Audio, lower_mime));
+    }
+    if google && lower_mime.starts_with("video/") {
+        return Some((MediaKind::Video, lower_mime));
+    }
 
     let ext = Path::new(filename)
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    match ext.as_str() {
-        "png" => Some((MediaKind::Image, "image/png".to_owned())),
-        "jpg" | "jpeg" => Some((MediaKind::Image, "image/jpeg".to_owned())),
-        "gif" => Some((MediaKind::Image, "image/gif".to_owned())),
-        "webp" => Some((MediaKind::Image, "image/webp".to_owned())),
-        "pdf" => Some((MediaKind::Document, "application/pdf".to_owned())),
-        _ => None,
+    let (kind, mime) = match ext.as_str() {
+        "png" => (MediaKind::Image, "image/png"),
+        "jpg" | "jpeg" => (MediaKind::Image, "image/jpeg"),
+        "gif" => (MediaKind::Image, "image/gif"),
+        "webp" => (MediaKind::Image, "image/webp"),
+        "pdf" => (MediaKind::Document, "application/pdf"),
+        // `mimeTypeFromPath` audio/video extensions.
+        "mp3" => (MediaKind::Audio, "audio/mpeg"),
+        "wav" => (MediaKind::Audio, "audio/wav"),
+        "ogg" => (MediaKind::Audio, "audio/ogg"),
+        "m4a" => (MediaKind::Audio, "audio/mp4"),
+        "aac" => (MediaKind::Audio, "audio/aac"),
+        "flac" => (MediaKind::Audio, "audio/flac"),
+        "mp4" => (MediaKind::Video, "video/mp4"),
+        "webm" => (MediaKind::Video, "video/webm"),
+        "mov" => (MediaKind::Video, "video/quicktime"),
+        "avi" => (MediaKind::Video, "video/x-msvideo"),
+        "mkv" => (MediaKind::Video, "video/x-matroska"),
+        _ => return None,
+    };
+    if matches!(kind, MediaKind::Audio | MediaKind::Video) && !google {
+        return None;
     }
+    Some((kind, mime.to_owned()))
+}
+
+/// `buildOversizedUploadedAudioHint` parity: an uploaded audio file above the model attachment
+/// limit is referenced by path only, with guidance not to `read` it.
+fn oversized_uploaded_audio_hint(disk_path: &Path) -> String {
+    format!(
+        "[System: The user uploaded an audio file which has been copied to {}. \
+         It is larger than the 25MB model attachment limit, so it is not attached as audio content. \
+         Do not call read on this uploaded audio path because read will not return audio bytes. \
+         Use a dedicated transcription workflow or local audio tooling if transcription is needed, \
+         and write any large requested output file in the workspace.]",
+        disk_path.display()
+    )
 }
 
 fn uploaded_outside_error(path: &Path) -> String {
@@ -545,10 +589,13 @@ fn open_uploaded_file(
     Ok((resolved, file, fstat.len()))
 }
 
+/// Stages inline attachments and resolves `uploadedFile` references into the user message.
+/// `provider` selects which media kinds are attached as content (audio/video: Google only).
 pub fn materialize_turn_attachments(
     extracted: &ExtractedTurnInput,
     uploads_directory: &Path,
     working_directory: &Path,
+    provider: ProviderName,
 ) -> Result<MaterializedTurnInput, String> {
     let mut staged_files = Vec::<PathBuf>::new();
     let mut content_blocks = Vec::<ContentBlock>::new();
@@ -587,7 +634,8 @@ pub fn materialize_turn_attachments(
                     } else {
                         mime_type.as_str()
                     };
-                    if let Some((kind, canonical_mime)) = classify_media_kind(mime_str, &safe_name)
+                    if let Some((kind, canonical_mime)) =
+                        classify_media_kind(mime_str, &safe_name, provider)
                     {
                         content_blocks.push(ContentBlock::Media {
                             kind,
@@ -599,11 +647,7 @@ pub fn materialize_turn_attachments(
                         });
                         file_notes.push(format!(
                             "[Attached {}: {} ({}, {} bytes)]",
-                            if kind == MediaKind::Image {
-                                "image"
-                            } else {
-                                "document"
-                            },
+                            kind.as_wire_str(),
                             dest.display(),
                             canonical_mime,
                             bytes.len()
@@ -629,12 +673,6 @@ pub fn materialize_turn_attachments(
                     let roots = upload_roots.as_deref().unwrap_or_default();
                     let (resolved, mut file, len) =
                         open_uploaded_file(roots, uploads_directory, path)?;
-                    if len > MAX_ATTACHMENT_BYTES as u64 {
-                        return Err(format!(
-                            "Uploaded file '{}' exceeds 25 MiB limit ({len} bytes).",
-                            resolved.display()
-                        ));
-                    }
                     let name_hint = if !filename.trim().is_empty() {
                         filename.as_str()
                     } else {
@@ -648,7 +686,22 @@ pub fn materialize_turn_attachments(
                     } else {
                         mime_type.as_str()
                     };
-                    if let Some((kind, canonical_mime)) = classify_media_kind(mime_str, name_hint) {
+                    let media = classify_media_kind(mime_str, name_hint, provider);
+                    let oversized = len > MAX_ATTACHMENT_BYTES as u64;
+                    // Only bytes sent to the model are size-limited; other uploads are path-only.
+                    let is_audio = mime_str.trim().to_ascii_lowercase().starts_with("audio/")
+                        || matches!(media, Some((MediaKind::Audio, _)));
+                    if oversized && is_audio {
+                        file_notes.push(oversized_uploaded_audio_hint(&resolved));
+                        continue;
+                    }
+                    if oversized && media.is_some() {
+                        return Err(format!(
+                            "Uploaded file '{}' exceeds 25 MiB limit ({len} bytes).",
+                            resolved.display()
+                        ));
+                    }
+                    if let Some((kind, canonical_mime)) = media {
                         // Read from the confined handle, never by path again.
                         let mut bytes = Vec::with_capacity(len as usize);
                         std::io::Read::read_to_end(
@@ -667,7 +720,7 @@ pub fn materialize_turn_attachments(
                         content_blocks.push(ContentBlock::Media {
                             kind,
                             source: MediaSource::Base64 {
-                                mime_type: canonical_mime.clone(),
+                                mime_type: canonical_mime,
                                 data: BASE64.encode(&bytes),
                             },
                             provider_meta: ProviderOpaqueMeta::default(),

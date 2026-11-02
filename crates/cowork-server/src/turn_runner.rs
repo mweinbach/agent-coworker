@@ -1403,8 +1403,9 @@ impl ServerRuntimeState {
         // Materialize attachments before committing idempotency so invalid base64 / missing files roll back cleanly!
         let canonical_cwd = canonicalize_sync(&cwd_path);
         let (output_dir, uploads_dir) = workspace_io_dirs(workspace_cfg.as_ref(), &canonical_cwd);
-        let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
-            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let materialized =
+            materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd, provider)
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
 
         // Imported / pre-journal threads: record the stored prefix before this turn journals.
         self.ensure_journal_seed_marker(&live_arc).await;
@@ -2623,13 +2624,14 @@ impl ServerRuntimeState {
 
         // Materialize attachments exactly like `turn/start` so the steered user message carries
         // the same media blocks and upload notes.
-        let Some((cwd, session_output_dir, session_uploads_dir)) =
+        let Some((cwd, session_output_dir, session_uploads_dir, provider)) =
             self.get_live_thread(&params.thread_id).map(|live| {
                 let live = live.lock();
                 (
                     PathBuf::from(&live.cwd),
                     live.output_directory.clone(),
                     live.uploads_directory.clone(),
+                    live.provider,
                 )
             })
         else {
@@ -2651,8 +2653,9 @@ impl ServerRuntimeState {
                 cfg
             });
         let (_, uploads_dir) = workspace_io_dirs(steer_cfg.as_ref(), &canonical_cwd);
-        let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
-            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let materialized =
+            materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd, provider)
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let dedupe_key = match &references_key {
             Some(refs) => {
                 serde_json::to_string(&(&extracted.text, &extracted.attachments, refs)).ok()

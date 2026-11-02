@@ -2,12 +2,16 @@
 //! the uploads directory (`userMessageAttachments.ts` `resolveUploadedAttachmentPath` parity).
 //! Workspace files outside it, a symlink inside it, and a path through a symlinked directory
 //! that lands outside it are refused before any bytes reach the provider request.
+//!
+//! Also covers provider-aware media classification (`googleMultimodalPartTypeForMime` parity):
+//! audio/video attach as media only for Google, and an oversized upload is path-only.
 
 use std::fs;
 use std::path::Path;
 
+use cowork_config::ProviderName;
 use cowork_harness::materialize_turn_attachments;
-use cowork_inference::{ContentBlock, MediaSource};
+use cowork_inference::{ContentBlock, MediaKind, MediaSource};
 use cowork_protocol::{ExtractedTurnInput, TurnInput};
 use serde_json::json;
 
@@ -66,7 +70,7 @@ fn fixture() -> Fixture {
 }
 
 fn assert_refused(input: &ExtractedTurnInput, f: &Fixture) {
-    let err = materialize_turn_attachments(input, &f.uploads, &f.ws)
+    let err = materialize_turn_attachments(input, &f.uploads, &f.ws, ProviderName::Openai)
         .expect_err("uploadedFile outside the uploads directory must be refused");
     assert!(
         err.contains("outside the uploads directory") || err.contains("symbolic link"),
@@ -80,7 +84,13 @@ fn genuine_upload_is_attached() {
     let file = f.uploads.join("abc-image.png");
     fs::write(&file, SECRET).unwrap();
 
-    let m = materialize_turn_attachments(&uploaded(&file, "image/png"), &f.uploads, &f.ws).unwrap();
+    let m = materialize_turn_attachments(
+        &uploaded(&file, "image/png"),
+        &f.uploads,
+        &f.ws,
+        ProviderName::Openai,
+    )
+    .unwrap();
     assert_eq!(media_bytes(&m.content_blocks), vec![SECRET.to_vec()]);
     assert!(m.display_text.contains("abc-image.png"));
 
@@ -88,7 +98,13 @@ fn genuine_upload_is_attached() {
     fs::create_dir_all(f.uploads.join("User Uploads")).unwrap();
     fs::write(f.uploads.join("User Uploads/x.png"), SECRET).unwrap();
     let rel = Path::new("User Uploads/x.png");
-    let m = materialize_turn_attachments(&uploaded(rel, "image/png"), &f.uploads, &f.ws).unwrap();
+    let m = materialize_turn_attachments(
+        &uploaded(rel, "image/png"),
+        &f.uploads,
+        &f.ws,
+        ProviderName::Openai,
+    )
+    .unwrap();
     assert_eq!(media_bytes(&m.content_blocks), vec![SECRET.to_vec()]);
 }
 
@@ -101,6 +117,7 @@ fn non_media_upload_is_noted_without_reading_bytes() {
         &uploaded_named(&file, "notes.txt", "text/plain"),
         &f.uploads,
         &f.ws,
+        ProviderName::Openai,
     )
     .unwrap();
     assert!(media_bytes(&m.content_blocks).is_empty());
@@ -131,8 +148,13 @@ fn uploads_directory_equal_to_workspace_does_not_expose_workspace() {
     let f = fixture();
     let secret = f.ws.join("secret.png");
     fs::write(&secret, SECRET).unwrap();
-    let err = materialize_turn_attachments(&uploaded(&secret, "image/png"), &f.ws, &f.ws)
-        .expect_err("workspace file must not count as an upload");
+    let err = materialize_turn_attachments(
+        &uploaded(&secret, "image/png"),
+        &f.ws,
+        &f.ws,
+        ProviderName::Openai,
+    )
+    .expect_err("workspace file must not count as an upload");
     assert!(err.contains("outside the uploads directory"), "{err}");
 
     // Inline attachments staged under `<ws>/User Uploads/` and the upload route's
@@ -140,10 +162,22 @@ fn uploads_directory_equal_to_workspace_does_not_expose_workspace() {
     fs::create_dir_all(f.ws.join("User Uploads")).unwrap();
     let staged = f.ws.join("User Uploads/a.png");
     fs::write(&staged, SECRET).unwrap();
-    materialize_turn_attachments(&uploaded(&staged, "image/png"), &f.ws, &f.ws).unwrap();
+    materialize_turn_attachments(
+        &uploaded(&staged, "image/png"),
+        &f.ws,
+        &f.ws,
+        ProviderName::Openai,
+    )
+    .unwrap();
     let routed = f.uploads.join("b.png");
     fs::write(&routed, SECRET).unwrap();
-    materialize_turn_attachments(&uploaded(&routed, "image/png"), &f.ws, &f.ws).unwrap();
+    materialize_turn_attachments(
+        &uploaded(&routed, "image/png"),
+        &f.ws,
+        &f.ws,
+        ProviderName::Openai,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -157,14 +191,25 @@ fn configured_uploads_dir_and_upload_route_dir_are_both_accepted() {
     let b = f.uploads.join("b.png");
     fs::write(&b, SECRET).unwrap();
     for p in [&a, &b] {
-        let m =
-            materialize_turn_attachments(&uploaded(p, "image/png"), &configured, &f.ws).unwrap();
+        let m = materialize_turn_attachments(
+            &uploaded(p, "image/png"),
+            &configured,
+            &f.ws,
+            ProviderName::Openai,
+        )
+        .unwrap();
         assert_eq!(media_bytes(&m.content_blocks), vec![SECRET.to_vec()]);
     }
     let secret = f.ws.join("secret.png");
     fs::write(&secret, SECRET).unwrap();
     assert!(
-        materialize_turn_attachments(&uploaded(&secret, "image/png"), &configured, &f.ws).is_err()
+        materialize_turn_attachments(
+            &uploaded(&secret, "image/png"),
+            &configured,
+            &f.ws,
+            ProviderName::Openai
+        )
+        .is_err()
     );
 }
 
@@ -176,7 +221,8 @@ fn directory_or_missing_upload_is_refused() {
         materialize_turn_attachments(
             &uploaded(&f.uploads.join("dir.png"), "image/png"),
             &f.uploads,
-            &f.ws
+            &f.ws,
+            ProviderName::Openai
         )
         .is_err()
     );
@@ -184,7 +230,8 @@ fn directory_or_missing_upload_is_refused() {
         materialize_turn_attachments(
             &uploaded(&f.uploads.join("missing.png"), "image/png"),
             &f.uploads,
-            &f.ws
+            &f.ws,
+            ProviderName::Openai
         )
         .is_err()
     );
@@ -247,7 +294,8 @@ fn symlinked_uploads_directory_is_refused() {
         materialize_turn_attachments(
             &uploaded(&uploads.join("secret.png"), "image/png"),
             &uploads,
-            &ws
+            &ws,
+            ProviderName::Openai
         )
         .is_err()
     );
@@ -262,6 +310,184 @@ fn fifo_in_uploads_is_refused_without_blocking() {
     // SAFETY: valid NUL-terminated path.
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
     assert!(
-        materialize_turn_attachments(&uploaded(&fifo, "image/png"), &f.uploads, &f.ws).is_err()
+        materialize_turn_attachments(
+            &uploaded(&fifo, "image/png"),
+            &f.uploads,
+            &f.ws,
+            ProviderName::Openai
+        )
+        .is_err()
     );
+}
+
+const AUDIO: &[u8] = b"ID3\x04\x00fake-mp3-bytes";
+const VIDEO: &[u8] = b"\x00\x00\x00\x18ftypmp42fake-mp4-bytes";
+
+fn inline(filename: &str, mime: &str, bytes: &[u8]) -> ExtractedTurnInput {
+    TurnInput::Parts(vec![
+        json!({ "type": "text", "text": "transcribe this" }),
+        json!({
+            "type": "file",
+            "filename": filename,
+            "mimeType": mime,
+            "contentBase64": data_encoding::BASE64.encode(bytes),
+        }),
+    ])
+    .extract_payload()
+    .unwrap()
+}
+
+fn media(blocks: &[ContentBlock]) -> Vec<(MediaKind, String, Vec<u8>)> {
+    blocks
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Media {
+                kind,
+                source: MediaSource::Base64 { mime_type, data },
+                ..
+            } => Some((
+                *kind,
+                mime_type.clone(),
+                data_encoding::BASE64.decode(data.as_bytes()).unwrap(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn google_attaches_inline_and_uploaded_audio_and_video() {
+    let f = fixture();
+    for (name, mime, bytes, kind) in [
+        ("clip.mp3", "audio/mpeg", AUDIO, MediaKind::Audio),
+        ("clip.mp4", "video/mp4", VIDEO, MediaKind::Video),
+    ] {
+        let m = materialize_turn_attachments(
+            &inline(name, mime, bytes),
+            &f.uploads,
+            &f.ws,
+            ProviderName::Google,
+        )
+        .unwrap();
+        assert_eq!(
+            media(&m.content_blocks),
+            vec![(kind, mime.to_owned(), bytes.to_vec())]
+        );
+
+        let file = f.uploads.join(format!("up-{name}"));
+        fs::write(&file, bytes).unwrap();
+        let m = materialize_turn_attachments(
+            &uploaded_named(&file, name, mime),
+            &f.uploads,
+            &f.ws,
+            ProviderName::Google,
+        )
+        .unwrap();
+        assert_eq!(
+            media(&m.content_blocks),
+            vec![(kind, mime.to_owned(), bytes.to_vec())]
+        );
+    }
+}
+
+#[test]
+fn non_google_audio_and_video_stay_path_notes() {
+    let f = fixture();
+    for provider in [ProviderName::Openai, ProviderName::Anthropic] {
+        for (name, mime, bytes) in [
+            ("clip.mp3", "audio/mpeg", AUDIO),
+            ("clip.mp4", "video/mp4", VIDEO),
+        ] {
+            let m = materialize_turn_attachments(
+                &inline(name, mime, bytes),
+                &f.uploads,
+                &f.ws,
+                provider,
+            )
+            .unwrap();
+            assert!(media(&m.content_blocks).is_empty());
+            assert!(
+                m.display_text.contains("[Attached file saved to: ")
+                    && m.display_text.contains(mime),
+                "{}",
+                m.display_text
+            );
+
+            let file = f.uploads.join(format!("up-{name}"));
+            fs::write(&file, bytes).unwrap();
+            let m = materialize_turn_attachments(
+                &uploaded_named(&file, name, mime),
+                &f.uploads,
+                &f.ws,
+                provider,
+            )
+            .unwrap();
+            assert!(media(&m.content_blocks).is_empty());
+            assert!(
+                m.display_text.contains(&format!(
+                    "[Attached uploaded file: {} ({mime}, {} bytes)]",
+                    file.display(),
+                    bytes.len()
+                )),
+                "{}",
+                m.display_text
+            );
+        }
+    }
+}
+
+#[test]
+fn oversized_uploads_are_path_only_except_attachable_video() {
+    let f = fixture();
+    let big = |name: &str| {
+        let p = f.uploads.join(name);
+        fs::File::create(&p)
+            .unwrap()
+            .set_len(25 * 1024 * 1024 + 1)
+            .unwrap();
+        p
+    };
+    let audio = big("long.mp3");
+    let video = big("long.mp4");
+
+    // Oversized audio is referenced by path with the no-`read` hint, for every provider.
+    for provider in [ProviderName::Google, ProviderName::Openai] {
+        let m = materialize_turn_attachments(
+            &uploaded_named(&audio, "long.mp3", "audio/mpeg"),
+            &f.uploads,
+            &f.ws,
+            provider,
+        )
+        .unwrap();
+        assert!(media(&m.content_blocks).is_empty());
+        assert!(
+            m.display_text.contains(&format!(
+                "uploaded an audio file which has been copied to {}",
+                audio.display()
+            )) && m
+                .display_text
+                .contains("larger than the 25MB model attachment limit"),
+            "{}",
+            m.display_text
+        );
+    }
+
+    // Video the model cannot receive is just a path note; video Google would receive is refused.
+    let m = materialize_turn_attachments(
+        &uploaded_named(&video, "long.mp4", "video/mp4"),
+        &f.uploads,
+        &f.ws,
+        ProviderName::Openai,
+    )
+    .unwrap();
+    assert!(media(&m.content_blocks).is_empty());
+    assert!(m.display_text.contains("[Attached uploaded file: "));
+    let err = materialize_turn_attachments(
+        &uploaded_named(&video, "long.mp4", "video/mp4"),
+        &f.uploads,
+        &f.ws,
+        ProviderName::Google,
+    )
+    .expect_err("oversized Google video must be refused");
+    assert!(err.contains("exceeds 25 MiB limit"), "{err}");
 }

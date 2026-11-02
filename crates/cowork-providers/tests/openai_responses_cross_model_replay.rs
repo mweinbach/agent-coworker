@@ -400,3 +400,102 @@ async fn response_failed_without_details_uses_default_message() {
     assert_eq!(err.message, "OpenAI response failed.");
     assert!(err.code.is_none());
 }
+
+/// Assistant turn holding a single tool call with a caller-chosen composite id.
+fn assistant_tool_call(provider: &str, model: &str, tool_id: &str) -> CanonicalMessage {
+    let mut args = Map::new();
+    args.insert("cmd".to_string(), json!("pwd"));
+    CanonicalMessage {
+        id: "a1".to_string(),
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::ToolCall {
+            id: tool_id.to_string(),
+            name: "bash".to_string(),
+            arguments: args,
+            partial_json: None,
+            provider_meta: ProviderOpaqueMeta::default(),
+        }],
+        phase: None,
+        provider: Some(provider.to_string()),
+        api: Some("openai-responses".to_string()),
+        model: Some(model.to_string()),
+        stop_reason: Some(StopReason::ToolUse),
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: "2026-11-01T00:00:01Z".to_string(),
+    }
+}
+
+fn tool_result_for(tool_id: &str) -> CanonicalMessage {
+    let mut msg = tool_result();
+    if let Some(ContentBlock::ToolResult { tool_call_id, .. }) = msg.content.first_mut() {
+        *tool_call_id = tool_id.to_string();
+    }
+    msg
+}
+
+/// Replays `assistant_tool_call` + its result and returns the `function_call` and
+/// `function_call_output` items, asserting no synthetic orphan output was emitted.
+async fn replay_tool_pair(provider: &str, model: &str, tool_id: &str) -> (Value, Value) {
+    let (result, requests) = run_step(
+        completed_reply(),
+        "gpt-5.5",
+        vec![
+            user("u1", "pwd?"),
+            assistant_tool_call(provider, model, tool_id),
+            tool_result_for(tool_id),
+            user("u2", "again"),
+        ],
+    )
+    .await;
+    result.expect("mock Responses request succeeds");
+    let body = requests.into_iter().next().unwrap();
+    let input = body["input"].as_array().unwrap().clone();
+    assert!(
+        !body.to_string().contains("No result provided"),
+        "{tool_id}: real result must satisfy the normalized call: {input:#?}"
+    );
+    let calls: Vec<&Value> = input
+        .iter()
+        .filter(|item| item["type"] == "function_call")
+        .collect();
+    let outputs: Vec<&Value> = input
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .collect();
+    assert_eq!(calls.len(), 1, "{input:#?}");
+    assert_eq!(outputs.len(), 1, "{input:#?}");
+    assert_eq!(outputs[0]["output"], "/tmp");
+    (calls[0].clone(), outputs[0].clone())
+}
+
+#[tokio::test]
+async fn cross_model_normalized_tool_call_id_is_applied_to_its_result() {
+    // Trailing `_` on the call part is trimmed by cross-model normalization; the result must
+    // follow the same normalized id instead of keeping `call_abc_`.
+    let (call, output) = replay_tool_pair("openai", "gpt-5.4", "call_abc_|fc_abc").await;
+    assert_eq!(call["call_id"], "call_abc");
+    assert!(call.get("id").is_none(), "fc_ item id stripped cross-model");
+    assert_eq!(output["call_id"], "call_abc");
+}
+
+#[tokio::test]
+async fn sanitized_and_truncated_tool_call_id_is_applied_to_its_result() {
+    // Foreign-provider history: invalid characters become `_`, the call part is truncated to
+    // 64 chars (then trailing `_` trimmed), and the item part gains an `fc_` prefix.
+    let long_call = format!("call.{}", "x".repeat(70));
+    let raw_id = format!("{long_call}|item:1");
+    let (call, output) = replay_tool_pair("azure", "gpt-5.5", &raw_id).await;
+    let expected_call = format!("call_{}", "x".repeat(59));
+    assert_eq!(expected_call.len(), 64);
+    assert_eq!(call["call_id"], expected_call.as_str());
+    assert_eq!(call["id"], "fc_item_1");
+    assert_eq!(output["call_id"], expected_call.as_str());
+}
+
+#[tokio::test]
+async fn same_model_tool_call_id_is_replayed_verbatim_for_call_and_result() {
+    let (call, output) = replay_tool_pair("openai", "gpt-5.5", "call_abc_|fc_abc").await;
+    assert_eq!(call["call_id"], "call_abc_");
+    assert_eq!(call["id"], "fc_abc");
+    assert_eq!(output["call_id"], "call_abc_");
+}

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -589,6 +589,9 @@ fn convert_messages_to_responses_input(
     let mut items = Vec::new();
     let mut pending_calls: Vec<(String, String)> = Vec::new(); // (call_id, tool_name)
     let mut satisfied_call_ids = std::collections::HashSet::new();
+    // `transformMessages` parity: original -> normalized composite tool-call ids for assistant
+    // calls rewritten on cross-model replay, so matching tool results reference the same id.
+    let mut tool_call_id_map: HashMap<String, String> = HashMap::new();
 
     let flush_orphaned_calls =
         |items: &mut Vec<Value>,
@@ -764,6 +767,9 @@ fn convert_messages_to_responses_input(
                             } else {
                                 sanitize_openai_composite_tool_id(id)
                             };
+                            if normalized != *id {
+                                tool_call_id_map.insert(id.clone(), normalized.clone());
+                            }
                             let (call_id, item_id_opt) = split_openai_tool_call_id(&normalized);
                             let item_id = match item_id_opt {
                                 Some(it) if is_different_model && it.starts_with("fc_") => None,
@@ -802,7 +808,10 @@ fn convert_messages_to_responses_input(
                         ..
                     } = block
                     {
-                        let (call_id, _) = split_openai_tool_call_id(tool_call_id);
+                        let resolved_id = tool_call_id_map
+                            .get(tool_call_id)
+                            .map_or(tool_call_id.as_str(), String::as_str);
+                        let (call_id, _) = split_openai_tool_call_id(resolved_id);
                         satisfied_call_ids.insert(call_id.to_string());
 
                         let mut texts = Vec::new();

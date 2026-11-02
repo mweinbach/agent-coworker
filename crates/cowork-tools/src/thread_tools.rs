@@ -76,7 +76,7 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "create_thread",
-                desc: "Create a new Cowork thread in a local directory or isolated git worktree, start the prompt in the background, and return the new thread summary.",
+                desc: "Create a new Cowork thread in a known project workspace or managed one-off chat (cwd defaults to the server workspace), optionally in an isolated git worktree of it, start the prompt in the background, and return the new thread summary.",
                 schema: json!({
                     "type": "object",
                     "properties": {

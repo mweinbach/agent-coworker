@@ -1703,6 +1703,10 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .and_then(Value::as_str)
             .map(str::to_owned);
 
+        // TS `resolveCreateTarget` only targets a known project or a managed one-off chat; the
+        // resolver canonicalizes `cwd` and rejects anything else before a worktree or thread
+        // is created, so a model cannot open a thread (and its file tools) on an arbitrary
+        // directory. The worktree base is that authorized workspace.
         let base_cwd = self
             .runtime
             .resolve_workspace_path(raw_cwd, "create_thread")?;
@@ -1722,6 +1726,15 @@ impl ThreadControlBridge for ServerThreadControlBridge {
         } else {
             base_cwd
         };
+        // Re-check the canonical target right before the thread starts on it: the managed
+        // worktree path, or the workspace whose links may have changed since validation.
+        let target_cwd = canonicalize_sync(&target_cwd);
+        if !target_cwd.is_dir() || !self.runtime.is_create_thread_workspace(&target_cwd) {
+            return Err(
+                "create_thread cwd must match a registered project workspace or a managed one-off chat"
+                    .to_owned(),
+            );
+        }
 
         // TS `createThread` parses the model against the target workspace's provider
         // (`parseThreadModelSelection`): an explicit `provider:modelId` ref overrides the

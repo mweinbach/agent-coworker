@@ -943,7 +943,45 @@ impl ServerRuntimeState {
             ));
         }
 
+        if method == "create_thread" {
+            if self.is_create_thread_workspace(&canonical) {
+                return Ok(canonical);
+            }
+            return Err(format!(
+                "{method} cwd must match a registered project workspace or a managed one-off chat"
+            ));
+        }
+
         Ok(canonical)
+    }
+
+    /// Whether a canonical directory is a target for the model-callable `create_thread` tool
+    /// (TS `LocalThreadHost.resolveCreateTarget` parity: a known `project` workspace or a
+    /// managed one-off chat). Accepted: the server workspace, a desktop-registered `project`
+    /// workspace (exact canonical match), a directory inside the managed one-off chats root,
+    /// or a managed worktree inside the server's worktrees root. `canonical` must already be
+    /// symlink-resolved, so a link inside an allowed root that points elsewhere is rejected.
+    pub(crate) fn is_create_thread_workspace(&self, canonical: &Path) -> bool {
+        if canonical == canonicalize_sync(&self.working_directory) {
+            return true;
+        }
+        let one_off_root = canonicalize_sync(&get_one_off_chats_root(&self.homedir));
+        let wt_root = canonicalize_sync(&self.worktree_service.worktrees_root());
+        let strictly_inside = |root: &Path| canonical != root && is_inside(root, canonical);
+        if strictly_inside(&one_off_root) || strictly_inside(&wt_root) {
+            return true;
+        }
+        let Some(svc) = self.desktop_service.as_deref() else {
+            return false;
+        };
+        let (workspaces, _) = crate::http_desktop::build_workspace_summaries(
+            &self.working_directory,
+            &self.homedir,
+            Some(svc),
+        );
+        workspaces.iter().any(|w| {
+            w.workspace_kind == "project" && canonicalize_sync(Path::new(&w.path)) == canonical
+        })
     }
 
     /// Requires an absolute, existing, already-canonical directory path

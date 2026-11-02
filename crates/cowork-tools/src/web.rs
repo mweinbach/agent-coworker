@@ -174,16 +174,24 @@ async fn resolve_and_validate_url_target(
     Ok((host.to_owned(), addrs[0]))
 }
 
-pub fn html_to_clean_markdown(raw_html: &str) -> String {
+/// `extractLikelyContentFragment` parity: the first `<main>`, else the first `<article>`, else
+/// `<body>`, else the whole input. Each selector is tried separately because a combined selector
+/// list matches in document order, which would always pick `<body>` before its descendants.
+fn extract_likely_content_fragment(raw_html: &str) -> String {
     let document = Html::parse_document(raw_html);
-    let selected_html = Selector::parse("article, main, [role='main'], body")
-        .ok()
-        .and_then(|sel| document.select(&sel).next().map(|el| el.html()))
-        .unwrap_or_else(|| raw_html.to_owned());
+    ["main", "article", "body"]
+        .into_iter()
+        .filter_map(|tag| Selector::parse(tag).ok())
+        .find_map(|sel| document.select(&sel).next().map(|el| el.html()))
+        .unwrap_or_else(|| raw_html.to_owned())
+}
+
+pub fn html_to_clean_markdown(raw_html: &str) -> String {
+    let selected_html = extract_likely_content_fragment(raw_html);
 
     let converter = HtmlToMarkdown::builder()
         .skip_tags(vec![
-            "script", "style", "noscript", "template", "svg", "iframe", "nav", "footer",
+            "script", "style", "noscript", "template", "canvas", "svg", "iframe", "nav", "footer",
         ])
         .build();
     let md = converter.convert(&selected_html).unwrap_or(selected_html);

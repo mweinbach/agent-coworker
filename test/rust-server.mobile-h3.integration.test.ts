@@ -174,5 +174,5 @@ describe("Rust cowork-server --mobile-h3 TLS pairing, permissions, and revocatio
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 });

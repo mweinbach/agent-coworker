@@ -61,7 +61,7 @@ describe("Rust cowork-server skills, MCP, OOXML spreadsheet, backups, and import
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 
   test("round-trips spreadsheet workbook read & patch, workspace backups, and importer sources over JSON-RPC", async () => {
     const srv = await startRustTestServer({
@@ -127,5 +127,5 @@ describe("Rust cowork-server skills, MCP, OOXML spreadsheet, backups, and import
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 });

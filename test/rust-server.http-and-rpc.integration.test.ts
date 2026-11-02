@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { connectRustJsonRpc, startRustTestServer } from "./helpers/rustServerHarness";
 
+// Each test spawns its own cowork-server, and startRustTestServer alone allows 15s for
+// startup; slow Windows runners regularly exceed bun's 5s default per-test timeout.
 describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopback RPC", () => {
   test("serves /cowork/health and enforces browser Origin gate on loopback", async () => {
     const srv = await startRustTestServer();
@@ -34,7 +36,7 @@ describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopba
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 
   test("enforces X-Cowork-Browser-Token when bound to non-loopback 0.0.0.0", async () => {
     const srv = await startRustTestServer({ host: "0.0.0.0" });
@@ -53,7 +55,7 @@ describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopba
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 
   test("serves /cowork/fs/* workspace directory and file operations while rejecting traversal", async () => {
     const srv = await startRustTestServer();
@@ -92,7 +94,7 @@ describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopba
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 
   test("enforces WebSocket subprotocol and JSON-RPC lite envelope strictness", async () => {
     const srv = await startRustTestServer();
@@ -121,7 +123,7 @@ describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopba
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 
   test("supports sticky loopback POST /rpc sessions with x-cowork-client-id", async () => {
     const srv = await startRustTestServer();
@@ -180,5 +182,5 @@ describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopba
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 });

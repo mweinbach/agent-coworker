@@ -194,7 +194,7 @@ describe("Rust cowork-server JSON-RPC thread lifecycle, streaming turns, tools, 
       await fs.rm(path.dirname(sharedHome), { recursive: true, force: true });
       await new Promise<void>((r) => mockServer.close(() => r()));
     }
-  });
+  }, 30_000);
 
   // `cowork/provider/status/refresh` probes the local LM Studio endpoint for real. On Windows a
   // refused loopback connect takes ~2s (TCP SYN retries), which with server startup can exceed

@@ -313,6 +313,56 @@ impl ParentSlotTracker {
     }
 }
 
+/// One reserved child slot held by an in-flight `spawn`. Dropping it (an error return, a panic,
+/// or the spawn future being dropped mid-`.await` by Stop/deadline races) releases the slot and
+/// wakes `quiesce_children`; `install` hands the slot over to the installed child instead.
+struct SpawnReservation {
+    state: Arc<Mutex<ParentSlotTracker>>,
+    status_bus: Arc<Notify>,
+    armed: bool,
+}
+
+impl SpawnReservation {
+    /// Synchronous check-and-reserve, so concurrent spawns can never race past the cap.
+    fn try_reserve(
+        state: &Arc<Mutex<ParentSlotTracker>>,
+        status_bus: &Arc<Notify>,
+    ) -> Result<Self, String> {
+        let mut guard = state.lock();
+        if guard.active_or_reserved_count() >= MAX_ACTIVE_CHILDREN_PER_PARENT {
+            return Err(format!(
+                "Maximum active child agents per parent ({MAX_ACTIVE_CHILDREN_PER_PARENT}) reached. Wait for or close existing agents before spawning more."
+            ));
+        }
+        guard.reserved_spawns += 1;
+        Ok(Self {
+            state: Arc::clone(state),
+            status_bus: Arc::clone(status_bus),
+            armed: true,
+        })
+    }
+
+    /// Converts the reservation into the child being inserted under the same lock, so the slot
+    /// is never double-counted or briefly free.
+    fn install(mut self, tracker: &mut ParentSlotTracker) {
+        tracker.reserved_spawns = tracker.reserved_spawns.saturating_sub(1);
+        self.armed = false;
+    }
+}
+
+impl Drop for SpawnReservation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        {
+            let mut guard = self.state.lock();
+            guard.reserved_spawns = guard.reserved_spawns.saturating_sub(1);
+        }
+        self.status_bus.notify_waiters();
+    }
+}
+
 pub type ParentSnapshotProvider =
     Arc<dyn Fn() -> (Vec<CanonicalMessage>, Vec<Value>, Option<Value>) + Send + Sync>;
 
@@ -539,24 +589,13 @@ impl AgentControl {
             return Err("Spawn message must not be empty.".to_owned());
         }
 
-        // Atomic synchronous check-and-reserve BEFORE any `.await`!
-        {
-            let mut guard = self.state.lock();
-            if guard.active_or_reserved_count() >= MAX_ACTIVE_CHILDREN_PER_PARENT {
-                return Err(format!(
-                    "Maximum active child agents per parent ({MAX_ACTIVE_CHILDREN_PER_PARENT}) reached. Wait for or close existing agents before spawning more."
-                ));
-            }
-            guard.reserved_spawns += 1;
-        }
+        // Atomic synchronous check-and-reserve BEFORE any `.await`! The guard releases the slot
+        // on every exit (errors, panics, or this future being dropped mid-persist) until the
+        // child is installed.
+        let reservation = SpawnReservation::try_reserve(&self.state, &self.status_bus)?;
 
         // One config snapshot per spawn, so a concurrent session config change can't mix.
         let agent_cfg = self.agent_config();
-        let state_for_cleanup = Arc::clone(&self.state);
-        let release_reservation = || {
-            let mut g = state_for_cleanup.lock();
-            g.reserved_spawns = g.reserved_spawns.saturating_sub(1);
-        };
 
         let prep = (|| -> Result<(PreparedChildSpawn, bool), String> {
             let profiles_store =
@@ -715,13 +754,7 @@ impl AgentControl {
             ))
         })();
 
-        let (prep, has_prompt_suffix) = match prep {
-            Ok(p) => p,
-            Err(e) => {
-                release_reservation();
-                return Err(e);
-            }
-        };
+        let (prep, has_prompt_suffix) = prep?;
 
         let agent_id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -768,14 +801,13 @@ impl AgentControl {
             "agent_spawned",
         );
         if let Err(e) = self.cfg.session_db.persist_session_mutation(mutation).await {
-            release_reservation();
             return Err(format!("Failed saving child agent session: {e}"));
         }
 
         let cancel_token = CancellationToken::new();
         {
             let mut guard = self.state.lock();
-            guard.reserved_spawns = guard.reserved_spawns.saturating_sub(1);
+            reservation.install(&mut guard);
             guard.children.insert(
                 agent_id.clone(),
                 ChildRuntimeEntry {

@@ -1076,3 +1076,102 @@ async fn empty_profile_allowlists_deny_all_instead_of_granting_everything() {
 
     let _ = fs::remove_dir_all(&base);
 }
+
+/// Stop/deadline races (`race_with_cancel_and_deadline` in workflow host agents) drop the spawn
+/// future while it awaits `persist_session_mutation`. The reserved slot must be released on drop,
+/// otherwise later spawns lose capacity and `quiesce_children` waits for phantom children.
+#[tokio::test]
+async fn dropped_spawn_mid_persist_releases_its_reserved_slot() {
+    let (base, cfg, db) = setup_env("spawn_drop_mid_persist").await;
+
+    struct HoldUntilCancelled;
+    #[async_trait]
+    impl ChildTurnExecutor for HoldUntilCancelled {
+        async fn run_child_turn(
+            &self,
+            input: ChildTurnInput,
+        ) -> Result<ChildTurnResult, ChildTurnError> {
+            input.cancel_token.cancelled().await;
+            Err("interrupted".into())
+        }
+    }
+    let control = AgentControl::new(
+        AgentControlConfig {
+            parent_session_id: "root-spawn-drop".to_owned(),
+            parent_depth: 0,
+            agent_config: Arc::new(cfg.clone()),
+            session_db: Arc::clone(&db),
+            connected_providers: [cfg.provider].into_iter().collect(),
+        },
+        Arc::new(HoldUntilCancelled),
+        Arc::new(|_, _| {}),
+    );
+    let req = || AgentSpawnRequest {
+        message: "go".to_owned(),
+        role: None,
+        profile_ref: None,
+        model: None,
+        reasoning_effort: None,
+        nickname: None,
+        task_type: None,
+        target_paths: None,
+        context_mode: Some("none".to_owned()),
+        briefing: None,
+        include_parent_todos: false,
+        include_harness_context: false,
+        fork_context: false,
+        system_prompt_suffix: None,
+    };
+
+    // Hold the session DB write lock so every spawn pends inside `persist_session_mutation`.
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let holder_db = Arc::clone(&db);
+    let holder = tokio::spawn(async move {
+        holder_db
+            .write_coordinator()
+            .run_exclusive("test_hold_write_lock", || async move {
+                let _ = held_tx.send(());
+                let _ = release_rx.await;
+                Ok(())
+            })
+            .await
+    });
+    held_rx.await.expect("write lock held");
+
+    // Drop as many mid-persist spawns as there are slots; each would leak one reservation.
+    for _ in 0..MAX_ACTIVE_CHILDREN_PER_PARENT {
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            control.spawn(req(), &[], &[], None),
+        )
+        .await;
+        assert!(outcome.is_err(), "spawn should pend on the held write lock");
+    }
+    assert!(control.list(true).is_empty());
+
+    // No children and no live reservations: quiesce settles immediately instead of timing out.
+    control
+        .quiesce_children(Duration::from_millis(500))
+        .await
+        .expect("dropped spawns must not keep the parent busy");
+
+    let _ = release_tx.send(());
+    holder.await.unwrap().unwrap();
+
+    // Full capacity is available again.
+    for _ in 0..MAX_ACTIVE_CHILDREN_PER_PARENT {
+        control
+            .spawn(req(), &[], &[], None)
+            .await
+            .expect("slot available after dropped spawns");
+    }
+    let err = control.spawn(req(), &[], &[], None).await.unwrap_err();
+    assert!(err.contains("Maximum active child agents"), "{err}");
+
+    control
+        .quiesce_children(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let _ = fs::remove_dir_all(&base);
+}

@@ -1003,3 +1003,122 @@ async fn memory_sqlite_store_imports_legacy_markdown_and_renders_hot_cache() {
     assert!(prompt.contains("Updated hot memory."));
     assert!(store.remove(MemoryScope::Workspace, "arch-notes").unwrap());
 }
+
+fn legacy_memory_import_marker(db_path: &std::path::Path) -> Option<String> {
+    let conn = Connection::open(db_path).unwrap();
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = 'legacy_import_done'",
+        [],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+fn legacy_memory_rows(db_path: &std::path::Path) -> Vec<(String, String)> {
+    let conn = Connection::open(db_path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, content FROM memories ORDER BY id")
+        .unwrap();
+    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[tokio::test]
+async fn memory_legacy_import_unreadable_agent_md_stays_retryable_without_duplicates() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-retry");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    fs::create_dir_all(ws_cowork.join("memory")).unwrap();
+    // A directory at `AGENT.md` fails to read with a non-NotFound error (EISDIR), standing in
+    // for a transiently unreadable file without relying on permissions (tests may run as root).
+    fs::create_dir_all(ws_cowork.join("AGENT.md")).unwrap();
+    fs::write(ws_cowork.join("memory/Notes.md"), "Legacy deep note.").unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    assert!(store.list(Some(MemoryScope::Workspace)).is_err());
+    assert!(
+        store
+            .upsert(
+                MemoryScope::Workspace,
+                Some("other"),
+                "x",
+                MemoryWriteMode::Upsert
+            )
+            .is_err()
+    );
+    assert_eq!(legacy_memory_import_marker(&db_path), None);
+    assert!(legacy_memory_rows(&db_path).is_empty());
+
+    // Simulate an entry that an earlier attempt already imported; the retry must not
+    // duplicate or overwrite it.
+    Connection::open(&db_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO memories(id, content, created_at, updated_at)
+             VALUES('notes', 'Already imported.', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+
+    fs::remove_dir(ws_cowork.join("AGENT.md")).unwrap();
+    fs::write(ws_cowork.join("AGENT.md"), "Recovered hot memory.").unwrap();
+
+    let entries = store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&db_path),
+        vec![
+            ("hot".to_string(), "Recovered hot memory.".to_string()),
+            ("notes".to_string(), "Already imported.".to_string()),
+        ]
+    );
+    assert_eq!(store.list(Some(MemoryScope::Workspace)).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn memory_legacy_import_missing_sources_still_marks_done() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-missing");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    fs::create_dir_all(&ws_cowork).unwrap();
+    #[cfg(unix)]
+    symlink(ws_cowork.join("missing-target"), ws_cowork.join("memory")).unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    assert!(store.list(Some(MemoryScope::Workspace)).unwrap().is_empty());
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+
+    // Once the import completed, later legacy files are not re-imported.
+    fs::write(ws_cowork.join("AGENT.md"), "Too late.").unwrap();
+    assert!(store.list(Some(MemoryScope::Workspace)).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_traversal_failure_stays_retryable() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-walk");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    fs::create_dir_all(&ws_cowork).unwrap();
+    fs::write(ws_cowork.join("AGENT.md"), "Hot memory.").unwrap();
+    // A self-referential symlink fails traversal with ELOOP rather than NotFound.
+    symlink(ws_cowork.join("memory"), ws_cowork.join("memory")).unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    assert!(store.list(Some(MemoryScope::Workspace)).is_err());
+    assert_eq!(legacy_memory_import_marker(&db_path), None);
+    assert!(legacy_memory_rows(&db_path).is_empty());
+
+    fs::remove_file(ws_cowork.join("memory")).unwrap();
+    fs::create_dir_all(ws_cowork.join("memory/nested")).unwrap();
+    fs::write(ws_cowork.join("memory/nested/Deep.md"), "Deep note.").unwrap();
+
+    let entries = store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    let mut ids: Vec<_> = entries.into_iter().map(|e| e.id).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["hot".to_string(), "nested/deep".to_string()]);
+}

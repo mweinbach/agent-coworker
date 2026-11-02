@@ -297,38 +297,46 @@ fn ensure_legacy_imported(conn: &Connection, db_path: &Path) -> Result<()> {
     };
     let mut to_import: Vec<(String, String)> = Vec::new();
 
+    // TS `readTextIfExists` / `walkMarkdownFiles`: only a missing file or directory is
+    // skipped. Any other read or traversal failure propagates before the completion marker is
+    // written, so a transient error (permissions, I/O) leaves the import retryable.
     let hot_path = agent_dir.join("AGENT.md");
-    if let Ok(hot) = fs::read_to_string(&hot_path)
+    if let Some(hot) = read_text_if_exists(&hot_path)?
         && !hot.trim().is_empty()
     {
         to_import.push((HOT_MEMORY_ID.to_string(), hot));
     }
 
     let memory_dir = agent_dir.join("memory");
-    if memory_dir.exists() {
-        let mut md_files: Vec<PathBuf> = WalkDir::new(&memory_dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_type().is_file()
-                    && e.path()
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-            })
-            .map(|e| e.into_path())
-            .collect();
-        md_files.sort();
+    let mut md_files: Vec<PathBuf> = Vec::new();
+    for entry in WalkDir::new(&memory_dir).follow_links(false) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) if is_not_found(&err) => continue,
+            Err(err) => return Err(std::io::Error::from(err).into()),
+        };
+        if entry.file_type().is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
+            md_files.push(entry.into_path());
+        }
+    }
+    md_files.sort();
 
-        for file_path in md_files {
-            if let Ok(content) = fs::read_to_string(&file_path)
-                && !content.trim().is_empty()
-                && let Ok(rel) = file_path.strip_prefix(&memory_dir)
-            {
-                let rel_str = rel.to_string_lossy();
-                to_import.push((normalize_memory_id(&rel_str), content));
-            }
+    for file_path in md_files {
+        let Some(content) = read_text_if_exists(&file_path)? else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        if let Ok(rel) = file_path.strip_prefix(&memory_dir) {
+            let rel_str = rel.to_string_lossy();
+            to_import.push((normalize_memory_id(&rel_str), content));
         }
     }
 
@@ -360,6 +368,21 @@ fn ensure_legacy_imported(conn: &Connection, db_path: &Path) -> Result<()> {
         [],
     )?;
     Ok(())
+}
+
+/// TS `readTextIfExists`: `None` only for a missing file; every other error propagates. Bytes
+/// are decoded lossily like `Bun.file().text()`, so non-UTF-8 content never blocks the import.
+fn read_text_if_exists(path: &Path) -> Result<Option<String>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn is_not_found(err: &walkdir::Error) -> bool {
+    err.io_error()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
 }
 
 pub fn normalize_memory_id(raw: &str) -> String {

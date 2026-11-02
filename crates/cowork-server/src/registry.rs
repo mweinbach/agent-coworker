@@ -8,7 +8,7 @@ use cowork_config::{
     AgentConfig, LoadConfigOptions, ModelRegistry, ProjectConfigPatch, ProviderName,
     canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside,
     legacy_model_alias, load_config, normalize_lexical_path, persist_project_config_patch,
-    reconcile_reasoning_provider_options,
+    reconcile_reasoning_provider_options, same_workspace_path,
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
@@ -2753,38 +2753,58 @@ impl ServerRuntimeState {
         {
             return Err(format!("Chat is locked by active task {}", active_task.id));
         }
+        // Workspace-scoped (SessionRegistry.ts `deleteSessionImpl`): a target whose live or
+        // persisted working directory is another workspace is rejected before any side effect.
+        let target_cwd = self
+            .get_live_thread(target_session_id)
+            .map(|live| live.lock().cwd.clone())
+            .or_else(|| {
+                self.session_db
+                    .get_session_record(target_session_id)
+                    .ok()
+                    .flatten()
+                    .map(|record| record.working_directory)
+            });
+        if let Some(target_cwd) = target_cwd
+            && !target_cwd.trim().is_empty()
+            && !same_workspace_path(&cwd.to_string_lossy(), &target_cwd)
+        {
+            return Err("Target session is outside the active workspace".to_owned());
+        }
         // Tombstone first: no new turn can load the thread and no late persist can recreate it.
         self.deleted_sessions
             .insert(target_session_id.to_owned(), ());
-        if let Some((_, ctrl)) = self.agent_controls.remove(target_session_id) {
+        // Signal the children now; they are awaited below once the root turn has settled.
+        if let Some(ctrl) = self
+            .agent_controls
+            .get(target_session_id)
+            .map(|c| Arc::clone(c.value()))
+        {
             ctrl.interrupt_running_children();
         }
         // Cancel the active root turn and wait (bounded) for it to settle so its tools stop and
         // its journal writer drains before the rows are removed (SessionRegistry.ts ordering).
         self.interrupt_session_for_quiesce(target_session_id, "Chat deleted");
-        let deadline = Instant::now() + DELETE_SESSION_SETTLE_TIMEOUT;
-        loop {
-            let notified = self.turn_settled_notify.notified();
-            if !self.active_turns.contains_key(target_session_id) {
-                break;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                tracing::warn!(
-                    session_id = target_session_id,
-                    "active turn did not settle before chat delete; deleting anyway"
-                );
-                break;
-            }
-            let _ = tokio::time::timeout(remaining.min(Duration::from_millis(50)), notified).await;
+        let root_ids = [target_session_id.to_owned()];
+        self.wait_for_turns_to_settle(&root_ids, Instant::now() + DELETE_SESSION_SETTLE_TIMEOUT)
+            .await;
+        // Only after the root settled (so an in-flight spawn cannot escape the lookup), tombstone,
+        // cancel and await every descendant so their final persists land before the tree's rows
+        // are removed. `SessionDb` also drops late writes for deleted ids if a wait times out.
+        let tree_ids = self
+            .quiesce_session_tree_for_delete(target_session_id)
+            .await;
+        for id in &tree_ids {
+            self.journal.wait_for_idle(id).await;
+            self.mcp_tool_cache.close_session(id).await;
+            self.sessions.remove(id);
         }
-        self.journal.wait_for_idle(target_session_id).await;
-        self.mcp_tool_cache.close_session(target_session_id).await;
-        self.sessions.remove(target_session_id);
         self.creation_keys
-            .retain(|_, bound_id| bound_id != target_session_id);
+            .retain(|_, bound_id| !tree_ids.contains(bound_id));
         if let Err(e) = self.session_db.delete_session(target_session_id).await {
-            self.deleted_sessions.remove(target_session_id);
+            for id in &tree_ids {
+                self.deleted_sessions.remove(id);
+            }
             return Err(e.to_string());
         }
         let state_id = self.get_or_create_workspace_state_id(cwd);
@@ -2793,6 +2813,66 @@ impl ServerRuntimeState {
             "sessionId": state_id,
             "targetSessionId": target_session_id,
         }))
+    }
+
+    /// Waits (until `deadline`) for every id in `session_ids` to have no active turn.
+    async fn wait_for_turns_to_settle(&self, session_ids: &[String], deadline: Instant) {
+        loop {
+            let notified = self.turn_settled_notify.notified();
+            let Some(busy) = session_ids
+                .iter()
+                .find(|id| self.active_turns.contains_key(id.as_str()))
+            else {
+                return;
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                tracing::warn!(
+                    session_id = busy.as_str(),
+                    "active turn did not settle before chat delete; deleting anyway"
+                );
+                return;
+            }
+            let _ = tokio::time::timeout(remaining.min(Duration::from_millis(50)), notified).await;
+        }
+    }
+
+    /// Tombstones `root` and all its live and persisted descendants, cancels their child agents
+    /// and turns, and waits (bounded) until each child's loop has stored its final state.
+    /// Returns the whole tree, `root` first.
+    async fn quiesce_session_tree_for_delete(&self, root: &str) -> Vec<String> {
+        let deadline = Instant::now() + DELETE_SESSION_SETTLE_TIMEOUT;
+        let mut tree = vec![root.to_owned()];
+        let mut seen: HashSet<String> = tree.iter().cloned().collect();
+        let mut next = 0;
+        while next < tree.len() {
+            let session_id = tree[next].clone();
+            next += 1;
+            self.deleted_sessions.insert(session_id.clone(), ());
+            if session_id != root {
+                self.interrupt_session_for_quiesce(&session_id, "Chat deleted");
+            }
+            let mut children = Vec::new();
+            if let Some((_, ctrl)) = self.agent_controls.remove(&session_id) {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if let Err(e) = ctrl.quiesce_children(remaining).await {
+                    tracing::warn!(session_id = session_id.as_str(), "{e}; deleting anyway");
+                }
+                children.extend(ctrl.list(true).into_iter().map(|a| a.agent_id));
+            }
+            children.extend(
+                self.session_db
+                    .list_session_tree_ids(&session_id)
+                    .unwrap_or_default(),
+            );
+            for child in children {
+                if seen.insert(child.clone()) {
+                    tree.push(child);
+                }
+            }
+        }
+        self.wait_for_turns_to_settle(&tree[1..], deadline).await;
+        tree
     }
 
     pub(crate) fn get_or_create_workspace_state_id(&self, cwd: &Path) -> String {

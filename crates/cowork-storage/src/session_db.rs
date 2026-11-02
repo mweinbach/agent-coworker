@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,6 +43,11 @@ pub struct SessionDb {
     pub(crate) ro_conn: Mutex<Option<Connection>>,
     pub(crate) write_coordinator: Arc<SessionDbWriteCoordinator>,
     closed: AtomicBool,
+    /// Session ids removed by `delete_session` (ids are never reused). A late
+    /// `persist_session_mutation` for one of them, or for a new child of one of them, is a
+    /// no-op so an in-flight writer (e.g. a cancelled child agent's final persist) cannot
+    /// recreate a deleted session as an orphan.
+    deleted_session_ids: Mutex<HashSet<String>>,
 }
 
 impl SessionDb {
@@ -108,6 +113,7 @@ impl SessionDb {
             ro_conn: Mutex::new(Some(ro)),
             write_coordinator,
             closed: AtomicBool::new(false),
+            deleted_session_ids: Mutex::new(HashSet::new()),
         })
     }
 
@@ -186,9 +192,23 @@ impl SessionDb {
     ) -> Result<u64> {
         self.write_coordinator
             .run_exclusive("persist_session_mutation", || async {
+                // Checked under the write lock so it is ordered against `delete_session`.
+                if self.is_deleted_session_or_child(&mutation) {
+                    return Ok(0);
+                }
                 self.with_rw_conn_mut(|conn| persist_session_mutation_sync(conn, &mutation))
             })
             .await
+    }
+
+    fn is_deleted_session_or_child(&self, mutation: &PersistedSessionMutation) -> bool {
+        let deleted = self.deleted_session_ids.lock();
+        deleted.contains(&mutation.session_id)
+            || mutation
+                .snapshot
+                .parent_session_id
+                .as_ref()
+                .is_some_and(|parent| deleted.contains(parent))
     }
 
     pub async fn persist_session_snapshot(&self, session_id: &str, snapshot: &Value) -> Result<()> {
@@ -248,6 +268,26 @@ impl SessionDb {
 
     pub fn get_session_record(&self, session_id: &str) -> Result<Option<PersistedSessionRecord>> {
         self.with_read_conn(|conn| read_session_record_from_conn(conn, session_id))
+    }
+
+    /// Lists the ids of every persisted descendant of `session_id` (children, grandchildren, ...),
+    /// excluding `session_id` itself (`sessionDb.listSessionTreeIds` parity).
+    pub fn list_session_tree_ids(&self, session_id: &str) -> Result<Vec<String>> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "WITH RECURSIVE session_tree(session_id) AS (
+                   SELECT ?1
+                   UNION
+                   SELECT sessions.session_id FROM sessions
+                   JOIN session_tree ON sessions.parent_session_id = session_tree.session_id
+                 )
+                 SELECT session_id FROM session_tree WHERE session_id != ?1",
+            )?;
+            let ids = stmt
+                .query_map(params![session_id], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(ids)
+        })
     }
 
     /// Lists persisted child agent sessions belonging to `parent_session_id` in creation order.
@@ -382,7 +422,7 @@ impl SessionDb {
                         }
                         v
                     };
-                    for id in tree_ids {
+                    for id in &tree_ids {
                         tx.execute(
                             "DELETE FROM thread_journal_events WHERE thread_id = ?1",
                             params![id],
@@ -402,6 +442,7 @@ impl SessionDb {
                         tx.execute("DELETE FROM sessions WHERE session_id = ?1", params![id])?;
                     }
                     tx.commit()?;
+                    self.deleted_session_ids.lock().extend(tree_ids);
                     Ok(())
                 })
             })

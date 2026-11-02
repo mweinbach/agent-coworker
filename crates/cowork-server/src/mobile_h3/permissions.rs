@@ -259,22 +259,11 @@ pub fn get_required_h3_permissions(message: &JsonRpcLiteClientMessage) -> Vec<Mo
         return vec![MobilePermissionKey::ProviderAuth];
     }
 
-    if matches!(
-        method,
-        "cowork/mcp/server/auth/setApiKey" | "cowork/mcp/server/auth/callback"
-    ) {
-        return vec![
-            MobilePermissionKey::McpAuth,
-            MobilePermissionKey::WorkspaceSettings,
-        ];
+    if method.starts_with("cowork/mcp/") {
+        return required_h3_mcp_permissions(method);
     }
 
-    if method.starts_with("cowork/mcp/server/auth/") {
-        return vec![MobilePermissionKey::McpAuth];
-    }
-
-    if method.starts_with("cowork/mcp/")
-        || method.starts_with("cowork/memory/")
+    if method.starts_with("cowork/memory/")
         || method == "cowork/plugins/install/preview"
         || method == "cowork/skills/install/preview"
         || method == "cowork/workspace/presentation/preview"
@@ -291,6 +280,149 @@ pub fn get_required_h3_permissions(message: &JsonRpcLiteClientMessage) -> Vec<Mo
     vec![MobilePermissionKey::WorkspaceSettings]
 }
 
+/// Grants for the `cowork/mcp/*` surface. This is deliberately stricter than TS
+/// (`src/server/transport/h3/permissions.ts`), which only required `workspaceSettings` (plus
+/// `mcpAuth` for auth) for every MCP method.
+///
+/// Any method that can connect to a configured server can start its stdio command, i.e. spawn an
+/// arbitrary local subprocess with no approval or sandbox, so it also needs `turns`, the grant
+/// that already lets a device run workspace commands through model turns. `workspaceSettings`
+/// alone only lets a device read and edit MCP config; it must not execute that config.
+fn required_h3_mcp_permissions(method: &str) -> Vec<MobilePermissionKey> {
+    match method {
+        // Config reads and edits. Edits are additionally restricted to workspace-scoped targets by
+        // `get_h3_request_denial`, and a newly written workspace server only auto-starts when the
+        // desktop user has set `trustWorkspaceMcp`.
+        "cowork/mcp/list"
+        | "cowork/mcp/servers/read"
+        | "cowork/mcp/server/upsert"
+        | "cowork/mcp/server/delete"
+        | "cowork/mcp/server/setEnabled" => vec![MobilePermissionKey::WorkspaceSettings],
+        // Connects to the server, which spawns a stdio server's configured command.
+        "cowork/mcp/server/validate" => vec![
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Turns,
+        ],
+        // Starts an OAuth challenge against the server's HTTP endpoint; never spawns a command.
+        "cowork/mcp/server/auth/authorize" => vec![MobilePermissionKey::McpAuth],
+        // TS validates the server after a successful credential save (`McpManager.setApiKey` /
+        // `callback`), which can execute its stdio command. The Rust handlers currently only save
+        // the credential, but gate them as if they validate so restoring that parity cannot
+        // reopen an execution path for a device without `turns`.
+        "cowork/mcp/server/auth/setApiKey" | "cowork/mcp/server/auth/callback" => vec![
+            MobilePermissionKey::McpAuth,
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Turns,
+        ],
+        // Unknown future MCP methods fail closed to the strictest grant set.
+        _ if method.starts_with("cowork/mcp/server/auth/") => vec![
+            MobilePermissionKey::McpAuth,
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Turns,
+        ],
+        _ => vec![
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Turns,
+        ],
+    }
+}
+
+/// A request the H3 transport refuses whatever grants the device holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H3RequestDenial {
+    /// The request would change the global user MCP layer (`~/.cowork/config/mcp-servers.json`
+    /// or user-scoped plugin MCP overrides).
+    UserMcpConfigMutation,
+    /// The request would install, update, enable, disable or delete a user-scoped plugin. User
+    /// plugins can bundle MCP servers, which join the user MCP layer.
+    UserPluginConfigMutation,
+}
+
+impl H3RequestDenial {
+    /// Stable machine-readable reason, returned as `error.data.reason`.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::UserMcpConfigMutation => "userMcpConfigReadOnly",
+            Self::UserPluginConfigMutation => "userPluginConfigReadOnly",
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::UserMcpConfigMutation => {
+                "Paired mobile devices can only change workspace MCP servers. Edit user (global) \
+                 MCP servers in Cowork Desktop."
+            }
+            Self::UserPluginConfigMutation => {
+                "Paired mobile devices can only change workspace plugins. Install or change user \
+                 (global) plugins in Cowork Desktop."
+            }
+        }
+    }
+}
+
+/// Refusals that depend on request params rather than on the method alone. They are checked after
+/// `get_required_h3_permissions`, so a missing grant is still reported as such first.
+///
+/// A device's trust is scoped to a workspace, but user-layer MCP servers, including those bundled
+/// by user-scoped plugins, start for every workspace and are exempt from the `trustWorkspaceMcp`
+/// gate (they auto-start on the next turn and validate without the trust check). Writing one is
+/// therefore a deferred, global command execution primitive, so no grant combination lets a
+/// paired device change the user MCP or plugin layer; that stays a desktop-only action. Workspace
+/// MCP servers and workspace plugins stay editable because their MCP servers only start once the
+/// desktop user sets `trustWorkspaceMcp`. User-scoped (`global`) skill installs stay allowed:
+/// skills are instruction bundles that cannot declare MCP servers and only run through a turn,
+/// which needs `turns`. TS had no such check.
+pub fn get_h3_request_denial(message: &JsonRpcLiteClientMessage) -> Option<H3RequestDenial> {
+    let (method, params) = match message {
+        JsonRpcLiteClientMessage::ClientResponse(_) => return None,
+        JsonRpcLiteClientMessage::Request(r) => (r.method.as_str(), r.params.as_ref()),
+        JsonRpcLiteClientMessage::Notification(n) => (n.method.as_str(), n.params.as_ref()),
+    };
+    let param = |key: &str| params.and_then(|p| p.get(key)).filter(|v| !v.is_null());
+    let is_workspace = |v: Option<&Value>| {
+        v.and_then(Value::as_str)
+            .is_some_and(|s| s.trim() == "workspace")
+    };
+
+    // Plugin installs require `targetScope`; update/enable/disable/delete take an optional
+    // `scope` and, when it is omitted, act on the first installed plugin with that id in any
+    // scope, which may be a user plugin. Only an explicit workspace scope is accepted.
+    let plugin_scope_key = match method {
+        "cowork/plugins/install" | "cowork/import/plugin" => Some("targetScope"),
+        "cowork/plugins/update"
+        | "cowork/plugins/enable"
+        | "cowork/plugins/disable"
+        | "cowork/plugins/delete" => Some("scope"),
+        _ => None,
+    };
+    if let Some(key) = plugin_scope_key {
+        return (!is_workspace(param(key))).then_some(H3RequestDenial::UserPluginConfigMutation);
+    }
+
+    let targets_workspace_only = match method {
+        // The handlers write `source: "user"` to the user layer and default anything else to the
+        // workspace layer; only accept an omitted or explicit workspace source so a future change
+        // to that default cannot silently widen this.
+        "cowork/mcp/server/upsert" | "cowork/mcp/server/delete" => {
+            param("source").is_none() || is_workspace(param("source"))
+        }
+        // `source` is required here and may name the user layer directly or, for plugin servers,
+        // through `pluginScope: "user"`.
+        "cowork/mcp/server/setEnabled" => {
+            let plugin_scope = param("pluginScope");
+            let plugin_scope_ok = plugin_scope.is_none() || is_workspace(plugin_scope);
+            match param("source").and_then(Value::as_str).map(str::trim) {
+                Some("workspace") => plugin_scope_ok,
+                Some("plugin") => is_workspace(plugin_scope),
+                _ => false,
+            }
+        }
+        _ => true,
+    };
+    (!targets_workspace_only).then_some(H3RequestDenial::UserMcpConfigMutation)
+}
+
 pub fn apply_trusted_device_permissions(
     runtime: &ServerRuntimeState,
     conn_state: &ConnectionRpcState,
@@ -304,4 +436,175 @@ pub fn apply_trusted_device_permissions(
     };
     conn_state.set_task_permissions(flags.task_read_allowed, flags.task_mutation_allowed);
     runtime.set_connection_access(&conn_state.connection_id, flags);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use MobilePermissionKey::{McpAuth, Turns, WorkspaceSettings};
+    use serde_json::json;
+
+    fn request(method: &str, params: Value) -> JsonRpcLiteClientMessage {
+        parse_http_jsonrpc_payload(&json!({ "id": 1, "method": method, "params": params })).unwrap()
+    }
+
+    fn required(method: &str) -> Vec<MobilePermissionKey> {
+        get_required_h3_permissions(&request(method, json!({})))
+    }
+
+    #[test]
+    fn mcp_methods_that_can_spawn_a_server_command_require_turns() {
+        assert_eq!(
+            required("cowork/mcp/server/validate"),
+            vec![WorkspaceSettings, Turns]
+        );
+        for method in [
+            "cowork/mcp/server/auth/setApiKey",
+            "cowork/mcp/server/auth/callback",
+        ] {
+            assert_eq!(
+                required(method),
+                vec![McpAuth, WorkspaceSettings, Turns],
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_config_reads_and_edits_need_only_workspace_settings() {
+        for method in [
+            "cowork/mcp/list",
+            "cowork/mcp/servers/read",
+            "cowork/mcp/server/upsert",
+            "cowork/mcp/server/delete",
+            "cowork/mcp/server/setEnabled",
+        ] {
+            assert_eq!(required(method), vec![WorkspaceSettings], "{method}");
+        }
+        assert_eq!(required("cowork/mcp/server/auth/authorize"), vec![McpAuth]);
+    }
+
+    #[test]
+    fn unknown_mcp_methods_fail_closed_to_turns() {
+        assert_eq!(
+            required("cowork/mcp/server/reconnect"),
+            vec![WorkspaceSettings, Turns]
+        );
+        assert_eq!(
+            required("cowork/mcp/server/auth/refresh"),
+            vec![McpAuth, WorkspaceSettings, Turns]
+        );
+    }
+
+    #[test]
+    fn user_layer_mcp_edits_are_denied_and_workspace_edits_allowed() {
+        let denied = Some(H3RequestDenial::UserMcpConfigMutation);
+        for method in ["cowork/mcp/server/upsert", "cowork/mcp/server/delete"] {
+            assert_eq!(get_h3_request_denial(&request(method, json!({}))), None);
+            assert_eq!(
+                get_h3_request_denial(&request(method, json!({ "source": null }))),
+                None
+            );
+            assert_eq!(
+                get_h3_request_denial(&request(method, json!({ "source": "workspace" }))),
+                None
+            );
+            for source in [json!("user"), json!(" user "), json!("plugin"), json!(1)] {
+                assert_eq!(
+                    get_h3_request_denial(&request(method, json!({ "source": source }))),
+                    denied,
+                    "{method} {source}"
+                );
+            }
+        }
+        // Params that are not an object carry no source; the handler rejects them itself.
+        assert_eq!(
+            get_h3_request_denial(&request("cowork/mcp/server/upsert", json!([]))),
+            None
+        );
+
+        let set_enabled =
+            |params: Value| get_h3_request_denial(&request("cowork/mcp/server/setEnabled", params));
+        assert_eq!(set_enabled(json!({ "source": "workspace" })), None);
+        assert_eq!(
+            set_enabled(json!({ "source": "plugin", "pluginScope": "workspace" })),
+            None
+        );
+        for params in [
+            json!({ "source": "user" }),
+            json!({ "source": "plugin", "pluginScope": "user" }),
+            json!({ "source": "plugin" }),
+            json!({ "source": "workspace", "pluginScope": "user" }),
+            json!({ "source": "system" }),
+            json!({}),
+        ] {
+            assert_eq!(set_enabled(params.clone()), denied, "{params}");
+        }
+
+        // Notifications are checked the same way; other methods and client responses are not.
+        let notification = parse_http_jsonrpc_payload(&json!({
+            "method": "cowork/mcp/server/upsert",
+            "params": { "source": "user" }
+        }))
+        .unwrap();
+        assert_eq!(get_h3_request_denial(&notification), denied);
+        assert_eq!(
+            get_h3_request_denial(&request(
+                "cowork/mcp/server/validate",
+                json!({ "source": "user" })
+            )),
+            None
+        );
+        let client_response =
+            parse_http_jsonrpc_payload(&json!({ "id": 1, "result": {} })).unwrap();
+        assert_eq!(get_h3_request_denial(&client_response), None);
+    }
+
+    #[test]
+    fn user_scoped_plugin_changes_are_denied_and_workspace_scoped_allowed() {
+        let denied = Some(H3RequestDenial::UserPluginConfigMutation);
+        for (method, key) in [
+            ("cowork/plugins/install", "targetScope"),
+            ("cowork/import/plugin", "targetScope"),
+            ("cowork/plugins/update", "scope"),
+            ("cowork/plugins/enable", "scope"),
+            ("cowork/plugins/disable", "scope"),
+            ("cowork/plugins/delete", "scope"),
+        ] {
+            assert_eq!(
+                get_h3_request_denial(&request(method, json!({ key: "workspace" }))),
+                None,
+                "{method}"
+            );
+            // An omitted scope can resolve to a user plugin, so it fails closed too.
+            for params in [
+                json!({ key: "user" }),
+                json!({ key: null }),
+                json!({}),
+                json!({ key: 1 }),
+            ] {
+                assert_eq!(
+                    get_h3_request_denial(&request(method, params.clone())),
+                    denied,
+                    "{method} {params}"
+                );
+            }
+        }
+        // Skills cannot carry MCP servers; global skill installs are not refused.
+        assert_eq!(
+            get_h3_request_denial(&request(
+                "cowork/skills/install",
+                json!({ "targetScope": "global" })
+            )),
+            None
+        );
+        // Previews only read the source.
+        assert_eq!(
+            get_h3_request_denial(&request(
+                "cowork/plugins/install/preview",
+                json!({ "targetScope": "user" })
+            )),
+            None
+        );
+    }
 }

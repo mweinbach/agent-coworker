@@ -624,18 +624,35 @@ fn permission_matrix_matches_all_h3_method_categories() {
         vec![MobilePermissionKey::ProviderAuth]
     );
     assert_eq!(
-        check_req("cowork/mcp/server/auth/start"),
+        check_req("cowork/mcp/server/auth/authorize"),
         vec![MobilePermissionKey::McpAuth]
     );
+    // Anything that can connect to (and so spawn) a configured MCP server needs `turns` on top of
+    // the TS grants; unknown MCP methods fail closed to the same set.
+    for method in [
+        "cowork/mcp/server/auth/setApiKey",
+        "cowork/mcp/server/auth/callback",
+        "cowork/mcp/server/auth/start",
+    ] {
+        assert_eq!(
+            check_req(method),
+            vec![
+                MobilePermissionKey::McpAuth,
+                MobilePermissionKey::WorkspaceSettings,
+                MobilePermissionKey::Turns
+            ],
+            "{method}"
+        );
+    }
     assert_eq!(
-        check_req("cowork/mcp/server/auth/setApiKey"),
+        check_req("cowork/mcp/server/validate"),
         vec![
-            MobilePermissionKey::McpAuth,
-            MobilePermissionKey::WorkspaceSettings
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Turns
         ]
     );
     assert_eq!(
-        check_req("cowork/mcp/server/validate"),
+        check_req("cowork/mcp/server/upsert"),
         vec![MobilePermissionKey::WorkspaceSettings]
     );
     assert_eq!(
@@ -2144,4 +2161,330 @@ async fn mobile_tls_withholds_thread_management_tools_without_conversations_perm
 
     server.shutdown().await;
     llm_task.abort();
+}
+
+/// A device granted `workspaceSettings` + `mcpAuth` but not `turns` must not be able to execute a
+/// command through MCP: validation (which spawns stdio servers) needs `turns`, and no grant lets
+/// it write the global user MCP layer, which starts in every workspace without the
+/// `trustWorkspaceMcp` gate.
+#[tokio::test]
+async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_only() {
+    let iso = IsolatedMobileTestEnv::new();
+    let server = start_server(iso.server_options()).await.unwrap();
+    let h3 = server
+        .listening_event()
+        .mobile_h3
+        .expect("mobile h3 active");
+    let admin_base = format!("http://127.0.0.1:{}", server.port());
+    let h3_base = h3.url.clone();
+    let tls_client = build_pinned_reqwest_client(&h3.cert_sha256, &h3.spki_sha256);
+    let plain_http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let device_id = "mcp-settings-phone";
+
+    let pair_json: Value = tls_client
+        .post(format!("{h3_base}/pair"))
+        .json(&json!({
+            "ticket": h3.ticket,
+            "nonce": h3.nonce,
+            "deviceId": device_id,
+            "identityPub": "pub-mcp-settings",
+            "displayName": "MCP Settings Phone"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_token = pair_json["sessionToken"].as_str().unwrap().to_owned();
+
+    let set_permissions = |permissions: Value| {
+        let plain_http = plain_http.clone();
+        let url = format!("{admin_base}/mobile-h3/trusted/{device_id}/permissions");
+        let admin_token = h3.admin_token.clone();
+        async move {
+            let res = plain_http
+                .patch(url)
+                .bearer_auth(admin_token)
+                .json(&json!({ "permissions": permissions }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 200);
+        }
+    };
+    let rpc = |body: Value| {
+        let tls_client = tls_client.clone();
+        let url = format!("{h3_base}/rpc");
+        let session_token = session_token.clone();
+        async move {
+            let res = tls_client
+                .post(url)
+                .bearer_auth(session_token)
+                .header("x-cowork-mobile-device-id", device_id)
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap();
+            (
+                status,
+                serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
+            )
+        }
+    };
+
+    let (status, _) = rpc(json!({
+        "id": 1,
+        "method": "initialize",
+        "params": { "clientInfo": { "name": "cowork-mobile", "version": "1.0.0" } }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = rpc(json!({ "method": "initialized" })).await;
+    assert_eq!(status, 202);
+
+    set_permissions(json!({
+        "workspaceSettings": true,
+        "mcpAuth": true,
+        "turns": false
+    }))
+    .await;
+
+    let cwd = iso.workspace_dir.to_string_lossy().into_owned();
+    let marker = iso.base_dir.join("mcp-command-ran");
+    let stdio_server = json!({
+        "name": "local-tool",
+        "transport": {
+            "type": "stdio",
+            "command": "sh",
+            "args": ["-c", format!("touch '{}'", marker.display())]
+        }
+    });
+    let user_layer = iso.home_dir.join(".cowork/config/mcp-servers.json");
+
+    // 1. User-layer edits are refused before dispatch with a JSON-RPC error.
+    let user_layer_denial = json!({
+        "code": -32600,
+        "message": "Paired mobile devices can only change workspace MCP servers. Edit user (global) MCP servers in Cowork Desktop.",
+        "data": { "reason": "userMcpConfigReadOnly" }
+    });
+    for (id, method, params) in [
+        (
+            10,
+            "cowork/mcp/server/upsert",
+            json!({ "cwd": cwd, "server": stdio_server, "source": "user" }),
+        ),
+        (
+            11,
+            "cowork/mcp/server/delete",
+            json!({ "cwd": cwd, "name": "local-tool", "source": "user" }),
+        ),
+        (
+            12,
+            "cowork/mcp/server/setEnabled",
+            json!({ "cwd": cwd, "name": "local-tool", "source": "user", "enabled": true }),
+        ),
+        (
+            13,
+            "cowork/mcp/server/setEnabled",
+            json!({
+                "cwd": cwd,
+                "name": "local-tool",
+                "source": "plugin",
+                "pluginId": "some-plugin",
+                "pluginScope": "user",
+                "enabled": true
+            }),
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 200, "{method}");
+        assert_eq!(
+            body,
+            json!({ "id": id, "error": user_layer_denial }),
+            "{method}"
+        );
+    }
+    assert!(!user_layer.exists(), "user MCP layer must not be written");
+
+    // 2. Workspace-scoped edits still work with `workspaceSettings` alone.
+    let (status, body) = rpc(json!({
+        "id": 20,
+        "method": "cowork/mcp/server/upsert",
+        "params": { "cwd": cwd, "server": stdio_server }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["result"]["event"]["type"],
+        json!("mcp_servers"),
+        "{body}"
+    );
+    assert!(iso.workspace_dir.join(".cowork/mcp-servers.json").exists());
+    assert!(!user_layer.exists());
+
+    // 3. Anything that can start the configured command needs `turns`.
+    for (id, method, params) in [
+        (
+            30,
+            "cowork/mcp/server/validate",
+            json!({ "cwd": cwd, "name": "local-tool", "source": "workspace" }),
+        ),
+        (
+            31,
+            "cowork/mcp/server/auth/setApiKey",
+            json!({ "cwd": cwd, "name": "local-tool", "apiKey": "secret" }),
+        ),
+        (
+            32,
+            "cowork/mcp/server/auth/callback",
+            json!({ "cwd": cwd, "name": "local-tool" }),
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 403, "{method}");
+        assert_eq!(
+            body,
+            json!({
+                "error": "Mobile device permission required: turns.",
+                "permission": "turns"
+            }),
+            "{method}"
+        );
+    }
+
+    // 4. With `turns`, validation dispatches; the workspace server is still held back by the
+    //    `trustWorkspaceMcp` gate, so its command does not run.
+    set_permissions(json!({ "turns": true })).await;
+    let (status, body) = rpc(json!({
+        "id": 40,
+        "method": "cowork/mcp/server/validate",
+        "params": { "cwd": cwd, "name": "local-tool", "source": "workspace" }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["result"]["event"]["type"],
+        json!("mcp_server_validation"),
+        "{body}"
+    );
+    assert_eq!(body["result"]["event"]["ok"], json!(false), "{body}");
+    assert!(
+        !marker.exists(),
+        "untrusted workspace MCP command must not run"
+    );
+
+    // 5. Even with every grant, the user layer stays read-only for a paired device.
+    let (status, body) = rpc(json!({
+        "id": 50,
+        "method": "cowork/mcp/server/upsert",
+        "params": { "cwd": cwd, "server": stdio_server, "source": "user" }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({ "id": 50, "error": user_layer_denial }));
+    assert!(!user_layer.exists());
+
+    // 6. User-scoped plugins bundle MCP servers into the user layer, so installing or changing one
+    //    is refused too (an omitted scope can resolve to a user plugin, so it fails closed).
+    let plugin_src = iso.base_dir.join("plugin-src");
+    std::fs::create_dir_all(plugin_src.join(".cowork-plugin")).unwrap();
+    std::fs::write(
+        plugin_src.join(".cowork-plugin/plugin.json"),
+        json!({ "name": "h3-plugin", "version": "1.0.0", "description": "H3 test" }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin_src.join(".mcp.json"),
+        json!({ "mcpServers": { "plugin-tool": {
+            "command": "sh",
+            "args": ["-c", format!("touch '{}'", marker.display())]
+        } } })
+        .to_string(),
+    )
+    .unwrap();
+    let plugin_src = plugin_src.to_string_lossy().into_owned();
+    let user_plugins = iso.home_dir.join(".cowork/plugins");
+    let plugin_denial = json!({
+        "code": -32600,
+        "message": "Paired mobile devices can only change workspace plugins. Install or change user (global) plugins in Cowork Desktop.",
+        "data": { "reason": "userPluginConfigReadOnly" }
+    });
+    for (id, method, params) in [
+        (
+            60,
+            "cowork/plugins/install",
+            json!({ "cwd": cwd, "sourceInput": plugin_src, "targetScope": "user" }),
+        ),
+        (
+            61,
+            "cowork/plugins/enable",
+            json!({ "cwd": cwd, "pluginId": "h3-plugin", "scope": "user" }),
+        ),
+        (
+            62,
+            "cowork/plugins/enable",
+            json!({ "cwd": cwd, "pluginId": "h3-plugin" }),
+        ),
+        (
+            63,
+            "cowork/plugins/delete",
+            json!({ "cwd": cwd, "pluginId": "h3-plugin", "scope": "user" }),
+        ),
+        (
+            64,
+            "cowork/import/plugin",
+            json!({
+                "cwd": cwd,
+                "source": "claude",
+                "sourcePath": plugin_src,
+                "conversionRequired": false,
+                "targetScope": "user"
+            }),
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 200, "{method}");
+        assert_eq!(
+            body,
+            json!({ "id": id, "error": plugin_denial }),
+            "{method}"
+        );
+    }
+    assert!(
+        !user_plugins.exists(),
+        "user plugin layer must not be written"
+    );
+
+    // Workspace-scoped plugin calls reach their handlers (whatever their own outcome).
+    for (id, method, params) in [
+        (
+            70,
+            "cowork/plugins/install",
+            json!({ "cwd": cwd, "sourceInput": plugin_src, "targetScope": "workspace" }),
+        ),
+        (
+            71,
+            "cowork/plugins/enable",
+            json!({ "cwd": cwd, "pluginId": "h3-plugin", "scope": "workspace" }),
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 200, "{method}");
+        assert_eq!(body["id"], json!(id), "{method}");
+        assert_ne!(
+            body["error"]["data"]["reason"],
+            json!("userPluginConfigReadOnly"),
+            "{method}: {body}"
+        );
+    }
+    assert!(!user_plugins.exists());
+    assert!(
+        !marker.exists(),
+        "untrusted workspace plugin MCP command must not run"
+    );
+
+    server.shutdown().await;
 }

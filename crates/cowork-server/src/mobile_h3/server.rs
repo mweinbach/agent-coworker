@@ -8,6 +8,7 @@ use axum::body::{Body, to_bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, Response, StatusCode, header};
 use axum::routing::any;
+use cowork_protocol::{JsonRpcLiteError, JsonRpcLiteResponse, error_codes};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as AutoConnBuilder;
 use hyper_util::service::TowerToHyperService;
@@ -35,7 +36,8 @@ use crate::mobile_h3::pairing_store::{
     remember_h3_trusted_device, update_h3_trusted_device_permissions, verify_h3_session_token,
 };
 use crate::mobile_h3::permissions::{
-    apply_trusted_device_permissions, get_required_h3_permissions, parse_http_jsonrpc_payload,
+    apply_trusted_device_permissions, get_h3_request_denial, get_required_h3_permissions,
+    parse_http_jsonrpc_payload,
 };
 use crate::mobile_h3::ticket::{
     CoworkPairingTicket, CoworkTicketScheme, H3PairingSession, create_h3_pairing_session,
@@ -515,6 +517,27 @@ async fn handle_mobile_request(
                         "error": format!("Mobile device permission required: {key_str}."),
                         "permission": key_str,
                     }),
+                );
+            }
+
+            // Param-level refusals no grant can lift. A request gets an ordinary JSON-RPC error so
+            // the client surfaces it inline (a 403 reads as a missing device permission, which
+            // granting would not fix); a notification has no id to answer, so it gets the 403.
+            if let Some(denial) = get_h3_request_denial(&message) {
+                let error = JsonRpcLiteError::with_data(
+                    error_codes::INVALID_REQUEST,
+                    denial.message(),
+                    json!({ "reason": denial.reason() }),
+                );
+                if let cowork_protocol::JsonRpcLiteClientMessage::Request(req) = &message {
+                    return json_response(
+                        StatusCode::OK,
+                        &json!(JsonRpcLiteResponse::error(Some(req.id.clone()), error)),
+                    );
+                }
+                return json_response(
+                    StatusCode::FORBIDDEN,
+                    &json!({ "error": denial.message(), "reason": denial.reason() }),
                 );
             }
 

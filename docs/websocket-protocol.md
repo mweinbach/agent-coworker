@@ -135,13 +135,30 @@ artifact reads can lazily materialize the immutable baseline. Sub-agent executio
 (`cowork/session/agent/spawn`, `cowork/session/agent/input/send`, `cowork/session/agent/resume`,
 and `cowork/session/agent/close`) requires both `conversations` and `turns`, because child agents run
 model turns with workspace tools; `cowork/session/agent/list`, `cowork/session/agent/inspect`, and
-`cowork/session/agent/wait` require `conversations`. The whole `cowork/mcp/*` config
-surface requires the workspace-settings permission: `cowork/mcp/servers/read` can expose configured
-transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command
-(spawns a local subprocess) while connecting. `cowork/mcp/server/auth/authorize` requires only
-the MCP-auth permission. `cowork/mcp/server/auth/setApiKey` and `cowork/mcp/server/auth/callback`
-require both `mcpAuth` and `workspaceSettings`, because successful credential saves also validate
-the server and can execute its configured stdio command. The `cowork/memory/*` surface (including the
+`cowork/session/agent/wait` require `conversations`. The MCP config surface
+(`cowork/mcp/list`, `cowork/mcp/servers/read`, `cowork/mcp/server/upsert`,
+`cowork/mcp/server/delete`, and `cowork/mcp/server/setEnabled`) requires the workspace-settings
+permission, because reads can expose configured transport env/headers. Anything that can connect to
+a configured server also requires `turns`, because connecting starts a stdio server's configured
+command (an unsandboxed, unapproved local subprocess): `cowork/mcp/server/validate` requires
+`workspaceSettings` and `turns`, and `cowork/mcp/server/auth/setApiKey` and
+`cowork/mcp/server/auth/callback` require `mcpAuth`, `workspaceSettings`, and `turns` (successful
+credential saves may validate the server). `cowork/mcp/server/auth/authorize` requires only the
+MCP-auth permission; any other `cowork/mcp/*` method fails closed to the strictest set. Paired
+devices may only edit workspace-scoped MCP servers, whatever their permissions: `upsert`/`delete`
+with `source: "user"` (or any source other than omitted/`"workspace"`) and `setEnabled` targeting
+the user layer (`source: "user"`, or `source: "plugin"` without `pluginScope: "workspace"`) are
+refused before dispatch with a JSON-RPC `-32600` error whose `data.reason` is
+`userMcpConfigReadOnly`. Because user-scoped plugins bundle MCP servers into that same layer,
+`cowork/plugins/install` and `cowork/import/plugin` require `targetScope: "workspace"`, and
+`cowork/plugins/update`, `cowork/plugins/enable`, `cowork/plugins/disable`, and
+`cowork/plugins/delete` require `scope: "workspace"` (an omitted scope can match a user plugin, so
+it is refused too); anything else gets the same `-32600` error with `data.reason`
+`userPluginConfigReadOnly`. User-layer servers start in every workspace and skip the
+`trustWorkspaceMcp` gate, so changing them stays a desktop-only action. Global skill installs are not
+refused, because skills cannot declare MCP servers. The `turns` requirement and the user-layer
+refusals are deliberately stricter than the TypeScript server, which gated the whole
+`cowork/mcp/*` and plugin surfaces on `workspaceSettings` alone. The `cowork/memory/*` surface (including the
 `cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
 workspace-settings permission, because memory holds long-lived private user/project content.
 `cowork/skills/improvement/*` likewise requires workspace-settings access because it reads skill

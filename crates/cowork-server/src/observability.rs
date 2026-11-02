@@ -27,6 +27,8 @@ const MAX_OBJECT_DEPTH: usize = 5;
 const MAX_OBJECT_KEYS: usize = 60;
 const MAX_ARRAY_LENGTH: usize = 30;
 const MAX_OTEL_ATTR_LEN: usize = 2048;
+/// Cap (in UTF-16 code units) applied to product-analytics string properties.
+const PRODUCT_ANALYTICS_MAX_STRING_LEN: usize = 120;
 const TELEMETRY_QUEUE_CAPACITY: usize = 256;
 const TELEMETRY_HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -260,16 +262,37 @@ pub fn redact_diagnostic_text(value: &str, ctx: &DiagnosticsRedactionContext) ->
     }
 
     next = redact_sensitive_text(&next);
-    if next.len() > max_len {
-        let keep = max_len.saturating_sub(32);
-        let mut end = keep.min(next.len());
-        while end > 0 && !next.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}[redacted-long-string:{}]", &next[..end], value.len())
+    let next_len = utf16_len(&next);
+    if next_len > max_len {
+        let kept = truncate_utf16_prefix(&next, max_len.saturating_sub(32));
+        format!("{kept}[redacted-long-string:{next_len}]")
     } else {
         next
     }
+}
+
+/// Length of `s` in UTF-16 code units, i.e. the JS `string.length` the TS
+/// reference measured telemetry limits in.
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// Longest prefix of `s` that is at most `max_units` UTF-16 code units long.
+///
+/// Mirrors JS `value.slice(0, max_units)` but always cuts on a `char`
+/// boundary: a character that would straddle the limit (including a
+/// surrogate pair such as an emoji) is dropped whole instead of split. It
+/// never panics, whatever the input, so telemetry sanitizers built on it
+/// cannot unwind into their callers.
+fn truncate_utf16_prefix(s: &str, max_units: usize) -> &str {
+    let mut units = 0usize;
+    for (idx, ch) in s.char_indices() {
+        units += ch.len_utf16();
+        if units > max_units {
+            return &s[..idx];
+        }
+    }
+    s
 }
 
 pub fn sanitize_log_meta(meta: &Value, ctx: &DiagnosticsRedactionContext) -> Value {
@@ -939,8 +962,11 @@ fn build_otlp_trace_payload(
                         } else {
                             redact_diagnostic_text(s, ctx)
                         };
-                        let truncated = if scrubbed.len() > MAX_OTEL_ATTR_LEN {
-                            format!("{}…", &scrubbed[..MAX_OTEL_ATTR_LEN - 1])
+                        let truncated = if utf16_len(&scrubbed) > MAX_OTEL_ATTR_LEN {
+                            format!(
+                                "{}…",
+                                truncate_utf16_prefix(&scrubbed, MAX_OTEL_ATTR_LEN - 1)
+                            )
                         } else {
                             scrubbed
                         };
@@ -1084,7 +1110,7 @@ pub fn sanitize_product_analytics_event(
             {
                 return None;
             }
-            let limited = if s.len() > 120 { &s[..120] } else { s };
+            let limited = truncate_utf16_prefix(s, PRODUCT_ANALYTICS_MAX_STRING_LEN);
             out.insert(k.clone(), Value::String(limited.to_owned()));
         } else {
             return None;
@@ -1387,5 +1413,128 @@ impl ServerObservability {
             fl.flush().await;
         }
         self.telemetry.flush().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_props(model: &str) -> BTreeMap<String, Value> {
+        BTreeMap::from([("model".to_owned(), Value::String(model.to_owned()))])
+    }
+
+    fn sanitized_model(model: &str) -> String {
+        let out = sanitize_product_analytics_event("turn_started", &model_props(model))
+            .expect("model property should be accepted");
+        out["model"].as_str().expect("model is a string").to_owned()
+    }
+
+    #[test]
+    fn truncate_utf16_prefix_keeps_whole_chars_within_the_limit() {
+        assert_eq!(truncate_utf16_prefix("", 0), "");
+        assert_eq!(truncate_utf16_prefix("abc", 0), "");
+        assert_eq!(truncate_utf16_prefix("abc", 3), "abc");
+        assert_eq!(truncate_utf16_prefix("abcd", 3), "abc");
+        // `é` is one UTF-16 unit (two UTF-8 bytes).
+        assert_eq!(truncate_utf16_prefix("aéb", 2), "aé");
+        // An emoji is a surrogate pair: it is dropped whole, never split.
+        assert_eq!(truncate_utf16_prefix("a😀", 2), "a");
+        assert_eq!(truncate_utf16_prefix("a😀", 3), "a😀");
+        // CJK is one UTF-16 unit but three UTF-8 bytes.
+        assert_eq!(truncate_utf16_prefix("漢字漢字", 3), "漢字漢");
+        assert_eq!(utf16_len("a😀漢é"), 5);
+    }
+
+    #[test]
+    fn product_analytics_model_with_multibyte_char_across_byte_120_does_not_panic() {
+        // 119 ASCII + `é` = 121 bytes but 120 UTF-16 units: kept intact (the old
+        // `&s[..120]` byte slice panicked here).
+        let model = format!("{}é", "a".repeat(119));
+        assert_eq!(sanitized_model(&model), model);
+
+        // 120 ASCII + `é`: the trailing char is past the 120-unit cap.
+        let model = format!("{}é", "a".repeat(120));
+        assert_eq!(sanitized_model(&model), "a".repeat(120));
+    }
+
+    #[test]
+    fn product_analytics_emoji_at_the_limit_is_dropped_not_split() {
+        // The emoji would occupy UTF-16 units 120 and 121.
+        let model = format!("{}😀tail", "m".repeat(119));
+        assert_eq!(sanitized_model(&model), "m".repeat(119));
+
+        // Fits exactly when it ends at unit 120.
+        let model = format!("{}😀tail", "m".repeat(118));
+        assert_eq!(sanitized_model(&model), format!("{}😀", "m".repeat(118)));
+    }
+
+    #[test]
+    fn product_analytics_cjk_is_capped_by_utf16_units_not_bytes() {
+        let model = "漢".repeat(130);
+        let out = sanitized_model(&model);
+        assert_eq!(out, "漢".repeat(120));
+        assert_eq!(utf16_len(&out), PRODUCT_ANALYTICS_MAX_STRING_LEN);
+    }
+
+    #[test]
+    fn redact_diagnostic_text_truncates_multibyte_text_on_char_boundaries() {
+        let ctx = DiagnosticsRedactionContext {
+            max_string_length: Some(40),
+            ..Default::default()
+        };
+        // 50 CJK chars: keep 40 - 32 = 8 chars; the marker reports the UTF-16
+        // length of the redacted text, like the TS `value.length`.
+        let out = redact_diagnostic_text(&"漢".repeat(50), &ctx);
+        assert_eq!(out, format!("{}[redacted-long-string:50]", "漢".repeat(8)));
+
+        // Emoji straddling the cut is dropped whole.
+        let input = format!("{}😀{}", "x".repeat(7), "y".repeat(40));
+        let out = redact_diagnostic_text(&input, &ctx);
+        assert_eq!(out, format!("{}[redacted-long-string:49]", "x".repeat(7)));
+
+        // Under the limit in UTF-16 units: untouched even though it is longer in bytes.
+        let input = "漢".repeat(40);
+        assert_eq!(redact_diagnostic_text(&input, &ctx), input);
+    }
+
+    #[test]
+    fn otel_string_attributes_truncate_on_char_boundaries() {
+        let cfg = LangfuseExporterConfig {
+            traces_endpoint: "https://example.invalid/v1/traces".to_owned(),
+            basic_auth_header: "Basic x".to_owned(),
+            environment: "test".to_owned(),
+            release: None,
+            allow_payload_attributes: true,
+        };
+        let ctx = DiagnosticsRedactionContext::default();
+        let attr_value = |value: String| {
+            let span = ObservabilitySpanInput {
+                name: "span".to_owned(),
+                status_error: false,
+                duration_ms: 1,
+                attributes: BTreeMap::from([("label".to_owned(), Value::String(value))]),
+            };
+            let payload = build_otlp_trace_payload(&cfg, &span, &ctx);
+            payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"][0]["value"]
+                ["stringValue"]
+                .as_str()
+                .expect("string attribute")
+                .to_owned()
+        };
+
+        // `é` straddles UTF-8 byte 2047 (the old `&s[..2047]` panicked).
+        let out = attr_value(format!("{}é{}", "a".repeat(2046), "b".repeat(10)));
+        assert_eq!(out, format!("{}é…", "a".repeat(2046)));
+
+        // Emoji straddling UTF-16 unit 2047 is dropped whole.
+        let out = attr_value(format!("{}😀{}", "a".repeat(2046), "b".repeat(10)));
+        assert_eq!(out, format!("{}…", "a".repeat(2046)));
+
+        // CJK under the cap in UTF-16 units passes through untouched.
+        let cjk = "漢".repeat(MAX_OTEL_ATTR_LEN);
+        assert_eq!(attr_value(cjk.clone()), cjk);
+        let out = attr_value("漢".repeat(MAX_OTEL_ATTR_LEN + 1));
+        assert_eq!(out, format!("{}…", "漢".repeat(MAX_OTEL_ATTR_LEN - 1)));
     }
 }

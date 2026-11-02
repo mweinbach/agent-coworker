@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -1076,12 +1077,10 @@ impl BuiltinTool for ReadPastConversationTool {
                 "# {} ({})\nUpdated: {}",
                 detail.title, detail.session_id, detail.updated_at
             )];
-            for msg in detail.messages.iter().take(max_turns) {
-                let role = msg.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                let text = extract_message_text_preview(msg);
-                if !text.is_empty() {
-                    lines.push(format!("[{role}] {text}"));
-                }
+            let window = &detail.messages[..detail.messages.len().min(max_turns)];
+            let transcript = serialize_turn_delta(window);
+            if !transcript.is_empty() {
+                lines.push(transcript);
             }
             return Ok(ToolOutput::Text(lines.join("\n\n")));
         }
@@ -1111,18 +1110,278 @@ impl BuiltinTool for ReadPastConversationTool {
     }
 }
 
-fn extract_message_text_preview(msg: &Value) -> String {
-    if let Some(s) = msg.get("content").and_then(Value::as_str) {
-        return s.to_owned();
+/// Per-tool truncation cap for tool results in a serialized transcript (TS `TOOL_RESULT_CHAR_CAP`).
+const TRANSCRIPT_TOOL_RESULT_CHAR_CAP: usize = 600;
+/// Cap on a tool call's compact JSON arguments (TS `stringifyToolInput`).
+const TRANSCRIPT_TOOL_ARGS_CHAR_CAP: usize = 300;
+/// Cap on one serialized transcript (TS `TRANSCRIPT_CHAR_CAP`).
+const TRANSCRIPT_CHAR_CAP: usize = 24_000;
+
+/// TS `truncate`: keep `max - 1` UTF-16 code units and append `…` when `value` is longer than
+/// `max` code units. A surrogate pair straddling the cut is dropped whole instead of split.
+fn truncate_utf16(value: &str, max: usize) -> String {
+    if value.encode_utf16().count() <= max {
+        return value.to_owned();
     }
-    if let Some(arr) = msg.get("content").and_then(Value::as_array) {
-        let parts: Vec<&str> = arr
-            .iter()
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
-            .collect();
-        return parts.join("\n");
+    let budget = max.saturating_sub(1);
+    let mut used = 0usize;
+    let mut end = 0usize;
+    for (idx, ch) in value.char_indices() {
+        let width = ch.len_utf16();
+        if used + width > budget {
+            break;
+        }
+        used += width;
+        end = idx + ch.len_utf8();
     }
-    String::new()
+    format!("{}…", &value[..end])
+}
+
+fn first_str<'a>(obj: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| obj.get(*k).and_then(Value::as_str))
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// TS `partText`: the part's string `text`, else empty.
+fn part_text(part: &Value) -> &str {
+    part.get("text").and_then(Value::as_str).unwrap_or_default()
+}
+
+/// TS `stringifyToolInput`: compact JSON capped at 300 code units; absent/null input renders empty.
+fn stringify_tool_input(input: Option<&Value>) -> String {
+    match input {
+        None | Some(Value::Null) => String::new(),
+        Some(v) => truncate_utf16(&v.to_string(), TRANSCRIPT_TOOL_ARGS_CHAR_CAP),
+    }
+}
+
+/// Placeholder for a media part inside a tool result, so base64 payloads never reach the
+/// transcript (`[image: image/png]`).
+fn media_placeholder(part: &Map<String, Value>, ty: &str) -> String {
+    let kind = part
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or(if ty == "media" { "media" } else { ty });
+    let mime = ["mediaType", "mimeType", "mime_type"]
+        .iter()
+        .find_map(|k| part.get(*k).and_then(Value::as_str))
+        .or_else(|| {
+            part.get("source")
+                .and_then(|s| s.get("mimeType").or_else(|| s.get("mime_type")))
+                .and_then(Value::as_str)
+        });
+    match mime {
+        Some(mime) if !mime.trim().is_empty() => format!("[{kind}: {mime}]"),
+        _ => format!("[{kind}]"),
+    }
+}
+
+/// Renders a tool-result parts array (canonical `ToolResultPart`s or AI-SDK `content` output
+/// parts): text parts verbatim, media parts as placeholders. `None` when any part is unknown.
+fn render_result_parts(parts: &[Value]) -> Option<String> {
+    let mut rendered = Vec::with_capacity(parts.len());
+    for part in parts {
+        let obj = part.as_object()?;
+        match obj.get("type").and_then(Value::as_str)? {
+            "text" => rendered.push(obj.get("text").and_then(Value::as_str)?.to_owned()),
+            ty @ ("media" | "image" | "image-data" | "audio" | "video" | "document" | "file"
+            | "file-data") => rendered.push(media_placeholder(obj, ty)),
+            _ => return None,
+        }
+    }
+    Some(rendered.join("\n"))
+}
+
+/// TS `stringifyToolOutput` for legacy AI-SDK outputs: strings verbatim, `{ value: string }`
+/// unwrapped, everything else compact JSON. `content`-typed outputs and bare part arrays render
+/// their parts (media as placeholders) instead of dumping base64 JSON.
+fn stringify_tool_output(output: Option<&Value>) -> String {
+    match output {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => {
+            render_result_parts(parts).unwrap_or_else(|| Value::Array(parts.clone()).to_string())
+        }
+        Some(Value::Object(obj)) => {
+            if let Some(s) = obj.get("value").and_then(Value::as_str) {
+                return s.to_owned();
+            }
+            if obj.get("type").and_then(Value::as_str) == Some("content")
+                && let Some(text) = obj
+                    .get("value")
+                    .or_else(|| obj.get("content"))
+                    .and_then(Value::as_array)
+                    .and_then(|parts| render_result_parts(parts))
+            {
+                return text;
+            }
+            Value::Object(obj.clone()).to_string()
+        }
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Text of one tool-result part plus its error flag, for canonical `toolResult` blocks (nested
+/// `content` parts + `isError`) and legacy `tool-result` parts (`output` | `result`).
+fn tool_result_text(part: &Map<String, Value>) -> (String, bool) {
+    let mut is_error = ["isError", "is_error"]
+        .iter()
+        .any(|k| part.get(*k).and_then(Value::as_bool) == Some(true));
+    let text = if let Some(output) = part.get("output").or_else(|| part.get("result")) {
+        if output
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|ty| ty.starts_with("error"))
+        {
+            is_error = true;
+        }
+        stringify_tool_output(Some(output))
+    } else {
+        match part.get("content") {
+            Some(Value::Array(parts)) => render_result_parts(parts)
+                .unwrap_or_else(|| Value::Array(parts.clone()).to_string()),
+            other => stringify_tool_output(other),
+        }
+    };
+    (text, is_error)
+}
+
+/// Tool name for a result part: its own `toolName`, else the name of the call it answers.
+fn tool_result_name(obj: &Map<String, Value>, call_names: &HashMap<String, String>) -> String {
+    first_str(obj, &["toolName", "tool_name", "name"])
+        .map(str::to_owned)
+        .or_else(|| {
+            first_str(obj, &["toolCallId", "tool_call_id", "callId", "id"])
+                .and_then(|id| call_names.get(id).cloned())
+        })
+        .unwrap_or_else(|| "tool".to_owned())
+}
+
+fn push_tool_result_line(lines: &mut Vec<String>, name: &str, text: &str, is_error: bool) {
+    let out = truncate_utf16(text.trim(), TRANSCRIPT_TOOL_RESULT_CHAR_CAP);
+    if out.is_empty() {
+        return;
+    }
+    let flag = if is_error { " (error)" } else { "" };
+    lines.push(format!("TOOL[{name}]{flag}: {out}"));
+}
+
+/// Port of TS `serializeMessages` (advancedMemory/MemoryGenerator.ts): user and assistant text,
+/// tool calls as `ASSISTANT → name(compact args)` and tool results as `TOOL[name]: …` truncated
+/// to 600 code units. Reasoning is omitted. Handles canonical messages (`toolCall` /
+/// `toolResult` / `providerNativeTool` blocks) as well as legacy AI-SDK (`tool-call` with
+/// `toolName` + `input`|`args`, `tool-result` with `output`|`result`), OpenAI-style string tool
+/// messages, and pi-ai `toolResult`-role messages.
+fn serialize_transcript_messages(messages: &[Value]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // Canonical results may omit `toolName`; recover it from the matching call.
+    let mut call_names: HashMap<String, String> = HashMap::new();
+
+    for message in messages {
+        let Some(obj) = message.as_object() else {
+            continue;
+        };
+        let role = obj.get("role").and_then(Value::as_str).unwrap_or_default();
+        let content = obj.get("content");
+        match role {
+            "user" => {
+                let text = match content {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Array(parts)) => parts.iter().map(part_text).collect(),
+                    _ => String::new(),
+                };
+                let text = text.trim();
+                if !text.is_empty() {
+                    lines.push(format!("USER: {text}"));
+                }
+            }
+            "assistant" => match content {
+                Some(Value::String(s)) => {
+                    if !s.trim().is_empty() {
+                        lines.push(format!("ASSISTANT: {}", s.trim()));
+                    }
+                }
+                Some(Value::Array(parts)) => {
+                    for part in parts {
+                        let Some(p) = part.as_object() else { continue };
+                        match p.get("type").and_then(Value::as_str).unwrap_or_default() {
+                            "text" | "output_text" => {
+                                let text = part_text(part).trim();
+                                if !text.is_empty() {
+                                    lines.push(format!("ASSISTANT: {text}"));
+                                }
+                            }
+                            "tool-call" | "toolCall" | "tool_call" => {
+                                let name = first_str(p, &["toolName", "name"]).unwrap_or("tool");
+                                if let Some(id) = first_str(p, &["toolCallId", "id", "callId"]) {
+                                    call_names.insert(id.to_owned(), name.to_owned());
+                                }
+                                let args = stringify_tool_input(
+                                    p.get("input")
+                                        .or_else(|| p.get("args"))
+                                        .or_else(|| p.get("arguments")),
+                                );
+                                lines.push(format!("ASSISTANT → {name}({args})"));
+                            }
+                            "providerNativeTool" => {
+                                let name = first_str(p, &["name"]).unwrap_or("tool");
+                                if p.get("role").and_then(Value::as_str) == Some("result") {
+                                    let text = stringify_tool_output(p.get("result"));
+                                    let is_error =
+                                        p.get("isError").and_then(Value::as_bool) == Some(true);
+                                    push_tool_result_line(&mut lines, name, &text, is_error);
+                                } else {
+                                    let args = stringify_tool_input(p.get("arguments"));
+                                    lines.push(format!("ASSISTANT → {name}({args})"));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            },
+            "tool" => match content {
+                Some(Value::Array(parts)) => {
+                    for part in parts {
+                        let Some(p) = part.as_object() else { continue };
+                        if !matches!(
+                            p.get("type").and_then(Value::as_str),
+                            Some("tool-result" | "toolResult" | "tool_result")
+                        ) {
+                            continue;
+                        }
+                        let name = tool_result_name(p, &call_names);
+                        let (text, is_error) = tool_result_text(p);
+                        push_tool_result_line(&mut lines, &name, &text, is_error);
+                    }
+                }
+                // OpenAI-style `{ role: "tool", tool_call_id, content: "..." }`.
+                Some(Value::String(text)) => {
+                    let name = tool_result_name(obj, &call_names);
+                    push_tool_result_line(&mut lines, &name, text, false);
+                }
+                _ => {}
+            },
+            // pi-ai `{ role: "toolResult", toolCallId, toolName, content: [...], isError }`.
+            "toolResult" => {
+                let name = tool_result_name(obj, &call_names);
+                let (text, is_error) = tool_result_text(obj);
+                push_tool_result_line(&mut lines, &name, &text, is_error);
+            }
+            _ => {}
+        }
+    }
+    lines.join("\n")
+}
+
+/// Port of TS `serializeTurnDelta`: the compact transcript capped at 24,000 UTF-16 code units.
+fn serialize_turn_delta(messages: &[Value]) -> String {
+    truncate_utf16(
+        &serialize_transcript_messages(messages),
+        TRANSCRIPT_CHAR_CAP,
+    )
 }
 
 #[cfg(test)]
@@ -1177,5 +1436,145 @@ mod tests {
                 .expect("general dir"),
             tmp.path().join("memories").join("(chats)")
         );
+    }
+
+    #[test]
+    fn transcript_keeps_canonical_tool_call_and_result_evidence() {
+        let long_tail = "x".repeat(1_000);
+        let messages = vec![
+            json!({ "id": "m1", "role": "user", "createdAt": "2026-10-30T10:00:00.000Z",
+                "content": [{ "type": "text", "text": "Why does CI fail?" }] }),
+            json!({ "id": "m2", "role": "assistant", "createdAt": "2026-10-30T10:00:01.000Z",
+                "content": [
+                    { "type": "thinking", "text": "private reasoning" },
+                    { "type": "toolCall", "id": "call_1", "name": "bash",
+                      "arguments": { "command": "cargo test -p core" } }
+                ] }),
+            json!({ "id": "m3", "role": "tool", "createdAt": "2026-10-30T10:00:02.000Z",
+                "content": [{ "type": "toolResult", "toolCallId": "call_1", "isError": true,
+                    "content": [
+                        { "type": "text", "text": format!("error[E0425]: cannot find value `cfg_flag`\n{long_tail}") },
+                        { "type": "media", "kind": "image",
+                          "source": { "type": "base64", "mimeType": "image/png", "data": "QUJD" } }
+                    ] }] }),
+            json!({ "id": "m4", "role": "assistant", "createdAt": "2026-10-30T10:00:03.000Z",
+                "content": [{ "type": "text", "text": "Fixed it." }] }),
+        ];
+
+        let out = serialize_turn_delta(&messages);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "USER: Why does CI fail?");
+        assert_eq!(
+            lines[1],
+            r#"ASSISTANT → bash({"command":"cargo test -p core"})"#
+        );
+        assert_eq!(
+            lines[2],
+            "TOOL[bash] (error): error[E0425]: cannot find value `cfg_flag`"
+        );
+        let result_line = out
+            .split('\n')
+            .skip(2)
+            .take_while(|l| !l.starts_with("ASSISTANT"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = result_line.strip_prefix("TOOL[bash] (error): ").unwrap();
+        assert_eq!(body.encode_utf16().count(), TRANSCRIPT_TOOL_RESULT_CHAR_CAP);
+        assert!(body.ends_with('…'));
+        assert!(!out.contains("QUJD"), "base64 media must not leak: {out}");
+        assert!(!out.contains("private reasoning"));
+        assert_eq!(lines.last().copied(), Some("ASSISTANT: Fixed it."));
+    }
+
+    #[test]
+    fn transcript_renders_canonical_media_placeholder_and_native_tools() {
+        let messages = vec![
+            json!({ "role": "assistant", "content": [
+                { "type": "providerNativeTool", "id": "ws_1", "name": "nativeWebSearch",
+                  "role": "call", "arguments": { "query": "rust 2024 edition" } },
+                { "type": "providerNativeTool", "id": "ws_1", "name": "nativeWebSearch",
+                  "role": "result", "result": { "sources": ["https://doc.rust-lang.org"] } }
+            ] }),
+            json!({ "role": "tool", "content": [{ "type": "toolResult", "toolCallId": "c",
+                "toolName": "screenshot",
+                "content": [{ "type": "media", "kind": "image",
+                    "source": { "type": "base64", "mimeType": "image/png", "data": "QUJD" } }] }] }),
+        ];
+        assert_eq!(
+            serialize_turn_delta(&messages),
+            [
+                r#"ASSISTANT → nativeWebSearch({"query":"rust 2024 edition"})"#,
+                r#"TOOL[nativeWebSearch]: {"sources":["https://doc.rust-lang.org"]}"#,
+                "TOOL[screenshot]: [image: image/png]",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn transcript_keeps_legacy_ai_sdk_and_pi_tool_evidence() {
+        let big_args = "a".repeat(400);
+        let messages = vec![
+            json!({ "role": "user", "content": "Find the needle" }),
+            json!({ "role": "assistant", "content": [
+                { "type": "text", "text": "Searching." },
+                { "type": "tool-call", "toolCallId": "t1", "toolName": "grep",
+                  "args": { "pattern": "needle" } },
+                { "type": "tool-call", "toolCallId": "t2", "toolName": "read",
+                  "input": { "path": big_args } }
+            ] }),
+            json!({ "role": "tool", "content": [
+                { "type": "tool-result", "toolCallId": "t1", "toolName": "grep",
+                  "result": "src/lib.rs:42: let needle = 7;" },
+                { "type": "tool-result", "toolCallId": "t2", "toolName": "read",
+                  "output": { "type": "text", "value": "file body" } }
+            ] }),
+            json!({ "role": "tool", "content": [
+                { "type": "tool-result", "toolCallId": "t3", "toolName": "webFetch",
+                  "output": { "type": "json", "value": { "status": 404 } } },
+                { "type": "tool-result", "toolCallId": "t4", "toolName": "bash",
+                  "output": { "type": "error-text", "value": "permission denied" } },
+                { "type": "tool-result", "toolCallId": "t5", "toolName": "read",
+                  "output": { "type": "content", "value": [
+                      { "type": "text", "text": "diagram" },
+                      { "type": "media", "data": "QUJD", "mediaType": "image/png" }
+                  ] } }
+            ] }),
+            json!({ "role": "tool", "tool_call_id": "t1", "content": "openai-style output" }),
+            json!({ "role": "toolResult", "toolCallId": "t6", "toolName": "bash",
+                "isError": true, "content": [{ "type": "text", "text": "exit 1" }] }),
+        ];
+        let truncated_args = truncate_utf16(
+            &json!({ "path": big_args }).to_string(),
+            TRANSCRIPT_TOOL_ARGS_CHAR_CAP,
+        );
+        assert_eq!(truncated_args.encode_utf16().count(), 300);
+        assert_eq!(
+            serialize_turn_delta(&messages),
+            [
+                "USER: Find the needle".to_owned(),
+                "ASSISTANT: Searching.".to_owned(),
+                r#"ASSISTANT → grep({"pattern":"needle"})"#.to_owned(),
+                format!("ASSISTANT → read({truncated_args})"),
+                "TOOL[grep]: src/lib.rs:42: let needle = 7;".to_owned(),
+                "TOOL[read]: file body".to_owned(),
+                r#"TOOL[webFetch]: {"type":"json","value":{"status":404}}"#.to_owned(),
+                "TOOL[bash] (error): permission denied".to_owned(),
+                "TOOL[read]: diagram\n[media: image/png]".to_owned(),
+                "TOOL[grep]: openai-style output".to_owned(),
+                "TOOL[bash] (error): exit 1".to_owned(),
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn transcript_is_capped_like_ts_serialize_turn_delta() {
+        let messages = vec![json!({ "role": "user", "content": "y".repeat(30_000) })];
+        let out = serialize_turn_delta(&messages);
+        assert_eq!(out.encode_utf16().count(), TRANSCRIPT_CHAR_CAP);
+        assert!(out.starts_with("USER: yyy") && out.ends_with('…'));
+        assert_eq!(truncate_utf16("héllo", 5), "héllo");
+        assert_eq!(truncate_utf16("a😀b", 3), "a…");
     }
 }

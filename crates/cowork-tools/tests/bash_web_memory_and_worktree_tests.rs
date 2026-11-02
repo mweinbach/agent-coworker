@@ -693,6 +693,17 @@ async fn ask_todo_skill_memory_advanced_memory_and_git_worktree_service_work_end
             messages: vec![
                 json!({ "role": "user", "content": [{ "type": "text", "text": "Which DB should we use?" }] }),
                 json!({ "role": "assistant", "content": [{ "type": "text", "text": "We chose PostgreSQL 17 for JSONB indexing." }] }),
+                // Evidence recorded only in tool calls/results (canonical + legacy AI-SDK shapes).
+                json!({ "id": "m3", "role": "assistant", "createdAt": "2026-10-30T10:01:00.000Z",
+                    "content": [{ "type": "toolCall", "id": "call_1", "name": "bash",
+                        "arguments": { "command": "psql --version" } }] }),
+                json!({ "id": "m4", "role": "tool", "createdAt": "2026-10-30T10:01:01.000Z",
+                    "content": [{ "type": "toolResult", "toolCallId": "call_1", "isError": false,
+                        "content": [{ "type": "text", "text": "psql (PostgreSQL) 17.2" }] }] }),
+                json!({ "role": "assistant", "content": [{ "type": "tool-call", "toolCallId": "t2",
+                    "toolName": "grep", "args": { "pattern": "max_connections" } }] }),
+                json!({ "role": "tool", "content": [{ "type": "tool-result", "toolCallId": "t2",
+                    "toolName": "grep", "output": { "type": "text", "value": "postgresql.conf:64: max_connections = 250" } }] }),
             ],
             last_memory_generated_index: Some(0),
             provider_state: None,
@@ -909,7 +920,24 @@ async fn ask_todo_skill_memory_advanced_memory_and_git_worktree_service_work_end
         )
         .await
         .unwrap();
-    assert!(past_read.as_text().unwrap().contains("PostgreSQL 17"));
+    let past_text = past_read.as_text().unwrap();
+    assert!(past_text.contains("PostgreSQL 17"));
+    assert!(
+        past_text.contains("ASSISTANT → bash({\"command\":\"psql --version\"})"),
+        "{past_text}"
+    );
+    assert!(
+        past_text.contains("TOOL[bash]: psql (PostgreSQL) 17.2"),
+        "{past_text}"
+    );
+    assert!(
+        past_text.contains("ASSISTANT → grep({\"pattern\":\"max_connections\"})"),
+        "{past_text}"
+    );
+    assert!(
+        past_text.contains("TOOL[grep]: postgresql.conf:64: max_connections = 250"),
+        "{past_text}"
+    );
 
     // 6. Git `WorktreeService` creates isolated git worktree under `<home>/.cowork/worktrees`
     let wt_svc = WorktreeService::new(home.clone(), HashMap::new());

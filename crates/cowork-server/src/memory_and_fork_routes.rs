@@ -298,7 +298,8 @@ impl ServerRuntimeState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(&params.name);
-        let mem_type = params.r#type.as_deref().unwrap_or("project");
+        // An omitted type keeps an edited entry's type and makes a new one a `note` (TS).
+        let mem_type = params.r#type.as_deref().unwrap_or("");
         store
             .upsert_entry(
                 "workspace",
@@ -337,7 +338,8 @@ impl ServerRuntimeState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(&params.name);
-        let mem_type = params.r#type.as_deref().unwrap_or("project");
+        // An omitted type keeps an edited entry's type and makes a new one a `note` (TS).
+        let mem_type = params.r#type.as_deref().unwrap_or("");
         store
             .upsert_entry(
                 "workspace",

@@ -237,3 +237,33 @@ async fn manage_memory_create_with_slug_uses_it_as_the_file_name() {
         .expect_err("a target is required");
     assert!(err.to_string().contains("name or slug"), "{err}");
 }
+
+/// A write with a blank type (the desktop upsert routes when `type` is omitted) keeps an
+/// existing entry's type, like TS `editMemory` (`patch.type ?? existing.type`), and defaults a new
+/// entry to `note`.
+#[test]
+fn blank_type_keeps_the_existing_type_on_edit_and_defaults_new_entries_to_note() {
+    let fx = fixture();
+    fx.store
+        .upsert_entry(
+            "workspace",
+            None,
+            "pref",
+            "Pref",
+            "d",
+            "feedback",
+            "body one",
+        )
+        .unwrap();
+    fx.store
+        .upsert_entry("workspace", None, "pref", "Pref", "d2", "", "body two")
+        .unwrap();
+    let edited = fx.entry("pref");
+    assert_eq!(edited.memory_type, "feedback");
+    assert_eq!(edited.body, "body two");
+
+    fx.store
+        .upsert_entry("workspace", None, "fresh", "Fresh", "d", "", "new body")
+        .unwrap();
+    assert_eq!(fx.entry("fresh").memory_type, "note");
+}

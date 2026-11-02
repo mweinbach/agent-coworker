@@ -490,21 +490,23 @@ impl AdvancedMemoryStore {
 
             // TS `editMemory` kept the entry's `originSessionId`; a rewrite normalizes the
             // file to the current flat frontmatter without dropping it.
-            let origin_session_id = if is_update {
-                existing
-                    .iter()
-                    .find(|e| e.slug == slug)
-                    .and_then(|e| e.origin_session_id.clone())
+            let previous = if is_update {
+                existing.iter().find(|e| e.slug == slug)
             } else {
                 None
             };
+            let origin_session_id = previous.and_then(|e| e.origin_session_id.clone());
             let now = Utc::now().to_rfc3339();
             let entry = AdvancedMemoryEntry {
                 slug: slug.clone(),
                 name: name.trim().to_owned(),
                 description: description.trim().to_owned(),
+                // A blank type keeps an edited entry's type (TS `editMemory`: `patch.type ??
+                // existing.type`) and defaults a new entry to `note`.
                 memory_type: match memory_type.trim() {
-                    "" => DEFAULT_MEMORY_TYPE.to_owned(),
+                    "" => previous
+                        .map(|e| e.memory_type.clone())
+                        .unwrap_or_else(|| DEFAULT_MEMORY_TYPE.to_owned()),
                     t => t.to_owned(),
                 },
                 scope: scope.to_owned(),

@@ -28,6 +28,7 @@ use crate::types::{
 
 const MAX_STDIO_LINE_BYTES: usize = 10 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const SSE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
     "2025-11-25",
@@ -84,6 +85,26 @@ fn build_safe_child_env(
     env
 }
 
+/// Deadlines applied by every transport.
+#[derive(Clone, Copy, Debug)]
+struct TransportTimeouts {
+    /// Opening a legacy SSE stream: the GET's response headers, then the `endpoint` event.
+    /// The event stream itself stays open indefinitely once established.
+    connect: Duration,
+    /// One JSON-RPC exchange end to end: writing or POSTing the message (including HTTP
+    /// response headers and body) and waiting for the matching response.
+    request: Duration,
+}
+
+impl Default for TransportTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: SSE_CONNECT_TIMEOUT,
+            request: DEFAULT_REQUEST_TIMEOUT,
+        }
+    }
+}
+
 #[async_trait]
 trait RpcTransport: Send + Sync {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, String>;
@@ -105,6 +126,7 @@ struct StdioTransport {
     pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
     closed: AtomicBool,
+    request_timeout: Duration,
     reader_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stderr_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -116,6 +138,7 @@ impl StdioTransport {
         cwd: Option<&str>,
         base_env: &HashMap<String, String>,
         explicit_env: Option<&HashMap<String, String>>,
+        timeouts: TransportTimeouts,
     ) -> Result<Arc<Self>, String> {
         let mut cmd = Command::new(command_bin);
         cmd.args(args)
@@ -227,13 +250,19 @@ impl StdioTransport {
             pending,
             next_id: AtomicU64::new(1),
             closed: AtomicBool::new(false),
+            request_timeout: timeouts.request,
             reader_task: Mutex::new(Some(reader_task)),
             stderr_task: Mutex::new(stderr_task),
         }))
     }
 
-    async fn write_frame(&self, frame: &Value) -> Result<(), String> {
-        write_stdio_frame(&self.stdin, frame).await
+    /// Writes `frame` from a detached task so a caller whose deadline expires mid-write
+    /// cannot leave a torn line in the pipe; queued frames still go out whole and in order.
+    async fn write_frame(&self, frame: Value) -> Result<(), String> {
+        let stdin = Arc::clone(&self.stdin);
+        tokio::spawn(async move { write_stdio_frame(&stdin, &frame).await })
+            .await
+            .unwrap_or_else(|e| Err(format!("MCP stdio write task failed: {e}")))
     }
 }
 
@@ -273,19 +302,16 @@ impl RpcTransport for StdioTransport {
             payload["params"] = p;
         }
 
-        if let Err(e) = self.write_frame(&payload).await {
-            self.pending.remove(&id);
-            return Err(e);
-        }
-
-        match tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(res)) => res,
-            Ok(Err(_)) => Err(format!("MCP stdio request \"{method}\" canceled")),
-            Err(_) => {
-                self.pending.remove(&id);
-                Err(format!("MCP stdio request \"{method}\" timed out"))
-            }
-        }
+        // The deadline covers the write too: a server that stops reading stdin fills the
+        // pipe and would otherwise block the write forever.
+        let outcome = tokio::time::timeout(self.request_timeout, async {
+            self.write_frame(payload).await?;
+            rx.await
+                .unwrap_or_else(|_| Err(format!("MCP stdio request \"{method}\" canceled")))
+        })
+        .await;
+        self.pending.remove(&id);
+        outcome.unwrap_or_else(|_| Err(format!("MCP stdio request \"{method}\" timed out")))
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), String> {
@@ -296,15 +322,23 @@ impl RpcTransport for StdioTransport {
         if let Some(p) = params {
             payload["params"] = p;
         }
-        self.write_frame(&payload).await
+        tokio::time::timeout(self.request_timeout, self.write_frame(payload))
+            .await
+            .unwrap_or_else(|_| Err(format!("MCP stdio notification \"{method}\" timed out")))
     }
 
     async fn close(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        // 1. Close stdin first so well-behaved servers exit cleanly
-        let _ = self.stdin.lock().await.take();
+        // 1. Close stdin first so well-behaved servers exit cleanly. A write blocked on a full
+        //    pipe holds the lock indefinitely; don't wait on it, since killing the process
+        //    group below fails that write.
+        if let Ok(mut stdin) =
+            tokio::time::timeout(Duration::from_millis(200), self.stdin.lock()).await
+        {
+            stdin.take();
+        }
 
         // 2. Signal the entire process group (`-pgid`) and wait briefly, escalating to SIGKILL
         #[cfg(unix)]
@@ -361,6 +395,7 @@ struct SseTransport {
     oauth_ctx: Option<McpOAuthRuntimeContext>,
     pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
+    request_timeout: Duration,
     stream_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     reply_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -370,6 +405,7 @@ impl SseTransport {
         sse_url_str: &str,
         initial_headers: Option<&HashMap<String, String>>,
         oauth_ctx: Option<McpOAuthRuntimeContext>,
+        timeouts: TransportTimeouts,
     ) -> Result<Arc<Self>, String> {
         let sse_url = Url::parse(sse_url_str).map_err(|e| format!("Invalid SSE URL: {e}"))?;
         let client = reqwest::Client::builder()
@@ -378,8 +414,13 @@ impl SseTransport {
             .map_err(|e| e.to_string())?;
         let mut headers = initial_headers.cloned().unwrap_or_default();
 
-        let resp =
-            Self::open_sse_stream(&client, &sse_url, &mut headers, oauth_ctx.as_ref()).await?;
+        // Bound only the wait for response headers; the event stream body stays unbounded.
+        let resp = tokio::time::timeout(
+            timeouts.connect,
+            Self::open_sse_stream(&client, &sse_url, &mut headers, oauth_ctx.as_ref()),
+        )
+        .await
+        .map_err(|_| "Timed out waiting for MCP SSE stream response".to_owned())??;
         let mut event_stream = resp.bytes_stream().eventsource();
 
         let (ep_tx, ep_rx) = oneshot::channel::<Result<Url, String>>();
@@ -438,7 +479,7 @@ impl SseTransport {
             }
         });
 
-        let endpoint_url = match tokio::time::timeout(Duration::from_secs(10), ep_rx).await {
+        let endpoint_url = match tokio::time::timeout(timeouts.connect, ep_rx).await {
             Ok(Ok(Ok(u))) => u,
             Ok(Ok(Err(e))) => {
                 stream_task.abort();
@@ -457,6 +498,7 @@ impl SseTransport {
             oauth_ctx,
             pending,
             next_id: AtomicU64::new(1),
+            request_timeout: timeouts.request,
             stream_task: Mutex::new(Some(stream_task)),
             reply_task: Mutex::new(None),
         });
@@ -466,7 +508,9 @@ impl SseTransport {
                 let Some(transport) = weak.upgrade() else {
                     break;
                 };
-                let _ = transport.post_json(&reply).await;
+                let _ =
+                    tokio::time::timeout(transport.request_timeout, transport.post_json(&reply))
+                        .await;
             }
         });
         *transport.reply_task.lock() = Some(reply_task);
@@ -568,27 +612,21 @@ impl RpcTransport for SseTransport {
             payload["params"] = p;
         }
 
-        match self.post_json(&payload).await {
-            Ok(Some(direct_msg)) => {
+        // One deadline covers the POST (response headers and body) and the wait for the
+        // response on the event stream: a server that accepts the POST but never answers it
+        // must not stall the caller.
+        let outcome = tokio::time::timeout(self.request_timeout, async {
+            if let Some(direct_msg) = self.post_json(&payload).await? {
                 for reply in dispatch_jsonrpc_response(&self.pending, direct_msg) {
                     let _ = self.post_json(&reply).await;
                 }
             }
-            Ok(None) => {}
-            Err(e) => {
-                self.pending.remove(&id);
-                return Err(e);
-            }
-        }
-
-        match tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(res)) => res,
-            Ok(Err(_)) => Err(format!("MCP SSE request \"{method}\" canceled")),
-            Err(_) => {
-                self.pending.remove(&id);
-                Err(format!("MCP SSE request \"{method}\" timed out"))
-            }
-        }
+            rx.await
+                .unwrap_or_else(|_| Err(format!("MCP SSE request \"{method}\" canceled")))
+        })
+        .await;
+        self.pending.remove(&id);
+        outcome.unwrap_or_else(|_| Err(format!("MCP SSE request \"{method}\" timed out")))
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), String> {
@@ -599,8 +637,10 @@ impl RpcTransport for SseTransport {
         if let Some(p) = params {
             payload["params"] = p;
         }
-        let _ = self.post_json(&payload).await?;
-        Ok(())
+        match tokio::time::timeout(self.request_timeout, self.post_json(&payload)).await {
+            Ok(res) => res.map(|_| ()),
+            Err(_) => Err(format!("MCP SSE notification \"{method}\" timed out")),
+        }
     }
 
     async fn close(&self) {
@@ -626,6 +666,7 @@ struct StreamableHttpTransport {
     protocol_version: Mutex<Option<String>>,
     next_id: AtomicU64,
     closed: AtomicBool,
+    request_timeout: Duration,
 }
 
 impl StreamableHttpTransport {
@@ -633,6 +674,7 @@ impl StreamableHttpTransport {
         url_str: &str,
         initial_headers: Option<&HashMap<String, String>>,
         oauth_ctx: Option<McpOAuthRuntimeContext>,
+        timeouts: TransportTimeouts,
     ) -> Result<Arc<Self>, String> {
         let url = Url::parse(url_str).map_err(|e| format!("Invalid HTTP MCP URL: {e}"))?;
         let client = reqwest::Client::builder()
@@ -648,6 +690,7 @@ impl StreamableHttpTransport {
             protocol_version: Mutex::new(None),
             next_id: AtomicU64::new(1),
             closed: AtomicBool::new(false),
+            request_timeout: timeouts.request,
         }))
     }
 
@@ -769,8 +812,11 @@ impl RpcTransport for StreamableHttpTransport {
         if let Some(p) = params {
             payload["params"] = p;
         }
-        self.send_rpc(&payload, Some(id))
-            .await?
+        // The client's per-POST timeout restarts on an OAuth retry and for each nested reply;
+        // this deadline bounds the whole exchange.
+        tokio::time::timeout(self.request_timeout, self.send_rpc(&payload, Some(id)))
+            .await
+            .map_err(|_| format!("MCP HTTP request \"{method}\" timed out"))??
             .ok_or_else(|| format!("MCP HTTP request \"{method}\" returned empty 202 response"))
     }
 
@@ -782,8 +828,10 @@ impl RpcTransport for StreamableHttpTransport {
         if let Some(p) = params {
             payload["params"] = p;
         }
-        let _ = self.send_rpc(&payload, None).await?;
-        Ok(())
+        match tokio::time::timeout(self.request_timeout, self.send_rpc(&payload, None)).await {
+            Ok(res) => res.map(|_| ()),
+            Err(_) => Err(format!("MCP HTTP notification \"{method}\" timed out")),
+        }
     }
 
     fn set_negotiated_protocol_version(&self, version: String) {
@@ -878,6 +926,7 @@ async fn connect_and_list_once(
     server: &HydratedMcpServer,
     base_env: &HashMap<String, String>,
 ) -> Result<ServerConnectionBundle, String> {
+    let timeouts = TransportTimeouts::default();
     let transport: Arc<dyn RpcTransport> = match &server.config.transport {
         McpServerTransport::Stdio {
             command,
@@ -891,15 +940,25 @@ async fn connect_and_list_once(
                 cwd.as_deref(),
                 base_env,
                 env.as_ref(),
+                timeouts,
             )
             .await?
         }
         McpServerTransport::Sse { url, headers } => {
-            SseTransport::connect(url, headers.as_ref(), server.oauth_context.clone()).await?
+            SseTransport::connect(
+                url,
+                headers.as_ref(),
+                server.oauth_context.clone(),
+                timeouts,
+            )
+            .await?
         }
-        McpServerTransport::Http { url, headers } => {
-            StreamableHttpTransport::new(url, headers.as_ref(), server.oauth_context.clone())?
-        }
+        McpServerTransport::Http { url, headers } => StreamableHttpTransport::new(
+            url,
+            headers.as_ref(),
+            server.oauth_context.clone(),
+            timeouts,
+        )?,
     };
 
     let init_res = match transport

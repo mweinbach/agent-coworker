@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -43,7 +43,16 @@ struct Env {
     chat: Arc<Mutex<Vec<Value>>>,
     /// When set, memory extraction requests to the chat endpoint answer 500.
     memory_fail: Arc<AtomicBool>,
+    /// When set, the first memory extraction answers after `SLOW_FIRST_MEMORY` and later ones
+    /// after `SLOW_LATER_MEMORY`, so a newer extraction would overtake an older one.
+    memory_slow: Arc<AtomicBool>,
+    /// Memory extraction requests currently awaiting their response, and the peak of that.
+    memory_in_flight: Arc<AtomicUsize>,
+    memory_max_in_flight: Arc<AtomicUsize>,
 }
+
+const SLOW_FIRST_MEMORY: Duration = Duration::from_millis(2_000);
+const SLOW_LATER_MEMORY: Duration = Duration::from_millis(100);
 
 fn chat_sse_text(text: &str) -> String {
     format!(
@@ -82,17 +91,41 @@ impl Env {
 
         let chat: Arc<Mutex<Vec<Value>>> = Arc::default();
         let memory_fail = Arc::new(AtomicBool::new(false));
+        let memory_slow = Arc::new(AtomicBool::new(false));
+        let memory_in_flight = Arc::new(AtomicUsize::new(0));
+        let memory_max_in_flight = Arc::new(AtomicUsize::new(0));
         let chat_route = Arc::clone(&chat);
         let fail_route = Arc::clone(&memory_fail);
+        let slow_route = Arc::clone(&memory_slow);
+        let in_flight_route = Arc::clone(&memory_in_flight);
+        let max_in_flight_route = Arc::clone(&memory_max_in_flight);
         let app = Router::new().route(
             "/v1/chat/completions",
             post(move |body: axum::body::Bytes| {
                 let chat = Arc::clone(&chat_route);
                 let fail = Arc::clone(&fail_route);
+                let slow = Arc::clone(&slow_route);
+                let in_flight = Arc::clone(&in_flight_route);
+                let max_in_flight = Arc::clone(&max_in_flight_route);
                 async move {
                     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                     let memory = is_memory_request(&parsed);
-                    chat.lock().unwrap().push(parsed);
+                    let memory_ordinal = {
+                        let mut chat = chat.lock().unwrap();
+                        chat.push(parsed);
+                        chat.iter().filter(|b| is_memory_request(b)).count()
+                    };
+                    if memory && slow.load(Ordering::SeqCst) {
+                        let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_in_flight.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(if memory_ordinal == 1 {
+                            SLOW_FIRST_MEMORY
+                        } else {
+                            SLOW_LATER_MEMORY
+                        })
+                        .await;
+                        in_flight.fetch_sub(1, Ordering::SeqCst);
+                    }
                     if memory && fail.load(Ordering::SeqCst) {
                         return Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -134,6 +167,9 @@ impl Env {
             env,
             chat,
             memory_fail,
+            memory_slow,
+            memory_in_flight,
+            memory_max_in_flight,
         }
     }
 
@@ -376,5 +412,79 @@ async fn failed_automatic_generation_keeps_the_cursor_for_the_next_turn() {
         "the unprocessed preference must be retried: {retry}"
     );
     await_cursor_at_end(&server, &thread_id).await;
+    server.shutdown().await;
+}
+
+/// Back-to-back turns queue their extractions on the thread's generation queue (TS
+/// `memoryGenerationQueue`): the second starts only after the first committed, reads the cursor
+/// the first advanced, and so sends only the second turn's messages. A slower earlier
+/// extraction can never overwrite a later checkpoint, so the final cursor covers the whole
+/// transcript, and the queue entry is released once the thread is idle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn back_to_back_turns_serialize_memory_generation_per_thread() {
+    const FIRST: &str = "I prefer tabs over spaces in this repository. MARKER-ALPHA";
+    const SECOND: &str = "I also prefer rebasing over merge commits. MARKER-BRAVO";
+
+    let env = Env::new().await;
+    env.memory_slow.store(true, Ordering::SeqCst);
+    let server = start_server(env.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let cwd = env.cwd();
+    let thread_id = start_thread(&mut ws, &cwd).await;
+    set_config(&mut ws, &thread_id, json!({ "advancedMemory": true })).await;
+
+    run_turn(&mut ws, "turn-1", &thread_id, FIRST).await;
+    env.await_memory_requests(1).await;
+    run_turn(&mut ws, "turn-2", &thread_id, SECOND).await;
+    assert_eq!(
+        env.memory_in_flight.load(Ordering::SeqCst),
+        1,
+        "the second turn must complete while the first extraction is still running"
+    );
+    assert_eq!(
+        env.memory_requests().len(),
+        1,
+        "the second extraction must wait for the first instead of starting alongside it"
+    );
+
+    let requests = env.await_memory_requests(2).await;
+    let end = await_cursor_at_end(&server, &thread_id).await;
+    for _ in 0..100 {
+        if env.memory_in_flight.load(Ordering::SeqCst) == 0
+            && server.runtime().memory_generation_queue_count() == 0
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Leave room for a stray duplicate extraction or a late checkpoint regression to land.
+    tokio::time::sleep(SLOW_LATER_MEMORY * 3).await;
+
+    assert_eq!(
+        env.memory_max_in_flight.load(Ordering::SeqCst),
+        1,
+        "extractions on one thread must not overlap"
+    );
+    let all = env.memory_requests();
+    assert_eq!(all.len(), 2, "one extraction per turn: {all:?}");
+    let (first, second) = (requests[0].to_string(), requests[1].to_string());
+    assert!(first.contains("MARKER-ALPHA"), "first extraction: {first}");
+    assert!(!first.contains("MARKER-BRAVO"), "first extraction: {first}");
+    assert!(
+        second.contains("MARKER-BRAVO"),
+        "second extraction: {second}"
+    );
+    assert!(
+        !second.contains("MARKER-ALPHA"),
+        "the second extraction must start from the first one's cursor: {second}"
+    );
+    let (cursor, len) = memory_cursor(&server, &thread_id);
+    assert_eq!(cursor, end, "the final cursor must not regress");
+    assert_eq!(cursor, len, "the final cursor covers the whole transcript");
+    assert_eq!(
+        server.runtime().memory_generation_queue_count(),
+        0,
+        "an idle thread keeps no generation queue entry"
+    );
     server.shutdown().await;
 }

@@ -37,7 +37,68 @@ use crate::turn_runner::{
     CurrentModelConnection, provider_base_url_override, select_provider_transport,
 };
 
+/// Holds a thread's advanced-memory generation slot (TS `memoryGenerationQueue`). Generations
+/// on one thread run one at a time in FIFO order (tokio's mutex is fair), so each reads the
+/// transcript cursor only once the previous one has committed. Dropping the last guard (with no
+/// waiter left) removes the thread's entry, so the map never outlives in-flight generations.
+pub(crate) struct MemoryGenerationGuard<'a> {
+    locks: &'a dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    thread_id: String,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for MemoryGenerationGuard<'_> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        // Only the map's own reference is left once no generation holds or awaits the lock;
+        // `remove_if` checks that under the shard lock, so a concurrent `lock` either cloned
+        // the entry first (and keeps it) or inserts a fresh one afterwards.
+        self.locks
+            .remove_if(&self.thread_id, |_, lock| Arc::strong_count(lock) == 1);
+    }
+}
+
+/// Commits an advanced-memory cursor checkpoint. The cursor only moves forward (TS
+/// `Math.max(lastMemoryGeneratedIndex, ...)`); returns whether it changed.
+pub(crate) fn advance_memory_cursor(live: &Mutex<LiveSession>, next_index: usize) -> bool {
+    let mut live = live.lock();
+    if next_index <= live.last_memory_generated_index.unwrap_or(0) {
+        return false;
+    }
+    live.last_memory_generated_index = Some(next_index);
+    true
+}
+
 impl ServerRuntimeState {
+    /// Waits for the thread's earlier advanced-memory generations to finish, then returns the
+    /// guard serializing this one. Callers read the cursor after this returns.
+    pub(crate) async fn lock_memory_generation(
+        &self,
+        thread_id: &str,
+    ) -> MemoryGenerationGuard<'_> {
+        let lock = Arc::clone(
+            self.memory_generation_locks
+                .entry(thread_id.to_owned())
+                .or_default()
+                .value(),
+        );
+        // Built before the wait: if the caller is cancelled while queued, the pending wait (and
+        // its `Arc`) drops first, then this guard's `Drop` removes the entry when it was the
+        // last reference.
+        let mut guard = MemoryGenerationGuard {
+            locks: &self.memory_generation_locks,
+            thread_id: thread_id.to_owned(),
+            guard: None,
+        };
+        guard.guard = Some(lock.lock_owned().await);
+        guard
+    }
+
+    /// Threads with an advanced-memory generation running or queued.
+    pub fn memory_generation_queue_count(&self) -> usize {
+        self.memory_generation_locks.len()
+    }
+
     pub fn memory_store_for_workspace(&self, cwd: &Path) -> MemoryStore {
         let ai_paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let workspace_db = cwd.join(".cowork").join("memory.db");
@@ -341,12 +402,11 @@ impl ServerRuntimeState {
                 format!("Unknown thread: {tid}"),
             ));
         };
-        let (thread_cwd, messages, cursor, provider, model, session_overrides, session_opts) = {
+        let (thread_cwd, messages, provider, model, session_overrides, session_opts) = {
             let live = live_arc.lock();
             (
                 canonicalize_sync(Path::new(&live.cwd)),
                 live.messages.clone(),
-                live.last_memory_generated_index.unwrap_or(0),
                 live.provider,
                 live.model.clone(),
                 live.config_overrides.clone(),
@@ -434,6 +494,9 @@ impl ServerRuntimeState {
         } else {
             None
         };
+        // TS `generateAdvancedMemoryForHistory` runs on the session's `memoryGenerationQueue`,
+        // after any automatic generation already queued for this thread.
+        let _generation = self.lock_memory_generation(tid).await;
         let generator = MemoryGenerator::new();
         let processed = match target_folder {
             None => generator
@@ -462,11 +525,7 @@ impl ServerRuntimeState {
 
         // `generateAdvancedMemoryForHistory`: the automatic checkpoint only moves forward, and
         // only for the thread's own folder.
-        if target_folder.is_none() && processed > cursor {
-            {
-                let mut live = live_arc.lock();
-                live.last_memory_generated_index = Some(processed);
-            }
+        if target_folder.is_none() && advance_memory_cursor(&live_arc, processed) {
             let _ = self
                 .persist_live_session(&live_arc, "advanced_memory_generate")
                 .await;

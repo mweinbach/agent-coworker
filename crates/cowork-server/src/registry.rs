@@ -504,6 +504,10 @@ pub struct ServerRuntimeState {
     /// reused, so a tombstone makes late writers (a cancelled turn's final persist, title or
     /// memory jobs) no-ops instead of resurrecting the deleted rows.
     pub(crate) deleted_sessions: DashMap<String, ()>,
+    /// Per-thread advanced-memory generation queue (TS `AgentSession.memoryGenerationQueue`).
+    /// An entry exists only while a generation holds or waits on it; the last guard to release
+    /// removes it (see `MemoryGenerationGuard`).
+    pub(crate) memory_generation_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(crate) interaction_managers: DashMap<String, Arc<cowork_harness::InteractionManager>>,
     pub(crate) idempotency_ledgers: DashMap<String, Arc<cowork_harness::TurnIdempotencyLedger>>,
     pub(crate) sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
@@ -681,6 +685,7 @@ impl ServerRuntimeState {
             pending_codex_logins: DashMap::new(),
             active_turns: DashMap::new(),
             deleted_sessions: DashMap::new(),
+            memory_generation_locks: DashMap::new(),
             interaction_managers: DashMap::new(),
             idempotency_ledgers: DashMap::new(),
             sessions: DashMap::new(),

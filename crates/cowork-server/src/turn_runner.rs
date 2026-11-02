@@ -51,7 +51,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::memory_and_fork_routes::{ServerThreadControlBridge, memory_generation_model_ref};
+use crate::memory_and_fork_routes::{
+    ServerThreadControlBridge, advance_memory_cursor, memory_generation_model_ref,
+};
 use crate::registry::{LiveSession, ServerRuntimeState};
 
 const DEFAULT_MAX_TURN_STEPS: usize = 100;
@@ -2127,7 +2129,7 @@ impl ServerRuntimeState {
                     );
                     let cost_snap = serde_json::to_value(full_usage_snapshot).ok();
 
-                    let mem_cursor = {
+                    {
                         let mut live = live_for_task.lock();
                         live.busy = false;
                         live.has_pending_approval = false;
@@ -2138,8 +2140,7 @@ impl ServerRuntimeState {
                         live.last_message_preview = Some(preview);
                         live.provider_state = next_provider_state;
                         live.cost_tracker_snapshot = cost_snap;
-                        live.last_memory_generated_index.unwrap_or(0)
-                    };
+                    }
                     runtime.active_turns.remove(&thread_id);
                     runtime.turn_settled_notify.notify_waiters();
                     sink_impl.clear_turn_journal_tx();
@@ -2292,49 +2293,65 @@ impl ServerRuntimeState {
                     if enable_memory && advanced_memory && outcome.status == "completed" {
                         let live_mem = Arc::clone(&live_for_task);
                         let rt_mem = Arc::clone(&runtime);
-                        // TS `runMemoryGenerationOnce` returns early when nothing is past the
-                        // cursor; otherwise `MemoryGenerator.resolveTargetConfig` picks
-                        // `memoryGenerationModel`, else the preferred child model, else the
-                        // thread's own model, so ordinary history is always model-analyzed.
-                        let has_delta = serialized_msgs.len() >= mem_cursor.saturating_add(2);
-                        let mem_model_ref = has_delta.then(|| {
-                            memory_generation_model_ref(workspace_cfg.as_ref(), provider, &model_id)
-                        });
-                        let remote_mem_model = match mem_model_ref {
-                            None => Ok(None),
-                            Some(model_ref) => runtime
+                        let tid_mem = thread_id.clone();
+                        let mem_model_ref = memory_generation_model_ref(
+                            workspace_cfg.as_ref(),
+                            provider,
+                            &model_id,
+                        );
+                        let mem_transport = Arc::clone(&transport);
+                        let mem_base_url = base_url.clone();
+                        let mem_api_key = api_key.clone();
+                        let mem_provider_opts = merged_provider_opts.clone();
+                        // TS `triggerMemoryGeneration` fixes only the target index when the turn
+                        // completes and chains `runMemoryGenerationOnce` onto the per-session
+                        // `memoryGenerationQueue`; the cursor is read when the queued run starts,
+                        // so back-to-back turns never resend an already-processed range and a
+                        // slower earlier run cannot regress a later run's checkpoint. Failures
+                        // are swallowed and leave the queue usable. The run stays in the
+                        // background, so turn completion never waits on it.
+                        tokio::spawn(async move {
+                            let _generation = rt_mem.lock_memory_generation(&tid_mem).await;
+                            if rt_mem.is_session_deleted(&tid_mem) {
+                                return;
+                            }
+                            let start = live_mem.lock().last_memory_generated_index.unwrap_or(0);
+                            // TS `runMemoryGenerationOnce` returns early when nothing is past the
+                            // cursor (the generator needs a user + assistant pair); otherwise
+                            // `MemoryGenerator.resolveTargetConfig` picks `memoryGenerationModel`,
+                            // else the preferred child model, else the thread's own model, so
+                            // ordinary history is always model-analyzed.
+                            if serialized_msgs.len() < start.saturating_add(2) {
+                                return;
+                            }
+                            let remote_mem_model = match rt_mem
                                 .resolve_memory_generation_model(
-                                    &model_ref,
+                                    &mem_model_ref,
                                     CurrentModelConnection {
                                         provider,
-                                        transport: &transport,
-                                        base_url: &base_url,
-                                        api_key: &api_key,
+                                        transport: &mem_transport,
+                                        base_url: &mem_base_url,
+                                        api_key: &mem_api_key,
                                     },
-                                    &merged_provider_opts,
+                                    &mem_provider_opts,
                                 )
                                 .await
-                                .map(Some)
-                                .map_err(|e| format!("{model_ref}: {e}")),
-                        };
-                        tokio::spawn(async move {
-                            let remote_mem_model = match remote_mem_model {
+                            {
                                 Ok(model) => model,
                                 Err(err) => {
                                     // Leave the cursor so the transcript is retried once the
                                     // model reference resolves.
-                                    tracing::warn!(error = %err, "memory generation model unavailable; skipping memory generation");
+                                    tracing::warn!(model = %mem_model_ref, error = %err, "memory generation model unavailable; skipping memory generation");
                                     return;
                                 }
                             };
-                            let mem_gen = MemoryGenerator::new();
-                            let generated = mem_gen
+                            let generated = MemoryGenerator::new()
                                 .maybe_generate_from_transcript(
                                     &serialized_msgs,
-                                    mem_cursor,
+                                    start,
                                     Some(&sqlite_mem),
                                     Some(&adv_mem),
-                                    remote_mem_model,
+                                    Some(remote_mem_model),
                                 )
                                 .await;
                             let next_idx = match generated {
@@ -2344,11 +2361,7 @@ impl ServerRuntimeState {
                                     return;
                                 }
                             };
-                            if next_idx > mem_cursor {
-                                {
-                                    let mut live = live_mem.lock();
-                                    live.last_memory_generated_index = Some(next_idx);
-                                }
+                            if advance_memory_cursor(&live_mem, next_idx) {
                                 let _ = rt_mem
                                     .persist_live_session(&live_mem, "memory_generated")
                                     .await;

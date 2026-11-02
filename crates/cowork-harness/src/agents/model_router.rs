@@ -164,6 +164,19 @@ pub fn resolve_child_model_selection(
     };
 
     if target_provider == parent_provider {
+        // `routeAgentConfig`: a same-provider LM Studio child on a different model needs LM
+        // Studio connected. An empty connected set means connectivity is unknown, so the check
+        // only applies when the caller reported at least one connected provider.
+        if trimmed_req.is_some()
+            && target_provider == ProviderName::Lmstudio
+            && target_model_id != parent_model
+            && !connected_providers.is_empty()
+            && !connected_providers.contains(&ProviderName::Lmstudio)
+        {
+            return Err(format!(
+                "Requested child target {canonical_ref} could not be used because LM Studio is not connected. No child was started."
+            ));
+        }
         if target_model_id != parent_model
             && !is_selectable_model(&registry, cfg, target_provider, &target_model_id)
         {

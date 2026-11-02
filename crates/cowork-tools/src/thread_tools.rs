@@ -28,6 +28,48 @@ fn assert_root_session_bridge(
 pub const FORK_FROM_TURN_INDEX_UNSUPPORTED: &str = "fork_thread does not support fromTurnIndex: \
      a fork always copies the source thread's full history. Omit fromTurnIndex.";
 
+/// TS `send_message_to_thread` takes the follow-up text as `prompt`; earlier Rust builds named
+/// it `message`. `message` stays accepted as a deprecated alias: it is folded into `prompt`
+/// (and removed) so everything downstream reads `prompt` only. Both may be given only when
+/// they carry the same text; conflicting values are rejected rather than silently picking one.
+pub fn resolve_send_message_prompt_alias(args: &mut Map<String, Value>) -> Result<(), String> {
+    let message = args.remove("message").filter(|v| !v.is_null());
+    let Some(message) = message else {
+        return Ok(());
+    };
+    match args.get("prompt").filter(|v| !v.is_null()) {
+        None => {
+            args.insert("prompt".to_owned(), message);
+            Ok(())
+        }
+        Some(prompt) => {
+            let same = match (prompt.as_str(), message.as_str()) {
+                (Some(p), Some(m)) => p.trim() == m.trim(),
+                _ => prompt == &message,
+            };
+            if same {
+                Ok(())
+            } else {
+                Err(SEND_MESSAGE_PROMPT_CONFLICT.to_owned())
+            }
+        }
+    }
+}
+
+pub const SEND_MESSAGE_PROMPT_CONFLICT: &str = "send_message_to_thread received both prompt and \
+     message with different text. Pass prompt only (message is a deprecated alias for prompt).";
+
+/// Actions whose omitted `threadId` defaults to the calling thread, as TS's
+/// `ThreadManagementService.createControl` does via `resolveThreadId`.
+pub const THREAD_ID_DEFAULTS_TO_CURRENT: &[&str] = &[
+    "read_thread",
+    "send_message_to_thread",
+    "fork_thread",
+    "set_thread_title",
+    "set_thread_pinned",
+    "set_thread_archived",
+];
+
 pub struct ThreadManagementTool {
     tool_name: &'static str,
     desc: &'static str,
@@ -60,7 +102,7 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "read_thread",
-                desc: "Read a compact, paginated transcript for a Cowork thread without subscribing to live updates. Tool outputs are omitted unless includeOutputs is true.",
+                desc: "Read a compact, paginated transcript for a Cowork thread without subscribing to live updates. Tool outputs are omitted unless includeOutputs is true. Defaults to the current thread when threadId is omitted.",
                 schema: json!({
                     "type": "object",
                     "properties": {
@@ -69,8 +111,7 @@ impl ThreadManagementTool {
                         "includeOutputs": { "type": "boolean" },
                         "maxOutputCharsPerItem": { "type": "integer", "minimum": 1, "maximum": 20000 },
                         "turnLimit": { "type": "integer", "minimum": 1, "maximum": 50 }
-                    },
-                    "required": ["threadId"]
+                    }
                 }),
                 read_only: true,
             }),
@@ -94,22 +135,22 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "send_message_to_thread",
-                desc: "Start a turn on another thread with a prompt message, optionally switching its model and/or reasoning level (thinking) first.",
+                desc: "Send a follow-up user message (prompt) to an idle Cowork thread, optionally switching its model and/or reasoning level (thinking) first. Busy threads return queued=false/busy=true rather than being steered; nothing is applied to them. Defaults to the current thread when threadId is omitted.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
-                        "message": { "type": "string" },
+                        "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
                         "model": { "type": "string" },
                         "thinking": { "type": "string", "minLength": 1 }
                     },
-                    "required": ["threadId", "message"]
+                    "required": ["prompt"]
                 }),
                 read_only: false,
             }),
             Arc::new(Self {
                 tool_name: "fork_thread",
-                desc: "Fork an existing thread into a new root thread (optionally into a fresh git worktree), optionally on a different model and/or reasoning level (thinking), and optionally start a prompt on the fork in the background.",
+                desc: "Fork an existing thread into a new root thread (optionally into a fresh git worktree), optionally on a different model and/or reasoning level (thinking), and optionally start a prompt on the fork in the background. Defaults to the current thread when threadId is omitted.",
                 schema: json!({
                     "type": "object",
                     "properties": {
@@ -120,47 +161,46 @@ impl ThreadManagementTool {
                         "thinking": { "type": "string", "minLength": 1 },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
                         "branchName": { "type": "string" }
-                    },
-                    "required": ["threadId"]
+                    }
                 }),
                 read_only: false,
             }),
             Arc::new(Self {
                 tool_name: "set_thread_title",
-                desc: "Rename an existing thread.",
+                desc: "Rename a thread. Defaults to the current thread when threadId is omitted.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
                         "title": { "type": "string" }
                     },
-                    "required": ["threadId", "title"]
+                    "required": ["title"]
                 }),
                 read_only: false,
             }),
             Arc::new(Self {
                 tool_name: "set_thread_pinned",
-                desc: "Pin or unpin a thread.",
+                desc: "Pin or unpin a thread. Defaults to the current thread when threadId is omitted.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
                         "pinned": { "type": "boolean" }
                     },
-                    "required": ["threadId", "pinned"]
+                    "required": ["pinned"]
                 }),
                 read_only: false,
             }),
             Arc::new(Self {
                 tool_name: "set_thread_archived",
-                desc: "Archive or unarchive a thread.",
+                desc: "Archive or unarchive a thread. Defaults to the current thread when threadId is omitted.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
                         "archived": { "type": "boolean" }
                     },
-                    "required": ["threadId", "archived"]
+                    "required": ["archived"]
                 }),
                 read_only: false,
             }),
@@ -187,7 +227,6 @@ impl ThreadManagementTool {
                         "threadId": { "type": "string" },
                         "cwd": { "type": "string" },
                         "title": { "type": "string" },
-                        "message": { "type": "string" },
                         "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
                         "model": { "type": "string" },
                         "thinking": { "type": "string", "minLength": 1 },
@@ -235,7 +274,7 @@ impl BuiltinTool for ThreadManagementTool {
 
     async fn execute(
         &self,
-        raw_args: Map<String, Value>,
+        mut raw_args: Map<String, Value>,
         ctx: &ToolExecutionContext,
     ) -> ToolResult<ToolOutput> {
         let bridge = assert_root_session_bridge(ctx)?;
@@ -244,17 +283,35 @@ impl BuiltinTool for ThreadManagementTool {
                 FORK_FROM_TURN_INDEX_UNSUPPORTED.to_owned(),
             ));
         }
-        let args = normalize_and_validate_args(&self.schema, &raw_args)?;
+        let is_send = if self.tool_name == "threadManagement" {
+            raw_args.get("action").and_then(Value::as_str) == Some("send_message_to_thread")
+        } else {
+            self.tool_name == "send_message_to_thread"
+        };
+        if is_send {
+            resolve_send_message_prompt_alias(&mut raw_args)
+                .map_err(ToolError::InvalidArguments)?;
+        }
+        let mut args = normalize_and_validate_args(&self.schema, &raw_args)?;
         let dispatch_name = if self.tool_name == "threadManagement" {
             args.get("action")
                 .and_then(Value::as_str)
                 .ok_or_else(|| ToolError::InvalidArguments("action is required".to_owned()))?
+                .to_owned()
         } else {
-            self.tool_name
+            self.tool_name.to_owned()
         };
+        // TS `ThreadManagementService.createControl(currentThreadId)`: an omitted `threadId`
+        // on `fork_thread` and the title/pinned/archived setters resolves to the calling
+        // thread (this tool's session).
+        if THREAD_ID_DEFAULTS_TO_CURRENT.contains(&dispatch_name.as_str())
+            && !args.contains_key("threadId")
+        {
+            args.insert("threadId".to_owned(), Value::String(ctx.session_id.clone()));
+        }
 
         let val_args = Value::Object(args.clone());
-        let res = match dispatch_name {
+        let res = match dispatch_name.as_str() {
             "list_projects" => bridge.list_projects().await,
             "list_threads" => bridge.list_threads(val_args).await,
             "read_thread" => bridge.read_thread(val_args).await,

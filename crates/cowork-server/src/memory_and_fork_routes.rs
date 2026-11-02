@@ -1608,18 +1608,54 @@ pub(crate) fn parse_thread_model_selection(
     }
 }
 
+/// TS `LocalThreadHost.requireThreadId`: a trimmed, non-empty `threadId`, or
+/// `"<operation> requires threadId"`.
+fn require_thread_id<'a>(args: &'a Value, operation: &str) -> Result<&'a str, String> {
+    args.get("threadId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| format!("{operation} requires threadId"))
+}
+
+/// TS `LOCAL_HOST_ID` (`src/server/threads/localThreadHost.ts`): the `hostId` thread-tool
+/// results carry for threads on this server.
+const LOCAL_THREAD_HOST_ID: &str = "local";
+
 pub struct ServerThreadControlBridge {
     pub runtime: Arc<ServerRuntimeState>,
     pub connection_id: String,
 }
 
 impl ServerThreadControlBridge {
+    /// TS `SendMessageResult` for a busy target (`runtime.read.isBusy`): not queued, nothing
+    /// applied, with the running turn's id (`null` when it is not known yet).
+    fn busy_send_result(&self, thread_id: &str) -> Option<Value> {
+        let live_arc = self.runtime.load_thread(thread_id)?;
+        let busy = live_arc.lock().busy || self.runtime.active_turns.contains_key(thread_id);
+        if !busy {
+            return None;
+        }
+        let active_turn_id = self
+            .runtime
+            .active_turns
+            .get(thread_id)
+            .map(|ctrl| ctrl.turn_id.clone());
+        Some(json!({
+            "threadId": thread_id,
+            "hostId": LOCAL_THREAD_HOST_ID,
+            "queued": false,
+            "busy": true,
+            "activeTurnId": active_turn_id,
+        }))
+    }
+
     /// TS `LocalThreadHost.applyModelAndThinking` for `send_message_to_thread`: `model` is
     /// parsed against the thread's current provider (`parseThreadModelSelection`) and set on
     /// the thread, then `thinking` is applied against the resulting provider/model. Both are
     /// validated before either is applied, so a rejected `thinking` never leaves a half-applied
     /// model switch. A busy thread is left untouched (TS returns before applying anything); the
-    /// turn start that follows reports it.
+    /// caller reports it as `busy` instead of starting a turn.
     async fn apply_send_model_and_thinking(
         &self,
         thread_id: &str,
@@ -1939,10 +1975,28 @@ impl ThreadControlBridge for ServerThreadControlBridge {
         Ok(json!({ "thread": thread, "queued": true }))
     }
 
+    /// TS `LocalThreadHost.sendMessage`: the trimmed `prompt` (`message` is a deprecated alias)
+    /// starts a turn on an idle thread and returns `{ threadId, hostId, queued: true }` (plus the
+    /// started `turn`). A busy thread is not steered and nothing is applied to it: the call
+    /// succeeds with `{ threadId, hostId, queued: false, busy: true, activeTurnId }`.
     async fn send_message_to_thread(&self, args: Value) -> Result<Value, String> {
+        let mut args = match args {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        };
+        cowork_tools::thread_tools::resolve_send_message_prompt_alias(&mut args)?;
+        let prompt = args
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "send_message_to_thread requires a non-empty prompt".to_owned())?
+            .to_owned();
         let thread_id = args
             .get("threadId")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| "threadId is required".to_owned())?;
         if self.runtime.task_coordinator.is_task_thread(thread_id) {
             return Err("Task-owned threads are not managed by thread-management tools".to_owned());
@@ -1950,10 +2004,12 @@ impl ThreadControlBridge for ServerThreadControlBridge {
         if let Some(lock) = self.runtime.get_session_task_lock(thread_id) {
             return Err(lock.message);
         }
-        let message = args
-            .get("message")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "message is required".to_owned())?;
+        if self.runtime.load_thread(thread_id).is_none() {
+            return Err(format!("Unknown thread: {thread_id}"));
+        }
+        if let Some(busy) = self.busy_send_result(thread_id) {
+            return Ok(busy);
+        }
         let model = args
             .get("model")
             .and_then(Value::as_str)
@@ -1968,27 +2024,48 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             self.apply_send_model_and_thinking(thread_id, model, thinking)
                 .await?;
         }
-        self.runtime
+        let started = self
+            .runtime
             .handle_turn_start(
                 &self.connection_id,
                 false,
                 &TurnStartParams {
                     thread_id: thread_id.to_owned(),
-                    input: TurnInput::Text(message.to_owned()),
+                    input: TurnInput::Text(prompt),
                     client_message_id: None,
                     references: None,
                     retry: None,
                 },
             )
-            .await
-            .map_err(|e| e.message)
+            .await;
+        match started {
+            Ok(started) => {
+                let mut result = Map::new();
+                result.insert("threadId".to_owned(), json!(thread_id));
+                result.insert("hostId".to_owned(), json!(LOCAL_THREAD_HOST_ID));
+                result.insert("queued".to_owned(), json!(true));
+                if let Value::Object(extra) = started {
+                    for (key, value) in extra {
+                        result.entry(key).or_insert(value);
+                    }
+                }
+                Ok(Value::Object(result))
+            }
+            // Another turn claimed the thread after the busy check above (while model/thinking
+            // were being applied): report it as busy, like the check itself.
+            Err(err) => self.busy_send_result(thread_id).ok_or(err.message),
+        }
     }
 
+    /// TS `LocalThreadHost.forkThread`. The agent-facing tool fills an omitted `threadId` with
+    /// the calling thread (TS `ThreadManagementService.createControl`) before reaching here.
     async fn fork_thread(&self, args: Value) -> Result<Value, String> {
         let thread_id = args
             .get("threadId")
             .and_then(Value::as_str)
-            .ok_or_else(|| "threadId is required".to_owned())?;
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "fork_thread requires threadId".to_owned())?;
         if self.runtime.task_coordinator.is_task_thread(thread_id) {
             return Err("Task-owned threads are not managed by thread-management tools".to_owned());
         }
@@ -2040,10 +2117,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
     }
 
     async fn set_thread_title(&self, args: Value) -> Result<Value, String> {
-        let thread_id = args
-            .get("threadId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "threadId is required".to_owned())?;
+        let thread_id = require_thread_id(&args, "set_thread_title")?;
         if self.runtime.task_coordinator.is_task_thread(thread_id) {
             return Err("Task-owned threads are not managed by thread-management tools".to_owned());
         }
@@ -2055,10 +2129,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
     }
 
     async fn set_thread_pinned(&self, args: Value) -> Result<Value, String> {
-        let thread_id = args
-            .get("threadId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "threadId is required".to_owned())?;
+        let thread_id = require_thread_id(&args, "set_thread_pinned")?;
         let pinned = args
             .get("pinned")
             .and_then(Value::as_bool)
@@ -2068,10 +2139,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
     }
 
     async fn set_thread_archived(&self, args: Value) -> Result<Value, String> {
-        let thread_id = args
-            .get("threadId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "threadId is required".to_owned())?;
+        let thread_id = require_thread_id(&args, "set_thread_archived")?;
         let archived = args
             .get("archived")
             .and_then(Value::as_bool)

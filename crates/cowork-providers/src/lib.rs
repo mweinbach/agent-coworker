@@ -22,6 +22,7 @@ pub mod oauth;
 pub mod openai_responses;
 pub mod sse;
 pub mod transport;
+pub mod web_search_options;
 
 use serde::{Deserialize, Serialize};
 

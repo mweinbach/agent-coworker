@@ -892,9 +892,9 @@ fn build_google_interactions_payload(
         })
         .collect();
 
-    let native_web_requested = read_google_opt(provider_options, "nativeWebSearch")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    // TS `buildGoogleStreamOptions`: `getGoogleNativeWebSearchFromProviderOptions` (default on).
+    let native_web_requested =
+        crate::web_search_options::google_native_web_search_enabled(Some(provider_options));
 
     let web_authorized = match authorized_tool_names {
         Some(names) => names.iter().any(|n| n == "webSearch" || n == "webFetch"),
@@ -2449,4 +2449,80 @@ fn is_failed_google_status(status: &str) -> bool {
         status,
         "failed" | "cancelled" | "incomplete" | "budget_exceeded"
     )
+}
+
+#[cfg(test)]
+mod native_web_search_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_owned(),
+            description: format!("{name} tool"),
+            parameters: json!({ "type": "object" }),
+        }
+    }
+
+    fn built_in_tool_types(provider_options: Value, tools: &[ToolDefinition]) -> Vec<String> {
+        let options: Map<String, Value> = serde_json::from_value(provider_options).unwrap();
+        let payload = build_google_interactions_payload(
+            "gemini-3.1-pro-preview",
+            "system",
+            &[],
+            tools,
+            None,
+            &options,
+            None,
+            false,
+        );
+        payload["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["type"].as_str())
+            .filter(|kind| *kind != "function")
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn native_web_tools_attach_by_default_like_legacy() {
+        let tools = [tool("webSearch"), tool("read")];
+        assert_eq!(
+            built_in_tool_types(json!({}), &tools),
+            ["google_search", "url_context"]
+        );
+        assert_eq!(
+            built_in_tool_types(json!({ "google": { "thinkingConfig": {} } }), &tools),
+            ["google_search", "url_context"]
+        );
+        assert_eq!(
+            built_in_tool_types(json!({ "google": { "nativeWebSearch": "yes" } }), &tools),
+            ["google_search", "url_context"]
+        );
+    }
+
+    #[test]
+    fn native_web_tools_respect_explicit_opt_out_and_codex_backend() {
+        let tools = [tool("webSearch"), tool("read")];
+        assert!(
+            built_in_tool_types(json!({ "google": { "nativeWebSearch": false } }), &tools)
+                .is_empty()
+        );
+        assert!(
+            built_in_tool_types(json!({ "google": { "nativeWebSearch": "off" } }), &tools)
+                .is_empty()
+        );
+        assert!(
+            built_in_tool_types(
+                json!({ "codex-cli": { "webSearchBackend": "exa" } }),
+                &tools
+            )
+            .is_empty()
+        );
+        // Without an authorized web tool nothing native is attached.
+        assert!(built_in_tool_types(json!({}), &[tool("read")]).is_empty());
+    }
 }

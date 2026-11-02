@@ -721,35 +721,95 @@ pub fn install_v2_pack_set(
                     serde_json::to_vec_pretty(&combined_manifest).unwrap(),
                 )?;
 
+                // Verify the composed tree before it can replace anything (TS
+                // `installRuntimeArchiveLocked` deep-verifies staging first): every pack can pass
+                // its own integrity checks while the composition still lacks a required
+                // entrypoint (e.g. a core-only set has no Python).
+                verify_installed_runtime(&merged_dir, &opts.trusted_keys, true)?;
+                let _ =
+                    std::fs::remove_file(crate::integrity::attestation_sidecar_path(&merged_dir));
+
                 let final_dir = rt_root.join(&version);
+                let mut backup_dir: Option<PathBuf> = None;
                 if final_dir.exists() {
+                    if !opts.force
+                        && let Ok(existing) =
+                            verify_installed_runtime(&final_dir, &opts.trusted_keys, false)
+                    {
+                        // Same as the v1 installer: an intact installation of this version is
+                        // kept unless `force` asks for a replacement.
+                        let now = chrono::Utc::now().to_rfc3339();
+                        write_current_pointer(
+                            &rt_root,
+                            &InstalledRuntimePointer {
+                                schema_version: 1,
+                                version: existing.version.clone(),
+                                asset: existing.asset.clone(),
+                                installed_at: now.clone(),
+                                confirmed_at: Some(now),
+                                runtime_dir: None,
+                                installed_packs: existing.installed_packs.clone(),
+                            },
+                        )?;
+                        let _ = prune_installed_runtimes(&opts.homedir, opts.keep_versions);
+                        if let Some(cb) = &opts.on_progress {
+                            cb(StartupProgressEvent::ready(&existing.version));
+                        }
+                        return Ok(existing);
+                    }
                     if has_active_consumer_lease(&final_dir) {
                         return Err(EnvError::Lock(format!(
                             "Cannot overwrite active leased runtime {}",
                             final_dir.display()
                         )));
                     }
-                    remove_sealed_tree(&final_dir)?;
+                    // TS: move the installed tree aside (dot-prefixed, so retention and fallback
+                    // discovery ignore it) instead of deleting it, so a failed promotion can be
+                    // rolled back.
+                    let backup =
+                        rt_root.join(format!(".replaced-{version}-{}", Uuid::new_v4().simple()));
+                    std::fs::rename(&final_dir, &backup)?;
+                    backup_dir = Some(backup);
                 }
 
-                std::fs::rename(&merged_dir, &final_dir)?;
-                seal_tree_readonly(&final_dir)?;
-                let final_verified =
-                    verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
+                let promoted = (|| -> Result<PreparedRuntime> {
+                    std::fs::rename(&merged_dir, &final_dir)?;
+                    seal_tree_readonly(&final_dir)?;
+                    let final_verified =
+                        verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
+                    let now = chrono::Utc::now().to_rfc3339();
+                    write_current_pointer(
+                        &rt_root,
+                        &InstalledRuntimePointer {
+                            schema_version: 1,
+                            version: final_verified.version.clone(),
+                            asset: final_verified.asset.clone(),
+                            installed_at: now.clone(),
+                            confirmed_at: Some(now),
+                            runtime_dir: None,
+                            installed_packs: final_verified.installed_packs.clone(),
+                        },
+                    )?;
+                    Ok(final_verified)
+                })();
+                let final_verified = match promoted {
+                    Ok(verified) => verified,
+                    Err(err) => {
+                        // Discard the promoted tree and restore the previous installation; the
+                        // promotion failure stays the reported error.
+                        if final_dir.exists() {
+                            let _ = remove_sealed_tree(&final_dir);
+                        }
+                        if let Some(backup) = &backup_dir {
+                            let _ = std::fs::rename(backup, &final_dir);
+                        }
+                        return Err(err);
+                    }
+                };
+                if let Some(backup) = &backup_dir {
+                    let _ = remove_sealed_tree(backup);
+                }
 
-                let now = chrono::Utc::now().to_rfc3339();
-                write_current_pointer(
-                    &rt_root,
-                    &InstalledRuntimePointer {
-                        schema_version: 1,
-                        version: final_verified.version.clone(),
-                        asset: final_verified.asset.clone(),
-                        installed_at: now.clone(),
-                        confirmed_at: Some(now),
-                        runtime_dir: None,
-                        installed_packs: final_verified.installed_packs.clone(),
-                    },
-                )?;
                 let _ = prune_installed_runtimes(&opts.homedir, opts.keep_versions);
                 if let Some(cb) = &opts.on_progress {
                     cb(StartupProgressEvent::ready(&final_verified.version));

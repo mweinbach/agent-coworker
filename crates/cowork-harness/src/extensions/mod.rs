@@ -817,16 +817,7 @@ impl ExtensionManager {
             PluginScope::User => (SkillScope::User, "user"),
         };
         for plugin in plugins.into_iter().filter(|p| p.scope == plugin_scope) {
-            let skills_dir = plugin.root_dir.join(&plugin.skills_rel_path);
-            let Ok(rd) = fs::read_dir(&skills_dir) else {
-                continue;
-            };
-            let mut dirs: Vec<PathBuf> = rd
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            dirs.sort();
+            let dirs = list_plugin_skill_dirs(&plugin.skills_dirs);
             let owner = SkillPluginOwnerWire {
                 plugin_id: plugin.id.clone(),
                 name: plugin.name.clone(),
@@ -1562,10 +1553,14 @@ impl ExtensionManager {
                 _ => None,
             };
 
-            let skills_dir = root.root_dir.join(&root.skills_rel_path);
+            let skills_dir = root
+                .skills_dirs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| root.root_dir.join("skills"));
             let mcp_file = root.root_dir.join(&root.mcp_rel_path);
             let skills_summaries = build_plugin_skill_summaries(
-                &skills_dir,
+                &root.skills_dirs,
                 &root.id,
                 &root.name,
                 root.enabled,
@@ -2731,24 +2726,34 @@ fn encode_plugin_icon(plugin_root: &Path, raw: &str) -> Option<String> {
     Some(format!("data:{mime};base64,{}", BASE64.encode(&bytes)))
 }
 
+/// Child directories of every declared plugin skills directory, each directory's children sorted,
+/// in manifest order (TS `readPluginSkillDirents`). Unreadable skills directories are skipped.
+fn list_plugin_skill_dirs(skills_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for skills_dir in skills_dirs {
+        let Ok(rd) = fs::read_dir(skills_dir) else {
+            continue;
+        };
+        let mut dirs: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+        out.extend(dirs);
+    }
+    out
+}
+
 fn build_plugin_skill_summaries(
-    skills_dir: &Path,
+    skills_dirs: &[PathBuf],
     plugin_id: &str,
     plugin_name: &str,
     plugin_enabled: bool,
     overrides: &cowork_mcp::plugin_overrides::PluginOverridesFile,
 ) -> Vec<PluginSkillSummaryWire> {
-    let Ok(rd) = fs::read_dir(skills_dir) else {
-        return Vec::new();
-    };
-    let mut dirs: Vec<PathBuf> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
     let mut out = Vec::new();
-    for dir in dirs {
+    for dir in list_plugin_skill_dirs(skills_dirs) {
         let md = dir.join("SKILL.md");
         let Ok(raw) = fs::read_to_string(&md) else {
             continue;
@@ -2777,6 +2782,8 @@ fn build_plugin_skill_summaries(
             interface: parsed.interface,
         });
     }
+    // TS `readPluginSkillSummaries` orders bundled skills by raw name across all directories.
+    out.sort_by(|a, b| a.raw_name.cmp(&b.raw_name));
     out
 }
 

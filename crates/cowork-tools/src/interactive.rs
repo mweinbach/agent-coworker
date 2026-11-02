@@ -736,21 +736,24 @@ pub fn discover_skills_for_config(
             .iter()
             .filter(|p| p.scope == target_scope && p.enabled)
         {
-            let skills_root = plugin.root_dir.join(&plugin.skills_rel_path);
             let root_canon = cowork_config::canonicalize_sync(&plugin.root_dir);
-            let skills_canon = cowork_config::canonicalize_sync(&skills_root);
-            if !cowork_config::is_inside(&root_canon, &skills_canon) || !skills_canon.is_dir() {
-                continue;
+            let mut dirs: Vec<PathBuf> = Vec::new();
+            for skills_root in &plugin.skills_dirs {
+                let skills_canon = cowork_config::canonicalize_sync(skills_root);
+                if !cowork_config::is_inside(&root_canon, &skills_canon) || !skills_canon.is_dir() {
+                    continue;
+                }
+                let Ok(entries) = fs::read_dir(&skills_canon) else {
+                    continue;
+                };
+                let mut skills_root_dirs: Vec<PathBuf> = entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect();
+                skills_root_dirs.sort();
+                dirs.extend(skills_root_dirs);
             }
-            let Ok(entries) = fs::read_dir(&skills_canon) else {
-                continue;
-            };
-            let mut dirs: Vec<PathBuf> = entries
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            dirs.sort();
             for dir_path in dirs {
                 let dir_canon = cowork_config::canonicalize_sync(&dir_path);
                 if !cowork_config::is_inside(&root_canon, &dir_canon) {

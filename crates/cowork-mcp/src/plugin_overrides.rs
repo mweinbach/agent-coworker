@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use cowork_config::{
     AgentConfig, FileLockOptions, canonicalize_sync, file_lock_root_for_cowork_home,
-    harden_private_file_sync, is_inside, with_file_lock_sync, write_text_file_atomic,
+    harden_private_file_sync, is_inside, normalize_lexical_path, with_file_lock_sync,
+    write_text_file_atomic,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -340,7 +341,11 @@ pub struct DiscoveredPluginRoot {
     pub default_enabled: bool,
     pub root_dir: PathBuf,
     pub manifest_path: PathBuf,
-    pub skills_rel_path: String,
+    /// Every bundled skills directory the manifest declares (`skills` may be a string or an array
+    /// of strings), resolved against `root_dir` and verified to stay inside it. Never empty: the
+    /// first entry is the primary skills path (TS `skillsPath`), the rest follow manifest order
+    /// (TS `skillsPaths`).
+    pub skills_dirs: Vec<PathBuf>,
     pub mcp_rel_path: String,
     pub discovery_kind: &'static str,
     pub marketplace_name: Option<String>,
@@ -580,13 +585,17 @@ fn load_plugin_from_dir(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let skills_rel_path = obj
-        .get("skills")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("./skills")
-        .to_owned();
+    let skills_dirs =
+        match resolve_plugin_skills_dirs(plugin_root, obj.get("skills"), &manifest_path) {
+            Ok(dirs) => dirs,
+            Err(e) => {
+                warnings.push(format!(
+                    "Failed to catalog plugin at {}: {e}",
+                    plugin_root.display()
+                ));
+                return None;
+            }
+        };
     let mcp_rel_path = obj
         .get("mcpServers")
         .and_then(Value::as_str)
@@ -617,11 +626,87 @@ fn load_plugin_from_dir(
         default_enabled,
         root_dir: plugin_root.to_path_buf(),
         manifest_path,
-        skills_rel_path,
+        skills_dirs,
         mcp_rel_path,
         discovery_kind: effective_discovery_kind,
         marketplace_name: effective_marketplace_name,
     })
+}
+
+const DEFAULT_PLUGIN_SKILLS_PATH: &str = "./skills/";
+
+/// Port of TS `resolvePluginSkillsPaths` (`src/plugins/manifest.ts`). The manifest `skills` field
+/// is a non-empty string or an array of non-empty strings (trimmed); absent or an empty array falls
+/// back to `./skills/`. Each path resolves against the plugin root (absolute paths are kept), must
+/// canonicalize inside the root, and duplicates collapse. Explicitly declared paths must exist and
+/// be directories; the implicit default may be missing.
+fn resolve_plugin_skills_dirs(
+    plugin_root: &Path,
+    skills_value: Option<&Value>,
+    manifest_path: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let invalid = || {
+        format!(
+            "Plugin manifest at {} has an invalid skills value: expected a non-empty string or an array of non-empty strings.",
+            manifest_path.display()
+        )
+    };
+    let non_empty = |v: &Value| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let requested: Vec<Option<String>> = match skills_value {
+        None => vec![None],
+        Some(Value::Array(items)) if items.is_empty() => vec![None],
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| non_empty(item).map(Some).ok_or_else(invalid))
+            .collect::<Result<_, _>>()?,
+        Some(other) => vec![Some(non_empty(other).ok_or_else(invalid)?)],
+    };
+    let validate_existing = requested.iter().all(Option::is_some);
+
+    let mut resolved_dirs: Vec<PathBuf> = Vec::new();
+    for requested_value in requested {
+        let selected = requested_value
+            .as_deref()
+            .unwrap_or(DEFAULT_PLUGIN_SKILLS_PATH);
+        let skills_dir = normalize_lexical_path(&plugin_root.join(selected));
+        // `is_inside` canonicalizes both sides (TS `canonicalizePathForBoundaryCheckSync`).
+        if !is_inside(plugin_root, &skills_dir) {
+            return Err(format!(
+                "Plugin manifest at {} resolves skills outside the plugin root.",
+                manifest_path.display()
+            ));
+        }
+        if resolved_dirs.contains(&skills_dir) {
+            continue;
+        }
+        if validate_existing {
+            match fs::metadata(&skills_dir) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => {
+                    return Err(format!(
+                        "Plugin manifest at {} declares skills path {}, but it is not a directory.",
+                        manifest_path.display(),
+                        skills_dir.display()
+                    ));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(format!(
+                        "Plugin manifest at {} declares skills path {}, but that directory does not exist.",
+                        manifest_path.display(),
+                        skills_dir.display()
+                    ));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        resolved_dirs.push(skills_dir);
+    }
+    Ok(resolved_dirs)
 }
 
 fn read_install_marketplace_name(plugin_root: &Path) -> Option<Option<String>> {

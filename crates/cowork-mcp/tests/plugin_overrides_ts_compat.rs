@@ -295,3 +295,120 @@ fn ts_written_workspace_overrides_disable_discovered_plugin() {
     assert!(!foo.enabled);
     assert!(bar.enabled);
 }
+
+/// TS `test/plugins.catalog.test.ts` "plugin manifests can declare multiple bundled skills
+/// directories": an array-valued `skills` keeps every declared directory, in manifest order.
+#[test]
+fn plugin_manifest_preserves_multiple_skills_directories() {
+    let fx = fixture();
+    let plugin_root = fx.cfg.workspace_agents_dir.join("plugins/multi-skill");
+    fs::create_dir_all(plugin_root.join("skills-a")).unwrap();
+    fs::create_dir_all(plugin_root.join("skills-b")).unwrap();
+    write_json(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        &json!({
+            "name": "multi-skill",
+            "description": "Plugin with multiple bundled skill directories",
+            "skills": ["./skills-a", "./skills-b", "./skills-a/"]
+        }),
+    );
+
+    let (plugins, warnings) = discover_installed_plugin_roots(&fx.cfg);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let plugin = plugins.iter().find(|p| p.id == "multi-skill").unwrap();
+    let root = fs::canonicalize(&plugin_root).unwrap();
+    assert_eq!(
+        plugin.skills_dirs,
+        vec![root.join("skills-a"), root.join("skills-b")]
+    );
+}
+
+/// TS `resolvePluginSkillsPaths`: absent / empty-array `skills` default to `./skills/` (which may
+/// be missing); explicit paths must exist as directories inside the plugin root, and a malformed
+/// `skills` value rejects the manifest.
+#[test]
+fn plugin_manifest_skills_paths_follow_ts_validation() {
+    let fx = fixture();
+    let plugins_dir = fx.cfg.workspace_plugins_dir.clone();
+    let write_plugin = |name: &str, skills: Option<Value>| {
+        let mut manifest = json!({ "name": name });
+        if let Some(skills) = skills {
+            manifest["skills"] = skills;
+        }
+        write_json(
+            &plugins_dir.join(name).join(".cowork-plugin/plugin.json"),
+            &manifest,
+        );
+    };
+    write_plugin("default-skills", None);
+    write_plugin("empty-array", Some(json!([])));
+    write_plugin("single-string", Some(json!("  ./custom  ")));
+    fs::create_dir_all(plugins_dir.join("single-string/custom")).unwrap();
+    write_plugin("missing-dir", Some(json!(["./skills", "./missing-skills"])));
+    fs::create_dir_all(plugins_dir.join("missing-dir/skills")).unwrap();
+    write_plugin("not-a-dir", Some(json!("./file.txt")));
+    fs::write(plugins_dir.join("not-a-dir/file.txt"), "x").unwrap();
+    write_plugin("escapes-root", Some(json!(["../default-skills"])));
+    write_plugin("bad-entry", Some(json!(["./skills", ""])));
+    write_plugin("bad-type", Some(json!(42)));
+
+    let (plugins, warnings) = discover_installed_plugin_roots(&fx.cfg);
+    let root_of = |name: &str| fs::canonicalize(plugins_dir.join(name)).unwrap();
+    let dirs_of = |name: &str| {
+        plugins
+            .iter()
+            .find(|p| p.id == name)
+            .map(|p| p.skills_dirs.clone())
+    };
+    assert_eq!(
+        dirs_of("default-skills"),
+        Some(vec![root_of("default-skills").join("skills")])
+    );
+    assert_eq!(
+        dirs_of("empty-array"),
+        Some(vec![root_of("empty-array").join("skills")])
+    );
+    assert_eq!(
+        dirs_of("single-string"),
+        Some(vec![root_of("single-string").join("custom")])
+    );
+    for rejected in [
+        "missing-dir",
+        "not-a-dir",
+        "escapes-root",
+        "bad-entry",
+        "bad-type",
+    ] {
+        assert_eq!(dirs_of(rejected), None, "{rejected} must be rejected");
+    }
+
+    let warning_for = |name: &str| {
+        let root = root_of(name);
+        warnings
+            .iter()
+            .find(|w| w.contains(&format!("plugin at {}:", root.display())))
+            .unwrap_or_else(|| panic!("no warning for {name}: {warnings:?}"))
+            .clone()
+    };
+    assert!(
+        warning_for("missing-dir").contains("but that directory does not exist"),
+        "{warnings:?}"
+    );
+    assert!(
+        warning_for("not-a-dir").contains("but it is not a directory"),
+        "{warnings:?}"
+    );
+    assert!(
+        warning_for("escapes-root").contains("resolves skills outside the plugin root"),
+        "{warnings:?}"
+    );
+    assert!(
+        warning_for("bad-entry").contains("invalid skills value"),
+        "{warnings:?}"
+    );
+    assert!(
+        warning_for("bad-type").contains("invalid skills value"),
+        "{warnings:?}"
+    );
+    assert_eq!(warnings.len(), 5, "{warnings:?}");
+}

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1269,6 +1269,112 @@ fn native_google_wire_type(name: &str, role: ProviderNativeToolRole) -> Option<&
     }
 }
 
+/// Object entries of a JSON array (`asRecordArray` parity).
+fn native_record_array(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter(|v| v.is_object()).cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Trimmed non-empty strings of `args[key]` (`extractStringArray` parity).
+fn native_string_array(args: &Map<String, Value>, key: &str) -> Vec<Value> {
+    args.get(key)
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| Value::String(s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Projected output for a provider-executed Google tool result
+/// (`buildNativeGoogleToolResultOutput` in `googleNative/nativeTools.ts`).
+fn native_google_tool_result_output(
+    name: &str,
+    call_id: &str,
+    call_arguments: &Map<String, Value>,
+    result: Option<&Value>,
+) -> Value {
+    let mut out = Map::new();
+    out.insert("provider".into(), json!("google"));
+    out.insert("status".into(), json!("completed"));
+    out.insert("callId".into(), json!(call_id));
+    let nested_results = || native_record_array(result.and_then(|r| r.get("results")));
+    let result_entries = || {
+        let direct = native_record_array(result);
+        if direct.is_empty() {
+            nested_results()
+        } else {
+            direct
+        }
+    };
+    match name {
+        "nativeWebSearch" => {
+            out.insert(
+                "queries".into(),
+                Value::Array(native_string_array(call_arguments, "queries")),
+            );
+            out.insert("results".into(), Value::Array(result_entries()));
+            let sources = result.filter(|r| r.is_object()).and_then(|r| {
+                let direct = native_record_array(r.get("sources"));
+                if !direct.is_empty() {
+                    return Some(direct);
+                }
+                let nested = native_record_array(r.get("action").and_then(|a| a.get("sources")));
+                (!nested.is_empty()).then_some(nested)
+            });
+            if let Some(sources) = sources {
+                out.insert("sources".into(), Value::Array(sources));
+            }
+        }
+        "nativeUrlContext" => {
+            out.insert(
+                "urls".into(),
+                Value::Array(native_string_array(call_arguments, "urls")),
+            );
+            let mut entries = result_entries();
+            if entries.is_empty()
+                && let Some(record) = result.filter(|r| r.is_object())
+            {
+                entries.push(record.clone());
+            }
+            out.insert("results".into(), Value::Array(entries));
+        }
+        "nativeMcpServerTool" => {
+            let non_empty = |key: &str| {
+                call_arguments
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Value::String(s.to_string()))
+            };
+            if let Some(server_name) = non_empty("server_name") {
+                out.insert("serverName".into(), server_name);
+            }
+            if let Some(tool_name) = non_empty("name") {
+                out.insert("name".into(), tool_name);
+            }
+            if let Some(res) = result {
+                out.insert("result".into(), res.clone());
+            }
+        }
+        // `nativeFileSearch` / `nativeGoogleMaps`.
+        _ => {
+            out.insert("results".into(), Value::Array(result_entries()));
+        }
+    }
+    if let Some(res) = result {
+        out.insert("raw".into(), res.clone());
+    }
+    Value::Object(out)
+}
+
 enum GoogleSlotState {
     Text {
         text: String,
@@ -1307,6 +1413,10 @@ struct GoogleStreamState {
     interaction_id: Option<String>,
     slots: BTreeMap<usize, GoogleSlotState>,
     finished_blocks: BTreeMap<usize, ContentBlock>,
+    /// Native (provider-executed) call ids, including later wire-id aliases, mapped to the
+    /// slot index holding the call so results resolve to the first emitted id and its arguments
+    /// (`providerToolCallsById` in `processEvent.ts`).
+    native_call_slots: HashMap<String, usize>,
     usage: TurnUsage,
     failed_status: Option<String>,
     /// `Some(status)` once the terminal `interaction.complete` event arrived (status may be empty).
@@ -1322,6 +1432,7 @@ impl GoogleStreamState {
             interaction_id: None,
             slots: BTreeMap::new(),
             finished_blocks: BTreeMap::new(),
+            native_call_slots: HashMap::new(),
             usage: TurnUsage::default(),
             failed_status: None,
             completion_status: None,
@@ -1597,11 +1708,10 @@ impl GoogleStreamState {
             other => {
                 if let Some(native_name) = canonical_native_google_name(other) {
                     let is_call = other.ends_with("_call");
-                    let id = c
+                    let wire_id = c
                         .get(if is_call { "id" } else { "call_id" })
                         .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| format!("native_{idx}"));
+                        .map(ToOwned::to_owned);
                     let arguments = c
                         .get("arguments")
                         .and_then(Value::as_object)
@@ -1614,11 +1724,32 @@ impl GoogleStreamState {
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned);
 
+                    let (id, name) = if is_call {
+                        let id = wire_id.unwrap_or_else(|| format!("native_{idx}"));
+                        self.native_call_slots.insert(id.clone(), idx);
+                        // `tool-input-start` (+ initial arguments) with `providerExecuted: true`.
+                        emit(StreamEvent::ToolCallStart {
+                            turn_id: self.turn_id.clone(),
+                            key: id.clone(),
+                            name: native_name.to_string(),
+                            initial_args: (!arguments.is_empty()).then(|| arguments.clone()),
+                        });
+                        (id, native_name.to_string())
+                    } else {
+                        // Results bind to the call's first emitted id and canonical name.
+                        match wire_id {
+                            Some(call_id) => self
+                                .resolve_native_call(&call_id)
+                                .unwrap_or((call_id, native_name.to_string())),
+                            None => (format!("native_{idx}"), native_name.to_string()),
+                        }
+                    };
+
                     self.slots.insert(
                         idx,
                         GoogleSlotState::NativeTool {
                             id,
-                            name: native_name.to_string(),
+                            name,
                             role: if is_call {
                                 ProviderNativeToolRole::Call
                             } else {
@@ -1633,6 +1764,187 @@ impl GoogleStreamState {
                     );
                 }
             }
+        }
+    }
+
+    /// Resolves a native call id (or later wire-id alias) to the call's emitted id and name.
+    fn resolve_native_call(&self, call_id: &str) -> Option<(String, String)> {
+        let idx = *self.native_call_slots.get(call_id)?;
+        match (self.slots.get(&idx), self.finished_blocks.get(&idx)) {
+            (
+                Some(GoogleSlotState::NativeTool {
+                    id,
+                    name,
+                    role: ProviderNativeToolRole::Call,
+                    ..
+                }),
+                _,
+            )
+            | (
+                _,
+                Some(ContentBlock::ProviderNativeTool {
+                    id,
+                    name,
+                    role: ProviderNativeToolRole::Call,
+                    ..
+                }),
+            ) => Some((id.clone(), name.clone())),
+            _ => None,
+        }
+    }
+
+    /// Current arguments of the native call emitted as `call_id`.
+    fn native_call_arguments(&self, call_id: &str) -> Map<String, Value> {
+        let Some(idx) = self.native_call_slots.get(call_id) else {
+            return Map::new();
+        };
+        match (self.slots.get(idx), self.finished_blocks.get(idx)) {
+            (
+                Some(GoogleSlotState::NativeTool {
+                    role: ProviderNativeToolRole::Call,
+                    arguments,
+                    ..
+                }),
+                _,
+            )
+            | (
+                _,
+                Some(ContentBlock::ProviderNativeTool {
+                    role: ProviderNativeToolRole::Call,
+                    arguments,
+                    ..
+                }),
+            ) => arguments.clone(),
+            _ => Map::new(),
+        }
+    }
+
+    /// Native call/result payloads arriving as `content.delta` / `step.delta`
+    /// (`processEvent.ts` + `mapToStreamParts.ts` delta branches).
+    fn handle_native_delta(
+        &mut self,
+        idx: usize,
+        d_type: &str,
+        native_name: &str,
+        d: &Map<String, Value>,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) {
+        let wire_id = d
+            .get(if d_type.ends_with("_call") {
+                "id"
+            } else {
+                "call_id"
+            })
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(ToOwned::to_owned);
+        let signature = d
+            .get("signature")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(ToOwned::to_owned);
+
+        if d_type.ends_with("_call") {
+            let delta_args = d.get("arguments").and_then(Value::as_object);
+            match self.slots.get_mut(&idx) {
+                Some(GoogleSlotState::NativeTool {
+                    id,
+                    name,
+                    role: ProviderNativeToolRole::Call,
+                    arguments,
+                    signature: slot_signature,
+                    ..
+                }) => {
+                    if let Some(sig) = signature {
+                        *slot_signature = Some(sig);
+                    }
+                    if let Some(args) = delta_args {
+                        arguments.extend(args.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    }
+                    let (id, name) = (id.clone(), name.clone());
+                    if let Some(alias) = wire_id.filter(|w| *w != id) {
+                        self.native_call_slots.insert(alias, idx);
+                    }
+                    if let Some(args) = delta_args {
+                        emit(StreamEvent::ToolCallDelta {
+                            turn_id: self.turn_id.clone(),
+                            key: id,
+                            name,
+                            delta: Value::Object(args.clone()).to_string(),
+                        });
+                    }
+                }
+                None => {
+                    let id = wire_id.unwrap_or_else(|| format!("native_{idx}"));
+                    let arguments = delta_args.cloned().unwrap_or_default();
+                    self.native_call_slots.insert(id.clone(), idx);
+                    emit(StreamEvent::ToolCallStart {
+                        turn_id: self.turn_id.clone(),
+                        key: id.clone(),
+                        name: native_name.to_string(),
+                        initial_args: (!arguments.is_empty()).then(|| arguments.clone()),
+                    });
+                    self.slots.insert(
+                        idx,
+                        GoogleSlotState::NativeTool {
+                            id,
+                            name: native_name.to_string(),
+                            role: ProviderNativeToolRole::Call,
+                            arguments,
+                            arg_buffer: String::new(),
+                            result: None,
+                            is_error: false,
+                            signature,
+                        },
+                    );
+                }
+                Some(_) => {}
+            }
+            return;
+        }
+
+        // `_result` deltas: no stream part until the block stops.
+        let Some(call_id) = wire_id else {
+            return;
+        };
+        let (emitted_id, name) = self
+            .resolve_native_call(&call_id)
+            .unwrap_or((call_id, native_name.to_string()));
+        let is_error = d.get("is_error").and_then(Value::as_bool) == Some(true);
+        match self.slots.get_mut(&idx) {
+            Some(GoogleSlotState::NativeTool {
+                id,
+                role: ProviderNativeToolRole::Result,
+                result,
+                is_error: slot_is_error,
+                signature: slot_signature,
+                ..
+            }) => {
+                *id = emitted_id;
+                if let Some(res) = d.get("result") {
+                    *result = Some(res.clone());
+                }
+                *slot_is_error = is_error;
+                if let Some(sig) = signature {
+                    *slot_signature = Some(sig);
+                }
+            }
+            None => {
+                self.slots.insert(
+                    idx,
+                    GoogleSlotState::NativeTool {
+                        id: emitted_id,
+                        name,
+                        role: ProviderNativeToolRole::Result,
+                        arguments: Map::new(),
+                        arg_buffer: String::new(),
+                        result: d.get("result").cloned(),
+                        is_error,
+                        signature,
+                    },
+                );
+            }
+            Some(_) => {}
         }
     }
 
@@ -1758,18 +2070,33 @@ impl GoogleStreamState {
                             });
                         }
                         Some(GoogleSlotState::NativeTool {
+                            id,
+                            name,
+                            role,
                             arguments,
                             arg_buffer,
                             ..
                         }) => {
                             arg_buffer.push_str(chunk);
                             *arguments = parse_partial_json_object(arg_buffer);
+                            if *role == ProviderNativeToolRole::Call {
+                                emit(StreamEvent::ToolCallDelta {
+                                    turn_id: self.turn_id.clone(),
+                                    key: id.clone(),
+                                    name: name.clone(),
+                                    delta: chunk.to_string(),
+                                });
+                            }
                         }
                         _ => {}
                     }
                 }
             }
-            _ => {}
+            other => {
+                if let Some(native_name) = canonical_native_google_name(other) {
+                    self.handle_native_delta(idx, other, native_name, d, emit);
+                }
+            }
         }
     }
 
@@ -1890,6 +2217,34 @@ impl GoogleStreamState {
             } => {
                 if !arg_buffer.is_empty() {
                     arguments = parse_partial_json_object(&arg_buffer);
+                }
+                // Provider-executed tools surface as tool activity (`tool-input-end` /
+                // `tool-result` / `tool-error` with `providerExecuted: true`); the harness never
+                // executes them because they stay `ProviderNativeTool` blocks for replay.
+                if role == ProviderNativeToolRole::Call {
+                    emit(StreamEvent::ToolCallEnd {
+                        turn_id: self.turn_id.clone(),
+                        key: id.clone(),
+                        name: name.clone(),
+                        arguments: Some(arguments.clone()),
+                        retry_of: None,
+                        input_digest: None,
+                    });
+                } else {
+                    let call_arguments = self.native_call_arguments(&id);
+                    emit(StreamEvent::ToolResult {
+                        turn_id: self.turn_id.clone(),
+                        key: id.clone(),
+                        name: name.clone(),
+                        result: native_google_tool_result_output(
+                            &name,
+                            &id,
+                            &call_arguments,
+                            result.as_ref(),
+                        ),
+                        is_error,
+                        denied: false,
+                    });
                 }
                 let citations = result
                     .as_ref()

@@ -5,6 +5,10 @@
 //! in `src/shared/tasks.ts`.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use icu_collator::options::CollatorOptions;
+use icu_collator::{CollatorBorrowed, CollatorPreferences};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -341,7 +345,7 @@ pub fn get_task_review_rounds_from_records(reviews: &[TaskReviewRecord]) -> Vec<
     sorted.sort_by(|a, b| {
         a.round
             .cmp(&b.round)
-            .then_with(|| a.created_at.cmp(&b.created_at))
+            .then_with(|| js_locale_compare(&a.created_at, &b.created_at))
     });
     sorted
         .into_iter()
@@ -595,16 +599,44 @@ pub fn js_f64_to_string(x: f64) -> String {
     if x < 0.0 { format!("-{body}") } else { body }
 }
 
-fn sort_by_stable_key<T, F>(items: &[T], projector: F) -> Vec<&T>
+/// `String.prototype.localeCompare` parity. With no locale argument, Bun and Node compare with
+/// ICU's root collation at its default options (tertiary strength, punctuation not ignored, no
+/// numeric ordering), which is what ICU4X's root `Collator` with default options implements.
+/// Used for every ordering the TypeScript code expressed with `localeCompare`, so material
+/// snapshots, and therefore persisted review fingerprints, keep their legacy array order.
+pub fn js_locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
+    root_collator().compare(a, b)
+}
+
+fn root_collator() -> &'static CollatorBorrowed<'static> {
+    static COLLATOR: LazyLock<CollatorBorrowed<'static>> = LazyLock::new(|| {
+        CollatorBorrowed::try_new(CollatorPreferences::default(), CollatorOptions::default())
+            .expect("compiled ICU root collation data is always available")
+    });
+    &COLLATOR
+}
+
+/// `sortByStableValue` parity: a stable sort of `items` by
+/// `stableStringify(projector(item)).localeCompare(...)`.
+fn sort_by_stable_key<'a, T, F>(items: impl IntoIterator<Item = &'a T>, projector: F) -> Vec<&'a T>
 where
+    T: 'a,
     F: Fn(&T) -> Value,
 {
     let mut keyed: Vec<(String, &T)> = items
-        .iter()
+        .into_iter()
         .map(|item| (stable_stringify(&projector(item)), item))
         .collect();
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    // `sort_by` is stable, like `Array.prototype.sort`: collation-equal keys keep input order.
+    keyed.sort_by(|a, b| js_locale_compare(&a.0, &b.0));
     keyed.into_iter().map(|(_, item)| item).collect()
+}
+
+/// `[...strings].sort()` parity: JavaScript's default sort compares UTF-16 code units.
+fn sort_utf16(strings: &[String]) -> Vec<String> {
+    let mut sorted = strings.to_vec();
+    sorted.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    sorted
 }
 
 /// Builds the canonical `TaskReviewMaterialSnapshot` matching `src/server/tasks/taskReviewPolicy.ts`.
@@ -627,39 +659,27 @@ pub fn build_task_review_material_snapshot(
         .iter()
         .filter(|r| r.status == "active")
         .collect();
-    let sorted_reqs = {
-        let mut keyed: Vec<(String, &TaskRequirement)> = active_reqs
-            .into_iter()
-            .map(|r| {
-                (
-                    stable_stringify(&json!([r.kind.as_str(), &r.text, &r.permanence, &r.source])),
-                    r,
-                )
-            })
-            .collect();
-        keyed.sort_by(|a, b| a.0.cmp(&b.0));
-        keyed
-            .into_iter()
-            .map(|(_, r)| {
-                json!({
-                    "kind": r.kind.as_str(),
-                    "text": r.text,
-                    "source": r.source,
-                    "permanence": r.permanence,
-                    "status": r.status,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
+    let sorted_reqs: Vec<Value> = sort_by_stable_key(active_reqs, |r| {
+        json!([r.kind.as_str(), &r.text, &r.permanence, &r.source])
+    })
+    .into_iter()
+    .map(|r| {
+        json!({
+            "kind": r.kind.as_str(),
+            "text": r.text,
+            "source": r.source,
+            "permanence": r.permanence,
+            "status": r.status,
+        })
+    })
+    .collect();
 
     let sorted_work_items: Vec<Value> =
         sort_by_stable_key(&task.work_items, |w| json!([w.position, &w.id]))
             .into_iter()
             .map(|w| {
-                let mut deps = w.depends_on.clone();
-                deps.sort();
-                let mut eos = w.expected_outputs.clone();
-                eos.sort();
+                let deps = sort_utf16(&w.depends_on);
+                let eos = sort_utf16(&w.expected_outputs);
                 json!({
                     "id": w.id,
                     "title": w.title,
@@ -679,101 +699,70 @@ pub fn build_task_review_material_snapshot(
         .iter()
         .filter(|d| d.status == "active")
         .collect();
-    let sorted_decisions = {
-        let mut keyed: Vec<(String, &TaskDecision)> = relevant_decisions
-            .into_iter()
-            .map(|d| {
-                (
-                    stable_stringify(&json!([&d.question, &d.resolution, &d.scope])),
-                    d,
-                )
-            })
-            .collect();
-        keyed.sort_by(|a, b| a.0.cmp(&b.0));
-        keyed
-            .into_iter()
-            .map(|(_, d)| {
-                json!({
-                    "question": d.question,
-                    "resolution": d.resolution,
-                    "source": d.source,
-                    "scope": d.scope,
-                    "confidence": d.confidence,
-                    "status": d.status,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
+    let sorted_decisions: Vec<Value> = sort_by_stable_key(relevant_decisions, |d| {
+        json!([&d.question, &d.resolution, &d.scope])
+    })
+    .into_iter()
+    .map(|d| {
+        json!({
+            "question": d.question,
+            "resolution": d.resolution,
+            "source": d.source,
+            "scope": d.scope,
+            "confidence": d.confidence,
+            "status": d.status,
+        })
+    })
+    .collect();
 
     let relevant_questions: Vec<&TaskQuestion> = task
         .questions
         .iter()
         .filter(|q| q.status.as_str() != "superseded")
         .collect();
-    let sorted_questions = {
-        let mut keyed: Vec<(String, &TaskQuestion)> = relevant_questions
-            .into_iter()
-            .map(|q| {
-                (
-                    stable_stringify(&json!([q.status.as_str(), q.blocking, &q.question])),
-                    q,
-                )
-            })
-            .collect();
-        keyed.sort_by(|a, b| a.0.cmp(&b.0));
-        keyed
-            .into_iter()
-            .map(|(_, q)| {
-                let mut opts = q.options.clone();
-                opts.sort_by(|a, b| a.id.cmp(&b.id));
-                json!({
-                    "threadId": q.thread_id,
-                    "workItemId": q.work_item_id,
-                    "header": q.header,
-                    "question": q.question,
-                    "context": q.context,
-                    "blocking": q.blocking,
-                    "urgency": q.urgency.as_str(),
-                    "defaultAction": q.default_action,
-                    "options": opts,
-                    "recommendedOptionId": q.recommended_option_id,
-                    "status": q.status.as_str(),
-                    "answer": q.answer,
-                    "answerOptionId": q.answer_option_id,
-                    "resolutionSource": q.resolution_source,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
+    let sorted_questions: Vec<Value> = sort_by_stable_key(relevant_questions, |q| {
+        json!([q.status.as_str(), q.blocking, &q.question])
+    })
+    .into_iter()
+    .map(|q| {
+        let opts = sort_by_stable_key(&q.options, |o| json!(o.id));
+        json!({
+            "threadId": q.thread_id,
+            "workItemId": q.work_item_id,
+            "header": q.header,
+            "question": q.question,
+            "context": q.context,
+            "blocking": q.blocking,
+            "urgency": q.urgency.as_str(),
+            "defaultAction": q.default_action,
+            "options": opts,
+            "recommendedOptionId": q.recommended_option_id,
+            "status": q.status.as_str(),
+            "answer": q.answer,
+            "answerOptionId": q.answer_option_id,
+            "resolutionSource": q.resolution_source,
+        })
+    })
+    .collect();
 
     let relevant_blockers: Vec<&TaskBlocker> = task
         .blockers
         .iter()
         .filter(|b| b.status == "active")
         .collect();
-    let sorted_blockers = {
-        let mut keyed: Vec<(String, &TaskBlocker)> = relevant_blockers
-            .into_iter()
-            .map(|b| {
-                (
-                    stable_stringify(&json!([b.blocking, &b.work_item_id, &b.description])),
-                    b,
-                )
-            })
-            .collect();
-        keyed.sort_by(|a, b| a.0.cmp(&b.0));
-        keyed
-            .into_iter()
-            .map(|(_, b)| {
-                json!({
-                    "workItemId": b.work_item_id,
-                    "description": b.description,
-                    "blocking": b.blocking,
-                    "status": b.status,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
+    let sorted_blockers: Vec<Value> = sort_by_stable_key(relevant_blockers, |b| {
+        json!([b.blocking, &b.work_item_id, &b.description])
+    })
+    .into_iter()
+    .map(|b| {
+        json!({
+            "workItemId": b.work_item_id,
+            "description": b.description,
+            "blocking": b.blocking,
+            "status": b.status,
+        })
+    })
+    .collect();
 
     let sorted_artifacts: Vec<Value> =
         sort_by_stable_key(&task.artifacts, |a| json!([&a.path, &a.id]))

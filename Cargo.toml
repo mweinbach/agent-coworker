@@ -91,6 +91,8 @@ blake3 = "1"
 ed25519-dalek = "3"
 flate2 = "1"
 fs4 = "1"
+# ICU root collation: `localeCompare` parity for persisted task-review fingerprints.
+icu_collator = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
 rayon = "1"
 rusqlite = { version = "0.41", features = ["bundled"] }
 tar = "0.4"

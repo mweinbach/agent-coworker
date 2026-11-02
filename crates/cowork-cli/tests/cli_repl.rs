@@ -897,6 +897,117 @@ async fn repl_new_thread_refreshes_provider_and_model_selection() {
     assert!(!after_new.contains("anthropic"), "output={output}");
 }
 
+/// The id printed after `marker` (e.g. the banner's `Thread: <id>` or `Started new thread: <id>`).
+fn id_after(output: &str, marker: &str) -> String {
+    output
+        .split(marker)
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("missing {marker:?}; output={output}"))
+        .to_owned()
+}
+
+/// Resuming a thread that belongs to another workspace adopts that thread's working directory
+/// (TS `applyThreadDescriptor`: `workspaceCwd = descriptor.cwd` before persisting, then
+/// `loadWorkspaceMetadata` for it): later workspace-scoped commands target the thread's
+/// workspace and the last-session entry is written under it, leaving the launch workspace's
+/// entry untouched. The startup auto-resume path adopts it the same way.
+#[tokio::test]
+async fn repl_resume_adopts_the_resumed_threads_workspace() {
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, _calls) =
+        spawn_mock_openai_sse(vec![responses_text_sse("resp_ws_b", "Hello from B.")]).await;
+    use_openai_provider(&mut iso, &base_url);
+    // Workspace B sits under the one-off chats root, which a server launched in A authorizes for
+    // `thread/list` / `thread/start`, and carries a skill that only exists there.
+    let workspace_b = iso.home_dir.join(".cowork/chats/workspace-b");
+    let skill_dir = workspace_b.join(".agents/skills/workspace-b-only");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: workspace-b-only\ndescription: Only discoverable from workspace B.\n---\n\n# B\n",
+    )
+    .unwrap();
+    let workspace_b = std::fs::canonicalize(&workspace_b).unwrap();
+    let workspace_a = iso.workspace_dir.clone();
+    let stored = |cwd: &PathBuf| get_stored_session_for_cwd(&iso.home_dir, &iso.env, cwd);
+
+    // Seed B's thread (with a turn, so `thread/list` includes it) from a REPL launched in B.
+    let mut b_opts = scripted_opts(&iso);
+    b_opts.working_directory = workspace_b.clone();
+    let output = run_repl_scripted(b_opts, &["Say hello", "/exit"])
+        .await
+        .unwrap();
+    assert!(output.contains("Hello from B."), "output={output}");
+    let b_thread = stored(&workspace_b).expect("expected a stored thread for workspace B");
+
+    // Launched in A: `/resume` B's thread, then list sessions and skills.
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &[
+            &format!("/resume {b_thread}"),
+            "/sessions",
+            "/skills",
+            "/exit",
+        ],
+    )
+    .await
+    .unwrap();
+    let a_thread = id_after(&output, "Thread: ");
+    assert_ne!(a_thread, b_thread, "output={output}");
+    let after_resume = output
+        .split("Resumed thread:")
+        .nth(1)
+        .unwrap_or_else(|| panic!("missing /resume notice; output={output}"));
+    assert!(
+        after_resume.contains(&format!(" * {b_thread} ")),
+        "/sessions must list workspace B's threads: {output}"
+    );
+    assert!(
+        !after_resume.contains(&a_thread),
+        "/sessions must not list workspace A's threads: {output}"
+    );
+    assert!(
+        after_resume.contains("  - workspace-b-only"),
+        "/skills must read workspace B: {output}"
+    );
+    assert_eq!(stored(&workspace_b).as_deref(), Some(b_thread.as_str()));
+    assert_eq!(
+        stored(&workspace_a).as_deref(),
+        Some(a_thread.as_str()),
+        "A's last-session entry must be untouched"
+    );
+
+    // Launched in A again (auto-resumes A's thread): `/new` after resuming B starts in B.
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &[&format!("/resume {b_thread}"), "/new", "/exit"],
+    )
+    .await
+    .unwrap();
+    assert_eq!(id_after(&output, "Thread: "), a_thread, "output={output}");
+    let new_thread = id_after(&output, "Started new thread: ");
+    assert_ne!(new_thread, b_thread, "output={output}");
+    assert_eq!(stored(&workspace_b).as_deref(), Some(new_thread.as_str()));
+    assert_eq!(stored(&workspace_a).as_deref(), Some(a_thread.as_str()));
+
+    // Startup auto-resume: a launch workspace whose stored thread belongs to B (as a pre-fix CLI
+    // persisted it) adopts B for the session.
+    set_stored_session_for_cwd(&iso.home_dir, &iso.env, &workspace_a, &b_thread).unwrap();
+    let output = run_repl_scripted(scripted_opts(&iso), &["/sessions", "/exit"])
+        .await
+        .unwrap();
+    assert!(
+        output.contains(&format!("Workspace: {}", workspace_b.display())),
+        "output={output}"
+    );
+    assert!(
+        output.contains(&format!(" * {b_thread} ")),
+        "output={output}"
+    );
+    assert_eq!(stored(&workspace_b).as_deref(), Some(b_thread.as_str()));
+}
+
 /// A slash command whose RPC fails reports the error and keeps the REPL running (TS parity:
 /// `tryRequest` prints `Error: ...` and re-prompts) instead of ending the session.
 #[tokio::test]

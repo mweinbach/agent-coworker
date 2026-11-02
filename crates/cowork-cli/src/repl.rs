@@ -180,88 +180,10 @@ impl ActiveReplSession {
         })
         .await?;
 
-        let mut rpc =
-            ReplRpcClient::connect_and_handshake(server.ws_url(), env!("CARGO_PKG_VERSION"))
-                .await?;
+        let rpc = ReplRpcClient::connect_and_handshake(server.ws_url(), env!("CARGO_PKG_VERSION"))
+            .await?;
 
-        let cwd_str = cwd.to_string_lossy().into_owned();
-        let _ = rpc
-            .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
-            .await;
-
-        let catalog_res = rpc
-            .request(
-                "cowork/provider/catalog/read",
-                Some(json!({ "cwd": cwd_str })),
-            )
-            .await
-            .unwrap_or_else(|_| json!({}));
-        let catalog = catalog_res
-            .get("event")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-
-        let stored_tid = get_stored_session_for_cwd(&homedir, &opts.env, &cwd);
-        let (thread_val, was_resumed) = if let Some(tid) = stored_tid {
-            match rpc
-                .request("thread/resume", Some(json!({ "threadId": tid })))
-                .await
-            {
-                Ok(res) => (res["thread"].clone(), true),
-                Err(_) => {
-                    let started = rpc
-                        .request("thread/start", Some(json!({ "cwd": cwd_str })))
-                        .await?;
-                    (started["thread"].clone(), false)
-                }
-            }
-        } else {
-            let started = rpc
-                .request("thread/start", Some(json!({ "cwd": cwd_str })))
-                .await?;
-            (started["thread"].clone(), false)
-        };
-
-        let thread_id = thread_val["id"].as_str().unwrap_or_default().to_owned();
-        let provider = thread_val["modelProvider"]
-            .as_str()
-            .unwrap_or("openai")
-            .to_owned();
-        let model = thread_val["model"].as_str().unwrap_or("gpt-5.4").to_owned();
-
-        let _ = set_stored_session_for_cwd(&homedir, &opts.env, &cwd, &thread_id);
-
-        writeln!(
-            out,
-            "Cowork CLI v{} — connected ({} / {})",
-            env!("CARGO_PKG_VERSION"),
-            sanitize(&provider),
-            sanitize(&model)
-        )?;
-        writeln!(out, "Workspace: {}", cwd.display())?;
-        writeln!(
-            out,
-            "Thread: {} (type /help for commands, /exit to quit)",
-            sanitize(&thread_id)
-        )?;
-        if was_resumed
-            && let Ok(read_res) = rpc
-                .request(
-                    "thread/read",
-                    Some(json!({
-                        "threadId": thread_id,
-                        "includeTurns": true,
-                    })),
-                )
-                .await
-        {
-            render_thread_history_if_any(&read_res, out)?;
-        }
-        rpc.drain_brief_notifications(20).await;
-        rpc.pending_notifications.clear();
-        out.flush()?;
-
-        Ok(Self {
+        let mut session = Self {
             cwd,
             homedir,
             env: opts.env,
@@ -270,24 +192,112 @@ impl ActiveReplSession {
             built_in_dir: opts.built_in_dir,
             server,
             rpc,
-            thread_id,
-            provider,
-            model,
-            catalog,
+            thread_id: String::new(),
+            provider: "openai".to_owned(),
+            model: "gpt-5.4".to_owned(),
+            catalog: json!({}),
             listen_os_ctrl_c: false,
             interrupt_notify: None,
-        })
+        };
+
+        // TS `connectToServer`: resume the workspace's stored thread (or start one), adopt its
+        // descriptor (which may move `cwd` to the thread's own workspace), then load the
+        // workspace metadata for the adopted `cwd`.
+        let cwd_str = session.cwd.to_string_lossy().into_owned();
+        let stored_tid = get_stored_session_for_cwd(&session.homedir, &session.env, &session.cwd);
+        let (thread_val, was_resumed) = if let Some(tid) = stored_tid {
+            match session
+                .rpc
+                .request("thread/resume", Some(json!({ "threadId": tid })))
+                .await
+            {
+                Ok(res) => (res["thread"].clone(), true),
+                Err(_) => {
+                    let started = session
+                        .rpc
+                        .request("thread/start", Some(json!({ "cwd": cwd_str })))
+                        .await?;
+                    (started["thread"].clone(), false)
+                }
+            }
+        } else {
+            let started = session
+                .rpc
+                .request("thread/start", Some(json!({ "cwd": cwd_str })))
+                .await?;
+            (started["thread"].clone(), false)
+        };
+        session.apply_thread_descriptor(&thread_val);
+        session.load_workspace_metadata().await;
+
+        writeln!(
+            out,
+            "Cowork CLI v{} — connected ({} / {})",
+            env!("CARGO_PKG_VERSION"),
+            sanitize(&session.provider),
+            sanitize(&session.model)
+        )?;
+        writeln!(out, "Workspace: {}", session.cwd.display())?;
+        writeln!(
+            out,
+            "Thread: {} (type /help for commands, /exit to quit)",
+            sanitize(&session.thread_id)
+        )?;
+        if was_resumed
+            && let Ok(read_res) = session
+                .rpc
+                .request(
+                    "thread/read",
+                    Some(json!({
+                        "threadId": session.thread_id,
+                        "includeTurns": true,
+                    })),
+                )
+                .await
+        {
+            render_thread_history_if_any(&read_res, out)?;
+        }
+        session.rpc.drain_brief_notifications(20).await;
+        session.rpc.pending_notifications.clear();
+        out.flush()?;
+
+        Ok(session)
+    }
+
+    /// TS `loadWorkspaceMetadata`: re-reads the session state and provider catalog for the
+    /// active `cwd` (best effort, like TS `Promise.allSettled`). The catalog is the only
+    /// workspace metadata the REPL caches; auth methods are read on demand by `/connect`.
+    async fn load_workspace_metadata(&mut self) {
+        let cwd_str = self.cwd.to_string_lossy().into_owned();
+        let _ = self
+            .rpc
+            .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
+            .await;
+        if let Ok(res) = self
+            .rpc
+            .request(
+                "cowork/provider/catalog/read",
+                Some(json!({ "cwd": cwd_str })),
+            )
+            .await
+        {
+            self.catalog = res.get("event").cloned().unwrap_or_else(|| json!({}));
+        }
     }
 
     /// TS `applyThreadDescriptor`: adopt a `thread/start` / `thread/resume` result as the active
-    /// thread, syncing the provider/model selection to the thread's own and persisting it as the
-    /// workspace's last session. Returns the adopted thread id.
+    /// thread, syncing the provider/model selection and working directory to the thread's own
+    /// (a resumed thread may belong to another workspace) and persisting it as that workspace's
+    /// last session. Returns the adopted thread id.
     fn apply_thread_descriptor(&mut self, thread: &Value) -> Option<String> {
         let tid = thread["id"]
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty())?
             .to_owned();
+        if let Some(cwd) = thread["cwd"].as_str().filter(|s| !s.trim().is_empty()) {
+            self.cwd = canonicalize_sync(Path::new(cwd));
+        }
         if let Some(p) = thread["modelProvider"]
             .as_str()
             .filter(|s| !s.trim().is_empty())
@@ -463,7 +473,11 @@ impl ActiveReplSession {
                     .await
                 {
                     Ok(res) => {
-                        let tid = match self.apply_thread_descriptor(&res["thread"]) {
+                        // TS `resumeSession` -> `connectToServer`: adopt the descriptor, then
+                        // reload workspace metadata for the thread's (possibly new) workspace.
+                        let adopted = self.apply_thread_descriptor(&res["thread"]);
+                        self.load_workspace_metadata().await;
+                        let tid = match adopted {
                             Some(tid) => tid,
                             None => {
                                 self.thread_id = target.to_owned();

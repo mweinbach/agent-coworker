@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { hostPlatform } from "../src/platform/host";
 import type { PersistentAgentSummary } from "../src/shared/agents";
 import type { ToolContext } from "../src/tools/context";
 import { createSpawnAgentTool } from "../src/tools/spawnAgent";
@@ -53,6 +55,36 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     askUser: async () => "",
     approveCommand: async () => true,
     ...overrides,
+  };
+}
+
+function controllableSpawn(
+  spawn: ReturnType<typeof mock>,
+): NonNullable<ToolContext["agentControl"]> {
+  return {
+    spawn,
+    list: async () => [],
+    sendInput: async () => {},
+    wait: async () => ({
+      timedOut: false,
+      mode: "any" as const,
+      agents: [],
+      readyAgentIds: [],
+    }),
+    inspect: async () => ({
+      agent: makeSummary(),
+      latestAssistantText: null,
+      parsedReport: null,
+      reportRequired: true,
+      reportFound: false,
+      reportValid: false,
+      reportBlockCount: 0,
+      reportDiagnostic: "No assistant message available to inspect for an <agent_report> footer.",
+      sessionUsage: null,
+      lastTurnUsage: null,
+    }),
+    resume: async () => makeSummary(),
+    close: async () => makeSummary(),
   };
 }
 
@@ -295,6 +327,89 @@ describe("spawnAgent tool", () => {
         targetPaths: [".git/hooks", "src/ok"],
       }),
     ).rejects.toThrow("invalid: .git/hooks");
+  });
+
+  test("rejects an escaping symlink even when another targetPath is in scope", async () => {
+    const root = await fs.mkdtemp(path.join(import.meta.dir, "spawn-agent-scope-"));
+    const ws = path.join(root, "ws");
+    const outside = path.join(root, "outside");
+    const spawn = mock(async () => makeSummary());
+    try {
+      await fs.mkdir(path.join(ws, "src", "ok"), { recursive: true });
+      await fs.mkdir(outside, { recursive: true });
+      await fs.writeFile(path.join(outside, "secret.txt"), "secret");
+      await fs.symlink(
+        outside,
+        path.join(ws, "src", "link"),
+        hostPlatform() === "win32" ? "junction" : "dir",
+      );
+      const tool: any = createSpawnAgentTool(
+        makeCtx({
+          config: makeConfig({
+            workingDirectory: ws,
+            outputDirectory: path.join(ws, "output"),
+            uploadsDirectory: path.join(ws, "uploads"),
+            projectCoworkDir: path.join(ws, ".cowork"),
+          }),
+          agentControl: controllableSpawn(spawn),
+        }),
+      );
+
+      await expect(
+        tool.execute({
+          message: "Investigate this failure",
+          targetPaths: ["src/ok", "src/link"],
+        }),
+      ).rejects.toThrow("invalid: src/link");
+      await expect(
+        tool.execute({
+          message: "Investigate this failure",
+          targetPaths: ["src/link/missing.ts"],
+        }),
+      ).rejects.toThrow("invalid: src/link/missing.ts");
+      expect(spawn).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(outside, "secret.txt"), "utf8")).toBe("secret");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("allows an in-workspace symlink and forwards the lexical targetPath", async () => {
+    const root = await fs.mkdtemp(path.join(import.meta.dir, "spawn-agent-scope-"));
+    const ws = path.join(root, "ws");
+    const spawn = mock(async () => makeSummary());
+    try {
+      await fs.mkdir(path.join(ws, "src", "real"), { recursive: true });
+      await fs.symlink(
+        path.join(ws, "src", "real"),
+        path.join(ws, "src", "alias"),
+        hostPlatform() === "win32" ? "junction" : "dir",
+      );
+      const tool: any = createSpawnAgentTool(
+        makeCtx({
+          config: makeConfig({
+            workingDirectory: ws,
+            outputDirectory: path.join(ws, "output"),
+            uploadsDirectory: path.join(ws, "uploads"),
+            projectCoworkDir: path.join(ws, ".cowork"),
+          }),
+          agentControl: controllableSpawn(spawn),
+        }),
+      );
+
+      await tool.execute({
+        message: "Investigate this failure",
+        targetPaths: ["src/alias"],
+      });
+      expect(spawn).toHaveBeenCalledWith({
+        message: "Investigate this failure",
+        role: "default",
+        targetPaths: ["src/alias"],
+        contextMode: "none",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   test("rejects an empty targetPaths list instead of widening to the whole workspace", async () => {

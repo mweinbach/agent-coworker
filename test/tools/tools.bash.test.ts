@@ -721,6 +721,56 @@ describe("bash tool", () => {
     expect(observed.requireBackend).toBe(false);
   });
 
+  test("read-only role stays a no-project-write hard floor when sandboxPolicy is omitted", async () => {
+    // Alternate delegate paths may not precompute sandboxPolicy. YOLO and a
+    // danger-full-access config must not widen a read-only role in that fallback.
+    const dir = await tmpDir();
+    let observed: { kind?: string; requireEnforcingBackend?: boolean } = {};
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = {
+        kind: opts.policy?.kind,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "danger-full-access", network: true, requireBackend: false },
+      }),
+      agentRole: "reviewer",
+      shellPolicy: "full",
+      yolo: true,
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    expect(observed.kind).toBe("no-project-write");
+    expect(observed.requireEnforcingBackend).toBe(true);
+  });
+
+  test("no_project_write shell policy stays a hard floor when sandboxPolicy and role are omitted", async () => {
+    const dir = await tmpDir();
+    let observed: { kind?: string; requireEnforcingBackend?: boolean } = {};
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = {
+        kind: opts.policy?.kind,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "danger-full-access", network: true, requireBackend: false },
+      }),
+      shellPolicy: "no_project_write",
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    expect(ctx.sandboxPolicy).toBeUndefined();
+    expect(ctx.agentRole).toBeUndefined();
+    expect(observed.kind).toBe("no-project-write");
+    expect(observed.requireEnforcingBackend).toBe(true);
+  });
+
   test("YOLO with an explicit network ban requires an enforcing backend", async () => {
     // YOLO auto-approves every prompt, so the unsandboxed no-backend fallback
     // would silently grant network access despite an explicit `network: false`.

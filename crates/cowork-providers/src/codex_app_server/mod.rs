@@ -2,16 +2,18 @@ pub mod client;
 pub mod connectors;
 pub mod isolation;
 pub mod policy;
+pub mod tool_activity;
 pub mod turn_output;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use cowork_config::{
-    SandboxMode, cowork_home, env_map_from_process, host_platform, resolve_home_dir,
+    ModelRegistry, ProviderName, SandboxMode, cowork_home, env_map_from_process, host_platform,
+    resolve_home_dir,
 };
 use cowork_inference::{
     CanonicalMessage, ContentBlock, ContinuationFingerprintInput, MediaKind, MediaSource,
@@ -22,6 +24,7 @@ use cowork_inference::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use tool_activity::{CodexToolActivity, is_codex_tool_notification};
 use turn_output::codex_text_phase;
 
 use crate::transport::{
@@ -69,6 +72,9 @@ pub struct CodexAppServerTransport {
     /// Effective Cowork tool-context restrictions (read-only role, `targetPaths`, sandbox mode)
     /// that must also bound Codex's native shell/file tools, which bypass Cowork's tool checks.
     pub sandbox_restrictions: Option<CodexSandboxRestrictions>,
+    /// Bundled install dir whose `config/models` registry gates per-model Codex options
+    /// (`normalizeSummaryForModel`). Unset, every model is treated as unknown to the registry.
+    pub built_in_dir: Option<PathBuf>,
 }
 
 /// Cowork session/agent restrictions applied to the native Codex sandbox. Merged fail-closed with
@@ -91,6 +97,7 @@ impl std::fmt::Debug for CodexAppServerTransport {
             .field("has_env_override", &self.env_override.is_some())
             .field("has_turn_observer", &self.turn_observer.is_some())
             .field("sandbox_restrictions", &self.sandbox_restrictions)
+            .field("built_in_dir", &self.built_in_dir)
             .finish()
     }
 }
@@ -118,7 +125,14 @@ impl CodexAppServerTransport {
             env_override: Some(env),
             turn_observer,
             sandbox_restrictions: None,
+            built_in_dir: None,
         }
+    }
+
+    /// Resolves per-model Codex options against the model registry under `built_in_dir`.
+    pub fn with_built_in_dir(mut self, built_in_dir: Option<PathBuf>) -> Self {
+        self.built_in_dir = built_in_dir;
+        self
     }
 
     /// Bounds Codex's native sandbox by the caller's effective tool-context restrictions.
@@ -235,6 +249,10 @@ impl ProviderTransport for CodexAppServerTransport {
         if policy.force_disable_web_search {
             config_overrides.insert("web_search".into(), Value::String("disabled".into()));
         }
+        // `codexThreadConfig` parity: `textVerbosity` maps to Codex's `model_verbosity`.
+        if let Some(verbosity) = codex_text_verbosity(&request.provider_options) {
+            config_overrides.insert("model_verbosity".into(), Value::String(verbosity));
+        }
 
         let thread_payload = json!({
             "model": request.model_id,
@@ -309,6 +327,15 @@ impl ProviderTransport for CodexAppServerTransport {
                     if let Some(effort) = codex_reasoning_effort(&request.provider_options) {
                         params["effort"] = Value::String(effort);
                     }
+                    if let Some(summary) = codex_reasoning_summary(
+                        &request.provider_options,
+                        codex_model_declares_reasoning_summary(
+                            self.built_in_dir.as_deref(),
+                            &request.model_id,
+                        ),
+                    ) {
+                        params["summary"] = Value::String(summary);
+                    }
                     params
                 }),
             )
@@ -333,6 +360,7 @@ impl ProviderTransport for CodexAppServerTransport {
         let mut text_started: Vec<bool> = Vec::new();
         let mut text_ended: Vec<bool> = Vec::new();
         let mut usage_tracker = CodexTurnUsageTracker::new();
+        let mut tool_activity = CodexToolActivity::new();
         let mut completed_turn: Option<Value> = None;
         let mut raw_events = Vec::new();
 
@@ -500,6 +528,15 @@ impl ProviderTransport for CodexAppServerTransport {
                                 citations: Vec::new(),
                                 annotations: Vec::new(),
                             });
+                        }
+                        // Native shell/patch/MCP/dynamic tool items and their streamed output
+                        // become tool stream events (`notifications.ts` parity).
+                        method if is_codex_tool_notification(method, item) => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            close_thinking!();
+                            tool_activity.handle(method, params, &turn_id, &mut *on_event);
                         }
                         "thread/tokenUsage/updated" => {
                             if !token_usage_targets_codex_turn(
@@ -958,14 +995,22 @@ fn codex_attachment_note(kind: MediaKind, source: &MediaSource) -> String {
     }
 }
 
+/// String `codex-cli.<key>` provider option, falling back to the top-level key.
+fn codex_provider_option_str<'a>(
+    provider_options: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
+    provider_options
+        .get("codex-cli")
+        .and_then(|o| o.get(key))
+        .or_else(|| provider_options.get(key))
+        .and_then(Value::as_str)
+}
+
 /// Normalized `codex-cli.reasoningEffort` (top-level fallback) forwarded as `turn/start.effort`
 /// (`normalizeEffort` parity: `none`/unknown values are omitted).
 fn codex_reasoning_effort(provider_options: &serde_json::Map<String, Value>) -> Option<String> {
-    let raw = provider_options
-        .get("codex-cli")
-        .and_then(|o| o.get("reasoningEffort"))
-        .or_else(|| provider_options.get("reasoningEffort"))
-        .and_then(Value::as_str)?
+    let raw = codex_provider_option_str(provider_options, "reasoningEffort")?
         .trim()
         .to_ascii_lowercase();
     matches!(
@@ -973,6 +1018,53 @@ fn codex_reasoning_effort(provider_options: &serde_json::Map<String, Value>) -> 
         "minimal" | "light" | "low" | "medium" | "high" | "xhigh" | "max"
     )
     .then_some(raw)
+}
+
+/// `codex-cli.reasoningSummary` forwarded as `turn/start.summary` (`normalizeSummaryForModel`
+/// parity): omitted for a registry model that declares no `reasoningSummary` default, otherwise
+/// passed through when it is one of the app-server's summary modes.
+fn codex_reasoning_summary(
+    provider_options: &serde_json::Map<String, Value>,
+    model_declares_summary: Option<bool>,
+) -> Option<String> {
+    if model_declares_summary == Some(false) {
+        return None;
+    }
+    codex_provider_option_str(provider_options, "reasoningSummary")
+        .filter(|v| matches!(*v, "auto" | "concise" | "detailed" | "none"))
+        .map(ToOwned::to_owned)
+}
+
+/// `codex-cli.textVerbosity` forwarded as thread `config.model_verbosity`
+/// (`normalizeTextVerbosity` parity).
+fn codex_text_verbosity(provider_options: &serde_json::Map<String, Value>) -> Option<String> {
+    codex_provider_option_str(provider_options, "textVerbosity")
+        .filter(|v| matches!(*v, "low" | "medium" | "high"))
+        .map(ToOwned::to_owned)
+}
+
+/// Whether the bundled registry entry for `model_id` declares a `reasoningSummary` default;
+/// `None` when no registry is configured or the model is not in it (`getSupportedModel` miss).
+fn codex_model_declares_reasoning_summary(
+    built_in_dir: Option<&Path>,
+    model_id: &str,
+) -> Option<bool> {
+    static REGISTRIES: OnceLock<Mutex<HashMap<PathBuf, Arc<ModelRegistry>>>> = OnceLock::new();
+    let dir = built_in_dir?;
+    let registry = {
+        let cache = REGISTRIES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+        Arc::clone(
+            guard
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| Arc::new(ModelRegistry::load_from_builtin_dir(dir))),
+        )
+    };
+    registry.get(ProviderName::CodexCli, model_id).map(|model| {
+        model
+            .provider_options_defaults
+            .contains_key("reasoningSummary")
+    })
 }
 
 fn and_restrict(a: Option<bool>, b: Option<bool>) -> Option<bool> {

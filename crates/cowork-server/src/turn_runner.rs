@@ -607,7 +607,12 @@ pub(crate) fn select_provider_transport(
                         Some(dyn_handler),
                         Some(observer),
                     )
-                    .with_sandbox_restrictions(codex_sandbox_restrictions(tctx)),
+                    .with_sandbox_restrictions(codex_sandbox_restrictions(tctx))
+                    .with_built_in_dir(
+                        tctx.built_in_dir
+                            .clone()
+                            .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone())),
+                    ),
                 ))
             } else {
                 Ok(Arc::new(CodexAppServerTransport::with_env(env.clone())))

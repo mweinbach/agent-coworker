@@ -46,6 +46,13 @@ impl MemoryGenerator {
     /// processed index is returned as `Ok` so the caller persists that progress and the
     /// unprocessed suffix is retried later; if no complete message was processed the error is
     /// returned and the cursor stays where it was.
+    ///
+    /// A batch only counts as processed once its memories are stored: a storage failure (for
+    /// example a full advanced-memory folder or an unwritable directory) is handled like a
+    /// failed model call, so the cursor stops at the start of that batch and its memories are
+    /// regenerated once storage is repaired. A model that finds nothing worth remembering is
+    /// not a failure and advances the cursor normally. Without a remote model the same applies
+    /// per message: the cursor stops at the first message whose directive could not be saved.
     pub async fn maybe_generate_from_transcript(
         &self,
         messages: &[Value],
@@ -82,7 +89,16 @@ impl MemoryGenerator {
         }
 
         let Some(remote) = remote_model else {
-            write_notes(&directives, sqlite_store, advanced_store);
+            for (index, note) in directives.iter().enumerate() {
+                let Some(note) = note else { continue };
+                if let Err(err) = write_note(note, sqlite_store, advanced_store) {
+                    return checkpoint_after_storage_failure(
+                        last_memory_generated_index,
+                        index,
+                        err,
+                    );
+                }
+            }
             return Ok(messages.len());
         };
 
@@ -92,13 +108,24 @@ impl MemoryGenerator {
             let prompt = batch_prompt(batch_number + 1, &batch);
             match run_remote_extraction(&remote, &prompt).await {
                 Ok(extracted) => {
-                    write_notes(
+                    // Directive notes come first, matching their order in the transcript. Any
+                    // storage failure leaves the whole batch unprocessed; the notes it did save
+                    // are refreshed in place (content-addressed) when the batch is retried.
+                    let stored = write_notes(
                         &directives[processed..batch.processed_message_count],
                         sqlite_store,
                         advanced_store,
-                    );
-                    if let Some(note) = extracted {
-                        write_note(&note, sqlite_store, advanced_store);
+                    )
+                    .and_then(|()| match extracted.as_deref() {
+                        Some(note) => write_note(note, sqlite_store, advanced_store),
+                        None => Ok(()),
+                    });
+                    if let Err(err) = stored {
+                        return checkpoint_after_storage_failure(
+                            last_memory_generated_index,
+                            processed,
+                            err,
+                        );
                     }
                     processed = processed.max(batch.processed_message_count);
                 }
@@ -116,9 +143,32 @@ impl MemoryGenerator {
         }
 
         // Every batch succeeded; messages with no text (including trailing ones) count as done.
-        write_notes(&directives[processed..], sqlite_store, advanced_store);
+        if let Err(err) = write_notes(&directives[processed..], sqlite_store, advanced_store) {
+            return checkpoint_after_storage_failure(last_memory_generated_index, processed, err);
+        }
         Ok(messages.len())
     }
+}
+
+/// Outcome of a run whose memory write failed after `processed` delta messages were fully
+/// stored: progress over those messages is returned so the caller checkpoints it, and the
+/// failed suffix stays behind the cursor to be retried. With no progress the storage error is
+/// returned so the caller leaves the cursor untouched.
+fn checkpoint_after_storage_failure(
+    last_memory_generated_index: usize,
+    processed: usize,
+    err: String,
+) -> Result<usize, String> {
+    if processed == 0 {
+        return Err(err);
+    }
+    let checkpoint = last_memory_generated_index + processed;
+    tracing::warn!(
+        error = %err,
+        checkpoint,
+        "failed to save generated memory; cursor checkpointed before the unsaved batch"
+    );
+    Ok(checkpoint)
 }
 
 #[derive(Default)]
@@ -224,10 +274,11 @@ fn write_notes(
     notes: &[Option<String>],
     sqlite_store: Option<&MemoryStore>,
     advanced_store: Option<&AdvancedMemoryStore>,
-) {
-    for note in notes.iter().flatten() {
-        write_note(note, sqlite_store, advanced_store);
-    }
+) -> Result<(), String> {
+    notes
+        .iter()
+        .flatten()
+        .try_for_each(|note| write_note(note, sqlite_store, advanced_store))
 }
 
 /// Characters of a generated note shown as its memory name. Display only: the note's storage
@@ -242,20 +293,22 @@ pub fn generated_note_title(body: &str) -> String {
         .collect()
 }
 
+/// Stores one generated note. An empty note (nothing to remember) is a successful no-op;
+/// any storage failure is returned so the caller keeps the note's source messages retryable.
 fn write_note(
     note: &str,
     sqlite_store: Option<&MemoryStore>,
     advanced_store: Option<&AdvancedMemoryStore>,
-) {
+) -> Result<(), String> {
     let body = note.trim();
     if body.is_empty() {
-        return;
+        return Ok(());
     }
     if let Some(adv) = advanced_store {
         let title = generated_note_title(body);
         // Re-saving an identical note refreshes its existing entry in place.
         let slug = generated_note_target(adv, None, body).into_slug();
-        if let Err(err) = adv.upsert_entry(
+        adv.upsert_entry(
             "workspace",
             None,
             &slug,
@@ -263,11 +316,12 @@ fn write_note(
             "Auto-extracted conversation preference",
             "feedback",
             body,
-        ) {
-            tracing::warn!(error = %err, slug, "failed to save generated memory note");
-        }
+        )
+        .map_err(|err| format!("failed to save generated memory note '{slug}': {err}"))?;
     } else if let Some(sql) = sqlite_store {
-        let existing = sql.list(Some(MemoryScope::Workspace)).unwrap_or_default();
+        let existing = sql
+            .list(Some(MemoryScope::Workspace))
+            .map_err(|err| format!("failed to read workspace memories: {err}"))?;
         // Re-saving a note that is already stored refreshes that entry instead of duplicating it.
         let key = match existing.iter().find(|e| e.content.trim() == body) {
             Some(same) => same.id.clone(),
@@ -277,15 +331,15 @@ fn write_note(
                     .any(|e| e.id.eq_ignore_ascii_case(candidate))
             }),
         };
-        if let Err(err) = sql.upsert(
+        sql.upsert(
             MemoryScope::Workspace,
             Some(&key),
             body,
             MemoryWriteMode::Upsert,
-        ) {
-            tracing::warn!(error = %err, key, "failed to save generated memory note");
-        }
+        )
+        .map_err(|err| format!("failed to save generated memory note '{key}': {err}"))?;
     }
+    Ok(())
 }
 
 /// Where a generated note belongs in an advanced-memory folder; see [`generated_note_target`].

@@ -800,17 +800,48 @@ pub fn resolve_lexically(base: &str, raw: &str, flavor: PathFlavor) -> String {
     }
 }
 
-/// Whether the absolute `target` lies lexically inside `root` (its configured or canonical
-/// spelling), per [`check_lexical_containment`] on the host path flavor. Pure for `target`:
-/// gate an untrusted path with this before canonicalizing or opening it, then re-check the
-/// canonical result against the canonical root to catch symlink escapes.
-pub fn is_lexically_inside_root(target: &Path, root: &Path) -> bool {
-    check_lexical_containment(
+/// Pre-canonicalization gate for an untrusted absolute `target` that must end up inside `root`:
+/// whether it is safe to touch the filesystem for `target` at all. Never touches the filesystem
+/// for `target`.
+///
+/// Rejects outright anything whose canonicalization could reach another host or volume: UNC,
+/// device, non-drive verbatim and automount paths outside every root spelling of the same form
+/// ([`LexicalGateDenial::SpecialForm`]), and paths on a different drive/root prefix than every
+/// spelling of `root`. A path on the same volume that merely fails the lexical match is allowed
+/// through, because two spellings of one local directory can differ lexically (Windows 8.3 short
+/// names such as `RUNNER~1`, case, junctions): the caller's mandatory canonical re-check against
+/// the canonical root makes the containment decision and catches symlink escapes.
+pub fn passes_pre_canonical_gate(target: &Path, root: &Path) -> bool {
+    passes_pre_canonical_gate_with(
         &target.to_string_lossy(),
         &root_spellings(&[root.to_path_buf()]),
         PathFlavor::host(),
     )
-    .is_ok()
+}
+
+/// [`passes_pre_canonical_gate`] over explicit root spellings and path flavor (testable for
+/// Windows paths on any host).
+pub fn passes_pre_canonical_gate_with<S: AsRef<str>>(
+    target_raw: &str,
+    spellings: &[S],
+    flavor: PathFlavor,
+) -> bool {
+    match check_lexical_containment(target_raw, spellings, flavor) {
+        Ok(()) => true,
+        Err(LexicalGateDenial::SpecialForm(_)) => false,
+        Err(LexicalGateDenial::OutsideRoots) => {
+            let target_lexical = LexicalPath::parse(target_raw, flavor);
+            target_lexical.kind().is_none()
+                && !target_lexical.prefix.is_empty()
+                && spellings.iter().any(|root| {
+                    let root_lexical = LexicalPath::parse(root.as_ref(), flavor);
+                    root_lexical.kind().is_none()
+                        && root_lexical
+                            .prefix
+                            .eq_ignore_ascii_case(&target_lexical.prefix)
+                })
+        }
+    }
 }
 
 fn special_form_label(kind: SpecialPathKind) -> &'static str {

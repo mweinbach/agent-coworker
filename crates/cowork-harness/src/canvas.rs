@@ -13,7 +13,7 @@ use std::time::UNIX_EPOCH;
 
 use cowork_config::{ConfigError, FileLockOptions, with_file_lock};
 use cowork_storage::sha256_hex;
-use cowork_tools::context::is_lexically_inside_root;
+use cowork_tools::context::passes_pre_canonical_gate;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -864,7 +864,7 @@ fn resolve_existing_workspace_file(
     };
     // Gate lexically before touching the filesystem: canonicalizing an out-of-workspace path
     // (a Windows UNC share) can make the host contact a remote server.
-    if !is_lexically_inside_root(&candidate, workspace_root_input) {
+    if !passes_pre_canonical_gate(&candidate, workspace_root_input) {
         return Err(CanvasOpError::OutsideWorkspace);
     }
     let resolved = fs::canonicalize(&candidate).map_err(|e| {
@@ -896,7 +896,7 @@ fn resolve_new_workspace_file(
     let Some(parent_raw) = candidate.parent() else {
         return Err(CanvasOpError::OutsideWorkspace);
     };
-    if !is_lexically_inside_root(&candidate, workspace_root_input) {
+    if !passes_pre_canonical_gate(&candidate, workspace_root_input) {
         return Err(CanvasOpError::OutsideWorkspace);
     }
     let canonical_parent = fs::canonicalize(parent_raw).map_err(|e| {

@@ -29,7 +29,7 @@ use cowork_storage::{
     WorkItemStatus, build_task_review_material_snapshot, fingerprint_task_review_material,
     get_pending_task_review, get_task_review_rounds_from_records, stable_stringify,
 };
-use cowork_tools::context::is_lexically_inside_root;
+use cowork_tools::context::passes_pre_canonical_gate;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -3083,7 +3083,7 @@ impl TaskCoordinator {
         let clean = non_empty(artifact_path, "Artifact path").ok()?;
         let ws_canon = std::fs::canonicalize(&task.workspace_path).ok()?;
         let candidate = Path::new(&task.workspace_path).join(&clean);
-        if !is_lexically_inside_root(&candidate, Path::new(&task.workspace_path)) {
+        if !passes_pre_canonical_gate(&candidate, Path::new(&task.workspace_path)) {
             return None;
         }
         let file_name = candidate.file_name()?.to_owned();
@@ -5232,7 +5232,7 @@ impl TaskCoordinator {
         };
         // Gate lexically before touching the filesystem: stat-ing an out-of-workspace path (a
         // Windows UNC share) can make the host contact a remote server.
-        if !is_lexically_inside_root(&candidate, Path::new(&task.workspace_path)) {
+        if !passes_pre_canonical_gate(&candidate, Path::new(&task.workspace_path)) {
             return Err(TaskCoordinatorError::InvalidRequest(
                 "Artifact path is outside the task workspace".to_owned(),
             ));

@@ -484,7 +484,7 @@ pub fn resolve_workspace_file_path(
     };
     // Gate lexically before touching the filesystem: canonicalizing an out-of-workspace path
     // (a Windows UNC share) can make the host contact a remote server.
-    if !cowork_tools::context::is_lexically_inside_root(&candidate, cwd) {
+    if !cowork_tools::context::passes_pre_canonical_gate(&candidate, cwd) {
         return Err(WorkspacePathError::OutsideWorkspace);
     }
     let resolved = match fs::canonicalize(&candidate) {

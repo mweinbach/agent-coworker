@@ -15,6 +15,7 @@ use cowork_config::ProviderName;
 use cowork_sandbox::SandboxPolicy;
 use cowork_tools::context::{
     LexicalGateDenial, LexicalPath, PathFlavor, SpecialPathKind, check_lexical_containment,
+    passes_pre_canonical_gate_with,
 };
 use cowork_tools::{
     ToolExecutionContext, assert_read_path_allowed, assert_write_path_allowed,
@@ -340,4 +341,62 @@ fn windows_unc_targets_are_rejected_by_the_public_checks() {
             );
         }
     }
+}
+
+/// The pre-canonicalization gate used by the canvas, spreadsheet/presentation, task-artifact and
+/// icon resolvers: remote/special forms and other volumes never reach the filesystem, but a
+/// same-volume path whose spelling differs from the workspace root (a Windows 8.3 short name
+/// such as `RUNNER~1` against the canonical long name) is left to the canonical re-check instead
+/// of being falsely rejected.
+#[test]
+fn pre_canonical_gate_defers_same_volume_spellings_but_blocks_remote_forms() {
+    let roots = [
+        r"C:\Users\runneradmin\AppData\Local\Temp\cowork-rust-srv-1\workspace",
+        r"\\?\C:\Users\runneradmin\AppData\Local\Temp\cowork-rust-srv-1\workspace",
+    ];
+    // Same file spelled with the 8.3 short name the client was given: deferred to the
+    // canonical check (which resolves both spellings to the same directory).
+    assert!(passes_pre_canonical_gate_with(
+        r"C:\Users\RUNNER~1\AppData\Local\Temp\cowork-rust-srv-1\workspace\budget.xlsx",
+        &roots,
+        WIN,
+    ));
+    // Lexically inside: allowed.
+    assert!(passes_pre_canonical_gate_with(
+        r"C:\Users\runneradmin\AppData\Local\Temp\cowork-rust-srv-1\workspace\a.xlsx",
+        &roots,
+        WIN,
+    ));
+    // Remote, device, non-drive verbatim and other-volume forms never reach the filesystem.
+    for blocked in [
+        r"\\attacker\share\x.xlsx",
+        r"//attacker/share/x.xlsx",
+        r"\\?\UNC\attacker\share\x.xlsx",
+        r"\\.\pipe\x",
+        r"\\?\GLOBALROOT\Device\x",
+        r"D:\other\x.xlsx",
+        r"Z:\mapped\x.xlsx",
+    ] {
+        assert!(
+            !passes_pre_canonical_gate_with(blocked, &roots, WIN),
+            "{blocked} must be rejected before canonicalization"
+        );
+    }
+    // POSIX: automount paths are blocked; other local paths defer to the canonical check.
+    let posix_roots = ["/home/u/ws"];
+    assert!(!passes_pre_canonical_gate_with(
+        "/net/host/share/x",
+        &posix_roots,
+        POSIX
+    ));
+    assert!(passes_pre_canonical_gate_with(
+        "/home/u/ws/a.txt",
+        &posix_roots,
+        POSIX
+    ));
+    assert!(passes_pre_canonical_gate_with(
+        "/private/home/u/ws/a.txt",
+        &posix_roots,
+        POSIX
+    ));
 }

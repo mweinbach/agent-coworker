@@ -2705,7 +2705,7 @@ fn encode_plugin_icon(plugin_root: &Path, raw: &str) -> Option<String> {
     let candidate = plugin_root.join(trimmed);
     // Manifest-supplied: gate lexically before the filesystem sees it (a Windows UNC ref would
     // make the host contact a remote server).
-    if !cowork_tools::context::is_lexically_inside_root(&candidate, plugin_root) {
+    if !cowork_tools::context::passes_pre_canonical_gate(&candidate, plugin_root) {
         return None;
     }
     let canonical_root = fs::canonicalize(plugin_root).ok()?;

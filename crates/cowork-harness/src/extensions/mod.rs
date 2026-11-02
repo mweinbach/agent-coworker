@@ -640,6 +640,7 @@ impl ExtensionManager {
                     subdir: None,
                     source_path: Some(skill_dir.to_string_lossy().into_owned()),
                     source_hash: None,
+                    commit_sha: None,
                 });
             let installed_hash = origin.source_hash.clone();
             let root_dir_str = skill_dir.to_string_lossy().into_owned();
@@ -881,6 +882,7 @@ impl ExtensionManager {
                         subdir: None,
                         source_path: Some(plugin.root_dir.to_string_lossy().into_owned()),
                         source_hash: None,
+                        commit_sha: None,
                     }),
                     manifest: None,
                     shadowed_by_installation_id: None,
@@ -1295,6 +1297,7 @@ impl ExtensionManager {
                 subdir: None,
                 source_path: Some(src_dir.to_string_lossy().into_owned()),
                 source_hash: Some(hash),
+                commit_sha: None,
             }),
         };
         self.run_locked(cfg, "skills-copy", || {
@@ -2684,6 +2687,7 @@ fn decode_legacy_plugin_install_manifest(raw: &str, path: &Path) -> Option<Plugi
             subdir: None,
             source_path: None,
             source_hash: source_hash.clone(),
+            commit_sha: None,
         },
         source_hash: source_hash.clone(),
         marketplace: Some(MarketplaceMetadataWire {
@@ -2812,18 +2816,44 @@ fn list_plugin_mcp_names(mcp_path: &Path) -> Vec<String> {
     names
 }
 
+/// Update source for a recorded origin. GitHub origins re-resolve the *requested* ref (branch,
+/// tag, or an explicitly pinned SHA), never the commit the previous download resolved to, so
+/// moving sources pick up upstream changes while explicit SHA installs stay pinned.
 fn reconstruct_origin_source(origin: &SkillOriginMetadata) -> Option<String> {
     if let Some(ref p) = origin.source_path {
         return Some(p.clone());
     }
     if let Some(ref repo) = origin.repo {
-        let git_ref = origin.git_ref.as_deref().unwrap_or("main");
+        // No recorded ref means the repository's default branch.
+        let git_ref = requested_origin_ref(origin).unwrap_or_else(|| "HEAD".to_owned());
         return Some(match origin.subdir {
             Some(ref sub) => format!("https://github.com/{repo}/tree/{git_ref}/{sub}"),
             None => format!("https://github.com/{repo}/tree/{git_ref}"),
         });
     }
     origin.url.clone()
+}
+
+/// Records written before `commitSha` existed stored the resolved commit SHA in `ref`. For
+/// those, the ref in the original source URL is the requested one (none: default branch); a
+/// SHA the user requested explicitly is in that URL too, so it stays pinned.
+fn requested_origin_ref(origin: &SkillOriginMetadata) -> Option<String> {
+    let recorded = origin
+        .git_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty());
+    if origin.commit_sha.is_none()
+        && recorded.is_some_and(is_full_commit_sha)
+        && let Some(url) = origin.url.as_deref()
+    {
+        return remote_source::git_ref_from_source_url(url);
+    }
+    recorded.map(str::to_owned)
+}
+
+fn is_full_commit_sha(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Resolves `owner/repo` (or a github.com URL) to a repo slug that TS `isValidRepoSlug` accepts;

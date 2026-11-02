@@ -18,6 +18,11 @@ pub struct SkillOriginMetadata {
     pub source_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_hash: Option<String>,
+    /// Commit SHA the requested `ref` resolved to when these files were downloaded. Updates
+    /// re-resolve `ref`; this only records which snapshot is installed. Absent on records
+    /// written before it existed, whose `ref` may hold that SHA instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

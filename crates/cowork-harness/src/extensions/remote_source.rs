@@ -69,110 +69,7 @@ pub fn parse_extension_source(
     }
 
     if let Ok(parsed_url) = Url::parse(trimmed) {
-        let host = parsed_url
-            .host_str()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let segments: Vec<&str> = parsed_url
-            .path_segments()
-            .map(|c| c.filter(|s| !s.is_empty()).collect())
-            .unwrap_or_default();
-
-        if host == "github.com" || host == "www.github.com" {
-            if segments.len() < 2 {
-                return Err(format!("Invalid GitHub URL: {trimmed}"));
-            }
-            let owner = segments[0].to_owned();
-            let repo = segments[1].trim_end_matches(".git").to_owned();
-            if segments.len() == 2 {
-                return Ok(ParsedExtensionSource::GitHub {
-                    raw: trimmed.to_owned(),
-                    descriptor_kind: "github_repo".to_owned(),
-                    origin_kind: "github".to_owned(),
-                    owner,
-                    repo,
-                    git_ref: None,
-                    subdir: None,
-                    raw_url: Some(trimmed.to_owned()),
-                });
-            }
-            let mode = segments[2];
-            if (mode == "tree" || mode == "blob") && segments.len() >= 4 {
-                let git_ref = segments[3].to_owned();
-                let mut rest = segments[4..].to_vec();
-                if mode == "blob" && rest.last().copied() == Some("SKILL.md") {
-                    rest.pop();
-                }
-                let subdir = if rest.is_empty() {
-                    None
-                } else {
-                    Some(rest.join("/"))
-                };
-                return Ok(ParsedExtensionSource::GitHub {
-                    raw: trimmed.to_owned(),
-                    descriptor_kind: if mode == "blob" {
-                        "github_blob".to_owned()
-                    } else {
-                        "github_tree".to_owned()
-                    },
-                    origin_kind: "github".to_owned(),
-                    owner,
-                    repo,
-                    git_ref: Some(git_ref),
-                    subdir,
-                    raw_url: Some(trimmed.to_owned()),
-                });
-            }
-            return Err(format!("Unsupported GitHub URL format: {trimmed}"));
-        }
-
-        if host == "raw.githubusercontent.com" && segments.len() >= 4 {
-            let owner = segments[0].to_owned();
-            let repo = segments[1].to_owned();
-            let git_ref = segments[2].to_owned();
-            let mut rest = segments[3..].to_vec();
-            if rest.last().copied() == Some("SKILL.md") {
-                rest.pop();
-            }
-            return Ok(ParsedExtensionSource::GitHub {
-                raw: trimmed.to_owned(),
-                descriptor_kind: "github_raw".to_owned(),
-                origin_kind: "github".to_owned(),
-                owner,
-                repo,
-                git_ref: Some(git_ref),
-                subdir: if rest.is_empty() {
-                    None
-                } else {
-                    Some(rest.join("/"))
-                },
-                raw_url: Some(trimmed.to_owned()),
-            });
-        }
-
-        if (host == "skills.sh" || host == "www.skills.sh") && segments.len() >= 2 {
-            let owner = segments[0].to_owned();
-            let repo = segments[1].to_owned();
-            let subdir = if segments.len() >= 3 {
-                Some(format!("skills/{}", segments[2..].join("/")))
-            } else {
-                None
-            };
-            return Ok(ParsedExtensionSource::GitHub {
-                raw: trimmed.to_owned(),
-                descriptor_kind: "skills.sh".to_owned(),
-                origin_kind: "skills.sh".to_owned(),
-                owner,
-                repo,
-                git_ref: None,
-                subdir,
-                raw_url: Some(trimmed.to_owned()),
-            });
-        }
-
-        return Err(format!(
-            "Unsupported remote URL host '{host}' in '{trimmed}'"
-        ));
+        return parse_remote_source_url(trimmed, &parsed_url);
     }
 
     let (path_part, explicit_ref) = match trimmed.split_once('#') {
@@ -201,6 +98,191 @@ pub fn parse_extension_source(
     }
 
     Err(format!("Unrecognized skill/plugin source: '{trimmed}'"))
+}
+
+fn parse_remote_source_url(
+    trimmed: &str,
+    parsed_url: &Url,
+) -> Result<ParsedExtensionSource, String> {
+    let host = parsed_url
+        .host_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let segments: Vec<&str> = parsed_url
+        .path_segments()
+        .map(|c| c.filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+
+    if host == "github.com" || host == "www.github.com" {
+        if segments.len() < 2 {
+            return Err(format!("Invalid GitHub URL: {trimmed}"));
+        }
+        let owner = segments[0].to_owned();
+        let repo = segments[1].trim_end_matches(".git").to_owned();
+        if segments.len() == 2 {
+            return Ok(ParsedExtensionSource::GitHub {
+                raw: trimmed.to_owned(),
+                descriptor_kind: "github_repo".to_owned(),
+                origin_kind: "github".to_owned(),
+                owner,
+                repo,
+                git_ref: None,
+                subdir: None,
+                raw_url: Some(trimmed.to_owned()),
+            });
+        }
+        let mode = segments[2];
+        if (mode == "tree" || mode == "blob") && segments.len() >= 4 {
+            let git_ref = segments[3].to_owned();
+            let rest = &segments[4..];
+            let subdir = if mode == "blob" {
+                github_file_directory_path(rest)
+            } else {
+                github_tree_directory_path(rest)
+            };
+            return Ok(ParsedExtensionSource::GitHub {
+                raw: trimmed.to_owned(),
+                descriptor_kind: if mode == "blob" {
+                    "github_blob".to_owned()
+                } else {
+                    "github_tree".to_owned()
+                },
+                origin_kind: "github".to_owned(),
+                owner,
+                repo,
+                git_ref: Some(git_ref),
+                subdir,
+                raw_url: Some(trimmed.to_owned()),
+            });
+        }
+        return Err(format!("Unsupported GitHub URL format: {trimmed}"));
+    }
+
+    if host == "raw.githubusercontent.com" && segments.len() >= 4 {
+        let owner = segments[0].to_owned();
+        let repo = segments[1].to_owned();
+        let git_ref = segments[2].to_owned();
+        return Ok(ParsedExtensionSource::GitHub {
+            raw: trimmed.to_owned(),
+            descriptor_kind: "github_raw".to_owned(),
+            origin_kind: "github".to_owned(),
+            owner,
+            repo,
+            git_ref: Some(git_ref),
+            subdir: github_file_directory_path(&segments[3..]),
+            raw_url: Some(trimmed.to_owned()),
+        });
+    }
+
+    if (host == "skills.sh" || host == "www.skills.sh") && segments.len() >= 2 {
+        let owner = segments[0].to_owned();
+        let repo = segments[1].to_owned();
+        let subdir = if segments.len() >= 3 {
+            Some(format!("skills/{}", segments[2..].join("/")))
+        } else {
+            None
+        };
+        return Ok(ParsedExtensionSource::GitHub {
+            raw: trimmed.to_owned(),
+            descriptor_kind: "skills.sh".to_owned(),
+            origin_kind: "skills.sh".to_owned(),
+            owner,
+            repo,
+            git_ref: None,
+            subdir,
+            raw_url: Some(trimmed.to_owned()),
+        });
+    }
+
+    Err(format!(
+        "Unsupported remote URL host '{host}' in '{trimmed}'"
+    ))
+}
+
+/// Ref encoded in a recorded remote source URL (`/tree/<ref>`, `/blob/<ref>`, raw), or `None`
+/// when the URL names no ref (repo root, skills.sh) or is not a recognized remote source.
+pub(crate) fn git_ref_from_source_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let parsed_url = Url::parse(trimmed).ok()?;
+    match parse_remote_source_url(trimmed, &parsed_url).ok()? {
+        ParsedExtensionSource::GitHub { git_ref, .. } => git_ref,
+        ParsedExtensionSource::LocalPath { .. } => None,
+    }
+}
+
+/// Plugin manifest directories whose `plugin.json` links resolve to the enclosing bundle root
+/// (TS `PLUGIN_MANIFEST_DIR_NAMES`).
+const PLUGIN_MANIFEST_DIR_NAMES: [&str; 2] = [".cowork-plugin", ".codex-plugin"];
+
+fn is_plugin_manifest_dir_name(name: &str) -> bool {
+    PLUGIN_MANIFEST_DIR_NAMES.contains(&name)
+}
+
+fn join_subdir(segments: &[&str]) -> Option<String> {
+    (!segments.is_empty()).then(|| segments.join("/"))
+}
+
+/// TS `normalizePluginGitHubDirectoryPath`: blob and raw URLs always name a file, so the source
+/// is its directory — except a `.cowork-plugin/plugin.json` or `.codex-plugin/plugin.json`
+/// manifest link, which resolves to the enclosing bundle root.
+fn github_file_directory_path(file_segments: &[&str]) -> Option<String> {
+    let (file_name, mut dir) = file_segments.split_last()?;
+    if *file_name == "plugin.json"
+        && let Some((manifest_dir, bundle_root)) = dir.split_last()
+        && is_plugin_manifest_dir_name(manifest_dir)
+    {
+        dir = bundle_root;
+    }
+    join_subdir(dir)
+}
+
+/// TS `normalizePluginGitHubTreePath`: a tree URL that points at a plugin manifest directory
+/// resolves to the enclosing bundle root.
+fn github_tree_directory_path(dir_segments: &[&str]) -> Option<String> {
+    match dir_segments.split_last() {
+        Some((last, bundle_root)) if is_plugin_manifest_dir_name(last) => join_subdir(bundle_root),
+        _ => join_subdir(dir_segments),
+    }
+}
+
+/// TS `normalizeLocalPluginSourceRoot`: a local plugin manifest directory, or its `plugin.json`,
+/// resolves to the enclosing bundle root.
+fn normalize_local_source_root(path: &Path, is_file: bool) -> Option<PathBuf> {
+    let candidate_root = if is_file { path.parent()? } else { path };
+    let in_manifest_dir = candidate_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_plugin_manifest_dir_name);
+    let names_manifest =
+        !is_file || path.file_name().and_then(|n| n.to_str()) == Some("plugin.json");
+    if in_manifest_dir
+        && names_manifest
+        && let Some(bundle_root) = candidate_root.parent()
+    {
+        return Some(bundle_root.to_path_buf());
+    }
+    Some(candidate_root.to_path_buf())
+}
+
+/// GitHub `default_branch` from repo metadata (TS `fetchGitHubDefaultBranch`). `None` when the
+/// metadata is unavailable; the caller then resolves the repository's `HEAD`.
+async fn fetch_github_default_branch(
+    client: &reqwest::Client,
+    api_base: &str,
+    owner: &str,
+    repo: &str,
+) -> Option<String> {
+    let resp = client
+        .get(format!("{api_base}/repos/{owner}/{repo}"))
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let meta: GitHubRepoMetaResp = resp.json().await.ok()?;
+    meta.default_branch
+        .map(|b| b.trim().to_owned())
+        .filter(|b| !b.is_empty())
 }
 
 pub fn github_api_base(env: &HashMap<String, String>) -> String {
@@ -240,6 +322,12 @@ pub fn is_network_allowed_for_github(env: &HashMap<String, String>) -> bool {
 #[derive(Debug, Deserialize)]
 struct GitHubCommitResp {
     sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRepoMetaResp {
+    #[serde(default)]
+    default_branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -298,14 +386,8 @@ pub async fn materialize_source(
         ParsedExtensionSource::LocalPath { raw, path } => {
             let canonical = fs::canonicalize(&path)
                 .map_err(|e| format!("Local path '{}' does not exist: {e}", path.display()))?;
-            let root_dir = if canonical.is_file() {
-                canonical
-                    .parent()
-                    .ok_or_else(|| "Invalid local file path".to_owned())?
-                    .to_path_buf()
-            } else {
-                canonical.clone()
-            };
+            let root_dir = normalize_local_source_root(&canonical, canonical.is_file())
+                .ok_or_else(|| "Invalid local file path".to_owned())?;
             let local_str = root_dir.to_string_lossy().into_owned();
             Ok(MaterializedSource {
                 descriptor: ExtensionSourceDescriptor {
@@ -328,6 +410,7 @@ pub async fn materialize_source(
                     subdir: None,
                     source_path: Some(local_str),
                     source_hash: None,
+                    commit_sha: None,
                 },
                 root_dir,
                 _temp_guard: None,
@@ -356,9 +439,17 @@ pub async fn materialize_source(
                 .map_err(|e| e.to_string())?;
             let api_base = github_api_base(env);
             let raw_base = github_raw_base(env);
-            let ref_to_resolve = git_ref.clone().unwrap_or_else(|| "HEAD".to_owned());
+            // The requested ref (an explicit branch/tag/SHA, else the default branch) is what an
+            // update re-resolves; the commit SHA it points at now only pins this download so every
+            // file comes from one consistent snapshot.
+            let requested_ref = match git_ref {
+                Some(r) => r,
+                None => fetch_github_default_branch(&client, &api_base, &owner, &repo)
+                    .await
+                    .unwrap_or_else(|| "HEAD".to_owned()),
+            };
 
-            let commit_url = format!("{api_base}/repos/{owner}/{repo}/commits/{ref_to_resolve}");
+            let commit_url = format!("{api_base}/repos/{owner}/{repo}/commits/{requested_ref}");
             let commit_resp: GitHubCommitResp = client
                 .get(&commit_url)
                 .send()
@@ -462,7 +553,7 @@ pub async fn materialize_source(
                     display_source,
                     url: url_val.clone(),
                     repo: Some(repo_slug.clone()),
-                    git_ref: Some(commit_resp.sha.clone()),
+                    git_ref: Some(requested_ref.clone()),
                     subdir: prefix.clone(),
                     ref_path: None,
                     local_path: None,
@@ -472,10 +563,11 @@ pub async fn materialize_source(
                     kind: origin_kind,
                     url: url_val,
                     repo: Some(repo_slug),
-                    git_ref: Some(commit_resp.sha),
+                    git_ref: Some(requested_ref),
                     subdir: prefix,
                     source_path: None,
                     source_hash: None,
+                    commit_sha: Some(commit_resp.sha),
                 },
                 _temp_guard: Some(temp_dir),
             })
@@ -509,6 +601,90 @@ fn portable_relative_blob_path(rel: &str) -> Option<std::path::PathBuf> {
         return None;
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod source_url_normalization_tests {
+    use std::path::Path;
+
+    use super::{ParsedExtensionSource, git_ref_from_source_url, parse_extension_source};
+
+    fn parsed_ref_and_subdir(raw: &str) -> (Option<String>, Option<String>) {
+        let missing = Path::new("/nonexistent-cowork-source-test");
+        match parse_extension_source(raw, missing, missing).unwrap() {
+            ParsedExtensionSource::GitHub {
+                git_ref, subdir, ..
+            } => (git_ref, subdir),
+            other => panic!("{raw:?} parsed as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_manifest_links_resolve_to_the_bundle_root() {
+        for (raw, subdir) in [
+            (
+                "https://github.com/acme/ext/blob/main/plugins/suite/.cowork-plugin/plugin.json",
+                Some("plugins/suite"),
+            ),
+            (
+                "https://github.com/acme/ext/blob/main/plugins/suite/.codex-plugin/plugin.json",
+                Some("plugins/suite"),
+            ),
+            (
+                "https://raw.githubusercontent.com/acme/ext/main/plugins/suite/.cowork-plugin/plugin.json",
+                Some("plugins/suite"),
+            ),
+            (
+                "https://raw.githubusercontent.com/acme/ext/main/.codex-plugin/plugin.json",
+                None,
+            ),
+            (
+                "https://github.com/acme/ext/blob/main/.cowork-plugin/plugin.json",
+                None,
+            ),
+            (
+                "https://github.com/acme/ext/tree/main/plugins/suite/.codex-plugin",
+                Some("plugins/suite"),
+            ),
+            ("https://github.com/acme/ext/tree/main/.cowork-plugin", None),
+            // Other files resolve to their directory (TS `path.posix.dirname`).
+            (
+                "https://github.com/acme/ext/blob/main/skills/review/SKILL.md",
+                Some("skills/review"),
+            ),
+            (
+                "https://github.com/acme/ext/blob/main/plugins/suite/.cowork-plugin/install.json",
+                Some("plugins/suite/.cowork-plugin"),
+            ),
+            (
+                "https://github.com/acme/ext/tree/main/plugins/suite",
+                Some("plugins/suite"),
+            ),
+        ] {
+            let (git_ref, got) = parsed_ref_and_subdir(raw);
+            assert_eq!(git_ref.as_deref(), Some("main"), "{raw}");
+            assert_eq!(got.as_deref(), subdir, "{raw}");
+        }
+    }
+
+    #[test]
+    fn recorded_source_urls_yield_their_requested_ref() {
+        assert_eq!(
+            git_ref_from_source_url("https://github.com/acme/ext/tree/main/skills/a").as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            git_ref_from_source_url("https://raw.githubusercontent.com/acme/ext/v2/SKILL.md")
+                .as_deref(),
+            Some("v2")
+        );
+        assert_eq!(git_ref_from_source_url("https://github.com/acme/ext"), None);
+        assert_eq!(
+            git_ref_from_source_url("https://skills.sh/acme/ext/a"),
+            None
+        );
+        assert_eq!(git_ref_from_source_url("acme/ext"), None);
+    }
 }
 
 #[cfg(test)]

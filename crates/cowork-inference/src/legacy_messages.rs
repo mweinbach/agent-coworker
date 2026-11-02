@@ -323,12 +323,20 @@ fn assistant_part(part: &Value) -> Option<ContentBlock> {
                 .or_else(|| obj.get("thinkingSignature"))
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            // The TS Google runtime persisted thought parts unstamped, with the Gemini signature
+            // under `providerOptions.google.thoughtSignature` next to the generic
+            // `thinkingSignature`. Keep the Google-specific one where the Google transport reads
+            // it for unstamped history; the generic signature alone is never trusted as Gemini's.
+            let provider_meta = ProviderOpaqueMeta {
+                google_thought_signature: legacy_google_thought_signature(obj, false),
+                ..ProviderOpaqueMeta::default()
+            };
             Some(ContentBlock::Thinking {
                 text: text.to_owned(),
                 summary: None,
                 redacted: obj.get("redacted").and_then(Value::as_bool) == Some(true),
                 signature,
-                provider_meta: ProviderOpaqueMeta::default(),
+                provider_meta,
             })
         }
         "tool-call" | "toolCall" | "tool_call" => {
@@ -391,7 +399,8 @@ fn native_google_tool_name(raw: &str) -> Option<&'static str> {
 
 /// Gemini thought signature on a legacy part (TS `getGoogleThoughtSignature`): the direct
 /// `thoughtSignature` field, optionally the generic `thinkingSignature` / `signature` fields, then
-/// `providerOptions.{google,vertex}.thoughtSignature` (camel or snake case).
+/// `providerOptions.{google,vertex}.thoughtSignature` (camel or snake case), then the same keys
+/// under the AI-SDK response-side `providerMetadata`.
 fn legacy_google_thought_signature(
     obj: &Map<String, Value>,
     include_generic: bool,
@@ -405,18 +414,22 @@ fn legacy_google_thought_signature(
     if direct.is_some() {
         return direct;
     }
-    let provider_options = obj.get("providerOptions").and_then(Value::as_object)?;
-    ["google", "vertex"].iter().find_map(|provider| {
-        let opts = provider_options.get(*provider).and_then(Value::as_object)?;
-        [
-            "thoughtSignature",
-            "thought_signature",
-            "thinkingSignature",
-            "thinking_signature",
-        ]
+    ["providerOptions", "providerMetadata"]
         .iter()
-        .find_map(|k| non_empty_str(opts.get(*k)))
-    })
+        .filter_map(|container| obj.get(*container).and_then(Value::as_object))
+        .find_map(|by_provider| {
+            ["google", "vertex"].iter().find_map(|provider| {
+                let opts = by_provider.get(*provider).and_then(Value::as_object)?;
+                [
+                    "thoughtSignature",
+                    "thought_signature",
+                    "thinkingSignature",
+                    "thinking_signature",
+                ]
+                .iter()
+                .find_map(|k| non_empty_str(opts.get(*k)))
+            })
+        })
 }
 
 /// Converts a legacy TS `providerToolCall` (`{id, name, arguments}`) / `providerToolResult`

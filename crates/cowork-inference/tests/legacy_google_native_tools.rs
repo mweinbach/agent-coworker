@@ -430,3 +430,124 @@ fn legacy_tool_call_reads_provider_options_thought_signature() {
         Some("sig_vertex")
     );
 }
+
+fn thinking_parts(msg: &CanonicalMessage) -> Vec<(Option<String>, Option<String>)> {
+    msg.content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Thinking {
+                signature,
+                provider_meta,
+                ..
+            } => Some((
+                signature.clone(),
+                provider_meta.google_thought_signature.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn legacy_unstamped_google_thinking_part_keeps_provider_options_thought_signature() {
+    // Shape the TS Google runtime persisted (`googleAssistantContentBlockToModelPart`): no
+    // provider stamp on the message, the thought part carrying both the generic
+    // `thinkingSignature` and `providerOptions.google.thoughtSignature`, then an unsigned call.
+    let raw = json!({
+        "role": "assistant",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "Need to read the file.",
+                "thinkingSignature": "sig_generic",
+                "providerOptions": { "google": { "thoughtSignature": "sig_gemini" } }
+            },
+            { "type": "tool-call", "toolCallId": "call_1", "toolName": "read", "input": { "path": "a" } }
+        ]
+    });
+    let msg = migrate_stored_message(&raw, 0, None).expect("migrates");
+    assert!(msg.provider.is_none(), "legacy message stays unstamped");
+    assert_eq!(
+        thinking_parts(&msg),
+        vec![(Some("sig_generic".into()), Some("sig_gemini".into()))],
+        "generic signature unchanged; Google signature preserved in provider_meta"
+    );
+    let ContentBlock::ToolCall { provider_meta, .. } = &msg.content[1] else {
+        panic!("expected tool call");
+    };
+    assert!(
+        provider_meta.google_thought_signature.is_none(),
+        "unsigned call stays unsigned until Google replay repair propagates the thought signature"
+    );
+    let reparsed: CanonicalMessage =
+        serde_json::from_value(serde_json::to_value(&msg).unwrap()).unwrap();
+    assert_eq!(reparsed, msg);
+}
+
+#[test]
+fn legacy_thinking_part_reads_google_signature_variants_but_not_generic_ones() {
+    let raw = json!({
+        "role": "assistant",
+        "content": [
+            { "type": "reasoning", "text": "a", "thoughtSignature": "sig_direct" },
+            {
+                "type": "reasoning",
+                "text": "b",
+                "providerOptions": { "vertex": { "thought_signature": "sig_vertex_snake" } }
+            },
+            {
+                "type": "reasoning",
+                "text": "c",
+                "providerMetadata": { "google": { "thoughtSignature": "sig_metadata" } }
+            },
+            {
+                "type": "thinking",
+                "thinking": "d",
+                "providerOptions": { "google": { "thinking_signature": "sig_thinking_snake" } }
+            },
+            // Anthropic-style generic signatures must never become Gemini signatures.
+            { "type": "reasoning", "text": "e", "signature": "sig_anthropic" },
+            { "type": "thinking", "thinking": "f", "thinkingSignature": "sig_pi" },
+            {
+                "type": "reasoning",
+                "text": "g",
+                "providerOptions": { "anthropic": { "signature": "sig_other" } }
+            }
+        ]
+    });
+    let msg = migrate_stored_message(&raw, 0, None).expect("migrates");
+    assert_eq!(
+        thinking_parts(&msg),
+        vec![
+            (None, Some("sig_direct".into())),
+            (None, Some("sig_vertex_snake".into())),
+            (None, Some("sig_metadata".into())),
+            (None, Some("sig_thinking_snake".into())),
+            (Some("sig_anthropic".into()), None),
+            (Some("sig_pi".into()), None),
+            (None, None),
+        ]
+    );
+}
+
+#[test]
+fn legacy_tool_call_reads_provider_metadata_thought_signature() {
+    let raw = json!({
+        "role": "assistant",
+        "content": [{
+            "type": "tool-call",
+            "toolCallId": "call_1",
+            "toolName": "read",
+            "input": {},
+            "providerMetadata": { "google": { "thoughtSignature": "sig_meta_call" } }
+        }]
+    });
+    let msg = migrate_stored_message(&raw, 0, None).unwrap();
+    let ContentBlock::ToolCall { provider_meta, .. } = &msg.content[0] else {
+        panic!("expected tool call");
+    };
+    assert_eq!(
+        provider_meta.google_thought_signature.as_deref(),
+        Some("sig_meta_call")
+    );
+}

@@ -937,6 +937,34 @@ impl ServerRuntimeState {
             }));
         };
 
+        // TS `setProviderConfig` parity: only structured `api` credential methods may be saved
+        // here. These checks run before any write so an OAuth method, or a plain API-key method
+        // (no structured fields), can never overwrite a working connection with an empty
+        // `credentials` entry.
+        let rejection = if method_spec.method_type != "api" {
+            Some(format!(
+                "Method \"{method_id}\" is not a credential method."
+            ))
+        } else if method_spec.fields.as_deref().is_none_or(<[_]>::is_empty) {
+            Some(format!(
+                "Method \"{method_id}\" does not define structured fields."
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = rejection {
+            return Ok(json!({
+                "event": {
+                    "type": "provider_auth_result",
+                    "sessionId": session_id,
+                    "provider": provider.as_str(),
+                    "methodId": method_id,
+                    "ok": false,
+                    "message": message,
+                }
+            }));
+        }
+
         let validated = match cowork_providers::validate_structured_provider_config(
             provider,
             &method_spec,

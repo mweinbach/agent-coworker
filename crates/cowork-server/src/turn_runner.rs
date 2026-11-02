@@ -582,6 +582,8 @@ pub(crate) fn select_provider_transport(
     homedir: &Path,
     env: &HashMap<String, String>,
     codex_tool_ctx: Option<CodexBridgeContext<'_>>,
+    // Bundled install dir gating per-model Codex options when no tool context supplies one.
+    built_in_dir: Option<&Path>,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
     match provider {
         ProviderName::Openai => Ok(Arc::new(OpenAiResponsesTransport::new())),
@@ -616,11 +618,16 @@ pub(crate) fn select_provider_transport(
                     .with_built_in_dir(
                         tctx.built_in_dir
                             .clone()
-                            .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone())),
-                    ),
+                            .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone()))
+                            .or_else(|| built_in_dir.map(Path::to_path_buf)),
+                    )
+                    .with_todos_handler(tctx.on_todos_updated.clone()),
                 ))
             } else {
-                Ok(Arc::new(CodexAppServerTransport::with_env(env.clone())))
+                Ok(Arc::new(
+                    CodexAppServerTransport::with_env(env.clone())
+                        .with_built_in_dir(built_in_dir.map(Path::to_path_buf)),
+                ))
             }
         }
         other => ChatCompletionsTransport::new(other)
@@ -714,8 +721,14 @@ impl ServerRuntimeState {
             ),
             other => provider_base_url_override(other, provider_opts, &self.env, false),
         };
-        let transport =
-            select_provider_transport(target, bedrock_auth, &self.homedir, &self.env, None)?;
+        let transport = select_provider_transport(
+            target,
+            bedrock_auth,
+            &self.homedir,
+            &self.env,
+            None,
+            Some(&self.built_in_dir),
+        )?;
         Ok(RemoteMemoryModel {
             transport,
             model_id,
@@ -2070,6 +2083,7 @@ impl ServerRuntimeState {
                     overflow_threshold,
                     Some(runner.codex_bridge_catalog()),
                 )),
+                Some(&runtime.built_in_dir),
             );
 
             match transport_res {

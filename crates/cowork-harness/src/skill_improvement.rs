@@ -681,6 +681,7 @@ fn resolve_improver_transport_and_endpoint(
     env: &HashMap<String, String>,
     conn_store: Option<&cowork_config::ConnectionStore>,
     provider_opts: &Map<String, Value>,
+    built_in_dir: &Path,
 ) -> Result<ResolvedImproverTransport, String> {
     let api_key = resolve_provider_api_key(provider, conn_store, env);
     let bedrock_auth = if provider == ProviderName::Bedrock {
@@ -745,7 +746,10 @@ fn resolve_improver_transport_and_endpoint(
                 env.clone(),
             )),
         },
-        ProviderName::CodexCli => Arc::new(CodexAppServerTransport::with_env(env.clone())),
+        ProviderName::CodexCli => Arc::new(
+            CodexAppServerTransport::with_env(env.clone())
+                .with_built_in_dir(Some(built_in_dir.to_path_buf())),
+        ),
         other => ChatCompletionsTransport::new(other)
             .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
             .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str()))?,
@@ -884,6 +888,7 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             &eff_env,
             conn_store.as_ref(),
             &merged_provider_opts,
+            &cfg.built_in_dir,
         ) {
             Ok(resolved) => resolved,
             Err(err) => {

@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use cowork_inference::StreamEvent;
 use serde_json::{Map, Value, json};
 
+use super::citations::projected_tool_output;
 use super::policy::from_codex_mcp_tool_name;
 
 const COMMAND_EXECUTION: &str = "commandExecution";
@@ -25,6 +26,8 @@ pub struct CodexToolActivity {
     announced: HashSet<String>,
     /// Output streamed so far per item by incremental delta notifications.
     streamed_output: HashMap<String, String>,
+    /// Surfaced tool calls still awaiting their completed item, in start order: `(id, name)`.
+    open: Vec<(String, String)>,
 }
 
 /// Returns `true` for item notifications this module projects.
@@ -67,6 +70,7 @@ impl CodexToolActivity {
                     return;
                 };
                 if self.announced.insert(call.id.clone()) {
+                    self.open.push((call.id.clone(), call.name.clone()));
                     emit_tool_call(call, turn_id, emit);
                 }
             }
@@ -85,6 +89,7 @@ impl CodexToolActivity {
                     emit_tool_call(call, turn_id, emit);
                 }
                 self.streamed_output.remove(&id);
+                self.open.retain(|(open_id, _)| *open_id != id);
                 let (result, is_error) = completed_tool_result(item);
                 emit(StreamEvent::ToolResult {
                     turn_id: turn_id.to_owned(),
@@ -140,6 +145,27 @@ impl CodexToolActivity {
                 });
             }
             _ => {}
+        }
+    }
+
+    /// `turn_error` parity (`failActiveToolStreamsForTurn`): an app-server `error` notification
+    /// fails every surfaced tool call that has not completed yet.
+    pub fn fail_open_tools(
+        &mut self,
+        message: &str,
+        turn_id: &str,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) {
+        for (id, name) in std::mem::take(&mut self.open) {
+            self.streamed_output.remove(&id);
+            emit(StreamEvent::ToolResult {
+                turn_id: turn_id.to_owned(),
+                key: id,
+                name,
+                result: error_result(json!(message)),
+                is_error: true,
+                denied: false,
+            });
         }
     }
 }
@@ -344,7 +370,7 @@ fn completed_tool_result(item: &Value) -> (Value, bool) {
                     .or_else(|| present(item, "contentItems"))
                     .cloned()
                     .unwrap_or(Value::Null);
-                (output, false)
+                (projected_tool_output(output, &[]), false)
             }
         }
         Some("fileChange") => {

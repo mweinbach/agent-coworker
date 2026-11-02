@@ -1,4 +1,6 @@
+mod citations;
 pub mod client;
+mod code_mode;
 pub mod connectors;
 pub mod installer;
 pub mod isolation;
@@ -25,6 +27,7 @@ use cowork_inference::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use code_mode::CodexCodeModeActivity;
 use tool_activity::{CodexToolActivity, is_codex_tool_notification};
 use turn_output::codex_text_phase;
 
@@ -60,6 +63,11 @@ pub use turn_output::{
     CodexAssistantItems, CodexTurnUsageTracker, assistant_text_from_codex_turn, parse_codex_usage,
 };
 
+/// Receives the normalized todo list (`{ content, status, activeForm }` items) whenever the
+/// app-server reports a plan/todo update (TS `params.updateTodos`). Same shape as the
+/// `todoWrite` tool's `on_todos_updated` callback.
+pub type CodexTodosCallback = Arc<dyn Fn(Vec<Value>) + Send + Sync>;
+
 pub trait CodexTurnObserver: Send + Sync {
     fn on_turn_started(
         &self,
@@ -81,6 +89,11 @@ pub struct CodexAppServerTransport {
     /// Bundled install dir whose `config/models` registry gates per-model Codex options
     /// (`normalizeSummaryForModel`). Unset, every model is treated as unknown to the registry.
     pub built_in_dir: Option<PathBuf>,
+    /// Session todo sink for app-server `todoList` updates.
+    pub todos_handler: Option<CodexTodosCallback>,
+    /// Managed-runtime installer settings used when the runtime must be installed before the
+    /// turn; `None` derives them from the environment ([`CodexRuntimeInstallOptions::from_env`]).
+    pub install_options: Option<CodexRuntimeInstallOptions>,
 }
 
 /// Cowork session/agent restrictions applied to the native Codex sandbox. Merged fail-closed with
@@ -104,6 +117,8 @@ impl std::fmt::Debug for CodexAppServerTransport {
             .field("has_turn_observer", &self.turn_observer.is_some())
             .field("sandbox_restrictions", &self.sandbox_restrictions)
             .field("built_in_dir", &self.built_in_dir)
+            .field("has_todos_handler", &self.todos_handler.is_some())
+            .field("install_options", &self.install_options)
             .finish()
     }
 }
@@ -132,12 +147,20 @@ impl CodexAppServerTransport {
             turn_observer,
             sandbox_restrictions: None,
             built_in_dir: None,
+            todos_handler: None,
+            install_options: None,
         }
     }
 
     /// Resolves per-model Codex options against the model registry under `built_in_dir`.
     pub fn with_built_in_dir(mut self, built_in_dir: Option<PathBuf>) -> Self {
         self.built_in_dir = built_in_dir;
+        self
+    }
+
+    /// Forwards app-server todo-list updates to the session's todo state.
+    pub fn with_todos_handler(mut self, handler: Option<CodexTodosCallback>) -> Self {
+        self.todos_handler = handler;
         self
     }
 
@@ -164,6 +187,53 @@ impl CodexAppServerTransport {
             tool_handler,
             ..Self::default()
         }
+    }
+}
+
+impl CodexAppServerTransport {
+    /// TS `resolveCodexAppServerCommand` parity: before the turn spawns the app-server, a missing
+    /// runtime (or a managed runtime that is not the app-pinned version) is installed from the
+    /// pinned, checksum-verified release. A stale managed runtime that cannot be updated (e.g.
+    /// offline) still runs; a missing one fails the turn with the install error.
+    async fn resolve_runtime_command(
+        &self,
+        cowork_home: &Path,
+        env: &HashMap<String, String>,
+    ) -> Result<(String, Vec<String>), ProviderTransportError> {
+        let status = resolve_codex_app_server_status(cowork_home, env);
+        let stale_managed = status.source == "managed" && status.pin_matches_current == Some(false);
+        if !status.available || stale_managed {
+            let opts = self
+                .install_options
+                .clone()
+                .unwrap_or_else(|| CodexRuntimeInstallOptions::from_env(env));
+            match install_codex_app_server(
+                cowork_home,
+                CODEX_APP_SERVER_MANAGED_VERSION,
+                false,
+                &opts,
+            )
+            .await
+            {
+                Ok(installed) => {
+                    return Ok((installed.command.to_string_lossy().into_owned(), Vec::new()));
+                }
+                Err(err) if status.available => {
+                    tracing::warn!(
+                        "[codex-app-server] could not update the managed runtime to {CODEX_APP_SERVER_MANAGED_VERSION}; using the installed one: {err}"
+                    );
+                }
+                Err(err) => {
+                    return Err(ProviderTransportError::protocol(format!(
+                        "Failed to install the Cowork-managed Codex runtime {CODEX_APP_SERVER_MANAGED_VERSION}: {err}"
+                    )));
+                }
+            }
+        }
+        Ok((
+            status.command.unwrap_or_else(|| "codex".to_string()),
+            status.args.unwrap_or_default(),
+        ))
     }
 }
 
@@ -197,14 +267,13 @@ impl ProviderTransport for CodexAppServerTransport {
         let (command, args) = match &self.command_override {
             Some((cmd, a)) => (cmd.clone(), a.clone()),
             None => {
-                let status = resolve_codex_app_server_status(&resolved_cowork_home, &env);
-                if !status.available {
-                    return Err(ProviderTransportError::protocol(status.message));
+                let cancel = budget.cancellation_token().clone();
+                tokio::select! {
+                    resolved = self.resolve_runtime_command(&resolved_cowork_home, &env) => resolved?,
+                    () = cancel.cancelled() => {
+                        return Err(ProviderTransportError::aborted("Model turn aborted."));
+                    }
                 }
-                (
-                    status.command.unwrap_or_else(|| "codex".to_string()),
-                    status.args.unwrap_or_default(),
-                )
             }
         };
 
@@ -251,14 +320,8 @@ impl ProviderTransport for CodexAppServerTransport {
         // Pre-arm notification subscription BEFORE `thread/start` and `turn/start` so fast turns never race!
         let mut notif_rx = client.subscribe_notifications();
 
-        let mut config_overrides = serde_json::Map::new();
-        if policy.force_disable_web_search {
-            config_overrides.insert("web_search".into(), Value::String("disabled".into()));
-        }
-        // `codexThreadConfig` parity: `textVerbosity` maps to Codex's `model_verbosity`.
-        if let Some(verbosity) = codex_text_verbosity(&request.provider_options) {
-            config_overrides.insert("model_verbosity".into(), Value::String(verbosity));
-        }
+        let config_overrides =
+            codex_thread_config(&request.provider_options, !policy.force_disable_web_search);
 
         let thread_payload = json!({
             "model": request.model_id,
@@ -268,6 +331,8 @@ impl ProviderTransport for CodexAppServerTransport {
             "developerInstructions": request.system_prompt,
             "dynamicTools": wire_dynamic_tools,
             "config": config_overrides,
+            // Code-mode `exec`/`wait` calls only surface as raw response items (`runTurn.ts`).
+            "experimentalRawEvents": true,
         });
 
         // Resume the stored Codex thread when the continuation fingerprint still matches the
@@ -367,6 +432,7 @@ impl ProviderTransport for CodexAppServerTransport {
         let mut text_ended: Vec<bool> = Vec::new();
         let mut usage_tracker = CodexTurnUsageTracker::new();
         let mut tool_activity = CodexToolActivity::new();
+        let mut code_mode = CodexCodeModeActivity::new();
         let mut completed_turn: Option<Value> = None;
         let mut raw_events = Vec::new();
 
@@ -397,8 +463,8 @@ impl ProviderTransport for CodexAppServerTransport {
                     }));
                     let params = &notif.params;
                     let item = params.get("item");
-                    let is_agent_message = item.and_then(|i| i.get("type")).and_then(Value::as_str)
-                        == Some("agentMessage");
+                    let item_type = item.and_then(|i| i.get("type")).and_then(Value::as_str);
+                    let is_agent_message = item_type == Some("agentMessage");
                     match notif.method.as_str() {
                         "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
                             if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
@@ -535,10 +601,65 @@ impl ProviderTransport for CodexAppServerTransport {
                                 annotations: Vec::new(),
                             });
                         }
+                        // Plan/todo updates replace the session todo list (`updateTodos`).
+                        "todoList/updated" | "item/todoList/updated" => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            if let (Some(handler), Some(todos)) =
+                                (&self.todos_handler, normalize_codex_todo_list(params))
+                            {
+                                handler(todos);
+                            }
+                        }
+                        "item/completed" if item_type == Some("todoList") => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            if let (Some(handler), Some(todos)) = (
+                                &self.todos_handler,
+                                item.and_then(normalize_codex_todo_list),
+                            ) {
+                                handler(todos);
+                            }
+                        }
+                        // `turn_error` parity: the turn's in-flight native tools fail; the turn
+                        // outcome itself still comes from `turn/completed`.
+                        "error" => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            let message = codex_error_notification_message(params);
+                            tool_activity.fail_open_tools(&message, &turn_id, &mut *on_event);
+                        }
+                        // Code-mode `exec` / `wait` calls (`notifications.ts` raw-item routing).
+                        "rawResponseItem/completed" => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            let Some(item) = item else {
+                                continue;
+                            };
+                            let mut events = Vec::new();
+                            code_mode.handle_raw_response_item(item, &turn_id, &mut |ev| {
+                                events.push(ev)
+                            });
+                            if !events.is_empty() {
+                                close_thinking!();
+                                events.into_iter().for_each(&mut *on_event);
+                            }
+                        }
                         // Native shell/patch/MCP/dynamic tool items and their streamed output
                         // become tool stream events (`notifications.ts` parity).
                         method if is_codex_tool_notification(method, item) => {
                             if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            // Dynamic tools a visible code-mode script calls fold into it.
+                            if item_type == Some("dynamicToolCall")
+                                && let Some(item) = item
+                                && code_mode.intercept_dynamic_tool(method, item)
+                            {
                                 continue;
                             }
                             close_thinking!();
@@ -1001,16 +1122,150 @@ fn codex_attachment_note(kind: MediaKind, source: &MediaSource) -> String {
     }
 }
 
+/// `codex-cli.<key>` provider option, falling back to the top-level key.
+fn codex_provider_option<'a>(
+    provider_options: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a Value> {
+    provider_options
+        .get("codex-cli")
+        .and_then(|o| o.get(key))
+        .or_else(|| provider_options.get(key))
+}
+
 /// String `codex-cli.<key>` provider option, falling back to the top-level key.
 fn codex_provider_option_str<'a>(
     provider_options: &'a serde_json::Map<String, Value>,
     key: &str,
 ) -> Option<&'a str> {
-    provider_options
-        .get("codex-cli")
-        .and_then(|o| o.get(key))
-        .or_else(|| provider_options.get(key))
+    codex_provider_option(provider_options, key).and_then(Value::as_str)
+}
+
+/// `codexThreadConfig` parity: the `thread/start` / `thread/resume` `config` overrides.
+/// Without network access web search is forced off and its tool config dropped; otherwise
+/// `webSearchMode` and the `webSearch` tool options (`contextSize`, `allowedDomains`,
+/// `location`) pass through when valid.
+fn codex_thread_config(
+    provider_options: &serde_json::Map<String, Value>,
+    web_search_allowed: bool,
+) -> serde_json::Map<String, Value> {
+    let mut config = serde_json::Map::new();
+    // Child lifecycle, scopes, and budgets belong to Cowork's agent control.
+    config.insert(
+        "features".into(),
+        json!({ "multi_agent": false, "multi_agent_v2": false }),
+    );
+    if !web_search_allowed {
+        config.insert("web_search".into(), Value::String("disabled".into()));
+    } else if let Some(mode) = codex_provider_option_str(provider_options, "webSearchMode")
+        .filter(|v| matches!(*v, "disabled" | "cached" | "live"))
+    {
+        config.insert("web_search".into(), Value::String(mode.to_owned()));
+    }
+    if let Some(verbosity) = codex_text_verbosity(provider_options) {
+        config.insert("model_verbosity".into(), Value::String(verbosity));
+    }
+    if web_search_allowed && let Some(tool_config) = codex_web_search_tool_config(provider_options)
+    {
+        config.insert("tools".into(), json!({ "web_search": tool_config }));
+    }
+    config
+}
+
+/// `codexWebSearchToolConfig` parity: `codex-cli.webSearch` as Codex's `tools.web_search`.
+fn codex_web_search_tool_config(
+    provider_options: &serde_json::Map<String, Value>,
+) -> Option<Value> {
+    let web_search = codex_provider_option(provider_options, "webSearch")?.as_object()?;
+    let mut tool_config = serde_json::Map::new();
+    if let Some(size) = web_search
+        .get("contextSize")
         .and_then(Value::as_str)
+        .filter(|v| matches!(*v, "low" | "medium" | "high"))
+    {
+        tool_config.insert("context_size".into(), Value::String(size.to_owned()));
+    }
+    let allowed_domains: Vec<Value> = web_search
+        .get("allowedDomains")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|d| d.as_str().is_some_and(|d| !d.is_empty()))
+        .cloned()
+        .collect();
+    if !allowed_domains.is_empty() {
+        tool_config.insert("allowed_domains".into(), Value::Array(allowed_domains));
+    }
+    if let Some(location) = web_search.get("location").and_then(Value::as_object) {
+        let location: serde_json::Map<String, Value> = ["country", "region", "city", "timezone"]
+            .iter()
+            .filter_map(|key| {
+                let value = location.get(*key)?.as_str().filter(|v| !v.is_empty())?;
+                Some(((*key).to_owned(), Value::String(value.to_owned())))
+            })
+            .collect();
+        if !location.is_empty() {
+            tool_config.insert("location".into(), Value::Object(location));
+        }
+    }
+    (!tool_config.is_empty()).then_some(Value::Object(tool_config))
+}
+
+/// `normalizeTodoList` parity: the `todos` (or `items`) array of a todo-list payload, or the
+/// payload itself when it is an array, as `{ content, status, activeForm }` items. `None` when
+/// entries exist but none is a usable todo; an empty list clears the todos.
+fn normalize_codex_todo_list(value: &Value) -> Option<Vec<Value>> {
+    let non_empty_array = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_array)
+            .filter(|a| !a.is_empty())
+    };
+    let candidates: &[Value] = match non_empty_array("todos").or_else(|| non_empty_array("items")) {
+        Some(items) => items,
+        None => value.as_array().map(Vec::as_slice).unwrap_or_default(),
+    };
+    let todos: Vec<Value> = candidates
+        .iter()
+        .filter_map(normalize_codex_todo_item)
+        .collect();
+    (!todos.is_empty() || candidates.is_empty()).then_some(todos)
+}
+
+/// `normalizeTodoItem` parity.
+fn normalize_codex_todo_item(value: &Value) -> Option<Value> {
+    let record = value.as_object()?;
+    let content = ["content", "title", "text", "task"]
+        .iter()
+        .find_map(|key| record.get(*key).and_then(Value::as_str))
+        .filter(|c| !c.is_empty())?;
+    let status = match record.get("status").and_then(Value::as_str) {
+        Some(s @ ("completed" | "in_progress" | "pending")) => s,
+        Some("in-progress") => "in_progress",
+        Some("done") => "completed",
+        _ => "pending",
+    };
+    let active_form = record
+        .get("activeForm")
+        .and_then(Value::as_str)
+        .or_else(|| record.get("active_form").and_then(Value::as_str))
+        .unwrap_or(content);
+    Some(json!({ "content": content, "status": status, "activeForm": active_form }))
+}
+
+/// Human-readable message of an app-server `error` notification (`payload.error ?? payload`).
+fn codex_error_notification_message(params: &Value) -> String {
+    let error = params
+        .get("error")
+        .filter(|e| !e.is_null())
+        .unwrap_or(params);
+    error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .filter(|m| !m.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "codex app-server error".to_owned())
 }
 
 /// Normalized `codex-cli.reasoningEffort` (top-level fallback) forwarded as `turn/start.effort`

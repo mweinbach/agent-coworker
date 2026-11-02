@@ -1,16 +1,18 @@
 //! Codex app-server native tool activity (`commandExecution` / `fileChange` / `mcpToolCall`
 //! items and their output deltas) projected into tool stream events, plus the
-//! `reasoningSummary` -> `turn/start.summary` and `textVerbosity` -> thread
-//! `config.model_verbosity` mappings, driven by a mocked stdio app-server.
+//! `reasoningSummary` -> `turn/start.summary` and `textVerbosity` / `webSearchMode` / `webSearch`
+//! thread `config` mappings, todo-list updates, `error` notifications and code-mode raw items,
+//! driven by a mocked stdio app-server.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use cowork_inference::{
     CanonicalMessage, ClientCapabilities, ContentBlock, MessageRole, ProviderOpaqueMeta,
     RequestPolicy, StepBudget, StreamEvent, StreamEventProjector,
 };
-use cowork_providers::codex_app_server::CodexAppServerTransport;
+use cowork_providers::codex_app_server::{CodexAppServerTransport, CodexTodosCallback};
 use cowork_providers::{ProviderStepRequest, ProviderStepResult, ProviderTransport};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -18,6 +20,9 @@ use uuid::Uuid;
 /// Mock app-server; logs every client request to `logPath`. `behavior`:
 /// - `tools`: reasoning, a successful and a failed shell command with streamed output, a file
 ///   edit, an MCP call, another turn's command (ignored), then the final answer.
+/// - `todos`: `todoList` updates (notification, item completion, another turn's update).
+/// - `error`: a running shell command interrupted by an `error` notification.
+/// - `codemode`: code-mode `exec` / `wait` raw items with nested dynamic tool calls.
 /// - anything else: a plain one-message turn.
 const NATIVE_TOOLS_MOCK: &str = r#"
 import readline from "node:readline";
@@ -58,6 +63,40 @@ rl.on("line", (line) => {
       note("item/completed", { item: { ...mcp, status: "completed", result: { content: [{ type: "text", text: "hit" }] } } });
       // Another turn's tool activity on the shared connection is ignored.
       send({ method: "item/started", params: { threadId, turnId: "turn-other", item: { type: "commandExecution", id: "x1", command: "rm -rf /", status: "inProgress" } } });
+    } else if (behavior === "todos") {
+      note("item/todoList/updated", { todos: [
+        { content: "Read code", status: "completed" },
+        { title: "Write fix", status: "in-progress", active_form: "Writing fix" },
+        { text: "Ship", status: "weird" },
+        { status: "pending" },
+      ] });
+      send({ method: "todoList/updated", params: { threadId, turnId: "turn-other", todos: [{ content: "foreign" }] } });
+      note("item/completed", { item: { type: "todoList", id: "td1", items: [{ task: "Ship", status: "done" }] } });
+      note("todoList/updated", { todos: [{ status: "pending" }] });
+    } else if (behavior === "error") {
+      const cmd = { type: "commandExecution", id: "cmd9", command: "sleep 9", cwd: "/w", status: "inProgress" };
+      note("item/started", { item: cmd });
+      send({ method: "error", params: { threadId, turnId: "turn-other", error: { message: "not ours" }, willRetry: false } });
+      note("error", { error: { message: "stream disconnected" }, willRetry: true });
+    } else if (behavior === "codemode") {
+      const raw = (item) => note("rawResponseItem/completed", { item });
+      const cited = { contentItems: [{ type: "inputText", text: "cite:\n[Docs](https://docs.rs/x) turn0search0" }] };
+      // A script whose nested tool runs inside its cell: folded into the script.
+      raw({ type: "custom_tool_call", call_id: "e1", name: "exec", input: "const r = await tools.webSearch({ q: 'x' });\nreturn r;" });
+      raw({ type: "custom_tool_call_output", call_id: "e1", output: "Script running with cell ID c1" });
+      note("item/started", { item: { type: "dynamicToolCall", id: "d1", tool: "webSearch", arguments: { q: "x" } } });
+      note("item/completed", { item: { type: "dynamicToolCall", id: "d1", tool: "webSearch", arguments: { q: "x" }, success: true, ...cited } });
+      // A script whose nested tool surfaces on its own: the script is not shown twice.
+      raw({ type: "custom_tool_call", call_id: "e2", name: "exec", input: { code: "await tools.read({ path: 'a' })" } });
+      note("item/started", { item: { type: "dynamicToolCall", id: "d2", tool: "read", arguments: { path: "a" } } });
+      note("item/completed", { item: { type: "dynamicToolCall", id: "d2", tool: "read", arguments: { path: "a" }, success: true, ...cited } });
+      raw({ type: "custom_tool_call_output", call_id: "e2", output: "ok" });
+      // A wait for an unknown cell still shows as a code execution.
+      raw({ type: "function_call", call_id: "w9", name: "wait", arguments: "{\"cell_id\":\"zz\"}" });
+      raw({ type: "function_call_output", call_id: "w9", output: "late" });
+      // Waiting on the running cell completes the first script with the nested citations.
+      raw({ type: "function_call", call_id: "w1", name: "wait", arguments: "{\"cell_id\":\"c1\"}" });
+      raw({ type: "function_call_output", call_id: "w1", output: "final" });
     }
     note("item/agentMessage/delta", { itemId: "f1", delta: "Done." });
     send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } });
@@ -106,7 +145,30 @@ impl Fixture {
         codex_options: Value,
         built_in_dir: Option<PathBuf>,
     ) -> (ProviderStepResult, Vec<StreamEvent>) {
-        let mut opts = Map::new();
+        self.run_with(
+            run,
+            behavior,
+            model_id,
+            codex_options,
+            built_in_dir,
+            Map::new(),
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with(
+        &self,
+        run: &str,
+        behavior: &str,
+        model_id: &str,
+        codex_options: Value,
+        built_in_dir: Option<PathBuf>,
+        top_level_options: Map<String, Value>,
+        todos: Option<CodexTodosCallback>,
+    ) -> (ProviderStepResult, Vec<StreamEvent>) {
+        let mut opts = top_level_options;
         opts.insert(
             "cwd".into(),
             json!(self.base.join("workspace").to_string_lossy()),
@@ -133,7 +195,8 @@ impl Fixture {
                 behavior.into(),
             ],
         )
-        .with_built_in_dir(built_in_dir);
+        .with_built_in_dir(built_in_dir)
+        .with_todos_handler(todos);
         transport.env_override = Some(env);
         let mut events = Vec::new();
         let result = transport
@@ -415,5 +478,188 @@ async fn codex_forwards_reasoning_summary_and_text_verbosity_to_the_app_server()
         fx.logged("invalid", "thread/start")["config"]
             .get("model_verbosity")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn codex_forwards_web_search_mode_tool_config_and_disables_multi_agent() {
+    let fx = Fixture::new();
+    let web_options = json!({
+        "webSearchMode": "live",
+        "webSearch": {
+            "contextSize": "high",
+            "allowedDomains": ["docs.rs", "", 7],
+            "location": { "country": "US", "city": "", "timezone": "America/New_York" },
+        },
+    });
+
+    // Network allowed: the mode and the tool config pass through.
+    let mut network = Map::new();
+    network.insert("sandboxNetwork".into(), json!(true));
+    fx.run_with(
+        "net",
+        "plain",
+        "gpt-5.6-sol",
+        web_options.clone(),
+        None,
+        network,
+        None,
+    )
+    .await;
+    let thread = fx.logged("net", "thread/start");
+    assert_eq!(thread["experimentalRawEvents"], true);
+    assert_eq!(
+        thread["config"],
+        json!({
+            "features": { "multi_agent": false, "multi_agent_v2": false },
+            "web_search": "live",
+            "tools": { "web_search": {
+                "context_size": "high",
+                "allowed_domains": ["docs.rs"],
+                "location": { "country": "US", "timezone": "America/New_York" },
+            } },
+        })
+    );
+
+    // No network: web search is forced off and its tool config dropped.
+    fx.run("offline", "plain", "gpt-5.6-sol", web_options, None)
+        .await;
+    assert_eq!(
+        fx.logged("offline", "thread/start")["config"],
+        json!({
+            "features": { "multi_agent": false, "multi_agent_v2": false },
+            "web_search": "disabled",
+        })
+    );
+
+    // Invalid modes are dropped.
+    let mut network = Map::new();
+    network.insert("sandboxNetwork".into(), json!(true));
+    fx.run_with(
+        "bad",
+        "plain",
+        "gpt-5.6-sol",
+        json!({ "webSearchMode": "always", "webSearch": { "contextSize": "huge" } }),
+        None,
+        network,
+        None,
+    )
+    .await;
+    let config = fx.logged("bad", "thread/start")["config"].clone();
+    assert!(config.get("web_search").is_none() && config.get("tools").is_none());
+}
+
+#[tokio::test]
+async fn codex_todo_list_updates_reach_the_session_todos() {
+    let fx = Fixture::new();
+    let updates: Arc<Mutex<Vec<Vec<Value>>>> = Arc::default();
+    let sink = Arc::clone(&updates);
+    let handler: CodexTodosCallback = Arc::new(move |todos| sink.lock().unwrap().push(todos));
+    fx.run_with(
+        "todos",
+        "todos",
+        "gpt-5.6-sol",
+        json!({}),
+        None,
+        Map::new(),
+        Some(handler),
+    )
+    .await;
+    assert_eq!(
+        *updates.lock().unwrap(),
+        vec![
+            vec![
+                json!({ "content": "Read code", "status": "completed", "activeForm": "Read code" }),
+                json!({ "content": "Write fix", "status": "in_progress", "activeForm": "Writing fix" }),
+                json!({ "content": "Ship", "status": "pending", "activeForm": "Ship" }),
+            ],
+            // The `todoList` item's `items`; another turn's update and an all-invalid list are
+            // ignored.
+            vec![json!({ "content": "Ship", "status": "completed", "activeForm": "Ship" })],
+        ]
+    );
+}
+
+#[tokio::test]
+async fn codex_error_notification_fails_in_flight_native_tools() {
+    let fx = Fixture::new();
+    let (_, events) = fx
+        .run("error", "error", "gpt-5.6-sol", json!({}), None)
+        .await;
+    let args = json!({ "command": "sleep 9", "cwd": "/w" });
+    assert_eq!(
+        tool_events(&events),
+        vec![
+            (
+                "start",
+                "cmd9".into(),
+                "commandExecution".into(),
+                args.clone()
+            ),
+            ("end", "cmd9".into(), "commandExecution".into(), args),
+            (
+                "error",
+                "cmd9".into(),
+                "commandExecution".into(),
+                json!({ "error": "stream disconnected" })
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn codex_code_mode_scripts_surface_once_with_nested_citations() {
+    let fx = Fixture::new();
+    let (result, events) = fx
+        .run("codemode", "codemode", "gpt-5.6-sol", json!({}), None)
+        .await;
+    let cited_items =
+        json!([{ "type": "inputText", "text": "cite:\n[Docs](https://docs.rs/x) turn0search0" }]);
+    let source =
+        json!({ "url": "https://docs.rs/x", "title": "Docs", "referenceId": "turn0search0" });
+    let script = json!({ "code": "const r = await tools.webSearch({ q: 'x' });\nreturn r;" });
+    let s = |v: &str| v.to_owned();
+    assert_eq!(
+        tool_events(&events),
+        vec![
+            ("start", s("e1"), s("webSearch"), script.clone()),
+            ("end", s("e1"), s("webSearch"), script),
+            // `d1` ran inside the visible `e1` script and is folded into it; `e2` is hidden
+            // because its nested `read` call surfaced on its own.
+            ("start", s("d2"), s("read"), json!({ "path": "a" })),
+            ("end", s("d2"), s("read"), json!({ "path": "a" })),
+            (
+                "result",
+                s("d2"),
+                s("read"),
+                json!({ "contentItems": cited_items, "citationSources": [source.clone()] })
+            ),
+            (
+                "start",
+                s("w9"),
+                s("codeExecution"),
+                json!({ "cell_id": "zz" })
+            ),
+            (
+                "end",
+                s("w9"),
+                s("codeExecution"),
+                json!({ "cell_id": "zz" })
+            ),
+            ("result", s("w9"), s("codeExecution"), json!("late")),
+            (
+                "result",
+                s("e1"),
+                s("webSearch"),
+                json!({ "contentItems": "final", "citationSources": [source] })
+            ),
+        ]
+    );
+    assert!(
+        !result
+            .assistant
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolCall { .. }))
     );
 }

@@ -1135,8 +1135,14 @@ impl ServerRuntimeState {
             ),
             other => provider_base_url_override(other, provider_opts, &self.env, true),
         };
-        let transport =
-            select_provider_transport(provider, bedrock_auth, &self.homedir, &self.env, None)?;
+        let transport = select_provider_transport(
+            provider,
+            bedrock_auth,
+            &self.homedir,
+            &self.env,
+            None,
+            Some(&self.built_in_dir),
+        )?;
         Ok((transport, base_url, api_key))
     }
 

@@ -514,6 +514,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                 overflow_threshold,
                 Some(runner.codex_bridge_catalog()),
             )),
+            Some(&runtime.built_in_dir),
         )?;
 
         let mut history = input.initial_messages;

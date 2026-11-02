@@ -102,10 +102,18 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Serves an app-server + code-mode-host pair whose app-server prints `marker`, returning the
 /// checksum override matching those bytes.
 fn publish_release(state: &Shared, marker: &str) -> HashMap<String, String> {
+    publish_release_with(state, marker, format!("#!/bin/sh\necho {marker}\n"))
+}
+
+fn publish_release_with(
+    state: &Shared,
+    marker: &str,
+    app_server_body: String,
+) -> HashMap<String, String> {
     let target = CodexRuntimeTarget::host().unwrap();
     let mut published = HashMap::new();
     for (basename, body) in [
-        ("codex-app-server", format!("#!/bin/sh\necho {marker}\n")),
+        ("codex-app-server", app_server_body),
         (
             "codex-code-mode-host",
             format!("#!/bin/sh\necho host-{marker}\n"),
@@ -294,4 +302,144 @@ async fn missing_release_asset_reports_ts_error() {
         err,
         format!("Codex app-server release did not include required asset {app_server_asset}.")
     );
+}
+
+/// Minimal JSON-RPC app-server: answers the handshake and completes one turn with "Done.".
+const MINIMAL_APP_SERVER: &str = r#"
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "thread/start") {
+    send({ id: msg.id, result: { thread: { id: "thr-1" } } });
+  } else if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "turn-1" } } });
+    const params = { threadId: "thr-1", turnId: "turn-1" };
+    send({ method: "item/agentMessage/delta", params: { ...params, itemId: "a1", delta: "Done." } });
+    send({ method: "turn/completed", params: { threadId: "thr-1", turn: { id: "turn-1", status: "completed" } } });
+  } else if (msg.id !== undefined && msg.method) {
+    send({ id: msg.id, result: {} });
+  }
+});
+"#;
+
+fn node_binary() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("node"))
+        .find(|p| p.is_file())
+        .expect("node on PATH")
+}
+
+async fn run_codex_turn(
+    home: &Path,
+    install: CodexRuntimeInstallOptions,
+) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError> {
+    use cowork_inference::{
+        CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, RequestPolicy, StepBudget,
+    };
+    use cowork_providers::ProviderTransport;
+    use cowork_providers::codex_app_server::CodexAppServerTransport;
+
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // No system `codex` on PATH, so only the managed runtime can serve the turn.
+    let mut env = HashMap::new();
+    env.insert(
+        "PATH".to_owned(),
+        home.join("empty-bin").to_string_lossy().into_owned(),
+    );
+    env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());
+    let mut transport = CodexAppServerTransport::with_env(env);
+    transport.install_options = Some(install);
+    let mut opts = serde_json::Map::new();
+    opts.insert("cwd".into(), json!(workspace.to_string_lossy()));
+    opts.insert(
+        "coworkHome".into(),
+        json!(home.join(".cowork").to_string_lossy()),
+    );
+    transport
+        .stream_step(
+            cowork_providers::ProviderStepRequest {
+                model_id: "gpt-5.6-sol".into(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Instructions".into(),
+                messages: vec![CanonicalMessage {
+                    id: "u1".into(),
+                    role: MessageRole::User,
+                    content: vec![ContentBlock::Text {
+                        text: "hi".into(),
+                        phase: None,
+                        citations: Vec::new(),
+                        provider_meta: ProviderOpaqueMeta::default(),
+                    }],
+                    phase: None,
+                    provider: None,
+                    api: None,
+                    model: None,
+                    stop_reason: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                    created_at: "2026-11-02T00:00:00Z".into(),
+                }],
+                tools: Vec::new(),
+                authorized_tool_names: None,
+                provider_options: opts,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-install".into(),
+            },
+            &StepBudget::new(60_000, None),
+            &mut |_| {},
+        )
+        .await
+}
+
+#[tokio::test]
+async fn first_codex_turn_installs_the_missing_managed_runtime() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    let cowork_home = home.join(".cowork");
+    let script = home.join("app_server.mjs");
+    std::fs::write(&script, MINIMAL_APP_SERVER).unwrap();
+    let state = start_mock().await;
+    let body = format!(
+        "#!/bin/sh\nexec '{}' '{}' \"$@\"\n",
+        node_binary().display(),
+        script.display()
+    );
+    let checksums = publish_release_with(&state, "turn", body);
+    assert!(!resolve_codex_app_server_status(&cowork_home, &HashMap::new()).available);
+
+    // Tampered (unpinned) bytes fail the turn with the install error and install nothing.
+    let err = run_codex_turn(home, options(&state, None))
+        .await
+        .expect_err("unverified runtime must not run");
+    assert!(
+        err.message
+            .contains("Failed to install the Cowork-managed Codex runtime")
+            && err.message.contains("failed checksum verification"),
+        "{}",
+        err.message
+    );
+    assert!(!resolve_codex_app_server_status(&cowork_home, &HashMap::new()).available);
+
+    let result = run_codex_turn(home, options(&state, Some(checksums)))
+        .await
+        .expect("turn runs on the freshly installed runtime");
+    assert!(result.assistant.content.iter().any(
+        |b| matches!(b, cowork_inference::ContentBlock::Text { text, .. } if text == "Done.")
+    ));
+    let status = resolve_codex_app_server_status(&cowork_home, &HashMap::new());
+    assert_eq!(status.source, "managed");
+    assert_eq!(status.pin_matches_current, Some(true));
+
+    // Later turns reuse the installed runtime without downloading again.
+    state.lock().downloads.clear();
+    run_codex_turn(home, options(&state, None))
+        .await
+        .expect("installed runtime is reused");
+    assert!(state.lock().downloads.is_empty());
 }

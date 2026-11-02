@@ -2487,9 +2487,27 @@ impl ServerRuntimeState {
         if let Some(po) = pick_editable_provider_options(&effective_po) {
             config_obj["providerOptions"] = Value::Object(po);
         }
+        // The effective profile: the session's stored `userProfile` fields layered over the
+        // workspace profile one field at a time (TS `buildNextConfig` spread the patch over
+        // `effectiveUserProfile`, and `getSessionConfigEvent` emitted all three fields). The
+        // desktop replaces its workspace profile with this event, so a partial override such as
+        // only `work` must not blank the inherited `instructions` and `details`.
+        if let Some(over) = overrides
+            .and_then(|o| o.get("userProfile"))
+            .and_then(Value::as_object)
+        {
+            for field in USER_PROFILE_FIELDS {
+                if let Some(v) = over.get(field).and_then(Value::as_str) {
+                    config_obj["userProfile"][field] = json!(v);
+                }
+            }
+        }
         if let (Some(Value::Object(dst)), Some(ovr)) = (Some(&mut config_obj), overrides) {
-            // `providerOptions` was merged over the workspace options above.
-            for (k, v) in ovr.iter().filter(|(k, _)| *k != "providerOptions") {
+            // `providerOptions` and `userProfile` were merged over the workspace values above.
+            for (k, v) in ovr
+                .iter()
+                .filter(|(k, _)| *k != "providerOptions" && *k != "userProfile")
+            {
                 if k == "toolOutputOverflowChars" {
                     // A session overflow patch is also the session's project override
                     // (`prepareConfigUpdate` set both).
@@ -4267,7 +4285,51 @@ fn merge_session_config_overrides(overrides: &mut Map<String, Value>, patch: Map
             store_client_provider_options(overrides, &v);
             continue;
         }
+        if k == "userProfile" {
+            store_client_user_profile(overrides, &v);
+            continue;
+        }
         overrides.insert(k, v);
+    }
+}
+
+/// The fields of a `userProfile`, as the TS `userProfileSchema` and `effectiveUserProfile`
+/// named them.
+const USER_PROFILE_FIELDS: [&str; 3] = ["instructions", "work", "details"];
+
+/// Reduces a client `userProfile` patch to the fields it sets (TS `{ ...effective, ...patch }`
+/// spread): a string replaces the field, including `""`, which clears it; `null` also clears
+/// it, since the TS session config and event read a `null` field as `""`; an omitted field (or a
+/// non-string value) leaves the current value alone. `None` when the patch is not an object.
+fn user_profile_patch_fields(value: &Value) -> Option<Map<String, Value>> {
+    let obj = value.as_object()?;
+    Some(
+        USER_PROFILE_FIELDS
+            .iter()
+            .filter_map(|field| match obj.get(*field)? {
+                Value::String(s) => Some(((*field).to_owned(), Value::String(s.clone()))),
+                Value::Null => Some(((*field).to_owned(), Value::String(String::new()))),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Merges a client `userProfile` patch into the session override field by field
+/// (`SessionMetadataManager.buildNextConfig` parity), so successive partial patches accumulate
+/// instead of each replacing the stored profile.
+fn store_client_user_profile(overrides: &mut Map<String, Value>, value: &Value) {
+    let Some(fields) = user_profile_patch_fields(value) else {
+        return;
+    };
+    let mut merged = overrides
+        .get("userProfile")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    merged.extend(fields);
+    if !merged.is_empty() {
+        overrides.insert("userProfile".to_owned(), Value::Object(merged));
     }
 }
 
@@ -4380,8 +4442,10 @@ fn apply_session_config_to_project_patch(
     if let Some(v) = cp.get("userName").and_then(Value::as_str) {
         patch.user_name = Some(v.to_owned());
     }
-    if let Some(v) = cp.get("userProfile")
-        && let Ok(profile) = serde_json::from_value(v.clone())
+    // Only the fields the patch sets reach the config file, where `persist_config_patch_file`
+    // merges them over the stored profile (`ConfigPatchStore.ts` spread parity).
+    if let Some(fields) = cp.get("userProfile").and_then(user_profile_patch_fields)
+        && let Ok(profile) = serde_json::from_value(Value::Object(fields))
     {
         patch.user_profile = Some(profile);
     }

@@ -646,13 +646,16 @@ impl ServerRuntimeState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            // `provider:modelId` refs (`parseThreadModelSelection` parity); model IDs may
-            // themselves contain `/` (e.g. `nvidia/Nemotron-120B-A12B`).
+            // `resolveForkModelSelection`: an explicit `provider:modelId` ref switches provider,
+            // anything else is a model ID on the source thread's provider.
             Some(raw_model) => {
-                match parse_child_model_ref(raw_model, Some(src_snapshot.provider)) {
-                    Some((parsed_provider, parsed_model, _, _)) => (parsed_provider, parsed_model),
-                    None => (src_snapshot.provider, raw_model.to_owned()),
-                }
+                let (parsed_provider, parsed_model) =
+                    parse_thread_model_selection(raw_model, src_snapshot.provider)
+                        .map_err(invalid)?;
+                (
+                    parsed_provider.unwrap_or(src_snapshot.provider),
+                    parsed_model,
+                )
             }
             None => (src_snapshot.provider, src_snapshot.model.clone()),
         };
@@ -1512,6 +1515,26 @@ impl ServerRuntimeState {
     }
 }
 
+/// TS `parseThreadModelSelection`: splits a thread model reference into an optional provider
+/// override and the model ID. `provider:modelId` with a known provider selects that provider
+/// (the provider is returned only when the ref names it explicitly). Any other string,
+/// including one whose prefix before `:` is not a provider (e.g. `nvidia/Nemotron:latest`),
+/// is a model ID for `default_provider`. A known provider with an empty model ID is rejected.
+pub(crate) fn parse_thread_model_selection(
+    raw: &str,
+    default_provider: ProviderName,
+) -> Result<(Option<ProviderName>, String), String> {
+    let trimmed = raw.trim();
+    match parse_child_model_ref(trimmed, Some(default_provider)) {
+        Some((provider, model, _, explicit_provider)) => {
+            Ok((explicit_provider.then_some(provider), model))
+        }
+        None => Err(format!(
+            "Unsupported thread model \"{trimmed}\". Expected provider:modelId."
+        )),
+    }
+}
+
 pub struct ServerThreadControlBridge {
     pub runtime: Arc<ServerRuntimeState>,
     pub connection_id: String,
@@ -1700,9 +1723,31 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             base_cwd
         };
 
+        // TS `createThread` parses the model against the target workspace's provider
+        // (`parseThreadModelSelection`): an explicit `provider:modelId` ref overrides the
+        // provider, anything else is a model ID on the workspace provider.
+        let (provider_override, model_override) = match model {
+            Some(raw_model) => {
+                let workspace_provider = self
+                    .runtime
+                    .load_workspace_config(&target_cwd)
+                    .map_err(|e| format!("Failed to load workspace config: {e}"))?
+                    .provider;
+                let (provider, model_id) =
+                    parse_thread_model_selection(raw_model, workspace_provider)?;
+                (provider, Some(model_id))
+            }
+            None => (None, None),
+        };
         let (mut thread, _) = self
             .runtime
-            .start_or_get_thread(&target_cwd, None, None, model, &self.connection_id)
+            .start_or_get_thread(
+                &target_cwd,
+                None,
+                provider_override.as_ref().map(ProviderName::as_str),
+                model_override.as_deref(),
+                &self.connection_id,
+            )
             .await?;
         if let Some(t) = title {
             let _ = self.runtime.set_session_title(&thread.id, t).await?;

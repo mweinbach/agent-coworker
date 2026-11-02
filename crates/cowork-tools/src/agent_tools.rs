@@ -1,12 +1,13 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use crate::context::{
-    BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
-    canonicalize_with_missing_tail, normalize_and_validate_args,
+    BuiltinTool, LexicalPath, PathFlavor, ToolError, ToolExecutionContext, ToolExecutionPolicy,
+    ToolOutput, ToolResult, canonicalize_with_missing_tail, check_lexical_containment,
+    normalize_and_validate_args, normalize_lexical_path, resolve_lexically,
 };
 
 pub const VALID_AGENT_ROLES: &[&str] = &["default", "explorer", "research", "worker", "reviewer"];
@@ -19,9 +20,33 @@ pub const VALID_CONTEXT_MODES: &[&str] = &["none", "brief", "full"];
 /// - Empty/whitespace strings
 /// - Paths escaping `working_directory` (including via symlinks)
 /// - Paths inside `.git` or `.cowork`
+///
+/// TS `resolveUsableTargetPath` order: each entry is resolved against the workspace and
+/// gated purely lexically first, so an out-of-workspace target (UNC `\\host\share`, device,
+/// verbatim, another drive, `../` escape, foreign absolute path) is rejected without ever
+/// reaching the filesystem (on Windows, resolving a UNC path makes the host authenticate to
+/// that server over SMB, outside any child sandbox). Only then is the target canonicalized and
+/// re-checked, which rejects in-workspace symlinks whose real target escapes.
 pub fn validate_and_resolve_target_paths(
     working_directory: &Path,
     raw_paths: &[String],
+) -> ToolResult<Vec<PathBuf>> {
+    validate_and_resolve_target_paths_with(
+        working_directory,
+        raw_paths,
+        PathFlavor::host(),
+        &canonicalize_with_missing_tail,
+    )
+}
+
+/// [`validate_and_resolve_target_paths`] with the path flavor and canonicalization injected,
+/// so tests can parse Windows paths on any host and prove a rejected target never reaches the
+/// filesystem.
+fn validate_and_resolve_target_paths_with(
+    working_directory: &Path,
+    raw_paths: &[String],
+    flavor: PathFlavor,
+    canonicalize: &dyn Fn(&Path) -> PathBuf,
 ) -> ToolResult<Vec<PathBuf>> {
     if raw_paths.is_empty() {
         return Err(ToolError::InvalidArguments(
@@ -30,40 +55,28 @@ pub fn validate_and_resolve_target_paths(
         ));
     }
 
-    let ws_canon = canonicalize_with_missing_tail(working_directory);
+    // The workspace is trusted configuration, so resolving it is safe.
+    let ws_lexical = normalize_lexical_path(working_directory)
+        .to_string_lossy()
+        .into_owned();
+    let ws_canon = canonicalize(working_directory)
+        .to_string_lossy()
+        .into_owned();
+    let ws_spellings = [ws_lexical.as_str(), ws_canon.as_str()];
     let mut invalid = Vec::new();
-    let mut resolved_out = Vec::with_capacity(raw_paths.len());
+    let mut resolved_out: Vec<PathBuf> = Vec::with_capacity(raw_paths.len());
 
     for raw in raw_paths {
         let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            invalid.push(raw.clone());
-            continue;
-        }
-        let candidate = if Path::new(trimmed).is_absolute() {
-            PathBuf::from(trimmed)
+        let usable = if trimmed.is_empty() {
+            None
         } else {
-            ws_canon.join(trimmed)
+            resolve_usable_target_path(&ws_lexical, &ws_spellings, trimmed, flavor, canonicalize)
         };
-        let canon = canonicalize_with_missing_tail(&candidate);
-        let inside_ws = canon == ws_canon || canon.starts_with(&ws_canon);
-        if !inside_ws {
-            invalid.push(raw.clone());
-            continue;
-        }
-        let rel = canon.strip_prefix(&ws_canon).unwrap_or(&canon);
-        let hits_protected = rel.components().any(|comp| {
-            matches!(comp, Component::Normal(os) if {
-                let s = os.to_string_lossy();
-                s.eq_ignore_ascii_case(".git") || s.eq_ignore_ascii_case(".cowork")
-            })
-        });
-        if hits_protected {
-            invalid.push(raw.clone());
-            continue;
-        }
-        if !resolved_out.contains(&canon) {
-            resolved_out.push(canon);
+        match usable {
+            Some(canon) if !resolved_out.contains(&canon) => resolved_out.push(canon),
+            Some(_) => {}
+            None => invalid.push(raw.clone()),
         }
     }
 
@@ -75,6 +88,43 @@ pub fn validate_and_resolve_target_paths(
     }
 
     Ok(resolved_out)
+}
+
+/// TS `resolveUsableTargetPath`: the canonical target when `raw` stays inside the workspace and
+/// outside `.git`/`.cowork` both lexically and after resolving symlinks, else `None`.
+fn resolve_usable_target_path(
+    ws_lexical: &str,
+    ws_spellings: &[&str],
+    raw: &str,
+    flavor: PathFlavor,
+    canonicalize: &dyn Fn(&Path) -> PathBuf,
+) -> Option<PathBuf> {
+    // 1. Lexical: nothing here touches the filesystem for the target.
+    let lexical = resolve_lexically(ws_lexical, raw, flavor);
+    if !inside_and_unprotected(&lexical, ws_spellings, flavor) {
+        return None;
+    }
+    // 2. Canonical: an in-workspace symlink whose real target escapes is rejected.
+    let canon = canonicalize(Path::new(&lexical));
+    inside_and_unprotected(&canon.to_string_lossy(), &ws_spellings[1..], flavor).then_some(canon)
+}
+
+/// Whether `target` is inside one of `roots` (see [`check_lexical_containment`]) without
+/// crossing a `.git`/`.cowork` directory below that root.
+fn inside_and_unprotected(target: &str, roots: &[&str], flavor: PathFlavor) -> bool {
+    if check_lexical_containment(target, roots, flavor).is_err() {
+        return false;
+    }
+    let target = LexicalPath::parse(target, flavor);
+    !roots.iter().any(|root| {
+        target
+            .segments_below(&LexicalPath::parse(root, flavor))
+            .is_some_and(|rel| {
+                rel.iter().any(|seg| {
+                    seg.eq_ignore_ascii_case(".git") || seg.eq_ignore_ascii_case(".cowork")
+                })
+            })
+    })
 }
 
 pub fn resolve_context_mode_and_briefing(
@@ -538,5 +588,186 @@ impl BuiltinTool for CloseAgentTool {
             .await
             .map_err(ToolError::Execution)?;
         Ok(ToolOutput::Json(res))
+    }
+}
+
+#[cfg(test)]
+mod target_path_tests {
+    use std::fs;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    type Calls = Arc<Mutex<Vec<PathBuf>>>;
+
+    /// Records every path handed to canonicalization, then delegates to `inner`.
+    fn recording(inner: impl Fn(&Path) -> PathBuf) -> (Calls, impl Fn(&Path) -> PathBuf) {
+        let calls = Calls::default();
+        let sink = Arc::clone(&calls);
+        let canon = move |p: &Path| {
+            sink.lock().unwrap().push(p.to_path_buf());
+            inner(p)
+        };
+        (calls, canon)
+    }
+
+    fn validate(
+        ws: &Path,
+        raw: &[&str],
+        flavor: PathFlavor,
+        canonicalize: &dyn Fn(&Path) -> PathBuf,
+    ) -> ToolResult<Vec<PathBuf>> {
+        let raw: Vec<String> = raw.iter().map(|s| (*s).to_owned()).collect();
+        validate_and_resolve_target_paths_with(ws, &raw, flavor, canonicalize)
+    }
+
+    fn assert_rejected_before_canonicalize(
+        ws: &Path,
+        raw: &str,
+        flavor: PathFlavor,
+        inner: impl Fn(&Path) -> PathBuf,
+    ) {
+        let (calls, canon) = recording(inner);
+        let err = validate(ws, &[raw], flavor, &canon)
+            .expect_err(raw)
+            .to_string();
+        assert!(
+            err.contains(
+                "spawnAgent targetPaths must be inside the workspace and outside .git/.cowork; invalid: "
+            ) && err.ends_with(raw),
+            "{raw}: {err}"
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            [ws.to_path_buf()],
+            "{raw} reached canonicalize (only the workspace may)"
+        );
+    }
+
+    #[test]
+    fn windows_out_of_workspace_targets_never_reach_canonicalize() {
+        let ws = Path::new(r"C:\ws");
+        for raw in [
+            r"\\attacker.example\share\x",
+            "//attacker.example/share/x",
+            r"\\?\UNC\attacker.example\share\x",
+            r"\??\UNC\attacker.example\share\x",
+            r"\\.\pipe\attacker",
+            r"\\.\UNC\attacker.example\share\x",
+            r"\\?\GLOBALROOT\Device\Mup\attacker.example\share\x",
+            r"\\?\D:\other",
+            r"D:\other",
+            r"D:other",
+            r"C:\other\x",
+            r"\other",
+            r"..\escape",
+            r"src\..\..\escape",
+            r"C:\ws-sibling",
+            r".git\hooks",
+            r"src\.COWORK\auth",
+        ] {
+            assert_rejected_before_canonicalize(ws, raw, PathFlavor::Windows, |p: &Path| {
+                p.to_path_buf()
+            });
+        }
+    }
+
+    #[test]
+    fn windows_in_workspace_targets_are_accepted() {
+        let ws = Path::new(r"C:\ws");
+        let (calls, canon) = recording(|p: &Path| p.to_path_buf());
+        let resolved = validate(
+            ws,
+            &[
+                r"src\a",
+                r"C:\ws\lib",
+                "c:/WS/docs",
+                r"\ws\tests",
+                r"C:bin",
+                r"\\?\C:\ws\pkg",
+                r"src\..\README.md",
+            ],
+            PathFlavor::Windows,
+            &canon,
+        )
+        .unwrap();
+        let expected: Vec<PathBuf> = [
+            r"C:\ws\src\a",
+            r"C:\ws\lib",
+            "c:/WS/docs",
+            r"C:\ws\tests",
+            r"C:\ws\bin",
+            r"\\?\C:\ws\pkg",
+            r"C:\ws\src\..\README.md",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(resolved, expected);
+        assert_eq!(calls.lock().unwrap().len(), 1 + expected.len());
+    }
+
+    #[test]
+    fn posix_out_of_workspace_targets_never_reach_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        let ws = root.join("ws");
+        fs::create_dir_all(ws.join("src")).unwrap();
+        let outside = root.join("outside").join("x");
+        let sibling = root.join("ws-sibling");
+        for raw in [
+            "../escape",
+            "src/../../escape",
+            outside.to_str().unwrap(),
+            sibling.to_str().unwrap(),
+            "/net/attacker.example/share/x",
+            "/Network/Servers/attacker.example/x",
+            ".git/hooks",
+            "src/.cowork/auth",
+        ] {
+            assert_rejected_before_canonicalize(
+                &ws,
+                raw,
+                PathFlavor::Posix,
+                canonicalize_with_missing_tail,
+            );
+        }
+    }
+
+    #[test]
+    fn posix_in_workspace_targets_are_canonicalized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = fs::canonicalize(tmp.path()).unwrap();
+        fs::create_dir_all(ws.join("src")).unwrap();
+        let abs = ws.join("src");
+        let resolved = validate_and_resolve_target_paths(
+            &ws,
+            &[
+                "src".to_owned(),
+                abs.to_string_lossy().into_owned(),
+                "./src/new/file.rs".to_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(resolved, vec![abs.clone(), abs.join("new").join("file.rs")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escapes_are_rejected_after_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        let ws = root.join("ws");
+        let outside = root.join("outside");
+        fs::create_dir_all(ws.join(".git").join("hooks")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("escape")).unwrap();
+        std::os::unix::fs::symlink(ws.join(".git"), ws.join("gitlink")).unwrap();
+        for raw in ["escape", "escape/new.rs", "gitlink/hooks"] {
+            let err = validate_and_resolve_target_paths(&ws, &[raw.to_owned()])
+                .expect_err(raw)
+                .to_string();
+            assert!(err.ends_with(&format!("invalid: {raw}")), "{raw}: {err}");
+        }
     }
 }

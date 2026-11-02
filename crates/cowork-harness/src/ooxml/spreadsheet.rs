@@ -480,13 +480,13 @@ pub fn resolve_workspace_file_path(
     let candidate = if p.is_absolute() {
         p.to_path_buf()
     } else {
-        let joined = workspace_root.join(p);
-        let lexical = cowork_config::normalize_lexical_path(&joined);
-        if !lexical.starts_with(&workspace_root) {
-            return Err(WorkspacePathError::OutsideWorkspace);
-        }
-        joined
+        workspace_root.join(p)
     };
+    // Gate lexically before touching the filesystem: canonicalizing an out-of-workspace path
+    // (a Windows UNC share) can make the host contact a remote server.
+    if !cowork_tools::context::is_lexically_inside_root(&candidate, cwd) {
+        return Err(WorkspacePathError::OutsideWorkspace);
+    }
     let resolved = match fs::canonicalize(&candidate) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

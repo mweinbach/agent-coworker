@@ -2702,8 +2702,14 @@ fn encode_plugin_icon(plugin_root: &Path, raw: &str) -> Option<String> {
     if trimmed.is_empty() || trimmed.contains("://") {
         return None;
     }
+    let candidate = plugin_root.join(trimmed);
+    // Manifest-supplied: gate lexically before the filesystem sees it (a Windows UNC ref would
+    // make the host contact a remote server).
+    if !cowork_tools::context::is_lexically_inside_root(&candidate, plugin_root) {
+        return None;
+    }
     let canonical_root = fs::canonicalize(plugin_root).ok()?;
-    let resolved = fs::canonicalize(plugin_root.join(trimmed)).ok()?;
+    let resolved = fs::canonicalize(&candidate).ok()?;
     if !resolved.starts_with(&canonical_root) {
         return None;
     }

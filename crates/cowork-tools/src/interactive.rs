@@ -656,6 +656,11 @@ pub fn encode_confined_icon_data_url(root_canon: &Path, raw_ref: &str) -> Option
         return Some(trimmed.to_owned());
     }
     let candidate = root_canon.join(trimmed);
+    // Manifest-supplied: gate lexically before the filesystem sees it (a Windows UNC ref would
+    // make the host contact a remote server).
+    if !crate::context::is_lexically_inside_root(&candidate, root_canon) {
+        return None;
+    }
     let canon = cowork_config::canonicalize_sync(&candidate);
     if !cowork_config::is_inside(root_canon, &canon) || !canon.is_file() {
         return None;

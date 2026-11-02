@@ -583,6 +583,12 @@ impl LexicalPath {
                 .all(|(r, s)| r == s)
     }
 
+    /// The segments of `self` below `root` when `self` is `root` or lies beneath it.
+    pub fn segments_below(&self, root: &LexicalPath) -> Option<&[String]> {
+        self.is_inside(root)
+            .then(|| &self.segments[root.segments.len()..])
+    }
+
     /// [`Self::is_inside`] with ASCII case folding, for deny-side checks (over-blocking on a
     /// case-sensitive filesystem is safe; under-blocking on a case-insensitive one is not).
     fn is_inside_ignore_ascii_case(&self, root: &LexicalPath) -> bool {
@@ -758,6 +764,53 @@ fn root_spellings(roots: &[PathBuf]) -> Vec<String> {
         );
     }
     out
+}
+
+/// Resolves a model- or client-supplied `raw` path against the absolute `base` purely lexically
+/// (TS `path.resolve(base, raw)` without the filesystem): a relative `raw` is joined onto
+/// `base`, a Windows current-drive-rooted `\x` takes `base`'s drive, a same-drive-relative
+/// `C:x` is joined onto a `C:\` base, and every other rooted form (POSIX `/x`, `D:\x`, `D:x`
+/// on another drive, UNC, device, verbatim) is returned unchanged for
+/// [`check_lexical_containment`] to judge. Feed the result to that gate before any filesystem
+/// call on it.
+pub fn resolve_lexically(base: &str, raw: &str, flavor: PathFlavor) -> String {
+    let parsed = LexicalPath::parse(raw, flavor);
+    match flavor {
+        PathFlavor::Posix if parsed.prefix.is_empty() => format!("{base}/{raw}"),
+        PathFlavor::Posix => raw.to_owned(),
+        PathFlavor::Windows => {
+            if parsed.prefix.is_empty() {
+                return format!("{base}\\{raw}");
+            }
+            let base_drive = split_windows_drive(&base.replace('/', "\\"))
+                .map(|(drive, _)| drive)
+                .filter(|drive| drive.ends_with('\\'));
+            match base_drive {
+                Some(_) if parsed.prefix == "\\" => format!("{}{raw}", &base[..2]),
+                Some(drive)
+                    if parsed.prefix.len() == 2
+                        && parsed.prefix.ends_with(':')
+                        && drive.starts_with(&parsed.prefix) =>
+                {
+                    format!("{base}\\{}", &raw[2..])
+                }
+                _ => raw.to_owned(),
+            }
+        }
+    }
+}
+
+/// Whether the absolute `target` lies lexically inside `root` (its configured or canonical
+/// spelling), per [`check_lexical_containment`] on the host path flavor. Pure for `target`:
+/// gate an untrusted path with this before canonicalizing or opening it, then re-check the
+/// canonical result against the canonical root to catch symlink escapes.
+pub fn is_lexically_inside_root(target: &Path, root: &Path) -> bool {
+    check_lexical_containment(
+        &target.to_string_lossy(),
+        &root_spellings(&[root.to_path_buf()]),
+        PathFlavor::host(),
+    )
+    .is_ok()
 }
 
 fn special_form_label(kind: SpecialPathKind) -> &'static str {

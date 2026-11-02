@@ -1018,9 +1018,9 @@ pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<
         ("grant_type".to_owned(), "refresh_token".to_owned()),
         ("refresh_token".to_owned(), refresh_token.clone()),
     ];
-    if let Some(res) = ctx.configured_resource.as_ref() {
-        form.push(("resource".to_owned(), res.clone()));
-    }
+    // Same resolved resource indicator as authorization and code exchange (configured value, then
+    // protected-resource discovery, then the server URL), so the refreshed token keeps its audience.
+    form.push(("resource".to_owned(), endpoints.resource.clone()));
 
     let resp = send_token_request(
         &http_client,

@@ -48,6 +48,8 @@ struct MockAuthServer {
     supported_methods: Option<Vec<&'static str>>,
     /// What the token endpoint requires: `Some((id, secret))` for HTTP Basic only.
     require_basic: Option<(&'static str, &'static str)>,
+    /// Path (appended to the mock origin) advertised as the protected-resource metadata `resource`.
+    prm_resource_path: &'static str,
     token_requests: Mutex<Vec<TokenRequest>>,
 }
 
@@ -78,11 +80,11 @@ async fn run_flow(server: MockAuthServer) -> Vec<TokenRequest> {
             "/.well-known/oauth-protected-resource/mcp",
             get({
                 let b = b.clone();
-                move || {
+                move |State(st): State<Arc<MockAuthServer>>| {
                     let b = b.clone();
                     async move {
                         axum::Json(json!({
-                            "resource": format!("{b}/mcp"),
+                            "resource": format!("{b}{}", st.prm_resource_path),
                             "authorization_servers": [format!("{b}/issuer")]
                         }))
                     }
@@ -324,6 +326,7 @@ async fn client_secret_basic_client_uses_http_basic_for_code_exchange_and_refres
         }),
         supported_methods: Some(vec!["client_secret_basic", "client_secret_post"]),
         require_basic: Some(("conf-client", "s3cr3t")),
+        prm_resource_path: "/mcp",
         token_requests: Mutex::new(Vec::new()),
     })
     .await;
@@ -357,6 +360,7 @@ async fn confidential_client_without_advertised_methods_defaults_to_http_basic()
         registration: json!({ "client_id": "conf-client", "client_secret": "s3cr3t" }),
         supported_methods: None,
         require_basic: Some(("conf-client", "s3cr3t")),
+        prm_resource_path: "/mcp",
         token_requests: Mutex::new(Vec::new()),
     })
     .await;
@@ -373,6 +377,7 @@ async fn client_secret_post_client_sends_credentials_in_the_body() {
         }),
         supported_methods: Some(vec!["client_secret_basic", "client_secret_post"]),
         require_basic: None,
+        prm_resource_path: "/mcp",
         token_requests: Mutex::new(Vec::new()),
     })
     .await;
@@ -400,6 +405,7 @@ async fn public_client_sends_only_its_client_id() {
         }),
         supported_methods: Some(vec!["none"]),
         require_basic: None,
+        prm_resource_path: "/mcp",
         token_requests: Mutex::new(Vec::new()),
     })
     .await;
@@ -413,4 +419,39 @@ async fn public_client_sends_only_its_client_id() {
         );
         assert!(!req.form.contains_key("client_secret"), "{req:?}");
     }
+}
+
+/// With no configured `auth.resource`, the refresh must carry the resource discovered from
+/// protected-resource metadata, exactly as authorization and code exchange do (MCP SDK
+/// `refreshAuthorization` receives `selectResourceURL(...)`). The metadata advertises the
+/// origin-level resource, distinct from the `/mcp` server-URL fallback.
+#[tokio::test]
+async fn refresh_carries_the_resource_discovered_from_protected_resource_metadata() {
+    let requests = run_flow(MockAuthServer {
+        registration: json!({
+            "client_id": "public-client",
+            "token_endpoint_auth_method": "none"
+        }),
+        supported_methods: Some(vec!["none"]),
+        require_basic: None,
+        prm_resource_path: "/",
+        token_requests: Mutex::new(Vec::new()),
+    })
+    .await;
+
+    assert_eq!(
+        requests.iter().map(grant).collect::<Vec<_>>(),
+        ["authorization_code", "refresh_token"],
+        "{requests:?}"
+    );
+    let exchange_resource = requests[0].form.get("resource").expect("exchange resource");
+    assert!(
+        exchange_resource.starts_with("http://127.0.0.1:") && exchange_resource.ends_with('/'),
+        "{requests:?}"
+    );
+    assert_eq!(
+        requests[1].form.get("resource"),
+        Some(exchange_resource),
+        "{requests:?}"
+    );
 }

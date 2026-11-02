@@ -813,6 +813,7 @@ impl ServerRuntimeState {
             harness_context: src_snapshot.harness_context.clone(),
             config_overrides,
             messages: src_snapshot.messages,
+            system_prompt: String::new(),
             subscribers: subscribers.clone(),
             idle_since: subscribers.is_empty().then(std::time::Instant::now),
         };

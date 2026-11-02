@@ -227,6 +227,12 @@ pub struct LiveSession {
     pub harness_context: Option<Value>,
     pub config_overrides: Map<String, Value>,
     pub messages: Vec<Value>,
+    /// The stored system prompt of a non-root (child agent) session, carried so metadata
+    /// persists (title, model, config, ...) write it back unchanged. Always empty for root
+    /// sessions, which rebuild their prompt every turn (`AgentSessionFromPersisted.ts`
+    /// `regenerateRootSystemPrompt` parity); a child's role/profile prompt plus any spawn-time
+    /// `systemPromptSuffix` cannot be rebuilt, so `AgentControl` restores it from this column.
+    pub system_prompt: String,
     pub subscribers: HashSet<String>,
     pub idle_since: Option<Instant>,
 }
@@ -316,7 +322,7 @@ impl LiveSession {
             status: SessionPersistenceStatus::Active,
             has_pending_ask: self.has_pending_ask,
             has_pending_approval: self.has_pending_approval,
-            system_prompt: String::new(),
+            system_prompt: self.system_prompt.clone(),
             messages: self.messages.clone(),
             last_memory_generated_index: self.last_memory_generated_index,
             provider_state: self.provider_state.clone(),
@@ -437,6 +443,11 @@ impl LiveSession {
             harness_context: record.harness_context,
             config_overrides,
             messages: record.messages,
+            system_prompt: if record.session_kind == SessionKind::Root {
+                String::new()
+            } else {
+                record.system_prompt
+            },
             subscribers: HashSet::new(),
             idle_since: Some(Instant::now()),
         }
@@ -1668,6 +1679,7 @@ impl ServerRuntimeState {
             harness_context: None,
             config_overrides: Map::new(),
             messages: Vec::new(),
+            system_prompt: String::new(),
             subscribers,
             idle_since: None,
         };

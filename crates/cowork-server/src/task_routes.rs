@@ -703,6 +703,7 @@ impl ServerRuntimeState {
             harness_context: None,
             config_overrides: Map::new(),
             messages: Vec::new(),
+            system_prompt: String::new(),
             subscribers: HashSet::new(),
             idle_since: Some(Instant::now()),
         };

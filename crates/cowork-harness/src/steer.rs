@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use cowork_inference::ContentBlock;
@@ -40,19 +40,27 @@ struct ActiveCodexBinding {
     codex_turn_id: Option<String>,
 }
 
+/// Pending steers plus the admission flag, guarded by one lock so "admission open? → enqueue"
+/// is atomic with respect to [`SteerCoordinator::close_admission`]: once closure returns, no
+/// enqueue can still succeed, and every enqueue that did succeed is visible to the final drain.
+#[derive(Default)]
+struct SteerQueue {
+    entries: VecDeque<SteerEntry>,
+    /// Set once the turn stops admitting steers (it is settling); later `turn/steer` requests are
+    /// rejected instead of being queued where nothing would ever drain them.
+    admission_closed: bool,
+}
+
 pub struct SteerCoordinator {
     thread_id: String,
     turn_id: String,
     sink: Arc<dyn HarnessEventSink>,
-    queue: Arc<Mutex<VecDeque<SteerEntry>>>,
+    queue: Arc<Mutex<SteerQueue>>,
     /// Native Codex `turn/steer` requests still awaiting a response.
     native_in_flight: Arc<AtomicUsize>,
     native_settled: Arc<tokio::sync::Notify>,
     idempotency: Mutex<VecDeque<SteerIdempotencyRecord>>,
     codex_binding: Mutex<Option<ActiveCodexBinding>>,
-    /// Set once the turn stops admitting steers (it is settling); later `turn/steer` requests are
-    /// rejected instead of being queued where nothing would ever drain them.
-    admission_closed: AtomicBool,
 }
 
 /// Rejection message for steers still queued when a turn is interrupted.
@@ -76,12 +84,11 @@ impl SteerCoordinator {
             thread_id: thread_id.into(),
             turn_id: turn_id.into(),
             sink,
-            queue: Arc::new(Mutex::new(VecDeque::new())),
+            queue: Arc::new(Mutex::new(SteerQueue::default())),
             native_in_flight: Arc::new(AtomicUsize::new(0)),
             native_settled: Arc::new(tokio::sync::Notify::new()),
             idempotency: Mutex::new(VecDeque::new()),
             codex_binding: Mutex::new(None),
-            admission_closed: AtomicBool::new(false),
         }
     }
 
@@ -135,27 +142,28 @@ impl SteerCoordinator {
                     format!("Steer clientMessageId '{cid}' was already used with different text."),
                 ));
             }
-            self.ensure_admission_open()?;
             let req_id = format!("steer_{}", Uuid::new_v4());
+            // The ledger lock stays held across admission so a concurrent replay cannot observe a
+            // half-admitted id; the id is only recorded once the steer was actually admitted, so
+            // a steer refused after closure is never "replayed" as accepted.
+            let result = self.push_entry(SteerEntry {
+                request_id: req_id.clone(),
+                text: trimmed,
+                client_message_id: Some(cid.to_owned()),
+                content,
+                delivered_natively: false,
+            })?;
             if ledger.len() >= 128 {
                 ledger.pop_front();
             }
             ledger.push_back(SteerIdempotencyRecord {
                 client_message_id: cid.to_owned(),
                 dedupe_key,
-                request_id: req_id.clone(),
-            });
-            drop(ledger);
-            return self.push_entry(SteerEntry {
                 request_id: req_id,
-                text: trimmed,
-                client_message_id: Some(cid.to_owned()),
-                content,
-                delivered_natively: false,
             });
+            return Ok(result);
         }
 
-        self.ensure_admission_open()?;
         let req_id = format!("steer_{}", Uuid::new_v4());
         self.push_entry(SteerEntry {
             request_id: req_id,
@@ -166,33 +174,42 @@ impl SteerCoordinator {
         })
     }
 
-    fn ensure_admission_open(&self) -> Result<(), JsonRpcLiteError> {
-        if self.admission_closed.load(Ordering::SeqCst) {
-            return Err(JsonRpcLiteError::new(
-                error_codes::INVALID_REQUEST,
-                "Active turn no longer accepts steering.",
-            ));
-        }
-        Ok(())
-    }
-
     /// Stops admitting new steers. Called when the turn starts settling so a steer accepted after
     /// the final drain cannot be silently lost.
+    ///
+    /// Closure takes the same lock as admission + insertion, so once this returns every steer
+    /// that was admitted is already queued (and its `steerAccepted` emitted), and every later
+    /// `turn/steer` is refused. The queue then only shrinks, so a subsequent
+    /// [`Self::settle_native_deliveries`] + [`Self::take_natively_delivered`] +
+    /// [`Self::drain_pending`] sees every admitted steer exactly once.
     pub fn close_admission(&self) {
-        self.admission_closed.store(true, Ordering::SeqCst);
+        self.queue.lock().admission_closed = true;
     }
 
     pub fn is_admission_closed(&self) -> bool {
-        self.admission_closed.load(Ordering::SeqCst)
+        self.queue.lock().admission_closed
     }
 
+    /// Admits `entry` if the turn still accepts steering. The admission check, the queue
+    /// insertion, the `steerAccepted` notification and the native in-flight registration all
+    /// happen under the queue lock, so they are atomic with respect to [`Self::close_admission`]
+    /// and the final drain: a steer is either queued-and-acknowledged before closure (and then
+    /// recorded or rejected by the turn's settlement) or refused with an error, never both.
     fn push_entry(&self, entry: SteerEntry) -> Result<Value, JsonRpcLiteError> {
         let req_id = entry.request_id.clone();
         let text_for_codex = entry.text.clone();
         // Structured native input (text + reference context + images). `None` means some content
         // cannot be sent natively: skip `turn/steer` so the entry stays owed to the provider.
         let input_for_codex = codex_steer_input(&entry.text, &entry.content);
-        self.queue.lock().push_back(entry.clone());
+
+        let mut queue = self.queue.lock();
+        if queue.admission_closed {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_REQUEST,
+                "Active turn no longer accepts steering.",
+            ));
+        }
+        queue.entries.push_back(entry.clone());
 
         let mut notif = serde_json::Map::new();
         notif.insert(
@@ -210,19 +227,29 @@ impl SteerCoordinator {
             notif.insert("clientMessageId".to_owned(), Value::String(cid));
         }
 
+        // Emitted before the lock is released so a rejection from the turn's final drain can
+        // never reach the client ahead of the acceptance it refers to.
         self.sink
             .send_notification("cowork/session/steerAccepted", Value::Object(notif));
 
         // If bound to a live Codex App-Server turn, also forward `turn/steer` over stdio!
-        if let Some(binding) = self.codex_binding.lock().clone()
-            && let Some(expected_turn_id) = binding.codex_turn_id
-            && let Some(input) = input_for_codex
-        {
+        // The in-flight count is registered before the lock is released so settlement after
+        // `close_admission` waits for this delivery instead of rejecting a steer the provider
+        // may still consume.
+        let native = self.codex_binding.lock().clone().and_then(|binding| {
+            let expected_turn_id = binding.codex_turn_id.clone()?;
+            Some((binding, expected_turn_id, input_for_codex?))
+        });
+        if native.is_some() {
+            self.native_in_flight.fetch_add(1, Ordering::SeqCst);
+        }
+        drop(queue);
+
+        if let Some((binding, expected_turn_id, input)) = native {
             let queue = Arc::clone(&self.queue);
             let in_flight = Arc::clone(&self.native_in_flight);
             let settled = Arc::clone(&self.native_settled);
             let steer_req_id = req_id.clone();
-            in_flight.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
                 let accepted = binding
                     .client
@@ -237,6 +264,7 @@ impl SteerCoordinator {
                 if accepted
                     && let Some(e) = queue
                         .lock()
+                        .entries
                         .iter_mut()
                         .find(|e| e.request_id == steer_req_id)
                 {
@@ -256,7 +284,7 @@ impl SteerCoordinator {
     /// Drains every queued steer. Entries with `delivered_natively` were already consumed by
     /// the native Codex turn and must only be recorded, not resubmitted.
     pub fn drain_pending(&self) -> Vec<SteerEntry> {
-        self.queue.lock().drain(..).collect()
+        self.queue.lock().entries.drain(..).collect()
     }
 
     /// Waits (bounded) for in-flight native `turn/steer` requests to resolve so each queued
@@ -277,14 +305,19 @@ impl SteerCoordinator {
     /// Removes and returns the steers the native Codex turn already accepted.
     pub fn take_natively_delivered(&self) -> Vec<SteerEntry> {
         let mut q = self.queue.lock();
-        let (delivered, rest): (Vec<_>, Vec<_>) = q.drain(..).partition(|e| e.delivered_natively);
-        q.extend(rest);
+        let (delivered, rest): (Vec<_>, Vec<_>) =
+            q.entries.drain(..).partition(|e| e.delivered_natively);
+        q.entries.extend(rest);
         delivered
     }
 
     /// Whether a steer is still owed to the provider (natively delivered ones are not).
     pub fn has_pending(&self) -> bool {
-        self.queue.lock().iter().any(|e| !e.delivered_natively)
+        self.queue
+            .lock()
+            .entries
+            .iter()
+            .any(|e| !e.delivered_natively)
     }
 
     /// Test hook: marks a queued steer as accepted by the native Codex turn.
@@ -293,6 +326,7 @@ impl SteerCoordinator {
         if let Some(e) = self
             .queue
             .lock()
+            .entries
             .iter_mut()
             .find(|e| e.request_id == request_id)
         {

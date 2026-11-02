@@ -481,16 +481,6 @@ fn build_anthropic_messages_payload(
             .iter()
             .enumerate()
             .map(|(idx, t)| {
-                let props = t
-                    .parameters
-                    .get("properties")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}));
-                let req = t
-                    .parameters
-                    .get("required")
-                    .cloned()
-                    .unwrap_or_else(|| json!([]));
                 let mut tool_obj = Map::new();
                 tool_obj.insert(
                     "name".to_string(),
@@ -506,11 +496,7 @@ fn build_anthropic_messages_payload(
                 );
                 tool_obj.insert(
                     "input_schema".to_string(),
-                    json!({
-                        "type": "object",
-                        "properties": props,
-                        "required": req,
-                    }),
+                    anthropic_tool_input_schema(&t.parameters),
                 );
                 if idx == last_idx
                     && let Some(cc) = &cache_control
@@ -536,6 +522,26 @@ fn build_anthropic_messages_payload(
     }
 
     (Value::Object(body), betas, active_effort)
+}
+
+/// Builds a tool's Anthropic `input_schema` from its (already normalized) parameter schema.
+///
+/// The complete schema is forwarded so root-level `$defs` / `definitions` referenced by nested
+/// `$ref`s, `additionalProperties`, and every nested combinator reach the API intact; rebuilding
+/// it from only `properties` / `required` leaves dangling references that make Anthropic reject
+/// the whole request. Anthropic requires `type: "object"` at the root and rejects `oneOf` /
+/// `allOf` / `anyOf` at the top level, so the root type is forced and root-level combinators are
+/// dropped (nested ones are untouched). A non-object schema becomes an empty object schema.
+fn anthropic_tool_input_schema(parameters: &Value) -> Value {
+    let mut schema = parameters.as_object().cloned().unwrap_or_default();
+    for combinator in ["oneOf", "allOf", "anyOf"] {
+        schema.remove(combinator);
+    }
+    schema.insert("type".to_string(), Value::String("object".to_string()));
+    if !schema.get("properties").is_some_and(Value::is_object) {
+        schema.insert("properties".to_string(), json!({}));
+    }
+    Value::Object(schema)
 }
 
 fn convert_messages_to_anthropic(

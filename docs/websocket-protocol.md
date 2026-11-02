@@ -136,7 +136,7 @@ artifact reads can lazily materialize the immutable baseline. Sub-agent executio
 and `cowork/session/agent/close`) requires both `conversations` and `turns`, because child agents run
 model turns with workspace tools; `cowork/session/agent/list`, `cowork/session/agent/inspect`, and
 `cowork/session/agent/wait` require `conversations`. The MCP config surface
-(`cowork/mcp/list`, `cowork/mcp/servers/read`, `cowork/mcp/server/upsert`,
+(`cowork/mcp/servers/read`, `cowork/mcp/server/upsert`,
 `cowork/mcp/server/delete`, and `cowork/mcp/server/setEnabled`) requires the workspace-settings
 permission, because reads can expose configured transport env/headers. Anything that can connect to
 a configured server also requires `turns`, because connecting starts a stdio server's configured

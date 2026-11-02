@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use cowork_js_vm::{
     VmError, WorkflowAgentBridgeReply, WorkflowCompileResult, WorkflowMeta, WorkflowVmBridge,
     WorkflowVmRunOptions, compile_workflow_source, execute_workflow_module,
+    inspect_workflow_source,
 };
 use serde_json::Value;
 use tokio::sync::Notify;
@@ -96,13 +97,22 @@ async fn run_with_timeout(
     run_timeout_ms: u64,
     bridge: Arc<HangingAgentBridge>,
 ) -> (Result<Value, VmError>, Duration) {
+    run_with_options(source, run_timeout_ms, None, bridge).await
+}
+
+async fn run_with_options(
+    source: &str,
+    run_timeout_ms: u64,
+    cancel_token: Option<CancellationToken>,
+    bridge: Arc<HangingAgentBridge>,
+) -> (Result<Value, VmError>, Duration) {
     let opts = WorkflowVmRunOptions {
         js: compile(source),
         args_json: "{}".to_owned(),
         budget_total: None,
         run_timeout_ms,
         max_memory_bytes: 32 * 1024 * 1024,
-        cancel_token: None,
+        cancel_token,
     };
     let started = Instant::now();
     let res = tokio::time::timeout(
@@ -174,5 +184,79 @@ async fn workflow_execution_error_cancels_outstanding_agent_before_cleanup() {
     assert!(
         bridge.hang_finished.load(Ordering::SeqCst),
         "outstanding agent call must be joined before the run returns"
+    );
+}
+
+/// A valid workflow whose module initialisation never settles. QuickJS has no JavaScript left to
+/// run, so the isolate's interrupt handler never fires; only the host-side deadline can end it.
+const PENDING_TOP_LEVEL_AWAIT: &str = r#"
+    await new Promise(() => {});
+    export const meta = { name: "stuck", description: "never finishes module init", phases: ["one"] };
+    export default async function run() {
+        return "unreachable";
+    }
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inspection_times_out_on_pending_top_level_await() {
+    let started = Instant::now();
+    let res = tokio::time::timeout(
+        PROMPT_RETURN_BOUND,
+        inspect_workflow_source(PENDING_TOP_LEVEL_AWAIT, 300),
+    )
+    .await
+    .expect("metadata inspection must honour its deadline during module evaluation");
+    let elapsed = started.elapsed();
+
+    let issues = res.expect_err("pending module init must fail inspection");
+    assert_eq!(issues.len(), 1, "unexpected issues: {issues:?}");
+    assert_eq!(issues[0].path, "script");
+    assert_eq!(
+        issues[0].message,
+        "workflow metadata inspection exceeded 300ms"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "inspection returned before its deadline: {elapsed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_timeout_applies_to_pending_module_init() {
+    let bridge = Arc::new(HangingAgentBridge::default());
+
+    let (res, elapsed) = run_with_timeout(PENDING_TOP_LEVEL_AWAIT, 300, bridge).await;
+
+    assert!(
+        matches!(res, Err(VmError::TimedOut { timeout_ms: 300 })),
+        "expected TimedOut, got {res:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "run returned before its deadline: {elapsed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_interrupts_pending_module_init() {
+    let bridge = Arc::new(HangingAgentBridge::default());
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        trigger.cancel();
+    });
+
+    // Run timeout far beyond the cancellation point, so only Stop ends the run.
+    let (res, elapsed) =
+        run_with_options(PENDING_TOP_LEVEL_AWAIT, 60_000, Some(cancel), bridge).await;
+
+    assert!(
+        matches!(res, Err(VmError::Cancelled)),
+        "expected Cancelled, got {res:?}"
+    );
+    assert!(
+        elapsed < PROMPT_RETURN_BOUND,
+        "cancelled run took {elapsed:?}"
     );
 }

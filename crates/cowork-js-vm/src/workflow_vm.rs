@@ -1,5 +1,6 @@
+use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -172,6 +173,39 @@ pub fn validate_workflow_meta_value(raw: &Value) -> Result<WorkflowMeta, Vec<Com
     }
 }
 
+/// Races an isolate future (module evaluation, driver promises) against the wall-clock deadline
+/// and, when given, a cancellation token. The QuickJS interrupt handler only fires while
+/// JavaScript is executing, so a promise that stays pending forever (for example a top-level
+/// `await new Promise(() => {})`) would otherwise never observe the deadline or a Stop.
+///
+/// On timeout/cancellation the abandoned future is dropped and `cancel_flag` is raised so any
+/// JavaScript that still runs before the isolate is torn down is interrupted immediately.
+async fn race_isolate_deadline<T>(
+    fut: impl Future<Output = T>,
+    deadline: tokio::time::Instant,
+    timeout_ms: u64,
+    cancel: Option<&CancellationToken>,
+    cancel_flag: &AtomicBool,
+) -> Result<T, VmError> {
+    let cancelled = async {
+        match cancel {
+            Some(tok) => tok.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        out = fut => Ok(out),
+        () = cancelled => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            Err(VmError::Cancelled)
+        }
+        () = tokio::time::sleep_until(deadline) => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            Err(VmError::TimedOut { timeout_ms })
+        }
+    }
+}
+
 /// Compiles and evaluates top-level `meta` + `default` export inside a sandboxed QuickJS isolate
 /// with a strict wall-clock timeout (default `2_000`ms) and zero host capabilities.
 pub async fn inspect_workflow_source(
@@ -206,6 +240,8 @@ pub async fn inspect_workflow_source(
                 None,
             )
             .await?;
+            let deadline =
+                tokio::time::Instant::now() + Duration::from_millis(effective_timeout);
 
             AsyncContext::async_with(&prepared.ctx, async |ctx| {
                 install_realm_seal(
@@ -241,11 +277,16 @@ pub async fn inspect_workflow_source(
                     .eval()
                     .catch(&ctx)
                     .map_err(|e| extract_caught_error(e, &limits, &prepared.interrupt_cause))?;
-                eval_promise
-                    .into_future::<()>()
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| extract_caught_error(e, &limits, &prepared.interrupt_cause))?;
+                race_isolate_deadline(
+                    eval_promise.into_future::<()>(),
+                    deadline,
+                    effective_timeout,
+                    None,
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &limits, &prepared.interrupt_cause))?;
 
                 let ns = evaluated
                     .namespace()
@@ -796,11 +837,18 @@ pub async fn execute_workflow_module(
                     .eval()
                     .catch(&ctx)
                     .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
-                eval_promise
-                    .into_future::<()>()
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
+                // A pending top-level `await` never re-enters the interrupt handler, so module
+                // initialisation must observe Stop and the run deadline on the host side.
+                race_isolate_deadline(
+                    eval_promise.into_future::<()>(),
+                    deadline_tokio,
+                    timeout_ms,
+                    Some(&cancel_for_vm),
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
 
                 let ns = evaluated
                     .namespace()
@@ -815,11 +863,16 @@ pub async fn execute_workflow_module(
                     .call((ns.clone(),))
                     .catch(&ctx)
                     .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
-                validate_promise
-                    .into_future::<()>()
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
+                race_isolate_deadline(
+                    validate_promise.into_future::<()>(),
+                    deadline_tokio,
+                    timeout_ms,
+                    Some(&cancel_for_vm),
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
 
                 let exec_fn: Function<'_> = driver
                     .get("executeDefault")
@@ -830,20 +883,16 @@ pub async fn execute_workflow_module(
                     .catch(&ctx)
                     .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
 
-                tokio::select! {
-                    res = exec_promise.into_future::<String>() => {
-                        res.catch(&ctx)
-                            .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))
-                    }
-                    _ = cancel_for_vm.cancelled() => {
-                        prepared.cancel_flag.store(true, Ordering::Relaxed);
-                        Err(VmError::Cancelled)
-                    }
-                    _ = tokio::time::sleep_until(deadline_tokio) => {
-                        prepared.cancel_flag.store(true, Ordering::Relaxed);
-                        Err(VmError::TimedOut { timeout_ms })
-                    }
-                }
+                race_isolate_deadline(
+                    exec_promise.into_future::<String>(),
+                    deadline_tokio,
+                    timeout_ms,
+                    Some(&cancel_for_vm),
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))
             })
             .await;
 

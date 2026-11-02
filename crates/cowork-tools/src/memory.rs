@@ -503,7 +503,10 @@ impl AdvancedMemoryStore {
                 slug: slug.clone(),
                 name: name.trim().to_owned(),
                 description: description.trim().to_owned(),
-                memory_type: memory_type.trim().to_owned(),
+                memory_type: match memory_type.trim() {
+                    "" => DEFAULT_MEMORY_TYPE.to_owned(),
+                    t => t.to_owned(),
+                },
                 scope: scope.to_owned(),
                 body: body.trim().to_owned(),
                 updated_at: now.clone(),
@@ -867,15 +870,21 @@ fn parse_advanced_entry(slug: &str, scope: &str, raw: &str) -> AdvancedMemoryEnt
         slug: slug.to_owned(),
         name: fm.name.unwrap_or_else(|| slug.to_owned()),
         description: fm.description.unwrap_or_default(),
+        // TS `parseMemoryFile` / `normalizeAdvancedMemoryWriteInput` default: `note`.
         memory_type: non_blank(fm.memory_type)
             .or(legacy_type)
-            .unwrap_or_else(|| "project".to_owned()),
+            .unwrap_or_else(|| DEFAULT_MEMORY_TYPE.to_owned()),
         scope: scope.to_owned(),
         body: body.trim().to_owned(),
         updated_at: fm.updated_at.unwrap_or_default(),
         origin_session_id: non_blank(fm.origin_session_id).or(legacy_origin),
     }
 }
+
+/// TS `src/tools/manageMemory.ts` `memoryTypeSchema` and the default the TS store applies to a
+/// write or file with no type (`input.type?.trim() || "note"`).
+const ADVANCED_MEMORY_TYPES: [&str; 3] = ["feedback", "project", "note"];
+const DEFAULT_MEMORY_TYPE: &str = "note";
 
 pub struct RecallMemoryTool;
 
@@ -1020,7 +1029,11 @@ impl BuiltinTool for ManageMemoryTool {
                 },
                 "name": {
                     "type": "string",
-                    "description": "Memory title or slug."
+                    "description": "Human-facing memory name. Required for create. Without slug it is also the update/delete target, and an update keeps the existing name."
+                },
+                "slug": {
+                    "type": "string",
+                    "description": "Stable memory slug. Targets update/delete; optional for create. With slug, an update's name renames the memory."
                 },
                 "description": {
                     "type": "string",
@@ -1028,7 +1041,8 @@ impl BuiltinTool for ManageMemoryTool {
                 },
                 "type": {
                     "type": "string",
-                    "enum": ["user", "feedback", "project", "reference"]
+                    "enum": ADVANCED_MEMORY_TYPES,
+                    "description": "Memory type. Defaults to note when creating."
                 },
                 "body": {
                     "type": "string",
@@ -1039,7 +1053,7 @@ impl BuiltinTool for ManageMemoryTool {
                     "enum": ["workspace", "global"]
                 }
             },
-            "required": ["action", "name"]
+            "required": ["action"]
         })
     }
 
@@ -1066,10 +1080,18 @@ impl BuiltinTool for ManageMemoryTool {
             .get("action")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::InvalidArguments("action is required".to_owned()))?;
-        let name = args
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::InvalidArguments("name is required".to_owned()))?;
+        let non_blank_arg = |key: &str| {
+            args.get(key)
+                .and_then(Value::as_str)
+                .filter(|v| !v.trim().is_empty())
+        };
+        let name = non_blank_arg("name");
+        let slug_arg = non_blank_arg("slug");
+        // TS `editMemory` targets the slug; `name` only renames. A call without `slug` keeps
+        // the older shape where `name` is the target (title or slug).
+        let target = slug_arg.or(name).ok_or_else(|| {
+            ToolError::InvalidArguments("manageMemory name or slug is required.".to_owned())
+        })?;
         let scope = args
             .get("scope")
             .and_then(Value::as_str)
@@ -1079,9 +1101,14 @@ impl BuiltinTool for ManageMemoryTool {
             "create" | "update" => {
                 // TS `editMemory` kept fields the edit did not supply, so an update that only
                 // changes the body must not reclassify the entry or replace its description.
+                if action == "create" && name.is_none() {
+                    return Err(ToolError::InvalidArguments(
+                        "manageMemory create name is required.".to_owned(),
+                    ));
+                }
                 let existing = if action == "update" {
                     let dir = store.resolve_scope_dir(scope, None)?;
-                    let (slug, target) = resolve_entry_target(&dir, name)?;
+                    let (slug, target) = resolve_entry_target(&dir, target)?;
                     if target.is_file() {
                         store
                             .list_entries_in_dir(&dir, scope)?
@@ -1093,22 +1120,38 @@ impl BuiltinTool for ManageMemoryTool {
                 } else {
                     None
                 };
+                // Display name: TS `editMemory` keeps `existing.name` unless the patch carries a
+                // new one. Without `slug`, `name` is the target (often the slug itself), so it
+                // never renames an existing entry.
+                let display_name = match (&existing, slug_arg, name) {
+                    (Some(_), Some(_), Some(new_name)) => new_name,
+                    (Some(e), _, _) => e.name.as_str(),
+                    (None, _, Some(new_name)) => new_name,
+                    (None, _, None) => target,
+                };
                 let description = args
                     .get("description")
                     .and_then(Value::as_str)
                     .or(existing.as_ref().map(|e| e.description.as_str()))
-                    .unwrap_or(name);
+                    .unwrap_or(display_name);
                 let mem_type = args
                     .get("type")
                     .and_then(Value::as_str)
                     .or(existing.as_ref().map(|e| e.memory_type.as_str()))
-                    .unwrap_or("project");
+                    .unwrap_or(DEFAULT_MEMORY_TYPE);
                 let body = args.get("body").and_then(Value::as_str).ok_or_else(|| {
                     ToolError::InvalidArguments("body is required for create/update".to_owned())
                 })?;
                 assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
-                let saved =
-                    store.upsert_entry(scope, None, name, name, description, mem_type, body)?;
+                let saved = store.upsert_entry(
+                    scope,
+                    None,
+                    target,
+                    display_name,
+                    description,
+                    mem_type,
+                    body,
+                )?;
                 Ok(ToolOutput::Json(json!({
                     "ok": true,
                     "action": action,
@@ -1117,7 +1160,7 @@ impl BuiltinTool for ManageMemoryTool {
             }
             "delete" => {
                 assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
-                let (slug, deleted) = store.delete_entry_resolved(scope, None, name)?;
+                let (slug, deleted) = store.delete_entry_resolved(scope, None, target)?;
                 Ok(ToolOutput::Json(json!({
                     "ok": true,
                     "deleted": deleted,

@@ -178,7 +178,7 @@ fn top_level_type_wins_and_malformed_metadata_keeps_the_rest() {
     let odd = listed.iter().find(|e| e.slug == "odd").unwrap();
     assert_eq!(odd.name, "Odd");
     assert_eq!(odd.description, "kept");
-    assert_eq!(odd.memory_type, "project");
+    assert_eq!(odd.memory_type, "note");
 }
 
 #[tokio::test]

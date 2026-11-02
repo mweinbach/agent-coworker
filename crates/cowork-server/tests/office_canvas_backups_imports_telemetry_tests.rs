@@ -1127,7 +1127,15 @@ async fn websocket_workspace_backups_opt_in_lifecycle_and_turn_checkpoints_e2e()
         .unwrap()
         .to_owned();
 
-    // Read delta preview comparing initial baseline (`cp-0001`) against current modified workspace
+    // Read the delta preview of the first checkpoint that captured the edits: it compares that
+    // checkpoint's snapshot with its predecessor's (the initial `cp-0001`).
+    let changed_cp_id = checkpoints
+        .iter()
+        .skip(1)
+        .find(|cp| cp["changed"] == true)
+        .and_then(|cp| cp["id"].as_str())
+        .expect("a checkpoint capturing the workspace edits")
+        .to_owned();
     let delta_res = ws_call_collecting(
         &mut ws,
         "bk-delta",
@@ -1135,7 +1143,7 @@ async fn websocket_workspace_backups_opt_in_lifecycle_and_turn_checkpoints_e2e()
         json!({
             "cwd": cwd_str,
             "targetSessionId": thread_id,
-            "checkpointId": "cp-0001"
+            "checkpointId": changed_cp_id
         }),
         &mut notifs,
     )
@@ -1148,6 +1156,8 @@ async fn websocket_workspace_backups_opt_in_lifecycle_and_turn_checkpoints_e2e()
         delta_res["result"]["event"]["type"],
         "workspace_backup_delta"
     );
+    assert_eq!(delta_res["result"]["event"]["baselineLabel"], "cp-0001");
+    assert_eq!(delta_res["result"]["event"]["currentLabel"], changed_cp_id);
     let counts = &delta_res["result"]["event"]["counts"];
     assert!(
         counts["added"].as_u64().unwrap() + counts["modified"].as_u64().unwrap() >= 1,

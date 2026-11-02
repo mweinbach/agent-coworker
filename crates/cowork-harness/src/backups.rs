@@ -27,7 +27,7 @@ use uuid::Uuid;
 pub const MODEL_SCRATCHPAD_DIRNAME: &str = ".ModelScratchpad";
 pub const RECOVERY_DIRECTORY_PREFIX: &str = ".restore-rollback-";
 pub const AUTO_CHECKPOINT_THROTTLE: Duration = Duration::from_secs(30);
-pub const MAX_DELTA_FILES: usize = 500;
+pub const MAX_DELTA_FILES: usize = 200;
 
 /// Strict archive safety bounds on backup tar extraction (`VAL-EXT-006` / preconditions).
 pub const MAX_BACKUP_ARCHIVE_ENTRIES: usize = 50_000;
@@ -1244,6 +1244,81 @@ fn materialize_snapshot_confined(
     }
 }
 
+/// Materializes `snapshot` into a temporary directory inside `session_dir` and returns its file and
+/// symlink entries (directories carry no content of their own and are not reported). The
+/// temporary directory is always removed.
+fn snapshot_delta_entries(
+    session_dir: &Path,
+    snapshot: &BackupSnapshotRef,
+    prefix: &str,
+) -> Result<BTreeMap<String, EntrySignature>, String> {
+    let dir = session_dir.join(format!("{prefix}{}", Uuid::new_v4().simple()));
+    let result = (|| -> Result<BTreeMap<String, EntrySignature>, String> {
+        materialize_snapshot_confined(session_dir, snapshot, &dir)?.apply();
+        collect_directory_manifest(&dir)
+    })();
+    let _ = remove_dir_all_force(&dir);
+    Ok(result?
+        .into_iter()
+        .filter(|(_, entry)| entry.kind != DeltaEntryKind::Directory)
+        .collect())
+}
+
+/// Compares two saved snapshots: counts cover the full delta, the file preview is capped at
+/// [`MAX_DELTA_FILES`], and an entry is modified when its kind or content digest changed.
+fn summarize_snapshot_delta(
+    session_dir: &Path,
+    baseline: &BackupSnapshotRef,
+    current: &BackupSnapshotRef,
+) -> Result<
+    (
+        WorkspaceBackupDeltaCounts,
+        Vec<WorkspaceBackupDeltaFile>,
+        bool,
+    ),
+    String,
+> {
+    let baseline_entries = snapshot_delta_entries(session_dir, baseline, ".delta-baseline-")?;
+    let current_entries = snapshot_delta_entries(session_dir, current, ".delta-current-")?;
+
+    let mut all_paths = BTreeSet::new();
+    all_paths.extend(baseline_entries.keys().cloned());
+    all_paths.extend(current_entries.keys().cloned());
+
+    let mut counts = WorkspaceBackupDeltaCounts {
+        added: 0,
+        modified: 0,
+        deleted: 0,
+    };
+    let mut files = Vec::new();
+    for path in all_paths {
+        let (change, kind) = match (baseline_entries.get(&path), current_entries.get(&path)) {
+            (None, Some(after)) => {
+                counts.added += 1;
+                (DeltaChangeKind::Added, after.kind)
+            }
+            (Some(before), None) => {
+                counts.deleted += 1;
+                (DeltaChangeKind::Deleted, before.kind)
+            }
+            (Some(before), Some(after))
+                if before.kind != after.kind || before.digest != after.digest =>
+            {
+                counts.modified += 1;
+                (DeltaChangeKind::Modified, after.kind)
+            }
+            _ => continue,
+        };
+        if files.len() < MAX_DELTA_FILES {
+            files.push(WorkspaceBackupDeltaFile { path, change, kind });
+        }
+    }
+
+    let total_changes = counts.added + counts.modified + counts.deleted;
+    let truncated = total_changes > files.len();
+    Ok((counts, files, truncated))
+}
+
 fn snapshot_byte_size(session_dir: &Path, snapshot: &BackupSnapshotRef) -> Option<u64> {
     let path = resolve_snapshot_path_confined(session_dir, snapshot).ok()?;
     match snapshot.kind {
@@ -2015,7 +2090,9 @@ impl WorkspaceBackupManager {
         })
     }
 
-    /// Computes added/modified/deleted delta between a backup checkpoint (or `"original"`) and current workspace.
+    /// Computes the added/modified/deleted delta a checkpoint introduced: the preceding checkpoint
+    /// (or the original snapshot for the first checkpoint) against the selected checkpoint. Both
+    /// sides are saved snapshots, so the live workspace never affects the preview.
     pub fn read_workspace_backup_delta(
         &self,
         working_directory: &Path,
@@ -2033,70 +2110,35 @@ impl WorkspaceBackupManager {
             return Err("Backup session does not belong to this workspace.".to_owned());
         }
 
-        let (snapshot_ref, baseline_label) =
-            Self::resolve_snapshot_ref(&meta, Some(checkpoint_id))?;
-        let temp_extract = session_dir.join(format!(".delta-extract-{}", Uuid::new_v4().simple()));
-        let baseline_manifest = {
-            let res = (|| -> Result<BTreeMap<String, EntrySignature>, String> {
-                materialize_snapshot_confined(&session_dir, &snapshot_ref, &temp_extract)?.apply();
-                collect_directory_manifest(&temp_extract)
-            })();
-            let _ = remove_dir_all_force(&temp_extract);
-            res?
+        let checkpoint_index = meta
+            .checkpoints
+            .iter()
+            .position(|checkpoint| checkpoint.id == checkpoint_id)
+            .ok_or_else(|| format!("Unknown checkpoint id: {checkpoint_id}"))?;
+        let checkpoint = &meta.checkpoints[checkpoint_index];
+        let baseline_checkpoint = checkpoint_index
+            .checked_sub(1)
+            .map(|index| &meta.checkpoints[index]);
+        let baseline_snapshot =
+            baseline_checkpoint.map_or(&meta.original_snapshot, |cp| &cp.snapshot);
+        let baseline_label =
+            baseline_checkpoint.map_or_else(|| "Original snapshot".to_owned(), |cp| cp.id.clone());
+
+        let (counts, files, truncated) = if checkpoint.snapshot.kind == baseline_snapshot.kind
+            && checkpoint.snapshot.path == baseline_snapshot.path
+        {
+            (
+                WorkspaceBackupDeltaCounts {
+                    added: 0,
+                    modified: 0,
+                    deleted: 0,
+                },
+                Vec::new(),
+                false,
+            )
+        } else {
+            summarize_snapshot_delta(&session_dir, baseline_snapshot, &checkpoint.snapshot)?
         };
-        let current_manifest = collect_directory_manifest(&canon_wd)?;
-
-        let mut all_paths = BTreeSet::new();
-        all_paths.extend(baseline_manifest.keys().cloned());
-        all_paths.extend(current_manifest.keys().cloned());
-
-        let mut added = 0_usize;
-        let mut modified = 0_usize;
-        let mut deleted = 0_usize;
-        let mut files = Vec::new();
-        let mut truncated = false;
-
-        for path in all_paths {
-            match (baseline_manifest.get(&path), current_manifest.get(&path)) {
-                (None, Some(curr)) => {
-                    added += 1;
-                    if files.len() < MAX_DELTA_FILES {
-                        files.push(WorkspaceBackupDeltaFile {
-                            path,
-                            change: DeltaChangeKind::Added,
-                            kind: curr.kind,
-                        });
-                    } else {
-                        truncated = true;
-                    }
-                }
-                (Some(base), None) => {
-                    deleted += 1;
-                    if files.len() < MAX_DELTA_FILES {
-                        files.push(WorkspaceBackupDeltaFile {
-                            path,
-                            change: DeltaChangeKind::Deleted,
-                            kind: base.kind,
-                        });
-                    } else {
-                        truncated = true;
-                    }
-                }
-                (Some(base), Some(curr)) if base != curr => {
-                    modified += 1;
-                    if files.len() < MAX_DELTA_FILES {
-                        files.push(WorkspaceBackupDeltaFile {
-                            path,
-                            change: DeltaChangeKind::Modified,
-                            kind: curr.kind,
-                        });
-                    } else {
-                        truncated = true;
-                    }
-                }
-                _ => {}
-            }
-        }
 
         Ok(WorkspaceBackupDeltaEvent {
             event_type: "workspace_backup_delta".to_owned(),
@@ -2104,12 +2146,8 @@ impl WorkspaceBackupManager {
             target_session_id: target_session_id.to_owned(),
             checkpoint_id: checkpoint_id.to_owned(),
             baseline_label,
-            current_label: "Current workspace".to_owned(),
-            counts: WorkspaceBackupDeltaCounts {
-                added,
-                modified,
-                deleted,
-            },
+            current_label: checkpoint.id.clone(),
+            counts,
             files,
             truncated,
         })

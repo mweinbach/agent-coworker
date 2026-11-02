@@ -9,7 +9,7 @@ use std::process::Command;
 
 use cowork_config::canonicalize_sync;
 use cowork_harness::backups::{
-    BackupLifecycle, DeltaChangeKind, SessionLookupMetadata, WorkspaceBackupManager,
+    BackupLifecycle, BackupTrigger, DeltaChangeKind, SessionLookupMetadata, WorkspaceBackupManager,
     extract_snapshot_tar_gz_confined,
 };
 use flate2::Compression;
@@ -113,6 +113,25 @@ fn legacy_backup(write_archive: impl FnOnce(&Path)) -> LegacyBackup {
     }
 }
 
+/// Records the current workspace as a manual checkpoint and returns its id.
+fn checkpoint_workspace(backup: &LegacyBackup) -> String {
+    let state = backup
+        .manager
+        .create_checkpoint(
+            "legacy-sess",
+            &backup.workspace,
+            BackupTrigger::Manual,
+            None,
+            None,
+            None,
+        )
+        .expect("manual checkpoint")
+        .expect("backup state");
+    let checkpoint = state.checkpoints.last().expect("checkpoint");
+    assert!(checkpoint.changed);
+    checkpoint.id.clone()
+}
+
 fn assert_legacy_contents_restored(workspace: &Path) {
     assert_eq!(
         fs::read_to_string(workspace.join("notes.txt")).unwrap(),
@@ -135,9 +154,11 @@ fn legacy_tar_with_root_dot_entry_is_delta_inspectable_and_restorable() {
     let ws = &backup.workspace;
     fs::write(ws.join("added.txt"), "new\n").unwrap();
 
+    // The first checkpoint after the initial one is compared with the legacy original archive.
+    let checkpoint_id = checkpoint_workspace(&backup);
     let delta = backup
         .manager
-        .read_workspace_backup_delta(ws, "legacy-sess", "original", None)
+        .read_workspace_backup_delta(ws, "legacy-sess", &checkpoint_id, None)
         .expect("delta against legacy tar");
     let change_of = |path: &str| {
         delta
@@ -203,10 +224,15 @@ fn legacy_tar_created_by_system_tar_is_restorable() {
     let ws = &backup.workspace;
     fs::write(ws.join("added.txt"), "new\n").unwrap();
 
-    backup
+    let checkpoint_id = checkpoint_workspace(&backup);
+    let delta = backup
         .manager
-        .read_workspace_backup_delta(ws, "legacy-sess", "original", None)
+        .read_workspace_backup_delta(ws, "legacy-sess", &checkpoint_id, None)
         .expect("delta against system-tar snapshot");
+    assert_eq!(delta.baseline_label, "cp-0001");
+    assert_eq!(delta.counts.added, 1, "{:?}", delta.files);
+    assert_eq!(delta.counts.modified, 1, "{:?}", delta.files);
+    assert_eq!(delta.counts.deleted, 1, "{:?}", delta.files);
     backup
         .manager
         .restore_workspace_backup(ws, "legacy-sess", Some("original"), None, lookup)

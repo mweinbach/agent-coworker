@@ -134,15 +134,26 @@ fn workspace_backups_lifecycle_delta_restore_and_tar_confinement() {
     assert!(!unchanged.checkpoints[1].changed);
     assert_eq!(unchanged.checkpoints[1].patch_bytes, 0);
 
-    // 3. Modify, add, and delete files in workspace, then inspect delta vs "original".
+    // 3. Modify, add, and delete files in workspace, then capture them in a manual checkpoint.
     fs::write(ws.join("src/app.txt"), "v2-updated\n").unwrap();
     fs::write(ws.join("added.bin"), [0x00, 0xff, 0x10, 0x20]).unwrap();
     fs::remove_file(ws.join("README.md")).unwrap();
 
+    let cp2_state = mgr
+        .create_checkpoint("sess-1", &ws, BackupTrigger::Manual, None, None, None)
+        .expect("create manual checkpoint")
+        .expect("state");
+    assert_eq!(cp2_state.checkpoints.len(), 3);
+    assert!(cp2_state.checkpoints[2].changed);
+    let cp2_id = cp2_state.checkpoints[2].id.clone();
+
+    // 4. The checkpoint's delta compares it with the preceding checkpoint's snapshot.
     let delta = mgr
-        .read_workspace_backup_delta(&ws, "sess-1", "original", Some("sess-1".to_owned()))
+        .read_workspace_backup_delta(&ws, "sess-1", &cp2_id, Some("sess-1".to_owned()))
         .expect("read delta");
     assert_eq!(delta.event_type, "workspace_backup_delta");
+    assert_eq!(delta.baseline_label, "cp-0002");
+    assert_eq!(delta.current_label, cp2_id);
     assert_eq!(delta.counts.added, 1);
     assert_eq!(delta.counts.modified, 1);
     assert_eq!(delta.counts.deleted, 1);
@@ -155,14 +166,16 @@ fn workspace_backups_lifecycle_delta_restore_and_tar_confinement() {
     assert_eq!(added_entry.change, DeltaChangeKind::Added);
     assert_eq!(added_entry.kind, DeltaEntryKind::File);
 
-    // 4. Create manual checkpoint for v2 state.
-    let cp2_state = mgr
-        .create_checkpoint("sess-1", &ws, BackupTrigger::Manual, None, None, None)
-        .expect("create manual checkpoint")
-        .expect("state");
-    assert_eq!(cp2_state.checkpoints.len(), 3);
-    assert!(cp2_state.checkpoints[2].changed);
-    let cp2_id = cp2_state.checkpoints[2].id.clone();
+    // Checkpoints that share their predecessor's snapshot report no changes.
+    let initial_delta = mgr
+        .read_workspace_backup_delta(&ws, "sess-1", "cp-0001", None)
+        .expect("read initial delta");
+    assert_eq!(initial_delta.baseline_label, "Original snapshot");
+    assert_eq!(initial_delta.current_label, "cp-0001");
+    assert_eq!(initial_delta.counts.added, 0);
+    assert_eq!(initial_delta.counts.modified, 0);
+    assert_eq!(initial_delta.counts.deleted, 0);
+    assert!(initial_delta.files.is_empty());
 
     // 5. Make dirty unstaged edit ("v3-dirty") and restore back to "initial".
     // Restore must create a pre-restore safety manual checkpoint so v3-dirty is recoverable!
@@ -1230,6 +1243,8 @@ fn workspace_backups_ts_v1_metadata_compat_directory_snapshots_and_path_traversa
     let ts_delta = mgr
         .read_workspace_backup_delta(&ws, "sess-ts-dir", "cp-0002", None)
         .expect("delta against TS directory snapshot");
+    assert_eq!(ts_delta.baseline_label, "cp-0001");
+    assert_eq!(ts_delta.current_label, "cp-0002");
     assert_eq!(ts_delta.counts.modified, 1);
 
     let _ = mgr
@@ -1297,7 +1312,7 @@ fn workspace_backups_ts_v1_metadata_compat_directory_snapshots_and_path_traversa
     .unwrap();
 
     let delta_err = mgr
-        .read_workspace_backup_delta(&ws, "sess-evil", "original", None)
+        .read_workspace_backup_delta(&ws, "sess-evil", "cp-0001", None)
         .expect_err("traversal in metadata.json must fail delta/read");
     assert!(
         delta_err.contains("traversal")

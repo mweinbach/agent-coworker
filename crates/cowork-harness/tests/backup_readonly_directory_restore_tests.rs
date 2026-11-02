@@ -178,15 +178,40 @@ fn restore_and_re_restore_with_read_only_directories() {
     mgr.ensure_initial_backup("sess-ro", &ws, None, None, None)
         .expect("initial backup");
 
-    // Inspecting the snapshot extracts it; the directory modes must round-trip so only the real
-    // change is reported, and the temporary extraction must not be left behind.
+    // Inspecting a checkpoint extracts it and its predecessor; both trees hold read-only
+    // directories, only the real change is reported, and no temporary extraction is left behind.
     fs::write(ws.join("added.txt"), "added\n").unwrap();
+    let checkpoint = mgr
+        .create_checkpoint(
+            "sess-ro",
+            &ws,
+            cowork_harness::backups::BackupTrigger::Manual,
+            None,
+            None,
+            None,
+        )
+        .expect("checkpoint with added file")
+        .expect("backup state");
+    let checkpoint_id = checkpoint
+        .checkpoints
+        .last()
+        .expect("checkpoint")
+        .id
+        .clone();
     let delta = mgr
-        .read_workspace_backup_delta(&ws, "sess-ro", "original", None)
-        .expect("delta against snapshot with read-only directories");
+        .read_workspace_backup_delta(&ws, "sess-ro", &checkpoint_id, None)
+        .expect("delta between snapshots with read-only directories");
     assert_eq!(delta.counts.added, 1, "delta: {:?}", delta.files);
     assert_eq!(delta.counts.modified, 0, "delta: {:?}", delta.files);
     assert_eq!(delta.counts.deleted, 0, "delta: {:?}", delta.files);
+    let backup_dir = PathBuf::from(checkpoint.backup_directory.expect("backup directory"));
+    let leftovers: Vec<_> = fs::read_dir(&backup_dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".delta-"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 
     // First restore: the workspace already holds the read-only directories (they were never
     // removed), so this also covers restoring over them.

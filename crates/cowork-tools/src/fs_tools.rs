@@ -856,7 +856,7 @@ impl BuiltinTool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Create a new file or atomically overwrite an existing file, preserving existing BOM and CRLF/LF line endings when overwriting text files."
+        "Create a new file or atomically overwrite an existing file (default), or append a chunk with mode \"append\" (creating the file if needed). Creates parent directories if needed. Preserves an existing text file's BOM/encoding and dominant CRLF/LF line endings."
     }
 
     fn input_schema(&self) -> Value {
@@ -870,7 +870,13 @@ impl BuiltinTool for WriteTool {
                 "content": {
                     "type": "string",
                     "maxLength": MAX_WRITE_CONTENT_CHARS,
-                    "description": "Full text content to write to the file."
+                    "description": "Content to write: the full file for overwrite, or the chunk to add for append."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["overwrite", "append"],
+                    "default": "overwrite",
+                    "description": "Use overwrite for a full replacement, or append to add a chunk"
                 }
             },
             "required": ["filePath", "content"]
@@ -900,14 +906,20 @@ impl BuiltinTool for WriteTool {
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::InvalidArguments("content is required".to_owned()))?
             .to_owned();
+        // Schema validation restricts `mode` to the enum; absent means overwrite (TS default).
+        let append = args.get("mode").and_then(Value::as_str) == Some("append");
 
         let target = resolve_tool_path(raw_path, &ctx.working_directory)?;
         let display = target.display().to_string();
+        // TS `write.ts` reports `content.length` (UTF-16 code units) for appends.
+        let appended_chars = append.then(|| content.encode_utf16().count());
 
         let (existed, byte_len) = with_file_mutation(&target, ctx, move |snapshot| {
-            let (encoding, eol) = if let Some(prev_bytes) = &snapshot.bytes
-                && let Ok(decoded) = decode_text_buffer(prev_bytes)
-            {
+            let decoded = snapshot
+                .bytes
+                .as_deref()
+                .and_then(|prev| decode_text_buffer(prev).ok());
+            let (encoding, eol) = if let Some(decoded) = &decoded {
                 (decoded.encoding, decoded.dominant_eol)
             } else {
                 let explicit_eol = detect_dominant_eol(&content);
@@ -924,18 +936,52 @@ impl BuiltinTool for WriteTool {
                     },
                 )
             };
-            let normalized = normalize_to_lf(&content);
-            let encoded = encode_text_buffer(&normalized, encoding, eol);
+            let encoded = match (append, snapshot.bytes) {
+                (true, Some(mut prev_bytes)) => {
+                    append_chunk(&mut prev_bytes, &content, decoded.is_some(), encoding, eol);
+                    prev_bytes
+                }
+                _ => encode_text_buffer(&normalize_to_lf(&content), encoding, eol),
+            };
             let len = encoded.len();
             Ok((encoded, (snapshot.exists, len)))
         })
         .await?;
 
+        if let Some(chars) = appended_chars {
+            return Ok(ToolOutput::Text(format!(
+                "Appended {chars} chars to {display}"
+            )));
+        }
         let verb = if existed { "Updated" } else { "Created" };
         Ok(ToolOutput::Text(format!(
             "{verb} {display} ({byte_len} bytes)"
         )))
     }
+}
+
+/// TS `writeFileAtomic(..., { append: true })` stages a copy of the current file and appends to
+/// it, so the existing bytes are kept verbatim and the whole result is published atomically. A
+/// decodable text file's chunk is encoded like an overwrite (the file's encoding and dominant
+/// EOL, never a second BOM); an undecodable file gets the raw UTF-8 chunk, as in TS.
+fn append_chunk(
+    prev_bytes: &mut Vec<u8>,
+    content: &str,
+    is_text: bool,
+    encoding: TextEncoding,
+    eol: LineEnding,
+) {
+    if !is_text {
+        prev_bytes.extend_from_slice(content.as_bytes());
+        return;
+    }
+    let chunk = encode_text_buffer(&normalize_to_lf(content), encoding, eol);
+    let bom_len = match encoding {
+        TextEncoding::Utf8 => 0,
+        TextEncoding::Utf8Bom => 3,
+        TextEncoding::Utf16LeBom | TextEncoding::Utf16BeBom => 2,
+    };
+    prev_bytes.extend_from_slice(&chunk[bom_len..]);
 }
 
 pub struct EditTool;

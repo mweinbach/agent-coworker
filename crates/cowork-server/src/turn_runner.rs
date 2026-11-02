@@ -6,14 +6,17 @@ use cowork_config::{
     AgentConfig, ProviderName, SandboxMode as ConfigSandboxMode, canonicalize_sync,
     get_ai_coworker_paths, read_connection_store, reconcile_reasoning_provider_options,
 };
+use cowork_harness::attachments::{
+    AttachmentModelCapabilities, materialize_turn_attachments_for_model,
+};
 use cowork_harness::{
     CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
     MemoryGenerator, PromptTemplateContext, RemoteMemoryModel, RemoteTitleOptions,
     SharedTurnCostTracker, SteerCoordinator, SystemPromptBuildOptions, ToolRetryTarget,
     TurnCancellationHandle, TurnIdempotencyLedger, TurnReference, TurnRunConfig, TurnStepRunner,
     build_layered_system_prompt, generate_heuristic_session_title, generate_remote_session_title,
-    is_failed_tool_outcome, materialize_turn_attachments, parse_turn_references,
-    preferred_title_model_for_provider, resolve_turn_references,
+    is_failed_tool_outcome, parse_turn_references, preferred_title_model_for_provider,
+    resolve_turn_references,
 };
 use cowork_inference::{
     BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState,
@@ -1395,9 +1398,20 @@ impl ServerRuntimeState {
         // Materialize attachments before committing idempotency so invalid base64 / missing files roll back cleanly!
         let canonical_cwd = canonicalize_sync(&cwd_path);
         let (output_dir, uploads_dir) = workspace_io_dirs(workspace_cfg.as_ref(), &canonical_cwd);
-        let materialized =
-            materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd, provider)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let attachment_caps = AttachmentModelCapabilities::resolve(
+            self.model_registry(),
+            provider,
+            &model_id,
+            &self.homedir,
+            &self.env,
+        );
+        let materialized = materialize_turn_attachments_for_model(
+            &extracted,
+            &uploads_dir,
+            &canonical_cwd,
+            attachment_caps,
+        )
+        .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
 
         // Imported / pre-journal threads: record the stored prefix before this turn journals.
         self.ensure_journal_seed_marker(&live_arc).await;
@@ -2649,7 +2663,7 @@ impl ServerRuntimeState {
 
         // Materialize attachments exactly like `turn/start` so the steered user message carries
         // the same media blocks and upload notes.
-        let Some((cwd, session_output_dir, session_uploads_dir, provider)) =
+        let Some((cwd, session_output_dir, session_uploads_dir, provider, model_id)) =
             self.get_live_thread(&params.thread_id).map(|live| {
                 let live = live.lock();
                 (
@@ -2657,6 +2671,7 @@ impl ServerRuntimeState {
                     live.output_directory.clone(),
                     live.uploads_directory.clone(),
                     live.provider,
+                    live.model.clone(),
                 )
             })
         else {
@@ -2678,9 +2693,20 @@ impl ServerRuntimeState {
                 cfg
             });
         let (_, uploads_dir) = workspace_io_dirs(steer_cfg.as_ref(), &canonical_cwd);
-        let materialized =
-            materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd, provider)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let attachment_caps = AttachmentModelCapabilities::resolve(
+            self.model_registry(),
+            provider,
+            &model_id,
+            &self.homedir,
+            &self.env,
+        );
+        let materialized = materialize_turn_attachments_for_model(
+            &extracted,
+            &uploads_dir,
+            &canonical_cwd,
+            attachment_caps,
+        )
+        .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let dedupe_key = match &references_key {
             Some(refs) => {
                 serde_json::to_string(&(&extracted.text, &extracted.attachments, refs)).ok()

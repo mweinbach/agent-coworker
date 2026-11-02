@@ -11,6 +11,10 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::routing::{get, post};
+use cowork_config::{
+    CachedModelDiscoveryModel, ModelDiscoveryResult, ModelDiscoverySource, ProviderName,
+    get_ai_coworker_paths, write_model_discovery_cache,
+};
 use cowork_protocol::WEBSOCKET_SUBPROTOCOL;
 use cowork_server::{ServerOptions, start_server};
 use data_encoding::BASE64;
@@ -606,16 +610,12 @@ async fn tool_retry_marks_hidden_turn_and_carries_retry_of_lineage() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn turn_steer_preserves_attachments_in_the_injected_user_message() {
-    let env = Env::new(vec![
-        (1500, chat_sse_text("first pass")),
-        (0, chat_sse_text("saw the steer image")),
-    ])
-    .await;
+/// Steers a PNG into an in-flight turn on `model` (provider `nvidia`) and returns the last
+/// user message the provider received plus the PNG's base64.
+async fn steer_png_into_running_turn(env: &Env, model: &str) -> (String, String) {
     let server = start_server(env.options()).await.unwrap();
     let mut ws = connect(server.ws_url()).await;
-    let thread_id = start_thread(&mut ws, &env.workspace).await;
+    let thread_id = start_thread_with(&mut ws, &env.workspace, "nvidia", model).await;
 
     let mut notifs = Vec::new();
     let res = call_collecting(
@@ -658,17 +658,73 @@ async fn turn_steer_preserves_attachments_in_the_injected_user_message() {
         .unwrap()
         .to_string();
     assert!(last_user.contains("STEER-TEXT"), "{last_user}");
+    let staged = env.workspace.join("uploads/User Uploads/steer.png");
+    assert!(staged.is_file(), "steered attachment must be saved");
+    assert!(
+        last_user.contains(&staged.display().to_string()),
+        "the saved path is noted for the model: {last_user}"
+    );
+    (last_user, png)
+}
+
+/// A text-only model gets the steered image as a saved-path note only
+/// (`googleMultimodalPartTypeForMime` returns null for images without image input).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_steer_preserves_attachments_in_the_injected_user_message() {
+    let env = Env::new(vec![
+        (1500, chat_sse_text("first pass")),
+        (0, chat_sse_text("saw the steer image")),
+    ])
+    .await;
+    let (last_user, _) = steer_png_into_running_turn(&env, "moonshotai/kimi-k2-instruct").await;
+    assert!(
+        last_user.contains("[Attached file saved to: "),
+        "{last_user}"
+    );
+    assert!(!last_user.contains("data:image/png;base64,"), "{last_user}");
+}
+
+/// A vision-capable model (here a discovered one) receives the steered image as content.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_steer_attaches_images_for_a_vision_model() {
+    const VISION_MODEL: &str = "meta/llama-3.2-90b-vision-instruct";
+    let env = Env::new(vec![
+        (1500, chat_sse_text("first pass")),
+        (0, chat_sse_text("saw the steer image")),
+    ])
+    .await;
+    write_model_discovery_cache(
+        &get_ai_coworker_paths(Some(&env.home), &env.env),
+        ProviderName::Nvidia,
+        ModelDiscoveryResult {
+            provider: ProviderName::Nvidia,
+            source: ModelDiscoverySource::Api,
+            models: vec![CachedModelDiscoveryModel {
+                id: VISION_MODEL.to_owned(),
+                model: None,
+                display_name: VISION_MODEL.to_owned(),
+                description: None,
+                knowledge_cutoff: None,
+                supports_image_input: Some(true),
+                is_default: None,
+                reasoning: None,
+                runtime_options: None,
+                runtime_overrides: None,
+            }],
+            updated_at: None,
+            expires_at: None,
+            message: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("write nvidia discovery cache");
+
+    let (last_user, png) = steer_png_into_running_turn(&env, VISION_MODEL).await;
     assert!(
         last_user.contains(&format!("data:image/png;base64,{png}")),
         "{last_user}"
-    );
-    assert!(
-        env.workspace
-            .join("uploads/User Uploads")
-            .read_dir()
-            .unwrap()
-            .count()
-            >= 1
     );
 }
 

@@ -2472,29 +2472,30 @@ impl ServerRuntimeState {
         if let Some(m) = &cfg.skill_improvement_model {
             config_obj["skillImprovementModel"] = json!(m);
         }
-        if let Some(po) = cfg
-            .provider_options
-            .as_ref()
-            .and_then(pick_editable_provider_options)
-        {
+        // The effective editable options: the session override layered over the workspace
+        // options exactly as the turn runner merges them, so the event reports what the next
+        // turn uses (TS `getSessionConfigEvent` read the merged `state.config.providerOptions`).
+        // A partial override (e.g. only `google.nativeWebSearch`) must not hide an inherited
+        // workspace setting such as `google.thinkingConfig`.
+        let session_po = overrides
+            .and_then(|o| o.get("providerOptions"))
+            .and_then(Value::as_object);
+        let mut effective_po = cfg.provider_options.clone().unwrap_or_default();
+        if let Some(over) = session_po {
+            overlay_session_provider_options(&mut effective_po, over.clone());
+        }
+        if let Some(po) = pick_editable_provider_options(&effective_po) {
             config_obj["providerOptions"] = Value::Object(po);
         }
         if let (Some(Value::Object(dst)), Some(ovr)) = (Some(&mut config_obj), overrides) {
-            for (k, v) in ovr {
-                if k == "providerOptions" {
-                    if let Some(m) = v.as_object().and_then(pick_editable_provider_options) {
-                        dst.insert(k.clone(), Value::Object(m));
-                    } else {
-                        dst.remove("providerOptions");
-                    }
-                } else {
-                    if k == "toolOutputOverflowChars" {
-                        // A session overflow patch is also the session's project override
-                        // (`prepareConfigUpdate` set both).
-                        dst.insert("defaultToolOutputOverflowChars".to_owned(), v.clone());
-                    }
-                    dst.insert(k.clone(), v.clone());
+            // `providerOptions` was merged over the workspace options above.
+            for (k, v) in ovr.iter().filter(|(k, _)| *k != "providerOptions") {
+                if k == "toolOutputOverflowChars" {
+                    // A session overflow patch is also the session's project override
+                    // (`prepareConfigUpdate` set both).
+                    dst.insert("defaultToolOutputOverflowChars".to_owned(), v.clone());
                 }
+                dst.insert(k.clone(), v.clone());
             }
         }
         json!({
@@ -3985,6 +3986,26 @@ fn pick_editable_provider_section(provider: &str, section: &Value) -> Option<Map
         "google" => pick_google_section(obj),
         "lmstudio" => pick_lmstudio_section(obj),
         _ => None,
+    }
+}
+
+/// Layers a session's stored `providerOptions` override onto the workspace provider options one
+/// provider section deep: a section's keys replace the workspace section's keys, and a
+/// non-object value replaces the entry. This is the merge the root turn runner applies before
+/// a turn (`turn_runner.rs`), so anything reporting the effective session options must use it.
+pub(crate) fn overlay_session_provider_options(
+    base: &mut Map<String, Value>,
+    over: Map<String, Value>,
+) {
+    for (k, v) in over {
+        match (base.get_mut(&k), v) {
+            (Some(Value::Object(existing)), Value::Object(over_section)) => {
+                existing.extend(over_section);
+            }
+            (_, other) => {
+                base.insert(k, other);
+            }
+        }
     }
 }
 

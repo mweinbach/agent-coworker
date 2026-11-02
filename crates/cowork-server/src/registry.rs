@@ -3477,140 +3477,383 @@ pub fn provider_display_name(provider: ProviderName) -> &'static str {
     }
 }
 
+// `src/shared/openaiCompatibleOptions.ts` value sets for the editable provider options.
+const EDITABLE_REASONING_EFFORT_VALUES: [&str; 8] = [
+    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+];
+const EDITABLE_REASONING_SUMMARY_VALUES: [&str; 3] = ["auto", "concise", "detailed"];
+const EDITABLE_TEXT_VERBOSITY_VALUES: [&str; 3] = ["low", "medium", "high"];
+const EDITABLE_CODEX_WEB_SEARCH_BACKEND_VALUES: [&str; 3] = ["native", "exa", "parallel"];
+const EDITABLE_LOCAL_WEB_SEARCH_PROVIDER_VALUES: [&str; 2] = ["exa", "parallel"];
+const EDITABLE_CODEX_WEB_SEARCH_MODE_VALUES: [&str; 3] = ["disabled", "cached", "live"];
+const EDITABLE_CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES: [&str; 3] = ["low", "medium", "high"];
+const EDITABLE_GOOGLE_THINKING_LEVEL_VALUES: [&str; 4] = ["minimal", "low", "medium", "high"];
+
+/// `EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES`, in the order the TS merge walks them.
+const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 4] = ["openai", "codex-cli", "google", "lmstudio"];
+
+/// Copies `obj[key]` into `dst` when it is exactly one of `allowed` (TS `is*` enum guards).
+fn pick_enum_into(
+    dst: &mut Map<String, Value>,
+    obj: &Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+) {
+    if let Some(s) = obj.get(key).and_then(Value::as_str)
+        && allowed.contains(&s)
+    {
+        dst.insert(key.to_owned(), Value::String(s.to_owned()));
+    }
+}
+
+/// TS `pickTrimmedString`.
+fn pick_trimmed_string(value: Option<&Value>) -> Option<String> {
+    let trimmed = value?.as_str()?.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+/// TS `pickPositiveInteger`: a finite number or numeric string, floored, kept when positive.
+fn pick_positive_integer(value: Option<&Value>) -> Option<u64> {
+    let n = match value? {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            trimmed.parse::<f64>().ok()?
+        }
+        _ => return None,
+    };
+    if !n.is_finite() {
+        return None;
+    }
+    let floored = n.floor();
+    (floored >= 1.0).then_some(floored as u64)
+}
+
+/// TS `pickBoolean`: a boolean or a yes/no style string.
+fn pick_boolean(value: Option<&Value>) -> Option<bool> {
+    match value? {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "y" | "on" => Some(true),
+            "0" | "false" | "no" | "n" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// TS `pickOpenAiCompatibleProviderOptionsSection`, without the empty-section check.
+fn pick_openai_compatible_fields(obj: &Map<String, Value>) -> Map<String, Value> {
+    let mut dst = Map::new();
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningSummary",
+        &EDITABLE_REASONING_SUMMARY_VALUES,
+    );
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "textVerbosity",
+        &EDITABLE_TEXT_VERBOSITY_VALUES,
+    );
+    dst
+}
+
+/// TS `pickCodexWebSearchOptions`. An explicit `location` object is kept even when no field
+/// survives, because the merge reads `location: {}` as "clear the stored location".
+fn pick_codex_web_search(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "contextSize",
+        &EDITABLE_CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
+    );
+    if let Some(domains) = obj.get("allowedDomains").and_then(Value::as_array) {
+        let kept: Vec<Value> = domains
+            .iter()
+            .filter_map(|d| pick_trimmed_string(Some(d)))
+            .map(Value::String)
+            .collect();
+        dst.insert("allowedDomains".to_owned(), Value::Array(kept));
+    }
+    if let Some(loc) = obj.get("location").and_then(Value::as_object) {
+        let mut loc_dst = Map::new();
+        for key in ["country", "region", "city", "timezone"] {
+            if let Some(s) = pick_trimmed_string(loc.get(key)) {
+                loc_dst.insert(key.to_owned(), Value::String(s));
+            }
+        }
+        dst.insert("location".to_owned(), Value::Object(loc_dst));
+    }
+    (!dst.is_empty()).then_some(dst)
+}
+
+/// TS `pickCodexCliProviderOptionsSection`.
+fn pick_codex_cli_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = pick_openai_compatible_fields(obj);
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "webSearchBackend",
+        &EDITABLE_CODEX_WEB_SEARCH_BACKEND_VALUES,
+    );
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "webSearchFallbackBackend",
+        &EDITABLE_LOCAL_WEB_SEARCH_PROVIDER_VALUES,
+    );
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "webSearchMode",
+        &EDITABLE_CODEX_WEB_SEARCH_MODE_VALUES,
+    );
+    if let Some(ws) = obj
+        .get("webSearch")
+        .and_then(Value::as_object)
+        .and_then(pick_codex_web_search)
+    {
+        dst.insert("webSearch".to_owned(), Value::Object(ws));
+    }
+    (!dst.is_empty()).then_some(dst)
+}
+
+/// TS `pickGoogleThinkingConfig`: a valid `thinkingLevel`, or `{}` for an explicit empty
+/// object (which the merge reads as "clear the stored level").
+fn pick_google_thinking_config(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "thinkingLevel",
+        &EDITABLE_GOOGLE_THINKING_LEVEL_VALUES,
+    );
+    if !dst.is_empty() || obj.is_empty() {
+        Some(dst)
+    } else {
+        None
+    }
+}
+
+/// TS `pickGoogleProviderOptionsSection`. A `null` `responseFormat` is dropped (TS kept any
+/// defined value) so the Google request never carries `response_format: null`.
+fn pick_google_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    if let Some(b) = pick_boolean(obj.get("nativeWebSearch")) {
+        dst.insert("nativeWebSearch".to_owned(), Value::Bool(b));
+    }
+    if let Some(tc) = obj
+        .get("thinkingConfig")
+        .and_then(Value::as_object)
+        .and_then(pick_google_thinking_config)
+    {
+        dst.insert("thinkingConfig".to_owned(), Value::Object(tc));
+    }
+    if let Some(rf) = obj.get("responseFormat")
+        && !rf.is_null()
+    {
+        dst.insert("responseFormat".to_owned(), rf.clone());
+    }
+    if let Some(mime) = pick_trimmed_string(obj.get("responseMimeType")) {
+        dst.insert("responseMimeType".to_owned(), Value::String(mime));
+    }
+    (!dst.is_empty()).then_some(dst)
+}
+
+/// TS `pickLmStudioProviderOptionsSection`. `baseUrl` is editable for LM Studio alone (a local
+/// server); every cloud provider endpoint stays non-editable.
+fn pick_lmstudio_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    if let Some(url) = pick_trimmed_string(obj.get("baseUrl")) {
+        dst.insert("baseUrl".to_owned(), Value::String(url));
+    }
+    if let Some(n) = pick_positive_integer(obj.get("contextLength")) {
+        dst.insert("contextLength".to_owned(), Value::from(n));
+    }
+    for key in ["autoLoad", "reloadOnContextMismatch"] {
+        if let Some(b) = pick_boolean(obj.get(key)) {
+            dst.insert(key.to_owned(), Value::Bool(b));
+        }
+    }
+    (!dst.is_empty()).then_some(dst)
+}
+
+/// The editable fields of one provider section (`undefined` in TS when nothing is editable).
+fn pick_editable_provider_section(provider: &str, section: &Value) -> Option<Map<String, Value>> {
+    let obj = section.as_object()?;
+    match provider {
+        "openai" => {
+            let dst = pick_openai_compatible_fields(obj);
+            (!dst.is_empty()).then_some(dst)
+        }
+        "codex-cli" => pick_codex_cli_section(obj),
+        "google" => pick_google_section(obj),
+        "lmstudio" => pick_lmstudio_section(obj),
+        _ => None,
+    }
+}
+
+/// `pickEditableOpenAiCompatibleProviderOptions` parity.
 fn pick_editable_provider_options(po: &Map<String, Value>) -> Option<Map<String, Value>> {
     let mut out = Map::new();
-
-    let pick_openai_base = |obj: &Map<String, Value>| -> Map<String, Value> {
-        let mut dst = Map::new();
-        for key in ["reasoningEffort", "reasoningSummary", "textVerbosity"] {
-            if let Some(s) = obj.get(key).and_then(Value::as_str).map(str::trim)
-                && !s.is_empty()
-            {
-                dst.insert(key.to_owned(), Value::String(s.to_owned()));
-            }
+    for provider in EDITABLE_PROVIDER_OPTION_SECTIONS {
+        if let Some(section) = po
+            .get(provider)
+            .and_then(|s| pick_editable_provider_section(provider, s))
+        {
+            out.insert(provider.to_owned(), Value::Object(section));
         }
-        dst
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// `mergeEditableOpenAiCompatibleProviderOptions` parity for one Codex section: the patch's
+/// `webSearch` merges into the stored one, and its `location` merges field by field (an
+/// explicit empty `location` clears it).
+fn merge_codex_cli_section(
+    current: &Map<String, Value>,
+    patch: Map<String, Value>,
+) -> Map<String, Value> {
+    let mut next_web_search = current
+        .get("webSearch")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut patch_web_search = patch
+        .get("webSearch")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let current_location = next_web_search
+        .get("location")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let patch_location = patch_web_search.remove("location");
+    let resolved_location = match &patch_location {
+        Some(loc) => {
+            let loc = loc.as_object().cloned().unwrap_or_default();
+            (!loc.is_empty()).then(|| {
+                let mut merged = current_location;
+                merged.extend(loc);
+                merged
+            })
+        }
+        None => (!current_location.is_empty()).then_some(current_location),
     };
-
-    if let Some(openai_obj) = po.get("openai").and_then(Value::as_object) {
-        let m = pick_openai_base(openai_obj);
-        if !m.is_empty() {
-            out.insert("openai".to_owned(), Value::Object(m));
+    next_web_search.extend(patch_web_search);
+    match resolved_location {
+        Some(loc) => {
+            next_web_search.insert("location".to_owned(), Value::Object(loc));
         }
+        None if patch_location.is_some() => {
+            next_web_search.remove("location");
+        }
+        None => {}
     }
 
-    if let Some(codex_obj) = po.get("codex-cli").and_then(Value::as_object) {
-        let mut m = pick_openai_base(codex_obj);
-        for key in [
-            "webSearchBackend",
-            "webSearchFallbackBackend",
-            "webSearchMode",
-        ] {
-            if let Some(s) = codex_obj.get(key).and_then(Value::as_str).map(str::trim)
-                && !s.is_empty()
-            {
-                m.insert(key.to_owned(), Value::String(s.to_owned()));
+    let mut next = current.clone();
+    next.extend(patch);
+    if !next_web_search.is_empty() {
+        next.insert("webSearch".to_owned(), Value::Object(next_web_search));
+    }
+    next
+}
+
+/// `mergeEditableOpenAiCompatibleProviderOptions` parity for one Google section. Whenever the
+/// raw patch names `thinkingConfig` (even with no editable field), the stored `thinkingConfig`
+/// is kept and only its `thinkingLevel` is set or, when the patch has none, removed.
+fn merge_google_section(
+    current: &Map<String, Value>,
+    patch: Map<String, Value>,
+    raw_patch: &Value,
+) -> Map<String, Value> {
+    let patch_has_thinking_config = raw_patch
+        .as_object()
+        .is_some_and(|raw| raw.contains_key("thinkingConfig"));
+    let patch_level = patch
+        .get("thinkingConfig")
+        .and_then(|tc| tc.get("thinkingLevel"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+        .map(str::to_owned);
+    let mut next = current.clone();
+    next.extend(patch);
+    if patch_has_thinking_config {
+        let mut thinking_config = current
+            .get("thinkingConfig")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        match patch_level {
+            Some(level) => {
+                thinking_config.insert("thinkingLevel".to_owned(), Value::String(level));
+            }
+            None => {
+                thinking_config.remove("thinkingLevel");
             }
         }
-        if let Some(ws_obj) = codex_obj.get("webSearch").and_then(Value::as_object) {
-            let mut ws_dst = Map::new();
-            if let Some(cs) = ws_obj
-                .get("contextSize")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                && !cs.is_empty()
-            {
-                ws_dst.insert("contextSize".to_owned(), Value::String(cs.to_owned()));
+        next.insert("thinkingConfig".to_owned(), Value::Object(thinking_config));
+    }
+    next
+}
+
+/// Merges a raw client `providerOptions` patch into a stored override
+/// (`mergeEditableOpenAiCompatibleProviderOptions` parity): each editable provider section is
+/// reduced to its editable fields and merged over the stored section, so sibling settings set
+/// by an earlier patch (e.g. `/reasoning` then `/verbosity`) survive. A section with nothing
+/// editable, a `null` value or an unknown enum value leaves the stored section untouched. The
+/// session tool-exposure toggles are merged as top-level booleans.
+fn merge_editable_provider_options(
+    base: Option<&Map<String, Value>>,
+    patch: &Map<String, Value>,
+) -> Option<Map<String, Value>> {
+    let mut current = base.cloned().unwrap_or_default();
+    for provider in EDITABLE_PROVIDER_OPTION_SECTIONS {
+        let Some(raw_section) = patch.get(provider) else {
+            continue;
+        };
+        let Some(cleaned) = pick_editable_provider_section(provider, raw_section) else {
+            continue;
+        };
+        let current_section = current
+            .get(provider)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let next = match provider {
+            "codex-cli" => merge_codex_cli_section(&current_section, cleaned),
+            "google" => merge_google_section(&current_section, cleaned, raw_section),
+            _ => {
+                let mut next = current_section;
+                next.extend(cleaned);
+                next
             }
-            if let Some(domains) = ws_obj.get("allowedDomains").and_then(Value::as_array) {
-                let strs: Vec<Value> = domains
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(|s| Value::String(s.to_owned()))
-                    .collect();
-                ws_dst.insert("allowedDomains".to_owned(), Value::Array(strs));
-            }
-            if let Some(loc_obj) = ws_obj.get("location").and_then(Value::as_object) {
-                let mut loc_dst = Map::new();
-                for k in ["country", "region", "city", "timezone"] {
-                    if let Some(s) = loc_obj.get(k).and_then(Value::as_str) {
-                        loc_dst.insert(k.to_owned(), Value::String(s.to_owned()));
-                    }
-                }
-                if !loc_dst.is_empty() {
-                    ws_dst.insert("location".to_owned(), Value::Object(loc_dst));
-                }
-            }
-            if !ws_dst.is_empty() {
-                m.insert("webSearch".to_owned(), Value::Object(ws_dst));
-            }
-        }
-        if !m.is_empty() {
-            out.insert("codex-cli".to_owned(), Value::Object(m));
+        };
+        current.insert(provider.to_owned(), Value::Object(next));
+    }
+    for key in SESSION_TOOL_EXPOSURE_KEYS {
+        if let Some(b) = patch.get(key).and_then(Value::as_bool) {
+            current.insert(key.to_owned(), Value::Bool(b));
         }
     }
-
-    if let Some(google_obj) = po.get("google").and_then(Value::as_object) {
-        let mut m = Map::new();
-        if let Some(b) = google_obj.get("nativeWebSearch").and_then(Value::as_bool) {
-            m.insert("nativeWebSearch".to_owned(), Value::Bool(b));
-        }
-        if let Some(tc_obj) = google_obj.get("thinkingConfig").and_then(Value::as_object)
-            && let Some(tl) = tc_obj
-                .get("thinkingLevel")
-                .and_then(Value::as_str)
-                .map(str::trim)
-            && !tl.is_empty()
-        {
-            let mut tc_dst = Map::new();
-            tc_dst.insert("thinkingLevel".to_owned(), Value::String(tl.to_owned()));
-            m.insert("thinkingConfig".to_owned(), Value::Object(tc_dst));
-        }
-        if let Some(rf) = google_obj.get("responseFormat")
-            && !rf.is_null()
-        {
-            m.insert("responseFormat".to_owned(), rf.clone());
-        }
-        if let Some(rmt) = google_obj
-            .get("responseMimeType")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            && !rmt.is_empty()
-        {
-            m.insert("responseMimeType".to_owned(), Value::String(rmt.to_owned()));
-        }
-        if !m.is_empty() {
-            out.insert("google".to_owned(), Value::Object(m));
-        }
-    }
-
-    if let Some(lm_obj) = po.get("lmstudio").and_then(Value::as_object) {
-        let mut m = Map::new();
-        if let Some(s) = lm_obj.get("baseUrl").and_then(Value::as_str).map(str::trim)
-            && !s.is_empty()
-        {
-            m.insert("baseUrl".to_owned(), Value::String(s.to_owned()));
-        }
-        if let Some(n) = lm_obj.get("contextLength").and_then(Value::as_u64)
-            && n > 0
-        {
-            m.insert("contextLength".to_owned(), Value::from(n));
-        }
-        if let Some(b) = lm_obj.get("autoLoad").and_then(Value::as_bool) {
-            m.insert("autoLoad".to_owned(), Value::Bool(b));
-        }
-        if let Some(b) = lm_obj
-            .get("reloadOnContextMismatch")
-            .and_then(Value::as_bool)
-        {
-            m.insert("reloadOnContextMismatch".to_owned(), Value::Bool(b));
-        }
-        if !m.is_empty() {
-            out.insert("lmstudio".to_owned(), Value::Object(m));
-        }
-    }
-
-    if out.is_empty() { None } else { Some(out) }
+    // SECURITY BOUNDARY: a stored override may predate client-side filtering; never carry an
+    // endpoint, header or credential override forward through a merge.
+    cowork_config::strip_provider_option_endpoints(&mut current);
+    (!current.is_empty()).then_some(current)
 }
 
 /// Top-level boolean tool-exposure toggles the Rust turn runner reads from session
@@ -3630,20 +3873,31 @@ fn editable_session_provider_options(po: &Map<String, Value>) -> Option<Map<Stri
     (!out.is_empty()).then_some(out)
 }
 
-/// Stores a client-supplied `providerOptions` session override, keeping only the editable
-/// allowlist (`mergeEditableOpenAiCompatibleProviderOptions` parity: unknown keys are dropped
-/// silently, and a patch with nothing editable leaves the current override untouched).
+/// Merges a client-supplied partial `providerOptions` patch into the session override
+/// (`SessionMetadataManager` → `mergeEditableOpenAiCompatibleProviderOptions` parity): only the
+/// editable allowlist is merged, unknown keys are dropped silently, sibling settings and nested
+/// values from earlier patches are kept, and a patch with nothing editable (or a non-object
+/// patch such as `null`) leaves the current override untouched.
 ///
 /// SECURITY BOUNDARY: `cowork/session/config/set` is reachable by any local client, so cloud
 /// provider `baseUrl`/`headers`/credential overrides must never be persisted; the next turn
 /// would send the user's saved API key to the client-chosen URL. Only `lmstudio.baseUrl`
 /// (a local server) is editable, as in the TypeScript schema.
 fn store_client_provider_options(overrides: &mut Map<String, Value>, value: &Value) {
-    if let Some(po) = value
-        .as_object()
-        .and_then(editable_session_provider_options)
-    {
-        overrides.insert("providerOptions".to_owned(), Value::Object(po));
+    let Some(patch) = value.as_object() else {
+        return;
+    };
+    let merged = merge_editable_provider_options(
+        overrides.get("providerOptions").and_then(Value::as_object),
+        patch,
+    );
+    match merged {
+        Some(po) => {
+            overrides.insert("providerOptions".to_owned(), Value::Object(po));
+        }
+        None => {
+            overrides.remove("providerOptions");
+        }
     }
 }
 

@@ -808,3 +808,96 @@ async fn repl_cwd_switches_workspace_and_restarts_server() {
         "expected a stored thread for the new workspace"
     );
 }
+
+fn scripted_opts(iso: &IsolatedCliEnv) -> ReplOptions {
+    ReplOptions {
+        working_directory: iso.workspace_dir.clone(),
+        port: 0,
+        yolo: false,
+        homedir: Some(iso.home_dir.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+        env: iso.env.clone(),
+    }
+}
+
+/// `/new` starts a thread on the workspace defaults (no provider/model overrides), so the REPL's
+/// provider/model must follow the new thread's descriptor rather than the previous thread's
+/// `/provider` selection (TS parity: `tryRequest("thread/start")` -> `applyThreadDescriptor`).
+#[tokio::test]
+async fn repl_new_thread_refreshes_provider_and_model_selection() {
+    let iso = IsolatedCliEnv::new();
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &[
+            "/provider anthropic",
+            "/new",
+            "/model",
+            "/reasoning high",
+            "/verbosity low",
+            "/exit",
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Banner: "Cowork CLI vX — connected (<provider> / <model>)" for the workspace defaults.
+    let banner = output
+        .lines()
+        .next()
+        .and_then(|l| l.split("connected (").nth(1))
+        .and_then(|l| l.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("missing banner; output={output}"));
+    let (default_provider, default_model) = banner
+        .split_once(" / ")
+        .unwrap_or_else(|| panic!("bad banner; output={output}"));
+    assert_ne!(default_provider, "anthropic", "output={output}");
+    assert!(
+        output.contains("Provider set to anthropic"),
+        "output={output}"
+    );
+
+    let after_new = output
+        .split("Started new thread:")
+        .nth(1)
+        .unwrap_or_else(|| panic!("missing /new notice; output={output}"));
+    assert!(
+        after_new.contains(&format!(
+            "Current model: {default_model} ({default_provider})"
+        )),
+        "output={output}"
+    );
+    assert!(
+        after_new.contains(&format!("{default_provider} reasoning effort set to high")),
+        "output={output}"
+    );
+    assert!(
+        after_new.contains(&format!("{default_provider} verbosity set to low")),
+        "output={output}"
+    );
+    assert!(!after_new.contains("anthropic"), "output={output}");
+}
+
+/// A slash command whose RPC fails reports the error and keeps the REPL running (TS parity:
+/// `tryRequest` prints `Error: ...` and re-prompts) instead of ending the session.
+#[tokio::test]
+async fn repl_keeps_running_after_a_failing_command_rpc() {
+    let iso = IsolatedCliEnv::new();
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &["/connect opneai token", "/sessions", "/model", "/exit"],
+    )
+    .await
+    .unwrap_or_else(|err| panic!("REPL ended on a recoverable command error: {err:#}"));
+
+    let error_line = output
+        .lines()
+        .find(|l| l.starts_with("Error: "))
+        .unwrap_or_else(|| panic!("missing error report; output={output}"));
+    assert!(error_line.contains("opneai"), "output={output}");
+    assert!(
+        output.contains("Use /new to start a new thread"),
+        "output={output}"
+    );
+    assert!(output.contains("Current model: "), "output={output}");
+    assert!(output.contains("Goodbye."), "output={output}");
+}

@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-use crate::client::{InboundRpcEvent, ReplRpcClient};
+use crate::client::{InboundRpcEvent, ReplRpcClient, RpcRequestError};
 use crate::parser::{ParsedReplCommand, parse_repl_input};
 use crate::sanitize_terminal::sanitize_terminal_output as sanitize;
 use crate::state_store::{
@@ -250,6 +250,49 @@ impl ActiveReplSession {
         })
     }
 
+    /// TS `applyThreadDescriptor`: adopt a `thread/start` / `thread/resume` result as the active
+    /// thread, syncing the provider/model selection to the thread's own and persisting it as the
+    /// workspace's last session. Returns the adopted thread id.
+    fn apply_thread_descriptor(&mut self, thread: &Value) -> Option<String> {
+        let tid = thread["id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?
+            .to_owned();
+        if let Some(p) = thread["modelProvider"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
+            self.provider = p.to_owned();
+        }
+        if let Some(m) = thread["model"].as_str().filter(|s| !s.trim().is_empty()) {
+            self.model = m.to_owned();
+        }
+        self.thread_id = tid.clone();
+        let _ = set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, &tid);
+        Some(tid)
+    }
+
+    /// Handles one input line at the REPL loop boundary. Commands whose request the server
+    /// rejected (or that timed out) are reported and the REPL keeps accepting input (TS
+    /// `tryRequest` prints `Error: ...` and re-prompts); connection loss, terminal I/O and prompt
+    /// failures stay fatal and propagate.
+    async fn handle_input_line(
+        &mut self,
+        line: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<LineOutcome> {
+        match self.handle_line(line, prompt_source, out).await {
+            Err(err) if is_recoverable_command_error(&err) => {
+                writeln!(out, "Error: {}", sanitize(&err.to_string()))?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+            other => other,
+        }
+    }
+
     fn default_model_for_provider(&self, provider_id: &str) -> String {
         if let Some(m) = self
             .catalog
@@ -339,10 +382,16 @@ impl ActiveReplSession {
                     .rpc
                     .request("thread/start", Some(json!({ "cwd": cwd_str })))
                     .await?;
-                if let Some(tid) = res["thread"]["id"].as_str() {
-                    self.thread_id = tid.to_owned();
-                    let _ = set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, tid);
-                    writeln!(out, "Started new thread: {}", sanitize(tid))?;
+                // `/new` sends no provider/model overrides, so the server starts the thread on the
+                // workspace defaults; follow its descriptor (TS `applyThreadDescriptor`).
+                if let Some(tid) = self.apply_thread_descriptor(&res["thread"]) {
+                    writeln!(
+                        out,
+                        "Started new thread: {} ({} / {})",
+                        sanitize(&tid),
+                        sanitize(&self.provider),
+                        sanitize(&self.model)
+                    )?;
                 }
                 self.rpc.drain_brief_notifications(15).await;
                 self.rpc.pending_notifications.clear();
@@ -389,16 +438,19 @@ impl ActiveReplSession {
                     .await
                 {
                     Ok(res) => {
-                        let tid = res["thread"]["id"].as_str().unwrap_or(target).to_owned();
-                        if let Some(p) = res["thread"]["modelProvider"].as_str() {
-                            self.provider = p.to_owned();
-                        }
-                        if let Some(m) = res["thread"]["model"].as_str() {
-                            self.model = m.to_owned();
-                        }
-                        self.thread_id = tid.clone();
-                        let _ =
-                            set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, &tid);
+                        let tid = match self.apply_thread_descriptor(&res["thread"]) {
+                            Some(tid) => tid,
+                            None => {
+                                self.thread_id = target.to_owned();
+                                let _ = set_stored_session_for_cwd(
+                                    &self.homedir,
+                                    &self.env,
+                                    &self.cwd,
+                                    target,
+                                );
+                                target.to_owned()
+                            }
+                        };
                         writeln!(
                             out,
                             "Resumed thread: {} ({} / {})",
@@ -1493,6 +1545,13 @@ impl ActiveReplSession {
     }
 }
 
+/// Whether a command failure leaves the REPL usable: the server answered the request with a
+/// JSON-RPC error, or the request timed out with the connection still open. Everything else
+/// (closed/broken WebSocket, terminal I/O, prompt or server-restart failures) is fatal.
+fn is_recoverable_command_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<RpcRequestError>().is_some()
+}
+
 /// TS `resolveAndValidateDir`: resolves `dir_arg` against `base` (the current workspace, which is
 /// the TS process cwd) with `path.resolve`-style lexical normalization, and requires an existing
 /// directory.
@@ -1611,7 +1670,7 @@ pub async fn run_repl_scripted_with_interrupt(
             break;
         };
         let outcome = session
-            .handle_line(&line, &mut prompt_source, &mut buf)
+            .handle_input_line(&line, &mut prompt_source, &mut buf)
             .await?;
         match session.apply_outcome(outcome, &mut buf).await? {
             Some(next) => session = next,
@@ -1640,9 +1699,22 @@ pub async fn run_repl_interactive(
     let mut prompt_source = PromptInputSource::Interactive(Some(Box::new(rl)));
 
     if let Some(prompt) = one_shot_prompt {
-        let outcome = session
+        // No TS counterpart (the TS CLI had no one-shot mode). A failing command is the run's
+        // result here, so shut the embedded server down cleanly and exit non-zero with the
+        // sanitized error instead of re-prompting.
+        let outcome = match session
             .handle_line(&prompt, &mut prompt_source, &mut stdout)
-            .await?;
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                session.shutdown().await;
+                if is_recoverable_command_error(&err) {
+                    anyhow::bail!("{}", sanitize(&err.to_string()));
+                }
+                return Err(err);
+            }
+        };
         if let Some(session) = session.apply_outcome(outcome, &mut stdout).await? {
             session.shutdown().await;
         }
@@ -1677,9 +1749,16 @@ pub async fn run_repl_interactive(
 
         match read_res {
             Ok(line) => {
-                let outcome = session
-                    .handle_line(&line, &mut prompt_source, &mut stdout)
-                    .await?;
+                let outcome = match session
+                    .handle_input_line(&line, &mut prompt_source, &mut stdout)
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        session.shutdown().await;
+                        return Err(err);
+                    }
+                };
                 match session.apply_outcome(outcome, &mut stdout).await? {
                     Some(next) => session = next,
                     None => return Ok(()),

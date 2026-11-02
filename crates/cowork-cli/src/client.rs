@@ -13,6 +13,17 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
+/// A request the server answered with a JSON-RPC error, or that got no reply in time. The
+/// connection is still usable afterwards, so the REPL reports these and keeps accepting input
+/// (TS `tryRequest`); transport failures (closed socket, send/read errors) are not this type.
+#[derive(Debug, thiserror::Error)]
+pub enum RpcRequestError {
+    #[error("{message} (code {code})")]
+    ErrorResponse { code: i64, message: String },
+    #[error("Timed out waiting for response to {method}")]
+    TimedOut { method: String },
+}
+
 #[derive(Debug, Clone)]
 pub enum InboundRpcEvent {
     Notification(JsonRpcLiteNotification),
@@ -123,7 +134,9 @@ impl ReplRpcClient {
         loop {
             let next_msg = tokio::time::timeout(Duration::from_secs(30), self.ws.next())
                 .await
-                .map_err(|_| anyhow::anyhow!("Timed out waiting for response to {method}"))?
+                .map_err(|_| RpcRequestError::TimedOut {
+                    method: method.to_owned(),
+                })?
                 .ok_or_else(|| anyhow::anyhow!("WebSocket closed while awaiting {method}"))??;
 
             let text = match next_msg {
@@ -139,12 +152,13 @@ impl ReplRpcClient {
             let val: Value = serde_json::from_str(&text)?;
             if val.get("id") == Some(&json!(id)) && val.get("method").is_none() {
                 if let Some(err) = val.get("error") {
-                    let msg = err
+                    let message = err
                         .get("message")
                         .and_then(Value::as_str)
-                        .unwrap_or("JSON-RPC error");
+                        .unwrap_or("JSON-RPC error")
+                        .to_owned();
                     let code = err.get("code").and_then(Value::as_i64).unwrap_or(-1);
-                    anyhow::bail!("{msg} (code {code})");
+                    return Err(RpcRequestError::ErrorResponse { code, message }.into());
                 }
                 return Ok(val.get("result").cloned().unwrap_or(Value::Null));
             }

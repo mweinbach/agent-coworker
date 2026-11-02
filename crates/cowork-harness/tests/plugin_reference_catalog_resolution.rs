@@ -146,6 +146,7 @@ fn plugin_without_plugin_md_or_readme_resolves_to_its_bundled_skills() {
         referenced_plugins: vec![expected],
         deferred_tool_search_enabled: false,
         code_mode_enabled: false,
+        template_context: Default::default(),
     });
     assert!(prompt.contains(
         "## Referenced Plugins\n\nThe user explicitly referenced the following plugin(s) for this request.\nPrefer their bundled skills when relevant. Load a specific skill with the `skill` tool only when you actually need its instructions.\n\n- Docs Free (bundled skills: docs-free:alpha, docs-free:beta)"

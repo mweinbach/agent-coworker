@@ -8,12 +8,12 @@ use cowork_config::{
 };
 use cowork_harness::{
     CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
-    MemoryGenerator, RemoteMemoryModel, RemoteTitleOptions, SteerCoordinator,
-    SystemPromptBuildOptions, ToolRetryTarget, TurnCancellationHandle, TurnIdempotencyLedger,
-    TurnReference, TurnRunConfig, TurnStepRunner, build_layered_system_prompt,
-    generate_heuristic_session_title, generate_remote_session_title, is_failed_tool_outcome,
-    materialize_turn_attachments, parse_turn_references, preferred_title_model_for_provider,
-    resolve_turn_references,
+    MemoryGenerator, PromptTemplateContext, RemoteMemoryModel, RemoteTitleOptions,
+    SteerCoordinator, SystemPromptBuildOptions, ToolRetryTarget, TurnCancellationHandle,
+    TurnIdempotencyLedger, TurnReference, TurnRunConfig, TurnStepRunner,
+    build_layered_system_prompt, generate_heuristic_session_title, generate_remote_session_title,
+    is_failed_tool_outcome, materialize_turn_attachments, parse_turn_references,
+    preferred_title_model_for_provider, resolve_turn_references,
 };
 use cowork_inference::{
     BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState,
@@ -1672,9 +1672,8 @@ impl ServerRuntimeState {
             .map(|ctx| cowork_harness::tasks::render_task_context_section(Some(ctx)))
             .filter(|s| !s.is_empty());
 
-        let resolved_prompt_template = self
-            .model_registry()
-            .get(provider, &model_id)
+        let session_model = self.model_registry().get(provider, &model_id);
+        let resolved_prompt_template = session_model
             .map(|m| m.prompt_template.trim().to_owned())
             .filter(|t| !t.is_empty() && t != "default")
             .or_else(|| {
@@ -1711,6 +1710,14 @@ impl ServerRuntimeState {
             referenced_plugins: mentions.referenced_plugins,
             deferred_tool_search_enabled: deferred_tool_search,
             code_mode_enabled,
+            template_context: PromptTemplateContext {
+                model_display_name: session_model.map(|m| m.display_name.clone()),
+                knowledge_cutoff: session_model.map(|m| m.knowledge_cutoff.clone()),
+                ..effective_agent_cfg
+                    .as_ref()
+                    .map(PromptTemplateContext::from_config)
+                    .unwrap_or_default()
+            },
         });
 
         let effective_display_text = display_text_override

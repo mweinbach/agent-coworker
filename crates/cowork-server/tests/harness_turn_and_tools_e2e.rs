@@ -323,6 +323,17 @@ async fn websocket_turn_runner_executes_builtin_tools_idempotency_attachments_st
         "Always honor project rule ALPHA-RULE-99.",
     )
     .unwrap();
+    // Saved profile fields render into the bundled template's `{{...}}` variables.
+    fs::create_dir_all(iso.workspace.join(".cowork")).unwrap();
+    fs::write(
+        iso.workspace.join(".cowork").join("config.json"),
+        json!({
+            "userName": "Ada Lovelace",
+            "userProfile": { "instructions": "PROFILE-RULE-42", "work": "", "details": "" }
+        })
+        .to_string(),
+    )
+    .unwrap();
     iso.env.insert(
         "NVIDIA_BASE_URL".into(),
         format!("http://127.0.0.1:{mock_port}/v1"),
@@ -478,6 +489,15 @@ async fn websocket_turn_runner_executes_builtin_tools_idempotency_attachments_st
         assert!(
             sys_msg.contains("ALPHA-RULE-99"),
             "system prompt should include AGENTS.md content, got: {sys_msg}"
+        );
+        assert!(
+            sys_msg.contains("- User profile instructions: PROFILE-RULE-42\n")
+                && sys_msg.contains("- User name: Ada Lovelace\n"),
+            "system prompt should render saved profile variables, got: {sys_msg}"
+        );
+        assert!(
+            !sys_msg.contains("{{") && !sys_msg.contains("User profile work/job:"),
+            "unrendered or blank-profile template lines remain: {sys_msg}"
         );
     }
 

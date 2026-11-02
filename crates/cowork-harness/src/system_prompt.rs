@@ -3,12 +3,13 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use cowork_config::{AgentConfig, ProviderName};
+use cowork_config::{AgentConfig, ProviderName, UserProfile};
 use cowork_tools::{DiscoveredSkill, render_skill_body_for_model};
 use regex::Regex;
 use serde_json::Value;
 
 use crate::extensions::{ExtensionManager, InstalledPluginCatalogEntry};
+use crate::prompt_template::render_system_template;
 
 const MAX_PROJECT_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 const MAX_WORKSPACE_MAP_ENTRIES: usize = 60;
@@ -35,6 +36,31 @@ pub struct SystemPromptBuildOptions {
     pub referenced_plugins: Vec<ReferencedPluginContext>,
     pub deferred_tool_search_enabled: bool,
     pub code_mode_enabled: bool,
+    /// Values for the bundled system template's `{{...}}` variables.
+    pub template_context: PromptTemplateContext,
+}
+
+/// Effective-config inputs for the bundled system template variables (legacy
+/// `loadSystemPromptWithSkills` `vars`). Blank profile fields drop their template lines.
+#[derive(Debug, Clone, Default)]
+pub struct PromptTemplateContext {
+    pub user_name: String,
+    pub user_profile: UserProfile,
+    /// Registry display name of the session model; `None` renders the model id.
+    pub model_display_name: Option<String>,
+    /// Registry knowledge cutoff of the session model; `None` renders `Unknown`.
+    pub knowledge_cutoff: Option<String>,
+}
+
+impl PromptTemplateContext {
+    /// The user name and profile of `config`, without model metadata.
+    pub fn from_config(config: &AgentConfig) -> Self {
+        Self {
+            user_name: config.user_name.clone(),
+            user_profile: config.user_profile.clone(),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -359,7 +385,21 @@ fn resolve_references(
     resolver.out
 }
 
-fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -> String {
+/// The base system prompt: a bundled template file (rendered with template variables, like
+/// legacy `loadSystemPromptWithSkills`) or inline text (role prompts, the built-in default),
+/// which is used verbatim like legacy `loadAgentPrompt`.
+enum BaseTemplate {
+    File(String),
+    Inline(String),
+}
+
+fn read_template_file(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    (!trimmed.is_empty()).then(|| trimmed.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -> BaseTemplate {
     if let Some(name) = template_name {
         if let Some(dir) = prompts_dir
             && !name.contains('\n')
@@ -371,26 +411,23 @@ fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -
             } else {
                 format!("{clean}.md")
             };
-            if let Ok(content) = fs::read_to_string(dir.join(file_name))
-                && !content.trim().is_empty()
-            {
-                return content.trim().to_owned();
+            if let Some(content) = read_template_file(&dir.join(file_name)) {
+                return BaseTemplate::File(content);
             }
         }
         if name.contains('\n') || name.contains(' ') {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
-                return trimmed.to_owned();
+                return BaseTemplate::Inline(trimmed.to_owned());
             }
         }
     }
     if let Some(dir) = prompts_dir
-        && let Ok(sys) = fs::read_to_string(dir.join("system.md"))
-        && !sys.trim().is_empty()
+        && let Some(sys) = read_template_file(&dir.join("system.md"))
     {
-        return sys.trim().to_owned();
+        return BaseTemplate::File(sys);
     }
-    DEFAULT_BASE_SYSTEM_PROMPT.to_owned()
+    BaseTemplate::Inline(DEFAULT_BASE_SYSTEM_PROMPT.to_owned())
 }
 
 /// Highest-precedence first; only the first readable file in a directory is used, so
@@ -635,10 +672,14 @@ fn render_referenced_plugins_section(plugins: &[ReferencedPluginContext]) -> Str
 pub fn build_layered_system_prompt(opts: &SystemPromptBuildOptions) -> String {
     let mut sections = Vec::<String>::new();
 
-    sections.push(load_base_template(
-        opts.prompts_dir.as_deref(),
-        opts.prompt_template.as_deref(),
-    ));
+    sections.push(
+        match load_base_template(opts.prompts_dir.as_deref(), opts.prompt_template.as_deref()) {
+            BaseTemplate::File(template) => {
+                render_system_template(&template, opts, chrono::Local::now().date_naive())
+            }
+            BaseTemplate::Inline(text) => text,
+        },
+    );
 
     if let Some(proj) = collect_project_instructions(&opts.working_directory) {
         sections.push(format!("## Project Instructions\n\n{proj}"));

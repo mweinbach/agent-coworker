@@ -14,8 +14,9 @@ use cowork_harness::extensions::types::MarketplaceSourceInput;
 use cowork_harness::{
     AgentControl, AgentControlConfig, AgentProfileScope, AgentProfilesStore, AgentSpawnRequest,
     ChildTurnError, ChildTurnExecutor, ChildTurnInput, ChildTurnResult, ExtensionManager,
-    HarnessEventSink, InteractionManager, SkillMutationBus, SteerCoordinator,
-    SystemPromptBuildOptions, TurnRunConfig, TurnStepRunner, build_layered_system_prompt,
+    HarnessEventSink, InteractionManager, PromptTemplateContext, SkillMutationBus,
+    SteerCoordinator, SystemPromptBuildOptions, TurnRunConfig, TurnStepRunner,
+    build_layered_system_prompt,
 };
 use cowork_inference::{BudgetThresholds, ContentBlock, MessageRole, SessionCostTracker};
 use cowork_mcp::{
@@ -344,6 +345,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             referenced_plugins: Vec::new(),
             deferred_tool_search_enabled: deferred_tool_search,
             code_mode_enabled,
+            template_context: PromptTemplateContext::from_config(&agent_cfg),
         });
 
         let turn_id = Uuid::new_v4().to_string();
@@ -2527,7 +2529,10 @@ fn parse_mcp_lookup(
 /// Layers session `childModelRoutingMode` / `allowedChildModelRefs` / `preferredChildModelRef`
 /// (or legacy `preferredChildModel`) overrides over the workspace routing, re-normalized against
 /// the session's provider and model the same way config loading does.
-fn apply_session_child_routing_overrides(cfg: &mut AgentConfig, overrides: &Map<String, Value>) {
+pub(crate) fn apply_session_child_routing_overrides(
+    cfg: &mut AgentConfig,
+    overrides: &Map<String, Value>,
+) {
     let mode = overrides
         .get("childModelRoutingMode")
         .and_then(Value::as_str)

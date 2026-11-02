@@ -8,7 +8,9 @@ use cowork_config::{
     get_one_off_chats_root, normalize_child_routing_config, parse_child_model_ref,
     read_connection_store,
 };
-use cowork_harness::{MemoryGenerator, RemoteMemoryModel};
+use cowork_harness::{
+    GeneratedNoteTarget, MemoryGenerator, RemoteMemoryModel, generated_note_target,
+};
 use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcThread,
     JsonRpcWorkspaceSummary, MemoryAdvancedDeleteParams, MemoryAdvancedFolderDeleteParams,
@@ -967,8 +969,9 @@ impl ServerRuntimeState {
     /// Runs extraction for a folder other than the thread's own (TS passes the selected folder
     /// to `MemoryGenerator.run`). The generator writes into its store's workspace folder, so it
     /// runs against a scratch store and only the memories it extracted are written into
-    /// `folder`; nothing else in the workspace reaches the target folder. Returns the number of
-    /// leading messages processed.
+    /// `folder`, under identities resolved against that folder (see `generated_note_target`);
+    /// nothing else in the workspace reaches the target folder. Returns the number of leading
+    /// messages processed.
     #[allow(clippy::too_many_arguments)]
     async fn generate_into_folder(
         &self,
@@ -1008,11 +1011,18 @@ impl ServerRuntimeState {
                 .list_entries_in_dir(&dir, "workspace")
                 .map_err(|e| e.to_string())?
             {
+                // The scratch slug was chosen against an empty store; re-resolve the note's
+                // identity against the target folder so an identical note already there is left
+                // as is and a different note (e.g. one the user edited) is never overwritten.
+                let slug = match generated_note_target(adv_store, Some(folder), &entry.body) {
+                    GeneratedNoteTarget::Existing(_) => continue,
+                    GeneratedNoteTarget::New(slug) => slug,
+                };
                 adv_store
                     .upsert_entry(
                         "workspace",
                         Some(folder),
-                        &entry.slug,
+                        &slug,
                         &entry.name,
                         &entry.description,
                         &entry.memory_type,

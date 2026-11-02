@@ -484,3 +484,97 @@ async fn folder_generate_writes_only_new_memories_into_the_target_folder() {
     assert_eq!(workspace.len(), 2, "{workspace:?}");
     server.shutdown().await;
 }
+
+/// Body the mock memory model extracts from [`PREFERENCE`].
+const EXTRACTED: &str = "Prefers tabs over spaces in this repository.";
+
+async fn folder_entries(ws: &mut WsStream, cwd: &str, folder: &str) -> Vec<Value> {
+    memories(
+        &rpc(
+            ws,
+            "folder-list",
+            "cowork/memory/advanced/folder/list",
+            json!({ "cwd": cwd, "folder": folder }),
+        )
+        .await,
+    )
+}
+
+async fn folder_generate(ws: &mut WsStream, cwd: &str, thread_id: &str, folder: &str) {
+    rpc(
+        ws,
+        "folder-gen",
+        "cowork/memory/advanced/folder/generate",
+        json!({ "cwd": cwd, "threadId": thread_id, "folder": folder }),
+    )
+    .await;
+}
+
+/// Copying extracted notes into the target folder resolves each note's identity against that
+/// folder: an identical note already there (under its hashed or a legacy truncated slug) is
+/// reused rather than duplicated, and a note the user edited under the generated slug survives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn folder_generate_dedupes_identical_notes_and_keeps_user_edits() {
+    let env = Env::new().await;
+    let server = start_server(env.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let cwd = env.cwd();
+    let thread_id = thread_with_unprocessed_history(&mut ws, &cwd).await;
+
+    folder_generate(&mut ws, &cwd, &thread_id, "team-notes").await;
+    let first = folder_entries(&mut ws, &cwd, "team-notes").await;
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["body"], json!(EXTRACTED));
+    let slug = first[0]["slug"].as_str().unwrap().to_owned();
+
+    folder_generate(&mut ws, &cwd, &thread_id, "team-notes").await;
+    let again = folder_entries(&mut ws, &cwd, "team-notes").await;
+    assert_eq!(
+        again.len(),
+        1,
+        "identical content must not be duplicated: {again:?}"
+    );
+    assert_eq!(again[0]["slug"], json!(slug));
+
+    // The user refines the generated memory in place (same slug, new body).
+    let edited = "Tabs, rendered four columns wide.";
+    rpc(
+        &mut ws,
+        "edit",
+        "cowork/memory/advanced/folder/upsert",
+        json!({
+            "cwd": cwd, "folder": "team-notes", "slug": slug,
+            "name": "Tabs", "description": "edited", "body": edited
+        }),
+    )
+    .await;
+    folder_generate(&mut ws, &cwd, &thread_id, "team-notes").await;
+    let team = folder_entries(&mut ws, &cwd, "team-notes").await;
+    assert_eq!(team.len(), 2, "{team:?}");
+    let edited_entry = team.iter().find(|e| e["slug"] == json!(slug)).unwrap();
+    assert_eq!(
+        edited_entry["body"],
+        json!(edited),
+        "user edit must survive: {team:?}"
+    );
+    assert!(has_body(&team, EXTRACTED), "{team:?}");
+
+    // A legacy note (old truncated-title slug) with identical content is reused, not duplicated.
+    let legacy: String = EXTRACTED.chars().take(40).collect();
+    rpc(
+        &mut ws,
+        "legacy",
+        "cowork/memory/advanced/folder/upsert",
+        json!({
+            "cwd": cwd, "folder": "legacy-notes", "slug": legacy, "name": legacy,
+            "description": "Auto-extracted conversation preference", "body": EXTRACTED
+        }),
+    )
+    .await;
+    let before = folder_entries(&mut ws, &cwd, "legacy-notes").await;
+    folder_generate(&mut ws, &cwd, &thread_id, "legacy-notes").await;
+    let after = folder_entries(&mut ws, &cwd, "legacy-notes").await;
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0]["slug"], before[0]["slug"]);
+    server.shutdown().await;
+}

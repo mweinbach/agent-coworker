@@ -231,8 +231,16 @@ fn write_notes(
 }
 
 /// Characters of a generated note shown as its memory name. Display only: the note's storage
-/// identity comes from [`generated_note_slug`], so notes sharing this prefix never collide.
+/// identity comes from [`generated_note_target`], so notes sharing this prefix never collide.
 const GENERATED_NOTE_TITLE_CHARS: usize = 40;
+
+/// Display name of a generated note: the first characters of its (trimmed) body.
+pub fn generated_note_title(body: &str) -> String {
+    body.trim()
+        .chars()
+        .take(GENERATED_NOTE_TITLE_CHARS)
+        .collect()
+}
 
 fn write_note(
     note: &str,
@@ -244,8 +252,9 @@ fn write_note(
         return;
     }
     if let Some(adv) = advanced_store {
-        let title: String = body.chars().take(GENERATED_NOTE_TITLE_CHARS).collect();
-        let slug = generated_note_slug(adv, &title, body);
+        let title = generated_note_title(body);
+        // Re-saving an identical note refreshes its existing entry in place.
+        let slug = generated_note_target(adv, None, body).into_slug();
         if let Err(err) = adv.upsert_entry(
             "workspace",
             None,
@@ -279,29 +288,59 @@ fn write_note(
     }
 }
 
-/// Storage slug for a generated advanced-memory note whose display title is `title`.
+/// Where a generated note belongs in an advanced-memory folder; see [`generated_note_target`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GeneratedNoteTarget {
+    /// The folder already holds an entry with this exact body, under this slug.
+    Existing(String),
+    /// No entry holds this body; this slug is free for it.
+    New(String),
+}
+
+impl GeneratedNoteTarget {
+    pub fn slug(&self) -> &str {
+        match self {
+            Self::Existing(slug) | Self::New(slug) => slug,
+        }
+    }
+
+    pub fn into_slug(self) -> String {
+        match self {
+            Self::Existing(slug) | Self::New(slug) => slug,
+        }
+    }
+}
+
+/// Storage identity for a generated note in the workspace scope of `store`, or in the explicit
+/// memory `folder` when given.
 ///
 /// TS lets the generator model pick a slug and overwrite only when it deliberately updates an
 /// existing memory. The deterministic port has no such intent signal, so identity follows the
-/// content: a note whose exact body is already stored reuses that entry's slug (update in place,
-/// including entries saved under the older bare-title slug); any other note gets
+/// content: a note whose exact body is already stored there is [`GeneratedNoteTarget::Existing`]
+/// (including entries saved under the older bare-title slug); any other note gets
 /// `<slug(title)>-<content hash>`, suffixed `-2`, `-3`, … if that slug already holds a different
 /// body (for example a generated memory the user later edited), so it never replaces another note.
-fn generated_note_slug(store: &AdvancedMemoryStore, title: &str, body: &str) -> String {
+pub fn generated_note_target(
+    store: &AdvancedMemoryStore,
+    folder: Option<&str>,
+    body: &str,
+) -> GeneratedNoteTarget {
+    let body = body.trim();
     let existing = store
-        .resolve_scope_dir("workspace", None)
+        .resolve_scope_dir("workspace", folder)
         .and_then(|dir| store.list_entries_in_dir(&dir, "workspace"))
         .unwrap_or_default();
     if let Some(same) = existing.iter().find(|e| e.body.trim() == body) {
-        return same.slug.clone();
+        return GeneratedNoteTarget::Existing(same.slug.clone());
     }
-    let base = format!("{}-{}", slugify_memory_name(title), content_digest(body));
+    let title = generated_note_title(body);
+    let base = format!("{}-{}", slugify_memory_name(&title), content_digest(body));
     // Case-insensitive so a differently cased file never aliases the target on macOS/Windows.
-    unique_identity(&base, |candidate| {
+    GeneratedNoteTarget::New(unique_identity(&base, |candidate| {
         existing
             .iter()
             .any(|e| e.slug.eq_ignore_ascii_case(candidate))
-    })
+    }))
 }
 
 /// Short, stable hash of a note's content used to make its storage identity collision-resistant.

@@ -6,6 +6,10 @@
 //!   persisted sandbox (mode, network, backend requirement) rather than the workspace
 //!   defaults. The effective policy is observed through the system prompt's
 //!   `Shell Execution Policy` line, which is rendered from the resolved sandbox policy.
+//!   A legacy child row saved without a sandbox is clamped to its parent's effective sandbox
+//!   (read-only when the parent row is missing).
+//! * A child session's `userName` / `userProfile` override (session-only) reaches the system
+//!   prompt of its direct turns (TS `prepareConfigUpdate` refreshed the prompt).
 //! * Automatic memory generation after a turn is gated on `advancedMemory` (TS
 //!   `triggerMemoryGeneration` / `runMemoryGenerationOnce`): with it off, no memory-model
 //!   request is made and nothing lands in the advanced store; with it on, generation runs.
@@ -528,6 +532,159 @@ async fn children_of_a_resumed_parent_inherit_its_persisted_sandbox() {
         "{policy}"
     );
     assert_eq!(env.stored_sandbox(&child), Some(expected));
+    drop(ws);
+    server.shutdown().await;
+}
+
+/// Turns a persisted root row into a child agent row of `parent` with `role`, as a legacy
+/// (pre-sandbox-persistence) child: no saved sandbox.
+fn make_legacy_child(env: &Env, child: &str, parent: &str, role: &str) {
+    let updated = env
+        .db()
+        .execute(
+            "UPDATE sessions SET session_kind = 'agent', role = ?1, parent_session_id = ?2 \
+             WHERE session_id = ?3",
+            [role, parent, child],
+        )
+        .unwrap();
+    assert_eq!(updated, 1);
+    assert_eq!(
+        env.stored_sandbox(child),
+        None,
+        "legacy child has no saved sandbox"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn legacy_child_without_saved_sandbox_is_clamped_to_its_parents_saved_sandbox() {
+    let env = Env::new().await;
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_thread(&mut ws, "t-parent", &env.workspace).await;
+    let child = start_thread(&mut ws, "t-child", &env.workspace).await;
+    let reviewer = start_thread(&mut ws, "t-reviewer", &env.workspace).await;
+    let open_parent = start_thread(&mut ws, "t-open-parent", &env.workspace).await;
+    let open_child = start_thread(&mut ws, "t-open-child", &env.workspace).await;
+    drop(ws);
+    server.shutdown().await;
+
+    // The parent was saved read-only and offline; its legacy children carry no sandbox.
+    env.set_stored_sandbox(&parent, READ_ONLY_NO_NETWORK);
+    make_legacy_child(&env, &child, &parent, "default");
+    // A parent saved without a sandbox follows the workspace defaults, and so does its legacy
+    // child (narrowed for its role).
+    make_legacy_child(&env, &open_child, &open_parent, "default");
+    make_legacy_child(&env, &reviewer, &open_parent, "reviewer");
+
+    // Workspace defaults are workspace-write with network enabled.
+    let server = start_server(env.options(Some("workspace-write")))
+        .await
+        .unwrap();
+    let mut ws = connect(server.ws_url()).await;
+
+    run_turn(&mut ws, "turn-child", &child, "hello").await;
+    let policy = env.last_shell_policy();
+    assert!(
+        policy.contains("`read-only` OS sandbox (network: disabled)"),
+        "a legacy child must never be wider than its parent's saved sandbox: {policy}"
+    );
+
+    run_turn(&mut ws, "turn-open-child", &open_child, "hello").await;
+    let policy = env.last_shell_policy();
+    assert!(
+        policy.contains("`workspace-write` OS sandbox (network: enabled)"),
+        "{policy}"
+    );
+
+    // The child role's narrowing still applies over the parent's effective sandbox.
+    run_turn(&mut ws, "turn-reviewer", &reviewer, "hello").await;
+    let policy = env.last_shell_policy();
+    assert!(
+        policy.contains("`read-only` OS sandbox (network: enabled)"),
+        "a read-only role stays read-only: {policy}"
+    );
+
+    drop(ws);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn legacy_child_without_saved_sandbox_fails_closed_when_its_parent_is_missing() {
+    let env = Env::new().await;
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let child = start_thread(&mut ws, "t-child", &env.workspace).await;
+    drop(ws);
+    server.shutdown().await;
+
+    make_legacy_child(&env, &child, "missing-parent-session", "default");
+
+    let server = start_server(env.options(Some("workspace-write")))
+        .await
+        .unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    run_turn(&mut ws, "turn-child", &child, "hello").await;
+    let policy = env.last_shell_policy();
+    assert!(
+        policy.contains("`read-only` OS sandbox"),
+        "an orphaned legacy child must run read-only: {policy}"
+    );
+    drop(ws);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_session_user_profile_override_reaches_its_system_prompt() {
+    let env = Env::new().await;
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_thread(&mut ws, "t-parent", &env.workspace).await;
+    let child = start_thread(&mut ws, "t-child", &env.workspace).await;
+    drop(ws);
+    server.shutdown().await;
+    make_legacy_child(&env, &child, &parent, "default");
+    env.set_stored_sandbox(&child, r#"{"mode":"workspace-write","network":true}"#);
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    // A child's override is session-only (TS persisted config patches for root sessions
+    // only) yet TS refreshed the session's system prompt from the patched config.
+    set_session_config(
+        &mut ws,
+        &child,
+        json!({
+            "userName": "child-user-name-marker",
+            "userProfile": { "work": "child-profile-work-marker" }
+        }),
+    )
+    .await;
+    set_session_config(
+        &mut ws,
+        &child,
+        json!({ "userProfile": { "details": "child-profile-details-marker" } }),
+    )
+    .await;
+    run_turn(&mut ws, "turn-child", &child, "hello").await;
+    let prompt = env.last_system_prompt();
+    for marker in [
+        "child-user-name-marker",
+        "child-profile-work-marker",
+        "child-profile-details-marker",
+    ] {
+        assert!(prompt.contains(marker), "missing {marker} in: {prompt}");
+    }
+    // Nothing was written to the workspace config.
+    let workspace_config = env.workspace.join(".cowork").join("config.json");
+    let written = fs::read_to_string(&workspace_config).unwrap_or_default();
+    assert!(!written.contains("child-profile-work-marker"), "{written}");
+
+    // The parent's prompt keeps the workspace profile.
+    run_turn(&mut ws, "turn-parent", &parent, "hello").await;
+    let prompt = env.last_system_prompt();
+    assert!(!prompt.contains("child-profile-work-marker"), "{prompt}");
     drop(ws);
     server.shutdown().await;
 }

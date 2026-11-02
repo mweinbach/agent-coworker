@@ -940,6 +940,27 @@ pub(crate) fn apply_session_config_overrides(
         }
         None => {}
     }
+    // A session `userName` / `userProfile` override is rendered into the system prompt (TS
+    // `prepareConfigUpdate` refreshed `state.system` from the patched config for every session
+    // kind). Root sessions also persist it to the workspace first, but a child agent's override
+    // is session-only, so it must be layered here. The stored profile holds only the fields the
+    // session set; the others keep the workspace values
+    // (`{ ...effectiveUserProfile(), ...patch }`).
+    if let Some(v) = overrides.get("userName").and_then(Value::as_str) {
+        cfg.user_name = v.to_owned();
+    }
+    if let Some(profile) = overrides.get("userProfile").and_then(Value::as_object) {
+        let field = |key: &str| profile.get(key).and_then(Value::as_str).map(str::to_owned);
+        if let Some(v) = field("instructions") {
+            cfg.user_profile.instructions = v;
+        }
+        if let Some(v) = field("work") {
+            cfg.user_profile.work = v;
+        }
+        if let Some(v) = field("details") {
+            cfg.user_profile.details = v;
+        }
+    }
 }
 
 pub(crate) fn build_memory_prompt_section(
@@ -984,6 +1005,38 @@ pub(crate) fn build_memory_prompt_section(
 }
 
 impl ServerRuntimeState {
+    /// Sandbox ceiling for a persisted child agent saved without a sandbox (rows written before
+    /// children persisted theirs): the parent's effective sandbox, i.e. the parent's stored
+    /// sandbox layered over `workspace` defaults exactly as the parent's own turns apply it
+    /// (`apply_session_sandbox`). The child's role/scope narrowing is applied on top by the
+    /// caller. Fails closed to read-only (as a child whose scope cannot be restored does) when
+    /// the parent session cannot be found.
+    fn legacy_child_parent_sandbox(
+        &self,
+        workspace: &AgentConfig,
+        parent_session_id: Option<&str>,
+    ) -> cowork_config::SandboxConfig {
+        let parent_saved = parent_session_id.and_then(|parent_id| {
+            if let Some(live) = self.get_live_thread(parent_id) {
+                return Some(live.lock().sandbox.clone());
+            }
+            self.session_db
+                .get_session_record(parent_id)
+                .ok()
+                .flatten()
+                .map(|record| record.sandbox)
+        });
+        let Some(parent_saved) = parent_saved else {
+            return cowork_config::SandboxConfig {
+                mode: ConfigSandboxMode::ReadOnly,
+                ..workspace.sandbox.clone()
+            };
+        };
+        let mut parent_cfg = workspace.clone();
+        apply_session_sandbox(&mut parent_cfg, parent_saved.as_ref());
+        parent_cfg.sandbox
+    }
+
     pub(crate) fn ensure_thread_idempotency_ledger(
         &self,
         thread_id: &str,
@@ -1296,7 +1349,7 @@ impl ServerRuntimeState {
         // fail closed when they cannot be rebuilt.
         let child_restrictions = if session_kind == cowork_storage::SessionKind::Agent {
             let restored = workspace_cfg
-                .as_ref()
+                .as_mut()
                 .ok_or_else(|| "workspace config could not be loaded".to_owned())
                 .and_then(|cfg| {
                     let row = self
@@ -1304,6 +1357,13 @@ impl ServerRuntimeState {
                         .get_session_record(&params.thread_id)
                         .map_err(|e| e.to_string())?
                         .ok_or_else(|| "persisted child session record is missing".to_owned())?;
+                    if row.sandbox.is_none() {
+                        // A legacy child saved without a sandbox: it inherited its parent's
+                        // effective sandbox at spawn, so derive it from the parent rather than
+                        // run it under the (possibly wider) workspace defaults.
+                        cfg.sandbox =
+                            self.legacy_child_parent_sandbox(cfg, row.parent_session_id.as_deref());
+                    }
                     cowork_harness::agents::restore_persisted_child_restrictions(cfg, &row)
                 });
             match restored {

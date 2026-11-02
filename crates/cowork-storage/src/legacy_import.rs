@@ -130,8 +130,17 @@ fn parse_legacy_snapshot(root: &Value) -> Option<ParsedLegacySnapshot> {
     } else {
         None
     };
-    let role = if has_subagent {
-        opt_string(session.get("role"))
+    // Mirrors the zod `role`/`agentType` schemas of `parsePersistedSessionSnapshot`: v3–v5 accept
+    // the legacy enum and normalize it, v6–v7 accept only canonical roles (no `agentType`).
+    // A value outside the version's enum rejects the whole snapshot, as in TS.
+    let role = if has_exec {
+        legacy_role_field(session, "role", AGENT_ROLES)?.map(ToOwned::to_owned)
+    } else if has_subagent {
+        normalize_legacy_role(
+            legacy_role_field(session, "role", LEGACY_AGENT_ROLES)?,
+            legacy_role_field(session, "agentType", LEGACY_AGENT_ROLES)?,
+        )
+        .map(ToOwned::to_owned)
     } else {
         None
     };
@@ -368,6 +377,7 @@ fn import_single_legacy_snapshot(
            session_kind = excluded.session_kind,
            parent_session_id = excluded.parent_session_id,
            role = excluded.role,
+           agent_type = excluded.agent_type,
            mode = excluded.mode,
            depth = excluded.depth,
            nickname = excluded.nickname,
@@ -609,6 +619,52 @@ fn extract_message_text(content: Option<&Value>) -> String {
         return parts.join("\n");
     }
     String::new()
+}
+
+/// `AgentRole` values (`agentRoleSchema` in `src/shared/agents.ts`).
+const AGENT_ROLES: &[&str] = &["default", "explorer", "research", "worker", "reviewer"];
+
+/// `legacyAgentRoleSchema` in `src/server/sessionStore/snapshots.ts`.
+const LEGACY_AGENT_ROLES: &[&str] = &[
+    "default", "explorer", "research", "worker", "reviewer", "general", "explore",
+];
+
+/// Reads an optional nullable role-enum field. Returns `None` when the field holds a value
+/// outside `allowed` (the snapshot fails validation), `Some(None)` when absent or `null`.
+fn legacy_role_field<'a>(
+    session: &'a serde_json::Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+) -> Option<Option<&'a str>> {
+    match session.get(key) {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::String(raw)) if allowed.contains(&raw.as_str()) => Some(Some(raw.as_str())),
+        Some(_) => None,
+    }
+}
+
+/// `mapLegacyAgentTypeToRole` in `src/shared/agents.ts`.
+fn map_legacy_agent_type_to_role(role: Option<&str>) -> Option<&'static str> {
+    match role? {
+        "explore" => Some("explorer"),
+        "research" => Some("research"),
+        "general" => Some("worker"),
+        _ => None,
+    }
+}
+
+/// `normalizeLegacyRole(role, agentType)` in `src/server/sessionStore/snapshots.ts`: a canonical
+/// `role` wins; otherwise the legacy alias in `role ?? agentType` is mapped.
+fn normalize_legacy_role<'a>(
+    role: Option<&'a str>,
+    agent_type: Option<&'a str>,
+) -> Option<&'a str> {
+    if let Some(role) = role
+        && AGENT_ROLES.contains(&role)
+    {
+        return Some(role);
+    }
+    map_legacy_agent_type_to_role(role.or(agent_type))
 }
 
 fn non_empty_str(val: &Value) -> Option<String> {

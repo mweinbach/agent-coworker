@@ -243,6 +243,22 @@ pub struct TaskCoordinatorOptions {
 
 static NEXT_CONTINUATION_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
+/// TS `DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS`: backoff for retrying an automatic
+/// completion whose pending artifact-revision settlement failed transiently (thread quiescence
+/// or a pending terminal lock). The last delay repeats while the failure stays transient.
+pub const DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS: [u64; 6] = [0, 25, 100, 250, 500, 1000];
+
+/// Delay before settlement retry `attempt` (0-based); TS `artifactSettlementRetryDelayMs`.
+pub type ArtifactSettlementRetryDelay = Arc<dyn Fn(u32) -> std::time::Duration + Send + Sync>;
+
+/// TS `ArtifactSettlementRetryState`: one per task with a scheduled or running retry.
+#[derive(Default)]
+struct ArtifactSettlementRetryState {
+    attempts: u32,
+    running: bool,
+    timer: Option<tokio::task::AbortHandle>,
+}
+
 pub struct TaskCoordinator {
     self_weak: Weak<Self>,
     session_db: Arc<SessionDb>,
@@ -253,6 +269,20 @@ pub struct TaskCoordinator {
     continuation_dispatcher: Mutex<Option<Arc<dyn TaskContinuationDispatcher>>>,
     task_mutation_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     continuation_attempts: DashMap<String, u64>,
+    artifact_settlement_retry_delay: Mutex<Option<ArtifactSettlementRetryDelay>>,
+    artifact_settlement_retries:
+        Mutex<std::collections::HashMap<String, ArtifactSettlementRetryState>>,
+}
+
+impl Drop for TaskCoordinator {
+    fn drop(&mut self) {
+        // Retry timers hold only a weak coordinator reference; abort them so none outlive it.
+        for (_, state) in self.artifact_settlement_retries.get_mut().drain() {
+            if let Some(timer) = state.timer {
+                timer.abort();
+            }
+        }
+    }
 }
 
 impl TaskCoordinator {
@@ -282,6 +312,8 @@ impl TaskCoordinator {
             continuation_dispatcher: Mutex::new(None),
             task_mutation_locks: DashMap::new(),
             continuation_attempts: DashMap::new(),
+            artifact_settlement_retry_delay: Mutex::new(None),
+            artifact_settlement_retries: Mutex::new(std::collections::HashMap::new()),
         }))
     }
 
@@ -307,6 +339,18 @@ impl TaskCoordinator {
 
     pub fn set_quiescer(&self, quiescer: Arc<dyn TaskThreadQuiescer>) {
         *self.quiescer.lock() = Some(quiescer);
+    }
+
+    /// Overrides the settlement retry backoff (TS `artifactSettlementRetryDelayMs`).
+    pub fn set_artifact_settlement_retry_delay(&self, delay: ArtifactSettlementRetryDelay) {
+        *self.artifact_settlement_retry_delay.lock() = Some(delay);
+    }
+
+    /// Whether an automatic-completion settlement retry is scheduled or running for `task_id`.
+    pub fn has_pending_artifact_settlement_retry(&self, task_id: &str) -> bool {
+        self.artifact_settlement_retries
+            .lock()
+            .contains_key(task_id)
     }
 
     fn allows_pending_terminal_mutation(task_id: &str) -> bool {
@@ -2987,7 +3031,7 @@ impl TaskCoordinator {
             }
         };
         let settled = self
-            .settle_after_revision_outcome(
+            .settle_after_revision_outcome_or_retry(
                 updated_task,
                 prior_task_status,
                 "completed",
@@ -3048,7 +3092,7 @@ impl TaskCoordinator {
             )
             .await?;
         let settled = self
-            .settle_after_revision_outcome(
+            .settle_after_revision_outcome_or_retry(
                 failed_task,
                 prior_task_status,
                 outcome_label,
@@ -3095,6 +3139,53 @@ impl TaskCoordinator {
         std::fs::symlink_metadata(&target)
             .is_err()
             .then_some(target)
+    }
+
+    /// `settle_after_revision_outcome`, keeping a pending artifact-revision settlement whose
+    /// automatic acceptance failed to quiesce the task threads and scheduling its retry (TS
+    /// `completeActiveRevisionOutcome` / `settleClosedRevisionOutcome` quiescence handling).
+    async fn settle_after_revision_outcome_or_retry(
+        &self,
+        task: TaskRecord,
+        prior_task_status: TaskStatus,
+        outcome: &str,
+        session_id: &str,
+        detail_msg: Option<&str>,
+        defer_terminal_until_origin_settled: bool,
+    ) -> Result<TaskRecord, TaskCoordinatorError> {
+        let task_id = task.id.clone();
+        match self
+            .settle_after_revision_outcome(
+                task,
+                prior_task_status,
+                outcome,
+                session_id,
+                detail_msg,
+                defer_terminal_until_origin_settled,
+            )
+            .await
+        {
+            Err(TaskCoordinatorError::QuiescenceFailed(error))
+                if self
+                    .session_db
+                    .has_pending_task_artifact_revision_settlement(&task_id)? =>
+            {
+                tracing::warn!(
+                    task_id = %task_id,
+                    session_id,
+                    %error,
+                    "automatic task acceptance could not quiesce task threads; retrying settlement"
+                );
+                self.schedule_pending_artifact_settlement_retry(&task_id);
+                let latest = self.session_db.get_task(&task_id)?.ok_or_else(|| {
+                    TaskCoordinatorError::InvalidRequest(format!("Unknown task: {task_id}"))
+                })?;
+                self.notify_updated(&latest);
+                self.notify_activity(&latest);
+                Ok(latest)
+            }
+            other => other,
+        }
     }
 
     async fn settle_after_revision_outcome(
@@ -3162,6 +3253,11 @@ impl TaskCoordinator {
                 .await
             {
                 Ok(settled) => return Ok(settled),
+                // TS rethrows these so the caller keeps the pending settlement and retries.
+                Err(
+                    err @ (TaskCoordinatorError::QuiescenceFailed(_)
+                    | TaskCoordinatorError::AtomicSettlementFailed(_)),
+                ) => return Err(err),
                 // TS `restoreAfterArtifactRevisionCompletionProposalFailure`: an ineligible or
                 // failed completion proposal restores the pre-revision status below instead of
                 // failing the revision outcome, but the cause must stay visible.
@@ -3672,9 +3768,14 @@ impl TaskCoordinator {
                     ready_commit,
                 )
                 .await?;
-            if self
-                .session_db
-                .has_pending_task_artifact_revision_settlement(&updated.id)?
+            // TS settles pending artifact-revision markers in the same commit that proposes
+            // (and, without required review, accepts) completion. For an auto-accepted task the
+            // acceptance commit clears them, so a failed acceptance (e.g. threads that do not
+            // quiesce) keeps the durable marker for the settlement retry / startup reconcile.
+            if task.review_required
+                && self
+                    .session_db
+                    .has_pending_task_artifact_revision_settlement(&updated.id)?
             {
                 let _ = self
                     .session_db
@@ -3710,9 +3811,10 @@ impl TaskCoordinator {
                     session_id,
                 )
                 .await?;
-            if self
-                .session_db
-                .has_pending_task_artifact_revision_settlement(&updated.id)?
+            if task.review_required
+                && self
+                    .session_db
+                    .has_pending_task_artifact_revision_settlement(&updated.id)?
             {
                 let _ = self
                     .session_db
@@ -3866,6 +3968,11 @@ impl TaskCoordinator {
                     }
                 }
                 pending_guard.release();
+                // A pending artifact-revision settlement survives a failed deferred acceptance;
+                // retry it once the threads settle instead of waiting for a restart.
+                if coord.should_retry_pending_artifact_settlement(&task_id_owned) {
+                    coord.schedule_pending_artifact_settlement_retry(&task_id_owned);
+                }
             });
             return Ok(current);
         }
@@ -3922,7 +4029,14 @@ impl TaskCoordinator {
                 TaskStatus::Completed,
                 session_id.map(str::to_owned),
             )
-            .await?;
+            .await
+            .map_err(|err| match err {
+                // TS `TerminalTaskCompletionQuiescenceError`: transient, retryable.
+                TaskCoordinatorError::InvalidRequest(msg) => {
+                    TaskCoordinatorError::QuiescenceFailed(msg)
+                }
+                other => other,
+            })?;
 
         let result = if let Some(mat) = reviewed_material {
             self.session_db
@@ -3953,6 +4067,7 @@ impl TaskCoordinator {
         match result {
             Ok(task) => {
                 self.continuation_attempts.remove(&task.id);
+                self.cancel_pending_artifact_settlement_retry(&task.id);
                 self.notify_updated(&task);
                 Ok(task)
             }
@@ -3980,16 +4095,33 @@ impl TaskCoordinator {
                     "Task must be awaiting review before changes can be requested".to_owned(),
                 ));
             }
-            self.transition_locked(
-                &task.id,
-                &task.workspace_path,
-                expected_revision,
-                TaskStatus::Working,
-                "Changes requested",
-                Some(feedback),
-                None,
-            )
-            .await
+            let updated = self
+                .transition_locked(
+                    &task.id,
+                    &task.workspace_path,
+                    expected_revision,
+                    TaskStatus::Working,
+                    "Changes requested",
+                    Some(feedback),
+                    None,
+                )
+                .await?;
+            // A reviewer rejecting the delivery settles any revision whose automatic acceptance
+            // was still pending, so a settlement retry cannot complete the task over the request.
+            self.cancel_pending_artifact_settlement_retry(&updated.id);
+            if self
+                .session_db
+                .has_pending_task_artifact_revision_settlement(&updated.id)?
+            {
+                return Ok(self
+                    .session_db
+                    .settle_pending_task_artifact_revision_settlements(
+                        updated.id.clone(),
+                        now_iso(),
+                    )
+                    .await?);
+            }
+            Ok(updated)
         })
         .await
     }
@@ -4076,19 +4208,24 @@ impl TaskCoordinator {
         detail: Option<&str>,
         session_id: Option<&str>,
     ) -> Result<TaskRecord, TaskCoordinatorError> {
-        self.run_task_mutation(task_id, || async {
-            self.transition_locked(
-                task_id,
-                workspace_path,
-                expected_revision,
-                status,
-                summary,
-                detail,
-                session_id,
-            )
-            .await
-        })
-        .await
+        let updated = self
+            .run_task_mutation(task_id, || async {
+                self.transition_locked(
+                    task_id,
+                    workspace_path,
+                    expected_revision,
+                    status,
+                    summary,
+                    detail,
+                    session_id,
+                )
+                .await
+            })
+            .await?;
+        if is_terminal_task(&updated) {
+            self.cancel_pending_artifact_settlement_retry(&updated.id);
+        }
+        Ok(updated)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4265,71 +4402,194 @@ impl TaskCoordinator {
                 continue;
             }
             let task_id = summary.id.clone();
-            let settled_now = self
+            let settled = self
                 .run_task_mutation(&task_id, || async {
                     let Some(latest) = self.session_db.get_task(&task_id)? else {
-                        return Ok(false);
+                        return Ok(None);
                     };
-                    if is_terminal_task(&latest)
-                        || self.has_active_artifact_revision(&latest)?
-                        || !self
-                            .session_db
-                            .has_pending_task_artifact_revision_settlement(&latest.id)?
-                    {
-                        return Ok(false);
-                    }
-                    if let Some(primary) = latest.threads.first()
-                        && let Some(sess) =
-                            self.session_db.get_session_record(&primary.session_id)?
-                        && sess.execution_state == Some(AgentExecutionState::Errored)
-                    {
-                        return Ok(false);
-                    }
-                    let pending_ids = self
-                        .session_db
-                        .list_pending_task_artifact_revision_settlement_ids(&latest.id)?;
-                    let Some(revision) = pending_ids.iter().find_map(|rid| {
-                        self.session_db
-                            .get_task_artifact_revision(rid)
-                            .ok()
-                            .flatten()
-                    }) else {
-                        return Ok(false);
-                    };
-                    let prior_status = self
-                        .session_db
-                        .get_task_artifact_revision_prior_task_status(&revision.id)?
-                        .unwrap_or(latest.status);
-                    let _ = self
-                        .settle_after_revision_outcome(
-                            latest,
-                            prior_status,
-                            "completed",
-                            &revision.session_id,
-                            None,
-                            false,
-                        )
-                        .await?;
-                    let still_awaiting = self
-                        .session_db
-                        .get_task(&task_id)?
-                        .map(|t| -> Result<bool, TaskCoordinatorError> {
-                            Ok(!is_terminal_task(&t)
-                                && !self.has_active_artifact_revision(&t)?
-                                && self
-                                    .session_db
-                                    .has_pending_task_artifact_revision_settlement(&t.id)?)
-                        })
-                        .transpose()?
-                        .unwrap_or(false);
-                    Ok(!still_awaiting)
+                    self.settle_pending_artifact_revision_settlements_locked(latest)
+                        .await
                 })
-                .await?;
-            if settled_now {
+                .await;
+            match settled {
+                Ok(_) => {}
+                Err(TaskCoordinatorError::QuiescenceFailed(error)) => {
+                    tracing::warn!(
+                        task_id = %task_id,
+                        %error,
+                        "pending artifact settlement could not quiesce task threads; retrying"
+                    );
+                    self.schedule_pending_artifact_settlement_retry(&task_id);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+            let still_awaiting = match self.session_db.get_task(&task_id)? {
+                Some(t) => self
+                    .session_db
+                    .has_pending_task_artifact_revision_settlement(&t.id)?,
+                None => false,
+            };
+            if !still_awaiting {
                 reconciled += 1;
             }
         }
         Ok(reconciled)
+    }
+
+    /// TS `settlePendingArtifactRevisionSettlementsLocked`: re-run the completion settlement of
+    /// the oldest completed revision still awaiting settlement. Caller holds the task mutation.
+    async fn settle_pending_artifact_revision_settlements_locked(
+        &self,
+        task: TaskRecord,
+    ) -> Result<Option<TaskRecord>, TaskCoordinatorError> {
+        if is_terminal_task(&task)
+            || self.has_active_artifact_revision(&task)?
+            || !self
+                .session_db
+                .has_pending_task_artifact_revision_settlement(&task.id)?
+        {
+            return Ok(None);
+        }
+        if let Some(primary) = task.threads.first()
+            && let Some(sess) = self.session_db.get_session_record(&primary.session_id)?
+            && sess.execution_state == Some(AgentExecutionState::Errored)
+        {
+            return Ok(None);
+        }
+        let pending_ids = self
+            .session_db
+            .list_pending_task_artifact_revision_settlement_ids(&task.id)?;
+        let Some(revision) = pending_ids.iter().find_map(|rid| {
+            self.session_db
+                .get_task_artifact_revision(rid)
+                .ok()
+                .flatten()
+        }) else {
+            return Ok(None);
+        };
+        let prior_status = self
+            .session_db
+            .get_task_artifact_revision_prior_task_status(&revision.id)?
+            .unwrap_or(task.status);
+        self.settle_after_revision_outcome(
+            task,
+            prior_status,
+            "completed",
+            &revision.session_id,
+            None,
+            false,
+        )
+        .await
+        .map(Some)
+    }
+
+    fn artifact_settlement_retry_delay(&self, attempt: u32) -> std::time::Duration {
+        if let Some(delay) = self.artifact_settlement_retry_delay.lock().clone() {
+            return delay(attempt);
+        }
+        let idx = (attempt as usize).min(DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS.len() - 1);
+        std::time::Duration::from_millis(DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS[idx])
+    }
+
+    /// TS `schedulePendingArtifactSettlementRetry`: at most one timer or run per task. The timer
+    /// task holds only a weak coordinator reference and is aborted on task completion or
+    /// cancellation and when the coordinator drops.
+    fn schedule_pending_artifact_settlement_retry(&self, task_id: &str) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            // No runtime to run on: the durable marker still drives startup reconciliation.
+            return;
+        };
+        let mut retries = self.artifact_settlement_retries.lock();
+        let state = retries.entry(task_id.to_owned()).or_default();
+        if state.timer.is_some() || state.running {
+            return;
+        }
+        let delay = self.artifact_settlement_retry_delay(state.attempts);
+        let weak = self.self_weak.clone();
+        let task_id_owned = task_id.to_owned();
+        let timer = runtime.spawn(async move {
+            tokio::time::sleep(delay).await;
+            if let Some(coord) = weak.upgrade() {
+                coord
+                    .run_pending_artifact_settlement_retry(&task_id_owned)
+                    .await;
+            }
+        });
+        state.timer = Some(timer.abort_handle());
+    }
+
+    fn cancel_pending_artifact_settlement_retry(&self, task_id: &str) {
+        if let Some(state) = self.artifact_settlement_retries.lock().remove(task_id)
+            && let Some(timer) = state.timer
+        {
+            timer.abort();
+        }
+    }
+
+    /// TS `shouldRetryPendingArtifactSettlement`.
+    fn should_retry_pending_artifact_settlement(&self, task_id: &str) -> bool {
+        let Ok(Some(latest)) = self.session_db.get_task(task_id) else {
+            return false;
+        };
+        !is_terminal_task(&latest)
+            && matches!(self.has_active_artifact_revision(&latest), Ok(false))
+            && matches!(
+                self.session_db
+                    .has_pending_task_artifact_revision_settlement(&latest.id),
+                Ok(true)
+            )
+    }
+
+    /// TS `runPendingArtifactSettlementRetry`: only quiescence failures and pending terminal
+    /// locks are retried (while the task still awaits that settlement); any other failure ends
+    /// the retry loop and leaves the durable marker to startup reconciliation.
+    async fn run_pending_artifact_settlement_retry(&self, task_id: &str) {
+        {
+            let mut retries = self.artifact_settlement_retries.lock();
+            let Some(state) = retries.get_mut(task_id) else {
+                return;
+            };
+            if state.running {
+                return;
+            }
+            state.running = true;
+            state.timer = None;
+        }
+        let result = self
+            .run_task_mutation(task_id, || async {
+                let Some(task) = self.session_db.get_task(task_id)? else {
+                    return Ok(None);
+                };
+                self.settle_pending_artifact_revision_settlements_locked(task)
+                    .await
+            })
+            .await;
+        let retry_again = match result {
+            Ok(_) => false,
+            Err(
+                TaskCoordinatorError::QuiescenceFailed(_) | TaskCoordinatorError::TaskLocked(_),
+            ) => self.should_retry_pending_artifact_settlement(task_id),
+            Err(error) => {
+                tracing::warn!(
+                    task_id,
+                    %error,
+                    "pending artifact settlement retry failed; leaving it to startup reconciliation"
+                );
+                false
+            }
+        };
+        {
+            let mut retries = self.artifact_settlement_retries.lock();
+            if !retry_again {
+                retries.remove(task_id);
+                return;
+            }
+            let state = retries.entry(task_id.to_owned()).or_default();
+            state.running = false;
+            state.attempts = state.attempts.saturating_add(1);
+        }
+        self.schedule_pending_artifact_settlement_retry(task_id);
     }
 
     async fn fail_primary_task_run(

@@ -783,3 +783,367 @@ fn preview_and_comparison_services_handle_text_png_and_docx() {
     assert_eq!(docx_diff["kind"], Value::String("docx".to_owned()));
     assert_eq!(docx_diff["summary"]["modified"], json!(1));
 }
+
+// ============================================================================
+// Pending artifact-revision settlement retries (TS `schedulePendingArtifactSettlementRetry`)
+// ============================================================================
+
+/// Quiescer whose terminal `completed` quiesce fails (as a thread that never settles within the
+/// server's timeout) while `fail_completed` is set. Other reasons always succeed.
+#[derive(Default)]
+struct FlakyCompletionQuiescer {
+    fail_completed: AtomicBool,
+    completed_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl TaskThreadQuiescer for FlakyCompletionQuiescer {
+    async fn quiesce_task_threads(
+        &self,
+        task: TaskRecord,
+        reason: TaskStatus,
+        _origin_session_id: Option<String>,
+    ) -> Result<(), String> {
+        if reason != TaskStatus::Completed {
+            return Ok(());
+        }
+        self.completed_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_completed.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Timed out waiting for task session {} to quiesce",
+                task.threads[0].session_id
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn settlement_coordinator(
+    env: &TestHarnessEnv,
+    quiescer: Arc<FlakyCompletionQuiescer>,
+    retry_delay: std::time::Duration,
+) -> Arc<TaskCoordinator> {
+    let coordinator = TaskCoordinator::new(TaskCoordinatorOptions {
+        session_db: env.session_db.clone(),
+        notify: None,
+        artifact_store: Some(env.artifact_store.clone()),
+        quiesce_task_threads: Some(quiescer),
+    })
+    .expect("create coordinator");
+    coordinator.set_thread_factory(Arc::new(MockThreadFactory {
+        counter: AtomicUsize::new(0),
+    }));
+    coordinator.set_artifact_settlement_retry_delay(Arc::new(move |_| retry_delay));
+    coordinator
+}
+
+/// Auto-accepted task (`reviewRequired: false`) whose artifact revision thread has finished
+/// editing `report.md`; returns `(task_id, revision_session_id)`.
+async fn start_auto_accept_revision(
+    coordinator: &Arc<TaskCoordinator>,
+    env: &TestHarnessEnv,
+    key: &str,
+) -> (String, String) {
+    let ws = env.workspace_str();
+    let report = env.workspace_dir.join("report.md");
+    std::fs::write(&report, "# v1\n").unwrap();
+    let creation = parse_and_validate_task_creation_input(
+        &json!({
+            "idempotencyKey": key,
+            "title": "Report",
+            "objective": "Write report.md",
+            "context": "Settlement retry fixture",
+            "reviewRequired": false,
+            "reviewRounds": 0,
+            "requirements": [{ "kind": "acceptance_criterion", "text": "report.md exists" }],
+            "workItems": [{
+                "key": "write",
+                "title": "Write report",
+                "description": "Create report.md",
+                "expectedOutputs": ["report.md"]
+            }]
+        }),
+        false,
+    )
+    .unwrap();
+    let created = coordinator
+        .create_planned(
+            &ws,
+            "task-main",
+            Some("source-chat"),
+            TaskCreationOrigin::ChatTool,
+            "keep_project",
+            creation,
+            Some("Main"),
+        )
+        .await
+        .unwrap()
+        .task;
+    let wi_id = created.work_items[0].id.clone();
+    let main_tid = created.threads[0].id.clone();
+    let claimed = coordinator
+        .claim_work_item(&created.id, &ws, &wi_id, &main_tid, created.revision)
+        .await
+        .unwrap();
+    let done = coordinator
+        .mark_work_item(
+            &created.id,
+            &ws,
+            &wi_id,
+            claimed.revision,
+            WorkItemStatus::Done,
+            Some("Wrote report.md"),
+            Some(&main_tid),
+        )
+        .await
+        .unwrap();
+    let registered = coordinator
+        .register_artifact(RegisterArtifactRequest {
+            task_id: created.id.clone(),
+            workspace_path: ws.clone(),
+            expected_revision: done.revision,
+            session_id: Some("task-main".to_owned()),
+            path: "report.md".to_owned(),
+            title: "Report".to_owned(),
+            kind: "markdown".to_owned(),
+            artifact_id: None,
+            base_version_id: None,
+            change_summary: None,
+            work_item_id: Some(wi_id),
+            provenance: None,
+        })
+        .await
+        .unwrap();
+    let (_, _, revision) = coordinator
+        .start_artifact_revision(cowork_harness::tasks::StartArtifactRevisionRequest {
+            task_id: created.id.clone(),
+            workspace_path: ws,
+            artifact_id: registered.artifacts[0].id.clone(),
+            expected_revision: registered.revision,
+            instruction: "Tighten the wording".to_owned(),
+            base_version_id: None,
+            title: None,
+            provider: None,
+            model: None,
+        })
+        .await
+        .unwrap();
+    std::fs::write(&report, "# v2\n").unwrap();
+    (created.id, revision.session_id)
+}
+
+/// Finishes the revision while completion quiescence fails: the durable settlement marker must
+/// survive and the task must wait in `awaiting_review` instead of silently stalling.
+async fn finish_revision_with_failed_quiescence(
+    coordinator: &Arc<TaskCoordinator>,
+    env: &TestHarnessEnv,
+    task_id: &str,
+    revision_session_id: &str,
+) -> TaskRecord {
+    let outcome = coordinator
+        .handle_thread_outcome(revision_session_id, "completed", None)
+        .await
+        .expect("revision outcome settles despite the quiescence failure")
+        .expect("revision outcome result");
+    assert_eq!(outcome.task.status, TaskStatus::AwaitingReview);
+    assert_eq!(
+        outcome.revision.status,
+        cowork_storage::TaskArtifactRevisionStatus::Completed
+    );
+    assert!(
+        env.session_db
+            .has_pending_task_artifact_revision_settlement(task_id)
+            .unwrap(),
+        "pending settlement marker must be kept until acceptance commits"
+    );
+    outcome.task
+}
+
+async fn wait_for(deadline: std::time::Duration, mut cond: impl FnMut() -> bool) -> bool {
+    let until = std::time::Instant::now() + deadline;
+    loop {
+        if cond() {
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn settlement_retry_completes_task_once_threads_quiesce() {
+    let env = TestHarnessEnv::new("settle-retry").await;
+    let quiescer = Arc::new(FlakyCompletionQuiescer::default());
+    let coordinator =
+        settlement_coordinator(&env, quiescer.clone(), std::time::Duration::from_millis(20));
+    let (task_id, rev_session) = start_auto_accept_revision(&coordinator, &env, "settle-1").await;
+
+    quiescer.fail_completed.store(true, Ordering::SeqCst);
+    finish_revision_with_failed_quiescence(&coordinator, &env, &task_id, &rev_session).await;
+    assert!(coordinator.has_pending_artifact_settlement_retry(&task_id));
+
+    // Retries keep failing while the threads stay busy; nothing is lost in the meantime.
+    assert!(
+        wait_for(std::time::Duration::from_secs(5), || {
+            quiescer.completed_calls.load(Ordering::SeqCst) >= 4
+        })
+        .await,
+        "settlement retries must keep firing while quiescence fails"
+    );
+    let waiting = env.session_db.get_task(&task_id).unwrap().unwrap();
+    assert_eq!(waiting.status, TaskStatus::AwaitingReview);
+    assert!(
+        env.session_db
+            .has_pending_task_artifact_revision_settlement(&task_id)
+            .unwrap()
+    );
+
+    // The threads settle: the next retry accepts the task and clears the marker.
+    quiescer.fail_completed.store(false, Ordering::SeqCst);
+    assert!(
+        wait_for(std::time::Duration::from_secs(5), || {
+            env.session_db.get_task(&task_id).unwrap().unwrap().status == TaskStatus::Completed
+        })
+        .await,
+        "retry must auto-accept the task once threads quiesce"
+    );
+    assert!(
+        !env.session_db
+            .has_pending_task_artifact_revision_settlement(&task_id)
+            .unwrap()
+    );
+    assert!(
+        wait_for(std::time::Duration::from_secs(2), || {
+            !coordinator.has_pending_artifact_settlement_retry(&task_id)
+        })
+        .await,
+        "retry state must be released after acceptance"
+    );
+}
+
+#[tokio::test]
+async fn startup_reconciliation_completes_pending_settlement_after_restart() {
+    let env = TestHarnessEnv::new("settle-restart").await;
+    let failing = Arc::new(FlakyCompletionQuiescer::default());
+    failing.fail_completed.store(true, Ordering::SeqCst);
+    // Long delay: the first server "crashes" before its retry fires.
+    let first = settlement_coordinator(&env, failing.clone(), std::time::Duration::from_secs(60));
+    let (task_id, rev_session) = start_auto_accept_revision(&first, &env, "settle-2").await;
+    finish_revision_with_failed_quiescence(&first, &env, &task_id, &rev_session).await;
+    assert!(first.has_pending_artifact_settlement_retry(&task_id));
+    drop(first);
+
+    let healthy = Arc::new(FlakyCompletionQuiescer::default());
+    let restarted = settlement_coordinator(&env, healthy.clone(), std::time::Duration::ZERO);
+    let reconciled = restarted
+        .reconcile_pending_artifact_revision_settlements(None)
+        .await
+        .expect("reconcile");
+    assert_eq!(reconciled, 1);
+    let task = env.session_db.get_task(&task_id).unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Completed);
+    assert!(
+        !env.session_db
+            .has_pending_task_artifact_revision_settlement(&task_id)
+            .unwrap()
+    );
+    assert_eq!(healthy.completed_calls.load(Ordering::SeqCst), 1);
+    assert!(!restarted.has_pending_artifact_settlement_retry(&task_id));
+    // The dropped coordinator's timer never fires again.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(failing.completed_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn manual_acceptance_before_retry_makes_retry_a_no_op() {
+    let env = TestHarnessEnv::new("settle-manual").await;
+    let quiescer = Arc::new(FlakyCompletionQuiescer::default());
+    let coordinator = settlement_coordinator(
+        &env,
+        quiescer.clone(),
+        std::time::Duration::from_millis(200),
+    );
+    let (task_id, rev_session) = start_auto_accept_revision(&coordinator, &env, "settle-3").await;
+    quiescer.fail_completed.store(true, Ordering::SeqCst);
+    let waiting =
+        finish_revision_with_failed_quiescence(&coordinator, &env, &task_id, &rev_session).await;
+
+    quiescer.fail_completed.store(false, Ordering::SeqCst);
+    let ws = env.workspace_str();
+    // A stale revision is rejected by optimistic concurrency.
+    assert!(matches!(
+        coordinator
+            .accept_task(&task_id, &ws, waiting.revision - 1)
+            .await,
+        Err(TaskCoordinatorError::RevisionConflict { .. })
+    ));
+    let accepted = coordinator
+        .accept_task(&task_id, &ws, waiting.revision)
+        .await
+        .expect("manual acceptance");
+    assert_eq!(accepted.status, TaskStatus::Completed);
+    assert!(
+        !env.session_db
+            .has_pending_task_artifact_revision_settlement(&task_id)
+            .unwrap(),
+        "the acceptance commit settles the pending revision"
+    );
+    let calls_after_accept = quiescer.completed_calls.load(Ordering::SeqCst);
+
+    // Past the retry delay: no second acceptance, no further quiescence, no revision bump.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let after = env.session_db.get_task(&task_id).unwrap().unwrap();
+    assert_eq!(after.status, TaskStatus::Completed);
+    assert_eq!(after.revision, accepted.revision);
+    assert_eq!(
+        quiescer.completed_calls.load(Ordering::SeqCst),
+        calls_after_accept
+    );
+    assert!(!coordinator.has_pending_artifact_settlement_retry(&task_id));
+}
+
+#[tokio::test]
+async fn settlement_retry_stops_when_task_is_cancelled() {
+    let env = TestHarnessEnv::new("settle-cancel").await;
+    let quiescer = Arc::new(FlakyCompletionQuiescer::default());
+    let coordinator =
+        settlement_coordinator(&env, quiescer.clone(), std::time::Duration::from_millis(10));
+    let (task_id, rev_session) = start_auto_accept_revision(&coordinator, &env, "settle-4").await;
+    quiescer.fail_completed.store(true, Ordering::SeqCst);
+    finish_revision_with_failed_quiescence(&coordinator, &env, &task_id, &rev_session).await;
+    assert!(
+        wait_for(std::time::Duration::from_secs(5), || {
+            quiescer.completed_calls.load(Ordering::SeqCst) >= 3
+        })
+        .await
+    );
+
+    let ws = env.workspace_str();
+    let current = env.session_db.get_task(&task_id).unwrap().unwrap();
+    let cancelled = coordinator
+        .transition(
+            &task_id,
+            &ws,
+            current.revision,
+            TaskStatus::Cancelled,
+            "Cancelled by user",
+            None,
+            None,
+        )
+        .await
+        .expect("cancel task");
+    assert_eq!(cancelled.status, TaskStatus::Cancelled);
+    assert!(!coordinator.has_pending_artifact_settlement_retry(&task_id));
+
+    // Terminal: the retry loop is over for good.
+    let calls = quiescer.completed_calls.load(Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(quiescer.completed_calls.load(Ordering::SeqCst), calls);
+    assert!(!coordinator.has_pending_artifact_settlement_retry(&task_id));
+    assert_eq!(
+        env.session_db.get_task(&task_id).unwrap().unwrap().status,
+        TaskStatus::Cancelled
+    );
+}

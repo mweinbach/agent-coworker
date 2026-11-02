@@ -1212,6 +1212,14 @@ fn accept_all_artifact_versions_in_open_tx(
         "DELETE FROM task_work_item_claims WHERE task_id = ?1",
         params![task_id],
     )?;
+    // Accepting the task settles every completed revision still awaiting settlement, so the
+    // durable marker is cleared only by the commit that actually completes the task.
+    conn.execute(
+        "UPDATE task_artifact_revisions
+         SET settlement_status = 'settled', updated_at = ?1
+         WHERE task_id = ?2 AND status = 'completed' AND settlement_status = ?3",
+        params![updated_at, task_id, PENDING_ARTIFACT_REVISION_SETTLEMENT],
+    )?;
     conn.execute(
         "UPDATE tasks SET status = 'completed' WHERE task_id = ?1",
         params![task_id],

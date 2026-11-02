@@ -194,8 +194,14 @@ async fn fs_open_keeps_mime_disposition_and_directory_listing() {
             .await
             .unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(body.contains("<li>notes.md</li>"), "{body}");
-        assert!(body.contains("<li>page.html</li>"), "{body}");
+        assert!(
+            body.contains("<span class=\"entry-title\">notes.md</span>"),
+            "{body}"
+        );
+        assert!(
+            body.contains("<span class=\"entry-title\">page.html</span>"),
+            "{body}"
+        );
     }
 }
 
@@ -346,7 +352,7 @@ async fn fs_open_route_streams_large_file_over_http() {
             .text()
             .await
             .unwrap()
-            .contains("<li>artifact.bin</li>")
+            .contains("<span class=\"entry-title\">artifact.bin</span>")
     );
 
     handle.shutdown().await;

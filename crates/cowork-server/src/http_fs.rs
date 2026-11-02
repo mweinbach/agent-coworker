@@ -214,20 +214,14 @@ fn query_map(query: Option<&str>) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-pub fn handle_fs_list(
-    allowed_roots: &[PathBuf],
-    default_cwd: &Path,
-    query: Option<&str>,
-) -> Result<Response<Body>, FsRouteError> {
-    let params = query_map(query);
-    let raw_path = params
-        .get("path")
-        .map(String::as_str)
-        .ok_or_else(|| FsRouteError::bad_request("Missing path parameter"))?;
-    let include_hidden = params.get("includeHidden").map(String::as_str) == Some("true");
-
-    let safe_dir = assert_path_within_roots(allowed_roots, default_cwd, raw_path)?;
-    let read_dir = std::fs::read_dir(&safe_dir).map_err(FsRouteError::from_io)?;
+/// Reads `dir` (an already-confined directory) into explorer entries, folders first, then by
+/// case-insensitive name (`listDirectoryEntries` in `webDesktopRoutes.ts`). Names starting with
+/// `.` or `~$` are hidden and skipped unless `include_hidden` is set.
+fn list_directory_entries(
+    dir: &Path,
+    include_hidden: bool,
+) -> Result<Vec<FsListEntry>, FsRouteError> {
+    let read_dir = std::fs::read_dir(dir).map_err(FsRouteError::from_io)?;
 
     let mut entries = Vec::new();
     for item in read_dir {
@@ -266,6 +260,23 @@ pub fn handle_fs_list(
             .cmp(&b.name.to_ascii_lowercase())
             .then_with(|| a.name.cmp(&b.name)),
     });
+    Ok(entries)
+}
+
+pub fn handle_fs_list(
+    allowed_roots: &[PathBuf],
+    default_cwd: &Path,
+    query: Option<&str>,
+) -> Result<Response<Body>, FsRouteError> {
+    let params = query_map(query);
+    let raw_path = params
+        .get("path")
+        .map(String::as_str)
+        .ok_or_else(|| FsRouteError::bad_request("Missing path parameter"))?;
+    let include_hidden = params.get("includeHidden").map(String::as_str) == Some("true");
+
+    let safe_dir = assert_path_within_roots(allowed_roots, default_cwd, raw_path)?;
+    let entries = list_directory_entries(&safe_dir, include_hidden)?;
 
     let body = serde_json::to_vec(&entries).unwrap_or_default();
     Ok(Response::builder()
@@ -558,25 +569,123 @@ fn guess_mime(path: &Path) -> &'static str {
     }
 }
 
-fn render_directory_html(dir: &Path) -> Result<String, FsRouteError> {
-    let read_dir = std::fs::read_dir(dir).map_err(FsRouteError::from_io)?;
-    let mut names: Vec<String> = read_dir
-        .filter_map(|e| {
-            e.ok()
-                .map(|item| item.file_name().to_string_lossy().into_owned())
+/// `/cowork/fs/open?path=<encoded>` (`buildOpenRoute` in `webDesktopRoutes.ts`). Every listing
+/// link goes back through `/cowork/fs/open`, so following one re-runs the same workspace
+/// confinement checks as the original request. Like the TS route, the link carries no browser
+/// access token.
+fn build_open_route(path_value: &str) -> String {
+    format!(
+        "/cowork/fs/open?path={}",
+        percent_encode_component(path_value)
+    )
+}
+
+/// Inline styles of the TS directory page (`renderDirectoryHtml`).
+const DIRECTORY_PAGE_STYLE: &str = concat!(
+    ":root { color-scheme: dark; font-family: \"Segoe UI\", system-ui, sans-serif; background: #0f1115; color: #f4f4f5; }",
+    "body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, rgba(79, 70, 229, 0.18), transparent 32%), linear-gradient(180deg, #10131a 0%, #0b0d11 100%); }",
+    "main { max-width: 900px; margin: 0 auto; padding: 40px 20px 64px; }",
+    ".chrome { margin-bottom: 24px; padding: 18px 20px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px; background: rgba(16, 18, 24, 0.8); backdrop-filter: blur(12px); }",
+    ".eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(244, 244, 245, 0.58); }",
+    "h1 { margin: 10px 0 6px; font-size: 24px; line-height: 1.2; }",
+    ".path { margin: 0; color: rgba(244, 244, 245, 0.72); word-break: break-all; }",
+    ".parent-link { display: inline-flex; margin-top: 14px; color: #9cc9ff; text-decoration: none; }",
+    ".list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }",
+    ".entry-link { display: flex; justify-content: space-between; gap: 18px; padding: 14px 16px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; background: rgba(15, 17, 21, 0.78); color: inherit; text-decoration: none; }",
+    ".entry-link:hover { border-color: rgba(156, 201, 255, 0.45); background: rgba(22, 26, 34, 0.95); }",
+    ".entry-title { font-weight: 600; word-break: break-word; }",
+    ".entry-meta { flex-shrink: 0; color: rgba(244, 244, 245, 0.58); font-size: 13px; }",
+    ".badge { margin-left: 8px; padding: 2px 6px; border-radius: 999px; background: rgba(244, 244, 245, 0.08); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }",
+    ".empty { padding: 28px 16px; border: 1px dashed rgba(255, 255, 255, 0.15); border-radius: 14px; color: rgba(244, 244, 245, 0.66); text-align: center; }",
+);
+
+/// Renders the `/cowork/fs/open` directory browser (`renderDirectoryHtml` in
+/// `webDesktopRoutes.ts`): every entry, hidden ones included and badged, links to
+/// `/cowork/fs/open` for that entry, and an "Up one level" link appears only while `dir` is below
+/// the workspace root that contains it, so it can never point outside the roots. `dir` must be a
+/// canonical, already-confined directory; `canonical_roots` are the canonicalized roots.
+fn render_directory_html(dir: &Path, canonical_roots: &[PathBuf]) -> Result<String, FsRouteError> {
+    let entries = list_directory_entries(dir, true)?;
+    let containing_root = canonical_roots
+        .iter()
+        .filter(|root| is_inside(root, dir))
+        .max_by_key(|root| root.as_os_str().len())
+        .ok_or_else(|| FsRouteError::forbidden("Path is outside allowed workspace roots"))?;
+    let parent_path = if dir == containing_root.as_path() {
+        None
+    } else {
+        dir.parent()
+            .filter(|parent| is_inside(containing_root, parent))
+    };
+
+    let rows: String = entries
+        .iter()
+        .map(|entry| {
+            let kind = if entry.is_directory { "Folder" } else { "File" };
+            let hidden_badge = if entry.is_hidden {
+                "<span class=\"badge\">hidden</span>"
+            } else {
+                ""
+            };
+            format!(
+                "<li class=\"entry\"><a class=\"entry-link\" href=\"{}\"><span class=\"entry-title\">{}</span><span class=\"entry-meta\">{kind}{hidden_badge}</span></a></li>",
+                html_escape(&build_open_route(&entry.path)),
+                html_escape(&entry.name),
+            )
         })
         .collect();
-    names.sort();
-    let mut html = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body><h1>{}</h1><ul>",
-        html_escape(&dir.to_string_lossy()),
-        html_escape(&dir.to_string_lossy())
+    let parent_link = parent_path
+        .map(|parent| {
+            format!(
+                "<a class=\"parent-link\" href=\"{}\">Up one level</a>",
+                html_escape(&build_open_route(&parent.to_string_lossy()))
+            )
+        })
+        .unwrap_or_default();
+    let listing_markup = if entries.is_empty() {
+        "<div class=\"empty\">This directory is empty.</div>".to_owned()
+    } else {
+        format!("<ul class=\"list\">{rows}</ul>")
+    };
+    let current_path = dir.to_string_lossy();
+    let title = html_escape(
+        dir.file_name()
+            .map(|name| name.to_string_lossy())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| current_path.clone())
+            .as_ref(),
     );
-    for name in names {
-        html.push_str(&format!("<li>{}</li>", html_escape(&name)));
-    }
-    html.push_str("</ul></body></html>");
-    Ok(html)
+    let escaped_current_path = html_escape(&current_path);
+
+    Ok(format!(
+        concat!(
+            "<!doctype html>",
+            "<html lang=\"en\">",
+            "<head>",
+            "<meta charset=\"utf-8\" />",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
+            "<title>{title}</title>",
+            "<style>{style}</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<section class=\"chrome\">",
+            "<div class=\"eyebrow\">Cowork Browser Shell</div>",
+            "<h1>{title}</h1>",
+            "<p class=\"path\">{path}</p>",
+            "{parent_link}",
+            "</section>",
+            "{listing}",
+            "</main>",
+            "</body>",
+            "</html>",
+        ),
+        title = title,
+        style = DIRECTORY_PAGE_STYLE,
+        path = escaped_current_path,
+        parent_link = parent_link,
+        listing = listing_markup,
+    ))
 }
 
 fn html_escape(s: &str) -> String {
@@ -584,6 +693,7 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 /// Chunk size for streaming `/cowork/fs/open` file bodies.
@@ -637,7 +747,7 @@ fn resolve_open_target(
     };
 
     if target_to_open.is_dir() {
-        return render_directory_html(&target_to_open).map(OpenTarget::Directory);
+        return render_directory_html(&target_to_open, &canonical_roots).map(OpenTarget::Directory);
     }
 
     let ConfinedFile { file, fstat, .. } =

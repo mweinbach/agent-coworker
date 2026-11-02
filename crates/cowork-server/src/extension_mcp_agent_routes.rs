@@ -987,12 +987,18 @@ impl ServerRuntimeState {
                 .map(|l| l.message)
         });
 
-        if let Some(existing) = self.agent_controls.get(thread_id) {
-            return Ok(Arc::clone(existing.value()));
-        }
-        self.agent_controls
-            .insert(thread_id.to_owned(), Arc::clone(&ctrl));
-        Ok(ctrl)
+        // Concurrent first-time callers can all reach this point (the lookup above and the
+        // `.await` in between are not atomic). Install under the map entry's shard lock and hand
+        // every caller the winning controller, so children, list/input/close and the
+        // per-parent slot cap all go through one instance. A losing controller has spawned no
+        // tasks or watchers (construction only hydrates rows and stores closures), so dropping
+        // it is side-effect free.
+        Ok(Arc::clone(
+            self.agent_controls
+                .entry(thread_id.to_owned())
+                .or_insert(ctrl)
+                .value(),
+        ))
     }
 
     // =========================================================================

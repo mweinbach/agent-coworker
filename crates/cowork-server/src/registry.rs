@@ -2763,9 +2763,12 @@ impl ServerRuntimeState {
         if let Some(existing) = self.workspace_state_ids.get(&key) {
             return existing.value().clone();
         }
-        let created = format!("jsonrpc-control:{}", Uuid::new_v4());
-        self.workspace_state_ids.insert(key, created.clone());
-        created
+        // Atomic get-or-insert so concurrent first callers all observe the same id.
+        self.workspace_state_ids
+            .entry(key)
+            .or_insert_with(|| format!("jsonrpc-control:{}", Uuid::new_v4()))
+            .value()
+            .clone()
     }
 
     pub fn read_workspace_state(

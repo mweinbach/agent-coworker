@@ -768,7 +768,14 @@ pub fn install_v2_pack_set(
                     // rolled back.
                     let backup =
                         rt_root.join(format!(".replaced-{version}-{}", Uuid::new_v4().simple()));
-                    std::fs::rename(&final_dir, &backup)?;
+                    // macOS (unlike Linux) refuses to rename a directory the caller cannot
+                    // write, and the installed root is sealed `0555`: open its owner-write bit
+                    // for the move, and re-seal it if the move fails or is rolled back.
+                    set_dir_root_mode(&final_dir, 0o755);
+                    if let Err(err) = std::fs::rename(&final_dir, &backup) {
+                        set_dir_root_mode(&final_dir, 0o555);
+                        return Err(err.into());
+                    }
                     backup_dir = Some(backup);
                 }
 
@@ -800,8 +807,10 @@ pub fn install_v2_pack_set(
                         if final_dir.exists() {
                             let _ = remove_sealed_tree(&final_dir);
                         }
-                        if let Some(backup) = &backup_dir {
-                            let _ = std::fs::rename(backup, &final_dir);
+                        if let Some(backup) = &backup_dir
+                            && std::fs::rename(backup, &final_dir).is_ok()
+                        {
+                            set_dir_root_mode(&final_dir, 0o555);
                         }
                         return Err(err);
                     }
@@ -823,6 +832,20 @@ pub fn install_v2_pack_set(
             res
         },
     )
+}
+
+/// macOS (unlike Linux) refuses to rename a directory the caller cannot write, so a sealed
+/// (`0555`) runtime root is opened for owner write around a move.
+fn set_dir_root_mode(dir: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, mode);
+    }
 }
 
 /// Options for `ensure_cowork_runtime_ready`.

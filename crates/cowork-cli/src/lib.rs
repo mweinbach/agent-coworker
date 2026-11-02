@@ -4,7 +4,7 @@
 //! - **Interactive terminal REPL (`rustyline`)**: Drives an in-process or loopback `cowork-server`
 //!   session over the `cowork-protocol` JSON-RPC-lite contract (`cowork.jsonrpc.v1`).
 //! - **Slash command router**: Supports `/help`, `/provider`, `/model`, `/reasoning`, `/tools`,
-//!   `/skills`, `/mcp`, `/sessions`, `/resume`, `/new`, `/compact`, `/clear`, and `/exit`.
+//!   `/skills`, `/mcp`, `/sessions`, `/resume`, `/new`, `/clear`, and `/exit`.
 //! - **Terminal output sanitization**: Strips OSC/DCS/APC/PM/SOS escape sequences from
 //!   server- and model-supplied text before it reaches the terminal (TS `sanitizeTerminalOutput`).
 //! - **CLI state store**: Persists per-workspace last active thread IDs in
@@ -36,7 +36,7 @@ pub use state_store::{
 };
 
 /// Canonical interactive REPL slash commands supported by `cowork`.
-pub const REPL_SLASH_COMMANDS: [&str; 13] = [
+pub const REPL_SLASH_COMMANDS: [&str; 12] = [
     "/help",
     "/provider",
     "/model",
@@ -47,7 +47,6 @@ pub const REPL_SLASH_COMMANDS: [&str; 13] = [
     "/sessions",
     "/resume",
     "/new",
-    "/compact",
     "/clear",
     "/exit",
 ];
@@ -163,7 +162,7 @@ mod tests {
         assert!(!args.yolo);
         assert!(REPL_SLASH_COMMANDS.contains(&"/help"));
         assert!(REPL_SLASH_COMMANDS.contains(&"/exit"));
-        assert_eq!(REPL_SLASH_COMMANDS.len(), 13);
+        assert_eq!(REPL_SLASH_COMMANDS.len(), 12);
         assert_eq!(cowork_protocol::WEBSOCKET_PROTOCOL_VERSION, "7.48");
     }
 }

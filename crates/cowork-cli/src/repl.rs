@@ -381,10 +381,6 @@ impl ActiveReplSession {
                 )?;
                 writeln!(
                     out,
-                    "  /compact                   Compact current conversation context"
-                )?;
-                writeln!(
-                    out,
                     "  /cwd <path>                Set working directory for this session"
                 )?;
                 writeln!(
@@ -820,25 +816,6 @@ impl ActiveReplSession {
                     )
                     .await?;
                 writeln!(out, "session hard-stop threshold cleared")?;
-                out.flush()?;
-                Ok(LineOutcome::Continue)
-            }
-
-            ParsedReplCommand::Compact => {
-                let _ = self
-                    .rpc
-                    .request(
-                        "thread/compact/start",
-                        Some(json!({ "threadId": self.thread_id })),
-                    )
-                    .await;
-                self.rpc.drain_brief_notifications(25).await;
-                self.rpc.pending_notifications.clear();
-                writeln!(
-                    out,
-                    "Conversation context compacted for thread {}.",
-                    sanitize(&self.thread_id)
-                )?;
                 out.flush()?;
                 Ok(LineOutcome::Continue)
             }

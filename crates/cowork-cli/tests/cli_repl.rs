@@ -120,7 +120,7 @@ fn embedded_server_self_exec_reaches_the_native_seccomp_stage() {
 }
 
 #[test]
-fn parses_all_13_slash_commands_and_messages() {
+fn parses_all_12_slash_commands_and_messages() {
     for &cmd in &REPL_SLASH_COMMANDS {
         let parsed = parse_repl_input(cmd);
         assert!(
@@ -147,6 +147,16 @@ fn parses_all_13_slash_commands_and_messages() {
     assert_eq!(
         parse_repl_input("hello world"),
         ParsedReplCommand::Message("hello world".to_owned())
+    );
+    // The TS CLI had no `/compact` and the protocol has no compaction RPC, so it is not a
+    // built-in command; it falls through to workspace command lookup like any other name.
+    assert!(!REPL_SLASH_COMMANDS.contains(&"/compact"));
+    assert_eq!(
+        parse_repl_input("/compact"),
+        ParsedReplCommand::Unknown {
+            name: "compact".to_owned(),
+            arg: String::new(),
+        }
     );
 }
 
@@ -217,6 +227,16 @@ async fn repl_connects_over_jsonrpc_and_executes_slash_commands_end_to_end() {
     assert!(output1.contains("read"));
     assert!(output1.contains("bash"));
     assert!(output1.contains("Started new thread:"));
+    // `/compact` must not claim success for an operation the server does not implement.
+    assert!(
+        !output1.contains("Compact current conversation context"),
+        "help must not advertise /compact: {output1}"
+    );
+    assert!(!output1.contains("compacted"), "{output1}");
+    assert!(
+        output1.contains("Unknown command: /compact"),
+        "expected /compact to be reported as unknown: {output1}"
+    );
 
     let saved_thread = get_stored_session_for_cwd(&iso.home_dir, &iso.env, &iso.workspace_dir)
         .expect("expected persisted thread id in cli-state.json");

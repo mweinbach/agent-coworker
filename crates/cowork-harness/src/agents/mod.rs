@@ -1808,22 +1808,16 @@ fn restore_latest_assistant_text(
     } else {
         None
     };
+    // The preview was cut from a whole message's joined text, not from one of its blocks.
     let mut matching = messages
         .iter()
         .filter(|m| m.role == MessageRole::Assistant)
-        .flat_map(|m| &m.content)
-        .filter_map(|block| match block {
-            ContentBlock::Text { text, .. }
-                if text.trim() == preview || prefix.is_some_and(|p| text.trim().starts_with(p)) =>
-            {
-                Some(text)
-            }
-            _ => None,
-        });
+        .filter_map(|m| crate::turn_runner::assistant_content_text(&m.content))
+        .filter(|text| *text == preview || prefix.is_some_and(|p| text.starts_with(p)));
     if let Some(text) = matching.next()
         && matching.all(|other| other == text)
     {
-        return Some(text.clone());
+        return Some(text);
     }
     Some(preview)
 }
@@ -1959,5 +1953,47 @@ fn build_child_session_mutation(
             harness_context: harness_context.cloned(),
             cost_tracker: summary.session_usage.clone(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assistant_with_texts(texts: &[&str]) -> CanonicalMessage {
+        let mut message = make_canonical_user_message("");
+        message.role = MessageRole::Assistant;
+        message.content = texts
+            .iter()
+            .map(|text| ContentBlock::Text {
+                text: (*text).to_owned(),
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            })
+            .collect();
+        message
+    }
+
+    #[test]
+    fn restored_reply_spans_every_text_block_of_the_matching_message() {
+        let head = "a".repeat(200);
+        let tail = "<agent_report>{\"status\":\"completed\",\"summary\":\"ok\"}</agent_report>";
+        let messages = vec![
+            make_canonical_user_message("task"),
+            assistant_with_texts(&[&head, tail]),
+        ];
+        let full = format!("{head}\n{tail}");
+        // Short reply: the preview is the whole joined text.
+        assert_eq!(
+            restore_latest_assistant_text(&messages, Some(full.clone())).as_deref(),
+            Some(full.as_str())
+        );
+        // Long reply: a 240-char preview cut across the block boundary restores the full text.
+        let preview: String = full.chars().take(CHILD_PREVIEW_CHARS).collect();
+        assert_eq!(
+            restore_latest_assistant_text(&messages, Some(preview)).as_deref(),
+            Some(full.as_str())
+        );
     }
 }

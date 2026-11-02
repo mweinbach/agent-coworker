@@ -69,6 +69,25 @@ pub struct TurnRunOutcome {
     pub updated_continuation: Option<ProviderContinuationState>,
 }
 
+/// The visible text of one assistant message (TS `contentText` as used by
+/// `AgentSession.getLatestAssistantText`): every text block trimmed, blank ones dropped, joined
+/// by `\n`. Commentary-phase text is skipped (TS never persisted it), and so are reasoning,
+/// tool, and media blocks. `None` when no text remains.
+pub fn assistant_content_text(content: &[ContentBlock]) -> Option<String> {
+    let text = content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, phase, .. } if *phase != Some(TextPhase::Commentary) => {
+                Some(text.trim())
+            }
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
 #[derive(Clone)]
 pub struct TurnCancellationHandle {
     cancel_token: CancellationToken,
@@ -631,25 +650,23 @@ impl TurnStepRunner {
                 );
             }
 
+            if let Some(text) = assistant_content_text(&step_ok.assistant.content) {
+                last_assistant_text = Some(text);
+            }
             let mut tool_calls = Vec::<ToolBatchCall>::new();
             for block in &step_ok.assistant.content {
-                match block {
-                    ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
-                        last_assistant_text = Some(text.clone());
-                    }
-                    ContentBlock::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                        ..
-                    } => {
-                        tool_calls.push(ToolBatchCall {
-                            call_id: id.clone(),
-                            tool_name: name.clone(),
-                            arguments: arguments.clone(),
-                        });
-                    }
-                    _ => {}
+                if let ContentBlock::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    ..
+                } = block
+                {
+                    tool_calls.push(ToolBatchCall {
+                        call_id: id.clone(),
+                        tool_name: name.clone(),
+                        arguments: arguments.clone(),
+                    });
                 }
             }
 
@@ -2073,6 +2090,116 @@ mod tests {
         // Step 2 follows a tool iteration: it must still receive the continuation, and the
         // transport's candidate-prefix check must accept it.
         assert_eq!(*transport.seen.lock(), vec![(false, false), (true, true)]);
+    }
+
+    /// Answers every step with one fixed assistant message.
+    struct FixedAssistantTransport {
+        content: Vec<ContentBlock>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for FixedAssistantTransport {
+        async fn stream_step(
+            &self,
+            _req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            let mut assistant = new_user_text_message("");
+            assistant.role = MessageRole::Assistant;
+            assistant.content = self.content.clone();
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    fn text_block(text: &str, phase: Option<TextPhase>) -> ContentBlock {
+        ContentBlock::Text {
+            text: text.to_owned(),
+            phase,
+            citations: Vec::new(),
+            provider_meta: ProviderOpaqueMeta::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn last_assistant_text_joins_every_text_block_of_the_final_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::Anthropic, "claude-test", 4));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Anthropic,
+            "claude-test",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        // The report spans two text blocks; reasoning and commentary carry decoy reports.
+        let transport = Arc::new(FixedAssistantTransport {
+            content: vec![
+                ContentBlock::Thinking {
+                    text:
+                        "<agent_report>{\"status\":\"failed\",\"summary\":\"draft\"}</agent_report>"
+                            .to_owned(),
+                    summary: None,
+                    redacted: false,
+                    signature: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                },
+                text_block(
+                    "<agent_report>{\"status\":\"blocked\",\"summary\":\"aside\"}</agent_report>",
+                    Some(TextPhase::Commentary),
+                ),
+                text_block("  Finished the review.  ", None),
+                text_block("   ", None),
+                text_block("<agent_report>\n{\"status\":\"completed\",", None),
+                text_block("\"summary\":\"All checks pass\"}\n</agent_report>\n", None),
+            ],
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport,
+                vec![new_user_text_message("review")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        assert_eq!(outcome.status, "completed");
+        let text = outcome.last_assistant_text.as_deref();
+        assert_eq!(
+            text,
+            Some(
+                "Finished the review.\n<agent_report>\n{\"status\":\"completed\",\n\
+                 \"summary\":\"All checks pass\"}\n</agent_report>"
+            )
+        );
+        let report = crate::agents::inspect_child_agent_report(text, true);
+        assert!(report.report_valid, "{:?}", report.report_diagnostic);
+        assert_eq!(report.report_block_count, 1);
+        let parsed = report.parsed_report.unwrap();
+        assert_eq!(parsed.status, "completed");
+        assert_eq!(parsed.summary, "All checks pass");
+    }
+
+    #[test]
+    fn assistant_content_text_is_none_without_visible_text() {
+        let content = vec![
+            text_block("only commentary", Some(TextPhase::Commentary)),
+            text_block("  \n", Some(TextPhase::FinalAnswer)),
+        ];
+        assert_eq!(assistant_content_text(&content), None);
     }
 
     /// Emits two tool calls and interrupts the turn while the step streams.

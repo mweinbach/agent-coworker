@@ -16,9 +16,9 @@ use cowork_harness::{
     ChildTurnError, ChildTurnExecutor, ChildTurnInput, ChildTurnResult, ExtensionManager,
     HarnessEventSink, InteractionManager, PromptTemplateContext, SkillMutationBus,
     SteerCoordinator, SystemPromptBuildOptions, TurnRunConfig, TurnStepRunner,
-    build_layered_system_prompt,
+    assistant_content_text, build_layered_system_prompt,
 };
-use cowork_inference::{BudgetThresholds, ContentBlock, MessageRole, SessionCostTracker};
+use cowork_inference::{BudgetThresholds, MessageRole, SessionCostTracker};
 use cowork_mcp::{
     HydratedMcpServer, McpAuthMode, McpConfigSource, McpOAuthChallengeResult, McpServerAuthConfig,
     McpServerConfig, complete_mcp_oauth_callback, delete_mcp_server, read_mcp_servers_snapshot,
@@ -566,17 +566,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                 .iter()
                 .rev()
                 .find(|m| m.role == MessageRole::Assistant)
-                .map(|m| {
-                    m.content
-                        .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text, .. } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .filter(|s| !s.trim().is_empty())
+                .and_then(|m| assistant_content_text(&m.content))
         });
 
         Ok(ChildTurnResult {

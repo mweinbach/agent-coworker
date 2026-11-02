@@ -801,6 +801,14 @@ fn read_google_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Va
         .or_else(|| opts.get(key))
 }
 
+/// The provider-options section TS reads Google stream options from:
+/// `asRecord(providerOptions.google) ?? asRecord(providerOptions.vertex)`.
+fn google_options_section(opts: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    opts.get("google")
+        .and_then(Value::as_object)
+        .or_else(|| opts.get("vertex").and_then(Value::as_object))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_google_interactions_payload(
     model_id: &str,
@@ -912,6 +920,25 @@ fn build_google_interactions_payload(
         "system_instruction".to_string(),
         Value::String(system_prompt.to_string()),
     );
+    // TS `buildGoogleStreamOptions` + `googleNative/buildRequest.ts`: structured-response options
+    // come from the `google` section (else `vertex`) and go top-level on the request, not inside
+    // `generation_config`. `responseFormat` passes through verbatim; `responseMimeType` is trimmed
+    // and dropped when blank.
+    let google_section = google_options_section(provider_options);
+    if let Some(response_format) = google_section.and_then(|sec| sec.get("responseFormat")) {
+        body.insert("response_format".to_string(), response_format.clone());
+    }
+    if let Some(mime) = google_section
+        .and_then(|sec| sec.get("responseMimeType"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|mime| !mime.is_empty())
+    {
+        body.insert(
+            "response_mime_type".to_string(),
+            Value::String(mime.to_string()),
+        );
+    }
     if !gen_cfg.is_empty() {
         body.insert("generation_config".to_string(), Value::Object(gen_cfg));
     }

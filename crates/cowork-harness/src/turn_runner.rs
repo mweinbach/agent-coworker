@@ -6,11 +6,11 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cowork_config::ProviderName;
 use cowork_inference::{
-    CanonicalMessage, ClientCapabilities as ProjectorCapabilities, ContentBlock,
+    CanonicalMessage, Citation, ClientCapabilities as ProjectorCapabilities, ContentBlock,
     ContinuationFingerprintInput, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
-    RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS, RequestPolicy, SessionCostTracker, StepBudget,
-    StreamEvent, StreamEventProjector, ToolDefinition, ToolResultPart, TurnUsage,
-    compute_continuation_fingerprint, execute_step_with_sink,
+    RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS, ReasoningStreamMode, RequestPolicy, SessionCostTracker,
+    StepBudget, StreamEvent, StreamEventProjector, TextPhase, ToolDefinition, ToolResultPart,
+    TurnUsage, compute_continuation_fingerprint, execute_step_with_sink,
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
 use cowork_providers::{ProviderStepRequest, ProviderTransport};
@@ -527,7 +527,9 @@ impl TurnStepRunner {
             } else {
                 StepBudget::new(policy.step_timeout_ms, Some(self.cancel_token.clone()))
             };
+            let partial_output = Mutex::new(PartialStepOutput::default());
             let mut sink_fn = |ev: StreamEvent| {
+                partial_output.lock().observe(&ev);
                 emit_stream_event(&mut projector, &ev);
             };
             let transport_step = Arc::clone(&transport);
@@ -536,6 +538,8 @@ impl TurnStepRunner {
                 &budget,
                 &mut sink_fn,
                 &mut |_attempt, mut emit_cb| {
+                    // Only the attempt that ends the step can leave partial output behind.
+                    partial_output.lock().clear();
                     let t = Arc::clone(&transport_step);
                     let r = req_template.clone();
                     let b = budget.clone();
@@ -551,6 +555,13 @@ impl TurnStepRunner {
                         status = "interrupted".to_owned();
                     } else {
                         status = "failed".to_owned();
+                        // Keep the prose and reasoning the failed step already streamed so the
+                        // next request sees what the transcript shows (`pi/runTurn.ts` parity).
+                        // Its tool calls never ran and are dropped. A user stop discards the
+                        // in-flight step instead, as TS did (`codexAppServer/runTurn.ts`).
+                        if let Some(partial) = partial_output.into_inner().into_message() {
+                            history.push(partial);
+                        }
                         emit_stream_event(
                             &mut projector,
                             &StreamEvent::Error {
@@ -1147,6 +1158,153 @@ where
                 provider_meta: ProviderOpaqueMeta::default(),
             }
         }
+    }
+}
+
+#[derive(PartialEq)]
+enum PartialBlockKey {
+    Text(usize),
+    Thinking(String, ReasoningStreamMode),
+}
+
+struct PartialBlock {
+    key: PartialBlockKey,
+    open: bool,
+    text: String,
+    phase: Option<TextPhase>,
+    citations: Vec<Citation>,
+    redacted: bool,
+}
+
+/// Text and reasoning the in-flight model step has streamed, in stream order.
+#[derive(Default)]
+struct PartialStepOutput {
+    blocks: Vec<PartialBlock>,
+}
+
+impl PartialStepOutput {
+    fn clear(&mut self) {
+        self.blocks.clear();
+    }
+
+    fn block(&mut self, key: PartialBlockKey) -> &mut PartialBlock {
+        let idx = match self.blocks.iter().rposition(|b| b.open && b.key == key) {
+            Some(idx) => idx,
+            None => {
+                self.blocks.push(PartialBlock {
+                    key,
+                    open: true,
+                    text: String::new(),
+                    phase: None,
+                    citations: Vec::new(),
+                    redacted: false,
+                });
+                self.blocks.len() - 1
+            }
+        };
+        &mut self.blocks[idx]
+    }
+
+    fn observe(&mut self, ev: &StreamEvent) {
+        match ev {
+            StreamEvent::TextStart {
+                block_index, phase, ..
+            } => {
+                let block = self.block(PartialBlockKey::Text(*block_index));
+                block.phase = phase.or(block.phase);
+            }
+            StreamEvent::TextDelta {
+                block_index,
+                delta,
+                phase,
+                ..
+            } => {
+                let block = self.block(PartialBlockKey::Text(*block_index));
+                block.text.push_str(delta);
+                block.phase = phase.or(block.phase);
+            }
+            StreamEvent::TextEnd {
+                block_index,
+                text,
+                phase,
+                citations,
+                ..
+            } => {
+                let block = self.block(PartialBlockKey::Text(*block_index));
+                if !text.is_empty() {
+                    block.text.clone_from(text);
+                }
+                block.phase = phase.or(block.phase);
+                block.citations.clone_from(citations);
+                block.open = false;
+            }
+            StreamEvent::ThinkingStart {
+                stream_id, mode, ..
+            } => {
+                self.block(PartialBlockKey::Thinking(stream_id.clone(), *mode));
+            }
+            StreamEvent::ThinkingDelta {
+                stream_id,
+                mode,
+                delta,
+                ..
+            } => {
+                self.block(PartialBlockKey::Thinking(stream_id.clone(), *mode))
+                    .text
+                    .push_str(delta);
+            }
+            StreamEvent::ThinkingEnd {
+                stream_id,
+                mode,
+                text,
+                redacted,
+                ..
+            } => {
+                let block = self.block(PartialBlockKey::Thinking(stream_id.clone(), *mode));
+                if !text.is_empty() {
+                    block.text.clone_from(text);
+                }
+                block.redacted = *redacted;
+                block.open = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// The assistant message to keep for a failed step (`pi/runTurn.ts` + `piMessageBridge.ts`
+    /// parity): text and reasoning only, with provider state (signatures, item ids, encrypted
+    /// reasoning, redacted thinking, provider/api/model) stripped because the response never
+    /// completed, so replay sends it as plain content. Commentary and blank blocks are dropped;
+    /// `None` when nothing remains.
+    fn into_message(self) -> Option<CanonicalMessage> {
+        let content: Vec<ContentBlock> = self
+            .blocks
+            .into_iter()
+            .filter(|b| !b.redacted && !b.text.trim().is_empty())
+            .filter_map(|b| match b.key {
+                PartialBlockKey::Text(_) if b.phase == Some(TextPhase::Commentary) => None,
+                PartialBlockKey::Text(_) => Some(ContentBlock::Text {
+                    text: b.text,
+                    phase: b.phase,
+                    citations: b.citations,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }),
+                PartialBlockKey::Thinking(..) => Some(ContentBlock::Thinking {
+                    text: b.text,
+                    summary: None,
+                    redacted: false,
+                    signature: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }),
+            })
+            .collect();
+        if content.is_empty() {
+            return None;
+        }
+        let mut msg = new_user_text_message("");
+        msg.role = MessageRole::Assistant;
+        msg.content = content;
+        Some(msg)
     }
 }
 
@@ -2002,6 +2160,227 @@ mod tests {
             })
             .collect();
         assert_eq!(ids, vec![("call_a", true), ("call_b", true)]);
+    }
+
+    /// How [`PartialOutputTransport`] ends step 2 after streaming partial output.
+    #[derive(Clone, Copy, PartialEq)]
+    enum PartialStepEnding {
+        /// The provider stream disconnects.
+        StreamError,
+        /// The user stops generation.
+        UserStop,
+        /// The provider fails before streaming anything.
+        SilentError,
+    }
+
+    /// Step 1 completes with a tool call; step 2 streams reasoning, prose, commentary and a tool
+    /// call, then ends per `ending` without returning an assistant message.
+    struct PartialOutputTransport {
+        handle: TurnCancellationHandle,
+        ending: PartialStepEnding,
+        steps: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for PartialOutputTransport {
+        async fn stream_step(
+            &self,
+            _req: ProviderStepRequest,
+            _budget: &StepBudget,
+            on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            let step = {
+                let mut steps = self.steps.lock();
+                *steps += 1;
+                *steps
+            };
+            if step == 1 {
+                let mut assistant = new_user_text_message("");
+                assistant.role = MessageRole::Assistant;
+                assistant.content = vec![ContentBlock::ToolCall {
+                    id: "call_1".to_owned(),
+                    name: "noSuchTool".to_owned(),
+                    arguments: Map::new(),
+                    partial_json: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }];
+                return Ok(cowork_providers::ProviderStepResult {
+                    assistant,
+                    persisted_assistant: None,
+                    usage: TurnUsage::default(),
+                    continuation: None,
+                    raw_events: Vec::new(),
+                });
+            }
+            if self.ending == PartialStepEnding::SilentError {
+                return Err(cowork_inference::ProviderTransportError::protocol(
+                    "provider exploded",
+                ));
+            }
+            let turn_id = "turn".to_owned();
+            let mode = ReasoningStreamMode::Reasoning;
+            for ev in [
+                StreamEvent::ThinkingStart {
+                    turn_id: turn_id.clone(),
+                    stream_id: "rs_1".to_owned(),
+                    mode,
+                },
+                StreamEvent::ThinkingDelta {
+                    turn_id: turn_id.clone(),
+                    stream_id: "rs_1".to_owned(),
+                    mode,
+                    delta: "Weighing ".to_owned(),
+                },
+                StreamEvent::ThinkingEnd {
+                    turn_id: turn_id.clone(),
+                    stream_id: "rs_1".to_owned(),
+                    mode,
+                    text: "Weighing options.".to_owned(),
+                    signature: Some("sig-from-unfinished-response".to_owned()),
+                    redacted: false,
+                },
+                StreamEvent::TextDelta {
+                    turn_id: turn_id.clone(),
+                    block_index: 0,
+                    delta: "Working on it".to_owned(),
+                    phase: Some(TextPhase::Commentary),
+                },
+                StreamEvent::TextStart {
+                    turn_id: turn_id.clone(),
+                    block_index: 1,
+                    phase: None,
+                },
+                StreamEvent::TextDelta {
+                    turn_id: turn_id.clone(),
+                    block_index: 1,
+                    delta: "The answer ".to_owned(),
+                    phase: None,
+                },
+                StreamEvent::TextDelta {
+                    turn_id: turn_id.clone(),
+                    block_index: 1,
+                    delta: "is".to_owned(),
+                    phase: None,
+                },
+                StreamEvent::ToolCallStart {
+                    turn_id: turn_id.clone(),
+                    key: "call_2".to_owned(),
+                    name: "noSuchTool".to_owned(),
+                    initial_args: None,
+                },
+            ] {
+                on_event(ev);
+            }
+            match self.ending {
+                PartialStepEnding::StreamError => Err(
+                    cowork_inference::ProviderTransportError::network("stream disconnected"),
+                ),
+                _ => {
+                    self.handle.interrupt("stop");
+                    Err(cowork_inference::ProviderTransportError::aborted(
+                        "Model turn aborted.",
+                    ))
+                }
+            }
+        }
+    }
+
+    async fn run_partial_output_turn(ending: PartialStepEnding) -> TurnRunOutcome {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::Openai, "gpt-test", 4));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Openai,
+            "gpt-test",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(PartialOutputTransport {
+            handle: runner.cancellation_handle(),
+            ending,
+            steps: Mutex::new(0),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        runner
+            .run_turn(
+                transport,
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await
+    }
+
+    fn roles(outcome: &TurnRunOutcome) -> Vec<MessageRole> {
+        outcome.messages.iter().map(|m| m.role).collect()
+    }
+
+    #[tokio::test]
+    async fn failed_step_keeps_streamed_text_and_reasoning_but_not_tool_calls() {
+        let outcome = run_partial_output_turn(PartialStepEnding::StreamError).await;
+        assert_eq!(outcome.status, "failed");
+        assert_eq!(
+            roles(&outcome),
+            vec![
+                MessageRole::User,
+                MessageRole::Assistant,
+                MessageRole::Tool,
+                MessageRole::Assistant,
+            ]
+        );
+        let partial = outcome.messages.last().unwrap();
+        // The step never completed: no provider state may be replayed from it.
+        assert_eq!(partial.provider, None);
+        assert_eq!(partial.api, None);
+        assert_eq!(partial.model, None);
+        assert_eq!(partial.stop_reason, None);
+        assert_eq!(
+            partial.content,
+            vec![
+                ContentBlock::Thinking {
+                    text: "Weighing options.".to_owned(),
+                    summary: None,
+                    redacted: false,
+                    signature: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                },
+                ContentBlock::Text {
+                    text: "The answer is".to_owned(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_step_without_streamed_output_adds_no_assistant_message() {
+        let outcome = run_partial_output_turn(PartialStepEnding::SilentError).await;
+        assert_eq!(outcome.status, "failed");
+        assert_eq!(
+            roles(&outcome),
+            vec![MessageRole::User, MessageRole::Assistant, MessageRole::Tool]
+        );
+    }
+
+    #[tokio::test]
+    async fn user_stop_discards_the_in_flight_step_output() {
+        // TS parity: a stopped step's partial output never entered history
+        // (`codexAppServer/runTurn.ts`, `persistCancelledInvocationProgress`).
+        let outcome = run_partial_output_turn(PartialStepEnding::UserStop).await;
+        assert_eq!(outcome.status, "interrupted");
+        assert_eq!(
+            roles(&outcome),
+            vec![MessageRole::User, MessageRole::Assistant, MessageRole::Tool]
+        );
     }
 
     /// Simulates a steer accepted by the live native Codex turn during step 1.

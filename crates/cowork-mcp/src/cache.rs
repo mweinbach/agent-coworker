@@ -96,21 +96,107 @@ impl CacheGeneration {
     }
 }
 
+/// Connection refs owned by a generation that is still being built.
+///
+/// The build awaits server connects, so the caller's future can be cancelled while it holds
+/// refs it took on the previous generation's connections. Dropping this without
+/// [`Self::into_inner`] gives those refs back (closing any connection that drops to zero), so
+/// a later retirement of the previous generation can still close the shared transports.
+struct ConnectionRefs(BTreeMap<String, Arc<SharedServerConnection>>);
+
+impl ConnectionRefs {
+    fn into_inner(mut self) -> BTreeMap<String, Arc<SharedServerConnection>> {
+        std::mem::take(&mut self.0)
+    }
+
+    /// Gives every ref back, awaiting the close of connections that drop to zero.
+    async fn release(self) {
+        for conn in self.into_inner().into_values() {
+            conn.release_ref().await;
+        }
+    }
+}
+
+impl Drop for ConnectionRefs {
+    fn drop(&mut self) {
+        for conn in std::mem::take(&mut self.0).into_values() {
+            if conn.ref_count.fetch_sub(1, Ordering::AcqRel) == 1
+                && let Ok(handle) = tokio::runtime::Handle::try_current()
+            {
+                handle.spawn(async move { conn.invoker.close().await });
+            }
+        }
+    }
+}
+
 struct WorkspaceCacheState {
     current: Option<Arc<CacheGeneration>>,
     sessions: BTreeSet<String>,
+    /// Bumped by every invalidation (explicit invalidate, last session closing, shutdown). A
+    /// load that started under an older epoch must not install its result as `current`.
+    epoch: u64,
+    /// Single-flight gate for generation builds in this epoch. Only the load path awaits it;
+    /// invalidation swaps in a fresh gate instead of waiting, so the next load does not queue
+    /// behind a connect whose result is already stale.
+    loader: Arc<tokio::sync::Mutex<()>>,
 }
+
+impl WorkspaceCacheState {
+    fn new() -> Self {
+        Self {
+            current: None,
+            sessions: BTreeSet::new(),
+            epoch: 0,
+            loader: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    /// Leases the current generation when it matches `desired_fp` and no failed server is due
+    /// for a retry. The lease is taken under the state lock, so the generation cannot be
+    /// retired and released before the caller's call is counted.
+    fn lease_reusable(&self, desired_fp: &str) -> Option<Arc<CacheGeneration>> {
+        let now = now_epoch_ms();
+        let cur = self.current.as_ref()?;
+        let reusable = cur.fingerprint == desired_fp
+            && cur
+                .failed_servers_retry_after_ms
+                .values()
+                .all(|&retry_at| now < retry_at);
+        if !reusable {
+            return None;
+        }
+        cur.begin_call();
+        Some(Arc::clone(cur))
+    }
+
+    /// Starts a new epoch: in-flight loads become stale and the current generation is handed
+    /// back for retirement.
+    fn invalidate(&mut self) -> Option<Arc<CacheGeneration>> {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.loader = Arc::new(tokio::sync::Mutex::new(()));
+        self.current.take()
+    }
+}
+
+type SharedWorkspaceState = Arc<parking_lot::Mutex<WorkspaceCacheState>>;
 
 /// Generation-refcounted workspace MCP connection & tool cache.
 ///
 /// Guarantees:
-/// 1. Refreshes are serialized per workspace while active `with_tools` calls run outside the mutex.
-/// 2. Hot-swapping config reuses live server connections whose hydrated config fingerprint did not change.
-/// 3. Retiring a generation waits until all in-flight `with_tools` calls on that generation finish
+/// 1. Generation builds (MCP server connects) are single-flight per workspace: concurrent callers
+///    for the same workspace share one build, while other workspaces proceed in parallel. No lock
+///    that invalidation, `close_session` or other workspaces need is held across a connect; the
+///    workspace state lock is synchronous and only guards bookkeeping. Active `with_tools` calls
+///    run outside every lock.
+/// 2. Invalidation never waits on an in-flight build. It bumps the workspace epoch, so a build
+///    that finishes afterwards serves only the callers that were waiting for it and is retired
+///    instead of being cached; the next call reconnects.
+/// 3. Hot-swapping config reuses live server connections whose hydrated config fingerprint did not change.
+/// 4. Retiring a generation waits until all in-flight `with_tools` calls on that generation finish
 ///    before closing unreferenced server connections.
 #[derive(Default)]
 pub struct WorkspaceMcpToolCache {
-    workspaces: DashMap<PathBuf, Arc<tokio::sync::Mutex<WorkspaceCacheState>>>,
+    workspaces: DashMap<PathBuf, SharedWorkspaceState>,
     session_to_workspace: DashMap<String, PathBuf>,
 }
 
@@ -136,8 +222,16 @@ impl WorkspaceMcpToolCache {
         parts.join("\n---\n")
     }
 
-    /// Acquires the current (or freshly reconciled) workspace generation, increments `active_calls`
-    /// while holding the workspace mutex, then drops the workspace mutex before invoking `f`!
+    fn workspace_states(&self) -> Vec<SharedWorkspaceState> {
+        self.workspaces
+            .iter()
+            .map(|e| Arc::clone(e.value()))
+            .collect()
+    }
+
+    /// Leases the current (or freshly built) workspace generation, then invokes `f` outside every
+    /// cache lock. A slow or hanging server connect only delays callers that need the same
+    /// workspace's generation.
     pub async fn with_tools<F, R>(
         &self,
         config: &AgentConfig,
@@ -159,58 +253,21 @@ impl WorkspaceMcpToolCache {
         self.session_to_workspace
             .insert(session_id.to_owned(), ws_key.clone());
 
-        let ws_lock = self
+        let ws_state = self
             .workspaces
             .entry(ws_key)
-            .or_insert_with(|| {
-                Arc::new(tokio::sync::Mutex::new(WorkspaceCacheState {
-                    current: None,
-                    sessions: BTreeSet::new(),
-                }))
-            })
+            .or_insert_with(|| Arc::new(parking_lot::Mutex::new(WorkspaceCacheState::new())))
             .value()
             .clone();
 
-        let (generation, to_retire) = {
-            let mut state = ws_lock.lock().await;
-            state.sessions.insert(session_id.to_owned());
-
-            let desired_servers = load_mcp_servers(config, false, |_| {})?;
-            let desired_fp = Self::desired_generation_fingerprint(&desired_servers);
-            let now = now_epoch_ms();
-
-            let can_reuse_current = state.current.as_ref().is_some_and(|cur| {
-                cur.fingerprint == desired_fp
-                    && cur
-                        .failed_servers_retry_after_ms
-                        .values()
-                        .all(|&retry_at| now < retry_at)
-            });
-
-            if can_reuse_current {
-                let cur = Arc::clone(state.current.as_ref().unwrap());
-                cur.begin_call();
-                (cur, None)
-            } else {
-                let prev = state.current.clone();
-                let next_gen = Self::build_next_generation(
-                    &desired_servers,
-                    desired_fp,
-                    prev.as_deref(),
-                    base_env,
-                )
-                .await?;
-                next_gen.begin_call();
-                let prev_replaced = state.current.replace(Arc::clone(&next_gen));
-                (next_gen, prev_replaced)
-            }
-        };
+        let (generation, to_retire) =
+            Self::acquire_generation(&ws_state, config, base_env, session_id).await?;
 
         if let Some(old_gen) = to_retire {
             Self::mark_retired(&old_gen).await;
         }
 
-        // Run caller outside workspace lock!
+        // Run caller outside every cache lock!
         let fut = f(&generation.tools, &generation.errors);
         let out = fut.await;
 
@@ -218,50 +275,129 @@ impl WorkspaceMcpToolCache {
         Ok(out)
     }
 
-    async fn build_next_generation(
-        desired_servers: &[HydratedMcpServer],
-        desired_fp: String,
-        prev: Option<&CacheGeneration>,
+    /// Returns a leased generation plus a generation the caller must retire: the replaced
+    /// previous generation, or the leased one itself when it was built in an epoch that was
+    /// invalidated mid-connect (served to this caller once, never cached).
+    async fn acquire_generation(
+        ws_state: &SharedWorkspaceState,
+        config: &AgentConfig,
         base_env: &HashMap<String, String>,
-    ) -> Result<Arc<CacheGeneration>, String> {
-        let mut new_connections: BTreeMap<String, Arc<SharedServerConnection>> = BTreeMap::new();
-        let mut freshly_opened: Vec<Arc<SharedServerConnection>> = Vec::new();
-        let mut errors = Vec::new();
-        let mut failed_retry_after = HashMap::new();
+        session_id: &str,
+    ) -> Result<(Arc<CacheGeneration>, Option<Arc<CacheGeneration>>), String> {
+        loop {
+            let desired_servers = load_mcp_servers(config, false, |_| {})?;
+            let desired_fp = Self::desired_generation_fingerprint(&desired_servers);
 
+            let (epoch, loader) = {
+                let mut state = ws_state.lock();
+                state.sessions.insert(session_id.to_owned());
+                if let Some(cur) = state.lease_reusable(&desired_fp) {
+                    return Ok((cur, None));
+                }
+                (state.epoch, Arc::clone(&state.loader))
+            };
+
+            // Single-flight per workspace epoch: a concurrent caller that is already building
+            // this workspace's generation finishes first, and its result is reused below.
+            let _building = loader.lock().await;
+
+            let refs = {
+                let mut state = ws_state.lock();
+                if state.epoch != epoch {
+                    // Invalidated while waiting: the config may have changed, so start over
+                    // under the new epoch (and its fresh gate).
+                    continue;
+                }
+                state.sessions.insert(session_id.to_owned());
+                if let Some(cur) = state.lease_reusable(&desired_fp) {
+                    return Ok((cur, None));
+                }
+                // Take refs on reusable connections while the previous generation is still
+                // current: it cannot be retired (and its connections closed) under this lock.
+                Self::reuse_unchanged_connections(&desired_servers, state.current.as_deref())
+            };
+
+            let next_gen =
+                Self::build_next_generation(&desired_servers, desired_fp, refs, base_env).await?;
+            next_gen.begin_call();
+
+            let mut state = ws_state.lock();
+            if state.epoch == epoch {
+                let prev = state.current.replace(Arc::clone(&next_gen));
+                return Ok((next_gen, prev));
+            }
+            // Invalidated mid-connect: serve this call from the stale build, but never cache it.
+            return Ok((Arc::clone(&next_gen), Some(next_gen)));
+        }
+    }
+
+    /// Takes a ref on each connection of `prev` whose server config is unchanged.
+    fn reuse_unchanged_connections(
+        desired_servers: &[HydratedMcpServer],
+        prev: Option<&CacheGeneration>,
+    ) -> ConnectionRefs {
+        let mut reused = BTreeMap::new();
+        let Some(prev) = prev else {
+            return ConnectionRefs(reused);
+        };
         for srv in desired_servers {
             let srv_fp = Self::server_fingerprint(srv);
             if let Some(existing) = prev
-                .and_then(|p| p.connections.get(&srv.config.name))
+                .connections
+                .get(&srv.config.name)
                 .filter(|c| c.config_fingerprint == srv_fp)
             {
                 existing.ref_count.fetch_add(1, Ordering::AcqRel);
-                new_connections.insert(srv.config.name.clone(), Arc::clone(existing));
-                continue;
+                reused.insert(srv.config.name.clone(), Arc::clone(existing));
             }
+        }
+        ConnectionRefs(reused)
+    }
 
-            match connect_single_server_with_retries(srv, base_env).await {
+    async fn build_next_generation(
+        desired_servers: &[HydratedMcpServer],
+        desired_fp: String,
+        mut refs: ConnectionRefs,
+        base_env: &HashMap<String, String>,
+    ) -> Result<Arc<CacheGeneration>, String> {
+        let mut errors = Vec::new();
+        let mut failed_retry_after = HashMap::new();
+        let mut required_failure = None;
+
+        // Connect changed servers independently, as TS `refresh` does with `Promise.allSettled`:
+        // one slow server bounds the build by its own deadline instead of the sum of all.
+        let to_connect: Vec<&HydratedMcpServer> = desired_servers
+            .iter()
+            .filter(|srv| !refs.0.contains_key(&srv.config.name))
+            .collect();
+        let results = futures::future::join_all(
+            to_connect
+                .iter()
+                .map(|srv| connect_single_server_with_retries(srv, base_env)),
+        )
+        .await;
+
+        for (srv, result) in to_connect.into_iter().zip(results) {
+            match result {
                 Ok(bundle) => {
                     let shared = Arc::new(SharedServerConnection {
-                        config_fingerprint: srv_fp,
+                        config_fingerprint: Self::server_fingerprint(srv),
                         server_name: bundle.server_name,
                         invoker: bundle.invoker,
                         raw_tools: bundle.raw_tools,
                         ref_count: AtomicUsize::new(1),
                     });
-                    freshly_opened.push(Arc::clone(&shared));
-                    new_connections.insert(srv.config.name.clone(), shared);
+                    refs.0.insert(srv.config.name.clone(), shared);
                 }
                 Err(err) => {
                     if srv.config.required == Some(true) {
-                        // Roll back refs acquired for this failed generation
-                        for conn in new_connections.values() {
-                            conn.release_ref().await;
-                        }
-                        return Err(format!(
-                            "Required MCP server \"{}\" failed to initialize: {err}",
-                            srv.config.name
-                        ));
+                        required_failure.get_or_insert_with(|| {
+                            format!(
+                                "Required MCP server \"{}\" failed to initialize: {err}",
+                                srv.config.name
+                            )
+                        });
+                        continue;
                     }
                     failed_retry_after.insert(
                         srv.config.name.clone(),
@@ -275,6 +411,13 @@ impl WorkspaceMcpToolCache {
             }
         }
 
+        if let Some(err) = required_failure {
+            // Roll back refs acquired for this failed generation (closing fresh connections).
+            refs.release().await;
+            return Err(err);
+        }
+
+        let new_connections = refs.into_inner();
         let bundles: Vec<ServerConnectionBundle> = new_connections
             .values()
             .map(|c| ServerConnectionBundle {
@@ -317,15 +460,15 @@ impl WorkspaceMcpToolCache {
     }
 
     /// Force-invalidates cached MCP connections for a workspace (e.g. after credential or plugin mutation).
+    ///
+    /// Does not wait for an in-flight build: that build's result is served to its waiting callers
+    /// once and then retired, and the next call reconnects.
     pub async fn invalidate_workspace(&self, working_dir: &Path) {
         let key = canonicalize_sync(working_dir);
-        let Some(ws_lock) = self.workspaces.get(&key).map(|e| Arc::clone(e.value())) else {
+        let Some(ws_state) = self.workspaces.get(&key).map(|e| Arc::clone(e.value())) else {
             return;
         };
-        let prev = {
-            let mut state = ws_lock.lock().await;
-            state.current.take()
-        };
+        let prev = ws_state.lock().invalidate();
         if let Some(old_gen) = prev {
             Self::mark_retired(&old_gen).await;
         }
@@ -333,36 +476,31 @@ impl WorkspaceMcpToolCache {
 
     /// Force-invalidates cached MCP connections across every workspace (e.g. after user-scope config/credential mutation).
     pub async fn invalidate_all(&self) {
-        let locks: Vec<Arc<tokio::sync::Mutex<WorkspaceCacheState>>> = self
-            .workspaces
+        let retired: Vec<Arc<CacheGeneration>> = self
+            .workspace_states()
             .iter()
-            .map(|e| Arc::clone(e.value()))
+            .filter_map(|ws_state| ws_state.lock().invalidate())
             .collect();
-        for lock in locks {
-            let prev = {
-                let mut state = lock.lock().await;
-                state.current.take()
-            };
-            if let Some(old_gen) = prev {
-                Self::mark_retired(&old_gen).await;
-            }
+        for old_gen in retired {
+            Self::mark_retired(&old_gen).await;
         }
     }
 
     /// Releases a session's interest in its workspace cache; when the last session closes,
-    /// retires the workspace's active MCP generation.
+    /// retires the workspace's active MCP generation. A build still in flight for that workspace
+    /// is not waited for: its eventual result is retired after serving its waiting callers.
     pub async fn close_session(&self, session_id: &str) {
         let Some((_, ws_key)) = self.session_to_workspace.remove(session_id) else {
             return;
         };
-        let Some(ws_lock) = self.workspaces.get(&ws_key).map(|e| Arc::clone(e.value())) else {
+        let Some(ws_state) = self.workspaces.get(&ws_key).map(|e| Arc::clone(e.value())) else {
             return;
         };
         let prev = {
-            let mut state = ws_lock.lock().await;
+            let mut state = ws_state.lock();
             state.sessions.remove(session_id);
             if state.sessions.is_empty() {
-                state.current.take()
+                state.invalidate()
             } else {
                 None
             }
@@ -375,21 +513,18 @@ impl WorkspaceMcpToolCache {
     /// Retires and closes all cached MCP generations across every workspace on server shutdown.
     pub async fn close_all(&self) {
         self.session_to_workspace.clear();
-        let locks: Vec<Arc<tokio::sync::Mutex<WorkspaceCacheState>>> = self
-            .workspaces
-            .iter()
-            .map(|e| Arc::clone(e.value()))
-            .collect();
+        let states = self.workspace_states();
         self.workspaces.clear();
-        for lock in locks {
-            let prev = {
-                let mut state = lock.lock().await;
+        let retired: Vec<Arc<CacheGeneration>> = states
+            .iter()
+            .filter_map(|ws_state| {
+                let mut state = ws_state.lock();
                 state.sessions.clear();
-                state.current.take()
-            };
-            if let Some(old_gen) = prev {
-                Self::mark_retired(&old_gen).await;
-            }
+                state.invalidate()
+            })
+            .collect();
+        for old_gen in retired {
+            Self::mark_retired(&old_gen).await;
         }
     }
 }

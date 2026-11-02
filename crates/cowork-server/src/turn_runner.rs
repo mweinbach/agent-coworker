@@ -1509,6 +1509,12 @@ impl ServerRuntimeState {
                 |c| c.tool_output_overflow_chars,
             )
             .map(|n| n as usize);
+        // `modelSettings.maxRetries` / `AGENT_MODEL_MAX_RETRIES`, already resolved by the config
+        // loader; the harness converts it into the per-step model-call attempt budget.
+        let model_max_retries = workspace_cfg
+            .as_ref()
+            .and_then(|c| c.model_settings.as_ref())
+            .and_then(|m| m.max_retries);
         let enable_memory = workspace_cfg.as_ref().is_none_or(|c| c.enable_memory);
         let advanced_memory = workspace_cfg.as_ref().is_some_and(|c| c.advanced_memory);
         let require_file_approval = merged_provider_opts
@@ -1718,6 +1724,7 @@ impl ServerRuntimeState {
                 effective_display_text.clone(),
                 params.client_message_id.clone(),
             )),
+            model_max_retries,
         })
         .with_tool_retry_targets(retry_targets);
         let cancel_handle = runner.cancellation_handle();

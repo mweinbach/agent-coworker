@@ -363,6 +363,10 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             overflow_threshold_chars: overflow_threshold,
             tool_retry_lineage: false,
             initial_user_message: Some((input.prompt.clone(), None)),
+            model_max_retries: agent_cfg
+                .model_settings
+                .as_ref()
+                .and_then(|m| m.max_retries),
         });
 
         let cancel_handle = runner.cancellation_handle();

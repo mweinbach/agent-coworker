@@ -314,6 +314,7 @@ async fn turn_runner_composes_code_mode_with_deferred_tool_search_and_rolls_up_w
         overflow_threshold_chars: None,
         tool_retry_lineage: false,
         initial_user_message: Some(("Read hello.txt via codeMode".to_owned(), None)),
+        model_max_retries: None,
     });
 
     let outcome = runner
@@ -445,6 +446,7 @@ async fn turn_runner_composes_code_mode_with_deferred_tool_search_and_rolls_up_w
         overflow_threshold_chars: None,
         tool_retry_lineage: false,
         initial_user_message: Some(("Run workflow".to_owned(), None)),
+        model_max_retries: None,
     });
 
     let wf_outcome = wf_runner
@@ -728,6 +730,7 @@ async fn turn_runner_keeps_mcp_tools_deferred_under_non_deferred_code_mode_and_e
         overflow_threshold_chars: None,
         tool_retry_lineage: false,
         initial_user_message: Some(("lookup quickjs doc".to_owned(), None)),
+        model_max_retries: None,
     });
     let out_a = runner_a
         .run_turn(
@@ -858,6 +861,7 @@ async fn turn_runner_keeps_mcp_tools_deferred_under_non_deferred_code_mode_and_e
         overflow_threshold_chars: None,
         tool_retry_lineage: false,
         initial_user_message: Some(("inspect readonly_note.txt".to_owned(), None)),
+        model_max_retries: None,
     });
     let out_b = runner_b
         .run_turn(

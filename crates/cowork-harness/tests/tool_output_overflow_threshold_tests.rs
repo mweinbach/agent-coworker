@@ -219,6 +219,7 @@ async fn run_grep_turn(dirs: &TestDirs, deferred: bool, threshold: Option<usize>
         overflow_threshold_chars: threshold,
         tool_retry_lineage: false,
         initial_user_message: None,
+        model_max_retries: None,
     });
     let transport = Arc::new(GrepThenStopTransport {
         deferred,

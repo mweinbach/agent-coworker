@@ -480,6 +480,7 @@ async fn turn_step_runner_drives_multi_step_tools_mid_turn_steer_deferred_search
         overflow_threshold_chars: Some(25_000),
         tool_retry_lineage: true,
         initial_user_message: None,
+        model_max_retries: None,
     });
 
     let initial_messages = vec![CanonicalMessage {
@@ -647,6 +648,7 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
         overflow_threshold_chars: Some(25_000),
         tool_retry_lineage: false,
         initial_user_message: None,
+        model_max_retries: None,
     }));
 
     let cancel_handle = runner.cancellation_handle();
@@ -978,6 +980,7 @@ async fn canonical_interactions_sequential_ask_budget_events_and_strict_steer_co
         overflow_threshold_chars: None,
         tool_retry_lineage: false,
         initial_user_message: None,
+        model_max_retries: None,
     });
     let _ = b_runner
         .run_turn(

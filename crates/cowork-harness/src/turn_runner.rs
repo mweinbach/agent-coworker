@@ -8,9 +8,9 @@ use cowork_config::ProviderName;
 use cowork_inference::{
     CanonicalMessage, ClientCapabilities as ProjectorCapabilities, ContentBlock,
     ContinuationFingerprintInput, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
-    RequestPolicy, SessionCostTracker, StepBudget, StreamEvent, StreamEventProjector,
-    ToolDefinition, ToolResultPart, TurnUsage, compute_continuation_fingerprint,
-    execute_step_with_sink,
+    RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS, RequestPolicy, SessionCostTracker, StepBudget,
+    StreamEvent, StreamEventProjector, ToolDefinition, ToolResultPart, TurnUsage,
+    compute_continuation_fingerprint, execute_step_with_sink,
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
 use cowork_providers::{ProviderStepRequest, ProviderTransport};
@@ -53,6 +53,11 @@ pub struct TurnRunConfig {
     pub overflow_threshold_chars: Option<usize>,
     pub tool_retry_lineage: bool,
     pub initial_user_message: Option<(String, Option<String>)>,
+    /// Resolved `modelSettings.maxRetries` (`AGENT_MODEL_MAX_RETRIES` wins at config load):
+    /// retries after the initial model call, converted into the harness-owned per-step attempt
+    /// budget by `model_call_max_attempts`. `None` keeps the default budget. This never
+    /// reaches provider SDK retries, which stay disabled.
+    pub model_max_retries: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -992,16 +997,32 @@ impl CostTrackerBridge for TurnSharedCostBridge {
     }
 }
 
+/// Total model-call attempts per step (TS `resolveRateLimitMaxAttempts` parity):
+/// `modelSettings.maxRetries` counts retries after the initial call and is clamped to the bounded
+/// default budget so a turn cannot stall on a persistently failing provider. Unset keeps the
+/// default [`RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS`].
+fn model_call_max_attempts(model_max_retries: Option<u32>) -> usize {
+    match model_max_retries {
+        None => RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS,
+        Some(retries) => {
+            let retries = usize::try_from(retries).unwrap_or(usize::MAX);
+            1 + retries.min(RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS - 1)
+        }
+    }
+}
+
 /// Resolves the per-step [`RequestPolicy`]: `cfg.step_timeout_ms` is the default step budget and
 /// the provider's `providerOptions` section may override `timeoutMs` / `stepTimeoutMs` /
-/// `maxRetryDelayMs` (invalid explicit values fail the turn). Transports exempt from the step
-/// budget (Codex app-server) never read PI request options, so their section is not validated.
+/// `maxRetryDelayMs` (invalid explicit values fail the turn) and `cfg.model_max_retries` sets the
+/// attempt budget. Transports exempt from the step budget (Codex app-server) never read PI
+/// request options, so their section is not validated.
 fn step_request_policy(
     cfg: &TurnRunConfig,
     exempt_from_step_budget: bool,
 ) -> Result<RequestPolicy, String> {
     let fallback = RequestPolicy {
         step_timeout_ms: cfg.step_timeout_ms.clamp(1, 1_800_000),
+        max_attempts: model_call_max_attempts(cfg.model_max_retries),
         ..RequestPolicy::default()
     };
     let resolved = if exempt_from_step_budget {
@@ -1712,6 +1733,7 @@ mod tests {
             overflow_threshold_chars: None,
             tool_retry_lineage: false,
             initial_user_message: None,
+            model_max_retries: None,
         }
     }
 

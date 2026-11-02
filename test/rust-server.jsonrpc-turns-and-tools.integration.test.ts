@@ -196,6 +196,9 @@ describe("Rust cowork-server JSON-RPC thread lifecycle, streaming turns, tools, 
     }
   });
 
+  // `cowork/provider/status/refresh` probes the local LM Studio endpoint for real. On Windows a
+  // refused loopback connect takes ~2s (TCP SYN retries), which with server startup can exceed
+  // bun's 5s default on slow runners, so give this route sweep an explicit budget.
   test("serves cowork/session/*, cowork/provider/*, and durable task/* routes", async () => {
     const srv = await startRustTestServer({
       env: {
@@ -235,5 +238,5 @@ describe("Rust cowork-server JSON-RPC thread lifecycle, streaming turns, tools, 
     } finally {
       await srv.stop();
     }
-  });
+  }, 30_000);
 });

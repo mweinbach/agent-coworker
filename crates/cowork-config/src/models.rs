@@ -199,16 +199,32 @@ impl ModelRegistry {
             return fallback_supported_model(provider, normalized_id);
         }
 
-        // Check provider discovery cache or user custom-models store.
-        if let Some(cache) = read_model_discovery_cache_sync(&paths, provider, None)
-            && let Some(cached) = cache.models.iter().find(|m| m.id == normalized_id)
-        {
+        // Check provider discovery cache or user custom-models store. A discovered entry wins
+        // over a custom-store placeholder so its real capabilities (reasoning) seed the session
+        // (`resolveModelMetadata` in `src/models/metadata.ts`). Both carry capability-aware
+        // `providerOptionsDefaults` so the configured `providerOptions` are reconciled against
+        // what the model actually supports (`mergeProviderOptionDefaults` in `src/config.ts`).
+        if let Some(cached) = find_discovered_model_sync(&paths, provider, normalized_id) {
             let mut m = placeholder_supported_model(provider, &cached.id);
             if let Some(cutoff) = &cached.knowledge_cutoff {
                 m.knowledge_cutoff = cutoff.clone();
             }
             if let Some(img) = cached.supports_image_input {
                 m.supports_image_input = img;
+            }
+            m.provider_options_defaults =
+                self.unbundled_provider_option_defaults(provider, &cached.id, Some(&cached));
+            if uses_generic_discovery_cache(provider) {
+                if !cached.display_name.trim().is_empty() {
+                    m.display_name = cached.display_name.clone();
+                }
+                if let Some(available) = cached
+                    .reasoning
+                    .as_ref()
+                    .and_then(|r| r.available_efforts.clone())
+                {
+                    m.supported_reasoning_efforts = Some(available);
+                }
             }
             return m;
         }
@@ -220,7 +236,10 @@ impl ModelRegistry {
                 .get(&provider)
                 .is_some_and(|list| list.iter().any(|e| e.id == normalized_id))
         {
-            return placeholder_supported_model(provider, normalized_id);
+            let mut m = placeholder_supported_model(provider, normalized_id);
+            m.provider_options_defaults =
+                self.unbundled_provider_option_defaults(provider, normalized_id, None);
+            return m;
         }
 
         // Bedrock resolves models at runtime like TypeScript's
@@ -235,6 +254,54 @@ impl ModelRegistry {
         // Intentional resilience matching `src/config.ts`: fall back to provider default.
         self.default_for(provider)
     }
+
+    /// `providerOptionsDefaults` the model declares, resolved like `getResolvedModelMetadataSync`
+    /// (`src/models/metadata.ts`): the bundled registry first, then the provider's discovery
+    /// cache (whose reasoning info decides whether reasoning keys survive,
+    /// `buildDiscoveredModelMetadata`), then the custom-id placeholder heuristics
+    /// (`buildProviderPlaceholderMetadata`). lmstudio/bedrock/codex-cli skip the generic
+    /// discovery lookup as in TS; none of them has model-gated reasoning keys.
+    pub fn resolved_provider_option_defaults(
+        &self,
+        provider: ProviderName,
+        model_id: &str,
+        paths: &AiCoworkerPaths,
+    ) -> Map<String, Value> {
+        if let Some(model) = self.get(provider, model_id) {
+            return model.provider_options_defaults.clone();
+        }
+        let discovered = uses_generic_discovery_cache(provider)
+            .then(|| find_discovered_model_sync(paths, provider, model_id))
+            .flatten();
+        self.unbundled_provider_option_defaults(provider, model_id, discovered.as_ref())
+    }
+
+    /// Defaults for a model absent from the bundled registry, derived from the provider default
+    /// model's defaults: a discovery-cache entry's reasoning info when the provider uses the
+    /// generic discovery cache, otherwise the custom-id heuristics.
+    fn unbundled_provider_option_defaults(
+        &self,
+        provider: ProviderName,
+        model_id: &str,
+        discovered: Option<&CachedModelDiscoveryModel>,
+    ) -> Map<String, Value> {
+        let fallback = self.default_for(provider).provider_options_defaults;
+        match discovered.filter(|_| uses_generic_discovery_cache(provider)) {
+            Some(cached) => discovered_provider_option_defaults(provider, cached, &fallback),
+            None => {
+                placeholder_provider_option_defaults(provider, model_id.trim(), &fallback, None)
+            }
+        }
+    }
+}
+
+/// Providers whose non-bundled models resolve through the generic discovery cache in
+/// `getResolvedModelMetadataSync`; lmstudio/bedrock/codex-cli take their own branches there.
+fn uses_generic_discovery_cache(provider: ProviderName) -> bool {
+    !matches!(
+        provider,
+        ProviderName::Lmstudio | ProviderName::Bedrock | ProviderName::CodexCli
+    )
 }
 
 /// Drops model-gated reasoning/thinking keys carried over from a previous model when the
@@ -670,6 +737,98 @@ mod tests {
             discovered_provider_option_defaults(ProviderName::Openai, &plain, &openai_defaults);
         assert!(!out.contains_key("reasoningEffort"));
         assert!(!out.contains_key("reasoningSummary"));
+    }
+
+    fn write_cache(
+        paths: &AiCoworkerPaths,
+        provider: ProviderName,
+        models: Vec<CachedModelDiscoveryModel>,
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(crate::stores::write_model_discovery_cache(
+            paths,
+            provider,
+            crate::stores::ModelDiscoveryResult {
+                provider,
+                source: crate::stores::ModelDiscoverySource::Api,
+                models,
+                updated_at: None,
+                expires_at: None,
+                message: None,
+            },
+            None,
+            None,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn resolver_seeds_discovered_and_custom_models_with_capability_aware_defaults() {
+        let home = tempfile::tempdir().unwrap();
+        let env = HashMap::new();
+        let paths = get_ai_coworker_paths(Some(home.path()), &env);
+        let registry = bundled_registry();
+        write_cache(
+            &paths,
+            ProviderName::Google,
+            vec![discovered(
+                "gemini-x",
+                efforts(Some("high"), &["low", "high"]),
+            )],
+        );
+        write_cache(
+            &paths,
+            ProviderName::CodexCli,
+            vec![discovered("gpt-9-codex", None)],
+        );
+
+        let google = registry.resolve_model_for_config(
+            ProviderName::Google,
+            Some("gemini-x"),
+            home.path(),
+            &env,
+        );
+        assert_eq!(google.id, "gemini-x");
+        assert!(
+            google
+                .provider_options_defaults
+                .contains_key("thinkingConfig")
+        );
+        assert_eq!(
+            google.supported_reasoning_efforts.as_deref(),
+            Some(&["low".to_owned(), "high".to_owned()][..])
+        );
+        assert_eq!(
+            google.provider_options_defaults,
+            registry.resolved_provider_option_defaults(ProviderName::Google, "gemini-x", &paths)
+        );
+
+        // codex-cli skips the discovered-reasoning rules (`getResolvedModelMetadataSync`): the
+        // placeholder keeps the provider default's options.
+        let codex = registry.resolve_model_for_config(
+            ProviderName::CodexCli,
+            Some("gpt-9-codex"),
+            home.path(),
+            &env,
+        );
+        assert_eq!(codex.id, "gpt-9-codex");
+        assert_eq!(
+            codex.provider_options_defaults,
+            registry
+                .default_for(ProviderName::CodexCli)
+                .provider_options_defaults
+        );
+
+        // Bedrock custom ids keep the empty bedrock placeholder defaults.
+        let bedrock = registry.resolved_provider_option_defaults(
+            ProviderName::Bedrock,
+            "meta.llama-custom",
+            &paths,
+        );
+        assert!(bedrock.is_empty());
     }
 
     #[test]

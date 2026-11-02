@@ -2171,41 +2171,17 @@ impl ServerRuntimeState {
     }
 
     /// Provider-option defaults the selected model declares, used to gate model-specific
-    /// reasoning keys. Resolution mirrors `getResolvedModelMetadataSync`
-    /// (`src/models/metadata.ts`): static registry metadata first, then the provider's discovery
-    /// cache (whose reasoning info decides whether reasoning keys survive,
-    /// `buildDiscoveredModelMetadata`), then the custom-id placeholder heuristics
-    /// (`buildProviderPlaceholderMetadata`). lmstudio/bedrock/codex-cli skip the generic
-    /// discovery lookup as in TS; none of them has model-gated reasoning keys.
+    /// reasoning keys. Shares `ModelRegistry::resolved_provider_option_defaults` with config
+    /// resolution (`getResolvedModelMetadataSync` in `src/models/metadata.ts`): static registry
+    /// metadata, then the provider's discovery cache, then the custom-id placeholder heuristics.
     pub(crate) fn model_provider_option_defaults(
         &self,
         provider: ProviderName,
         model_id: &str,
     ) -> Map<String, Value> {
-        if let Some(model) = self.model_registry().get(provider, model_id) {
-            return model.provider_options_defaults.clone();
-        }
-        let fallback = self
-            .model_registry()
-            .default_for(provider)
-            .provider_options_defaults;
-        let uses_generic_discovery = !matches!(
-            provider,
-            ProviderName::Lmstudio | ProviderName::Bedrock | ProviderName::CodexCli
-        );
-        if uses_generic_discovery {
-            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-            if let Some(cached) =
-                cowork_config::models::find_discovered_model_sync(&paths, provider, model_id)
-            {
-                return cowork_config::models::discovered_provider_option_defaults(
-                    provider, &cached, &fallback,
-                );
-            }
-        }
-        cowork_config::models::placeholder_provider_option_defaults(
-            provider, model_id, &fallback, None,
-        )
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        self.model_registry()
+            .resolved_provider_option_defaults(provider, model_id, &paths)
     }
 
     /// Reconciles a thread's stored `providerOptions` override and requested reasoning effort

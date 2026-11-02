@@ -1766,6 +1766,11 @@ impl ThreadControlBridge for ServerThreadControlBridge {
         if self.runtime.task_coordinator.is_task_thread(thread_id) {
             return Err("Task-owned threads are not managed by thread-management tools".to_owned());
         }
+        // TS `fork_thread` has no turn cutoff (its schema is strict): a fork always copies the
+        // whole source history, so a requested cutoff must not silently fork everything.
+        if args.get("fromTurnIndex").is_some_and(|v| !v.is_null()) {
+            return Err(cowork_tools::thread_tools::FORK_FROM_TURN_INDEX_UNSUPPORTED.to_owned());
+        }
         let title = args.get("title").and_then(Value::as_str).map(str::to_owned);
         let prompt = args
             .get("prompt")

@@ -22,6 +22,12 @@ fn assert_root_session_bridge(
         .ok_or_else(|| ToolError::Execution("Thread management bridge is not attached.".to_owned()))
 }
 
+/// TS `fork_thread` has no turn cutoff (its input schema is strict and has no
+/// `fromTurnIndex`): a fork always copies the source thread's whole history. The argument is
+/// rejected rather than ignored so a caller never gets a different fork than it asked for.
+pub const FORK_FROM_TURN_INDEX_UNSUPPORTED: &str = "fork_thread does not support fromTurnIndex: \
+     a fork always copies the source thread's full history. Omit fromTurnIndex.";
+
 pub struct ThreadManagementTool {
     tool_name: &'static str,
     desc: &'static str,
@@ -105,7 +111,6 @@ impl ThreadManagementTool {
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
-                        "fromTurnIndex": { "type": "integer", "minimum": 0 },
                         "title": { "type": "string" },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
                         "branchName": { "type": "string" }
@@ -189,8 +194,7 @@ impl ThreadManagementTool {
                         "maxOutputCharsPerItem": { "type": "integer", "minimum": 1, "maximum": 20000 },
                         "turnLimit": { "type": "integer", "minimum": 1, "maximum": 50 },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
-                        "branchName": { "type": "string" },
-                        "fromTurnIndex": { "type": "integer", "minimum": 0 }
+                        "branchName": { "type": "string" }
                     },
                     "required": ["action"]
                 }),
@@ -228,6 +232,11 @@ impl BuiltinTool for ThreadManagementTool {
         ctx: &ToolExecutionContext,
     ) -> ToolResult<ToolOutput> {
         let bridge = assert_root_session_bridge(ctx)?;
+        if raw_args.get("fromTurnIndex").is_some_and(|v| !v.is_null()) {
+            return Err(ToolError::InvalidArguments(
+                FORK_FROM_TURN_INDEX_UNSUPPORTED.to_owned(),
+            ));
+        }
         let args = normalize_and_validate_args(&self.schema, &raw_args)?;
         let dispatch_name = if self.tool_name == "threadManagement" {
             args.get("action")

@@ -715,6 +715,18 @@ fn normalize_posthog_environment_value(raw: &str, packaged: bool) -> String {
     }
 }
 
+/// TS `SAFE_ANONYMOUS_ID_PATTERN` (`/^[A-Za-z0-9_-]{16,128}$/`): an
+/// installation id outside this shape disables product analytics (every
+/// event is dropped) rather than being sent as the PostHog `distinct_id`.
+/// The desktop generates `anon_<uuid-without-dashes>` (37 chars), which
+/// always matches.
+fn is_safe_anonymous_id(id: &str) -> bool {
+    (16..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 fn resolve_posthog_environment(env: &HashMap<String, String>, packaged: bool) -> String {
     if let Some(explicit) = clean_env(env, "COWORK_POSTHOG_ENVIRONMENT")
         .or_else(|| clean_env(env, "COWORK_PRODUCT_ANALYTICS_ENV"))
@@ -853,7 +865,8 @@ pub fn resolve_server_telemetry_exporters(
         && parse_env_bool(env.get("COWORK_PRODUCT_ANALYTICS_ENABLED")) == Some(true);
     let posthog = if product_enabled {
         let key = clean_env(env, "COWORK_POSTHOG_KEY");
-        let distinct_id = clean_env(env, "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID");
+        let distinct_id = clean_env(env, "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID")
+            .filter(|id| is_safe_anonymous_id(id));
         let host_raw = clean_env(env, "COWORK_POSTHOG_HOST")
             .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_owned());
         match (key, distinct_id, normalize_http_url(&host_raw)) {
@@ -2138,5 +2151,48 @@ mod tests {
         assert_eq!(attr_value(cjk.clone()), cjk);
         let out = attr_value("漢".repeat(MAX_OTEL_ATTR_LEN + 1));
         assert_eq!(out, format!("{}…", "漢".repeat(MAX_OTEL_ATTR_LEN - 1)));
+    }
+
+    #[test]
+    fn product_analytics_requires_a_safe_installation_id() {
+        let posthog_for = |id: Option<&str>| {
+            let mut env = HashMap::from([
+                ("COWORK_TELEMETRY_MODE".to_owned(), "local-dev".to_owned()),
+                (
+                    "COWORK_PRODUCT_ANALYTICS_ENABLED".to_owned(),
+                    "1".to_owned(),
+                ),
+                ("COWORK_POSTHOG_KEY".to_owned(), "phc_test_key".to_owned()),
+            ]);
+            if let Some(id) = id {
+                env.insert(
+                    "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID".to_owned(),
+                    id.to_owned(),
+                );
+            }
+            resolve_server_telemetry_exporters(&env, None).posthog
+        };
+
+        // Desktop-generated shape: `anon_` + UUID without dashes.
+        let generated = "anon_0123456789abcdef0123456789abcdef";
+        let cfg = posthog_for(Some(generated)).expect("valid id enables PostHog");
+        assert_eq!(cfg.distinct_id, generated);
+        // Trimmed like the TS `normalizeEnvValue`.
+        let cfg = posthog_for(Some("  abcdefghijklmnop  ")).expect("16 chars is enough");
+        assert_eq!(cfg.distinct_id, "abcdefghijklmnop");
+        assert!(posthog_for(Some(&"a".repeat(128))).is_some());
+
+        for bad in [
+            "inst-test-1",
+            "abcdefghijklmno",
+            "user@example.com-0123456789",
+            "anon 0123456789abcdef",
+            "anon.0123456789abcdef",
+            "anon_0123456789abcdé",
+        ] {
+            assert!(posthog_for(Some(bad)).is_none(), "{bad:?} must be rejected");
+        }
+        assert!(posthog_for(Some(&"a".repeat(129))).is_none());
+        assert!(posthog_for(None).is_none());
     }
 }

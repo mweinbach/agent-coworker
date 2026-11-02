@@ -2066,7 +2066,7 @@ async fn server_redacted_daily_jsonl_logs_and_nonblocking_telemetry_exporters_e2
         .insert("COWORK_POSTHOG_KEY".into(), "phc_test_key".into());
     iso.env.insert(
         "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID".into(),
-        "inst-test-1".into(),
+        "anon_inst0test0000000000000000000001".into(),
     );
     iso.env.insert(
         "COWORK_POSTHOG_HOST".into(),
@@ -2567,7 +2567,7 @@ async fn server_telemetry_gates_langfuse_on_observability_enabled_and_honors_pac
         .insert("COWORK_POSTHOG_KEY".into(), "phc_packaged_key".into());
     iso.env.insert(
         "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID".into(),
-        "inst-packaged-1".into(),
+        "anon_inst0packaged00000000000000001".into(),
     );
     iso.env.insert(
         "COWORK_POSTHOG_HOST".into(),
@@ -2693,6 +2693,10 @@ async fn server_telemetry_gates_langfuse_on_observability_enabled_and_honors_pac
         let props = &p["batch"][0]["properties"];
         assert_eq!(props["environment"], "packaged");
         assert_eq!(props["eventSource"], "server");
+        assert_eq!(
+            p["batch"][0]["distinct_id"],
+            "anon_inst0packaged00000000000000001"
+        );
     }
 
     // Also verify default `observabilityEnabled == false` (without AGENT_OBSERVABILITY_ENABLED env var) stays at 0 Langfuse hits!
@@ -2735,6 +2739,124 @@ async fn server_telemetry_gates_langfuse_on_observability_enabled_and_honors_pac
         0,
         "default observabilityEnabled=false must make zero Langfuse OTLP connections even when keys exist"
     );
+}
+
+/// TS `SAFE_ANONYMOUS_ID_PATTERN` parity: an installation id that is not
+/// `^[A-Za-z0-9_-]{16,128}$` disables product analytics, so no PostHog
+/// batch is ever sent; the same server with a desktop-shaped id does send.
+#[tokio::test]
+async fn server_product_analytics_drops_events_for_invalid_installation_id() {
+    let mut iso = IsolatedServerEnv::new("cowork-srv-ph-install-id-");
+    let posthog_payloads: Arc<parking_lot::Mutex<Vec<Value>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let ph_ref = Arc::clone(&posthog_payloads);
+    let mock_app = Router::new()
+        .route(
+            "/batch/",
+            post(move |body: Bytes| {
+                let ph = Arc::clone(&ph_ref);
+                async move {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                        ph.lock().push(v);
+                    }
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|| async { sse_resp(chat_sse_text("Analytics id turn ok.")) }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = listener.local_addr().unwrap().port();
+    let _mock_task = tokio::spawn(async move {
+        axum::serve(listener, mock_app).await.unwrap();
+    });
+
+    iso.env.remove("COWORK_DISABLE_NETWORK_TELEMETRY");
+    iso.env
+        .insert("COWORK_TELEMETRY_MODE".into(), "local-dev".into());
+    iso.env
+        .insert("COWORK_PRODUCT_ANALYTICS_ENABLED".into(), "1".into());
+    iso.env
+        .insert("COWORK_POSTHOG_KEY".into(), "phc_test_key".into());
+    iso.env.insert(
+        "COWORK_POSTHOG_HOST".into(),
+        format!("http://127.0.0.1:{mock_port}"),
+    );
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-test-key".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}/v1"),
+    );
+    let cwd_str = iso.workspace.to_string_lossy().into_owned();
+
+    async fn run_one_turn(iso: &IsolatedServerEnv, cwd_str: &str) {
+        let server = start_server(iso.server_options(true)).await.unwrap();
+        let mut ws = connect_ready_ws(server.ws_url()).await;
+        let mut notifs = Vec::new();
+        let th = ws_call_collecting(
+            &mut ws,
+            "th-ph-id",
+            "thread/start",
+            json!({
+                "cwd": cwd_str,
+                "provider": "together",
+                "model": "moonshotai/Kimi-K2.5"
+            }),
+            &mut notifs,
+        )
+        .await;
+        let tid = th["result"]["thread"]["id"].as_str().unwrap().to_owned();
+        notifs.clear();
+        let _ = ws_call_collecting(
+            &mut ws,
+            "turn-ph-id",
+            "turn/start",
+            json!({
+                "threadId": tid,
+                "input": [{ "type": "text", "text": "Hello analytics" }]
+            }),
+            &mut notifs,
+        )
+        .await;
+        collect_until(&mut ws, &mut notifs, 5000, |ns| {
+            ns.iter().any(|n| n["method"] == "turn/completed")
+        })
+        .await;
+        server.shutdown().await;
+    }
+
+    // Too short (11 chars): every event is dropped.
+    iso.env.insert(
+        "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID".into(),
+        "inst-test-1".into(),
+    );
+    run_one_turn(&iso, &cwd_str).await;
+    assert!(
+        posthog_payloads.lock().is_empty(),
+        "an installation id outside ^[A-Za-z0-9_-]{{16,128}}$ must drop all PostHog events, got {:?}",
+        posthog_payloads.lock()
+    );
+
+    // Control: the desktop-generated shape (`anon_` + dashless UUID) is accepted.
+    let valid_id = "anon_0123456789abcdef0123456789abcdef";
+    iso.env.insert(
+        "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID".into(),
+        valid_id.into(),
+    );
+    run_one_turn(&iso, &cwd_str).await;
+    let payloads = posthog_payloads.lock().clone();
+    assert!(
+        payloads
+            .iter()
+            .any(|p| p["batch"][0]["event"] == "turn_completed"),
+        "a valid installation id must deliver PostHog events, got {payloads:?}"
+    );
+    for p in &payloads {
+        assert_eq!(p["batch"][0]["distinct_id"], valid_id);
+    }
 }
 
 #[tokio::test]

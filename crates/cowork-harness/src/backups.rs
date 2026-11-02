@@ -1725,6 +1725,33 @@ impl WorkspaceBackupManager {
         .map_err(|e| e.to_string())
     }
 
+    /// Runs `f` holding the session-backup lock and then the workspace lock, re-checking for an
+    /// unfinished restore recovery directory once both are held.
+    ///
+    /// Lock order (matches the TS `SessionBackupManager.withLatestMetadata` and
+    /// `withBackupPathLock`): session directory first, workspace second, never the reverse. Every
+    /// operation that reads or replaces the workspace tree (initial snapshot, checkpoint capture,
+    /// restore) holds the workspace lock, and no operation acquires a session lock while holding a
+    /// workspace lock, so sessions that share a workspace serialize without deadlocking.
+    fn run_session_then_workspace_locked<R, F>(
+        &self,
+        session_dir: &Path,
+        canon_wd: &Path,
+        f: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce() -> Result<R, String>,
+    {
+        self.run_locked(session_dir, || {
+            self.run_locked(canon_wd, || {
+                if let Some(reason) = workspace_recovery_failure_reason(canon_wd) {
+                    return Err(reason);
+                }
+                f()
+            })
+        })
+    }
+
     fn select_session_dir_for_workspace(
         &self,
         session_id: &str,
@@ -1839,13 +1866,12 @@ impl WorkspaceBackupManager {
         provider: Option<String>,
         model: Option<String>,
     ) -> Result<SessionBackupPublicState, String> {
-        if let Some(reason) = workspace_recovery_failure_reason(working_directory) {
-            return Err(reason);
-        }
         let canon_wd = canonicalize_sync(working_directory);
         let session_dir = self.select_session_dir_for_workspace(session_id, &canon_wd)?;
 
-        self.run_locked(&session_dir, || {
+        // Session lock, then workspace lock (see `run_session_then_workspace_locked`): the original
+        // snapshot must not observe a tree another session is mid-way through restoring.
+        self.run_session_then_workspace_locked(&session_dir, &canon_wd, || {
             if session_dir.join("metadata.json").is_file() {
                 let mut existing = Self::read_metadata(&session_dir)?;
                 let mut dirty = false;
@@ -1925,9 +1951,6 @@ impl WorkspaceBackupManager {
         provider: Option<String>,
         model: Option<String>,
     ) -> Result<Option<SessionBackupPublicState>, String> {
-        if let Some(reason) = workspace_recovery_failure_reason(working_directory) {
-            return Err(reason);
-        }
         let canon_wd = canonicalize_sync(working_directory);
         let session_dir = match self.find_existing_session_dir(session_id)? {
             Some(dir) => dir,
@@ -1947,7 +1970,7 @@ impl WorkspaceBackupManager {
         };
 
         self.run_locked(&session_dir, || {
-            let mut meta = Self::read_metadata(&session_dir)?;
+            let meta = Self::read_metadata(&session_dir)?;
             if !same_workspace_path(&meta.working_directory, &canon_wd.to_string_lossy()) {
                 return Err("Target backup session belongs to a different workspace.".to_owned());
             }
@@ -1964,51 +1987,81 @@ impl WorkspaceBackupManager {
                 }
             }
 
-            let fp = compute_workspace_fingerprint(&canon_wd)?;
-            let idx = meta.checkpoints.iter().map(|c| c.index).max().unwrap_or(0) + 1;
-            let cp_id = format!("cp-{idx:04}");
-            let now = now_iso();
-
-            let prev_record = meta.checkpoints.last().cloned();
-            let (changed, patch_bytes, snapshot) =
-                if let Some(prev) = prev_record.filter(|p| p.fingerprint == fp) {
-                    (false, 0_u64, prev.snapshot)
-                } else {
-                    let rel = format!("checkpoints/{cp_id}.tar.gz");
-                    let bytes = write_snapshot_tar_gz(&canon_wd, &session_dir.join(&rel))?;
-                    (
-                        true,
-                        bytes,
-                        BackupSnapshotRef {
-                            kind: OriginalSnapshotKind::TarGz,
-                            path: rel,
-                        },
-                    )
-                };
-
-            meta.updated_at = Some(now.clone());
-            if title.is_some() {
-                meta.title = title;
-            }
-            if provider.is_some() {
-                meta.provider = provider;
-            }
-            if model.is_some() {
-                meta.model = model;
-            }
-            meta.checkpoints.push(StoredCheckpointRecord {
-                id: cp_id,
-                index: idx,
-                created_at: now,
-                trigger,
-                changed,
-                patch_bytes,
-                fingerprint: fp,
-                snapshot,
-            });
-            Self::write_metadata(&session_dir, &meta)?;
-            Ok(Some(Self::to_public_state(true, &session_dir, &meta)))
+            // The workspace lock is held (after the session lock) from the recovery check through
+            // the fingerprint, the snapshot and the metadata write, so a concurrent restore from
+            // another session sharing this workspace can never be observed half-applied.
+            self.run_locked(&canon_wd, || {
+                if let Some(reason) = workspace_recovery_failure_reason(&canon_wd) {
+                    return Err(reason);
+                }
+                Self::capture_checkpoint_locked(
+                    &session_dir,
+                    &canon_wd,
+                    meta,
+                    trigger,
+                    title,
+                    provider,
+                    model,
+                )
+            })
         })
+    }
+
+    /// Fingerprints and (when changed) snapshots the workspace into a new checkpoint record.
+    /// Callers must hold the session lock and then the workspace lock.
+    fn capture_checkpoint_locked(
+        session_dir: &Path,
+        canon_wd: &Path,
+        mut meta: StoredSessionBackupMetadata,
+        trigger: BackupTrigger,
+        title: Option<String>,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> Result<Option<SessionBackupPublicState>, String> {
+        let fp = compute_workspace_fingerprint(canon_wd)?;
+        let idx = meta.checkpoints.iter().map(|c| c.index).max().unwrap_or(0) + 1;
+        let cp_id = format!("cp-{idx:04}");
+        let now = now_iso();
+
+        let prev_record = meta.checkpoints.last().cloned();
+        let (changed, patch_bytes, snapshot) =
+            if let Some(prev) = prev_record.filter(|p| p.fingerprint == fp) {
+                (false, 0_u64, prev.snapshot)
+            } else {
+                let rel = format!("checkpoints/{cp_id}.tar.gz");
+                let bytes = write_snapshot_tar_gz(canon_wd, &session_dir.join(&rel))?;
+                (
+                    true,
+                    bytes,
+                    BackupSnapshotRef {
+                        kind: OriginalSnapshotKind::TarGz,
+                        path: rel,
+                    },
+                )
+            };
+
+        meta.updated_at = Some(now.clone());
+        if title.is_some() {
+            meta.title = title;
+        }
+        if provider.is_some() {
+            meta.provider = provider;
+        }
+        if model.is_some() {
+            meta.model = model;
+        }
+        meta.checkpoints.push(StoredCheckpointRecord {
+            id: cp_id,
+            index: idx,
+            created_at: now,
+            trigger,
+            changed,
+            patch_bytes,
+            fingerprint: fp,
+            snapshot,
+        });
+        Self::write_metadata(session_dir, &meta)?;
+        Ok(Some(Self::to_public_state(true, session_dir, &meta)))
     }
 
     /// Reads current session backup state for `cowork/session/backupState`.
@@ -2165,9 +2218,6 @@ impl WorkspaceBackupManager {
     where
         F: FnMut(&str) -> SessionLookupMetadata,
     {
-        if let Some(reason) = workspace_recovery_failure_reason(working_directory) {
-            return Err(reason);
-        }
         let canon_wd = canonicalize_sync(working_directory);
         let wd_str = canon_wd.to_string_lossy().into_owned();
         let session_dir = self
@@ -2182,7 +2232,9 @@ impl WorkspaceBackupManager {
         let (snapshot_ref, _) = Self::resolve_snapshot_ref(&meta_before, checkpoint_id)?;
         verify_snapshot_exists_confined(&session_dir, &snapshot_ref)?;
 
-        // Create safety manual checkpoint before overwriting workspace contents.
+        // Create safety manual checkpoint before overwriting workspace contents. It checks for an
+        // unfinished restore recovery directory under the workspace lock, so a workspace needing
+        // recovery is refused here.
         let _ = self.create_checkpoint(
             target_session_id,
             &canon_wd,
@@ -2192,25 +2244,25 @@ impl WorkspaceBackupManager {
             None,
         )?;
 
-        let state = self.run_locked(&session_dir, || {
-            self.run_locked(&canon_wd, || {
-                let stage_parent =
-                    session_dir.join(format!(".stage-restore-{}", Uuid::new_v4().simple()));
-                let res = (|| -> Result<SessionBackupPublicState, String> {
-                    // The staged tree stays writable so its entries can be moved into the
-                    // workspace; snapshot directory modes are applied once they are in place.
-                    let deferred_modes =
-                        materialize_snapshot_confined(&session_dir, &snapshot_ref, &stage_parent)?;
-                    replace_directory_contents(&canon_wd, &stage_parent)?;
-                    deferred_modes.apply_to_workspace(&canon_wd);
-                    let mut meta = Self::read_metadata(&session_dir)?;
-                    meta.updated_at = Some(now_iso());
-                    Self::write_metadata(&session_dir, &meta)?;
-                    Ok(Self::to_public_state(true, &session_dir, &meta))
-                })();
-                let _ = remove_dir_all_force(&stage_parent);
-                res
-            })
+        // The recovery check is repeated once both locks are held: another session sharing this
+        // workspace may have stranded a recovery directory after the safety checkpoint.
+        let state = self.run_session_then_workspace_locked(&session_dir, &canon_wd, || {
+            let stage_parent =
+                session_dir.join(format!(".stage-restore-{}", Uuid::new_v4().simple()));
+            let res = (|| -> Result<SessionBackupPublicState, String> {
+                // The staged tree stays writable so its entries can be moved into the
+                // workspace; snapshot directory modes are applied once they are in place.
+                let deferred_modes =
+                    materialize_snapshot_confined(&session_dir, &snapshot_ref, &stage_parent)?;
+                replace_directory_contents(&canon_wd, &stage_parent)?;
+                deferred_modes.apply_to_workspace(&canon_wd);
+                let mut meta = Self::read_metadata(&session_dir)?;
+                meta.updated_at = Some(now_iso());
+                Self::write_metadata(&session_dir, &meta)?;
+                Ok(Self::to_public_state(true, &session_dir, &meta))
+            })();
+            let _ = remove_dir_all_force(&stage_parent);
+            res
         })?;
 
         let event = self.read_workspace_backups(&canon_wd, session_id_for_event, lookup_session)?;

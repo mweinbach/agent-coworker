@@ -725,37 +725,14 @@ impl ServerRuntimeState {
         let mut requested_reasoning = src_snapshot.requested_reasoning_effort.clone();
         if let Some(thinking) = thinking {
             requested_reasoning = Some(thinking.to_owned());
-            // The fork's effective section is its inherited override layered key by key over
-            // the target workspace's options (as the turn runner merges them); the patch is
-            // computed against it so a workspace `thinkingConfig` is overridden too.
-            let provider_key = fork_provider.as_str();
-            let workspace_section = self
-                .load_workspace_config(Path::new(&target_cwd))
-                .ok()
-                .and_then(|cfg| cfg.provider_options)
-                .and_then(|po| po.get(provider_key).and_then(Value::as_object).cloned())
-                .unwrap_or_default();
-            let po = config_overrides
-                .entry("providerOptions".to_owned())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if !po.is_object() {
-                *po = Value::Object(Map::new());
-            }
-            if let Some(po_map) = po.as_object_mut() {
-                let mut section = po_map
-                    .get(provider_key)
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut current = workspace_section;
-                current.extend(section.clone());
-                // Only the patched reasoning key is stored, so workspace-only keys (endpoints
-                // included) are never copied into the thread's override.
-                let (key, value) =
-                    thread_reasoning_options_entry(fork_provider, thinking, &current);
-                section.insert(key.to_owned(), value);
-                po_map.insert(provider_key.to_owned(), Value::Object(section));
-            }
+            let workspace_section =
+                self.workspace_provider_section(Path::new(&target_cwd), fork_provider);
+            apply_thread_thinking_override(
+                &mut config_overrides,
+                workspace_section,
+                fork_provider,
+                thinking,
+            );
         }
 
         let new_id = Uuid::new_v4().to_string();
@@ -1031,6 +1008,86 @@ fn thread_reasoning_options_entry(
         ("thinkingConfig", Value::Object(thinking_config))
     } else {
         ("reasoningEffort", Value::String(thinking.to_owned()))
+    }
+}
+
+/// Writes a validated `thinking` into a thread's `providerOptions` override (TS
+/// `applyThinking`: `setConfig({ providerOptions: buildThreadReasoningOptionsPatch(...) })`).
+/// The thread's effective section is its own override layered key by key over the workspace's
+/// options (as the turn runner merges them); the patch is computed against it so a workspace
+/// `thinkingConfig` is overridden too. Only the patched reasoning key is stored, so
+/// workspace-only keys (endpoints included) are never copied into the thread's override.
+fn apply_thread_thinking_override(
+    config_overrides: &mut Map<String, Value>,
+    workspace_section: Map<String, Value>,
+    provider: ProviderName,
+    thinking: &str,
+) {
+    let provider_key = provider.as_str();
+    let po = config_overrides
+        .entry("providerOptions".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !po.is_object() {
+        *po = Value::Object(Map::new());
+    }
+    if let Some(po_map) = po.as_object_mut() {
+        let mut section = po_map
+            .get(provider_key)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut current = workspace_section;
+        current.extend(section.clone());
+        let (key, value) = thread_reasoning_options_entry(provider, thinking, &current);
+        section.insert(key.to_owned(), value);
+        po_map.insert(provider_key.to_owned(), Value::Object(section));
+    }
+}
+
+impl ServerRuntimeState {
+    /// The workspace config's `providerOptions` section for `provider` at `cwd` (empty when
+    /// the workspace config cannot be loaded or has none).
+    fn workspace_provider_section(&self, cwd: &Path, provider: ProviderName) -> Map<String, Value> {
+        self.load_workspace_config(cwd)
+            .ok()
+            .and_then(|cfg| cfg.provider_options)
+            .and_then(|po| {
+                po.get(provider.as_str())
+                    .and_then(Value::as_object)
+                    .cloned()
+            })
+            .unwrap_or_default()
+    }
+
+    /// TS `LocalThreadHost.applyThinking` for an existing thread: validates `thinking` against
+    /// the thread's current provider/model (`buildThreadReasoningOptionsPatch`), then stores it
+    /// as the thread's reasoning override exactly as `thread/fork { thinking }` does.
+    async fn apply_thread_thinking(&self, thread_id: &str, thinking: &str) -> Result<(), String> {
+        let live_arc = self
+            .load_thread(thread_id)
+            .ok_or_else(|| format!("Unknown thread: {thread_id}"))?;
+        let (provider, model, cwd) = {
+            let live = live_arc.lock();
+            (live.provider, live.model.clone(), PathBuf::from(&live.cwd))
+        };
+        self.validate_thread_reasoning(provider, &model, thinking)?;
+        let workspace_section = self.workspace_provider_section(&cwd, provider);
+        {
+            let mut live = live_arc.lock();
+            apply_thread_thinking_override(
+                &mut live.config_overrides,
+                workspace_section,
+                provider,
+                thinking,
+            );
+            live.requested_reasoning_effort = Some(thinking.to_owned());
+            live.effective_reasoning_effort = Some(thinking.to_owned());
+            live.updated_at =
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        }
+        self.persist_live_session(&live_arc, "session_config")
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -1547,6 +1604,65 @@ pub struct ServerThreadControlBridge {
     pub connection_id: String,
 }
 
+impl ServerThreadControlBridge {
+    /// TS `LocalThreadHost.applyModelAndThinking` for `send_message_to_thread`: `model` is
+    /// parsed against the thread's current provider (`parseThreadModelSelection`) and set on
+    /// the thread, then `thinking` is applied against the resulting provider/model. Both are
+    /// validated before either is applied, so a rejected `thinking` never leaves a half-applied
+    /// model switch. A busy thread is left untouched (TS returns before applying anything); the
+    /// turn start that follows reports it.
+    async fn apply_send_model_and_thinking(
+        &self,
+        thread_id: &str,
+        model: Option<&str>,
+        thinking: Option<&str>,
+    ) -> Result<(), String> {
+        let live_arc = self
+            .runtime
+            .load_thread(thread_id)
+            .ok_or_else(|| format!("Unknown thread: {thread_id}"))?;
+        let (current_provider, current_model, busy) = {
+            let live = live_arc.lock();
+            (
+                live.provider,
+                live.model.clone(),
+                live.busy || self.runtime.active_turns.contains_key(thread_id),
+            )
+        };
+        if busy {
+            return Ok(());
+        }
+        let selection = model
+            .map(|raw| parse_thread_model_selection(raw, current_provider))
+            .transpose()?;
+        if let Some(thinking) = thinking {
+            let (provider, model_id) = match &selection {
+                Some((provider, model_id)) => {
+                    (provider.unwrap_or(current_provider), model_id.as_str())
+                }
+                None => (current_provider, current_model.as_str()),
+            };
+            self.runtime
+                .validate_thread_reasoning(provider, model_id, thinking)?;
+        }
+        if let Some((provider, model_id)) = &selection {
+            self.runtime
+                .set_session_model(
+                    thread_id,
+                    provider.as_ref().map(ProviderName::as_str),
+                    model_id,
+                )
+                .await?;
+        }
+        if let Some(thinking) = thinking {
+            self.runtime
+                .apply_thread_thinking(thread_id, thinking)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl ThreadControlBridge for ServerThreadControlBridge {
     async fn list_projects(&self) -> Result<Value, String> {
@@ -1701,6 +1817,11 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty());
+        let thinking = args
+            .get("thinking")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let env_kind = args
             .get("environment")
             .and_then(Value::as_str)
@@ -1746,19 +1867,31 @@ impl ThreadControlBridge for ServerThreadControlBridge {
         // TS `createThread` parses the model against the target workspace's provider
         // (`parseThreadModelSelection`): an explicit `provider:modelId` ref overrides the
         // provider, anything else is a model ID on the workspace provider.
-        let (provider_override, model_override) = match model {
-            Some(raw_model) => {
-                let workspace_provider = self
-                    .runtime
+        let workspace_cfg = if model.is_some() || thinking.is_some() {
+            Some(
+                self.runtime
                     .load_workspace_config(&target_cwd)
-                    .map_err(|e| format!("Failed to load workspace config: {e}"))?
-                    .provider;
-                let (provider, model_id) =
-                    parse_thread_model_selection(raw_model, workspace_provider)?;
+                    .map_err(|e| format!("Failed to load workspace config: {e}"))?,
+            )
+        } else {
+            None
+        };
+        let (provider_override, model_override) = match (model, workspace_cfg.as_ref()) {
+            (Some(raw_model), Some(cfg)) => {
+                let (provider, model_id) = parse_thread_model_selection(raw_model, cfg.provider)?;
                 (provider, Some(model_id))
             }
-            None => (None, None),
+            _ => (None, None),
         };
+        // TS applies `thinking` to the new thread (`applyThinking`) before its first turn;
+        // `buildThreadReasoningOptionsPatch` validation runs here, against the provider/model
+        // the thread will be created with, so a rejected level never leaves a thread behind.
+        if let (Some(thinking), Some(cfg)) = (thinking, workspace_cfg.as_ref()) {
+            let provider = provider_override.unwrap_or(cfg.provider);
+            let model_id = model_override.clone().unwrap_or_else(|| cfg.model.clone());
+            self.runtime
+                .validate_thread_reasoning(provider, &model_id, thinking)?;
+        }
         let (mut thread, _) = self
             .runtime
             .start_or_get_thread(
@@ -1769,6 +1902,11 @@ impl ThreadControlBridge for ServerThreadControlBridge {
                 &self.connection_id,
             )
             .await?;
+        if let Some(thinking) = thinking {
+            self.runtime
+                .apply_thread_thinking(&thread.id, thinking)
+                .await?;
+        }
         if let Some(t) = title {
             let _ = self.runtime.set_session_title(&thread.id, t).await?;
         }
@@ -1807,6 +1945,20 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .get("message")
             .and_then(Value::as_str)
             .ok_or_else(|| "message is required".to_owned())?;
+        let model = args
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let thinking = args
+            .get("thinking")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if model.is_some() || thinking.is_some() {
+            self.apply_send_model_and_thinking(thread_id, model, thinking)
+                .await?;
+        }
         self.runtime
             .handle_turn_start(
                 &self.connection_id,
@@ -1842,6 +1994,12 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let model = args.get("model").and_then(Value::as_str).map(str::to_owned);
+        // Validated (`buildThreadReasoningOptionsPatch`) and applied to the fork by
+        // `handle_thread_fork`, against the fork's own provider/model.
+        let thinking = args
+            .get("thinking")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let branch_name = args
             .get("branchName")
             .and_then(Value::as_str)
@@ -1865,7 +2023,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
                     title,
                     prompt,
                     model,
-                    thinking: None,
+                    thinking,
                 },
             )
             .await

@@ -84,6 +84,7 @@ impl ThreadManagementTool {
                         "cwd": { "type": "string" },
                         "title": { "type": "string" },
                         "model": { "type": "string" },
+                        "thinking": { "type": "string", "minLength": 1 },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
                         "branchName": { "type": "string" }
                     },
@@ -93,12 +94,14 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "send_message_to_thread",
-                desc: "Start a turn on another thread with a prompt message.",
+                desc: "Start a turn on another thread with a prompt message, optionally switching its model and/or reasoning level (thinking) first.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
-                        "message": { "type": "string" }
+                        "message": { "type": "string" },
+                        "model": { "type": "string" },
+                        "thinking": { "type": "string", "minLength": 1 }
                     },
                     "required": ["threadId", "message"]
                 }),
@@ -106,12 +109,15 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "fork_thread",
-                desc: "Fork an existing thread (optionally into a fresh git worktree).",
+                desc: "Fork an existing thread into a new root thread (optionally into a fresh git worktree), optionally on a different model and/or reasoning level (thinking), and optionally start a prompt on the fork in the background.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "threadId": { "type": "string" },
                         "title": { "type": "string" },
+                        "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
+                        "model": { "type": "string" },
+                        "thinking": { "type": "string", "minLength": 1 },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
                         "branchName": { "type": "string" }
                     },
@@ -184,6 +190,7 @@ impl ThreadManagementTool {
                         "message": { "type": "string" },
                         "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
                         "model": { "type": "string" },
+                        "thinking": { "type": "string", "minLength": 1 },
                         "pinned": { "type": "boolean" },
                         "archived": { "type": "boolean" },
                         "includeArchived": { "type": "boolean" },

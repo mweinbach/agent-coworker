@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use cowork_js_vm::{
     CodeModeCatalog, CodeModeLimits, CodeModeOptions, CompileIssue, DEFAULT_WALL_CLOCK_TIMEOUT_MS,
-    DeterminismMode, IsolateLimits, VmEvalOptions, WorkflowCompileResult, WorkflowJournal,
+    DeterminismMode, IsolateLimits, VmError, VmEvalOptions, WorkflowCompileResult, WorkflowJournal,
     WorkflowJournalEntry, WorkflowJournalOpenOptions, assert_safe_workflow_run_id,
     compile_workflow_source, digest_agent_call, eval_isolated_module, execute_code_mode,
     extract_result_envelope, hash_workflow_args, inspect_workflow_source, strip_typescript,
@@ -703,4 +703,157 @@ async fn workflow_journal_replays_occurrences_and_validates_json_schemas() {
 
     let bad = validate_against_json_schema(&schema, Some("{\"count\": 0}")).expect("valid schema");
     assert!(!bad.issues().is_empty());
+}
+
+/// Upper bound for a run stuck on a never-settling promise to return once its deadline (or Stop)
+/// fires. QuickJS has no JavaScript left to run, so the isolate's interrupt handler never fires;
+/// only the host-side deadline can end these runs.
+const PENDING_PROMISE_RETURN_BOUND: Duration = Duration::from_secs(10);
+
+fn realm_options(timeout_ms: u64, cancel_token: Option<CancellationToken>) -> VmEvalOptions {
+    VmEvalOptions {
+        limits: IsolateLimits {
+            wall_clock_timeout_ms: timeout_ms,
+            ..IsolateLimits::default()
+        },
+        determinism: DeterminismMode::Live,
+        cancel_token,
+    }
+}
+
+fn cancel_after(delay: Duration) -> CancellationToken {
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        trigger.cancel();
+    });
+    cancel
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realm_times_out_on_pending_top_level_await() {
+    let started = Instant::now();
+    let res = tokio::time::timeout(
+        PENDING_PROMISE_RETURN_BOUND,
+        eval_isolated_module(
+            "await new Promise(() => {}); export default 1;",
+            realm_options(300, None),
+        ),
+    )
+    .await
+    .expect("module evaluation must honour the wall-clock timeout");
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(res, Err(VmError::TimedOut { timeout_ms: 300 })),
+        "expected TimedOut, got {res:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "returned before the deadline: {elapsed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realm_times_out_on_pending_default_export() {
+    let res = tokio::time::timeout(
+        PENDING_PROMISE_RETURN_BOUND,
+        eval_isolated_module(
+            "export default async () => { await new Promise(() => {}); return 1; };",
+            realm_options(300, None),
+        ),
+    )
+    .await
+    .expect("the default export's promise must honour the wall-clock timeout");
+
+    assert!(
+        matches!(res, Err(VmError::TimedOut { timeout_ms: 300 })),
+        "expected TimedOut, got {res:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realm_cancellation_interrupts_pending_promises() {
+    for source in [
+        "await new Promise(() => {}); export default 1;",
+        "export default async () => { await new Promise(() => {}); return 1; };",
+    ] {
+        let started = Instant::now();
+        // Timeout far beyond the cancellation point, so only Stop ends the run.
+        let res = tokio::time::timeout(
+            PENDING_PROMISE_RETURN_BOUND,
+            eval_isolated_module(
+                source,
+                realm_options(60_000, Some(cancel_after(Duration::from_millis(200)))),
+            ),
+        )
+        .await
+        .expect("cancellation must end a pending isolated module");
+
+        assert!(
+            matches!(res, Err(VmError::Cancelled)),
+            "expected Cancelled for {source:?}, got {res:?}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(150),
+            "returned before cancellation: {:?}",
+            started.elapsed()
+        );
+    }
+}
+
+fn code_mode_options(timeout_ms: u64, cancel_token: Option<CancellationToken>) -> CodeModeOptions {
+    CodeModeOptions {
+        limits: CodeModeLimits {
+            timeout_ms,
+            ..CodeModeLimits::default()
+        },
+        cancel_token,
+        on_call_event: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_times_out_on_pending_await() {
+    let started = Instant::now();
+    let res = tokio::time::timeout(
+        PENDING_PROMISE_RETURN_BOUND,
+        execute_code_mode(
+            "await new Promise(() => {}); return 1;",
+            Arc::new(EchoCatalog),
+            code_mode_options(300, None),
+        ),
+    )
+    .await
+    .expect("code mode must honour its timeout on a pending await");
+
+    assert!(
+        matches!(res, Err(VmError::TimedOut { timeout_ms: 300 })),
+        "expected TimedOut, got {res:?}"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "returned before the deadline: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_cancellation_interrupts_pending_await() {
+    let res = tokio::time::timeout(
+        PENDING_PROMISE_RETURN_BOUND,
+        execute_code_mode(
+            "await new Promise(() => {}); return 1;",
+            Arc::new(EchoCatalog),
+            code_mode_options(30_000, Some(cancel_after(Duration::from_millis(200)))),
+        ),
+    )
+    .await
+    .expect("cancellation must end a pending code mode run");
+
+    assert!(
+        matches!(res, Err(VmError::Cancelled)),
+        "expected Cancelled, got {res:?}"
+    );
 }

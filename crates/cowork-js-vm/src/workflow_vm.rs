@@ -1,6 +1,5 @@
-use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -14,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::realm::{
     DeterminismMode, InterruptCause, IsolateLimits, VmError, create_isolated_runtime,
-    extract_caught_error, install_realm_seal,
+    extract_caught_error, install_realm_seal, race_isolate_deadline,
 };
 use crate::transpile::{CompileIssue, WorkflowCompileResult, compile_workflow_source};
 use crate::{DEFAULT_ISOLATE_HEAP_LIMIT_BYTES, DEFAULT_ISOLATE_MAX_STACK_BYTES};
@@ -170,39 +169,6 @@ pub fn validate_workflow_meta_value(raw: &Value) -> Result<WorkflowMeta, Vec<Com
         })
     } else {
         Err(issues)
-    }
-}
-
-/// Races an isolate future (module evaluation, driver promises) against the wall-clock deadline
-/// and, when given, a cancellation token. The QuickJS interrupt handler only fires while
-/// JavaScript is executing, so a promise that stays pending forever (for example a top-level
-/// `await new Promise(() => {})`) would otherwise never observe the deadline or a Stop.
-///
-/// On timeout/cancellation the abandoned future is dropped and `cancel_flag` is raised so any
-/// JavaScript that still runs before the isolate is torn down is interrupted immediately.
-async fn race_isolate_deadline<T>(
-    fut: impl Future<Output = T>,
-    deadline: tokio::time::Instant,
-    timeout_ms: u64,
-    cancel: Option<&CancellationToken>,
-    cancel_flag: &AtomicBool,
-) -> Result<T, VmError> {
-    let cancelled = async {
-        match cancel {
-            Some(tok) => tok.cancelled().await,
-            None => std::future::pending::<()>().await,
-        }
-    };
-    tokio::select! {
-        out = fut => Ok(out),
-        () = cancelled => {
-            cancel_flag.store(true, Ordering::Relaxed);
-            Err(VmError::Cancelled)
-        }
-        () = tokio::time::sleep_until(deadline) => {
-            cancel_flag.store(true, Ordering::Relaxed);
-            Err(VmError::TimedOut { timeout_ms })
-        }
     }
 }
 

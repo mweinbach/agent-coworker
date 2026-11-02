@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::realm::{
     DEFAULT_MAX_CONSOLE_LINE_CHARS, DEFAULT_MAX_CONSOLE_LOGS, DEFAULT_WALL_CLOCK_TIMEOUT_MS,
     DeterminismMode, InterruptCause, IsolateLimits, VmError, create_isolated_runtime,
-    extract_caught_error, install_realm_seal,
+    extract_caught_error, install_realm_seal, race_isolate_deadline,
 };
 use crate::transpile::compile_code_mode_module;
 use crate::{DEFAULT_ISOLATE_HEAP_LIMIT_BYTES, DEFAULT_ISOLATE_MAX_STACK_BYTES};
@@ -611,11 +611,19 @@ pub async fn execute_code_mode(
                     .eval()
                     .catch(&ctx)
                     .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
-                eval_promise
-                    .into_future::<()>()
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
+                // The compiled module only declares the wrapper function, so evaluation settles
+                // immediately today; still bound it like every other isolate await so a pending
+                // promise can never outlive the deadline or Stop.
+                race_isolate_deadline(
+                    eval_promise.into_future::<()>(),
+                    deadline_tokio,
+                    limits_for_vm.timeout_ms,
+                    Some(&cancel_for_vm),
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &isolate_limits, &prepared.interrupt_cause))?;
 
                 let run_fn: Function<'_> = evaluated
                     .get("default")

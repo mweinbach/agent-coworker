@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -248,6 +249,39 @@ pub(crate) async fn create_isolated_runtime(
         slice_deadline,
         cancel_flag,
     })
+}
+
+/// Races an isolate future (module evaluation, driver promises) against the wall-clock deadline
+/// and, when given, a cancellation token. The QuickJS interrupt handler only fires while
+/// JavaScript is executing, so a promise that stays pending forever (for example a top-level
+/// `await new Promise(() => {})`) would otherwise never observe the deadline or a Stop.
+///
+/// On timeout/cancellation the abandoned future is dropped and `cancel_flag` is raised so any
+/// JavaScript that still runs before the isolate is torn down is interrupted immediately.
+pub(crate) async fn race_isolate_deadline<T>(
+    fut: impl Future<Output = T>,
+    deadline: tokio::time::Instant,
+    timeout_ms: u64,
+    cancel: Option<&CancellationToken>,
+    cancel_flag: &AtomicBool,
+) -> Result<T, VmError> {
+    let cancelled = async {
+        match cancel {
+            Some(tok) => tok.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        out = fut => Ok(out),
+        () = cancelled => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            Err(VmError::Cancelled)
+        }
+        () = tokio::time::sleep_until(deadline) => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            Err(VmError::TimedOut { timeout_ms })
+        }
+    }
 }
 
 /// Seals `globalThis` to the strict allowlist, installs bounded `console`, configures
@@ -688,6 +722,8 @@ pub async fn eval_isolated_module(
                 options.cancel_token.as_ref(),
             )
             .await?;
+            let timeout_ms = options.limits.wall_clock_timeout_ms;
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.max(1));
 
             let json_str: String = AsyncContext::async_with(&prepared.ctx, async |ctx| {
                 install_realm_seal(
@@ -724,13 +760,18 @@ pub async fn eval_isolated_module(
                 let (evaluated, eval_promise) = declared.eval().catch(&ctx).map_err(|e| {
                     extract_caught_error(e, &options.limits, &prepared.interrupt_cause)
                 })?;
-                eval_promise
-                    .into_future::<()>()
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| {
-                        extract_caught_error(e, &options.limits, &prepared.interrupt_cause)
-                    })?;
+                // A pending top-level `await` (or default export) never re-enters the interrupt
+                // handler, so the deadline and Stop must also be observed on the host side.
+                race_isolate_deadline(
+                    eval_promise.into_future::<()>(),
+                    deadline,
+                    timeout_ms,
+                    options.cancel_token.as_ref(),
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &options.limits, &prepared.interrupt_cause))?;
 
                 let ns = evaluated.namespace().catch(&ctx).map_err(|e| {
                     extract_caught_error(e, &options.limits, &prepared.interrupt_cause)
@@ -739,13 +780,16 @@ pub async fn eval_isolated_module(
                     runner.call((ns,)).catch(&ctx).map_err(|e| {
                         extract_caught_error(e, &options.limits, &prepared.interrupt_cause)
                     })?;
-                out_promise
-                    .into_future::<String>()
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| {
-                        extract_caught_error(e, &options.limits, &prepared.interrupt_cause)
-                    })
+                race_isolate_deadline(
+                    out_promise.into_future::<String>(),
+                    deadline,
+                    timeout_ms,
+                    options.cancel_token.as_ref(),
+                    &prepared.cancel_flag,
+                )
+                .await?
+                .catch(&ctx)
+                .map_err(|e| extract_caught_error(e, &options.limits, &prepared.interrupt_cause))
             })
             .await?;
 

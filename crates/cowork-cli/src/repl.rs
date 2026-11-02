@@ -56,6 +56,33 @@ enum LineOutcome {
         cwd: PathBuf,
         announce: Option<String>,
     },
+    /// A model turn ran (or was attempted) for this line; the REPL keeps going as for
+    /// `Continue`, while one-shot mode turns anything but `Completed` into a failing exit.
+    Turn(TurnOutcome),
+}
+
+/// How a message or command turn ended (TS has no counterpart: its CLI had no one-shot mode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TurnOutcome {
+    Completed,
+    /// `turn/completed` reported `failed` (or another non-success status), with the turn error.
+    Failed(Option<String>),
+    Interrupted,
+    /// The `turn/start` / `command/execute` request was rejected, so no turn ran.
+    StartFailed(String),
+}
+
+impl TurnOutcome {
+    /// The one-shot run's error for an unsuccessful turn, `None` when it completed.
+    fn one_shot_error(&self) -> Option<anyhow::Error> {
+        match self {
+            Self::Completed => None,
+            Self::Failed(Some(message)) => Some(anyhow::anyhow!("Turn failed: {message}")),
+            Self::Failed(None) => Some(anyhow::anyhow!("Turn failed")),
+            Self::Interrupted => Some(anyhow::anyhow!("Turn interrupted")),
+            Self::StartFailed(message) => Some(anyhow::anyhow!("Failed to start turn: {message}")),
+        }
+    }
 }
 
 enum PromptInputSource {
@@ -878,13 +905,10 @@ impl ActiveReplSession {
                     {
                         Ok(res) => res,
                         Err(err) => {
-                            writeln!(
-                                out,
-                                "[error] Failed to run /{name}: {}",
-                                sanitize(&err.to_string())
-                            )?;
+                            let message = sanitize(&err.to_string());
+                            writeln!(out, "[error] Failed to run /{name}: {message}")?;
                             out.flush()?;
-                            return Ok(LineOutcome::Continue);
+                            return Ok(LineOutcome::Turn(TurnOutcome::StartFailed(message)));
                         }
                     };
                     // `command/execute` starts a normal turn (server `execute_command_turn`);
@@ -896,7 +920,9 @@ impl ActiveReplSession {
                                 .and_then(Value::as_str)
                                 .unwrap_or("")
                                 .to_owned();
-                            self.consume_turn(&turn_id, prompt_source, out).await?;
+                            let outcome = self.consume_turn(&turn_id, prompt_source, out).await?;
+                            out.flush()?;
+                            return Ok(LineOutcome::Turn(outcome));
                         }
                         None => writeln!(out, "Executed /{name}.")?,
                     }
@@ -907,10 +933,9 @@ impl ActiveReplSession {
                 Ok(LineOutcome::Continue)
             }
 
-            ParsedReplCommand::Message(msg) => {
-                self.execute_turn(&msg, prompt_source, out).await?;
-                Ok(LineOutcome::Continue)
-            }
+            ParsedReplCommand::Message(msg) => Ok(LineOutcome::Turn(
+                self.execute_turn(&msg, prompt_source, out).await?,
+            )),
         }
     }
 
@@ -919,7 +944,7 @@ impl ActiveReplSession {
         msg: &str,
         prompt_source: &mut PromptInputSource,
         out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<TurnOutcome> {
         self.rpc.pending_notifications.clear();
 
         let client_message_id = Uuid::new_v4().to_string();
@@ -937,13 +962,10 @@ impl ActiveReplSession {
         {
             Ok(res) => res,
             Err(err) => {
-                writeln!(
-                    out,
-                    "[error] Failed to start turn: {}",
-                    sanitize(&err.to_string())
-                )?;
+                let message = sanitize(&err.to_string());
+                writeln!(out, "[error] Failed to start turn: {message}")?;
                 out.flush()?;
-                return Ok(());
+                return Ok(TurnOutcome::StartFailed(message));
             }
         };
 
@@ -958,13 +980,14 @@ impl ActiveReplSession {
     }
 
     /// Renders a started turn's notifications and answers its approval/ask server requests until
-    /// `turn/completed` for `turn_id` arrives (shared by message turns and command turns).
+    /// `turn/completed` for `turn_id` arrives (shared by message turns and command turns), and
+    /// returns how the turn ended.
     async fn consume_turn(
         &mut self,
         turn_id: &str,
         prompt_source: &mut PromptInputSource,
         out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<TurnOutcome> {
         let mut in_reasoning = false;
         let mut in_agent_text = false;
         let mut interrupt_sent = false;
@@ -1222,27 +1245,35 @@ impl ActiveReplSession {
                                 .and_then(|t| t.get("status"))
                                 .and_then(Value::as_str)
                                 .unwrap_or("completed");
-                            if status == "interrupted" {
-                                writeln!(out, "[Turn interrupted]")?;
-                            } else if status == "failed"
-                                && let Some(em) = params
-                                    .get("turn")
-                                    .and_then(|t| t.get("error"))
-                                    .and_then(|e| e.get("message"))
-                                    .and_then(Value::as_str)
-                            {
-                                writeln!(out, "[Turn failed: {}]", sanitize(em))?;
-                            }
+                            let error_message = params
+                                .get("turn")
+                                .and_then(|t| t.get("error"))
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                                .map(sanitize);
+                            let outcome = match status {
+                                "completed" => TurnOutcome::Completed,
+                                "interrupted" => {
+                                    writeln!(out, "[Turn interrupted]")?;
+                                    TurnOutcome::Interrupted
+                                }
+                                _ => {
+                                    if status == "failed"
+                                        && let Some(em) = &error_message
+                                    {
+                                        writeln!(out, "[Turn failed: {em}]")?;
+                                    }
+                                    TurnOutcome::Failed(error_message)
+                                }
+                            };
                             out.flush()?;
-                            break;
+                            return Ok(outcome);
                         }
                         _ => {}
                     }
                 }
             }
         }
-
-        Ok(())
     }
 
     async fn handle_server_request(
@@ -1528,7 +1559,7 @@ impl ActiveReplSession {
         out: &mut dyn Write,
     ) -> anyhow::Result<Option<Self>> {
         match outcome {
-            LineOutcome::Continue => Ok(Some(self)),
+            LineOutcome::Continue | LineOutcome::Turn(_) => Ok(Some(self)),
             LineOutcome::Exit => {
                 self.shutdown().await;
                 Ok(None)
@@ -1699,9 +1730,10 @@ pub async fn run_repl_interactive(
     let mut prompt_source = PromptInputSource::Interactive(Some(Box::new(rl)));
 
     if let Some(prompt) = one_shot_prompt {
-        // No TS counterpart (the TS CLI had no one-shot mode). A failing command is the run's
-        // result here, so shut the embedded server down cleanly and exit non-zero with the
-        // sanitized error instead of re-prompting.
+        // No TS counterpart (the TS CLI had no one-shot mode). A failing command or an
+        // unsuccessful turn (rejected start, provider failure, interruption) is the run's result
+        // here, so shut the embedded server down cleanly and exit non-zero with the sanitized
+        // error instead of re-prompting.
         let outcome = match session
             .handle_line(&prompt, &mut prompt_source, &mut stdout)
             .await
@@ -1715,10 +1747,17 @@ pub async fn run_repl_interactive(
                 return Err(err);
             }
         };
+        let turn_error = match &outcome {
+            LineOutcome::Turn(turn) => turn.one_shot_error(),
+            _ => None,
+        };
         if let Some(session) = session.apply_outcome(outcome, &mut stdout).await? {
             session.shutdown().await;
         }
-        return Ok(());
+        return match turn_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        };
     }
 
     loop {

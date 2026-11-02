@@ -901,3 +901,93 @@ async fn repl_keeps_running_after_a_failing_command_rpc() {
     assert!(output.contains("Current model: "), "output={output}");
     assert!(output.contains("Goodbye."), "output={output}");
 }
+
+/// Runs the real `cowork "<prompt>"` binary in one-shot mode against an isolated home/workspace.
+async fn run_one_shot_binary(iso: &IsolatedCliEnv, prompt: &str) -> std::process::Output {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_cowork"));
+    cmd.arg("-d").arg(&iso.workspace_dir).arg(prompt);
+    cmd.env_clear();
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.envs(&iso.env);
+    cmd.stdin(std::process::Stdio::null());
+    tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output())
+        .await
+        .expect("one-shot cowork timed out")
+        .expect("failed to spawn cowork")
+}
+
+/// A one-shot turn whose provider fails must exit non-zero so shell scripts and CI see the
+/// failure, instead of the unconditional success the REPL loop uses for interactive recovery.
+#[tokio::test]
+async fn one_shot_prompt_exits_nonzero_when_the_turn_fails() {
+    let mut iso = IsolatedCliEnv::new();
+    // A reachable provider endpoint that rejects every model call.
+    let app = Router::new().route(
+        "/v1/responses",
+        post(|| async {
+            (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                r#"{"error":{"message":"one-shot provider rejected the request","type":"invalid_request_error"}}"#,
+            )
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    use_openai_provider(&mut iso, &format!("http://127.0.0.1:{port}/v1"));
+
+    let result = run_one_shot_binary(&iso, "Say hello").await;
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !result.status.success(),
+        "failed one-shot turn exited successfully; status={:?} stdout={stdout} stderr={stderr}",
+        result.status
+    );
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Turn failed"),
+        "stdout={stdout} stderr={stderr}"
+    );
+}
+
+/// A one-shot turn that completes keeps exiting zero.
+#[tokio::test]
+async fn one_shot_prompt_exits_zero_when_the_turn_completes() {
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, calls) =
+        spawn_mock_openai_sse(vec![responses_text_sse("resp_one_shot", "One-shot done.")]).await;
+    use_openai_provider(&mut iso, &base_url);
+
+    let result = run_one_shot_binary(&iso, "Say hello").await;
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "status={:?} stdout={stdout} stderr={stderr}",
+        result.status
+    );
+    assert!(
+        stdout.contains("One-shot done."),
+        "stdout={stdout} stderr={stderr}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 1);
+}
+
+/// Selects the OpenAI provider (served from `base_url`) as the isolated workspace default.
+fn use_openai_provider(iso: &mut IsolatedCliEnv, base_url: &str) {
+    iso.env.insert("AGENT_PROVIDER".into(), "openai".into());
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env
+        .insert("OPENAI_BASE_URL".into(), base_url.to_owned());
+}

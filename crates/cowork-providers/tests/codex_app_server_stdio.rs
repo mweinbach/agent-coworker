@@ -112,6 +112,25 @@ fn narrows_danger_full_access_without_network_and_enforces_hybrid_dynamic_tool_b
     assert_eq!(narrowed.turn_sandbox_policy["type"], "workspaceWrite");
     assert_eq!(narrowed.turn_sandbox_policy["networkAccess"], false);
     assert!(narrowed.force_disable_web_search);
+    // The workspace lives under /tmp: the app-server's implicit /tmp and $TMPDIR grants must be
+    // disabled and no explicit scratch root may contain the workspace, or native Codex tools could
+    // write sibling workspaces and other temp files outside `writableRoots`.
+    assert_eq!(narrowed.turn_sandbox_policy["excludeSlashTmp"], true);
+    assert_eq!(narrowed.turn_sandbox_policy["excludeTmpdirEnvVar"], true);
+    let narrowed_roots: Vec<PathBuf> = narrowed.turn_sandbox_policy["writableRoots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| PathBuf::from(r.as_str().unwrap()))
+        .collect();
+    assert_eq!(narrowed_roots[0], ws);
+    for root in &narrowed_roots[1..] {
+        assert!(
+            !ws.starts_with(root) && !PathBuf::from("/tmp/cowork-codex-ws").starts_with(root),
+            "scratch root {} must not contain the workspace",
+            root.display()
+        );
+    }
 
     // 2. Read-only floor preserved even under yolo: true
     let ro = resolve_codex_sandbox_and_approval_policy(&CodexSandboxNarrowingInput {
@@ -827,10 +846,23 @@ async fn codex_native_sandbox_honors_read_only_role_target_paths_and_forwards_re
     .unwrap();
     let (thread, turn) = thread_and_turn(&fx.logged("scoped"));
     assert_eq!(thread["sandbox"], "workspace-write");
-    assert_eq!(
-        turn["sandboxPolicy"]["writableRoots"],
-        json!([scoped.to_string_lossy()])
-    );
+    let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
+        .as_array()
+        .expect("writableRoots")
+        .iter()
+        .map(|r| r.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(roots[0], scoped.to_string_lossy());
+    // Explicit temp scratch never widens the scoped target (no ancestor of it is writable), and
+    // the app-server's implicit `/tmp` / `$TMPDIR` grants are disabled.
+    for root in &roots[1..] {
+        assert!(
+            !scoped.starts_with(root),
+            "scratch root {root} must not contain the scoped target"
+        );
+    }
+    assert_eq!(turn["sandboxPolicy"]["excludeSlashTmp"], true);
+    assert_eq!(turn["sandboxPolicy"]["excludeTmpdirEnvVar"], true);
     assert!(turn.get("effort").is_none(), "effort none must be omitted");
 
     // Provider-option fallback for the read-only role (no transport restrictions set).

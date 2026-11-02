@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use cowork_config::SandboxMode;
+use cowork_sandbox::policy::{scratch_roots, with_tmp_scratch};
 use serde_json::{Value, json};
 
 use crate::transport::ToolDefinition;
@@ -48,15 +49,19 @@ pub fn resolve_codex_sandbox_and_approval_policy(
         || matches!(input.mode, SandboxMode::WorkspaceWrite | SandboxMode::Auto)
         || (input.mode == SandboxMode::DangerFullAccess && !input.network)
     {
-        let writable_roots: Vec<String> = if has_scoped_paths {
-            input
-                .agent_target_paths
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect()
+        let base_roots: Vec<PathBuf> = if has_scoped_paths {
+            input.agent_target_paths.clone()
         } else {
-            vec![input.workspace_dir.to_string_lossy().into_owned()]
+            vec![input.workspace_dir.clone()]
         };
+        // TS `codexSandboxPolicy`: grant temp scratch explicitly, filtered so a scratch dir that
+        // is an ancestor of a writable root (a workspace or scoped target under `/tmp`) is never
+        // added, and disable the app-server's implicit `/tmp` / `$TMPDIR` grants, which would
+        // otherwise make sibling workspaces and other temp files writable.
+        let writable_roots: Vec<String> = with_tmp_scratch(&base_roots, &scratch_roots(None))
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
 
         (
             "workspace-write".to_string(),
@@ -64,6 +69,8 @@ pub fn resolve_codex_sandbox_and_approval_policy(
                 "type": "workspaceWrite",
                 "writableRoots": writable_roots,
                 "networkAccess": input.network,
+                "excludeTmpdirEnvVar": true,
+                "excludeSlashTmp": true,
             }),
             !input.network,
         )

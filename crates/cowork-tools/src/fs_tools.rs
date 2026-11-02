@@ -93,7 +93,7 @@ fn binary_media_guard_message(file_name: &str, mime: &str) -> String {
 
 /// TS `modelSupportsImageInputSync`: resolves the session model through the bundled
 /// registry, the provider discovery cache and the custom-model store.
-fn model_supports_image_input(ctx: &ToolExecutionContext) -> bool {
+pub(crate) fn model_supports_image_input(ctx: &ToolExecutionContext) -> bool {
     static REGISTRIES: OnceLock<Mutex<HashMap<PathBuf, Arc<ModelRegistry>>>> = OnceLock::new();
     let built_in_dir = ctx.built_in_dir.clone().or_else(|| {
         ctx.agent_config

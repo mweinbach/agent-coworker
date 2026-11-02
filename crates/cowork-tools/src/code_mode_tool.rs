@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cowork_inference::{MediaKind, MediaSource, ToolResultPart};
 use cowork_js_vm::{
     CodeModeCatalog, CodeModeExecutionResult, CodeModeLimits, CodeModeOptions, execute_code_mode,
 };
@@ -14,6 +15,7 @@ use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
     normalize_and_validate_args,
 };
+use crate::fs_tools::model_supports_image_input;
 
 pub const CODE_MODE_DESCRIPTION: &str = "Execute a bounded async JavaScript/TypeScript body with tools.search(query) and tools.call(name, arguments). Return JSON data. No filesystem, shell, network, or import access exists except through permitted tools.";
 
@@ -353,6 +355,108 @@ impl BuiltinTool for CodeModeTool {
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::InvalidArguments("code is required".to_owned()))?;
         let outcome = self.execute_with_details(code, ctx).await?;
-        Ok(ToolOutput::Json(outcome.value))
+        Ok(code_mode_tool_output(outcome.value, ctx))
     }
+}
+
+/// Final `codeMode` output. When the script returns exactly a supported rich-result wrapper
+/// (e.g. `return await tools.call("read", { filePath: "image.png" })`, which the nested-call
+/// bridge serialized as `{ "parts": [...] }`), its parts are restored as native content so
+/// images reach the provider as media rather than base64 JSON text. Anything else stays JSON.
+fn code_mode_tool_output(value: Value, ctx: &ToolExecutionContext) -> ToolOutput {
+    match rich_content_from_code_mode_value(&value) {
+        Some(parts) if !has_image_part(&parts) || model_supports_image_input(ctx) => {
+            ToolOutput::Content(parts)
+        }
+        // Image content for a model without image input keeps the pre-existing JSON output,
+        // mirroring a direct `read`, which never emits image parts for such models.
+        _ => ToolOutput::Json(value),
+    }
+}
+
+fn has_image_part(parts: &[ToolResultPart]) -> bool {
+    parts.iter().any(|p| {
+        matches!(
+            p,
+            ToolResultPart::Media {
+                kind: MediaKind::Image,
+                ..
+            }
+        )
+    })
+}
+
+/// TS `piMessageBridge.richToolResultContentFromOutput` parity: the returned value must itself be
+/// the wrapper (not nested inside another object or array). Recognized shapes:
+/// - `{ "parts": [...] }` (exactly that key): the nested-call bridge's `ToolOutput::Content`
+///   serialization;
+/// - `{ "type": "content", "content": [...] }`: the TS content wrapper;
+/// - a bare array of parts.
+///
+/// Every part must be supported and the list non-empty; otherwise the value is not rich.
+fn rich_content_from_code_mode_value(value: &Value) -> Option<Vec<ToolResultPart>> {
+    let raw_parts = match value {
+        Value::Array(items) => items,
+        Value::Object(obj) => {
+            if obj.len() == 1
+                && let Some(Value::Array(items)) = obj.get("parts")
+            {
+                items
+            } else if obj.get("type").and_then(Value::as_str) == Some("content")
+                && let Some(Value::Array(items)) = obj.get("content")
+            {
+                items
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    if raw_parts.is_empty() {
+        return None;
+    }
+    raw_parts.iter().map(normalize_code_mode_part).collect()
+}
+
+/// Accepts text parts and inline base64 images only. File-reference and URL sources are rejected
+/// so a script cannot make a provider adapter read a local path or fetch a URL; audio, video and
+/// document media are rejected because no built-in tool returns them inline.
+fn normalize_code_mode_part(part: &Value) -> Option<ToolResultPart> {
+    let obj = part.as_object()?;
+    match obj.get("type").and_then(Value::as_str)? {
+        "text" => Some(ToolResultPart::Text {
+            text: obj.get("text")?.as_str()?.to_owned(),
+        }),
+        // Canonical `ToolResultPart::Media` serialization.
+        "media" => {
+            if obj.get("kind").and_then(Value::as_str)? != "image" {
+                return None;
+            }
+            let source = obj.get("source")?.as_object()?;
+            if source.get("type").and_then(Value::as_str)? != "base64" {
+                return None;
+            }
+            let mime = source
+                .get("mime_type")
+                .or_else(|| source.get("mimeType"))?
+                .as_str()?;
+            base64_image_part(mime, source.get("data")?.as_str()?)
+        }
+        // TS pi content part `{ type: "image", data, mimeType }`.
+        "image" => base64_image_part(obj.get("mimeType")?.as_str()?, obj.get("data")?.as_str()?),
+        _ => None,
+    }
+}
+
+fn base64_image_part(mime_type: &str, data: &str) -> Option<ToolResultPart> {
+    if data.is_empty() || !mime_type.starts_with("image/") {
+        return None;
+    }
+    Some(ToolResultPart::Media {
+        kind: MediaKind::Image,
+        source: MediaSource::Base64 {
+            mime_type: mime_type.to_owned(),
+            data: data.to_owned(),
+        },
+    })
 }

@@ -197,6 +197,36 @@ pub fn get_required_h3_permissions(message: &JsonRpcLiteClientMessage) -> Vec<Mo
         return vec![MobilePermissionKey::Turns];
     }
 
+    // Sub-agents run model turns with workspace tools (`spawn`, `input/send`, `resume`) or stop
+    // them (`close`), so they need the same grants as starting/forking a turn; reading a child's
+    // conversation (`list`, `inspect`, `wait`) needs `conversations`. None of them may fall
+    // through to the `workspaceSettings` default, which would bypass a denied Turns grant.
+    if matches!(
+        method,
+        "cowork/session/agent/spawn"
+            | "cowork/session/agent/input/send"
+            | "cowork/session/agent/resume"
+            | "cowork/session/agent/close"
+    ) {
+        return vec![
+            MobilePermissionKey::Conversations,
+            MobilePermissionKey::Turns,
+        ];
+    }
+    if matches!(
+        method,
+        "cowork/session/agent/list" | "cowork/session/agent/inspect" | "cowork/session/agent/wait"
+    ) {
+        return vec![MobilePermissionKey::Conversations];
+    }
+    if method.starts_with("cowork/session/agent/") {
+        // Unknown future agent methods fail closed to the strictest grant set.
+        return vec![
+            MobilePermissionKey::Conversations,
+            MobilePermissionKey::Turns,
+        ];
+    }
+
     if method == "cowork/session/state/read" {
         return vec![MobilePermissionKey::WorkspaceSettings];
     }

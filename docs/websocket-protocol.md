@@ -131,7 +131,11 @@ Task reads (`task/list`, `task/read`, `task/artifact/version/compare`, and
 `task/artifact/version/preview`) also require `conversations`. Task mutations, lifecycle operations,
 task thread creation, direct task creation, and artifact writes require both `conversations` and
 `turns`. `task/artifact/read` also requires both `conversations` and `turns` because active legacy
-artifact reads can lazily materialize the immutable baseline. The whole `cowork/mcp/*` config
+artifact reads can lazily materialize the immutable baseline. Sub-agent execution
+(`cowork/session/agent/spawn`, `cowork/session/agent/input/send`, `cowork/session/agent/resume`,
+and `cowork/session/agent/close`) requires both `conversations` and `turns`, because child agents run
+model turns with workspace tools; `cowork/session/agent/list`, `cowork/session/agent/inspect`, and
+`cowork/session/agent/wait` require `conversations`. The whole `cowork/mcp/*` config
 surface requires the workspace-settings permission: `cowork/mcp/servers/read` can expose configured
 transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command
 (spawns a local subprocess) while connecting. `cowork/mcp/server/auth/authorize` requires only

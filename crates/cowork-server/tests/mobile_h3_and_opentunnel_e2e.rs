@@ -573,6 +573,34 @@ fn permission_matrix_matches_all_h3_method_categories() {
             MobilePermissionKey::Turns
         ]
     );
+    // Sub-agent execution must honour a denied Turns grant instead of falling through to the
+    // workspaceSettings default.
+    for method in [
+        "cowork/session/agent/spawn",
+        "cowork/session/agent/input/send",
+        "cowork/session/agent/resume",
+        "cowork/session/agent/close",
+    ] {
+        assert_eq!(
+            check_req(method),
+            vec![
+                MobilePermissionKey::Conversations,
+                MobilePermissionKey::Turns
+            ],
+            "{method}"
+        );
+    }
+    for method in [
+        "cowork/session/agent/list",
+        "cowork/session/agent/inspect",
+        "cowork/session/agent/wait",
+    ] {
+        assert_eq!(
+            check_req(method),
+            vec![MobilePermissionKey::Conversations],
+            "{method}"
+        );
+    }
     assert_eq!(
         check_req("task/list"),
         vec![MobilePermissionKey::Conversations]

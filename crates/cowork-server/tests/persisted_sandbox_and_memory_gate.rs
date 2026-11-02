@@ -788,6 +788,39 @@ async fn memory_generation_runs_when_advanced_memory_is_on() {
     server.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_session_prompt_injects_the_shared_chats_memory_index() {
+    let env = Env::new().await;
+    // A `(chats)` folder as the TS store left it: an entry with nested `metadata` and the
+    // generated `MEMORY.md` (TS `renderMemoryIndex`).
+    let chats = env.home.join(".cowork").join("memories").join("(chats)");
+    fs::create_dir_all(&chats).unwrap();
+    fs::write(
+        chats.join("commit-style.md"),
+        "---\nname: \"Commit style\"\ndescription: \"chats-shared-pref-marker\"\nmetadata:\n  node_type: memory\n  type: \"feedback\"\n---\n\nUse conventional commits.\n",
+    )
+    .unwrap();
+    fs::write(
+        chats.join("MEMORY.md"),
+        "# Memory Index\n\n- [Commit style](commit-style.md) \u{2014} chats-shared-pref-marker\n",
+    )
+    .unwrap();
+
+    let server = start_server(env.options(None)).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let thread_id = start_thread(&mut ws, "t", &env.workspace).await;
+    set_session_config(&mut ws, &thread_id, json!({ "advancedMemory": true })).await;
+    run_turn(&mut ws, "turn", &thread_id, "hello").await;
+    let prompt = env.last_system_prompt();
+    assert!(
+        prompt.contains("### Shared (chats) Memory Index"),
+        "project sessions keep the shared (chats) index (TS renderPromptSection): {prompt}"
+    );
+    assert!(prompt.contains("chats-shared-pref-marker"), "{prompt}");
+    drop(ws);
+    server.shutdown().await;
+}
+
 const TS_MEMORY_TIMESTAMP: &str = "2025-01-01T00:00:00.000Z";
 
 /// Writes a `memory.sqlite` the way `src/memoryStore.ts` left it: its schema, its completed

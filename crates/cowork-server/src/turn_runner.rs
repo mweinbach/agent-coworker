@@ -970,14 +970,15 @@ pub(crate) fn build_memory_prompt_section(
 ) -> Option<String> {
     let mut parts = Vec::new();
     if advanced_enabled {
-        for (scope, label) in [("workspace", "Workspace"), ("global", "Global")] {
-            if let Ok(dir) = adv_store.resolve_scope_dir(scope, None) {
-                let idx_path = dir.join("MEMORY.md");
-                if let Ok(raw) = std::fs::read_to_string(&idx_path) {
-                    let trimmed = raw.trim();
-                    if !trimmed.is_empty() {
-                        parts.push(format!("### {label} Memory Index\n{trimmed}"));
-                    }
+        // The session's own folder, the shared `(chats)` folder (TS `renderPromptSection`
+        // injected it into project sessions too), then `_global`.
+        for (scope, dir) in adv_store.readable_scope_dirs() {
+            let idx_path = dir.join("MEMORY.md");
+            if let Ok(raw) = std::fs::read_to_string(&idx_path) {
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() {
+                    let label = cowork_tools::memory::scope_display_label(scope);
+                    parts.push(format!("### {label} Memory Index\n{trimmed}"));
                 }
             }
         }

@@ -265,6 +265,10 @@ pub struct AdvancedMemoryEntry {
     pub scope: String,
     pub body: String,
     pub updated_at: String,
+    /// Session that produced the memory (TS `AdvancedMemoryEntry.originSessionId`). Only files
+    /// written by the TS store carry it; it is kept across edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_session_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -274,6 +278,30 @@ struct AdvancedFrontmatter {
     #[serde(rename = "type")]
     memory_type: Option<String>,
     updated_at: Option<String>,
+    #[serde(rename = "originSessionId")]
+    origin_session_id: Option<String>,
+    /// The TS store (origin/main `src/advancedMemory/store.ts` `serializeMemory`) wrote
+    /// `type` and `originSessionId` under a nested `metadata:` map (beside `node_type: memory`);
+    /// kept loosely typed so an odd value there cannot discard the rest of the frontmatter.
+    metadata: Option<Value>,
+}
+
+impl AdvancedFrontmatter {
+    /// String field from the legacy TS `metadata:` map, with TS `asString` semantics (a
+    /// non-blank string, trimmed).
+    fn legacy_metadata_str(&self, key: &str) -> Option<String> {
+        self.metadata
+            .as_ref()?
+            .get(key)?
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    }
+}
+
+fn non_blank(value: Option<String>) -> Option<String> {
+    value.filter(|s| !s.trim().is_empty())
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +364,24 @@ impl AdvancedMemoryStore {
         }
     }
 
+    /// Advanced-memory folders a session reads (prompt index injection and default recall), as
+    /// `(scope label, dir)` in lookup order: the session's own folder, then the shared `(chats)`
+    /// folder (TS `resolveAdvancedMemoryAccessRoots` / `renderPromptSection` /
+    /// `createRecallMemoryTool` read it from project sessions too, and memories saved there by
+    /// one-off chats or the TS app are only there), then the `_global` scope folder. `(chats)`
+    /// is listed once when it already is the session's own folder.
+    pub fn readable_scope_dirs(&self) -> Vec<(&'static str, PathBuf)> {
+        let base = self.memories_base_dir();
+        let workspace_key = self.workspace_folder_key();
+        let shared_chats = workspace_key != CHATS_FOLDER;
+        let mut dirs = vec![(WORKSPACE_SCOPE_LABEL, base.join(workspace_key))];
+        if shared_chats {
+            dirs.push((CHATS_SCOPE_LABEL, base.join(CHATS_FOLDER)));
+        }
+        dirs.push((GLOBAL_SCOPE_LABEL, base.join("_global")));
+        dirs
+    }
+
     fn with_dir_lock<F, R>(&self, dir: &Path, op: F) -> ToolResult<R>
     where
         F: FnOnce() -> ToolResult<R>,
@@ -376,7 +422,16 @@ impl AdvancedMemoryStore {
                 continue;
             };
             if let Ok(raw) = fs::read_to_string(&p) {
-                entries.push(parse_advanced_entry(slug, scope_label, &raw));
+                let mut entry = parse_advanced_entry(slug, scope_label, &raw);
+                if entry.updated_at.is_empty() {
+                    // TS-written files carry no `updated_at`; TS `listMemories` used the file's
+                    // mtime (`toISOString()`).
+                    if let Ok(modified) = item.metadata().and_then(|m| m.modified()) {
+                        entry.updated_at = chrono::DateTime::<Utc>::from(modified)
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    }
+                }
+                entries.push(entry);
             }
         }
         entries.sort_by(|a, b| {
@@ -433,6 +488,16 @@ impl AdvancedMemoryStore {
                 )));
             }
 
+            // TS `editMemory` kept the entry's `originSessionId`; a rewrite normalizes the
+            // file to the current flat frontmatter without dropping it.
+            let origin_session_id = if is_update {
+                existing
+                    .iter()
+                    .find(|e| e.slug == slug)
+                    .and_then(|e| e.origin_session_id.clone())
+            } else {
+                None
+            };
             let now = Utc::now().to_rfc3339();
             let entry = AdvancedMemoryEntry {
                 slug: slug.clone(),
@@ -442,9 +507,15 @@ impl AdvancedMemoryStore {
                 scope: scope.to_owned(),
                 body: body.trim().to_owned(),
                 updated_at: now.clone(),
+                origin_session_id,
             };
+            let origin_line = entry
+                .origin_session_id
+                .as_deref()
+                .map(|id| format!("originSessionId: {}\n", yaml_quote(id)))
+                .unwrap_or_default();
             let serialized = format!(
-                "---\nname: {}\ndescription: {}\ntype: {}\nupdated_at: {}\n---\n\n{}\n",
+                "---\nname: {}\ndescription: {}\ntype: {}\nupdated_at: {}\n{origin_line}---\n\n{}\n",
                 yaml_quote(&entry.name),
                 yaml_quote(&entry.description),
                 yaml_quote(&entry.memory_type),
@@ -518,18 +589,13 @@ impl AdvancedMemoryStore {
 
     pub fn read_index_summary(&self) -> String {
         let mut sections = Vec::new();
-        for (label, dir) in [
-            ("Global Memories", self.memories_base_dir().join("_global")),
-            (
-                "Workspace Memories",
-                self.memories_base_dir().join(self.workspace_folder_key()),
-            ),
-        ] {
+        for (scope, dir) in self.readable_scope_dirs() {
             let idx_path = dir.join("MEMORY.md");
             if let Ok(content) = fs::read_to_string(idx_path) {
                 let trimmed = content.trim();
                 if !trimmed.is_empty() {
-                    sections.push(format!("### {label}\n{trimmed}"));
+                    let label = scope_display_label(scope);
+                    sections.push(format!("### {label} Memories\n{trimmed}"));
                 }
             }
         }
@@ -558,6 +624,20 @@ fn yaml_quote(s: &str) -> String {
 
 /// Shared advanced-memory folder for one-off chats (TS `CHATS_FOLDER`).
 pub const CHATS_FOLDER: &str = "(chats)";
+
+/// Scope labels for [`AdvancedMemoryStore::readable_scope_dirs`].
+pub const WORKSPACE_SCOPE_LABEL: &str = "workspace";
+pub const CHATS_SCOPE_LABEL: &str = "chats";
+pub const GLOBAL_SCOPE_LABEL: &str = "global";
+
+/// Heading label for a [`AdvancedMemoryStore::readable_scope_dirs`] scope.
+pub fn scope_display_label(scope: &str) -> &'static str {
+    match scope {
+        CHATS_SCOPE_LABEL => "Shared (chats)",
+        GLOBAL_SCOPE_LABEL => "Global",
+        _ => "Workspace",
+    }
+}
 
 /// TS `resolveMemoryFolderName` for a project workspace root: readable slug of the root's
 /// basename plus the first 12 hex chars of `sha256(canonicalWorkspacePath(root))`. Advanced
@@ -764,14 +844,22 @@ fn parse_advanced_entry(slug: &str, scope: &str, raw: &str) -> AdvancedMemoryEnt
         .as_deref()
         .and_then(|y| serde_saphyr::from_str(y).ok())
         .unwrap_or_default();
+    // Current files keep `type` at the top level; files written by the TS store keep it under
+    // `metadata.type`. Both are read so a TS-classified `feedback`/`note` entry is not
+    // reclassified (and then overwritten on the next edit) by the fallback.
+    let legacy_type = fm.legacy_metadata_str("type");
+    let legacy_origin = fm.legacy_metadata_str("originSessionId");
     AdvancedMemoryEntry {
         slug: slug.to_owned(),
         name: fm.name.unwrap_or_else(|| slug.to_owned()),
         description: fm.description.unwrap_or_default(),
-        memory_type: fm.memory_type.unwrap_or_else(|| "project".to_owned()),
+        memory_type: non_blank(fm.memory_type)
+            .or(legacy_type)
+            .unwrap_or_else(|| "project".to_owned()),
         scope: scope.to_owned(),
         body: body.trim().to_owned(),
         updated_at: fm.updated_at.unwrap_or_default(),
+        origin_session_id: non_blank(fm.origin_session_id).or(legacy_origin),
     }
 }
 
@@ -797,11 +885,12 @@ impl BuiltinTool for RecallMemoryTool {
                 },
                 "query": {
                     "type": "string",
-                    "description": "Optional search keyword across workspace and global memories."
+                    "description": "Optional search keyword across workspace, shared (chats), and global memories."
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["workspace", "global", "both"]
+                    "enum": ["workspace", "global", "both"],
+                    "description": "workspace = this workspace's memories; global = shared (chats) and global memories; both (default) = all."
                 }
             }
         })
@@ -826,14 +915,19 @@ impl BuiltinTool for RecallMemoryTool {
         });
 
         let scope = args.get("scope").and_then(Value::as_str).unwrap_or("both");
+        // `workspace` is the session's own folder; `global` is the cross-workspace memory,
+        // i.e. the shared `(chats)` folder (TS) plus `_global`; `both` reads all of them in
+        // that order, so the session's own entries win name lookups (TS `findByNameOrSlug`).
         let mut all_entries = Vec::new();
-        if scope == "workspace" || scope == "both" {
-            let dir = store.resolve_scope_dir("workspace", None)?;
-            all_entries.extend(store.list_entries_in_dir(&dir, "workspace")?);
-        }
-        if scope == "global" || scope == "both" {
-            let dir = store.resolve_scope_dir("global", None)?;
-            all_entries.extend(store.list_entries_in_dir(&dir, "global")?);
+        for (label, dir) in store.readable_scope_dirs() {
+            let wanted = match scope {
+                "workspace" => label == WORKSPACE_SCOPE_LABEL,
+                "global" => label != WORKSPACE_SCOPE_LABEL,
+                _ => true,
+            };
+            if wanted {
+                all_entries.extend(store.list_entries_in_dir(&dir, label)?);
+            }
         }
 
         if let Some(target_name) = args.get("name").and_then(Value::as_str) {
@@ -969,13 +1063,31 @@ impl BuiltinTool for ManageMemoryTool {
 
         match action {
             "create" | "update" => {
+                // TS `editMemory` kept fields the edit did not supply, so an update that only
+                // changes the body must not reclassify the entry or replace its description.
+                let existing = if action == "update" {
+                    let dir = store.resolve_scope_dir(scope, None)?;
+                    let (slug, target) = resolve_entry_target(&dir, name)?;
+                    if target.is_file() {
+                        store
+                            .list_entries_in_dir(&dir, scope)?
+                            .into_iter()
+                            .find(|e| e.slug == slug)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let description = args
                     .get("description")
                     .and_then(Value::as_str)
+                    .or(existing.as_ref().map(|e| e.description.as_str()))
                     .unwrap_or(name);
                 let mem_type = args
                     .get("type")
                     .and_then(Value::as_str)
+                    .or(existing.as_ref().map(|e| e.memory_type.as_str()))
                     .unwrap_or("project");
                 let body = args.get("body").and_then(Value::as_str).ok_or_else(|| {
                     ToolError::InvalidArguments("body is required for create/update".to_owned())

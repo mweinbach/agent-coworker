@@ -1006,35 +1006,77 @@ pub(crate) fn build_memory_prompt_section(
 
 impl ServerRuntimeState {
     /// Sandbox ceiling for a persisted child agent saved without a sandbox (rows written before
-    /// children persisted theirs): the parent's effective sandbox, i.e. the parent's stored
-    /// sandbox layered over `workspace` defaults exactly as the parent's own turns apply it
-    /// (`apply_session_sandbox`). The child's role/scope narrowing is applied on top by the
-    /// caller. Fails closed to read-only (as a child whose scope cannot be restored does) when
-    /// the parent session cannot be found.
+    /// children persisted theirs): its parent's effective sandbox. The child's own role/scope
+    /// narrowing is applied on top by the caller.
+    ///
+    /// The ancestry is walked up to the nearest ancestor with a saved sandbox, or to the root
+    /// (whose effective sandbox is its saved sandbox layered over `workspace` defaults, exactly
+    /// as its own turns apply it in `apply_session_sandbox`). Every legacy child crossed on the
+    /// way re-applies its own role/scope narrowing on the way back down, so the result is never
+    /// wider than any ancestor. Fails closed to read-only (as a child whose scope cannot be
+    /// restored does) when a link is missing, an intermediate scope cannot be restored, the
+    /// ancestry loops, or it is deeper than `MAX_LEGACY_CHILD_ANCESTRY`.
     fn legacy_child_parent_sandbox(
         &self,
         workspace: &AgentConfig,
         parent_session_id: Option<&str>,
     ) -> cowork_config::SandboxConfig {
-        let parent_saved = parent_session_id.and_then(|parent_id| {
-            if let Some(live) = self.get_live_thread(parent_id) {
-                return Some(live.lock().sandbox.clone());
-            }
-            self.session_db
-                .get_session_record(parent_id)
-                .ok()
-                .flatten()
-                .map(|record| record.sandbox)
-        });
-        let Some(parent_saved) = parent_saved else {
-            return cowork_config::SandboxConfig {
-                mode: ConfigSandboxMode::ReadOnly,
-                ..workspace.sandbox.clone()
-            };
+        const MAX_LEGACY_CHILD_ANCESTRY: usize = 64;
+        let fail_closed = || cowork_config::SandboxConfig {
+            mode: ConfigSandboxMode::ReadOnly,
+            ..workspace.sandbox.clone()
         };
-        let mut parent_cfg = workspace.clone();
-        apply_session_sandbox(&mut parent_cfg, parent_saved.as_ref());
-        parent_cfg.sandbox
+        // Legacy child ancestors crossed on the way up, nearest first.
+        let mut legacy_ancestors: Vec<cowork_storage::PersistedSessionRecord> = Vec::new();
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut next = parent_session_id.map(str::to_owned);
+        let ceiling = loop {
+            let Some(id) = next.take() else {
+                return fail_closed();
+            };
+            if visited.len() >= MAX_LEGACY_CHILD_ANCESTRY || !visited.insert(id.clone()) {
+                return fail_closed();
+            }
+            let record = self.session_db.get_session_record(&id).ok().flatten();
+            let live = self.get_live_thread(&id).map(|live| {
+                let live = live.lock();
+                (
+                    live.sandbox.clone(),
+                    live.session_kind,
+                    live.parent_session_id.clone(),
+                )
+            });
+            let (saved, kind, parent) = match (live, &record) {
+                (Some(live), _) => live,
+                (None, Some(row)) => (
+                    row.sandbox.clone(),
+                    row.session_kind,
+                    row.parent_session_id.clone(),
+                ),
+                (None, None) => return fail_closed(),
+            };
+            if saved.is_some() || kind != cowork_storage::SessionKind::Agent {
+                let mut ancestor_cfg = workspace.clone();
+                apply_session_sandbox(&mut ancestor_cfg, saved.as_ref());
+                break ancestor_cfg.sandbox;
+            }
+            // A legacy child ancestor: its own narrowing needs its persisted row.
+            let Some(row) = record else {
+                return fail_closed();
+            };
+            legacy_ancestors.push(row);
+            next = parent;
+        };
+        let mut sandbox = ceiling;
+        for row in legacy_ancestors.iter().rev() {
+            let mut ancestor_cfg = workspace.clone();
+            ancestor_cfg.sandbox = sandbox;
+            match cowork_harness::agents::restore_persisted_child_restrictions(&ancestor_cfg, row) {
+                Ok(restored) => sandbox = restored.sandbox,
+                Err(_) => return fail_closed(),
+            }
+        }
+        sandbox
     }
 
     pub(crate) fn ensure_thread_idempotency_ledger(

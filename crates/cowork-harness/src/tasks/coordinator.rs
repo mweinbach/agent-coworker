@@ -3173,18 +3173,16 @@ impl TaskCoordinator {
             let cur = self.session_db.get_task(&latest.id)?.unwrap_or(latest);
             if !is_terminal_task(&cur) && cur.status != prior_task_status {
                 let restored = self
-                    .transition_locked(
-                        &cur.id,
-                        &cur.workspace_path,
-                        cur.revision,
+                    .restore_early_phase_status_after_artifact_revision(
+                        &cur,
                         prior_task_status,
                         if outcome == "completed" {
                             "Artifact revision completed"
                         } else {
                             "Artifact revision cancelled"
                         },
-                        None,
-                        Some(session_id),
+                        detail_msg,
+                        session_id,
                     )
                     .await?;
                 return Ok(restored);
@@ -3195,6 +3193,66 @@ impl TaskCoordinator {
         let refreshed = self.session_db.get_task(&latest.id)?.unwrap_or(latest);
         self.notify_updated(&refreshed);
         Ok(refreshed)
+    }
+
+    /// TS `restoreTaskStatusAfterArtifactRevision` for an early-phase task: starting an artifact
+    /// revision moves a `draft` / `planning` task to `working` and records that pre-revision
+    /// status on the revision; when the revision settles without completing the task, the saved
+    /// status is written back directly. `working -> draft` / `working -> planning` are not
+    /// forward transitions, so this deliberately bypasses `transition_locked`'s validator, but
+    /// only for exactly that restore: the target must be an early phase and the task must still
+    /// be in the `working` status the revision put it in. Anything else goes through the
+    /// ordinary validated transition.
+    async fn restore_early_phase_status_after_artifact_revision(
+        &self,
+        task: &TaskRecord,
+        prior_task_status: TaskStatus,
+        summary: &str,
+        detail: Option<&str>,
+        session_id: &str,
+    ) -> Result<TaskRecord, TaskCoordinatorError> {
+        if task.status == prior_task_status {
+            self.notify_updated(task);
+            return Ok(task.clone());
+        }
+        let is_revision_restore =
+            matches!(prior_task_status, TaskStatus::Draft | TaskStatus::Planning)
+                && task.status == TaskStatus::Working;
+        if !is_revision_restore {
+            return self
+                .transition_locked(
+                    &task.id,
+                    &task.workspace_path,
+                    task.revision,
+                    prior_task_status,
+                    summary,
+                    detail,
+                    Some(session_id),
+                )
+                .await;
+        }
+        let thread_id = task
+            .threads
+            .iter()
+            .find(|t| t.session_id == session_id)
+            .map(|t| t.id.clone());
+        let restored = self
+            .session_db
+            .set_task_status(SetTaskStatusInput {
+                task_id: task.id.clone(),
+                expected_revision: task.revision,
+                status: prior_task_status,
+                summary: non_empty(summary, "Status summary")?,
+                detail: detail
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
+                updated_at: now_iso(),
+                thread_id,
+            })
+            .await?;
+        self.notify_updated(&restored);
+        Ok(restored)
     }
 
     // =========================================================================

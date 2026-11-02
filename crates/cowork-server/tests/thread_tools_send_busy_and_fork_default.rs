@@ -366,11 +366,8 @@ async fn send_message_takes_prompt_and_returns_ts_result_shape() {
     let thread_id = start_thread(&mut ws, &iso.cwd(), "start").await;
 
     let schema = tool_schema("send_message_to_thread");
-    assert_eq!(
-        schema["required"],
-        json!(["threadId", "prompt"]),
-        "{schema}"
-    );
+    // `threadId` defaults to the calling thread (TS `resolveThreadId`), so only `prompt` is required.
+    assert_eq!(schema["required"], json!(["prompt"]), "{schema}");
 
     let rejected = [
         (

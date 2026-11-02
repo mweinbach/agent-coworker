@@ -444,12 +444,48 @@ fn canonical_strictly_within(root: &Path, child: &Path) -> bool {
     }
 }
 
+/// Whether skill directories of `scope` must resolve inside their skills root. Only
+/// workspace-scoped roots (`<cwd>/.cowork/skills`, `.agents/skills`, `.claude/skills`, workspace
+/// plugins) can be written by whoever controls the workspace, so only there is a symlinked skill
+/// directory refused when it resolves outside the root (TS listed only real `Dirent` directories
+/// there). User-owned roots (global `~/.cowork/skills`, user plugins, bundled) keep supporting
+/// skill directories linked elsewhere, e.g. a dotfiles checkout.
+pub fn skill_dir_must_stay_in_root(scope: SkillScope) -> bool {
+    scope == SkillScope::Project
+}
+
 /// Resolves `skill_dir` to its canonical path and requires it to be a directory strictly inside
 /// the canonical skills root `root_canon`. A symlinked skill directory that resolves outside its
 /// root (or onto the root itself) is refused.
 pub fn confine_skill_dir(root_canon: &Path, skill_dir: &Path) -> Option<PathBuf> {
     let canon = fs::canonicalize(skill_dir).ok()?;
     (canon.is_dir() && canonical_strictly_within(root_canon, &canon)).then_some(canon)
+}
+
+/// Canonical skill directory for `skill_dir` (an entry of its skills root) under the per-scope
+/// policy of [`skill_dir_must_stay_in_root`].
+pub fn resolve_scoped_skill_dir(skill_dir: &Path, scope: SkillScope) -> std::io::Result<PathBuf> {
+    if skill_dir_must_stay_in_root(scope) {
+        let root = skill_dir
+            .parent()
+            .ok_or_else(|| std::io::Error::other("skill directory has no parent"))?;
+        let root_canon = fs::canonicalize(root)?;
+        return confine_skill_dir(&root_canon, skill_dir).ok_or_else(|| {
+            std::io::Error::other(format!(
+                "skill directory {} resolves outside {}",
+                skill_dir.display(),
+                root_canon.display()
+            ))
+        });
+    }
+    let canon = fs::canonicalize(skill_dir)?;
+    if !canon.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "{} is not a directory",
+            skill_dir.display()
+        )));
+    }
+    Ok(canon)
 }
 
 /// Reads the regular file at `path` without following a symlink (Windows: reparse point) in its
@@ -521,23 +557,14 @@ pub fn read_confined_text_file(root_canon: &Path, path: &Path) -> std::io::Resul
     String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-/// Reads `<skill_dir>/SKILL.md` confined to the skill's root (the directory containing
-/// `skill_dir`): the skill directory must resolve strictly inside that root, and `SKILL.md` must
-/// be a regular file (never a followed symlink) whose opened real path stays inside the
-/// canonical skill directory. Every discovery scan and every later re-read of a discovered skill
-/// goes through here, so a skill swapped for a link after discovery is refused as well.
-pub fn read_skill_md_confined(skill_dir: &Path) -> std::io::Result<String> {
-    let root = skill_dir
-        .parent()
-        .ok_or_else(|| std::io::Error::other("skill directory has no parent"))?;
-    let root_canon = fs::canonicalize(root)?;
-    let dir_canon = confine_skill_dir(&root_canon, skill_dir).ok_or_else(|| {
-        std::io::Error::other(format!(
-            "skill directory {} resolves outside {}",
-            skill_dir.display(),
-            root_canon.display()
-        ))
-    })?;
+/// Reads `<skill_dir>/SKILL.md` for a skill of `scope`. For every scope `SKILL.md` must be a
+/// regular file (never a followed symlink) whose opened real path stays inside the canonical
+/// skill directory; for workspace scopes the skill directory must also resolve strictly inside
+/// its skills root (the directory containing `skill_dir`, see [`skill_dir_must_stay_in_root`]).
+/// Every discovery scan and every later re-read of a discovered skill goes through here, so a
+/// skill swapped for a link after discovery is refused as well.
+pub fn read_skill_md_confined(skill_dir: &Path, scope: SkillScope) -> std::io::Result<String> {
+    let dir_canon = resolve_scoped_skill_dir(skill_dir, scope)?;
     read_confined_text_file(&dir_canon, &dir_canon.join("SKILL.md")).map_err(|err| {
         std::io::Error::new(
             err.kind(),
@@ -882,15 +909,16 @@ pub fn discover_skills_for_config(
                 if !cowork_config::is_inside(&root_canon, &dir_canon) {
                     continue;
                 }
-                // Confined to the plugin's skills directory, no-follow `SKILL.md` open.
-                let Ok(raw) = read_skill_md_confined(&dir_path) else {
-                    continue;
-                };
-                let skill_md = dir_canon.join("SKILL.md");
                 let skill_scope = match target_scope {
                     cowork_mcp::PluginScope::Workspace => SkillScope::Project,
                     cowork_mcp::PluginScope::User => SkillScope::User,
                 };
+                // No-follow `SKILL.md` open; workspace plugin skills also stay inside the
+                // plugin's skills directory.
+                let Ok(raw) = read_skill_md_confined(&dir_path, skill_scope) else {
+                    continue;
+                };
+                let skill_md = dir_canon.join("SKILL.md");
                 // TS `parseSkillDocument(..., { mode: "catalog" })`: plugin skills need valid
                 // frontmatter (kebab `name` matching the directory, non-empty `description`).
                 if let Ok(mut disc) =
@@ -946,9 +974,9 @@ fn scan_skill_dir_into(
         .collect();
     dirs.sort();
     for dir_path in dirs {
-        // The skill directory must resolve inside `root`, and `SKILL.md` is opened without
-        // following links, so a workspace cannot point a skill at an arbitrary file.
-        let Ok(raw) = read_skill_md_confined(&dir_path) else {
+        // `SKILL.md` is opened without following links, and a workspace skill directory must
+        // resolve inside `root`, so a workspace cannot point a skill at an arbitrary file.
+        let Ok(raw) = read_skill_md_confined(&dir_path, scope) else {
             continue;
         };
         let skill_md = dir_path.join("SKILL.md");
@@ -1051,7 +1079,7 @@ fn defang_untrusted_skill_markers(body: &str) -> String {
 pub fn render_skill_body_for_model(skill: &DiscoveredSkill) -> ToolResult<String> {
     // Re-read under the same confinement as discovery: the skill may have been swapped for a
     // link since it was discovered.
-    let raw = read_skill_md_confined(&skill.dir_path).map_err(|e| {
+    let raw = read_skill_md_confined(&skill.dir_path, skill.scope).map_err(|e| {
         ToolError::Execution(format!(
             "Failed to read skill '{}': {e}",
             skill.skill_md_path.display()

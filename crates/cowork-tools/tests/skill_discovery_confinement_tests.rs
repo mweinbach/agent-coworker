@@ -9,7 +9,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use cowork_tools::{
-    discover_skills, read_skill_agent_interface_metadata, read_skill_md_confined,
+    SkillScope, discover_skills, read_skill_agent_interface_metadata, read_skill_md_confined,
     render_skill_body_for_model,
 };
 
@@ -74,7 +74,7 @@ fn symlinked_skill_md_to_outside_file_is_not_registered_or_read() {
     for skill in skills.values() {
         assert!(!skill.description.contains(SECRET));
     }
-    let err = read_skill_md_confined(&leak).unwrap_err();
+    let err = read_skill_md_confined(&leak, SkillScope::Project).unwrap_err();
     assert!(!err.to_string().contains(SECRET), "{err}");
 }
 
@@ -90,11 +90,11 @@ fn symlinked_skill_md_with_valid_frontmatter_target_is_refused() {
 
     let skills = discover_skills(None, &fx.cowork_home, &fx.workspace);
     assert!(!skills.contains_key("linked"), "skills={:?}", skills.keys());
-    assert!(read_skill_md_confined(&linked).is_err());
+    assert!(read_skill_md_confined(&linked, SkillScope::Project).is_err());
 }
 
 #[test]
-fn symlinked_skill_directory_escaping_the_root_is_not_registered() {
+fn project_skill_directory_escaping_the_root_is_not_registered() {
     let fx = Fixture::new();
     let outside = fx.home.join("outside-skill");
     write_skill(&outside, "escape", SECRET);
@@ -109,7 +109,42 @@ fn symlinked_skill_directory_escaping_the_root_is_not_registered() {
     let skills = discover_skills(None, &fx.cowork_home, &fx.workspace);
     assert!(!skills.contains_key("escape"), "skills={:?}", skills.keys());
     assert!(!skills.contains_key("auth"), "skills={:?}", skills.keys());
-    assert!(read_skill_md_confined(&fx.project_skills().join("escape")).is_err());
+    assert!(
+        read_skill_md_confined(&fx.project_skills().join("escape"), SkillScope::Project).is_err()
+    );
+}
+
+#[test]
+fn global_skill_directory_may_be_linked_but_its_skill_md_may_not() {
+    // User-owned roots keep supporting a skill directory linked elsewhere (a dotfiles checkout),
+    // but `SKILL.md` inside it is still opened without following links.
+    let fx = Fixture::new();
+    let global_skills = fx.cowork_home.join("skills");
+    fs::create_dir_all(&global_skills).unwrap();
+
+    let dotfiles = fx.home.join("dotfiles/foo");
+    write_skill(&dotfiles, "foo", "Dotfiles skill body.");
+    symlink(&dotfiles, global_skills.join("foo")).unwrap();
+
+    let bar = fx.home.join("dotfiles/bar");
+    fs::create_dir_all(&bar).unwrap();
+    symlink(fx.secret_path(), bar.join("SKILL.md")).unwrap();
+    symlink(&bar, global_skills.join("bar")).unwrap();
+
+    let skills = discover_skills(None, &fx.cowork_home, &fx.workspace);
+    let foo = skills.get("foo").expect("linked global skill discovered");
+    assert_eq!(foo.dir_path, global_skills.join("foo"));
+    let rendered = render_skill_body_for_model(foo).unwrap();
+    assert!(rendered.contains("Dotfiles skill body."), "{rendered}");
+    assert!(!skills.contains_key("bar"), "skills={:?}", skills.keys());
+    let err = read_skill_md_confined(&global_skills.join("bar"), SkillScope::Global).unwrap_err();
+    assert!(!err.to_string().contains(SECRET), "{err}");
+
+    // The same linked directory under the workspace root is refused.
+    symlink(&dotfiles, fx.project_skills().join("foo-ws")).unwrap();
+    assert!(
+        read_skill_md_confined(&fx.project_skills().join("foo-ws"), SkillScope::Project).is_err()
+    );
 }
 
 #[test]

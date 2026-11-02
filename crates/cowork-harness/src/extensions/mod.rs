@@ -17,8 +17,8 @@ use cowork_mcp::plugin_overrides::{
     plugin_skill_override_key, read_plugin_overrides,
 };
 use cowork_tools::{
-    DiscoveredSkill, SkillScope, confine_skill_dir, discover_skills_for_config,
-    parse_and_validate_skill_md, read_confined_text_file, read_skill_md_confined,
+    DiscoveredSkill, SkillScope, discover_skills_for_config, parse_and_validate_skill_md,
+    read_confined_text_file, read_skill_md_confined, resolve_scoped_skill_dir,
 };
 use data_encoding::BASE64;
 use serde::{Deserialize, Serialize};
@@ -426,11 +426,11 @@ impl ExtensionManager {
             .into_iter()
             .find(|s| s.name == skill_name)
             .ok_or_else(|| format!("Skill '{skill_name}' not found."))?;
-        // Re-read under discovery's confinement (no-follow `SKILL.md` inside its skill root).
+        // Re-read under discovery's confinement (no-follow `SKILL.md` inside its skill dir).
         let skill_dir = Path::new(&entry.path)
             .parent()
             .ok_or_else(|| format!("Failed reading skill '{}': invalid path", entry.name))?;
-        let raw = read_skill_md_confined(skill_dir)
+        let raw = read_skill_md_confined(skill_dir, skill_scope_from_wire(&entry.source))
             .map_err(|e| format!("Failed reading skill '{}': {e}", entry.name))?;
         Ok((entry, raw))
     }
@@ -451,7 +451,7 @@ impl ExtensionManager {
             .skill_path
             .as_deref()
             .and_then(|p| Path::new(p).parent())
-            .and_then(|dir| read_skill_md_confined(dir).ok());
+            .and_then(|dir| read_skill_md_confined(dir, skill_scope_from_wire(&entry.scope)).ok());
         (Some(entry), content)
     }
 
@@ -579,9 +579,6 @@ impl ExtensionManager {
         writable: bool,
         out: &mut Vec<SkillInstallationEntry>,
     ) {
-        let Ok(root_canon) = fs::canonicalize(dir) else {
-            return;
-        };
         let Ok(rd) = fs::read_dir(dir) else {
             return;
         };
@@ -618,9 +615,9 @@ impl ExtensionManager {
                 }
             }
 
-            // A skill directory linked outside its scope root is not a skill of this scope
-            // (TS listed only real `Dirent` directories).
-            let Some(skill_canon) = confine_skill_dir(&root_canon, &skill_dir) else {
+            // A workspace skill directory linked outside its scope root is not a skill of this
+            // scope (TS listed only real `Dirent` directories); user-owned scopes may link one.
+            let Ok(skill_canon) = resolve_scoped_skill_dir(&skill_dir, scope) else {
                 continue;
             };
             let skill_md = skill_dir.join("SKILL.md");
@@ -703,7 +700,7 @@ impl ExtensionManager {
                 continue;
             }
 
-            let raw = match read_skill_md_confined(&skill_dir) {
+            let raw = match read_skill_md_confined(&skill_dir, scope) {
                 Ok(s) => s,
                 Err(e) => {
                     out.push(SkillInstallationEntry {
@@ -845,7 +842,7 @@ impl ExtensionManager {
             };
             for sdir in dirs {
                 let skill_md = sdir.join("SKILL.md");
-                let Ok(raw) = read_skill_md_confined(&sdir) else {
+                let Ok(raw) = read_skill_md_confined(&sdir, skill_scope) else {
                     continue;
                 };
                 let Ok(parsed) =
@@ -1579,6 +1576,7 @@ impl ExtensionManager {
                 .unwrap_or_else(|| root.root_dir.join("skills"));
             let mcp_file = root.root_dir.join(&root.mcp_rel_path);
             let skills_summaries = build_plugin_skill_summaries(
+                root.scope,
                 &root.skills_dirs,
                 &root.id,
                 &root.name,
@@ -2771,7 +2769,19 @@ fn list_plugin_skill_dirs(skills_dirs: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+/// Maps a wire scope (`SkillEntryWire::source`, `SkillInstallationEntry::scope`) back to its
+/// [`SkillScope`]; anything unrecognized gets the strictest (workspace) confinement.
+fn skill_scope_from_wire(scope: &str) -> SkillScope {
+    match scope {
+        "built-in" => SkillScope::Bundled,
+        "global" => SkillScope::Global,
+        "user" => SkillScope::User,
+        _ => SkillScope::Project,
+    }
+}
+
 fn build_plugin_skill_summaries(
+    plugin_scope: PluginScope,
     skills_dirs: &[PathBuf],
     plugin_id: &str,
     plugin_name: &str,
@@ -2781,7 +2791,11 @@ fn build_plugin_skill_summaries(
     let mut out = Vec::new();
     for dir in list_plugin_skill_dirs(skills_dirs) {
         let md = dir.join("SKILL.md");
-        let Ok(raw) = read_skill_md_confined(&dir) else {
+        let skill_scope = match plugin_scope {
+            PluginScope::Workspace => SkillScope::Project,
+            PluginScope::User => SkillScope::User,
+        };
+        let Ok(raw) = read_skill_md_confined(&dir, skill_scope) else {
             continue;
         };
         let Ok(parsed) = parse_and_validate_skill_md(&dir, &md, &raw, SkillScope::Project, true)

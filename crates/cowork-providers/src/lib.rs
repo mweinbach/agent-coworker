@@ -31,10 +31,10 @@ pub use bedrock::BedrockConverseTransport;
 pub use catalog::{
     CatalogBuildOptions, ProviderAuthMethod, ProviderAuthMethodField, ProviderCatalogEntry,
     ProviderCatalogModelEntry, ProviderCatalogPayload, ProviderCatalogReasoning,
-    ProviderStatusEntry, build_provider_catalog, build_provider_statuses,
+    ProviderCatalogSnapshot, ProviderStatusEntry, build_provider_catalog, build_provider_statuses,
     default_provider_auth_methods, default_provider_auth_methods_for, mask_api_key,
-    provider_display_label, resolve_provider_api_key, resolve_provider_auth_method,
-    validate_structured_provider_config,
+    provider_display_label, read_provider_catalog_snapshot, resolve_provider_api_key,
+    resolve_provider_auth_method, validate_structured_provider_config,
 };
 pub use chat_completions::{ChatCompletionsTransport, ProviderQuirks};
 pub use codex_app_server::CodexAppServerTransport;

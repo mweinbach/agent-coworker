@@ -3,13 +3,15 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use cowork_config::{AgentConfig, ProviderName, UserProfile};
+use cowork_config::{AgentConfig, ChildModelRoutingMode, ProviderName, UserProfile};
+use cowork_providers::{ProviderCatalogEntry, ProviderCatalogPayload, ProviderCatalogSnapshot};
 use cowork_tools::{DiscoveredSkill, render_skill_body_for_model};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
+use crate::agents::profiles::AgentProfilesStore;
 use crate::extensions::{ExtensionManager, InstalledPluginCatalogEntry};
-use crate::prompt_template::render_system_template;
+use crate::prompt_template::{format_agent_profile_prompt_summaries, render_system_template};
 
 const MAX_PROJECT_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 const MAX_WORKSPACE_MAP_ENTRIES: usize = 60;
@@ -50,15 +52,82 @@ pub struct PromptTemplateContext {
     pub model_display_name: Option<String>,
     /// Registry knowledge cutoff of the session model; `None` renders `Unknown`.
     pub knowledge_cutoff: Option<String>,
+    /// Whether the session model accepts image input (legacy `supportsImageInput`): keeps or
+    /// strips the templates' `<image_input>` spans. `None` resolves it from the bundled
+    /// registry, falling back to the placeholder capability for unknown models.
+    pub supports_image_input: Option<bool>,
+    /// Legacy `config.enableMemory` (`None` = enabled, the legacy `?? true`).
+    pub enable_memory: Option<bool>,
+    /// Legacy `config.advancedMemory`: strips the legacy memory guidance.
+    pub advanced_memory: bool,
+    /// The session's effective provider options (legacy `config.providerOptions`); selects the
+    /// web-search guidance rewrites. `None` behaves like legacy `providerOptions == null`.
+    pub provider_options: Option<Map<String, Value>>,
+    /// Legacy `config.childModelRoutingMode`.
+    pub child_model_routing_mode: ChildModelRoutingMode,
+    /// Legacy `config.allowedChildModelRefs`.
+    pub allowed_child_model_refs: Vec<String>,
+    /// Legacy `formatAgentProfilePromptSummaries(readAgentProfilesCatalog(config))`.
+    pub agent_profile_lines: Vec<String>,
+    /// Provider catalog for the spawnAgent model-override list (legacy
+    /// `readProviderCatalogSnapshot`). `None` renders the legacy read-failure fallback: the
+    /// static registry models with their `bestFor` guidance.
+    pub provider_catalog: Option<PromptProviderCatalog>,
 }
 
 impl PromptTemplateContext {
-    /// The user name and profile of `config`, without model metadata.
+    /// The user name, profile, memory flags, provider options, child-model routing, and agent
+    /// profile summaries of `config`, without model metadata or a provider catalog.
     pub fn from_config(config: &AgentConfig) -> Self {
+        let profiles = AgentProfilesStore::new(&config.user_cowork_dir, &config.working_directory)
+            .read_catalog();
         Self {
             user_name: config.user_name.clone(),
             user_profile: config.user_profile.clone(),
+            enable_memory: Some(config.enable_memory),
+            advanced_memory: config.advanced_memory,
+            provider_options: config.provider_options.clone(),
+            child_model_routing_mode: config.child_model_routing_mode,
+            allowed_child_model_refs: config.allowed_child_model_refs.clone(),
+            agent_profile_lines: format_agent_profile_prompt_summaries(&profiles),
             ..Self::default()
+        }
+    }
+}
+
+/// The provider catalog view the spawnAgent prompt reads (legacy `ProviderCatalogPayload |
+/// ProviderCatalogSnapshot`).
+#[derive(Debug, Clone, Default)]
+pub struct PromptProviderCatalog {
+    /// Every provider entry with its models (`enabled: Some(false)` = disabled) and default.
+    pub all: Vec<ProviderCatalogEntry>,
+    /// Snapshot `configured` providers, or live payload `connected` providers.
+    pub available: Vec<ProviderName>,
+    /// A cache-only snapshot (legacy `"configured" in catalog`): adds the availability note.
+    pub cache_only_snapshot: bool,
+}
+
+impl PromptProviderCatalog {
+    /// A cache-only snapshot (legacy `readProviderCatalogSnapshot`, what `loadSystemPrompt`
+    /// reads): `configured` providers, with the snapshot availability note.
+    pub fn from_snapshot(snapshot: ProviderCatalogSnapshot) -> Self {
+        Self {
+            all: snapshot.all,
+            available: snapshot.configured,
+            cache_only_snapshot: true,
+        }
+    }
+
+    /// A live catalog payload (`connected` providers, no snapshot note).
+    pub fn from_live_payload(payload: &ProviderCatalogPayload) -> Self {
+        Self {
+            all: payload.all.clone(),
+            available: payload
+                .connected
+                .iter()
+                .filter_map(|p| ProviderName::parse(p))
+                .collect(),
+            cache_only_snapshot: false,
         }
     }
 }

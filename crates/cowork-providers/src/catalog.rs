@@ -1939,6 +1939,154 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
     }
 }
 
+/// Legacy `ProviderCatalogSnapshot` (`src/providers/connectionCatalog.ts`): prompt/model
+/// candidates read from disk only, with `configured` (saved or ambient credentials) in place of
+/// a live `connected` check.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCatalogSnapshot {
+    /// Always `"cache-only"`.
+    pub source: String,
+    pub all: Vec<ProviderCatalogEntry>,
+    pub default: BTreeMap<String, String>,
+    pub configured: Vec<ProviderName>,
+}
+
+/// Legacy `hasConfiguredCredentials`: a resolvable discovery API key, or a saved API-key /
+/// OAuth connection.
+fn has_configured_credentials(
+    provider: ProviderName,
+    store: &ConnectionStore,
+    env: &HashMap<String, String>,
+) -> bool {
+    if is_api_discovery_provider(provider)
+        && resolve_provider_api_key(provider, Some(store), env).is_some()
+    {
+        return true;
+    }
+    store
+        .services
+        .get(&provider)
+        .is_some_and(|e| matches!(e.mode, ConnectionMode::ApiKey | ConnectionMode::Oauth))
+}
+
+/// Approximates JS `localeCompare` for registry ids (legacy `listSupportedModels` order):
+/// case-insensitive, then byte order.
+fn locale_compare_ids(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
+}
+
+/// Legacy `readProviderCatalogSnapshot`: reads prompt/model candidates without refreshing
+/// providers, probing LM Studio, or starting app servers. Each provider uses its cached
+/// discovery result (any age) when present, else its bundled static entry; custom models and
+/// model preferences are then applied. `configured` lists providers with saved or ambient
+/// credentials (LM Studio: an API key or cached models; Bedrock: resolvable auth; Codex: an
+/// `auth.json`).
+pub async fn read_provider_catalog_snapshot(opts: &CatalogBuildOptions) -> ProviderCatalogSnapshot {
+    let built_in_dir = opts.built_in_dir.as_path();
+    let paths: AiCoworkerPaths = get_ai_coworker_paths(Some(&opts.homedir), &opts.env);
+    let store = read_connection_store(&paths)
+        .await
+        .unwrap_or_else(|_| ConnectionStore::empty());
+    let custom_store = read_custom_model_store(&paths)
+        .await
+        .unwrap_or_else(|_| cowork_config::CustomModelStore::empty());
+    let prefs_store = read_model_preferences_store(&paths)
+        .await
+        .unwrap_or_else(|_| cowork_config::ModelPreferencesStore::empty());
+    let has_codex_auth_file = paths.codex_auth_dir.join("auth.json").is_file();
+
+    let saved_lmstudio_key = stored_provider_api_key(&store, ProviderName::Lmstudio);
+    let mut lmstudio = resolve_lmstudio_options(
+        &opts.env,
+        opts.provider_options.as_ref(),
+        saved_lmstudio_key.as_deref(),
+    );
+    if let Some(ov) = opts.base_url_overrides.get(&ProviderName::Lmstudio) {
+        lmstudio.base_url = crate::chat_completions::normalize_lmstudio_base_url(Some(ov));
+    }
+    let lmstudio_scope = json!([
+        lmstudio.base_url,
+        lmstudio.api_key.clone().unwrap_or_default()
+    ])
+    .to_string();
+
+    // Profile-based Bedrock auth may run a credential process / SSO / STS exchange (cached per
+    // credential lifetime); keep it off the async executor.
+    let bedrock_auth = {
+        let homedir = opts.homedir.clone();
+        let env = opts.env.clone();
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || {
+            resolve_bedrock_auth_config(&homedir, &env, Some(&store))
+        })
+        .await
+        .ok()
+        .flatten()
+    };
+    let bedrock_scope = bedrock_auth.as_ref().map(compute_bedrock_auth_fingerprint);
+
+    let mut all = Vec::with_capacity(ProviderName::ALL.len());
+    let mut configured = Vec::new();
+    for provider in ProviderName::ALL {
+        let cached = match provider {
+            ProviderName::Lmstudio => {
+                read_model_discovery_cache(&paths, provider, Some(&lmstudio_scope)).await
+            }
+            ProviderName::Bedrock => match bedrock_scope.as_deref() {
+                Some(scope) => read_model_discovery_cache(&paths, provider, Some(scope)).await,
+                None => None,
+            },
+            _ => read_model_discovery_cache(&paths, provider, None).await,
+        };
+        let raw_entry = match cached {
+            Some(cache) => catalog_entry_from_discovery(
+                built_in_dir,
+                provider,
+                &cache_to_discovery(&cache),
+                None,
+                None,
+            ),
+            None => {
+                let mut entry = static_catalog_entry(built_in_dir, provider);
+                entry
+                    .models
+                    .sort_by(|a, b| locale_compare_ids(&a.id, &b.id));
+                entry
+            }
+        };
+        let entry = merge_custom_models_and_preferences(
+            built_in_dir,
+            raw_entry,
+            custom_store.providers.get(&provider),
+            prefs_store.providers.get(&provider),
+        );
+        let is_configured = match provider {
+            ProviderName::Lmstudio => lmstudio.api_key.is_some() || !entry.models.is_empty(),
+            ProviderName::Bedrock => bedrock_auth.is_some(),
+            ProviderName::CodexCli if has_codex_auth_file => true,
+            _ => has_configured_credentials(provider, &store, &opts.env),
+        };
+        if is_configured {
+            configured.push(provider);
+        }
+        all.push(entry);
+    }
+
+    let default = all
+        .iter()
+        .map(|entry| (entry.id.as_str().to_owned(), entry.default_model.clone()))
+        .collect();
+    ProviderCatalogSnapshot {
+        source: "cache-only".to_owned(),
+        all,
+        default,
+        configured,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatusEntry {

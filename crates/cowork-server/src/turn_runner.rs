@@ -1792,6 +1792,21 @@ impl ServerRuntimeState {
             template_context: PromptTemplateContext {
                 model_display_name: session_model.map(|m| m.display_name.clone()),
                 knowledge_cutoff: session_model.map(|m| m.knowledge_cutoff.clone()),
+                supports_image_input: session_model.map(|m| m.supports_image_input).or_else(|| {
+                    cowork_config::models::find_discovered_model_sync(&paths, provider, &model_id)
+                        .and_then(|m| m.supports_image_input)
+                }),
+                enable_memory: Some(enable_memory),
+                advanced_memory,
+                provider_options: Some(merged_provider_opts.clone()),
+                provider_catalog: Some(
+                    cowork_harness::system_prompt::PromptProviderCatalog::from_snapshot(
+                        cowork_providers::read_provider_catalog_snapshot(
+                            &self.catalog_build_options(&canonical_cwd, false),
+                        )
+                        .await,
+                    ),
+                ),
                 ..effective_agent_cfg
                     .as_ref()
                     .map(PromptTemplateContext::from_config)

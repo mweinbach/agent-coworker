@@ -62,6 +62,23 @@ impl Drop for ChildActiveTurnGuard {
     }
 }
 
+/// Layers a session's `providerOptions` override onto workspace provider options one provider
+/// section deep, as the root turn path does (`turn_runner.rs`).
+fn overlay_session_provider_options(base: &mut Map<String, Value>, over: Map<String, Value>) {
+    for (k, v) in over {
+        match (base.get_mut(&k), v) {
+            (Some(Value::Object(existing_sub)), Value::Object(over_sub)) => {
+                for (sk, sv) in over_sub {
+                    existing_sub.insert(sk, sv);
+                }
+            }
+            (_, other) => {
+                base.insert(k, other);
+            }
+        }
+    }
+}
+
 const CHILD_MAX_TURN_STEPS: usize = 60;
 const CHILD_STEP_TIMEOUT_MS: u64 = 180_000;
 
@@ -136,20 +153,30 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
 
         let mut merged_provider_opts = agent_cfg.provider_options.clone().unwrap_or_default();
         if let Some(over) = parent_provider_opts {
-            for (k, v) in over {
-                match (merged_provider_opts.get_mut(&k), v) {
-                    (Some(Value::Object(existing_sub)), Value::Object(over_sub)) => {
-                        for (sk, sv) in over_sub {
-                            existing_sub.insert(sk, sv);
-                        }
-                    }
-                    (_, other) => {
-                        merged_provider_opts.insert(k, other);
-                    }
+            overlay_session_provider_options(&mut merged_provider_opts, over);
+        }
+        let child_model_defaults =
+            runtime.model_provider_option_defaults(input.provider, &input.model_id);
+        // `applyReasoningEffort` (`src/server/agents/modelRouter.ts`): the child model's own
+        // defaults fill keys the parent's section leaves unset, then the routed effort (requested,
+        // the child model's default, or the parent's current effort for an unchanged child)
+        // replaces `reasoningEffort` for OpenAI-compatible providers only.
+        if !child_model_defaults.is_empty() {
+            let provider_key = input.provider.as_str().to_owned();
+            let mut section = child_model_defaults.clone();
+            if let Some(Value::Object(parent_section)) = merged_provider_opts.get(&provider_key) {
+                for (k, v) in parent_section {
+                    section.insert(k.clone(), v.clone());
                 }
             }
+            merged_provider_opts.insert(provider_key, Value::Object(section));
         }
-        if let Some(ref effort) = input.reasoning_effort {
+        if let Some(ref effort) = input.reasoning_effort
+            && matches!(
+                input.provider,
+                ProviderName::Openai | ProviderName::CodexCli
+            )
+        {
             let sub = merged_provider_opts
                 .entry(input.provider.as_str().to_owned())
                 .or_insert_with(|| Value::Object(Map::new()));
@@ -163,8 +190,6 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         // would carry a payload the model rejects. Reconcile against the child model's own
         // defaults, as the root turn path does (`routeAgentConfig` →
         // `reconcileReasoningProviderOptions` in `src/server/agents/modelRouter.ts`).
-        let child_model_defaults =
-            runtime.model_provider_option_defaults(input.provider, &input.model_id);
         merged_provider_opts = reconcile_reasoning_provider_options(
             &merged_provider_opts,
             input.provider,
@@ -828,6 +853,19 @@ impl ServerRuntimeState {
         cfg.enable_mcp = enable_mcp;
         crate::turn_runner::apply_session_config_overrides(&mut cfg, &overrides);
         apply_session_child_routing_overrides(&mut cfg, &overrides);
+        // The parent's current provider options, merged exactly as its own turns merge them
+        // (workspace + session `providerOptions` override, reconciled against the thread's
+        // model), so child routing can inherit the parent's current `reasoningEffort`
+        // (`currentReasoningEffort` in `src/server/agents/modelRouter.ts`).
+        let mut provider_opts = cfg.provider_options.take().unwrap_or_default();
+        if let Some(over) = overrides.get("providerOptions").and_then(Value::as_object) {
+            let mut over = over.clone();
+            cowork_config::strip_provider_option_endpoints(&mut over);
+            overlay_session_provider_options(&mut provider_opts, over);
+        }
+        let model_defaults = self.model_provider_option_defaults(cfg.provider, &cfg.model);
+        cfg.provider_options =
+            reconcile_reasoning_provider_options(&provider_opts, cfg.provider, &model_defaults);
         Ok(cfg)
     }
 
@@ -1920,11 +1958,13 @@ impl ServerRuntimeState {
                         format!("{method}: invalid role '{r}'"),
                     ));
                 }
+                // `agentReasoningEffortSchema` (`OPENAI_REASONING_EFFORT_VALUES`): the router
+                // passes the request through and the runtime normalizes it per model.
                 let reasoning_effort = opt_str(&params_obj, "reasoningEffort");
                 if let Some(ref eff) = reasoning_effort
                     && !matches!(
                         eff.as_str(),
-                        "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+                        "none" | "minimal" | "light" | "low" | "medium" | "high" | "xhigh" | "max"
                     )
                 {
                     return Err(JsonRpcLiteError::new(

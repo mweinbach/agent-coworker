@@ -456,3 +456,107 @@ async fn routed_children_reconcile_inherited_reasoning_options_against_child_mod
 
     server.shutdown().await;
 }
+
+/// Port of `modelRouter.test.ts` "inherits parent reasoningEffort from providerOptions when no
+/// model requested" / "parent providerOptions reasoningEffort used as last fallback (no model
+/// change)" end to end: a gpt-5.4 parent set to `low` must hand `low` (not the model's `high`
+/// default) to a same-model child, and a requested effort passes through verbatim.
+#[tokio::test]
+async fn same_model_children_inherit_the_parents_current_reasoning_effort() {
+    let mut iso = Iso::new("cowork-child-effort-inherit-");
+    let mock = start_mock(&mut iso).await;
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let th = call(
+        &mut ws,
+        "start",
+        "thread/start",
+        json!({ "cwd": cwd, "provider": "openai", "model": "gpt-5.4" }),
+    )
+    .await;
+    let parent = th["result"]["thread"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("thread/start failed: {th}"))
+        .to_owned();
+    let cfg = call(
+        &mut ws,
+        "cfg",
+        "cowork/session/config/set",
+        json!({
+            "threadId": parent,
+            "config": { "providerOptions": { "openai": { "reasoningEffort": "low" } } }
+        }),
+    )
+    .await;
+    assert!(cfg.get("error").is_none(), "config/set failed: {cfg}");
+
+    // No model, no effort: the unchanged child inherits the parent's current effort.
+    let event = spawn_child_and_wait(&mut ws, &parent, "CHILD_SAME_INHERIT", json!({})).await;
+    assert_eq!(
+        event["agent"]["effectiveModel"], "openai:gpt-5.4",
+        "{event}"
+    );
+    assert_eq!(
+        event["agent"]["effectiveReasoningEffort"], "low",
+        "same-model child must inherit the parent's current effort: {event}"
+    );
+    assert!(
+        event["agent"]["requestedReasoningEffort"].is_null(),
+        "{event}"
+    );
+    let body = child_body(&mock, "CHILD_SAME_INHERIT");
+    assert_eq!(body["model"], "gpt-5.4", "{body}");
+    assert_eq!(body["reasoning"]["effort"], "low", "{body}");
+
+    // A later parent change is picked up by the next spawn.
+    let cfg = call(
+        &mut ws,
+        "cfg2",
+        "cowork/session/config/set",
+        json!({
+            "threadId": parent,
+            "config": { "providerOptions": { "openai": { "reasoningEffort": "medium" } } }
+        }),
+    )
+    .await;
+    assert!(cfg.get("error").is_none(), "config/set failed: {cfg}");
+    let event = spawn_child_and_wait(&mut ws, &parent, "CHILD_SAME_MEDIUM", json!({})).await;
+    assert_eq!(
+        event["agent"]["effectiveReasoningEffort"], "medium",
+        "{event}"
+    );
+    let body = child_body(&mock, "CHILD_SAME_MEDIUM");
+    assert_eq!(body["reasoning"]["effort"], "medium", "{body}");
+
+    // Explicitly naming the parent's model is a model change: the model default applies.
+    let event = spawn_child_and_wait(
+        &mut ws,
+        &parent,
+        "CHILD_SAME_NAMED",
+        json!({ "model": "gpt-5.4" }),
+    )
+    .await;
+    assert_eq!(
+        event["agent"]["effectiveReasoningEffort"], "high",
+        "{event}"
+    );
+    let body = child_body(&mock, "CHILD_SAME_NAMED");
+    assert_eq!(body["reasoning"]["effort"], "high", "{body}");
+
+    // A requested effort is reported verbatim; the runtime normalizes it for the request.
+    let event = spawn_child_and_wait(
+        &mut ws,
+        &parent,
+        "CHILD_SAME_MAX",
+        json!({ "reasoningEffort": "max" }),
+    )
+    .await;
+    assert_eq!(event["agent"]["requestedReasoningEffort"], "max", "{event}");
+    assert_eq!(event["agent"]["effectiveReasoningEffort"], "max", "{event}");
+    let body = child_body(&mock, "CHILD_SAME_MAX");
+    assert_eq!(body["reasoning"]["effort"], "xhigh", "{body}");
+
+    server.shutdown().await;
+}

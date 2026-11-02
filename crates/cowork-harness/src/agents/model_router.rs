@@ -4,6 +4,7 @@ use std::path::Path;
 use cowork_config::{
     AgentConfig, ChildModelRoutingMode, ModelRegistry, ProviderName, parse_child_model_ref,
 };
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedChildModel {
@@ -51,6 +52,73 @@ fn is_selectable_model(
     let resolved =
         registry.resolve_model_for_config(provider, Some(model_id), homedir, &HashMap::new());
     resolved.id == model_id.trim()
+}
+
+/// `OPENAI_COMPATIBLE_PROVIDER_NAMES` (`src/shared/openaiCompatibleOptions.ts`).
+fn is_openai_compatible_provider(provider: ProviderName) -> bool {
+    matches!(provider, ProviderName::Openai | ProviderName::CodexCli)
+}
+
+/// `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`).
+fn is_openai_reasoning_effort(value: &str) -> bool {
+    matches!(
+        value,
+        "none" | "minimal" | "light" | "low" | "medium" | "high" | "xhigh" | "max"
+    )
+}
+
+/// The parent's current effort from its (merged) provider options — `currentReasoningEffort`
+/// in `modelRouter.ts`. Only OpenAI-compatible providers carry a `reasoningEffort`.
+fn current_reasoning_effort(cfg: &AgentConfig, provider: ProviderName) -> Option<String> {
+    if !is_openai_compatible_provider(provider) {
+        return None;
+    }
+    cfg.provider_options
+        .as_ref()?
+        .get(provider.as_str())?
+        .as_object()?
+        .get("reasoningEffort")?
+        .as_str()
+        .filter(|v| is_openai_reasoning_effort(v))
+        .map(str::to_owned)
+}
+
+/// Resolved `providerOptionsDefaults` of a selectable child model: the bundled registry entry,
+/// else the root resolver's view (discovery cache / custom-model store placeholders, which
+/// declare no defaults) — `getResolvedModelMetadataSync(...).providerOptionsDefaults`.
+fn resolved_provider_option_defaults(
+    registry: &ModelRegistry,
+    cfg: &AgentConfig,
+    provider: ProviderName,
+    model_id: &str,
+) -> Map<String, Value> {
+    if let Some(entry) = registry.get(provider, model_id) {
+        return entry.provider_options_defaults.clone();
+    }
+    let Some(homedir) = cfg.user_cowork_dir.parent() else {
+        return Map::new();
+    };
+    let resolved =
+        registry.resolve_model_for_config(provider, Some(model_id), homedir, &HashMap::new());
+    if resolved.id == model_id.trim() {
+        resolved.provider_options_defaults
+    } else {
+        Map::new()
+    }
+}
+
+/// `modelDefaultReasoningEffort` in `modelRouter.ts`.
+fn model_default_reasoning_effort(
+    registry: &ModelRegistry,
+    cfg: &AgentConfig,
+    provider: ProviderName,
+    model_id: &str,
+) -> Option<String> {
+    resolved_provider_option_defaults(registry, cfg, provider, model_id)
+        .get("reasoningEffort")?
+        .as_str()
+        .filter(|v| is_openai_reasoning_effort(v))
+        .map(str::to_owned)
 }
 
 pub fn resolve_child_model_selection(
@@ -142,29 +210,21 @@ pub fn resolve_child_model_selection(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
 
-    let effective_reasoning_effort =
-        if let Some(entry) = registry.get(target_provider, &target_model_id) {
-            match &entry.supported_reasoning_efforts {
-                None => None,
-                Some(levels) if levels.is_empty() => None,
-                Some(levels) => {
-                    if let Some(ref eff) = req_effort
-                        && levels.iter().any(|l| l == eff)
-                    {
-                        Some(eff.clone())
-                    } else {
-                        entry
-                            .provider_options_defaults
-                            .get("reasoningEffort")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned)
-                            .or_else(|| levels.first().cloned())
-                    }
-                }
-            }
+    // `routeAgentConfig` (`src/server/agents/modelRouter.ts`): a requested effort passes through
+    // verbatim (the runtime normalizes it per model). Without one, a changed child model uses its
+    // own default effort (none for a non-reasoning model, so a reasoning parent's effort is never
+    // handed to a model that rejects it); only an unchanged child inherits the parent's current
+    // effort. Any explicit model request counts as a change, even one naming the parent's model.
+    let child_model_changed = trimmed_req.is_some()
+        || target_provider != parent_provider
+        || target_model_id != parent_model;
+    let effective_reasoning_effort = req_effort.clone().or_else(|| {
+        if child_model_changed {
+            model_default_reasoning_effort(&registry, cfg, target_provider, &target_model_id)
         } else {
-            req_effort.clone()
-        };
+            current_reasoning_effort(cfg, parent_provider)
+        }
+    });
 
     Ok(ResolvedChildModel {
         provider: target_provider,

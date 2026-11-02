@@ -160,7 +160,7 @@ impl BuiltinTool for SpawnAgentTool {
                 "model": { "type": "string" },
                 "reasoningEffort": {
                     "type": "string",
-                    "enum": ["none", "minimal", "low", "medium", "high", "xhigh"]
+                    "enum": ["none", "minimal", "light", "low", "medium", "high", "xhigh", "max"]
                 },
                 "nickname": { "type": "string" },
                 "taskType": { "type": "string" },

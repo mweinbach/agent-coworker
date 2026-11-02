@@ -25,7 +25,15 @@ use crate::state_store::{
     get_stored_session_for_cwd, repl_history_file_path, set_stored_session_for_cwd,
 };
 
-const REASONING_EFFORTS: [&str; 5] = ["minimal", "low", "medium", "high", "xhigh"];
+/// The canonical reasoning-effort ladder accepted by `/reasoning` (and its `/effort` /
+/// `/reasoning-effort` aliases), in ladder order: TS `OPENAI_REASONING_EFFORT_VALUES`
+/// (`src/shared/openaiCompatibleOptions.ts`), mirrored by the private
+/// `cowork_config::models::OPENAI_REASONING_EFFORT_VALUES`. `none` disables reasoning, while
+/// `light`/`max` are only honored where a model advertises them; each runtime downgrades an
+/// unsupported value to the nearest level it can send, so the CLI must not narrow the ladder.
+const REASONING_EFFORTS: [&str; 8] = [
+    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+];
 const TEXT_VERBOSITIES: [&str; 3] = ["low", "medium", "high"];
 const REASONING_SUMMARIES: [&str; 4] = ["auto", "concise", "detailed", "none"];
 
@@ -373,7 +381,8 @@ impl ActiveReplSession {
                 writeln!(out, "  /model <id>                Switch active model")?;
                 writeln!(
                     out,
-                    "  /reasoning <effort>        Set reasoning effort (minimal|low|medium|high|xhigh)"
+                    "  /reasoning <effort>        Set reasoning effort ({})",
+                    REASONING_EFFORTS.join("|")
                 )?;
                 writeln!(
                     out,

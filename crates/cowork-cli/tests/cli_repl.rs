@@ -897,6 +897,46 @@ async fn repl_new_thread_refreshes_provider_and_model_selection() {
     assert!(!after_new.contains("anthropic"), "output={output}");
 }
 
+/// `/effort` (and `/reasoning`) accept the full canonical ladder, TS
+/// `OPENAI_REASONING_EFFORT_VALUES`: `none` disables reasoning and `light`/`max` are opt-in
+/// levels some models advertise, so none of them may be rejected client-side. Unknown values
+/// still print the usage line listing the complete ladder in order.
+#[tokio::test]
+async fn repl_effort_accepts_full_reasoning_effort_ladder() {
+    let iso = IsolatedCliEnv::new();
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &[
+            "/help",
+            "/provider openai",
+            "/effort none",
+            "/effort light",
+            "/reasoning-effort MAX",
+            "/effort bogus",
+            "/exit",
+        ],
+    )
+    .await
+    .unwrap();
+
+    let ladder = "none|minimal|light|low|medium|high|xhigh|max";
+    assert!(
+        output.contains(&format!("Set reasoning effort ({ladder})")),
+        "help must list the full ladder; output={output}"
+    );
+    for effort in ["none", "light", "max"] {
+        assert!(
+            output.contains(&format!("openai reasoning effort set to {effort}")),
+            "expected /effort {effort} to be accepted; output={output}"
+        );
+    }
+    assert!(
+        output.contains(&format!("usage: /reasoning <{ladder}>")),
+        "output={output}"
+    );
+    assert!(!output.contains("set to bogus"), "output={output}");
+}
+
 /// The id printed after `marker` (e.g. the banner's `Thread: <id>` or `Started new thread: <id>`).
 fn id_after(output: &str, marker: &str) -> String {
     output

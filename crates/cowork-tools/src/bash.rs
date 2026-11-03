@@ -11,6 +11,7 @@ use cowork_sandbox::{
     SandboxErrorCode, SandboxExecutionRequest, SandboxPolicy, SandboxRunner, SandboxType,
     classify_command_detailed, host_platform, resolve_sandbox_policy,
 };
+use parking_lot::Mutex;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -146,6 +147,11 @@ impl BuiltinTool for BashTool {
             }
         }
 
+        // TS `await ctx.assertCanMutate?.("bash")` before the first run: the task-mutation lock
+        // (e.g. a concurrent `createTask` locking this chat) may have been taken while the
+        // manual-approval prompt above was pending, so the dispatch-time check is stale.
+        ctx.check_before_tool_invocation("bash")?;
+
         let platform = host_platform();
         let is_sandboxed = !matches!(policy, SandboxPolicy::DangerFullAccess { .. })
             || !cowork_sandbox::policy_allows_network(&policy);
@@ -196,11 +202,16 @@ impl BuiltinTool for BashTool {
             read_denied_roots: credential_roots.clone(),
         };
 
+        // A task-mutation lock taken while the unsandboxed-fallback prompt was pending. The
+        // runner callback can only report "declined" (so the command never runs); the lock's own
+        // error is stashed here and returned instead, matching TS where `assertCanMutate` threw.
+        let unsandboxed_lock_error: Mutex<Option<ToolError>> = Mutex::new(None);
         let make_unsandboxed_cb = || {
             ctx.approval_handler.as_ref().map(|handler| {
                 let handler = Arc::clone(handler);
                 let cmd = command.clone();
                 let cwd = ctx.working_directory.clone();
+                let lock_error = &unsandboxed_lock_error;
                 move |detail_opt: Option<&str>| {
                     let detail = detail_opt
                         .map(str::to_owned)
@@ -208,7 +219,7 @@ impl BuiltinTool for BashTool {
                             "No enforcing OS sandbox is available on this machine, so this command can only run with full filesystem and network access.".to_owned()
                         });
                     async move {
-                        handler
+                        let approved = handler
                             .approve_command(ApprovalDecisionRequest {
                                 command: cmd,
                                 reason: "sandbox_denied".to_owned(),
@@ -217,7 +228,18 @@ impl BuiltinTool for BashTool {
                                 cwd,
                             })
                             .await
-                            .unwrap_or(false)
+                            .unwrap_or(false);
+                        if !approved {
+                            return false;
+                        }
+                        // TS `runShellCommand`: `assertCanMutate` after the unsandboxed approval.
+                        match ctx.check_before_tool_invocation("bash") {
+                            Ok(()) => true,
+                            Err(err) => {
+                                *lock_error.lock() = Some(err);
+                                false
+                            }
+                        }
                     }
                 }
             })
@@ -230,6 +252,9 @@ impl BuiltinTool for BashTool {
                 make_unsandboxed_cb(),
             )
             .await;
+        if let Some(err) = take_lock_error(&unsandboxed_lock_error) {
+            return Err(err);
+        }
 
         if let Some(esc) = &run_res.escalation
             && !ctx.yolo
@@ -250,6 +275,8 @@ impl BuiltinTool for BashTool {
                 .await
                 .map_err(ToolError::Execution)?;
             if approved {
+                // TS rechecks `assertCanMutate("bash")` after the escalation approval wait.
+                ctx.check_before_tool_invocation("bash")?;
                 run_res = runner
                     .run_with_approval(
                         build_req(esc.retry_policy.clone()),
@@ -257,6 +284,9 @@ impl BuiltinTool for BashTool {
                         make_unsandboxed_cb(),
                     )
                     .await;
+                if let Some(err) = take_lock_error(&unsandboxed_lock_error) {
+                    return Err(err);
+                }
             }
         }
 
@@ -295,6 +325,10 @@ impl BuiltinTool for BashTool {
             "exitCode": exit_code,
         })))
     }
+}
+
+fn take_lock_error(slot: &Mutex<Option<ToolError>>) -> Option<ToolError> {
+    slot.lock().take()
 }
 
 /// Commands the legacy TS server (`src/platform/approval.ts` `classifyCommand`) did NOT

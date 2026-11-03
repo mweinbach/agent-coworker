@@ -16,6 +16,7 @@ use cowork_config::{
     harden_private_file_sync, is_inside, same_workspace_path, with_file_lock_sync,
     write_text_file_atomic,
 };
+use cowork_storage::task_review_policy::js_locale_compare;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -258,7 +259,6 @@ struct StoredSessionBackupMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EntrySignature {
     kind: DeltaEntryKind,
-    mode: u32,
     digest: String,
 }
 
@@ -465,7 +465,6 @@ fn collect_directory_manifest(root: &Path) -> Result<BTreeMap<String, EntrySigna
                     rel_path,
                     EntrySignature {
                         kind: DeltaEntryKind::Symlink,
-                        mode: 0o777,
                         digest,
                     },
                 );
@@ -474,31 +473,16 @@ fn collect_directory_manifest(root: &Path) -> Result<BTreeMap<String, EntrySigna
                     rel_path,
                     EntrySignature {
                         kind: DeltaEntryKind::Directory,
-                        mode: entry_mode(&meta),
                         digest: String::new(),
                     },
                 );
                 walk(base, &full_path, false, out)?;
             } else if ft.is_file() {
-                let mut file = File::open(&full_path)
-                    .map_err(|e| format!("Failed opening {}: {e}", full_path.display()))?;
-                let mut hasher = Sha256::new();
-                let mut buf = [0_u8; 64 * 1024];
-                loop {
-                    let n = file
-                        .read(&mut buf)
-                        .map_err(|e| format!("Failed hashing {}: {e}", full_path.display()))?;
-                    if n == 0 {
-                        break;
-                    }
-                    hasher.update(&buf[..n]);
-                }
                 out.insert(
                     rel_path,
                     EntrySignature {
                         kind: DeltaEntryKind::File,
-                        mode: entry_mode(&meta),
-                        digest: hex::encode(hasher.finalize()),
+                        digest: hash_file_hex(&full_path)?,
                     },
                 );
             }
@@ -510,27 +494,112 @@ fn collect_directory_manifest(root: &Path) -> Result<BTreeMap<String, EntrySigna
     Ok(manifest)
 }
 
-/// Deterministic `session-backup-workspace-v2` SHA-256 fingerprint.
-pub fn compute_workspace_fingerprint(working_directory: &Path) -> Result<String, String> {
-    let manifest = collect_directory_manifest(working_directory)?;
-    Ok(fingerprint_from_manifest(&manifest))
+/// Hex SHA-256 of a file's content.
+fn hash_file_hex(path: &Path) -> Result<String, String> {
+    let mut file =
+        File::open(path).map_err(|e| format!("Failed opening {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed hashing {}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
-fn fingerprint_from_manifest(manifest: &BTreeMap<String, EntrySignature>) -> String {
+/// Deterministic `session-backup-workspace-v2` SHA-256 fingerprint.
+///
+/// Byte-compatible with the TypeScript `workspaceFingerprint` that wrote the same prefix, so a
+/// checkpoint of an unchanged workspace deduplicates against a fingerprint recorded before the
+/// upgrade: entries are walked depth-first in pre-order, siblings sorted with `localeCompare`
+/// (ICU root collation), and each entry hashes one `JSON.stringify` line:
+/// `["directory", rel, mode]`, `["file", rel, mode, sha256]`, `["symlink", rel, rawTarget]`, or
+/// `["other", rel, st_mode, size]`. Top-level `.ModelScratchpad` (and `.restore-rollback-*`,
+/// which the recovery guard keeps absent whenever a fingerprint is taken) are skipped.
+pub fn compute_workspace_fingerprint(working_directory: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
     hasher.update(b"session-backup-workspace-v2\n");
-    for (rel_path, sig) in manifest {
-        let kind_str = match sig.kind {
-            DeltaEntryKind::Directory => "directory",
-            DeltaEntryKind::File => "file",
-            DeltaEntryKind::Symlink => "symlink",
-        };
-        let line =
-            serde_json::to_string(&(kind_str, rel_path, sig.mode, &sig.digest)).unwrap_or_default();
+    if working_directory.exists() {
+        fingerprint_walk(&mut hasher, working_directory, working_directory, true)?;
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn fingerprint_walk(
+    hasher: &mut Sha256,
+    base: &Path,
+    current: &Path,
+    is_root: bool,
+) -> Result<(), String> {
+    let mut entries: Vec<(String, PathBuf)> = fs::read_dir(current)
+        .map_err(|e| format!("Failed reading directory {}: {e}", current.display()))?
+        .map(|entry| {
+            entry
+                .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                .map_err(|e| {
+                    format!(
+                        "Failed reading directory entry in {}: {e}",
+                        current.display()
+                    )
+                })
+        })
+        .collect::<Result<_, _>>()?;
+    // `entries.sort((a, b) => a.name.localeCompare(b.name))`; byte order only breaks collation
+    // ties, which the TS stable sort left in (unspecified) `readdir` order.
+    entries.sort_by(|a, b| js_locale_compare(&a.0, &b.0).then_with(|| a.0.cmp(&b.0)));
+
+    for (name, full_path) in entries {
+        if is_root && is_excluded_top_level_name(&name) {
+            continue;
+        }
+        let rel_path = full_path
+            .strip_prefix(base)
+            .map_err(|e| e.to_string())?
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let meta = fs::symlink_metadata(&full_path)
+            .map_err(|e| format!("Failed stating {}: {e}", full_path.display()))?;
+        let ft = meta.file_type();
+        let line = if ft.is_dir() {
+            serde_json::to_string(&("directory", &rel_path, entry_mode(&meta)))
+        } else if ft.is_file() {
+            let digest = hash_file_hex(&full_path)?;
+            serde_json::to_string(&("file", &rel_path, entry_mode(&meta), digest))
+        } else if ft.is_symlink() {
+            let target = fs::read_link(&full_path)
+                .map_err(|e| format!("Failed reading symlink {}: {e}", full_path.display()))?;
+            serde_json::to_string(&("symlink", &rel_path, target.to_string_lossy()))
+        } else {
+            serde_json::to_string(&("other", &rel_path, raw_st_mode(&meta), meta.len()))
+        }
+        .map_err(|e| format!("Failed encoding fingerprint entry {rel_path:?}: {e}"))?;
         hasher.update(line.as_bytes());
         hasher.update(b"\n");
+        if ft.is_dir() {
+            fingerprint_walk(hasher, base, &full_path, false)?;
+        }
     }
-    hex::encode(hasher.finalize())
+    Ok(())
+}
+
+/// Full `st_mode` (file type and permission bits), as Node's `stat.mode`.
+fn raw_st_mode(meta: &fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.mode()
+    }
+    #[cfg(not(unix))]
+    {
+        entry_mode(meta)
+    }
 }
 
 /// Creates a `.tar.gz` archive of `source_dir` (excluding `.ModelScratchpad` and `.restore-rollback-*`).
@@ -876,6 +945,7 @@ fn extract_snapshot_tar_gz_deferred(
 
     let mut count = 0_usize;
     let mut total_uncompressed = 0_u64;
+    let mut extracted_symlinks: Vec<PathBuf> = Vec::new();
 
     for entry_res in entries {
         count += 1;
@@ -911,12 +981,13 @@ fn extract_snapshot_tar_gz_deferred(
         let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
         match entry_type {
             EntryType::Directory => {
-                fs::create_dir_all(&target_path)
-                    .map_err(|e| format!("Failed creating dir {}: {e}", target_path.display()))?;
+                // An earlier entry may have planted a symlink (or file) at this path: replace it
+                // rather than creating/chmodding through it.
+                ensure_real_directory_leaf(&target_path, &raw_path)?;
                 let final_mode = if mode == 0 { 0o755 } else { mode };
                 // Archives list a directory before its descendants: keep it writable until the
                 // whole archive is extracted.
-                apply_unix_mode(&target_path, writable_dir_mode(final_mode));
+                set_dir_mode_no_follow(&target_path, writable_dir_mode(final_mode));
                 deferred.record(&rel_path, final_mode);
             }
             EntryType::Regular | EntryType::Continuous => {
@@ -927,7 +998,10 @@ fn extract_snapshot_tar_gz_deferred(
                     ));
                 }
                 let mut limited = entry.take(MAX_BACKUP_ARCHIVE_ENTRY_BYTES + 1);
-                let mut out_file = File::create(&target_path)
+                // A later entry reusing a symlink's path replaces the link; it never writes
+                // through it (the file is created exclusively and without following symlinks).
+                unlink_non_directory_leaf(&target_path, &raw_path)?;
+                let mut out_file = create_new_file_no_follow(&target_path)
                     .map_err(|e| format!("Failed creating {}: {e}", target_path.display()))?;
                 let copied = std::io::copy(&mut limited, &mut out_file)
                     .map_err(|e| format!("Failed extracting {raw_path:?}: {e}"))?;
@@ -947,7 +1021,7 @@ fn extract_snapshot_tar_gz_deferred(
                 out_file
                     .flush()
                     .map_err(|e| format!("Failed flushing {raw_path:?}: {e}"))?;
-                apply_unix_mode(&target_path, if mode == 0 { 0o644 } else { mode });
+                set_file_mode_on_handle(&out_file, if mode == 0 { 0o644 } else { mode });
             }
             EntryType::Symlink => {
                 let link_name = entry
@@ -959,6 +1033,7 @@ fn extract_snapshot_tar_gz_deferred(
                     let _ = fs::remove_file(&target_path);
                 }
                 create_symlink(&link_name, &target_path)?;
+                extracted_symlinks.push(rel_path);
             }
             other => {
                 return Err(format!(
@@ -968,7 +1043,183 @@ fn extract_snapshot_tar_gz_deferred(
         }
     }
 
+    // Each target was checked lexically on its own when it was created; later entries can still
+    // add the symlink hops that make it resolve elsewhere, so re-resolve every link against the
+    // finished tree.
+    validate_materialized_symlinks(&canon_dest, &extracted_symlinks)?;
     Ok(deferred)
+}
+
+/// Makes `target_path` a real directory, replacing a symlink or non-directory left there by an
+/// earlier archive entry (never following it).
+fn ensure_real_directory_leaf(target_path: &Path, raw_path: &str) -> Result<(), String> {
+    match fs::symlink_metadata(target_path) {
+        Ok(meta) if meta.file_type().is_dir() => return Ok(()),
+        Ok(_) => fs::remove_file(target_path).map_err(|e| {
+            format!("Failed replacing existing entry for archive directory {raw_path:?}: {e}")
+        })?,
+        Err(_) => {}
+    }
+    fs::create_dir(target_path)
+        .map_err(|e| format!("Failed creating dir {}: {e}", target_path.display()))
+}
+
+/// Removes a symlink or file left at `target_path` by an earlier archive entry (the link itself,
+/// never what it points to). A directory there conflicts with a file entry and is rejected.
+fn unlink_non_directory_leaf(target_path: &Path, raw_path: &str) -> Result<(), String> {
+    match fs::symlink_metadata(target_path) {
+        Ok(meta) if meta.file_type().is_dir() => Err(format!(
+            "Archive file entry {raw_path:?} conflicts with an extracted directory."
+        )),
+        Ok(_) => fs::remove_file(target_path).map_err(|e| {
+            format!("Failed replacing existing entry for archive file {raw_path:?}: {e}")
+        }),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Creates a new file exclusively (`O_CREAT | O_EXCL`, plus `O_NOFOLLOW` on Unix), so a symlink
+/// at `path` is never followed.
+fn create_new_file_no_follow(path: &Path) -> std::io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    options.open(path)
+}
+
+/// Best-effort `fchmod` on an open handle (no path lookup, so nothing can be followed).
+fn set_file_mode_on_handle(file: &File, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, mode);
+    }
+}
+
+/// Re-resolves every extracted symlink against the materialized tree under `root` (see
+/// [`ensure_materialized_symlink_confined`]). A link that fails is removed before the error is
+/// returned so it is not left pointing outside the destination.
+fn validate_materialized_symlinks(root: &Path, symlinks: &[PathBuf]) -> Result<(), String> {
+    for rel in symlinks {
+        let link_path = root.join(rel);
+        let still_symlink =
+            fs::symlink_metadata(&link_path).is_ok_and(|m| m.file_type().is_symlink());
+        if !still_symlink {
+            // Replaced by a later entry.
+            continue;
+        }
+        if let Err(err) = ensure_materialized_symlink_confined(root, rel) {
+            let _ = fs::remove_file(&link_path);
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+/// Upper bound on symlinks followed while resolving one link; well above the kernel's own limit
+/// (40 on Linux, 32 on macOS), so a link still unresolved past it cannot resolve at all.
+const MAX_MATERIALIZED_SYMLINK_HOPS: usize = 256;
+
+/// Resolves the symlink at `rel_link` (relative to `root`) the way the kernel would, following
+/// every symlink it traverses, and fails when any step climbs above `root`, reaches an absolute
+/// path, or enters a reserved top-level directory. Components that do not exist (yet) are treated
+/// as plain directories, so later-created entries cannot turn a dangling link into an escape
+/// without themselves being symlinks that this check also covers.
+fn ensure_materialized_symlink_confined(root: &Path, rel_link: &Path) -> Result<(), String> {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+
+    let escape_error = || {
+        format!(
+            "Archive symlink {} resolves outside the extraction destination.",
+            rel_link.display()
+        )
+    };
+    let push_target = |pending: &mut VecDeque<OsString>, target: &Path| -> Result<(), String> {
+        let mut parts = Vec::new();
+        for comp in target.components() {
+            match comp {
+                Component::Normal(name) => parts.push(name.to_os_string()),
+                Component::ParentDir => parts.push(OsString::from("..")),
+                Component::CurDir => {}
+                Component::RootDir | Component::Prefix(_) => return Err(escape_error()),
+            }
+        }
+        for part in parts.into_iter().rev() {
+            pending.push_front(part);
+        }
+        Ok(())
+    };
+
+    // Directory holding the link, as real path components under `root`.
+    let mut dir: Vec<OsString> = rel_link
+        .parent()
+        .map(|p| {
+            p.components()
+                .filter_map(|c| match c {
+                    Component::Normal(s) => Some(s.to_os_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let link_path = root.join(rel_link);
+    let first_target = fs::read_link(&link_path)
+        .map_err(|e| format!("Failed reading symlink {}: {e}", link_path.display()))?;
+    let mut pending = VecDeque::new();
+    push_target(&mut pending, &first_target)?;
+
+    let mut hops = 0_usize;
+    while let Some(part) = pending.pop_front() {
+        if part == ".." {
+            if dir.pop().is_none() {
+                return Err(escape_error());
+            }
+            continue;
+        }
+        dir.push(part);
+        if dir.len() == 1 && is_excluded_top_level_name(&dir[0].to_string_lossy()) {
+            return Err(format!(
+                "Archive symlink {} resolves into reserved directory {:?}.",
+                rel_link.display(),
+                dir[0]
+            ));
+        }
+        let cursor: PathBuf = dir.iter().fold(root.to_path_buf(), |acc, c| acc.join(c));
+        let Ok(meta) = fs::symlink_metadata(&cursor) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        hops += 1;
+        if hops > MAX_MATERIALIZED_SYMLINK_HOPS {
+            // The kernel gives up (ELOOP) long before this; nothing is reachable through it.
+            return Ok(());
+        }
+        let next = fs::read_link(&cursor)
+            .map_err(|e| format!("Failed reading symlink {}: {e}", cursor.display()))?;
+        // The hop's target is relative to the directory holding it.
+        dir.pop();
+        push_target(&mut pending, &next)?;
+    }
+
+    // Belt and braces for links whose target exists: the kernel's own resolution must agree.
+    if let Ok(resolved) = fs::canonicalize(&link_path) {
+        let real_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if !resolved.starts_with(&real_root) {
+            return Err(escape_error());
+        }
+    }
+    Ok(())
 }
 
 /// Whether a tar entry path names the archive root itself.
@@ -1195,7 +1446,25 @@ fn copy_snapshot_directory_confined(
         &mut total_bytes,
         &mut deferred,
     )?;
+    let mut symlinks = Vec::new();
+    collect_relative_symlinks(&canon_dest, Path::new(""), &mut symlinks);
+    validate_materialized_symlinks(&canon_dest, &symlinks)?;
     Ok(deferred)
+}
+
+/// Relative paths of every symlink under `root/rel` (never following symlinks).
+fn collect_relative_symlinks(root: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root.join(rel)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = rel.join(entry.file_name());
+        match entry.file_type() {
+            Ok(ft) if ft.is_symlink() => out.push(child),
+            Ok(ft) if ft.is_dir() => collect_relative_symlinks(root, &child, out),
+            _ => {}
+        }
+    }
 }
 
 fn verify_snapshot_exists_confined(
@@ -2107,6 +2376,22 @@ impl WorkspaceBackupManager {
         F: FnMut(&str) -> SessionLookupMetadata,
     {
         let canon_wd = canonicalize_sync(working_directory);
+        // Under the workspace lock (TS `listWorkspaceBackups`), so the `.restore-rollback-*`
+        // directory of a restore in progress is never reported as a recovery failure.
+        self.run_locked(&canon_wd, || {
+            self.read_workspace_backups_locked(&canon_wd, session_id_for_event, &mut lookup_session)
+        })
+    }
+
+    fn read_workspace_backups_locked<F>(
+        &self,
+        canon_wd: &Path,
+        session_id_for_event: Option<String>,
+        lookup_session: &mut F,
+    ) -> Result<WorkspaceBackupsEvent, String>
+    where
+        F: FnMut(&str) -> SessionLookupMetadata,
+    {
         let wd_str = canon_wd.to_string_lossy().into_owned();
         let mut seen_sessions = BTreeSet::new();
         let mut entries = Vec::new();
@@ -2158,8 +2443,30 @@ impl WorkspaceBackupManager {
         let session_dir = self
             .find_existing_session_dir(target_session_id)?
             .ok_or_else(|| format!("Backup entry not found for session {target_session_id}."))?;
-        let meta = Self::read_metadata(&session_dir)?;
-        if !same_workspace_path(&meta.working_directory, &wd_str) {
+        // The session lock covers the metadata read and the `.delta-*` staging directories created
+        // inside `session_dir`, so `delete_entry` / `delete_checkpoint` cannot remove the backup (or
+        // a snapshot) mid-preview. Only the session lock is taken: the preview never reads the
+        // live workspace.
+        self.run_locked(&session_dir, || {
+            Self::read_workspace_backup_delta_locked(
+                &session_dir,
+                &wd_str,
+                target_session_id,
+                checkpoint_id,
+                session_id_for_event,
+            )
+        })
+    }
+
+    fn read_workspace_backup_delta_locked(
+        session_dir: &Path,
+        wd_str: &str,
+        target_session_id: &str,
+        checkpoint_id: &str,
+        session_id_for_event: Option<String>,
+    ) -> Result<WorkspaceBackupDeltaEvent, String> {
+        let meta = Self::read_metadata(session_dir)?;
+        if !same_workspace_path(&meta.working_directory, wd_str) {
             return Err("Backup session does not belong to this workspace.".to_owned());
         }
 
@@ -2190,7 +2497,7 @@ impl WorkspaceBackupManager {
                 false,
             )
         } else {
-            summarize_snapshot_delta(&session_dir, baseline_snapshot, &checkpoint.snapshot)?
+            summarize_snapshot_delta(session_dir, baseline_snapshot, &checkpoint.snapshot)?
         };
 
         Ok(WorkspaceBackupDeltaEvent {
@@ -2352,14 +2659,19 @@ impl WorkspaceBackupManager {
             return Err("Backup session does not belong to this workspace.".to_owned());
         }
 
-        self.run_locked(&session_dir, || {
-            self.run_locked(&canon_wd, || {
-                remove_dir_all_force(&session_dir).map_err(|e| {
-                    format!(
-                        "Failed removing backup directory {}: {e}",
-                        session_dir.display()
-                    )
-                })
+        // Session lock, then workspace lock, with the recovery guard (TS `deleteEntry`): a
+        // backup cannot be deleted while an interrupted restore still needs recovering.
+        self.run_session_then_workspace_locked(&session_dir, &canon_wd, || {
+            if !session_dir.join("metadata.json").is_file() {
+                return Err(format!(
+                    "Backup entry not found for session {target_session_id}."
+                ));
+            }
+            remove_dir_all_force(&session_dir).map_err(|e| {
+                format!(
+                    "Failed removing backup directory {}: {e}",
+                    session_dir.display()
+                )
             })
         })?;
 

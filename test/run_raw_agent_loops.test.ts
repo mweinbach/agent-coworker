@@ -19,6 +19,7 @@ import { validateWithOptionalRepair } from "../packages/harness/src/rawLoopValid
 import {
   applyRawLoopToolSurfaceConfig,
   buildRawLoopHarnessContext,
+  buildRawLoopServerEnv,
   runRawLoopTurnViaServer,
 } from "../packages/harness/src/run_raw_agent_loops";
 import type { AgentConfig } from "../src/types";
@@ -425,6 +426,63 @@ describe("raw loop tool surface and Rust server execution", () => {
         .filter((entry) => entry.scope === "tool-call")
         .map((entry) => (entry.step as { toolName: string }).toolName),
     ).toEqual(["todoWrite", "glob"]);
+  });
+
+  test("pins the spawned server repo root and disables tasks and workflows via env", () => {
+    const env = buildRawLoopServerEnv({
+      PATH: "/usr/bin",
+      COWORK_ENABLE_TASKS: "1",
+      COWORK_ENABLE_WORKFLOWS: "true",
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.COWORK_REPO_ROOT).toBe(path.resolve(import.meta.dir, ".."));
+    expect(env.COWORK_ENABLE_TASKS).toBe("0");
+    expect(env.COWORK_ENABLE_WORKFLOWS).toBe("0");
+    expect(env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
+    expect(env.COWORK_DISABLE_BUILTIN_SKILLS).toBe("1");
+    expect(buildRawLoopServerEnv({ COWORK_REPO_ROOT: " /custom/root " }).COWORK_REPO_ROOT).toBe(
+      "/custom/root",
+    );
+  });
+
+  test("forwards maxSteps and rejects the turn when the server socket closes mid-turn", async () => {
+    const configSets: unknown[] = [];
+    const fakeServer = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req, srv) {
+        return srv.upgrade(req) ? undefined : new Response("upgrade required", { status: 426 });
+      },
+      websocket: {
+        message(ws, raw) {
+          const msg = JSON.parse(String(raw)) as { id?: number; method: string; params?: any };
+          if (msg.id === undefined) return;
+          if (msg.method === "cowork/session/config/set") configSets.push(msg.params.config);
+          if (msg.method === "turn/start") {
+            ws.send(JSON.stringify({ id: msg.id, result: {} }));
+            // Simulate cowork-server exiting before `turn/completed`.
+            ws.close(1011, "server exited");
+            return;
+          }
+          const result = msg.method === "thread/start" ? { thread: { id: "thread-1" } } : {};
+          ws.send(JSON.stringify({ id: msg.id, result }));
+        },
+      },
+    });
+    try {
+      const turn = runRawLoopTurnViaServer({
+        wsUrl: `ws://127.0.0.1:${String(fakeServer.port)}`,
+        cwd: "/tmp/raw-loop",
+        provider: "openai",
+        model: "gpt-test",
+        prompt: "hi",
+        maxSteps: 42,
+      });
+      await expect(turn).rejects.toThrow("cowork-server WebSocket closed unexpectedly");
+      expect(configSets).toEqual([{ enableMemory: true, advancedMemory: false, maxSteps: 42 }]);
+    } finally {
+      fakeServer.stop(true);
+    }
   });
 
   test("executes a raw-loop turn end-to-end against Rust cowork-server", async () => {

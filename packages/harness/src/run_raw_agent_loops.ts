@@ -242,6 +242,22 @@ export type ServerTurnTraceResult = {
   totalSteps: number;
 };
 
+/**
+ * Environment for the spawned `cowork-server`. Tasks and workflows resolve only from
+ * `COWORK_ENABLE_TASKS` / `COWORK_ENABLE_WORKFLOWS` (session `featureFlags` never reach the
+ * turn), so they are pinned off here instead of inheriting the developer's shell.
+ */
+export function buildRawLoopServerEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    COWORK_REPO_ROOT: baseEnv.COWORK_REPO_ROOT?.trim() || REPO_ROOT,
+    COWORK_DESKTOP_PARENT_MANAGED: "1",
+    COWORK_DISABLE_BUILTIN_SKILLS: baseEnv.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
+    COWORK_ENABLE_TASKS: "0",
+    COWORK_ENABLE_WORKFLOWS: "0",
+  };
+}
+
 export async function runRawLoopTurnViaServer(opts: {
   wsUrl: string;
   cwd: string;
@@ -251,7 +267,14 @@ export async function runRawLoopTurnViaServer(opts: {
   threadId?: string;
   harnessContext?: HarnessContextState;
   providerOptions?: Record<string, unknown>;
+  /** Session `maxSteps` override; the server falls back to its default when omitted. */
+  maxSteps?: number;
 }): Promise<ServerTurnTraceResult> {
+  const sessionConfig = {
+    enableMemory: opts.provider !== "lmstudio",
+    advancedMemory: false,
+    ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
+  };
   const ws = new WebSocket(opts.wsUrl, "cowork.jsonrpc.v1");
   const steps: TracedStep[] = [];
   const toolLogLines: string[] = [];
@@ -272,6 +295,11 @@ export async function runRawLoopTurnViaServer(opts: {
     turnDoneResolve = resolve;
     turnDoneReject = reject;
   });
+  turnDonePromise.catch(() => {
+    // A socket close can reject the turn before it is awaited; the await below reports it.
+  });
+  let socketClosedError: Error | null = null;
+  let closingByClient = false;
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(typeof event.data === "string" ? event.data : String(event.data));
@@ -366,10 +394,31 @@ export async function runRawLoopTurnViaServer(opts: {
   await new Promise<void>((resolve, reject) => {
     ws.onopen = () => resolve();
     ws.onerror = () => reject(new Error("Failed to connect to cowork-server WebSocket"));
+    ws.onclose = (event) =>
+      reject(
+        new Error(`cowork-server WebSocket closed before opening (code ${String(event.code)})`),
+      );
   });
+
+  // An unexpected server exit mid-turn must fail the run instead of hanging it.
+  ws.onclose = (event) => {
+    if (closingByClient) return;
+    socketClosedError = new Error(
+      `cowork-server WebSocket closed unexpectedly (code ${String(event.code)}${
+        event.reason ? `: ${event.reason}` : ""
+      })`,
+    );
+    for (const waiter of pending.values()) waiter.reject(socketClosedError);
+    pending.clear();
+    turnDoneReject?.(socketClosedError);
+  };
 
   const rpc = <T = Record<string, unknown>>(method: string, params?: unknown) =>
     new Promise<T>((resolve, reject) => {
+      if (socketClosedError) {
+        reject(socketClosedError);
+        return;
+      }
       const id = ++nextId;
       pending.set(id, { resolve: resolve as (val: unknown) => void, reject });
       ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
@@ -386,13 +435,7 @@ export async function runRawLoopTurnViaServer(opts: {
       cwd: opts.cwd,
       provider: opts.provider,
       model: opts.model,
-      config: {
-        enableMemory: opts.provider !== "lmstudio",
-        advancedMemory: false,
-        tasksEnabled: false,
-        workflowsEnabled: false,
-        ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
-      },
+      config: sessionConfig,
     });
     let threadId = opts.threadId;
     if (threadId) {
@@ -405,14 +448,12 @@ export async function runRawLoopTurnViaServer(opts: {
       });
       threadId = String(started.thread.id);
     }
+    // `maxSteps` is a session-only override the server reads when the turn starts.
     await rpc("cowork/session/config/set", {
       threadId,
       config: {
-        enableMemory: opts.provider !== "lmstudio",
-        advancedMemory: false,
-        tasksEnabled: false,
-        workflowsEnabled: false,
-        ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
+        ...sessionConfig,
+        ...(opts.maxSteps !== undefined ? { maxSteps: opts.maxSteps } : {}),
       },
     });
     if (opts.harnessContext) {
@@ -430,6 +471,7 @@ export async function runRawLoopTurnViaServer(opts: {
     await turnDonePromise;
     return { threadId, text: finalText, steps, toolLogLines, todos, totalSteps };
   } finally {
+    closingByClient = true;
     ws.close();
   }
 }
@@ -499,11 +541,7 @@ async function main() {
       ["--dir", runDir, "--host", "127.0.0.1", "--port", "0", "--yolo", "--json"],
       {
         cwd: runDir,
-        env: {
-          ...process.env,
-          COWORK_DESKTOP_PARENT_MANAGED: "1",
-          COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
-        },
+        env: buildRawLoopServerEnv(process.env),
         stdio: ["pipe", "pipe", "inherit"],
       },
     );
@@ -536,6 +574,7 @@ async function main() {
         prompt,
         harnessContext,
         ...(providerOptions ? { providerOptions } : {}),
+        ...(run.maxSteps !== undefined ? { maxSteps: run.maxSteps } : {}),
       });
 
       assertRawLoopToolRequirements(run, turnResult.steps, turnResult.toolLogLines);
@@ -560,6 +599,7 @@ async function main() {
             threadId: turnResult.threadId,
             prompt: repairPrompt,
             ...(providerOptions ? { providerOptions } : {}),
+            ...(run.maxSteps !== undefined ? { maxSteps: run.maxSteps } : {}),
           });
           turnResult.toolLogLines.push(...repaired.toolLogLines);
           turnResult.totalSteps += repaired.totalSteps;

@@ -2,10 +2,12 @@
 //! `item/fileChange/requestApproval` and their legacy aliases) must preserve the sandbox hard
 //! floors the turn was started with (TS `assertApprovalPreservesPolicy`): escalation from a
 //! scoped, read-only or network-disabled child is declined even under YOLO and never shown to the
-//! user, and scoped file grants are checked against `grantRoot`.
+//! user, and scoped file grants are checked against `grantRoot`. They are also gated by the
+//! task-mutation lock (TS `assertCanMutate`) before asking and again after acceptance.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cowork_config::{ProviderName, SandboxConfig, SandboxMode};
@@ -43,6 +45,8 @@ struct Turn {
     read_only_role: bool,
     /// Relative to the workspace.
     targets: Vec<&'static str>,
+    /// Installs a task-mutation lock hook (as the server does) that blocks while this is set.
+    task_lock: Option<Arc<AtomicBool>>,
 }
 
 struct Harness {
@@ -51,6 +55,8 @@ struct Harness {
     sink: Arc<RecordingSink>,
     interactions: Arc<InteractionManager>,
     bridge: Arc<dyn DynamicToolHandler>,
+    /// Tool names the task-mutation lock hook was consulted with.
+    lock_checks: Arc<Mutex<Vec<String>>>,
 }
 
 impl Harness {
@@ -93,6 +99,19 @@ impl Harness {
         ctx.yolo = turn.yolo;
         ctx.read_only_role = turn.read_only_role;
         ctx.target_paths = (!targets.is_empty()).then_some(targets);
+        let lock_checks = Arc::new(Mutex::new(Vec::new()));
+        if let Some(locked) = turn.task_lock {
+            let checks = Arc::clone(&lock_checks);
+            ctx.before_tool_invocation = Some(Arc::new(move |tool_name: &str| {
+                checks.lock().push(tool_name.to_owned());
+                if locked.load(Ordering::SeqCst) {
+                    return Err(format!(
+                        "Tool {tool_name} blocked because source chat is locked by active task task-1."
+                    ));
+                }
+                Ok(())
+            }));
+        }
 
         let sink = Arc::new(RecordingSink::default());
         // The session-level manager mirrors the turn's YOLO flag, as in production; the bridge
@@ -113,6 +132,7 @@ impl Harness {
             sink,
             interactions,
             bridge,
+            lock_checks,
         }
     }
 
@@ -142,6 +162,18 @@ impl Harness {
 
     /// Runs an approval that must be shown to the user, answering it with `approve`.
     async fn decide_interactively(&self, method: &str, params: Value, approve: bool) -> bool {
+        self.decide_interactively_with(method, params, approve, || {})
+            .await
+    }
+
+    /// Like [`Self::decide_interactively`], running `while_pending` while the prompt is open.
+    async fn decide_interactively_with(
+        &self,
+        method: &str,
+        params: Value,
+        approve: bool,
+        while_pending: impl FnOnce(),
+    ) -> bool {
         let before = self.prompts();
         let bridge = Arc::clone(&self.bridge);
         let owned_method = method.to_owned();
@@ -157,6 +189,7 @@ impl Harness {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let request_id = request_id.unwrap_or_else(|| panic!("{method} was never prompted"));
+        while_pending();
         self.interactions
             .resolve_client_response(&request_id, &json!({ "approved": approve }))
             .unwrap();
@@ -396,4 +429,86 @@ async fn unrestricted_turn_approvals_behave_as_before() {
     let requests = interactive.sink.server_requests.lock().clone();
     assert_eq!(requests[0].2["command"], json!("curl https://example.com"));
     assert_eq!(requests[1].2["command"], json!("rm -rf build"));
+}
+
+fn native_approvals(h: &Harness) -> Vec<(&'static str, Value, &'static str)> {
+    vec![
+        (COMMAND, command("cargo build"), "codex:commandExecution"),
+        (
+            LEGACY_COMMAND,
+            command("cargo build"),
+            "codex:commandExecution",
+        ),
+        (
+            FILE_CHANGE,
+            json!({ "grantRoot": h.path("") }),
+            "codex:fileChange",
+        ),
+        (
+            LEGACY_PATCH,
+            json!({ "grantRoot": h.path("") }),
+            "codex:fileChange",
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn task_locked_source_chat_declines_native_approvals_before_asking() {
+    for yolo in [true, false] {
+        let locked = Arc::new(AtomicBool::new(true));
+        let h = Harness::new(Turn {
+            yolo,
+            task_lock: Some(Arc::clone(&locked)),
+            ..Turn::default()
+        });
+        for (method, params, lock_name) in native_approvals(&h) {
+            h.lock_checks.lock().clear();
+            assert!(
+                !h.decide_silently(method, params.clone()).await,
+                "yolo={yolo}: {method} must be declined while the source chat is task-locked"
+            );
+            assert_eq!(*h.lock_checks.lock(), vec![lock_name.to_owned()]);
+        }
+
+        // Once the lock clears the same approvals go through again.
+        locked.store(false, Ordering::SeqCst);
+        for (method, params, lock_name) in native_approvals(&h) {
+            h.lock_checks.lock().clear();
+            let approved = if yolo {
+                h.decide_silently(method, params).await
+            } else {
+                h.decide_interactively(method, params, true).await
+            };
+            assert!(
+                approved,
+                "yolo={yolo}: {method} must be accepted when unlocked"
+            );
+            // Checked before asking and again after acceptance.
+            assert_eq!(*h.lock_checks.lock(), vec![lock_name.to_owned(); 2]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn task_lock_taken_while_approval_is_pending_declines_after_acceptance() {
+    let locked = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(Turn {
+        task_lock: Some(Arc::clone(&locked)),
+        ..Turn::default()
+    });
+    for (method, params, lock_name) in native_approvals(&h) {
+        locked.store(false, Ordering::SeqCst);
+        h.lock_checks.lock().clear();
+        // `createTask` locks the source chat while the user is looking at the prompt.
+        let approved = h
+            .decide_interactively_with(method, params, true, || {
+                locked.store(true, Ordering::SeqCst)
+            })
+            .await;
+        assert!(
+            !approved,
+            "{method} accepted by the user must still be declined once the chat is task-locked"
+        );
+        assert_eq!(*h.lock_checks.lock(), vec![lock_name.to_owned(); 2]);
+    }
 }

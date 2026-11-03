@@ -1730,11 +1730,10 @@ impl DynamicToolHandler for CodexDynamicBridge {
 
     async fn request_approval(&self, method: &str, params: &Value) -> bool {
         let is_file_change = is_codex_file_change_approval(method);
-        // TS `handleServerRequest`: the hard-floor check runs before both YOLO and interactive
-        // acceptance, so a floor-violating escalation is never auto-accepted nor shown as approvable.
-        if let Err(reason) =
-            assert_codex_approval_preserves_policy(&self.tool_ctx, is_file_change, params)
-        {
+        // TS `handleServerRequest`: the task-mutation lock (`assertCanMutate`) and hard-floor
+        // checks run before both YOLO and interactive acceptance, so a locked source chat or a
+        // floor-violating escalation is never auto-accepted nor shown as approvable.
+        if let Err(reason) = self.assert_native_approval_allowed(is_file_change, params) {
             tracing::warn!(
                 method,
                 %reason,
@@ -1749,10 +1748,9 @@ impl DynamicToolHandler for CodexDynamicBridge {
         if !approved {
             return false;
         }
-        // Re-check after the wait: a path may have been re-pointed (e.g. via symlink) meanwhile.
-        if let Err(reason) =
-            assert_codex_approval_preserves_policy(&self.tool_ctx, is_file_change, params)
-        {
+        // Re-check after the wait: a task may have locked this chat, or a path may have been
+        // re-pointed (e.g. via symlink), while the user was deciding.
+        if let Err(reason) = self.assert_native_approval_allowed(is_file_change, params) {
             tracing::warn!(
                 method,
                 %reason,
@@ -1897,6 +1895,25 @@ fn assert_codex_approval_preserves_policy(
 }
 
 impl CodexDynamicBridge {
+    /// TS `assertCanMutate("codex:fileChange" | "codex:commandExecution")` followed by
+    /// `assertApprovalPreservesPolicy`: a native approval authorizes a mutation, so it is gated by
+    /// the same task-mutation lock as dynamic tool calls as well as the turn's sandbox hard floors.
+    fn assert_native_approval_allowed(
+        &self,
+        is_file_change: bool,
+        params: &Value,
+    ) -> Result<(), String> {
+        let lock_name = if is_file_change {
+            "codex:fileChange"
+        } else {
+            "codex:commandExecution"
+        };
+        self.tool_ctx
+            .check_before_tool_invocation(lock_name)
+            .map_err(|e| e.to_string())?;
+        assert_codex_approval_preserves_policy(&self.tool_ctx, is_file_change, params)
+    }
+
     /// Shows a native Codex approval to the user. Only reached once
     /// [`assert_codex_approval_preserves_policy`] has accepted the request.
     async fn prompt_native_approval(

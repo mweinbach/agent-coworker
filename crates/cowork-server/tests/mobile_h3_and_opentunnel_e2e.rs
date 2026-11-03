@@ -32,6 +32,9 @@ use cowork_server::mobile_h3::ticket::{
     encode_cowork_pairing_ticket,
 };
 use cowork_server::startup::{InterfaceAddrInfo, resolve_listening_hints_from_interfaces};
+use cowork_server::workspace_file_monitor::{
+    WorkspaceFileChangeEvent, broadcast_workspace_file_changed,
+};
 use cowork_server::{ServerOptions, start_server};
 use data_encoding::BASE64URL_NOPAD;
 use futures_util::{SinkExt, StreamExt};
@@ -2544,6 +2547,503 @@ async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_onl
     assert!(
         !marker.exists(),
         "untrusted workspace plugin MCP command must not run"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn mobile_tls_session_subprocess_import_and_user_layer_routes_are_gated() {
+    let iso = IsolatedMobileTestEnv::new();
+    let mut options = iso.server_options();
+    options
+        .env
+        .insert("COWORK_WEB_DESKTOP_SERVICE".into(), "1".into());
+    let server = start_server(options).await.unwrap();
+    // Home is a legitimate selectable project, but its `.cowork` directories are the user layer.
+    let desktop = server.runtime().desktop_service.as_ref().unwrap();
+    desktop
+        .save_state_json(
+            json!({ "workspaces": [{
+            "id": "home-project", "name": "Home", "path": iso.home_dir, "workspaceKind": "project",
+            "createdAt": "2026-01-01T00:00:00Z", "lastOpenedAt": "2026-01-01T00:00:00Z"
+        }] }),
+            &iso.workspace_dir,
+        )
+        .unwrap();
+    let h3 = server
+        .listening_event()
+        .mobile_h3
+        .expect("mobile h3 active");
+    let admin_base = format!("http://127.0.0.1:{}", server.port());
+    let h3_base = h3.url.clone();
+    let tls_client = build_pinned_reqwest_client(&h3.cert_sha256, &h3.spki_sha256);
+    let plain_http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let device_id = "gated-routes-phone";
+
+    let pair_json: Value = tls_client
+        .post(format!("{h3_base}/pair"))
+        .json(&json!({
+            "ticket": h3.ticket,
+            "nonce": h3.nonce,
+            "deviceId": device_id,
+            "identityPub": "pub-gated-routes",
+            "displayName": "Gated Routes Phone"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_token = pair_json["sessionToken"].as_str().unwrap().to_owned();
+
+    let set_permissions = |permissions: Value| {
+        let plain_http = plain_http.clone();
+        let url = format!("{admin_base}/mobile-h3/trusted/{device_id}/permissions");
+        let admin_token = h3.admin_token.clone();
+        async move {
+            let res = plain_http
+                .patch(url)
+                .bearer_auth(admin_token)
+                .json(&json!({ "permissions": permissions }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 200);
+        }
+    };
+    let rpc = |body: Value| {
+        let tls_client = tls_client.clone();
+        let url = format!("{h3_base}/rpc");
+        let session_token = session_token.clone();
+        async move {
+            let res = tls_client
+                .post(url)
+                .bearer_auth(session_token)
+                .header("x-cowork-mobile-device-id", device_id)
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = res.status().as_u16();
+            let text = res.text().await.unwrap();
+            (
+                status,
+                serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
+            )
+        }
+    };
+
+    let cwd = iso.workspace_dir.to_string_lossy().into_owned();
+    let home = iso.home_dir.to_string_lossy().into_owned();
+    let missing = |permission: &str| {
+        json!({
+            "error": format!("Mobile device permission required: {permission}."),
+            "permission": permission
+        })
+    };
+
+    // 1. `workspaceSettings` alone no longer reaches session state, subprocess or model-job
+    //    routes, or conversation import.
+    set_permissions(json!({
+        "workspaceSettings": true,
+        "conversations": false,
+        "turns": false
+    }))
+    .await;
+    // Revoking `conversations` closes the device connection, so initialize afterwards.
+    let (status, _) = rpc(json!({
+        "id": 1,
+        "method": "initialize",
+        "params": { "clientInfo": { "name": "cowork-mobile", "version": "1.0.0" } }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = rpc(json!({ "method": "initialized" })).await;
+    assert_eq!(status, 202);
+
+    for (id, method, params, permission) in [
+        (
+            10,
+            "cowork/session/harnessContext/get",
+            json!({ "threadId": "t-1" }),
+            "conversations",
+        ),
+        (
+            11,
+            "cowork/session/delete",
+            json!({ "targetSessionId": "t-1" }),
+            "conversations",
+        ),
+        (
+            12,
+            "cowork/session/title/set",
+            json!({ "threadId": "t-1", "title": "x" }),
+            "conversations",
+        ),
+        (
+            13,
+            "cowork/session/harnessContext/set",
+            json!({ "threadId": "t-1" }),
+            "conversations",
+        ),
+        (
+            14,
+            "cowork/provider/lmstudio/local/start",
+            json!({}),
+            "turns",
+        ),
+        (
+            15,
+            "cowork/provider/codexAppServer/update",
+            json!({}),
+            "turns",
+        ),
+        (
+            16,
+            "cowork/memory/advanced/generate",
+            json!({ "cwd": cwd, "threadId": "t-1" }),
+            "conversations",
+        ),
+        (
+            17,
+            "cowork/skills/improvement/run",
+            json!({ "cwd": cwd }),
+            "turns",
+        ),
+        (
+            18,
+            "cowork/skills/improvement/restore",
+            json!({ "cwd": cwd }),
+            "turns",
+        ),
+        (
+            19,
+            "cowork/runtime/libreoffice/check",
+            json!({ "smoke": true }),
+            "turns",
+        ),
+        (
+            20,
+            "cowork/conversationImport/preview",
+            json!({}),
+            "conversations",
+        ),
+        (
+            21,
+            "cowork/conversationImport/import",
+            json!({}),
+            "conversations",
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 403, "{method}: {body}");
+        assert_eq!(body, missing(permission), "{method}");
+    }
+    // The plain LibreOffice probe stays always-allowed.
+    let (status, body) = rpc(json!({
+        "id": 22, "method": "cowork/runtime/libreoffice/check", "params": {}
+    }))
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["id"], json!(22), "{body}");
+    assert!(body.get("error").is_none(), "{body}");
+
+    // 2. Even with every grant, conversation import stays desktop-only and registers nothing.
+    set_permissions(json!({ "conversations": true, "turns": true })).await;
+    let target = iso.base_dir.join("import-target");
+    std::fs::create_dir_all(&target).unwrap();
+    let (status, body) = rpc(json!({
+        "id": 30,
+        "method": "cowork/conversationImport/import",
+        "params": {
+            "explicitPaths": [iso.base_dir.join("transcript.jsonl").to_string_lossy()],
+            "selected": [{ "source": "codex", "fingerprint": "fp" }],
+            "mappings": { "fp": { "kind": "create", "path": target.to_string_lossy() } }
+        }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body,
+        json!({ "id": 30, "error": {
+            "code": -32600,
+            "message": "Importing conversations can add workspaces, so it is only available in Cowork Desktop.",
+            "data": { "reason": "conversationImportDesktopOnly" }
+        } })
+    );
+    let state = desktop.load_state_json(&iso.workspace_dir);
+    assert_eq!(
+        state["workspaces"].as_array().map(Vec::len),
+        Some(1),
+        "{state}"
+    );
+
+    // 3. With home as the workspace, a "project" skill install lands in the user skills
+    //    directory, so it is refused like a global install.
+    let skill_src = iso.base_dir.join("skill-src");
+    std::fs::create_dir_all(&skill_src).unwrap();
+    std::fs::write(
+        skill_src.join("SKILL.md"),
+        "---\nname: h3-skill\ndescription: H3 test skill\n---\nBe helpful.\n",
+    )
+    .unwrap();
+    let skill_denial = json!({
+        "code": -32600,
+        "message": "Paired mobile devices can only add workspace skills. Install or copy user (global) skills in Cowork Desktop.",
+        "data": { "reason": "userSkillConfigReadOnly" }
+    });
+    let (status, body) = rpc(json!({
+        "id": 40,
+        "method": "cowork/skills/install",
+        "params": { "cwd": home, "sourceInput": skill_src.to_string_lossy(), "targetScope": "project" }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({ "id": 40, "error": skill_denial }));
+    assert!(!iso.home_dir.join(".cowork/skills/h3-skill").exists());
+
+    // 4. Global agent profiles are desktop-only; workspace profiles stay editable, except when the
+    //    workspace profile directory is the global one.
+    let profile = |scope: &str| json!({ "scope": scope, "id": "h3-profile", "displayName": "H3 Profile", "baseRole": "worker" });
+    let profile_denial = json!({
+        "code": -32600,
+        "message": "Paired mobile devices can only change workspace agent profiles. Change user (global) agent profiles in Cowork Desktop.",
+        "data": { "reason": "userAgentProfileConfigReadOnly" }
+    });
+    for (id, method, params) in [
+        (
+            50,
+            "cowork/agentProfiles/upsert",
+            json!({ "cwd": cwd, "profile": profile("global") }),
+        ),
+        (
+            51,
+            "cowork/agentProfiles/upsert",
+            json!({ "cwd": home, "profile": profile("workspace") }),
+        ),
+        (
+            52,
+            "cowork/agentProfiles/delete",
+            json!({ "cwd": cwd, "scope": "global", "id": "h3-profile" }),
+        ),
+        (
+            53,
+            "cowork/agentProfiles/copy",
+            json!({ "cwd": cwd, "copy": { "sourceRef": "workspace:h3-profile", "targetScope": "global" } }),
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 200, "{method}");
+        assert_eq!(
+            body,
+            json!({ "id": id, "error": profile_denial }),
+            "{method}"
+        );
+    }
+    assert!(!iso.home_dir.join(".cowork/agent-profiles").exists());
+    let (status, body) = rpc(json!({
+        "id": 54,
+        "method": "cowork/agentProfiles/upsert",
+        "params": { "cwd": cwd, "profile": profile("workspace") }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    assert!(body.get("error").is_none(), "{body}");
+    assert!(iso.workspace_dir.join(".cowork/agent-profiles").exists());
+
+    // 5. User memory is desktop-only; workspace memory stays editable, except at home where the
+    //    workspace database is the user one.
+    let memory_denial = json!({
+        "code": -32600,
+        "message": "Paired mobile devices can only change workspace memory. Edit user memory in Cowork Desktop.",
+        "data": { "reason": "userMemoryReadOnly" }
+    });
+    for (id, method, params) in [
+        (
+            60,
+            "cowork/memory/upsert",
+            json!({ "cwd": cwd, "scope": "user", "id": "hot", "content": "from phone" }),
+        ),
+        (
+            61,
+            "cowork/memory/delete",
+            json!({ "cwd": cwd, "scope": "user", "id": "hot" }),
+        ),
+        (
+            62,
+            "cowork/memory/upsert",
+            json!({ "cwd": home, "scope": "workspace", "id": "hot", "content": "from phone" }),
+        ),
+    ] {
+        let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
+        assert_eq!(status, 200, "{method}");
+        assert_eq!(
+            body,
+            json!({ "id": id, "error": memory_denial }),
+            "{method}"
+        );
+    }
+    let (status, body) = rpc(json!({
+        "id": 63,
+        "method": "cowork/memory/upsert",
+        "params": { "cwd": cwd, "scope": "workspace", "id": "hot", "content": "workspace note" }
+    }))
+    .await;
+    assert_eq!(status, 200);
+    let memories = body["result"]["event"]["memories"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{body}"));
+    assert!(
+        memories
+            .iter()
+            .all(|m| m["scope"] == json!("workspace") && m["content"] == json!("workspace note")),
+        "{body}"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn mobile_tls_workspace_file_changes_need_handshake_and_workspace_settings() {
+    let iso = IsolatedMobileTestEnv::new();
+    let mut options = iso.server_options();
+    // Only the explicit broadcasts below may produce file-change events.
+    options
+        .env
+        .insert("COWORK_DISABLE_WORKSPACE_FILE_MONITOR".into(), "1".into());
+    let server = start_server(options).await.unwrap();
+    let h3 = server
+        .listening_event()
+        .mobile_h3
+        .expect("mobile h3 active");
+    let admin_base = format!("http://127.0.0.1:{}", server.port());
+    let h3_base = h3.url.clone();
+    let tls_client = build_pinned_reqwest_client(&h3.cert_sha256, &h3.spki_sha256);
+    let plain_http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let device_id = "file-events-phone";
+
+    let pair_json: Value = tls_client
+        .post(format!("{h3_base}/pair"))
+        .json(&json!({
+            "ticket": h3.ticket,
+            "nonce": h3.nonce,
+            "deviceId": device_id,
+            "identityPub": "pub-file-events",
+            "displayName": "File Events Phone"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_token = pair_json["sessionToken"].as_str().unwrap().to_owned();
+    let set_permissions = |permissions: Value| {
+        let plain_http = plain_http.clone();
+        let url = format!("{admin_base}/mobile-h3/trusted/{device_id}/permissions");
+        let admin_token = h3.admin_token.clone();
+        async move {
+            let res = plain_http
+                .patch(url)
+                .bearer_auth(admin_token)
+                .json(&json!({ "permissions": permissions }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 200);
+        }
+    };
+    let rpc = |body: Value| {
+        let req = tls_client
+            .post(format!("{h3_base}/rpc"))
+            .bearer_auth(&session_token)
+            .header("x-cowork-mobile-device-id", device_id)
+            .json(&body);
+        async move { req.send().await.unwrap().status().as_u16() }
+    };
+    let open_events = || async {
+        let mut sse = tls_client
+            .get(format!("{h3_base}/events"))
+            .bearer_auth(&session_token)
+            .header("x-cowork-mobile-device-id", device_id)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sse.status(), 200);
+        let banner = tokio::time::timeout(Duration::from_secs(2), sse.chunk())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(std::str::from_utf8(&banner).unwrap(), ": cowork events\n\n");
+        sse
+    };
+    let handshake = || async {
+        assert_eq!(
+            rpc(json!({
+                "id": 1,
+                "method": "initialize",
+                "params": { "clientInfo": { "name": "cowork-mobile", "version": "1.0.0" } }
+            }))
+            .await,
+            200
+        );
+        assert_eq!(rpc(json!({ "method": "initialized" })).await, 202);
+    };
+    let secret = iso.workspace_dir.join("secret-plans.txt");
+    let broadcast = || {
+        broadcast_workspace_file_changed(
+            server.runtime(),
+            &iso.workspace_dir,
+            &WorkspaceFileChangeEvent::deleted(secret.clone()),
+        )
+    };
+    let assert_withheld =
+        |chunk: Result<reqwest::Result<Option<bytes::Bytes>>, tokio::time::error::Elapsed>,
+         why: &str| {
+            let leaked = match chunk {
+                Err(_) => None,
+                Ok(Ok(Some(bytes))) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                Ok(other) => Some(format!("{other:?}")),
+            };
+            assert!(leaked.is_none(), "{why}: {leaked:?}");
+        };
+
+    // 1. Before the handshake, even a device with `workspaceSettings` gets no file paths.
+    set_permissions(json!({ "workspaceSettings": true })).await;
+    let mut sse = open_events().await;
+    broadcast();
+    assert_withheld(
+        tokio::time::timeout(Duration::from_millis(200), sse.chunk()).await,
+        "fileChanged must wait for the handshake",
+    );
+
+    // 2. After the handshake it is delivered.
+    handshake().await;
+    broadcast();
+    let delivered = tokio::time::timeout(Duration::from_secs(2), sse.chunk())
+        .await
+        .expect("fileChanged after handshake")
+        .unwrap()
+        .unwrap();
+    let delivered = String::from_utf8_lossy(&delivered).into_owned();
+    assert!(
+        delivered.contains("cowork/workspace/fileChanged")
+            && delivered.contains("secret-plans.txt"),
+        "{delivered}"
+    );
+    drop(sse);
+
+    // 3. A device without `workspaceSettings` never receives it, handshake or not.
+    set_permissions(json!({ "workspaceSettings": false })).await;
+    let mut sse = open_events().await;
+    handshake().await;
+    broadcast();
+    assert_withheld(
+        tokio::time::timeout(Duration::from_millis(200), sse.chunk()).await,
+        "fileChanged needs workspaceSettings",
     );
 
     server.shutdown().await;

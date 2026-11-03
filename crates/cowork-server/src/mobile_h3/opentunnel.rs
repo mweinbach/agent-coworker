@@ -31,6 +31,11 @@ pub const DEFAULT_CERT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub const DEFAULT_CERT_POLL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_ATTACH_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_HEARTBEAT_MS: u64 = 15_000;
+/// Concurrent multiplexed connections advertised in `attach` (`client.max_conns`) and enforced
+/// on inbound `open` frames.
+pub(crate) const OPEN_TUNNEL_MAX_CONNS: usize = 256;
+/// `reset` code sent for an `open` beyond [`OPEN_TUNNEL_MAX_CONNS`].
+const OPEN_TUNNEL_CONN_LIMIT_CODE: &str = "conn_limit";
 
 pub(crate) fn ensure_default_crypto_provider() {
     static ONCE: Once = Once::new();
@@ -519,6 +524,11 @@ fn spawn_local_tcp_mux_conn(
     })
 }
 
+/// Whether an inbound `open` for `conn_id` would exceed [`OPEN_TUNNEL_MAX_CONNS`].
+fn open_exceeds_conn_cap<V>(active_conns: &HashMap<u32, V>, conn_id: u32) -> bool {
+    !active_conns.contains_key(&conn_id) && active_conns.len() >= OPEN_TUNNEL_MAX_CONNS
+}
+
 async fn run_single_bridge_session(
     ws_url: &str,
     options: &OpenTunnelBridgeOptions,
@@ -578,7 +588,7 @@ async fn run_single_bridge_session(
             "routes": ["@", "cowork"],
             "client": {
                 "version": "0.1.0",
-                "max_conns": 256
+                "max_conns": OPEN_TUNNEL_MAX_CONNS
             }
         }))?
         .into(),
@@ -709,6 +719,21 @@ async fn run_single_bridge_session(
                         let Ok(conn_id) = u32::try_from(conn_u64) else {
                             continue;
                         };
+                        // The relay must not open more than the advertised `max_conns`; refuse
+                        // the excess instead of spawning another local TCP connection. A
+                        // re-`open` of a live id replaces that connection, so it never counts.
+                        if open_exceeds_conn_cap(&active_conns.lock(), conn_id) {
+                            let _ = ws_out_tx.send(WsMessage::Text(
+                                serde_json::to_string(&json!({
+                                    "type": "reset",
+                                    "conn": conn_id,
+                                    "code": OPEN_TUNNEL_CONN_LIMIT_CODE
+                                }))
+                                .unwrap_or_default()
+                                .into(),
+                            ));
+                            continue;
+                        }
                         let token = next_conn_token;
                         next_conn_token += 1;
                         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -875,5 +900,24 @@ pub async fn connect_open_tunnel_bridge(
             supervisor_task.abort();
             anyhow::bail!("OpenTunnel bridge attach task exited unexpectedly.")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_frames_beyond_the_advertised_max_conns_are_refused() {
+        let mut conns: HashMap<u32, ()> = HashMap::new();
+        for id in 0..(OPEN_TUNNEL_MAX_CONNS as u32 - 1) {
+            conns.insert(id, ());
+        }
+        assert!(!open_exceeds_conn_cap(&conns, 9_999));
+        conns.insert(9_999, ());
+        assert_eq!(conns.len(), OPEN_TUNNEL_MAX_CONNS);
+        assert!(open_exceeds_conn_cap(&conns, 10_000));
+        // Re-opening a live id replaces it, so it stays within the cap.
+        assert!(!open_exceeds_conn_cap(&conns, 9_999));
     }
 }

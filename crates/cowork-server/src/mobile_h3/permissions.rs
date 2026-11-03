@@ -1,4 +1,9 @@
-use cowork_config::{is_inside, path_has_link_component};
+use std::path::PathBuf;
+
+use cowork_config::{
+    get_ai_coworker_paths, host_platform, is_inside, path_has_link_component, resolve_home_dir,
+    user_memory_db_path,
+};
 use cowork_protocol::{
     JsonRpcLiteClientMessage, JsonRpcLiteClientResponse, JsonRpcLiteError, JsonRpcLiteId,
     JsonRpcLiteNotification, JsonRpcLiteRequest,
@@ -55,7 +60,6 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS: &[&str] = &[
     "thread/unsubscribe",
     "workspace/list",
     "workspace/switch",
-    "cowork/session/harnessContext/get",
     "cowork/provider/catalog/read",
     "cowork/provider/authMethods/read",
     "cowork/provider/status/refresh",
@@ -172,16 +176,91 @@ pub fn parse_http_jsonrpc_payload(raw: &Value) -> Result<JsonRpcLiteClientMessag
 }
 
 pub fn get_required_h3_permissions(message: &JsonRpcLiteClientMessage) -> Vec<MobilePermissionKey> {
-    let method = match message {
+    let (method, params) = match message {
         JsonRpcLiteClientMessage::ClientResponse(_) => {
             return vec![MobilePermissionKey::ServerRequests];
         }
-        JsonRpcLiteClientMessage::Request(r) => r.method.as_str(),
-        JsonRpcLiteClientMessage::Notification(n) => n.method.as_str(),
+        JsonRpcLiteClientMessage::Request(r) => (r.method.as_str(), r.params.as_ref()),
+        JsonRpcLiteClientMessage::Notification(n) => (n.method.as_str(), n.params.as_ref()),
     };
+
+    // The LibreOffice probe is always allowed, but its `smoke` conversion launches a headless
+    // `soffice` render, so it needs `turns` like any other command execution. Anything but an
+    // omitted, `null` or `false` flag fails closed.
+    if method == "cowork/runtime/libreoffice/check"
+        && params
+            .and_then(|p| p.get("smoke"))
+            .is_some_and(|smoke| !smoke.is_null() && smoke != &Value::Bool(false))
+    {
+        return vec![MobilePermissionKey::Turns];
+    }
 
     if ALWAYS_ALLOWED_H3_RPC_METHODS.contains(&method) {
         return Vec::new();
+    }
+
+    // Persisted session state. Reading a thread's harness context exposes conversation state;
+    // deleting a session (which also stops its running turn), renaming it, or replacing its
+    // harness context changes persisted thread state, like `thread/pinned/set`. None of these may
+    // fall through to the `workspaceSettings` default.
+    if method == "cowork/session/harnessContext/get" {
+        return vec![MobilePermissionKey::Conversations];
+    }
+    if matches!(
+        method,
+        "cowork/session/delete" | "cowork/session/title/set" | "cowork/session/harnessContext/set"
+    ) {
+        return vec![
+            MobilePermissionKey::Conversations,
+            MobilePermissionKey::Turns,
+        ];
+    }
+
+    // Routes that spawn a local process or run a model job: starting the local LM Studio server,
+    // replacing the managed Codex app-server binary, generating memories from a thread's
+    // conversation, and running or restoring skill-improvement jobs. They keep the
+    // `workspaceSettings` grant they had and also need `turns`; memory generation reads the
+    // source thread's conversation, so it needs `conversations` too.
+    if matches!(
+        method,
+        "cowork/memory/advanced/generate" | "cowork/memory/advanced/folder/generate"
+    ) {
+        return vec![
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Conversations,
+            MobilePermissionKey::Turns,
+        ];
+    }
+    if matches!(
+        method,
+        "cowork/provider/lmstudio/local/start"
+            | "cowork/provider/codexAppServer/update"
+            | "cowork/skills/improvement/run"
+            | "cowork/skills/improvement/restore"
+    ) {
+        return vec![
+            MobilePermissionKey::WorkspaceSettings,
+            MobilePermissionKey::Turns,
+        ];
+    }
+
+    // External conversation import. Discovery, preview and mapping validation read external
+    // transcripts and probe host paths; the import itself persists root threads and can register
+    // host directories as workspaces, so `get_h3_request_denial` also refuses it outright.
+    if method.starts_with("cowork/conversationImport/") {
+        return match method {
+            "cowork/conversationImport/sources/list"
+            | "cowork/conversationImport/preview"
+            | "cowork/conversationImport/workspaceMappings/validate" => vec![
+                MobilePermissionKey::WorkspaceSettings,
+                MobilePermissionKey::Conversations,
+            ],
+            _ => vec![
+                MobilePermissionKey::WorkspaceSettings,
+                MobilePermissionKey::Conversations,
+                MobilePermissionKey::Turns,
+            ],
+        };
     }
 
     if matches!(
@@ -340,6 +419,14 @@ pub enum H3RequestDenial {
     /// The request would add a skill to the user (`global`) layer, which every workspace's turns
     /// load as instructions.
     UserSkillConfigMutation,
+    /// The request would create, change, copy into or delete a user (`global`) agent profile,
+    /// which every workspace's sub-agents can use.
+    UserAgentProfileConfigMutation,
+    /// The request would write or delete user-scoped memory, which every workspace's turns load.
+    UserMemoryMutation,
+    /// `cowork/conversationImport/import` persists root threads and can register host directories
+    /// as workspaces.
+    ConversationImportDesktopOnly,
 }
 
 impl H3RequestDenial {
@@ -349,6 +436,9 @@ impl H3RequestDenial {
             Self::UserMcpConfigMutation => "userMcpConfigReadOnly",
             Self::UserPluginConfigMutation => "userPluginConfigReadOnly",
             Self::UserSkillConfigMutation => "userSkillConfigReadOnly",
+            Self::UserAgentProfileConfigMutation => "userAgentProfileConfigReadOnly",
+            Self::UserMemoryMutation => "userMemoryReadOnly",
+            Self::ConversationImportDesktopOnly => "conversationImportDesktopOnly",
         }
     }
 
@@ -365,6 +455,18 @@ impl H3RequestDenial {
             Self::UserSkillConfigMutation => {
                 "Paired mobile devices can only add workspace skills. Install or copy user \
                  (global) skills in Cowork Desktop."
+            }
+            Self::UserAgentProfileConfigMutation => {
+                "Paired mobile devices can only change workspace agent profiles. Change user \
+                 (global) agent profiles in Cowork Desktop."
+            }
+            Self::UserMemoryMutation => {
+                "Paired mobile devices can only change workspace memory. Edit user memory in \
+                 Cowork Desktop."
+            }
+            Self::ConversationImportDesktopOnly => {
+                "Importing conversations can add workspaces, so it is only available in Cowork \
+                 Desktop."
             }
         }
     }
@@ -384,7 +486,12 @@ impl H3RequestDenial {
 /// for one workspace could steer the agent in all of them. Adding skills to the user layer
 /// (install, copy, import) is therefore desktop-only too; workspace skills stay installable.
 /// Enabling, disabling, deleting or updating an already-installed skill is not refused: it only
-/// acts on content the desktop user chose. TS had none of these checks.
+/// acts on content the desktop user chose. User (`global`) agent profiles and user-scoped memory
+/// likewise reach every workspace (sub-agent instructions and memory loaded into every turn), so
+/// creating, copying into, changing or deleting them is desktop-only; workspace profiles and
+/// workspace memory stay editable. A conversation import can register arbitrary host directories
+/// as workspaces (and persist threads that can then run turns there), so it is desktop-only too.
+/// TS had none of these checks.
 pub fn get_h3_request_denial(
     message: &JsonRpcLiteClientMessage,
     workspace_targets_allowed: impl FnOnce(Option<&str>, &[&str]) -> bool,
@@ -439,6 +546,39 @@ pub fn get_h3_request_denial(
             .then_some(H3RequestDenial::UserSkillConfigMutation);
     }
 
+    if method == "cowork/conversationImport/import" {
+        return Some(H3RequestDenial::ConversationImportDesktopOnly);
+    }
+
+    // Agent profile scopes are `workspace` | `global`. `workspaceAvailability/set` only toggles a
+    // global profile for this workspace, but it writes the workspace overrides file, so its
+    // destination is still checked. Unknown future profile mutations fail closed.
+    if method.starts_with("cowork/agentProfiles/") && method != "cowork/agentProfiles/catalog/read"
+    {
+        let scope_ok = match method {
+            "cowork/agentProfiles/upsert" => {
+                is_workspace(param("profile").and_then(|profile| profile.get("scope")))
+            }
+            "cowork/agentProfiles/delete" => is_workspace(param("scope")),
+            "cowork/agentProfiles/copy" => {
+                is_workspace(param("copy").and_then(|copy| copy.get("targetScope")))
+            }
+            "cowork/agentProfiles/workspaceAvailability/set" => true,
+            _ => false,
+        };
+        return (!scope_ok || !workspace_targets_allowed(cwd, &[".cowork/agent-profiles"]))
+            .then_some(H3RequestDenial::UserAgentProfileConfigMutation);
+    }
+
+    // Memory scopes are `workspace` | `user`; the handler treats anything but `user` as the
+    // workspace, but only an explicit workspace scope is accepted here. A workspace's memory
+    // database is `<cwd>/.cowork/memory.sqlite`, which is the user database when `cwd` is home.
+    if matches!(method, "cowork/memory/upsert" | "cowork/memory/delete") {
+        return (!is_workspace(param("scope"))
+            || !workspace_targets_allowed(cwd, &[".cowork/memory.sqlite"]))
+        .then_some(H3RequestDenial::UserMemoryMutation);
+    }
+
     let (workspace_scope, destinations): (bool, &[&str]) = match method {
         // Rename and delete can also migrate the workspace server's stored credentials.
         "cowork/mcp/server/upsert" | "cowork/mcp/server/delete" => (
@@ -478,13 +618,7 @@ pub(super) fn workspace_targets_allowed(
     if !runtime.is_create_thread_workspace(&cwd) {
         return false;
     }
-    let user_roots = [
-        ".cowork/plugins",
-        ".agents/plugins",
-        ".cowork/config",
-        ".cowork/auth",
-    ]
-    .map(|path| runtime.homedir.join(path));
+    let user_roots = user_layer_roots(runtime);
     destinations.iter().all(|relative| {
         let target = cwd.join(relative);
         !path_has_link_component(&target)
@@ -492,6 +626,34 @@ pub(super) fn workspace_targets_allowed(
                 .iter()
                 .any(|root| is_inside(root, &target) || is_inside(&target, root))
     })
+}
+
+/// User-layer locations a workspace destination may never reach: user plugins, skills, agent
+/// profiles, config, credentials and the user memory database. They are derived the way the
+/// server resolves them (`get_ai_coworker_paths` over the runtime home) and, when
+/// `COWORK_HOME_OVERRIDE` or `HOME` names a different home, from that home too.
+fn user_layer_roots(runtime: &ServerRuntimeState) -> Vec<PathBuf> {
+    let mut homes = vec![runtime.homedir.clone()];
+    let env_home = resolve_home_dir(&runtime.env, host_platform());
+    if env_home != runtime.homedir {
+        homes.push(env_home);
+    }
+    homes
+        .iter()
+        .flat_map(|home| {
+            let paths = get_ai_coworker_paths(Some(home), &runtime.env);
+            [
+                paths.root_dir.join("plugins"),
+                paths.skills_dir.clone(),
+                paths.root_dir.join("agent-profiles"),
+                user_memory_db_path(&paths.root_dir),
+                paths.config_dir.clone(),
+                paths.auth_dir.clone(),
+                home.join(".agents/plugins"),
+                home.join(".agents/skills"),
+            ]
+        })
+        .collect()
 }
 
 pub fn apply_trusted_device_permissions(
@@ -512,7 +674,7 @@ pub fn apply_trusted_device_permissions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use MobilePermissionKey::{McpAuth, Turns, WorkspaceSettings};
+    use MobilePermissionKey::{Conversations, McpAuth, Turns, WorkspaceSettings};
     use serde_json::json;
 
     fn scope_denial(message: &JsonRpcLiteClientMessage) -> Option<H3RequestDenial> {
@@ -683,6 +845,197 @@ mod tests {
                 "{method}"
             );
         }
+    }
+
+    #[test]
+    fn session_state_routes_require_conversation_grants() {
+        assert_eq!(
+            required("cowork/session/harnessContext/get"),
+            vec![Conversations]
+        );
+        for method in [
+            "cowork/session/delete",
+            "cowork/session/title/set",
+            "cowork/session/harnessContext/set",
+        ] {
+            assert_eq!(required(method), vec![Conversations, Turns], "{method}");
+        }
+    }
+
+    #[test]
+    fn subprocess_and_model_job_routes_require_turns() {
+        for method in [
+            "cowork/provider/lmstudio/local/start",
+            "cowork/provider/codexAppServer/update",
+            "cowork/skills/improvement/run",
+            "cowork/skills/improvement/restore",
+        ] {
+            assert_eq!(required(method), vec![WorkspaceSettings, Turns], "{method}");
+        }
+        for method in [
+            "cowork/memory/advanced/generate",
+            "cowork/memory/advanced/folder/generate",
+        ] {
+            assert_eq!(
+                required(method),
+                vec![WorkspaceSettings, Conversations, Turns],
+                "{method}"
+            );
+        }
+        // Neighbouring reads keep their previous grants.
+        assert_eq!(
+            required("cowork/provider/lmstudio/local/status"),
+            vec![WorkspaceSettings]
+        );
+        assert_eq!(
+            required("cowork/skills/improvement/status"),
+            vec![WorkspaceSettings]
+        );
+        assert_eq!(
+            required("cowork/memory/advanced/list"),
+            vec![WorkspaceSettings]
+        );
+        assert!(required("cowork/provider/codexAppServer/status").is_empty());
+    }
+
+    #[test]
+    fn libreoffice_smoke_check_requires_turns() {
+        let check = |params: Value| {
+            get_required_h3_permissions(&request("cowork/runtime/libreoffice/check", params))
+        };
+        for params in [
+            json!({}),
+            json!({ "smoke": false }),
+            json!({ "smoke": null }),
+            json!({ "cwd": "/tmp" }),
+        ] {
+            assert!(check(params.clone()).is_empty(), "{params}");
+        }
+        for params in [
+            json!({ "smoke": true }),
+            json!({ "smoke": "true" }),
+            json!({ "smoke": 1 }),
+        ] {
+            assert_eq!(check(params.clone()), vec![Turns], "{params}");
+        }
+    }
+
+    #[test]
+    fn conversation_import_requires_conversations_and_import_is_desktop_only() {
+        for method in [
+            "cowork/conversationImport/sources/list",
+            "cowork/conversationImport/preview",
+            "cowork/conversationImport/workspaceMappings/validate",
+        ] {
+            assert_eq!(
+                required(method),
+                vec![WorkspaceSettings, Conversations],
+                "{method}"
+            );
+            assert_eq!(scope_denial(&request(method, json!({}))), None, "{method}");
+        }
+        for method in [
+            "cowork/conversationImport/import",
+            "cowork/conversationImport/future",
+        ] {
+            assert_eq!(
+                required(method),
+                vec![WorkspaceSettings, Conversations, Turns],
+                "{method}"
+            );
+        }
+        assert_eq!(
+            scope_denial(&request("cowork/conversationImport/import", json!({}))),
+            Some(H3RequestDenial::ConversationImportDesktopOnly)
+        );
+    }
+
+    #[test]
+    fn user_agent_profile_changes_are_denied_and_workspace_changes_allowed() {
+        let denied = Some(H3RequestDenial::UserAgentProfileConfigMutation);
+        let cases = [
+            (
+                "cowork/agentProfiles/upsert",
+                json!({ "profile": { "scope": "workspace", "id": "p" } }),
+                json!({ "profile": { "scope": "global", "id": "p" } }),
+            ),
+            (
+                "cowork/agentProfiles/delete",
+                json!({ "scope": "workspace", "id": "p" }),
+                json!({ "scope": "global", "id": "p" }),
+            ),
+            (
+                "cowork/agentProfiles/copy",
+                json!({ "copy": { "sourceRef": "global:p", "targetScope": "workspace" } }),
+                json!({ "copy": { "sourceRef": "workspace:p", "targetScope": "global" } }),
+            ),
+        ];
+        for (method, workspace, global) in cases {
+            assert_eq!(
+                scope_denial(&request(method, workspace.clone())),
+                None,
+                "{method}"
+            );
+            assert_eq!(scope_denial(&request(method, global)), denied, "{method}");
+            // A missing scope fails closed.
+            assert_eq!(
+                scope_denial(&request(method, json!({}))),
+                denied,
+                "{method}"
+            );
+            // A workspace scope still needs an authorized workspace destination.
+            assert_eq!(
+                get_h3_request_denial(&request(method, workspace), |_, _| false),
+                denied,
+                "{method}"
+            );
+        }
+        let availability = request(
+            "cowork/agentProfiles/workspaceAvailability/set",
+            json!({ "id": "p", "disabled": true }),
+        );
+        assert_eq!(scope_denial(&availability), None);
+        assert_eq!(get_h3_request_denial(&availability, |_, _| false), denied);
+        assert_eq!(
+            scope_denial(&request("cowork/agentProfiles/catalog/read", json!({}))),
+            None
+        );
+        assert_eq!(
+            scope_denial(&request(
+                "cowork/agentProfiles/rename",
+                json!({ "scope": "workspace" })
+            )),
+            denied
+        );
+    }
+
+    #[test]
+    fn user_memory_changes_are_denied_and_workspace_changes_allowed() {
+        let denied = Some(H3RequestDenial::UserMemoryMutation);
+        for method in ["cowork/memory/upsert", "cowork/memory/delete"] {
+            let workspace = request(method, json!({ "scope": "workspace", "id": "hot" }));
+            assert_eq!(scope_denial(&workspace), None, "{method}");
+            assert_eq!(
+                get_h3_request_denial(&workspace, |_, _| false),
+                denied,
+                "{method}"
+            );
+            for params in [
+                json!({ "scope": "user", "id": "hot" }),
+                json!({ "id": "hot" }),
+                json!({ "scope": null }),
+            ] {
+                assert_eq!(
+                    scope_denial(&request(method, params.clone())),
+                    denied,
+                    "{method} {params}"
+                );
+            }
+        }
+        assert_eq!(
+            scope_denial(&request("cowork/memory/list", json!({ "scope": "user" }))),
+            None
+        );
     }
 
     #[test]

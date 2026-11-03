@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cowork_config::{ProviderName, canonicalize_sync, get_ai_coworker_paths};
+use cowork_config::{
+    ProviderName, canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside,
+};
 use cowork_harness::ExtensionManager;
 use cowork_harness::backups::{BackupLifecycle, BackupTrigger, SessionLookupMetadata};
 use cowork_harness::canvas::{
@@ -934,6 +936,27 @@ impl ServerRuntimeState {
                 let target_for_op = target_sid.clone();
                 let (evt, maybe_state) =
                     tokio::task::spawn_blocking(move || -> Result<_, String> {
+                        let lookup_fn = |sid: &str| {
+                            lookup.get(sid).cloned().unwrap_or(SessionLookupMetadata {
+                                lifecycle: BackupLifecycle::Deleted,
+                                title: None,
+                                provider: None,
+                                model: None,
+                                busy: false,
+                            })
+                        };
+                        // `WorkspaceBackupService.createCheckpoint` parity: only an existing,
+                        // readable backup recorded for this workspace may be checkpointed.
+                        // `create_checkpoint` would otherwise initialize a fresh backup for any
+                        // session id, claiming another workspace's session for `cwd`.
+                        let existing = bm.read_workspace_backups(&cwd_for_op, None, lookup_fn)?;
+                        if !existing
+                            .backups
+                            .iter()
+                            .any(|entry| entry.target_session_id == target_for_op)
+                        {
+                            return Err(format!("Unknown workspace backup: {target_for_op}"));
+                        }
                         let state_opt = bm.create_checkpoint(
                             &target_for_op,
                             &cwd_for_op,
@@ -943,15 +966,7 @@ impl ServerRuntimeState {
                             meta_hint.as_ref().and_then(|m| m.model.clone()),
                         )?;
                         let evt =
-                            bm.read_workspace_backups(&cwd_for_op, Some(session_id), |sid| {
-                                lookup.get(sid).cloned().unwrap_or(SessionLookupMetadata {
-                                    lifecycle: BackupLifecycle::Deleted,
-                                    title: None,
-                                    provider: None,
-                                    model: None,
-                                    busy: false,
-                                })
-                            })?;
+                            bm.read_workspace_backups(&cwd_for_op, Some(session_id), lookup_fn)?;
                         Ok((evt, state_opt))
                     })
                     .await
@@ -1492,6 +1507,13 @@ impl ServerRuntimeState {
                 let svc = self.build_conversation_import_service();
                 let desktop = self.desktop_service.clone();
                 let fallback_wd = self.working_directory.clone();
+                let cowork_root = canonicalize_sync(
+                    &get_ai_coworker_paths(Some(&self.homedir), &self.env).root_dir,
+                );
+                let managed_roots = [
+                    canonicalize_sync(&get_one_off_chats_root(&self.homedir)),
+                    canonicalize_sync(&self.worktree_service.worktrees_root()),
+                ];
 
                 let res = svc
                     .import_selected(
@@ -1509,8 +1531,11 @@ impl ServerRuntimeState {
                         &workspaces,
                         |target_path, preferred_name| {
                             let target = Path::new(target_path);
-                            std::fs::create_dir_all(target)
-                                .map_err(|e| format!("Failed creating workspace directory: {e}"))?;
+                            if let Some(refusal) =
+                                import_workspace_refusal(target, &cowork_root, &managed_roots)
+                            {
+                                return Err(refusal.to_owned());
+                            }
                             if let Some(ref ds) = desktop {
                                 ds.ensure_workspace_for_import(target, preferred_name, &fallback_wd)
                             } else {
@@ -1626,6 +1651,28 @@ impl ServerRuntimeState {
             )),
         }
     }
+}
+
+/// Checks a directory an import would add as a workspace (`ensureDesktopWorkspaceForPath`). Like
+/// TS it must already exist (nothing is created). Unlike TS, a directory inside the Cowork data
+/// root (credentials, config, plugins, skills, agent profiles, backups) is refused, except inside
+/// the managed one-off chat and worktree roots, where the server itself creates threads.
+fn import_workspace_refusal(
+    target: &Path,
+    cowork_root: &Path,
+    managed_roots: &[PathBuf],
+) -> Option<&'static str> {
+    let canonical = canonicalize_sync(target);
+    if !canonical.is_dir() {
+        return Some("Workspace path must be an existing directory.");
+    }
+    let in_managed_root = managed_roots
+        .iter()
+        .any(|root| canonical != *root && is_inside(root, &canonical));
+    if is_inside(cowork_root, &canonical) && !in_managed_root {
+        return Some("A Cowork data directory cannot be imported as a workspace.");
+    }
+    None
 }
 
 fn validate_spreadsheet_patch_ops(
@@ -1772,4 +1819,56 @@ fn parse_optional_provider(
             )
         })
         .map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_workspace_refusal_requires_existing_dir_outside_cowork_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = canonicalize_sync(tmp.path());
+        let home = base.join("home");
+        let cowork_root = home.join(".cowork");
+        let chats = cowork_root.join("chats");
+        let worktrees = cowork_root.join("worktrees");
+        let project = base.join("project");
+        for dir in [
+            &project,
+            &cowork_root.join("auth"),
+            &chats.join("chat-1"),
+            &worktrees.join("wt-1"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let managed = [chats.clone(), worktrees.clone()];
+        let refusal = |path: &Path| import_workspace_refusal(path, &cowork_root, &managed);
+
+        assert_eq!(refusal(&project), None);
+        assert_eq!(refusal(&home), None);
+        assert_eq!(refusal(&chats.join("chat-1")), None);
+        assert_eq!(refusal(&worktrees.join("wt-1")), None);
+
+        let missing = base.join("missing");
+        assert_eq!(
+            refusal(&missing),
+            Some("Workspace path must be an existing directory.")
+        );
+        assert!(!missing.exists(), "an import must not create directories");
+
+        for data_dir in [
+            cowork_root.clone(),
+            cowork_root.join("auth"),
+            chats,
+            worktrees,
+        ] {
+            assert_eq!(
+                refusal(&data_dir),
+                Some("A Cowork data directory cannot be imported as a workspace."),
+                "{}",
+                data_dir.display()
+            );
+        }
+    }
 }

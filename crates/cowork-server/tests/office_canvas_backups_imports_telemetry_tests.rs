@@ -1127,6 +1127,47 @@ async fn websocket_workspace_backups_opt_in_lifecycle_and_turn_checkpoints_e2e()
         .unwrap()
         .to_owned();
 
+    // A manual checkpoint needs a backup already recorded for this workspace
+    // (`WorkspaceBackupService.createCheckpoint` → `findWorkspaceBackup`); it must not
+    // initialize one for an arbitrary (or another workspace's) session id.
+    let foreign_cp = ws_call_collecting(
+        &mut ws,
+        "bk-cp-foreign",
+        "cowork/backups/workspace/checkpoint",
+        json!({
+            "cwd": cwd_str,
+            "targetSessionId": "foreign-session"
+        }),
+        &mut notifs,
+    )
+    .await;
+    assert!(
+        foreign_cp["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Unknown workspace backup: foreign-session")),
+        "checkpoint for an unknown backup must fail: {foreign_cp}"
+    );
+    assert!(
+        !iso.home
+            .join(".cowork/session-backups/foreign-session")
+            .exists()
+    );
+    let after_foreign = ws_call_collecting(
+        &mut ws,
+        "bk-read-after-foreign",
+        "cowork/backups/workspace/read",
+        json!({ "cwd": cwd_str }),
+        &mut notifs,
+    )
+    .await;
+    let backup_ids: Vec<_> = after_foreign["result"]["event"]["backups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["targetSessionId"].clone())
+        .collect();
+    assert_eq!(backup_ids, vec![json!(thread_id)], "{after_foreign}");
+
     // Read the delta preview of the first checkpoint that captured the edits: it compares that
     // checkpoint's snapshot with its predecessor's (the initial `cp-0001`).
     let changed_cp_id = checkpoints

@@ -120,16 +120,29 @@ impl WorkspaceFileChangeEvent {
     }
 }
 
-/// Broadcasts `event` to every connection, tagged with `reported_cwd`: the workspace directory as
-/// the server was given it (TS `config.workingDirectory`), not its canonical form.
+/// Broadcasts `event` to every connection allowed to receive workspace control events, tagged
+/// with `reported_cwd`: the workspace directory as the server was given it (TS
+/// `config.workingDirectory`), not its canonical form. A paired mobile device without the
+/// `workspaceSettings` grant never receives workspace file paths; its connection additionally
+/// withholds them until its JSON-RPC handshake completes (`mobile_h3::connection`).
 pub fn broadcast_workspace_file_changed(
     runtime: &ServerRuntimeState,
     reported_cwd: &Path,
     event: &WorkspaceFileChangeEvent,
 ) {
-    runtime.broadcast_to_all(&JsonRpcLiteOutbound::Notification(
-        event.to_notification(reported_cwd),
-    ));
+    let outbound = JsonRpcLiteOutbound::Notification(event.to_notification(reported_cwd));
+    let Ok(payload) = serde_json::to_value(&outbound) else {
+        return;
+    };
+    let recipients: Vec<String> = runtime
+        .ws_sinks
+        .iter()
+        .map(|entry| entry.key().clone())
+        .filter(|cid| runtime.is_workspace_control_events_allowed(cid))
+        .collect();
+    for cid in recipients {
+        runtime.send_value_to_connection(&cid, &payload);
+    }
 }
 
 /// Starts the runtime's workspace monitor on `runtime.working_directory`; events carry

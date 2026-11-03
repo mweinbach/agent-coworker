@@ -162,13 +162,43 @@ skill is loaded as instructions into every workspace's turns, so `cowork/skills/
 `cowork/skills/installation/copy` require `targetScope: "project"` and `cowork/import/skill`
 requires `targetScope: "workspace"`; anything else is refused with `data.reason`
 `userSkillConfigReadOnly`. Enabling, disabling, deleting, or updating an installed skill is not
-refused. The `turns` requirement and the user-layer
+refused. User (`global`) agent profiles and user-scoped memory reach every workspace too, so
+`cowork/agentProfiles/upsert` requires `profile.scope: "workspace"`, `cowork/agentProfiles/delete`
+requires `scope: "workspace"`, and `cowork/agentProfiles/copy` requires `copy.targetScope:
+"workspace"` (otherwise `data.reason` `userAgentProfileConfigReadOnly`), and `cowork/memory/upsert`
+and `cowork/memory/delete` require `scope: "workspace"` (otherwise `data.reason`
+`userMemoryReadOnly`). Workspace-scoped skill, agent profile (including
+`cowork/agentProfiles/workspaceAvailability/set`), and memory writes need an authorized workspace
+directory whose destination is not, and does not lead into, the user skills (`~/.cowork/skills`,
+`~/.agents/skills`), agent profiles, or memory database, so they are refused when the workspace is
+the home directory itself. User-layer locations are resolved from the server's Cowork home and,
+when `COWORK_HOME_OVERRIDE` or `HOME` names a different home, from that one too. The `turns` requirement and the user-layer
 refusals are deliberately stricter than the TypeScript server, which gated the whole
 `cowork/mcp/*` and plugin surfaces on `workspaceSettings` alone. The `cowork/memory/*` surface (including the
 `cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
 workspace-settings permission, because memory holds long-lived private user/project content.
 `cowork/skills/improvement/*` likewise requires workspace-settings access because it reads skill
 usage state, runs local skill-file edits, and can restore skill backups.
+Routes that start a local process or run a model job also require `turns`:
+`cowork/skills/improvement/run`, `cowork/skills/improvement/restore`,
+`cowork/provider/lmstudio/local/start` (starts the local LM Studio server), and
+`cowork/provider/codexAppServer/update` (replaces the managed Codex app-server binary) require
+`workspaceSettings` and `turns`; `cowork/memory/advanced/generate` and
+`cowork/memory/advanced/folder/generate` (which also read the source thread's conversation)
+require `workspaceSettings`, `conversations`, and `turns`. `cowork/runtime/libreoffice/check` stays
+always-allowed, but with a `smoke` flag other than omitted/`null`/`false` (a headless conversion
+run) it requires `turns`. Persisted session state is gated like threads:
+`cowork/session/harnessContext/get` requires `conversations`, and `cowork/session/delete`,
+`cowork/session/title/set`, and `cowork/session/harnessContext/set` require `conversations` and
+`turns`. External conversation import reads transcripts outside the workspace, so
+`cowork/conversationImport/sources/list`, `cowork/conversationImport/preview`, and
+`cowork/conversationImport/workspaceMappings/validate` require `workspaceSettings` and
+`conversations`; `cowork/conversationImport/import` (and any other `cowork/conversationImport/*`
+method) requires `workspaceSettings`, `conversations`, and `turns`, and the import itself is then
+refused with `data.reason` `conversationImportDesktopOnly`, because it persists root threads and
+can register arbitrary existing host directories as workspaces. These grants are deliberately
+stricter than the TypeScript server, which always allowed `cowork/session/harnessContext/get` and
+the LibreOffice check and gated the rest on `workspaceSettings` alone.
 `cowork/plugins/install/preview` and `cowork/skills/install/preview` also require the
 workspace-settings permission, because they materialize an attacker-selectable local or GitHub
 source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
@@ -577,7 +607,9 @@ Currently implemented `cowork/*` methods include:
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`
-  - `cowork/backups/workspace/checkpoint`
+  - `cowork/backups/workspace/checkpoint` (only for a `targetSessionId` that already has a backup
+    recorded for `cwd`; otherwise it fails with `Unknown workspace backup: <id>` and initializes
+    nothing)
   - `cowork/backups/workspace/restore`
   - `cowork/backups/workspace/deleteCheckpoint`
   - `cowork/backups/workspace/deleteEntry`
@@ -635,7 +667,7 @@ Conversation import controls let a client import historical chats as real Cowork
 - `cowork/conversationImport/sources/list` — params `{ sources?: Array<{ source: "codex" | "claude-code" | "cowork", path?: string }>, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths? }`. Omitting `sources` scans the default Codex and Claude Code homes. Codex discovery reads `~/.codex/state_5.sqlite`, `~/.codex/sessions`, and `~/.codex/archived_sessions` (never Cowork-owned `~/.cowork/auth/codex-cli` caches); Claude Code discovery reads `~/.claude/projects`; Cowork requires an explicit alternate `.cowork` directory or `sessions.db` path and rejects the current live Cowork DB. Returns `{ sources }`, where each source has `{ source, id, path, available, conversationCount?, warning? }`.
 - `cowork/conversationImport/preview` — params `{ sources?, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths?, limit?, includeArchived? }`. Returns `{ conversations }`. The limit applies across all selected sources, preferring unimported conversations; already-imported conversations fill any remaining slots. Each preview item has `{ source, sourceId, sourcePath, fingerprint, title, cwd, createdAt, updatedAt, originalProvider, originalModel, messageCount, toolCount, warnings, mapping, alreadyImportedThreadId }`. `mapping` is `{ status: "matched", workspaceId, workspacePath }`, `{ status: "create", workspacePath, name }`, or `{ status: "missing", originalPath, reason }`.
 - `cowork/conversationImport/workspaceMappings/validate` — params `{ mappings: Record<string, WorkspaceMappingInput> }`. Returns `{ valid, mappings, errors }` so clients can block import until every missing conversation fingerprint has a usable existing/fallback workspace or an existing path to create.
-- `cowork/conversationImport/import` — params `{ sources?, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths?, selected, mappings?, provider?, model?, defaultProvider?, defaultModel?, mode?: "skip-existing", includeArchived? }`, where `selected` is an array of `{ source, fingerprint }`. `mappings` is keyed by `fingerprint` or `${source}:${fingerprint}` and accepts `{ kind: "existing" | "fallback", workspaceId }` or `{ kind: "create", path, name? }`. Returns `{ imported, skipped, failed, createdWorkspaces }`; duplicate imports are reported in `skipped` with `reason: "already_imported"`.
+- `cowork/conversationImport/import` — params `{ sources?, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths?, selected, mappings?, provider?, model?, defaultProvider?, defaultModel?, mode?: "skip-existing", includeArchived? }`, where `selected` is an array of `{ source, fingerprint }`. `mappings` is keyed by `fingerprint` or `${source}:${fingerprint}` and accepts `{ kind: "existing" | "fallback", workspaceId }` or `{ kind: "create", path, name? }`. Returns `{ imported, skipped, failed, createdWorkspaces }`; duplicate imports are reported in `skipped` with `reason: "already_imported"`. A `create` mapping (explicit or derived from a conversation's original `cwd`) must name an existing directory (nothing is created), and a directory inside the Cowork data root (`~/.cowork`, other than inside the managed one-off chat and worktree roots) is refused for that conversation, which is reported in `failed`.
 
 Imported conversations are persisted in `~/.cowork/sessions.db` with normal `sessions`, `session_state`, and `session_snapshots` rows plus an idempotency record keyed by `(source, fingerprint)`. The snapshot feed stores the reconstructed visible replay, including user/assistant messages and display-only tool cards. `session_state.provider_state_json` is always `NULL`, and model-facing history contains only a sanitized `<past_conversation>` summary; raw tool-call IDs, provider response/thread IDs, thinking signatures, encrypted reasoning, and hidden chain-of-thought are intentionally omitted. If import creates a new project workspace, the server emits `workspace/listChanged`.
 
@@ -706,7 +738,7 @@ XLSX column widths use one stable seven-pixel maximum-digit-width baseline for t
 
 `cowork/workspace/presentation/preview` resolves an exported PowerPoint deck (`.pptx` or `.ppt`) inside the server-owned workspace boundary. Previewing never executes workspace JavaScript or reads guessed PNG caches. The server renders an immutable snapshot through the verified managed LibreOffice launcher and Poppler, with a 25-second overall deadline, bounded output, and an isolated temporary job directory. Successful results are `{ ok: true, dependencies, path, slides, version, renderingMode?, warnings? }`, where `path` is the canonical source path, `dependencies` contains that deck, and `version.fingerprint` is the SHA-256 of the exact source bytes. New servers always provide `renderingMode` (`rendered` or `text`) and `warnings`; clients must visibly identify `text` results as text-only previews that omit images, charts, layout, and styling. If native rendering is unavailable or fails, `.pptx` decks can return a complete text-only slide set with an explanation; partial native slide sets are never reported as successful renders. Legacy `.ppt` decks require the native renderer. JavaScript slide sources must be exported before previewing. Previews are limited to 100 MiB source files, 200 slides, 4 MiB per rendered PNG, and 16 MiB of rendered image data in total.
 
-`cowork/workspace/fileChanged` is a generic invalidation notification emitted for monitored external and agent changes plus successful Canvas, spreadsheet, and web filesystem mutations. Params are `{ cwd, kind: "changed", path, version }` for a changed file or directory and `{ cwd, kind: "deleted", path, version: null }` for a deleted path. Clients should invalidate resources whose requested, canonical, alias, or declared dependency path matches `path`; receiving the same version again is a no-op.
+`cowork/workspace/fileChanged` is a generic invalidation notification emitted for monitored external and agent changes plus successful Canvas, spreadsheet, and web filesystem mutations. Params are `{ cwd, kind: "changed", path, version }` for a changed file or directory and `{ cwd, kind: "deleted", path, version: null }` for a deleted path. Clients should invalidate resources whose requested, canonical, alias, or declared dependency path matches `path`; receiving the same version again is a no-op. A paired mobile (H3) device receives it only after its `initialize`/`initialized` handshake and only with the `workspaceSettings` permission, because it carries workspace file paths.
 
 `cowork/session/agent/wait` is compact by default: the `agent_wait_result` event returns child summaries, `readyAgentIds`, and `erroredAgentIds`. Clients may set `includeFinalMessage: true` and/or `includeReport: true`; when either flag is set, the wait result includes an `inspections` array for the returned child summaries, including children that remain running when a wait times out. `includeFinalMessage` adds each child's full latest assistant text. `includeReport` adds parsed `<agent_report>` data plus report status fields (`reportRequired`, `reportFound`, `reportValid`, `reportBlockCount`, and `reportDiagnostic`).
 

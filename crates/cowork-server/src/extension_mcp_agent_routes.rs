@@ -80,6 +80,24 @@ fn overlay_session_provider_options(base: &mut Map<String, Value>, over: Map<Str
     }
 }
 
+/// A child's endpoint override. The parent's top-level `baseUrl` belongs to the parent's provider,
+/// so a child routed to another provider only honors its own provider section (or env), as the
+/// root turn path does (`provider_base_url_override`); otherwise the child provider's API key
+/// would be sent to the parent provider's endpoint.
+fn child_provider_base_url(
+    provider: ProviderName,
+    parent_provider: ProviderName,
+    provider_opts: &Map<String, Value>,
+    env: &HashMap<String, String>,
+) -> Option<String> {
+    crate::turn_runner::provider_base_url_override(
+        provider,
+        provider_opts,
+        env,
+        provider == parent_provider,
+    )
+}
+
 const CHILD_MAX_TURN_STEPS: usize = 60;
 const CHILD_STEP_TIMEOUT_MS: u64 = 180_000;
 
@@ -105,30 +123,42 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             .upgrade()
             .ok_or_else(|| ChildTurnError::from("Server runtime has shut down."))?;
 
-        let (live_parent_cwd, parent_provider_opts, parent_enable_mcp, parent_yolo_override) =
-            match runtime.get_live_thread(&input.parent_session_id) {
-                Some(l) => {
-                    let guard = l.lock();
-                    (
-                        Some(PathBuf::from(guard.cwd.clone())),
-                        // SECURITY BOUNDARY: endpoint overrides are stripped here.
-                        guard.provider_options_override(),
-                        Some(guard.enable_mcp),
-                        guard.config_overrides.get("yolo").and_then(Value::as_bool),
-                    )
-                }
-                None => (None, None, None, None),
-            };
+        let (
+            live_parent_cwd,
+            live_parent_provider,
+            parent_provider_opts,
+            parent_enable_mcp,
+            parent_yolo_override,
+        ) = match runtime.get_live_thread(&input.parent_session_id) {
+            Some(l) => {
+                let guard = l.lock();
+                (
+                    Some(PathBuf::from(guard.cwd.clone())),
+                    Some(guard.provider),
+                    // SECURITY BOUNDARY: endpoint overrides are stripped here.
+                    guard.provider_options_override(),
+                    Some(guard.enable_mcp),
+                    guard.config_overrides.get("yolo").and_then(Value::as_bool),
+                )
+            }
+            None => (None, None, None, None, None),
+        };
         let effective_yolo = parent_yolo_override.unwrap_or(runtime.yolo);
 
+        let parent_record = if live_parent_cwd.is_none() {
+            runtime
+                .session_db
+                .get_session_record(&input.parent_session_id)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
         let parent_cwd = live_parent_cwd
             .or_else(|| {
-                runtime
-                    .session_db
-                    .get_session_record(&input.parent_session_id)
-                    .ok()
-                    .flatten()
-                    .map(|r| PathBuf::from(r.working_directory))
+                parent_record
+                    .as_ref()
+                    .map(|r| PathBuf::from(&r.working_directory))
             })
             .unwrap_or_else(|| runtime.working_directory.clone());
         let canonical_cwd = canonicalize_sync(&parent_cwd);
@@ -145,6 +175,11 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         );
         let (output_dir, uploads_dir) =
             crate::turn_runner::workspace_io_dirs(Some(&agent_cfg), &canonical_cwd);
+        // The provider the parent's options were written for: the parent session's, or the
+        // workspace default when the parent is unknown.
+        let parent_provider = live_parent_provider
+            .or_else(|| parent_record.as_ref().map(|r| r.provider))
+            .unwrap_or(agent_cfg.provider);
         agent_cfg.provider = input.provider;
         agent_cfg.model = input.model_id.clone();
         // The child's complete sandbox (the parent's effective sandbox narrowed for its role and
@@ -234,36 +269,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                 Some(lms.inference_base_url)
             }
             other => {
-                let env_key = match other {
-                    ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
-                    ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
-                    p => format!(
-                        "{}_BASE_URL",
-                        p.as_str().to_ascii_uppercase().replace('-', "_")
-                    ),
-                };
-                merged_provider_opts
-                    .get(other.as_str())
-                    .and_then(Value::as_object)
-                    .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
-                    .or_else(|| {
-                        merged_provider_opts
-                            .get("baseUrl")
-                            .or_else(|| merged_provider_opts.get("base_url"))
-                    })
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        runtime
-                            .env
-                            .get(&env_key)
-                            .map(String::as_str)
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_owned)
-                    })
+                child_provider_base_url(other, parent_provider, &merged_provider_opts, &runtime.env)
             }
         };
 
@@ -2577,4 +2583,50 @@ pub(crate) fn apply_session_child_routing_overrides(
     cfg.preferred_child_model = routing.preferred_child_model;
     cfg.preferred_child_model_ref = routing.preferred_child_model_ref;
     cfg.allowed_child_model_refs = routing.allowed_child_model_refs;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn child_base_url_ignores_parent_top_level_override_for_other_providers() {
+        let opts = json!({
+            "baseUrl": "https://parent-proxy.example/v1",
+            "anthropic": { "reasoningEffort": "high" },
+            "google": { "baseUrl": "https://google-section.example" }
+        });
+        let opts = opts.as_object().unwrap();
+        let env = HashMap::from([(
+            "ANTHROPIC_BASE_URL".to_owned(),
+            "https://anthropic-env.example".to_owned(),
+        )]);
+
+        // Same provider as the parent: the top-level override applies, as on the root turn.
+        assert_eq!(
+            child_provider_base_url(ProviderName::Openai, ProviderName::Openai, opts, &env)
+                .as_deref(),
+            Some("https://parent-proxy.example/v1")
+        );
+        // Another provider: never the parent's endpoint; its own section or env only.
+        assert_eq!(
+            child_provider_base_url(ProviderName::Anthropic, ProviderName::Openai, opts, &env)
+                .as_deref(),
+            Some("https://anthropic-env.example")
+        );
+        assert_eq!(
+            child_provider_base_url(ProviderName::Google, ProviderName::Openai, opts, &env)
+                .as_deref(),
+            Some("https://google-section.example")
+        );
+        assert_eq!(
+            child_provider_base_url(
+                ProviderName::Anthropic,
+                ProviderName::Openai,
+                opts,
+                &HashMap::new()
+            ),
+            None
+        );
+    }
 }

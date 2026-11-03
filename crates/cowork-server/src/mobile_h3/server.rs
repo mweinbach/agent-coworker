@@ -163,6 +163,10 @@ impl MobileH3Server {
         let trimmed = device_id.trim();
         self.device_connections.close(trimmed);
         let removed = forget_h3_trusted_device(&self.store_root_path, trimmed).await?;
+        // A request that authenticated against the store before `forget` landed may have
+        // recreated the connection meanwhile; close it again now that the record is gone (such
+        // requests also re-check the store after registering, see `confirm_still_trusted`).
+        self.device_connections.close(trimmed);
         let all_summaries: Vec<MobileTrustedDevice> =
             list_h3_trusted_devices(&self.store_root_path)
                 .await
@@ -186,6 +190,7 @@ impl MobileH3Server {
     pub async fn revoke_trusted_devices(&self) -> anyhow::Result<()> {
         self.device_connections.close_all();
         forget_h3_trusted_devices(&self.store_root_path).await?;
+        self.device_connections.close_all();
         let mut info = self.info.write();
         info.trusted_device = None;
         info.trusted_devices.clear();
@@ -216,6 +221,41 @@ fn format_url_host(host: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+/// The address the OpenTunnel bridge dials to reach this listener: the bound address, with an
+/// unspecified bind (`0.0.0.0` / `::`) mapped to the loopback address of the same family. The
+/// result is a bare IP literal, as `TcpStream::connect((host, port))` expects (no brackets).
+fn bridge_local_host(bound: std::net::IpAddr) -> String {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    match bound {
+        IpAddr::V4(v4) if v4.is_unspecified() => Ipv4Addr::LOCALHOST.to_string(),
+        IpAddr::V6(v6) if v6.is_unspecified() => Ipv6Addr::LOCALHOST.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Re-reads the pairing store after a request registered a device connection or event stream. A
+/// revoke that completed while the request was authenticating closes the device's connections
+/// before the request recreated them, so a device that is no longer trusted (under this session
+/// token) has its connection closed again and the request is refused.
+async fn confirm_still_trusted(
+    st: &MobileH3RouteState,
+    session_token: Option<&str>,
+    device_id_header: Option<&str>,
+    device_id: &str,
+) -> bool {
+    let still_trusted = find_h3_trusted_device_by_session_token(
+        &st.store_root_path,
+        session_token,
+        ExpectedDeviceId::Header(device_id_header),
+    )
+    .await
+    .is_some_and(|record| record.device_id == device_id);
+    if !still_trusted {
+        st.device_connections.close(device_id);
+    }
+    still_trusted
 }
 
 fn format_bind_addr(host: &str, port: u16) -> String {
@@ -500,9 +540,23 @@ async fn handle_mobile_request(
                 }
             };
 
-            let conn = st
+            let (conn, created) = st
                 .device_connections
-                .get_or_create(&trusted_device.device_id);
+                .get_or_create_tracked(&trusted_device.device_id);
+            if created
+                && !confirm_still_trusted(
+                    &st,
+                    session_token,
+                    device_id_header,
+                    &trusted_device.device_id,
+                )
+                .await
+            {
+                return json_response(
+                    StatusCode::UNAUTHORIZED,
+                    &json!({ "error": "Unauthorized." }),
+                );
+            }
             apply_trusted_device_permissions(&st.runtime, &conn.conn_state, &trusted_device);
 
             let required = get_required_h3_permissions(&message);
@@ -574,6 +628,20 @@ async fn handle_mobile_request(
             let sse_stream = st
                 .device_connections
                 .open_sse_stream(&trusted_device.device_id);
+            if !confirm_still_trusted(
+                &st,
+                session_token,
+                device_id_header,
+                &trusted_device.device_id,
+            )
+            .await
+            {
+                drop(sse_stream);
+                return json_response(
+                    StatusCode::UNAUTHORIZED,
+                    &json!({ "error": "Unauthorized." }),
+                );
+            }
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")
@@ -647,7 +715,8 @@ pub async fn start_mobile_h3_server(
         Err(err) => return Err(err.into()),
     };
 
-    let local_port = listener.local_addr()?.port();
+    let local_addr = listener.local_addr()?;
+    let local_port = local_addr.port();
     persist_h3_listener_port(&options.store_root_path, local_port)?;
 
     let pairing_session = create_h3_pairing_session(PAIRING_SESSION_LIFETIME_MS);
@@ -666,7 +735,7 @@ pub async fn start_mobile_h3_server(
             api_url: bundle.api_url.clone(),
             tunnel_id: bundle.tunnel_id.clone(),
             token: bundle.token.clone(),
-            local_host: "127.0.0.1".to_owned(),
+            local_host: bridge_local_host(local_addr.ip()),
             local_port,
             attach_timeout: open_tunnel_cfg
                 .attach_timeout
@@ -817,4 +886,34 @@ pub async fn start_mobile_h3_server(
         shutdown,
         accept_task: Mutex::new(Some(accept_task)),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    #[test]
+    fn bridge_dials_the_bound_address_or_loopback_of_the_same_family() {
+        assert_eq!(
+            bridge_local_host(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            "127.0.0.1"
+        );
+        assert_eq!(bridge_local_host(IpAddr::V6(Ipv6Addr::UNSPECIFIED)), "::1");
+        assert_eq!(
+            bridge_local_host(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))),
+            "192.168.1.20"
+        );
+        let lan_v6: Ipv6Addr = "fd00::20".parse().unwrap();
+        assert_eq!(bridge_local_host(IpAddr::V6(lan_v6)), "fd00::20");
+        // The host is a bare literal that `TcpStream::connect((host, port))` resolves directly.
+        use std::net::ToSocketAddrs;
+        for host in ["127.0.0.1", "::1", "fd00::20"] {
+            assert!(
+                (host, 443).to_socket_addrs().unwrap().next().is_some(),
+                "{host}"
+            );
+        }
+    }
 }

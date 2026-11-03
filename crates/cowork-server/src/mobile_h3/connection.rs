@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::jsonrpc::{ConnectionRpcState, dispatch_client_message};
 use crate::registry::{ConnectionAccessFlags, ServerRuntimeState};
+use crate::workspace_file_monitor::WORKSPACE_FILE_CHANGED_METHOD;
 
 pub const HTTP_RPC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
@@ -64,11 +65,19 @@ impl H3DeviceConnection {
         let sinks_for_fwd = Arc::clone(&sinks);
         let rt_for_fwd = Arc::clone(&runtime);
         let cid_for_fwd = connection_id.clone();
+        let state_for_fwd = Arc::clone(&conn_state);
 
         let forwarder_task = tokio::spawn(async move {
             while let Some(frame) = rx.recv().await {
-                let sse_chunk = Bytes::from(format!("data: {frame}\n\n"));
-                {
+                // The device's connection is registered for broadcasts as soon as it exists, so
+                // workspace file-change events (`broadcast_to_all`, including the deferred ones a
+                // route queues after its response) are held back here until the handshake is
+                // done and the device may receive workspace control events.
+                let withheld = is_workspace_file_changed_frame(&frame)
+                    && !(state_for_fwd.is_ready()
+                        && rt_for_fwd.is_workspace_control_events_allowed(&cid_for_fwd));
+                if !withheld {
+                    let sse_chunk = Bytes::from(format!("data: {frame}\n\n"));
                     let mut guard = sinks_for_fwd.lock();
                     guard.retain(|_, sink_tx| sink_tx.send(sse_chunk.clone()).is_ok());
                 }
@@ -258,6 +267,14 @@ impl H3DeviceConnection {
     }
 }
 
+/// Whether a serialized outbound frame is a `cowork/workspace/fileChanged` notification.
+fn is_workspace_file_changed_frame(frame: &str) -> bool {
+    frame.contains(WORKSPACE_FILE_CHANGED_METHOD)
+        && serde_json::from_str::<Value>(frame).is_ok_and(|value| {
+            value.get("method").and_then(Value::as_str) == Some(WORKSPACE_FILE_CHANGED_METHOD)
+        })
+}
+
 pub struct H3DeviceConnections {
     runtime: Arc<ServerRuntimeState>,
     keepalive_interval: Duration,
@@ -278,16 +295,25 @@ impl H3DeviceConnections {
     }
 
     pub fn get_or_create(&self, device_id: &str) -> Arc<H3DeviceConnection> {
+        self.get_or_create_tracked(device_id).0
+    }
+
+    /// Like [`Self::get_or_create`], also reporting whether this call created the connection.
+    pub fn get_or_create_tracked(&self, device_id: &str) -> (Arc<H3DeviceConnection>, bool) {
         if let Some(existing) = self.connections.get(device_id) {
-            return Arc::clone(existing.value());
+            return (Arc::clone(existing.value()), false);
         }
-        self.connections
+        let mut created = false;
+        let conn = self
+            .connections
             .entry(device_id.to_owned())
             .or_insert_with(|| {
+                created = true;
                 H3DeviceConnection::new(Arc::clone(&self.runtime), self.keepalive_interval)
             })
             .value()
-            .clone()
+            .clone();
+        (conn, created)
     }
 
     pub fn is_current(&self, device_id: &str, expected: &Arc<H3DeviceConnection>) -> bool {
@@ -367,6 +393,25 @@ impl Drop for SseDeviceEventStream {
         self.manager.stream_owners.remove(&self.device_id);
         if self.manager.is_current(&self.device_id, &self.connection) {
             self.manager.close(&self.device_id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_file_changed_frames_are_recognized() {
+        assert!(is_workspace_file_changed_frame(
+            r#"{"method":"cowork/workspace/fileChanged","params":{"path":"/w/a.txt"}}"#
+        ));
+        for frame in [
+            r#"{"method":"workspace/listChanged","params":{"revision":1}}"#,
+            r#"{"method":"item/delta","params":{"text":"cowork/workspace/fileChanged"}}"#,
+            "not json cowork/workspace/fileChanged",
+        ] {
+            assert!(!is_workspace_file_changed_frame(frame), "{frame}");
         }
     }
 }

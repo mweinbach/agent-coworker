@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use walkdir::WalkDir;
 
 use crate::error::{Result, StorageError};
 use crate::hardening::{ensure_private_directory, harden_sqlite_family};
@@ -308,23 +307,7 @@ fn ensure_legacy_imported(conn: &Connection, db_path: &Path) -> Result<()> {
     }
 
     let memory_dir = agent_dir.join("memory");
-    let mut md_files: Vec<PathBuf> = Vec::new();
-    for entry in WalkDir::new(&memory_dir).follow_links(false) {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) if is_not_found(&err) => continue,
-            Err(err) => return Err(std::io::Error::from(err).into()),
-        };
-        if entry.file_type().is_file()
-            && entry
-                .path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        {
-            md_files.push(entry.into_path());
-        }
-    }
+    let mut md_files = walk_markdown_files(&memory_dir)?;
     md_files.sort();
 
     for file_path in md_files {
@@ -380,9 +363,55 @@ fn read_text_if_exists(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn is_not_found(err: &walkdir::Error) -> bool {
-    err.io_error()
-        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+/// TS `walkMarkdownFiles`: follows symlinked files and directories (`fs.stat`, not `lstat`)
+/// and guards against cycles by skipping any directory whose canonical path was already
+/// walked. Only a missing entry (including a dangling symlink) is skipped; every other error
+/// propagates so the caller leaves the legacy import retryable. Returned paths keep the
+/// walked (non-canonical) spelling so ids derive from the path under `root`.
+fn walk_markdown_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut visited = HashSet::new();
+    walk_markdown_dir(root, &mut visited, &mut out)?;
+    Ok(out)
+}
+
+fn walk_markdown_dir(
+    dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let canonical = match fs::canonicalize(dir) {
+        Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
+    let read_dir = match fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    let mut names = Vec::new();
+    for entry in read_dir {
+        names.push(entry?.file_name());
+    }
+    names.sort();
+    for name in names {
+        let full = dir.join(&name);
+        let metadata = match fs::metadata(&full) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        if metadata.is_dir() {
+            walk_markdown_dir(&full, visited, out)?;
+        } else if metadata.is_file() && name.to_string_lossy().to_lowercase().ends_with(".md") {
+            out.push(full);
+        }
+    }
+    Ok(())
 }
 
 pub fn normalize_memory_id(raw: &str) -> String {

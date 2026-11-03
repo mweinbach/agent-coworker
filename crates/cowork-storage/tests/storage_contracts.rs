@@ -1122,3 +1122,123 @@ async fn memory_legacy_import_traversal_failure_stays_retryable() {
     ids.sort();
     assert_eq!(ids, vec!["hot".to_string(), "nested/deep".to_string()]);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_follows_symlinked_markdown_files() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-file");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    fs::create_dir_all(ws_cowork.join("memory")).unwrap();
+    let outside = iso.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("target.txt"), "Linked note.").unwrap();
+    // TS `walkMarkdownFiles` uses `fs.stat`, so a symlink to a file is imported under the
+    // link's own name even when the target lives outside the memory directory.
+    symlink(
+        outside.join("target.txt"),
+        ws_cowork.join("memory/Linked.md"),
+    )
+    .unwrap();
+    // A dangling symlink is a missing entry (ENOENT) and is skipped like in TS.
+    symlink(
+        outside.join("missing.md"),
+        ws_cowork.join("memory/Dangling.md"),
+    )
+    .unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&db_path),
+        vec![("linked".to_string(), "Linked note.".to_string())]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_follows_symlinked_directories() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-dir");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    fs::create_dir_all(ws_cowork.join("memory")).unwrap();
+    let outside = iso.root.join("shared-notes");
+    fs::create_dir_all(outside.join("inner")).unwrap();
+    fs::write(outside.join("Top.md"), "Top note.").unwrap();
+    fs::write(outside.join("inner/Deep.md"), "Deep note.").unwrap();
+    symlink(&outside, ws_cowork.join("memory/shared")).unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&db_path),
+        vec![
+            ("shared/inner/deep".to_string(), "Deep note.".to_string()),
+            ("shared/top".to_string(), "Top note.".to_string()),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_symlink_cycles_terminate_without_duplicates() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-cycle");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    let memory = ws_cowork.join("memory");
+    fs::create_dir_all(memory.join("sub")).unwrap();
+    fs::write(memory.join("Root.md"), "Root note.").unwrap();
+    fs::write(memory.join("sub/Child.md"), "Child note.").unwrap();
+    // Cycles back to the memory root and to the containing directory: TS skips any directory
+    // whose canonical path it already walked, so neither loops nor re-imports the same files.
+    symlink(&memory, memory.join("sub/to-root")).unwrap();
+    symlink(memory.join("sub"), memory.join("sub/to-self")).unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&db_path),
+        vec![
+            ("root".to_string(), "Root note.".to_string()),
+            ("sub/child".to_string(), "Child note.".to_string()),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_unresolvable_symlinked_entry_stays_retryable() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-retry");
+    let ws_cowork = iso.root.join("ws/.cowork");
+    let memory = ws_cowork.join("memory");
+    fs::create_dir_all(&memory).unwrap();
+    fs::write(memory.join("Plain.md"), "Plain note.").unwrap();
+    // A self-referential symlinked entry fails `stat` with ELOOP (not ENOENT): the import must
+    // fail without writing the completion marker instead of silently dropping the entry.
+    symlink(memory.join("Looped.md"), memory.join("Looped.md")).unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    assert!(store.list(Some(MemoryScope::Workspace)).is_err());
+    assert_eq!(legacy_memory_import_marker(&db_path), None);
+    assert!(legacy_memory_rows(&db_path).is_empty());
+
+    fs::remove_file(memory.join("Looped.md")).unwrap();
+    let outside = iso.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("looped.md"), "Recovered note.").unwrap();
+    symlink(outside.join("looped.md"), memory.join("Looped.md")).unwrap();
+
+    store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&db_path),
+        vec![
+            ("looped".to_string(), "Recovered note.".to_string()),
+            ("plain".to_string(), "Plain note.".to_string()),
+        ]
+    );
+}

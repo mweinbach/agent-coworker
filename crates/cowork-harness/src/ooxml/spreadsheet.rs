@@ -1940,7 +1940,7 @@ fn register_styles_part(session: &mut XlsxPatchSession) -> Result<bool, String> 
         && !rels_xml.contains(r#"Target="styles.xml""#)
     {
         static RID_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        let rid_re = RID_RE.get_or_init(|| Regex::new(r#"\bId="rId(\d+)""#).unwrap());
+        let rid_re = RID_RE.get_or_init(|| Regex::new(r#"\bId="rId([0-9]+)""#).unwrap());
         let max_id = rid_re
             .captures_iter(&rels_xml)
             .filter_map(|c| c.get(1)?.as_str().parse::<usize>().ok())
@@ -2095,7 +2095,8 @@ fn encode_cell_xml(cell_ref: &str, style_attr: &str, raw_input: &str) -> String 
     }
     let trimmed = raw_input.trim();
     static NUM_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let num_re = NUM_RE.get_or_init(|| Regex::new(r"^-?(?:\d+(?:\.\d+)?|\.\d+)$").unwrap());
+    let num_re =
+        NUM_RE.get_or_init(|| Regex::new(r"^-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$").unwrap());
     if num_re.is_match(trimmed) {
         return format!(r#"<c r="{cell_ref}"{s}><v>{trimmed}</v></c>"#);
     }
@@ -2230,7 +2231,7 @@ fn insert_cell_sorted(xml: &str, addr: CellCoords, cell_xml: &str) -> Result<Str
 fn find_cell_insert_offset(row_inner: &str, col: usize) -> usize {
     static CELL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let cell_re = CELL_RE.get_or_init(|| {
-        Regex::new(r#"(?s)<c\b[^>]*?\br="([A-Z]+\d+)"[^>]*?(?:/>|>.*?</c>)"#).unwrap()
+        Regex::new(r#"(?s)<c\b[^>]*?\br="([A-Z]+[0-9]+)"[^>]*?(?:/>|>.*?</c>)"#).unwrap()
     });
     for caps in cell_re.captures_iter(row_inner) {
         if let Some(r_attr) = caps.get(1)
@@ -2245,7 +2246,7 @@ fn find_cell_insert_offset(row_inner: &str, col: usize) -> usize {
 
 fn find_row_insert_offset(sheet_data_inner: &str, row_num: usize) -> usize {
     static ROW_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let row_re = ROW_RE.get_or_init(|| Regex::new(r#"<row\b[^>]*?\br="(\d+)"[^>]*?>"#).unwrap());
+    let row_re = ROW_RE.get_or_init(|| Regex::new(r#"<row\b[^>]*?\br="([0-9]+)"[^>]*?>"#).unwrap());
     for caps in row_re.captures_iter(sheet_data_inner) {
         if let Some(r_attr) = caps.get(1)
             && let Ok(r) = r_attr.as_str().parse::<usize>()
@@ -3039,6 +3040,26 @@ mod tests {
         let (start, end, _) = find_cell_span(xml, "A2").unwrap();
         assert_eq!(&xml[start..end], r#"<c r="A2" s="3" t="n"><v>1</v></c>"#);
         assert_eq!(read_cell_style_index(xml, "A2"), Some(3));
+    }
+
+    #[test]
+    fn only_ascii_digit_input_becomes_a_numeric_cell() {
+        assert_eq!(
+            encode_cell_xml("A1", "", "-12.5"),
+            r#"<c r="A1"><v>-12.5</v></c>"#
+        );
+        assert_eq!(
+            encode_cell_xml("A1", "", ".5"),
+            r#"<c r="A1"><v>.5</v></c>"#
+        );
+        // Localized digits (Arabic-Indic, fullwidth) stay inline text, as in TS.
+        for localized in ["١٢٣", "１２３", "-٤.٥"] {
+            assert_eq!(
+                encode_cell_xml("A1", "", localized),
+                format!(r#"<c r="A1" t="inlineStr"><is><t>{localized}</t></is></c>"#),
+                "{localized}"
+            );
+        }
     }
 
     #[test]

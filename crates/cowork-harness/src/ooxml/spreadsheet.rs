@@ -1882,7 +1882,7 @@ fn remove_calc_chain_content_type(xml: &str) -> String {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
         Regex::new(
-            r#"(?s)<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*(?:/>|>.*?</Override>)"#,
+            r#"(?s)<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*?(?:/>|>.*?</Override>)"#,
         )
         .unwrap()
     });
@@ -1966,8 +1966,10 @@ fn register_styles_part(session: &mut XlsxPatchSession) -> Result<bool, String> 
 // --- Worksheet XML Surgical Edits ---
 
 fn find_cell_span(xml: &str, cell_ref: &str) -> Option<(usize, usize, bool)> {
+    // The trailing attributes must be lazy: a greedy `[^>]*` swallows a self-closing cell's `/`,
+    // after which the paired-tag branch would run on through the *next* cell's `</c>`.
     let pattern = format!(
-        r#"<c\b[^>]*\br="{}"(?:\s[^>]*)?(?:/>|>[\s\S]*?</c>)"#,
+        r#"<c\b[^>]*\br="{}"(?:\s[^>]*?)?(?:/>|>[\s\S]*?</c>)"#,
         regex::escape(cell_ref)
     );
     let re = Regex::new(&pattern).ok()?;
@@ -3012,5 +3014,42 @@ fn write_xml_node(writer: &mut Writer<Cursor<Vec<u8>>>, node: &XmlNode) {
             write_xml_node(writer, child);
         }
         let _ = writer.write_event(Event::End(BytesEnd::new(node.name.as_str())));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_closing_cell_span_stops_before_the_next_cell() {
+        let xml = r#"<row r="1"><c r="A1" s="1"/><c r="B1"><v>42</v></c></row>"#;
+        let (start, end, self_closing) = find_cell_span(xml, "A1").unwrap();
+        assert_eq!(&xml[start..end], r#"<c r="A1" s="1"/>"#);
+        assert!(self_closing);
+
+        let (start, end, self_closing) = find_cell_span(xml, "B1").unwrap();
+        assert_eq!(&xml[start..end], r#"<c r="B1"><v>42</v></c>"#);
+        assert!(!self_closing);
+
+        // Attribute-less and whitespace-before-slash forms.
+        let xml = r#"<c r="A1" /><c r="A2" s="3" t="n"><v>1</v></c>"#;
+        let (start, end, _) = find_cell_span(xml, "A1").unwrap();
+        assert_eq!(&xml[start..end], r#"<c r="A1" />"#);
+        let (start, end, _) = find_cell_span(xml, "A2").unwrap();
+        assert_eq!(&xml[start..end], r#"<c r="A2" s="3" t="n"><v>1</v></c>"#);
+        assert_eq!(read_cell_style_index(xml, "A2"), Some(3));
+    }
+
+    #[test]
+    fn calc_chain_override_removal_leaves_following_overrides() {
+        let xml = concat!(
+            r#"<Types><Override PartName="/xl/calcChain.xml" ContentType="x"/>"#,
+            r#"<Override PartName="/xl/other.xml" ContentType="y"></Override></Types>"#
+        );
+        assert_eq!(
+            remove_calc_chain_content_type(xml),
+            r#"<Types><Override PartName="/xl/other.xml" ContentType="y"></Override></Types>"#
+        );
     }
 }

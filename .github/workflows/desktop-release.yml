@@ -18,10 +18,31 @@ jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Runs the Rust workspace and Bun suites back to back; ci.yml splits them
+    # across 35- and 30-minute jobs.
+    timeout-minutes: 60
+    env:
+      # Mirror ci.yml: full debuginfo makes each workspace test binary ~0.5 GB,
+      # which exhausts the ubuntu-latest disk during `cargo test --workspace`.
+      # Line tables keep panic backtraces readable; dependencies need none.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_PACKAGE____DEBUG: "false"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # The hosted image ships ~20+ GB of toolchains this job never uses.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # Rust sandbox tests and the black-box rust-server suites run real
+      # sandboxed shell tools, which need bubblewrap and unprivileged userns.
+      - name: Setup Linux sandbox
+        uses: ./.github/actions/setup-linux-sandbox
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun

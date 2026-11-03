@@ -350,6 +350,61 @@ describe("main CI workflow", () => {
     expect(sandboxAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
+  test("release validate jobs mirror CI sandbox setup, Cargo debuginfo bounds, and disk cleanup", () => {
+    // Release workflows only run on tags, so a drift from ci.yml stays hidden
+    // until a release fails in `validate`.
+    const ciWorkflow = Bun.YAML.parse(workflow) as {
+      env: Record<string, string>;
+      jobs: Record<
+        string,
+        { env?: Record<string, string>; steps: Array<{ name?: string; run?: string }> }
+      >;
+    };
+    const ciDiskCleanup = ciWorkflow.jobs["rust-test"]?.steps.find(
+      (step) => step.name === "Free runner disk space",
+    )?.run;
+    expect(ciDiskCleanup).toBeDefined();
+    const expectedEnv = { ...ciWorkflow.env, ...ciWorkflow.jobs["rust-test"]?.env };
+    expect(expectedEnv).toMatchObject({
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only",
+      CARGO_PROFILE_DEV_PACKAGE____DEBUG: "false",
+      CARGO_INCREMENTAL: "0",
+    });
+
+    for (const relWorkflow of [
+      ".github/workflows/cowork-server-release.yml",
+      ".github/workflows/desktop-release.yml",
+    ]) {
+      const release = Bun.YAML.parse(
+        readFileSync(new URL(`../${relWorkflow}`, import.meta.url), "utf8"),
+      ) as {
+        env?: Record<string, string>;
+        jobs: Record<
+          string,
+          {
+            env?: Record<string, string>;
+            steps: Array<{ name?: string; uses?: string; run?: string }>;
+          }
+        >;
+      };
+      const validate = release.jobs.validate;
+      expect(validate, relWorkflow).toBeDefined();
+      expect({ ...release.env, ...validate?.env }, relWorkflow).toMatchObject(expectedEnv);
+      const steps = validate?.steps ?? [];
+      const indexOf = (predicate: (step: (typeof steps)[number]) => boolean) =>
+        steps.findIndex(predicate);
+      const cleanup = indexOf((step) => step.name === "Free runner disk space");
+      const sandbox = indexOf((step) => step.uses === "./.github/actions/setup-linux-sandbox");
+      const cargoTest = indexOf((step) => step.run?.startsWith("cargo test") ?? false);
+      const bunTest = indexOf((step) => step.run === "bun run test");
+      expect(steps[cleanup]?.run, relWorkflow).toBe(ciDiskCleanup);
+      expect(cleanup, relWorkflow).toBeGreaterThanOrEqual(0);
+      expect(sandbox, relWorkflow).toBeGreaterThanOrEqual(0);
+      expect(cargoTest, relWorkflow).toBeGreaterThan(Math.max(cleanup, sandbox));
+      expect(bunTest, relWorkflow).toBeGreaterThan(sandbox);
+    }
+  });
+
   test("installs mobile dependencies before the dead-export check", () => {
     const steps = jobs.lint.steps;
     const installIndex = steps.findIndex(

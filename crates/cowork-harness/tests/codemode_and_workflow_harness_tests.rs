@@ -879,3 +879,267 @@ async fn turn_runner_keeps_mcp_tools_deferred_under_non_deferred_code_mode_and_e
 
     mcp_task.abort();
 }
+
+/// Regression: the harness's deferred MCP adapters honour a profile's `allowedMcpServers` on
+/// a read-only base role (TS `filterToolsForRole(..., { allowProfileMcp: true })` +
+/// `filterToolsForProfile`, server names compared after `normalizeMcpNamePart`), while a
+/// read-only role without a profile still gets no MCP tools.
+#[tokio::test]
+async fn turn_runner_exposes_profile_allowed_mcp_servers_to_read_only_roles() {
+    use axum::Router;
+    use axum::body::{Body, Bytes};
+    use axum::http::{Response, StatusCode, header};
+    use axum::routing::post;
+    use cowork_mcp::{
+        McpConfigSource, McpServerConfig, McpServerTransport, WorkspaceMcpToolCache,
+        upsert_mcp_server,
+    };
+    use cowork_storage::SessionKind;
+    use tokio::net::TcpListener;
+
+    fn respond(body: Bytes, server: &'static str) -> Response<Body> {
+        let msg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let Some(mid) = msg.get("id").cloned() else {
+            return Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .body(Body::empty())
+                .unwrap();
+        };
+        let result = match msg.get("method").and_then(Value::as_str).unwrap_or("") {
+            "initialize" => json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": server, "version": "1.0.0" }
+            }),
+            "tools/list" => json!({
+                "tools": [{
+                    "name": "lookup",
+                    "description": "Looks up a record",
+                    "inputSchema": { "type": "object", "properties": {} }
+                }]
+            }),
+            "tools/call" => json!({
+                "content": [{ "type": "text", "text": format!("served-by:{server}") }]
+            }),
+            _ => json!({}),
+        };
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_string(&json!({ "jsonrpc": "2.0", "id": mid, "result": result }))
+                    .unwrap(),
+            ))
+            .unwrap()
+    }
+
+    let mut iso = setup_env("harness-profile-mcp-ro-").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Router::new()
+        .route(
+            "/github",
+            post(|b: Bytes| async move { respond(b, "github") }),
+        )
+        .route(
+            "/linear",
+            post(|b: Bytes| async move { respond(b, "linear") }),
+        )
+        .route(
+            "/other",
+            post(|b: Bytes| async move { respond(b, "other") }),
+        );
+    let server_task = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    for (name, path) in [
+        ("github", "github"),
+        ("linear server", "linear"),
+        ("other", "other"),
+    ] {
+        upsert_mcp_server(
+            &iso.cfg,
+            McpConfigSource::User,
+            McpServerConfig {
+                name: name.to_owned(),
+                transport: McpServerTransport::Http {
+                    url: format!("http://127.0.0.1:{port}/{path}"),
+                    headers: None,
+                },
+                enabled: Some(true),
+                required: None,
+                retries: Some(0),
+                auth: None,
+                icon: None,
+            },
+            None,
+        )
+        .unwrap();
+    }
+
+    let mut env_map = HashMap::new();
+    env_map.insert("HOME".to_owned(), iso.home.to_string_lossy().into_owned());
+    env_map.insert(
+        "COWORK_HOME_OVERRIDE".to_owned(),
+        iso.home.join(".cowork").to_string_lossy().into_owned(),
+    );
+    iso.cfg = load_config(LoadConfigOptions {
+        cwd: Some(iso.ws.clone()),
+        homedir: Some(iso.home.clone()),
+        env: Some(env_map.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+    })
+    .unwrap();
+    iso.cfg.provider = ProviderName::Openai;
+    iso.cfg.model = "gpt-5.4".to_owned();
+    iso.cfg.enable_mcp = true;
+    iso.cfg.tool_calling.deferred_tool_search = true;
+    iso.cfg.tool_calling.code_mode = true;
+    let cfg = Arc::new(iso.cfg.clone());
+    let mcp_cache = Arc::new(WorkspaceMcpToolCache::new());
+
+    // Runs one read-only child turn whose codeMode call lists the reachable MCP tools and
+    // tries each server; returns the codeMode result payload.
+    let run = |label: &'static str, allowed: Option<Vec<&'static str>>| {
+        let cfg = Arc::clone(&cfg);
+        let mcp_cache = Arc::clone(&mcp_cache);
+        let env_map = env_map.clone();
+        let home = iso.home.clone();
+        let ws = iso.ws.clone();
+        async move {
+            let payload: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let payload_w = Arc::clone(&payload);
+            let transport = Arc::new(QueueTransport::new(vec![
+                Box::new(|_req| {
+                    Ok(ProviderStepResult {
+                        assistant: assistant_msg(vec![ContentBlock::ToolCall {
+                            id: "tc_profile_mcp".to_owned(),
+                            name: "codeMode".to_owned(),
+                            arguments: serde_json::from_value(json!({
+                                "code": r#"
+                                    const s: any = await tools.search("lookup");
+                                    const found = s.tools.map((t: any) => t.name).filter((n: string) => n.startsWith("mcp__")).sort();
+                                    const out: any = {};
+                                    for (const name of ["mcp__github__lookup", "mcp__linear_server__lookup", "mcp__other__lookup"]) {
+                                      try {
+                                        out[name] = JSON.stringify(await tools.call(name, {}));
+                                      } catch {
+                                        out[name] = "blocked";
+                                      }
+                                    }
+                                    return { found, out };
+                                "#
+                            }))
+                            .unwrap(),
+                            partial_json: None,
+                            provider_meta: ProviderOpaqueMeta::default(),
+                        }]),
+                        persisted_assistant: None,
+                        usage: TurnUsage::default(),
+                        continuation: None,
+                        raw_events: Vec::new(),
+                    })
+                }),
+                Box::new(move |req| {
+                    let tool_msg = req
+                        .messages
+                        .iter()
+                        .find(|m| m.role == MessageRole::Tool)
+                        .expect("tool result");
+                    let ContentBlock::ToolResult {
+                        is_error,
+                        ref content,
+                        ..
+                    } = tool_msg.content[0]
+                    else {
+                        panic!("expected ToolResult");
+                    };
+                    assert!(!is_error, "codeMode must succeed: {content:?}");
+                    *payload_w.lock() = Some(serde_json::to_string(content).unwrap());
+                    Ok(ProviderStepResult {
+                        assistant: assistant_msg(vec![ContentBlock::Text {
+                            text: "done".to_owned(),
+                            phase: None,
+                            citations: Vec::new(),
+                            provider_meta: ProviderOpaqueMeta::default(),
+                        }]),
+                        persisted_assistant: None,
+                        usage: TurnUsage::default(),
+                        continuation: None,
+                        raw_events: Vec::new(),
+                    })
+                }),
+            ]));
+
+            let mut ctx =
+                ToolExecutionContext::new_for_tests(home, ws, ProviderName::Openai, "gpt-5.4");
+            ctx.session_id = format!("agent-{label}");
+            ctx.session_kind = SessionKind::Agent;
+            ctx.read_only_role = true;
+            ctx.allowed_mcp_servers =
+                allowed.map(|a| a.into_iter().map(str::to_owned).collect::<BTreeSet<_>>());
+            ctx.env = env_map;
+            ctx.agent_config = Some(cfg);
+            ctx.mcp_tool_cache = Some(mcp_cache);
+
+            let sid = ctx.session_id.clone();
+            let sink = Arc::new(RecordingSink::default());
+            let im = Arc::new(InteractionManager::new(&sid, sink.clone()));
+            let steer = Arc::new(SteerCoordinator::new(&sid, "t-1", sink.clone(), None));
+            let mut cost = SessionCostTracker::new(&sid, None);
+            let runner = TurnStepRunner::new(TurnRunConfig {
+                thread_id: sid.clone(),
+                turn_id: "t-1".to_owned(),
+                provider: ProviderName::Openai,
+                model_id: "gpt-5.4".to_owned(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "test".to_owned(),
+                provider_options: Map::new(),
+                deferred_tool_search: true,
+                max_steps: 4,
+                step_timeout_ms: 10_000,
+                overflow_threshold_chars: None,
+                tool_retry_lineage: false,
+                initial_user_message: Some(("look things up".to_owned(), None)),
+                model_max_retries: None,
+            });
+            let out = runner
+                .run_turn(
+                    transport,
+                    Vec::new(),
+                    &mut ctx,
+                    &im,
+                    &steer,
+                    &mut cost,
+                    None,
+                    sink,
+                )
+                .await;
+            assert_eq!(out.status, "completed", "{label}");
+            payload.lock().clone().expect("second step ran")
+        }
+    };
+
+    // Explorer-based profile listing `github` and `"linear  server"` (normalized to the
+    // `mcp__linear_server__*` server): both reachable, `other` is not.
+    let profiled = run("profiled", Some(vec!["github", "linear  server"])).await;
+    assert!(
+        profiled.contains(r#"\"found\":[\"mcp__github__lookup\",\"mcp__linear_server__lookup\"]"#),
+        "{profiled}"
+    );
+    assert!(profiled.contains("served-by:github"), "{profiled}");
+    assert!(profiled.contains("served-by:linear"), "{profiled}");
+    assert!(
+        profiled.contains(r#"\"mcp__other__lookup\":\"blocked\""#),
+        "{profiled}"
+    );
+
+    // Read-only role without a profile: no MCP at all.
+    let unprofiled = run("unprofiled", None).await;
+    assert!(unprofiled.contains(r#"\"found\":[]"#), "{unprofiled}");
+    assert!(!unprofiled.contains("served-by:"), "{unprofiled}");
+
+    server_task.abort();
+}

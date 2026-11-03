@@ -57,7 +57,8 @@ pub use interactive::{
 };
 pub use mcp_tools::{
     DEFAULT_TOOL_SEARCH_LIMIT, LoadedMcpBuiltinToolAdapter, MAX_TOOL_SEARCH_LIMIT, McpCallTool,
-    McpToolSearchTool, SearchableToolEntry, score_and_paginate_tools, tokenize_search_text,
+    McpToolSearchTool, SearchableToolEntry, mcp_access_enabled, mcp_server_allowed,
+    score_and_paginate_tools, tokenize_search_text,
 };
 pub use memory::{
     AdvancedMemoryEntry, AdvancedMemoryStore, ManageMemoryTool, MemoryTool,

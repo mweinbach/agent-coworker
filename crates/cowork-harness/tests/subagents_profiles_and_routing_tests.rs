@@ -1318,3 +1318,150 @@ async fn dropped_spawn_mid_persist_releases_its_reserved_slot() {
         .unwrap();
     let _ = fs::remove_dir_all(&base);
 }
+
+/// Regression: a profile whose `baseRole` is read-only (`explorer`) keeps the MCP servers it
+/// lists in `allowedMcpServers` (TS `filterToolsForRole(..., { allowProfileMcp: true })`), while
+/// an unprofiled explorer child still gets no MCP tools.
+#[tokio::test]
+async fn read_only_base_role_profiles_keep_their_allowed_mcp_servers() {
+    let (base, mut cfg, db) = setup_env("ro_profile_mcp").await;
+    cfg.enable_mcp = true;
+    cfg.tool_calling.deferred_tool_search = false;
+    cfg.tool_calling.code_mode = false;
+    AgentProfilesStore::new(&cfg.user_cowork_dir, &cfg.working_directory)
+        .upsert(AgentProfileUpsertInput {
+            scope: AgentProfileScope::Workspace,
+            profile: AgentProfileDefinition {
+                version: 1,
+                id: "readonly-github".to_owned(),
+                display_name: "Read-only GitHub".to_owned(),
+                description: "Read local files and GitHub MCP tools".to_owned(),
+                enabled: true,
+                base_role: "explorer".to_owned(),
+                prompt: String::new(),
+                allowed_built_in_tools: vec!["read".to_owned(), "write".to_owned()],
+                allowed_mcp_servers: vec!["github".to_owned()],
+                skill_names: Vec::new(),
+                model: None,
+                reasoning_effort: None,
+                default_task_type: None,
+                default_context_mode: None,
+            },
+        })
+        .unwrap();
+
+    struct Recorder(Mutex<Vec<ChildTurnInput>>);
+    #[async_trait]
+    impl ChildTurnExecutor for Recorder {
+        async fn run_child_turn(
+            &self,
+            input: ChildTurnInput,
+        ) -> Result<ChildTurnResult, ChildTurnError> {
+            self.0.lock().push(input.clone());
+            Ok(ChildTurnResult {
+                messages: input.initial_messages,
+                latest_assistant_text: Some("done".to_owned()),
+                usage: TurnUsage::default(),
+            })
+        }
+    }
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let control = AgentControl::new(
+        AgentControlConfig {
+            parent_session_id: "root-ro-profile-mcp".to_owned(),
+            parent_depth: 0,
+            agent_config: Arc::new(cfg.clone()),
+            session_db: Arc::clone(&db),
+            connected_providers: [cfg.provider].into_iter().collect(),
+        },
+        recorder.clone(),
+        Arc::new(|_, _| {}),
+    );
+    let mk = |profile_ref: Option<&str>| AgentSpawnRequest {
+        message: "go".to_owned(),
+        role: Some("explorer".to_owned()),
+        profile_ref: profile_ref.map(str::to_owned),
+        model: None,
+        reasoning_effort: None,
+        nickname: None,
+        task_type: None,
+        target_paths: None,
+        context_mode: Some("none".to_owned()),
+        briefing: None,
+        include_parent_todos: false,
+        include_harness_context: false,
+        fork_context: false,
+        system_prompt_suffix: None,
+    };
+    let profiled = control
+        .spawn(mk(Some("readonly-github")), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    let plain = control
+        .spawn(mk(None), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    control
+        .wait(
+            &[profiled.clone(), plain.clone()],
+            Some(5_000),
+            Some("all"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+    // The child's tool registry, built from its spawn input as the turn executor does.
+    let tools_for = |input: &ChildTurnInput| {
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            cfg.user_cowork_dir.clone(),
+            cfg.working_directory.clone(),
+            input.provider,
+            input.model_id.clone(),
+        );
+        ctx.session_kind = cowork_storage::SessionKind::Agent;
+        ctx.read_only_role = input.read_only_role;
+        ctx.allowed_builtin_tools = Some(input.allowed_builtin_tools.clone());
+        ctx.allowed_mcp_servers = input.allowed_mcp_servers.clone();
+        ctx.agent_config = Some(Arc::new(cfg.clone()));
+        ctx.mcp_tool_cache = Some(Arc::new(cowork_mcp::WorkspaceMcpToolCache::new()));
+        create_builtin_tools(&ctx)
+    };
+
+    let inputs = recorder.0.lock().clone();
+    let profiled_in = inputs.iter().find(|i| i.agent_id == profiled).unwrap();
+    assert!(
+        profiled_in.read_only_role,
+        "explorer base role stays read-only"
+    );
+    assert_eq!(
+        profiled_in.allowed_mcp_servers,
+        Some(BTreeSet::from(["github".to_owned()]))
+    );
+    let tools = tools_for(profiled_in);
+    assert!(
+        tools.contains_key("toolSearch") && tools.contains_key("mcpCall"),
+        "profile-allowed MCP must reach an explorer-based child: {:?}",
+        tools.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        tools.contains_key("read") && !tools.contains_key("write"),
+        "the read-only base role still caps built-ins: {:?}",
+        tools.keys().collect::<Vec<_>>()
+    );
+
+    let plain_in = inputs.iter().find(|i| i.agent_id == plain).unwrap();
+    assert!(plain_in.read_only_role);
+    assert_eq!(plain_in.allowed_mcp_servers, None);
+    let tools = tools_for(plain_in);
+    assert!(
+        !tools.contains_key("toolSearch") && !tools.contains_key("mcpCall"),
+        "an unprofiled explorer must not get MCP tools: {:?}",
+        tools.keys().collect::<Vec<_>>()
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}

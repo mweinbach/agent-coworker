@@ -326,14 +326,10 @@ impl TurnStepRunner {
                 tools_map.remove("toolSearch");
                 tools_map.remove("mcpCall");
             }
-            if !tool_ctx.read_only_role
-                && tool_ctx
-                    .allowed_mcp_servers
-                    .as_ref()
-                    .is_none_or(|s| !s.is_empty())
-            {
+            if cowork_tools::mcp_access_enabled(tool_ctx) {
                 let agent_cfg_cloned = Arc::clone(agent_cfg);
                 let env_cloned = tool_ctx.env.clone();
+                let read_only_role = tool_ctx.read_only_role;
                 let allowed_servers = tool_ctx.allowed_mcp_servers.clone();
                 let existing_keys: BTreeSet<String> = catalog_tools.keys().cloned().collect();
                 if let Ok(mcp_adapters) = cache
@@ -344,9 +340,11 @@ impl TurnStepRunner {
                         move |loaded, _| {
                             let mut out: Vec<Arc<dyn cowork_tools::BuiltinTool>> = Vec::new();
                             for t in loaded {
-                                if let Some(ref allow) = allowed_servers
-                                    && !allow.contains(&t.server_name)
-                                {
+                                if !cowork_tools::mcp_server_allowed(
+                                    read_only_role,
+                                    allowed_servers.as_ref(),
+                                    &t.server_name,
+                                ) {
                                     continue;
                                 }
                                 if !existing_keys.contains(&t.qualified_name) {

@@ -1,7 +1,8 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cowork_mcp::{LoadedMcpTool, McpToolErrorEntry};
+use cowork_mcp::{LoadedMcpTool, McpToolErrorEntry, normalize_mcp_name};
 use serde_json::{Map, Value, json};
 
 use crate::context::{
@@ -139,22 +140,65 @@ pub fn score_and_paginate_tools(
     (out, discovered)
 }
 
+/// Whether a session may use tools of the MCP server `server_name`. Every MCP gate (tool
+/// registration, discovery, execution, and the harness's deferred adapters) goes through this,
+/// so listing and calling always agree.
+///
+/// Matches TS `filterToolsForRole(..., { allowProfileMcp: true })` followed by
+/// `filterToolsForProfile`:
+/// - no profile (`allowed_mcp_servers == None`): every server, except for read-only roles
+///   (`explorer`/`research`/`reviewer`), which get no MCP at all;
+/// - with a profile: exactly the servers listed in `profile.allowedMcpServers` (an empty list
+///   denies all), including on read-only base roles — the profile opted into them explicitly.
+///
+/// Both sides are compared after `normalize_mcp_name` (TS `normalizeMcpNamePart`), so
+/// `"linear  server"` in a profile matches the server whose tools are `mcp__linear_server__*`.
+pub fn mcp_server_allowed(
+    read_only_role: bool,
+    allowed_mcp_servers: Option<&BTreeSet<String>>,
+    server_name: &str,
+) -> bool {
+    match allowed_mcp_servers {
+        None => !read_only_role,
+        Some(allowed) => {
+            let server = normalize_mcp_name(server_name);
+            allowed.iter().any(|a| normalize_mcp_name(a) == server)
+        }
+    }
+}
+
+/// Whether `ctx` can reach any MCP server at all (see [`mcp_server_allowed`]); used to decide
+/// whether MCP tools are registered for the session in the first place.
+pub fn mcp_access_enabled(ctx: &ToolExecutionContext) -> bool {
+    match &ctx.allowed_mcp_servers {
+        None => !ctx.read_only_role,
+        Some(allowed) => !allowed.is_empty(),
+    }
+}
+
+fn mcp_server_allowed_for_context(ctx: &ToolExecutionContext, server_name: &str) -> bool {
+    mcp_server_allowed(
+        ctx.read_only_role,
+        ctx.allowed_mcp_servers.as_ref(),
+        server_name,
+    )
+}
+
+const READ_ONLY_MCP_DENIED: &str =
+    "MCP tool calls are blocked because this session is running in read-only mode.";
+
 fn filter_mcp_tools_for_context(
     tools: &[LoadedMcpTool],
     ctx: &ToolExecutionContext,
 ) -> Vec<LoadedMcpTool> {
-    if ctx.read_only_role {
-        // Read-only subagent roles cannot invoke external mutating MCP tools
+    if !mcp_access_enabled(ctx) {
         return Vec::new();
     }
-    match &ctx.allowed_mcp_servers {
-        None => tools.to_vec(),
-        Some(allowed) => tools
-            .iter()
-            .filter(|t| allowed.contains(&t.server_name))
-            .cloned()
-            .collect(),
-    }
+    tools
+        .iter()
+        .filter(|t| mcp_server_allowed_for_context(ctx, &t.server_name))
+        .cloned()
+        .collect()
 }
 
 /// Standard-mode `toolSearch` backed by `WorkspaceMcpToolCache`.
@@ -290,11 +334,9 @@ impl BuiltinTool for McpCallTool {
         mut raw_args: Map<String, Value>,
         ctx: &ToolExecutionContext,
     ) -> ToolResult<ToolOutput> {
-        if ctx.read_only_role {
-            return Err(ToolError::PathDenied(
-                "MCP tool calls are blocked because this session is running in read-only mode."
-                    .to_owned(),
-            ));
+        // Unprofiled read-only roles get no MCP; a profile's allowlist is applied below.
+        if ctx.read_only_role && ctx.allowed_mcp_servers.is_none() {
+            return Err(ToolError::PathDenied(READ_ONLY_MCP_DENIED.to_owned()));
         }
         if !raw_args.contains_key("tool")
             && let Some(alias) = raw_args.remove("name")
@@ -413,10 +455,16 @@ impl BuiltinTool for LoadedMcpBuiltinToolAdapter {
         if ctx.is_cancelled() {
             return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
         }
-        if ctx.read_only_role {
+        if !mcp_server_allowed_for_context(ctx, &self.tool.server_name) {
             return Err(ToolError::PathDenied(
-                "MCP tool calls are blocked because this session is running in read-only mode."
-                    .to_owned(),
+                if ctx.read_only_role && ctx.allowed_mcp_servers.is_none() {
+                    READ_ONLY_MCP_DENIED.to_owned()
+                } else {
+                    format!(
+                        "MCP tool '{}' is not allowed for this agent's profile.",
+                        self.tool.qualified_name
+                    )
+                },
             ));
         }
         let validated = Value::Object(normalize_and_validate_args(
@@ -454,5 +502,141 @@ impl BuiltinTool for LoadedMcpBuiltinToolAdapter {
             .map_err(ToolError::Execution)?
             .map_err(ToolError::Execution)?;
         Ok(ToolOutput::Json(res))
+    }
+}
+
+#[cfg(test)]
+mod profile_mcp_allowlist_tests {
+    use std::path::PathBuf;
+
+    use cowork_config::ProviderName;
+    use cowork_mcp::{McpToolInvoker, build_mcp_tool_name};
+
+    use super::*;
+
+    struct EchoInvoker {
+        server: String,
+    }
+
+    #[async_trait]
+    impl McpToolInvoker for EchoInvoker {
+        async fn call_tool(&self, raw_tool_name: &str, _arguments: Value) -> Result<Value, String> {
+            Ok(json!({ "called": format!("{}/{raw_tool_name}", self.server) }))
+        }
+        async fn close(&self) {}
+    }
+
+    fn tool(server: &str) -> LoadedMcpTool {
+        LoadedMcpTool {
+            qualified_name: build_mcp_tool_name(server, "ping"),
+            server_name: server.to_owned(),
+            raw_tool_name: "ping".to_owned(),
+            description: "ping".to_owned(),
+            input_schema: json!({ "type": "object" }),
+            invoker: Arc::new(EchoInvoker {
+                server: server.to_owned(),
+            }),
+        }
+    }
+
+    fn ctx(read_only_role: bool, allowed: Option<&[&str]>) -> ToolExecutionContext {
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            PathBuf::from("/nonexistent-home"),
+            PathBuf::from("/nonexistent-ws"),
+            ProviderName::Openai,
+            "gpt-5.4",
+        );
+        ctx.read_only_role = read_only_role;
+        ctx.allowed_mcp_servers =
+            allowed.map(|a| a.iter().map(|s| (*s).to_owned()).collect::<BTreeSet<_>>());
+        ctx
+    }
+
+    fn names(tools: Vec<LoadedMcpTool>) -> Vec<String> {
+        tools.into_iter().map(|t| t.qualified_name).collect()
+    }
+
+    fn servers() -> Vec<LoadedMcpTool> {
+        vec![tool("github"), tool("linear server"), tool("other")]
+    }
+
+    /// TS `filterToolsForRole(..., { allowProfileMcp: true })` + `filterToolsForProfile`: an
+    /// explorer-based profile keeps the MCP servers it lists.
+    #[test]
+    fn read_only_role_with_profile_keeps_only_listed_servers() {
+        let c = ctx(true, Some(&["github"]));
+        assert!(mcp_access_enabled(&c));
+        assert_eq!(
+            names(filter_mcp_tools_for_context(&servers(), &c)),
+            vec!["mcp__github__ping"]
+        );
+    }
+
+    #[test]
+    fn read_only_role_without_profile_gets_no_mcp() {
+        let c = ctx(true, None);
+        assert!(!mcp_access_enabled(&c));
+        assert!(filter_mcp_tools_for_context(&servers(), &c).is_empty());
+        assert!(!mcp_server_allowed(true, None, "github"));
+        // Non-read-only, unprofiled sessions keep every server.
+        let c = ctx(false, None);
+        assert!(mcp_access_enabled(&c));
+        assert_eq!(filter_mcp_tools_for_context(&servers(), &c).len(), 3);
+    }
+
+    #[test]
+    fn empty_profile_allowlist_denies_all_mcp() {
+        for read_only in [false, true] {
+            let c = ctx(read_only, Some(&[]));
+            assert!(!mcp_access_enabled(&c));
+            assert!(filter_mcp_tools_for_context(&servers(), &c).is_empty());
+        }
+    }
+
+    /// TS `normalizeMcpNamePart` on both sides: `"linear  server"` and `"linear_server"` name
+    /// the server whose tools are `mcp__linear_server__*`.
+    #[test]
+    fn profile_server_names_are_normalized_on_both_sides() {
+        for listed in ["linear  server", "linear_server", " linear server "] {
+            let c = ctx(true, Some(&[listed]));
+            assert_eq!(
+                names(filter_mcp_tools_for_context(&servers(), &c)),
+                vec!["mcp__linear_server__ping"],
+                "{listed:?}"
+            );
+        }
+        let allowed: BTreeSet<String> = ["linear_server".to_owned()].into();
+        assert!(mcp_server_allowed(false, Some(&allowed), "linear  server"));
+        assert!(!mcp_server_allowed(false, Some(&allowed), "linear"));
+        // Like TS `normalizeMcpNamePart` (and the case-preserving `mcp__<server>__` names),
+        // normalization does not fold case.
+        let allowed: BTreeSet<String> = ["GitHub".to_owned()].into();
+        assert!(mcp_server_allowed(true, Some(&allowed), "GitHub"));
+        assert!(!mcp_server_allowed(true, Some(&allowed), "github"));
+    }
+
+    #[tokio::test]
+    async fn adapter_executes_only_profile_allowed_servers_on_read_only_roles() {
+        let github = LoadedMcpBuiltinToolAdapter::into_builtin(tool("github"));
+        let other = LoadedMcpBuiltinToolAdapter::into_builtin(tool("other"));
+
+        let profiled = ctx(true, Some(&["github"]));
+        let out = github
+            .execute(Map::new(), &profiled)
+            .await
+            .expect("profile-listed server must run on a read-only base role");
+        assert!(
+            matches!(&out, ToolOutput::Json(v) if v["called"] == "github/ping"),
+            "{out:?}"
+        );
+        let err = other.execute(Map::new(), &profiled).await.unwrap_err();
+        assert!(matches!(err, ToolError::PathDenied(_)), "{err:?}");
+
+        let unprofiled = ctx(true, None);
+        let err = github.execute(Map::new(), &unprofiled).await.unwrap_err();
+        assert!(
+            matches!(&err, ToolError::PathDenied(m) if m.contains("read-only")),
+            "{err:?}"
+        );
     }
 }

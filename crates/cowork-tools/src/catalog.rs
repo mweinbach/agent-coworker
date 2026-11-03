@@ -20,7 +20,8 @@ use crate::context::{
 use crate::fs_tools::{EditTool, ReadTool, WriteTool};
 use crate::interactive::{AskUserQuestionTool, SkillTool, TodoWriteTool};
 use crate::mcp_tools::{
-    McpCallTool, McpToolSearchTool, SearchableToolEntry, score_and_paginate_tools,
+    McpCallTool, McpToolSearchTool, SearchableToolEntry, mcp_access_enabled,
+    score_and_paginate_tools,
 };
 use crate::memory::{ManageMemoryTool, MemoryTool, ReadPastConversationTool, RecallMemoryTool};
 use crate::search_tools::{GlobTool, GrepTool};
@@ -123,11 +124,7 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
         .map(|c| c.enable_mcp)
         .unwrap_or(false)
         && ctx.mcp_tool_cache.is_some()
-        && !ctx.read_only_role
-        && ctx
-            .allowed_mcp_servers
-            .as_ref()
-            .is_none_or(|s| !s.is_empty());
+        && mcp_access_enabled(ctx);
 
     if mcp_enabled && !deferred_mode {
         register(Arc::new(McpToolSearchTool));

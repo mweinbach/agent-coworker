@@ -154,7 +154,9 @@ refused before dispatch with a JSON-RPC `-32600` error whose `data.reason` is
 `cowork/plugins/update`, `cowork/plugins/enable`, `cowork/plugins/disable`, and
 `cowork/plugins/delete` require `scope: "workspace"` (an omitted scope can match a user plugin, so
 it is refused too); anything else gets the same `-32600` error with `data.reason`
-`userPluginConfigReadOnly`. User-layer servers start in every workspace and skip the
+`userPluginConfigReadOnly`. Plugin and MCP configuration mutations also require an authorized workspace directory.
+Before dispatch, the server checks each destination for links and for overlap with user-level
+plugin, config, or credential directories. User-layer servers start in every workspace and skip the
 `trustWorkspaceMcp` gate, so changing them stays a desktop-only action. Global skill installs are not
 refused, because skills cannot declare MCP servers. The `turns` requirement and the user-layer
 refusals are deliberately stricter than the TypeScript server, which gated the whole

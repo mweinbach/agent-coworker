@@ -37,7 +37,7 @@ use crate::mobile_h3::pairing_store::{
 };
 use crate::mobile_h3::permissions::{
     apply_trusted_device_permissions, get_h3_request_denial, get_required_h3_permissions,
-    parse_http_jsonrpc_payload,
+    parse_http_jsonrpc_payload, workspace_targets_allowed,
 };
 use crate::mobile_h3::ticket::{
     CoworkPairingTicket, CoworkTicketScheme, H3PairingSession, create_h3_pairing_session,
@@ -523,7 +523,9 @@ async fn handle_mobile_request(
             // Param-level refusals no grant can lift. A request gets an ordinary JSON-RPC error so
             // the client surfaces it inline (a 403 reads as a missing device permission, which
             // granting would not fix); a notification has no id to answer, so it gets the 403.
-            if let Some(denial) = get_h3_request_denial(&message) {
+            if let Some(denial) = get_h3_request_denial(&message, |cwd, paths| {
+                workspace_targets_allowed(&st.runtime, cwd, paths)
+            }) {
                 let error = JsonRpcLiteError::with_data(
                     error_codes::INVALID_REQUEST,
                     denial.message(),

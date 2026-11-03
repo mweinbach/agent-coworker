@@ -2170,7 +2170,25 @@ async fn mobile_tls_withholds_thread_management_tools_without_conversations_perm
 #[tokio::test]
 async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_only() {
     let iso = IsolatedMobileTestEnv::new();
-    let server = start_server(iso.server_options()).await.unwrap();
+    let mut options = iso.server_options();
+    options
+        .env
+        .insert("COWORK_WEB_DESKTOP_SERVICE".into(), "1".into());
+    let server = start_server(options).await.unwrap();
+    // Home is a legitimate selectable project, but its plugin directory belongs to the user.
+    server
+        .runtime()
+        .desktop_service
+        .as_ref()
+        .unwrap()
+        .save_state_json(
+            json!({ "workspaces": [{
+            "id": "home-project", "name": "Home", "path": iso.home_dir, "workspaceKind": "project",
+            "createdAt": "2026-01-01T00:00:00Z", "lastOpenedAt": "2026-01-01T00:00:00Z"
+        }] }),
+            &iso.workspace_dir,
+        )
+        .unwrap();
     let h3 = server
         .listening_event()
         .mobile_h3
@@ -2325,6 +2343,25 @@ async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_onl
     assert!(iso.workspace_dir.join(".cowork/mcp-servers.json").exists());
     assert!(!user_layer.exists());
 
+    // The workspace config directory must not lead into the global config directory.
+    #[cfg(unix)]
+    {
+        let config = iso.workspace_dir.join(".cowork");
+        let saved = iso.workspace_dir.join(".cowork-test-original");
+        std::fs::rename(&config, &saved).unwrap();
+        std::os::unix::fs::symlink(user_layer.parent().unwrap(), &config).unwrap();
+        let (status, body) = rpc(json!({
+            "id": 21, "method": "cowork/mcp/server/upsert",
+            "params": { "cwd": cwd, "server": stdio_server, "source": "workspace" }
+        }))
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, json!({ "id": 21, "error": user_layer_denial }));
+        assert!(!user_layer.exists());
+        std::fs::remove_file(config.as_path()).unwrap();
+        std::fs::rename(saved, config).unwrap();
+    }
+
     // 3. Anything that can start the configured command needs `turns`.
     for (id, method, params) in [
         (
@@ -2444,6 +2481,11 @@ async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_onl
                 "targetScope": "user"
             }),
         ),
+        (
+            65,
+            "cowork/plugins/install",
+            json!({ "cwd": iso.home_dir, "sourceInput": plugin_src, "targetScope": "workspace" }),
+        ),
     ] {
         let (status, body) = rpc(json!({ "id": id, "method": method, "params": params })).await;
         assert_eq!(status, 200, "{method}");
@@ -2457,6 +2499,24 @@ async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_onl
         !user_plugins.exists(),
         "user plugin layer must not be written"
     );
+
+    // Even an authorized cwd cannot redirect its plugin install root to the user layer.
+    #[cfg(unix)]
+    {
+        let workspace_plugins = iso.workspace_dir.join(".cowork/plugins");
+        std::fs::create_dir_all(&user_plugins).unwrap();
+        std::os::unix::fs::symlink(&user_plugins, &workspace_plugins).unwrap();
+        let (status, body) = rpc(json!({
+            "id": 66, "method": "cowork/plugins/install",
+            "params": { "cwd": cwd, "sourceInput": plugin_src, "targetScope": "workspace" }
+        }))
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, json!({ "id": 66, "error": plugin_denial }));
+        assert!(!user_plugins.join("h3-plugin").exists());
+        std::fs::remove_file(workspace_plugins).unwrap();
+        std::fs::remove_dir(&user_plugins).unwrap();
+    }
 
     // Workspace-scoped plugin calls reach their handlers (whatever their own outcome).
     for (id, method, params) in [

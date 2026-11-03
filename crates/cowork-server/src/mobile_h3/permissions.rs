@@ -1,3 +1,4 @@
+use cowork_config::{is_inside, path_has_link_component};
 use cowork_protocol::{
     JsonRpcLiteClientMessage, JsonRpcLiteClientResponse, JsonRpcLiteError, JsonRpcLiteId,
     JsonRpcLiteNotification, JsonRpcLiteRequest,
@@ -373,7 +374,10 @@ impl H3RequestDenial {
 /// desktop user sets `trustWorkspaceMcp`. User-scoped (`global`) skill installs stay allowed:
 /// skills are instruction bundles that cannot declare MCP servers and only run through a turn,
 /// which needs `turns`. TS had no such check.
-pub fn get_h3_request_denial(message: &JsonRpcLiteClientMessage) -> Option<H3RequestDenial> {
+pub fn get_h3_request_denial(
+    message: &JsonRpcLiteClientMessage,
+    workspace_targets_allowed: impl FnOnce(Option<&str>, &[&str]) -> bool,
+) -> Option<H3RequestDenial> {
     let (method, params) = match message {
         JsonRpcLiteClientMessage::ClientResponse(_) => return None,
         JsonRpcLiteClientMessage::Request(r) => (r.method.as_str(), r.params.as_ref()),
@@ -388,39 +392,80 @@ pub fn get_h3_request_denial(message: &JsonRpcLiteClientMessage) -> Option<H3Req
     // Plugin installs require `targetScope`; update/enable/disable/delete take an optional
     // `scope` and, when it is omitted, act on the first installed plugin with that id in any
     // scope, which may be a user plugin. Only an explicit workspace scope is accepted.
-    let plugin_scope_key = match method {
-        "cowork/plugins/install" | "cowork/import/plugin" => Some("targetScope"),
-        "cowork/plugins/update"
-        | "cowork/plugins/enable"
-        | "cowork/plugins/disable"
-        | "cowork/plugins/delete" => Some("scope"),
+    let cwd = param("cwd").and_then(Value::as_str);
+    let plugin_mutation: Option<(&str, &[&str])> = match method {
+        "cowork/plugins/install" | "cowork/import/plugin" => {
+            Some(("targetScope", &[".cowork/plugins"]))
+        }
+        "cowork/plugins/update" => Some(("scope", &[".cowork/plugins"])),
+        "cowork/plugins/enable" | "cowork/plugins/disable" => {
+            Some(("scope", &[".cowork/plugins.json"]))
+        }
+        // Deletion can remove an installation from either discovery root and edit its override.
+        "cowork/plugins/delete" => Some((
+            "scope",
+            &[".cowork/plugins", ".agents/plugins", ".cowork/plugins.json"],
+        )),
         _ => None,
     };
-    if let Some(key) = plugin_scope_key {
-        return (!is_workspace(param(key))).then_some(H3RequestDenial::UserPluginConfigMutation);
+    if let Some((key, destinations)) = plugin_mutation {
+        return (!is_workspace(param(key)) || !workspace_targets_allowed(cwd, destinations))
+            .then_some(H3RequestDenial::UserPluginConfigMutation);
     }
 
-    let targets_workspace_only = match method {
-        // The handlers write `source: "user"` to the user layer and default anything else to the
-        // workspace layer; only accept an omitted or explicit workspace source so a future change
-        // to that default cannot silently widen this.
-        "cowork/mcp/server/upsert" | "cowork/mcp/server/delete" => {
-            param("source").is_none() || is_workspace(param("source"))
-        }
-        // `source` is required here and may name the user layer directly or, for plugin servers,
-        // through `pluginScope: "user"`.
+    let (workspace_scope, destinations): (bool, &[&str]) = match method {
+        // Rename and delete can also migrate the workspace server's stored credentials.
+        "cowork/mcp/server/upsert" | "cowork/mcp/server/delete" => (
+            param("source").is_none() || is_workspace(param("source")),
+            &[
+                ".cowork/mcp-servers.json",
+                ".cowork/auth/mcp-credentials.json",
+            ],
+        ),
         "cowork/mcp/server/setEnabled" => {
             let plugin_scope = param("pluginScope");
-            let plugin_scope_ok = plugin_scope.is_none() || is_workspace(plugin_scope);
             match param("source").and_then(Value::as_str).map(str::trim) {
-                Some("workspace") => plugin_scope_ok,
-                Some("plugin") => is_workspace(plugin_scope),
-                _ => false,
+                Some("workspace") => (
+                    plugin_scope.is_none() || is_workspace(plugin_scope),
+                    &[".cowork/mcp-servers.json"],
+                ),
+                Some("plugin") => (is_workspace(plugin_scope), &[".cowork/plugins.json"]),
+                _ => return Some(H3RequestDenial::UserMcpConfigMutation),
             }
         }
-        _ => true,
+        _ => return None,
     };
-    (!targets_workspace_only).then_some(H3RequestDenial::UserMcpConfigMutation)
+    (!workspace_scope || !workspace_targets_allowed(cwd, destinations))
+        .then_some(H3RequestDenial::UserMcpConfigMutation)
+}
+
+/// A scope is relative to the requested cwd. Home can itself be a registered workspace,
+/// and workspace metadata can be linked to the user layer.
+pub(super) fn workspace_targets_allowed(
+    runtime: &ServerRuntimeState,
+    raw_cwd: Option<&str>,
+    destinations: &[&str],
+) -> bool {
+    let Ok(cwd) = runtime.resolve_workspace_path(raw_cwd, "mobile workspace settings") else {
+        return false;
+    };
+    if !runtime.is_create_thread_workspace(&cwd) {
+        return false;
+    }
+    let user_roots = [
+        ".cowork/plugins",
+        ".agents/plugins",
+        ".cowork/config",
+        ".cowork/auth",
+    ]
+    .map(|path| runtime.homedir.join(path));
+    destinations.iter().all(|relative| {
+        let target = cwd.join(relative);
+        !path_has_link_component(&target)
+            && !user_roots
+                .iter()
+                .any(|root| is_inside(root, &target) || is_inside(&target, root))
+    })
 }
 
 pub fn apply_trusted_device_permissions(
@@ -443,6 +488,10 @@ mod tests {
     use super::*;
     use MobilePermissionKey::{McpAuth, Turns, WorkspaceSettings};
     use serde_json::json;
+
+    fn scope_denial(message: &JsonRpcLiteClientMessage) -> Option<H3RequestDenial> {
+        get_h3_request_denial(message, |_, _| true)
+    }
 
     fn request(method: &str, params: Value) -> JsonRpcLiteClientMessage {
         parse_http_jsonrpc_payload(&json!({ "id": 1, "method": method, "params": params })).unwrap()
@@ -500,18 +549,18 @@ mod tests {
     fn user_layer_mcp_edits_are_denied_and_workspace_edits_allowed() {
         let denied = Some(H3RequestDenial::UserMcpConfigMutation);
         for method in ["cowork/mcp/server/upsert", "cowork/mcp/server/delete"] {
-            assert_eq!(get_h3_request_denial(&request(method, json!({}))), None);
+            assert_eq!(scope_denial(&request(method, json!({}))), None);
             assert_eq!(
-                get_h3_request_denial(&request(method, json!({ "source": null }))),
+                scope_denial(&request(method, json!({ "source": null }))),
                 None
             );
             assert_eq!(
-                get_h3_request_denial(&request(method, json!({ "source": "workspace" }))),
+                scope_denial(&request(method, json!({ "source": "workspace" }))),
                 None
             );
             for source in [json!("user"), json!(" user "), json!("plugin"), json!(1)] {
                 assert_eq!(
-                    get_h3_request_denial(&request(method, json!({ "source": source }))),
+                    scope_denial(&request(method, json!({ "source": source }))),
                     denied,
                     "{method} {source}"
                 );
@@ -519,12 +568,12 @@ mod tests {
         }
         // Params that are not an object carry no source; the handler rejects them itself.
         assert_eq!(
-            get_h3_request_denial(&request("cowork/mcp/server/upsert", json!([]))),
+            scope_denial(&request("cowork/mcp/server/upsert", json!([]))),
             None
         );
 
         let set_enabled =
-            |params: Value| get_h3_request_denial(&request("cowork/mcp/server/setEnabled", params));
+            |params: Value| scope_denial(&request("cowork/mcp/server/setEnabled", params));
         assert_eq!(set_enabled(json!({ "source": "workspace" })), None);
         assert_eq!(
             set_enabled(json!({ "source": "plugin", "pluginScope": "workspace" })),
@@ -547,9 +596,9 @@ mod tests {
             "params": { "source": "user" }
         }))
         .unwrap();
-        assert_eq!(get_h3_request_denial(&notification), denied);
+        assert_eq!(scope_denial(&notification), denied);
         assert_eq!(
-            get_h3_request_denial(&request(
+            scope_denial(&request(
                 "cowork/mcp/server/validate",
                 json!({ "source": "user" })
             )),
@@ -557,7 +606,7 @@ mod tests {
         );
         let client_response =
             parse_http_jsonrpc_payload(&json!({ "id": 1, "result": {} })).unwrap();
-        assert_eq!(get_h3_request_denial(&client_response), None);
+        assert_eq!(scope_denial(&client_response), None);
     }
 
     #[test]
@@ -572,7 +621,7 @@ mod tests {
             ("cowork/plugins/delete", "scope"),
         ] {
             assert_eq!(
-                get_h3_request_denial(&request(method, json!({ key: "workspace" }))),
+                scope_denial(&request(method, json!({ key: "workspace" }))),
                 None,
                 "{method}"
             );
@@ -584,7 +633,7 @@ mod tests {
                 json!({ key: 1 }),
             ] {
                 assert_eq!(
-                    get_h3_request_denial(&request(method, params.clone())),
+                    scope_denial(&request(method, params.clone())),
                     denied,
                     "{method} {params}"
                 );
@@ -592,7 +641,7 @@ mod tests {
         }
         // Skills cannot carry MCP servers; global skill installs are not refused.
         assert_eq!(
-            get_h3_request_denial(&request(
+            scope_denial(&request(
                 "cowork/skills/install",
                 json!({ "targetScope": "global" })
             )),
@@ -600,7 +649,7 @@ mod tests {
         );
         // Previews only read the source.
         assert_eq!(
-            get_h3_request_denial(&request(
+            scope_denial(&request(
                 "cowork/plugins/install/preview",
                 json!({ "targetScope": "user" })
             )),

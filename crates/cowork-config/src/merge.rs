@@ -332,20 +332,42 @@ pub fn is_network_telemetry_globally_disabled(env: &HashMap<String, String>) -> 
     ) == Some(true)
 }
 
-fn resolve_builtin_dir(env: &HashMap<String, String>) -> PathBuf {
-    if let Some(dir) = as_non_empty_env(env, "COWORK_BUILTIN_DIR") {
-        return PathBuf::from(dir);
+/// Locate trusted installation resources without consulting the project or process working directory.
+pub fn resolve_builtin_dir(env: &HashMap<String, String>) -> Result<PathBuf> {
+    for key in ["COWORK_BUILTIN_DIR", "COWORK_REPO_ROOT"] {
+        if let Some(value) = as_non_empty_env(env, key) {
+            let dir = PathBuf::from(value);
+            if dir.is_absolute() && dir.is_dir() {
+                return Ok(dir);
+            }
+            return Err(ConfigError::Validation(format!(
+                "{key} must point to an existing absolute directory"
+            )));
+        }
     }
-    if let Ok(cwd) = std::env::current_dir()
-        && cwd.join("config").join("defaults.json").exists()
+
+    let executable = std::env::current_exe().map_err(|error| {
+        ConfigError::Validation(format!("Cannot locate Cowork executable: {error}"))
+    })?;
+    // Cargo development builds can live in a shared CARGO_TARGET_DIR outside this checkout.
+    // A distributed release must not trust a build-machine path that happens to exist on the host.
+    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2)
+        && (executable.starts_with(root.join("target"))
+            || env.get("CARGO_MANIFEST_DIR").is_some_and(|manifest| {
+                Path::new(manifest).parent() == Some(root.join("crates").as_path())
+            }))
+        && root.join("config/defaults.json").is_file()
     {
-        return cwd;
+        return Ok(root.to_owned());
     }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
+    if let Some(dir) = executable.parent()
+        && dir.join("config/defaults.json").is_file()
+    {
+        return Ok(dir.to_owned());
+    }
+    // A resource-less binary still has embedded defaults. Resource consumers join paths
+    // beneath this root; the executable itself is a file, so those probes find no assets.
+    Ok(executable)
 }
 
 fn parse_commands_config(
@@ -507,9 +529,10 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
     let homedir = options
         .homedir
         .unwrap_or_else(|| resolve_home_dir(&env, host_platform()));
-    let built_in_dir = options
-        .built_in_dir
-        .unwrap_or_else(|| resolve_builtin_dir(&env));
+    let built_in_dir = match options.built_in_dir {
+        Some(dir) => dir,
+        None => resolve_builtin_dir(&env)?,
+    };
 
     let project_cowork_dir = cwd.join(".cowork");
     let workspace_agents_dir = cwd.join(".agents");

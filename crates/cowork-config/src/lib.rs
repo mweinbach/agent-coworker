@@ -43,7 +43,8 @@ pub use merge::{
     AgentConfig, CommandTemplateConfig, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
     DEFAULT_WORKFLOW_MAX_CONCURRENT_AGENTS, ExperimentalFeatures, HarnessConfig, LoadConfigOptions,
     ModelSettings, ObservabilityConfig, ProjectConfigOverrides, ToolCallingConfig, UserProfile,
-    is_network_telemetry_globally_disabled, load_config, strip_provider_option_endpoints,
+    is_network_telemetry_globally_disabled, load_config, resolve_builtin_dir,
+    strip_provider_option_endpoints,
 };
 pub use migration::{
     AgentConfigMigrationResult, AgentConfigMigrationScopeResult, MigrateAgentConfigOptions,

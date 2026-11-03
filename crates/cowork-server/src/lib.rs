@@ -43,7 +43,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use cowork_config::{
     canonicalize_sync, ensure_ai_coworker_home, env_map_from_process, get_ai_coworker_paths,
-    resolve_home_dir,
+    resolve_builtin_dir, resolve_home_dir,
 };
 use cowork_storage::{SessionDb, SessionDbOptions, ThreadJournal};
 use dashmap::DashMap;
@@ -234,50 +234,6 @@ impl ServerHandle {
     }
 }
 
-fn locate_builtin_dir(cwd: &Path, env: &HashMap<String, String>) -> PathBuf {
-    if let Some(builtin_dir) = env
-        .get("COWORK_BUILTIN_DIR")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        let p = PathBuf::from(builtin_dir);
-        if p.is_dir() {
-            return p;
-        }
-    }
-    if let Some(repo_root) = env
-        .get("COWORK_REPO_ROOT")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        let p = PathBuf::from(repo_root);
-        if p.join("config/defaults.json").is_file() {
-            return p;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        let mut cur = exe.parent();
-        while let Some(dir) = cur {
-            if dir.join("config/defaults.json").is_file() {
-                return dir.to_path_buf();
-            }
-            let dist_dir = dir.join("dist");
-            if dist_dir.join("config/defaults.json").is_file() {
-                return dist_dir;
-            }
-            cur = dir.parent();
-        }
-    }
-    let mut cur = Some(cwd);
-    while let Some(dir) = cur {
-        if dir.join("config/defaults.json").is_file() {
-            return dir.to_path_buf();
-        }
-        cur = dir.parent();
-    }
-    cwd.to_path_buf()
-}
-
 fn format_host_port(host: &str, port: u16) -> String {
     let trimmed = host.trim();
     if trimmed.contains(':') && !trimmed.starts_with('[') {
@@ -335,9 +291,10 @@ async fn start_server_inner(
         .unwrap_or_else(|| {
             canonicalize_sync(&resolve_home_dir(&opts.env, cowork_config::host_platform()))
         });
-    let built_in_dir = opts
-        .built_in_dir
-        .unwrap_or_else(|| locate_builtin_dir(&working_directory, &opts.env));
+    let built_in_dir = match opts.built_in_dir {
+        Some(dir) => dir,
+        None => resolve_builtin_dir(&opts.env)?,
+    };
 
     let ai_paths = get_ai_coworker_paths(Some(&homedir), &opts.env);
     ensure_ai_coworker_home(&ai_paths)?;

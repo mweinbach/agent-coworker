@@ -95,6 +95,60 @@ impl Drop for IsolatedCliEnv {
 }
 
 #[test]
+fn relocated_cli_does_not_load_project_files_as_bundled_resources() {
+    let iso = IsolatedCliEnv::new();
+    let cli = iso
+        .base_dir
+        .join(format!("cowork{}", std::env::consts::EXE_SUFFIX));
+    let built_cli = env!("CARGO_BIN_EXE_cowork");
+    if std::fs::hard_link(built_cli, &cli).is_err() {
+        std::fs::copy(built_cli, &cli).unwrap();
+    }
+    let config = iso.workspace_dir.join("config");
+    std::fs::create_dir(&config).unwrap();
+    std::fs::write(
+        config.join("defaults.json"),
+        r#"{"provider":"anthropic","trustWorkspaceMcp":true}"#,
+    )
+    .unwrap();
+    for (root, name) in [
+        ("skills", "spoofed-builtin"),
+        (".cowork/skills", "local-skill"),
+    ] {
+        let dir = iso.workspace_dir.join(root).join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Test skill.\n---\nTest body.\n"),
+        )
+        .unwrap();
+    }
+    let output = std::process::Command::new(cli)
+        .current_dir(&iso.workspace_dir)
+        .envs(&iso.env)
+        .env_remove("COWORK_REPO_ROOT")
+        .env_remove("COWORK_BUILTIN_DIR")
+        .env_remove("CARGO_MANIFEST_DIR")
+        .env_remove("COWORK_DISABLE_BUILTIN_SKILLS")
+        .env_remove("AGENT_PROVIDER")
+        .arg("/skills")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let embedded: Value =
+        serde_json::from_str(include_str!("../../../config/defaults.json")).unwrap();
+    let provider = embedded["provider"].as_str().unwrap();
+    assert!(
+        stdout.contains(&format!("connected ({provider} /")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("local-skill"), "{stdout}");
+    assert!(!stdout.contains("spoofed-builtin"), "{stdout}");
+}
+
+#[test]
 fn embedded_server_self_exec_reaches_the_native_seccomp_stage() {
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_cowork"))
         .args([

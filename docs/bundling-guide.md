@@ -50,6 +50,8 @@ The build script (`scripts/build_cowork_server_binary.ts`) compiles the native R
 
 **Spawn as a subprocess:**
 
+A standalone executable can run with embedded defaults. To use a resource bundle stored elsewhere, set `COWORK_BUILTIN_DIR` to its absolute path. The workspace passed to `--dir` supplies project settings and skills only.
+
 ```typescript
 import { spawn } from "node:child_process";
 

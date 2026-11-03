@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
 
 use cowork_config::{
-    AgentConfig, ChildModelRoutingMode, ModelRegistry, ProviderName, parse_child_model_ref,
+    AgentConfig, ChildModelRoutingMode, ModelRegistry, ProviderName, env_map_from_process,
+    parse_child_model_ref, resolve_builtin_dir,
 };
 use serde_json::{Map, Value};
 
@@ -20,13 +20,8 @@ fn load_registry_with_repo_fallback(cfg: &AgentConfig) -> ModelRegistry {
     if cfg.built_in_dir.join("config/models").is_dir() {
         return ModelRegistry::load_from_builtin_dir(&cfg.built_in_dir);
     }
-    let manifest_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent);
-    if let Some(root) = manifest_root
-        && root.join("config/models").is_dir()
-    {
-        return ModelRegistry::load_from_builtin_dir(root);
+    if let Ok(root) = resolve_builtin_dir(&env_map_from_process()) {
+        return ModelRegistry::load_from_builtin_dir(&root);
     }
     ModelRegistry::load_from_builtin_dir(&cfg.built_in_dir)
 }

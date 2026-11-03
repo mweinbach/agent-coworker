@@ -69,6 +69,58 @@ fn not_approved(out: &Value) -> bool {
     out["stderr"] == "Command was not approved." && out["exitCode"] == 1
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn bash_discovers_backend_from_host_and_runs_it_with_child_env() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_ws, mut ctx) = setup();
+    let bundle = tempfile::tempdir().unwrap();
+    let helper = bundle.path().join("fixture-bwrap");
+    fs::write(
+        &helper,
+        r#"#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+if [ "$2" = __sandbox-exec ]; then
+    printf 'fixture: '
+    while [ "$1" != -- ]; do shift; done
+    shift
+fi
+exec "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    ctx.env.insert(
+        "COWORK_BWRAP_PATH".to_owned(),
+        helper.to_string_lossy().into_owned(),
+    );
+    ctx.sandbox_config.require_backend = true;
+    let out = run_bash(&ctx, "echo \"$COWORK_SANDBOX ${COWORK_BWRAP_PATH-unset}\"").await;
+    assert_eq!(out["exitCode"], 0, "{out}");
+    assert_eq!(
+        out["stdout"].as_str().unwrap().trim(),
+        "fixture: linux-bwrap unset"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires the provisioned Windows sandbox helper bundle"]
+async fn windows_bash_uses_host_sandbox() {
+    let (_ws, mut ctx) = setup();
+    ctx.env = std::env::vars().collect();
+    ctx.sandbox_config.require_backend = true;
+    let out = run_bash(
+        &ctx,
+        "if (Get-ChildItem Env:COWORK_WIN_SANDBOX_*) { throw 'helper configuration leaked' }; Write-Output 'sandbox-ok'",
+    )
+    .await;
+    assert_eq!(out["exitCode"], 0, "{out}");
+    assert_eq!(out["stdout"].as_str().unwrap().trim(), "sandbox-ok");
+}
+
 #[tokio::test]
 async fn review_classified_bash_commands_require_approval_outside_yolo() {
     let (ws, mut ctx) = setup();

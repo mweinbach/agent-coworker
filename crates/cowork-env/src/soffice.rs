@@ -493,7 +493,7 @@ impl SofficeRunner {
             network: false,
         };
         let child_env = build_isolated_child_env(&req.env, scratch_guard.path(), &tmp_dir);
-        self.verify_full_sandbox_enforcement(&child_env)?;
+        self.verify_full_sandbox_enforcement(&req.env)?;
 
         let timeout = req.timeout.unwrap_or(self.default_timeout);
         let mut sreq = SandboxExecutionRequest::new(
@@ -504,7 +504,8 @@ impl SofficeRunner {
         sreq.yolo = false;
         sreq.require_backend = true;
         sreq.timeout = Some(timeout);
-        sreq.env_source = Some(child_env.clone());
+        sreq.env_source = Some(req.env);
+        sreq.child_env_source = Some(child_env.clone());
         sreq.extra_env = child_env;
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
@@ -629,7 +630,7 @@ impl SofficeRunner {
             network: false,
         };
         let child_env = build_isolated_child_env(&req.env, scratch_guard.path(), &tmp_dir);
-        self.verify_full_sandbox_enforcement(&child_env)?;
+        self.verify_full_sandbox_enforcement(&req.env)?;
 
         let timeout = req.timeout.unwrap_or(self.default_timeout);
         let mut sreq = SandboxExecutionRequest::new(
@@ -640,7 +641,8 @@ impl SofficeRunner {
         sreq.yolo = false;
         sreq.require_backend = true;
         sreq.timeout = Some(timeout);
-        sreq.env_source = Some(child_env.clone());
+        sreq.env_source = Some(req.env);
+        sreq.child_env_source = Some(child_env.clone());
         sreq.extra_env = child_env;
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
@@ -877,7 +879,8 @@ impl SofficeRunner {
         req.yolo = false;
         req.require_backend = false;
         req.timeout = Some(Duration::from_secs(10));
-        req.env_source = Some(child_env.clone());
+        req.env_source = Some(env.clone());
+        req.child_env_source = Some(child_env.clone());
         req.extra_env = child_env;
 
         let res = self

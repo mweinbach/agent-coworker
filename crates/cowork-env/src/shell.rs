@@ -877,7 +877,8 @@ pub async fn execute_non_login_shell(
     req.yolo = opts.yolo;
     req.require_backend = opts.require_sandbox_backend;
     req.timeout = Some(opts.timeout);
-    req.env_source = Some(canonical_env);
+    req.env_source = Some(opts.base_env);
+    req.child_env_source = Some(canonical_env);
     req.extra_env = caller_extra_env;
     req.read_denied_roots = opts.read_denied_roots;
 

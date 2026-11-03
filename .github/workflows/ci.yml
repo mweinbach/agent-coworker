@@ -383,6 +383,9 @@ jobs:
           & $helperPath setup --sandbox-home $env:COWORK_WIN_SANDBOX_HOME --cwd $setupWorkspace --mode workspace-write --writable-root $setupWorkspace
           if ($LASTEXITCODE -ne 0) { throw "Windows sandbox setup or enforcement probe failed with exit code $LASTEXITCODE" }
 
+          cargo test -p cowork-tools --test bash_approval_parity_tests windows_bash_uses_host_sandbox -- --exact --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.windows-scope.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

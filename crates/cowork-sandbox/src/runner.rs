@@ -33,7 +33,12 @@ pub struct SandboxExecutionRequest {
     pub has_scoped_target_paths: bool,
     pub timeout: Option<Duration>,
     pub max_buffer: usize,
+    /// Trusted host environment for backend discovery and verification. Defaults to the process
+    /// environment and also seeds the child environment unless a caller supplies its own.
     pub env_source: Option<HashMap<String, String>>,
+    /// Prepared environment for the inner command (for example an isolated Office HOME).
+    /// Never used to locate or verify the sandbox helper.
+    pub child_env_source: Option<HashMap<String, String>>,
     pub extra_env: HashMap<String, String>,
     pub capabilities_override: Option<SandboxCapabilities>,
     pub sandbox_exec_path: Option<PathBuf>,
@@ -57,6 +62,7 @@ impl SandboxExecutionRequest {
             timeout: None,
             max_buffer: DEFAULT_MAX_BUFFER_BYTES,
             env_source: None,
+            child_env_source: None,
             extra_env: HashMap::new(),
             capabilities_override: None,
             sandbox_exec_path: None,
@@ -208,12 +214,13 @@ impl SandboxRunner {
             ),
         };
 
+        let child_env_src = req.child_env_source.as_ref().unwrap_or(env_src);
         let mut child_env = if unsandboxed && req.yolo {
-            let mut full = env_src.clone();
+            let mut full = child_env_src.clone();
             remove_env(&mut full, PARENT_MANAGED_ENV_VAR, platform);
             full
         } else {
-            let allowlisted = minimal_sandbox_env(env_src, platform);
+            let allowlisted = minimal_sandbox_env(child_env_src, platform);
             normalize_sandbox_child_env(&allowlisted, &req.policy, Some(platform))
         };
         for (k, v) in &req.extra_env {

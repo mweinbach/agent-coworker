@@ -880,12 +880,17 @@ pub fn read_ooxml_color(
     tint: Option<f64>,
 ) -> Option<String> {
     if let Some(rgb_str) = rgb {
+        // Attribute text comes straight from the workbook XML, so validate before slicing: a
+        // non-ASCII 8-byte value would otherwise put byte index 2 inside a multi-byte char.
+        if !rgb_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
         let normalized = if rgb_str.len() == 8 {
             &rgb_str[2..]
         } else {
             rgb_str
         };
-        if normalized.len() == 6 && normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if normalized.len() == 6 {
             return Some(format!("#{}", normalized.to_ascii_uppercase()));
         }
         return None;
@@ -2175,4 +2180,25 @@ fn parse_chart_metadata(xml: &str) -> (Option<String>, Option<String>) {
     let title = normalize_whitespace(&title_parts.join(" "));
     let title_opt = if title.is_empty() { None } else { Some(title) };
     (title_opt, chart_type)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_ooxml_color;
+
+    #[test]
+    fn rgb_colors_parse_and_malformed_values_never_panic() {
+        assert_eq!(
+            read_ooxml_color(Some("FF1a2B3c"), None, None, None).as_deref(),
+            Some("#1A2B3C")
+        );
+        assert_eq!(
+            read_ooxml_color(Some("00ff00"), None, None, None).as_deref(),
+            Some("#00FF00")
+        );
+        // 8 bytes whose byte index 2 falls inside a multi-byte char ("0é12345").
+        for bad in ["0é12345", "ééé12", "FFGG0000", "FF00", "", "€€"] {
+            assert_eq!(read_ooxml_color(Some(bad), None, None, None), None, "{bad}");
+        }
+    }
 }

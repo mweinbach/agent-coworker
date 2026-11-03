@@ -943,7 +943,7 @@ impl BuiltinTool for RecallMemoryTool {
         // `workspace` is the session's own folder; `global` is the cross-workspace memory,
         // i.e. the shared `(chats)` folder (TS) plus `_global`; `both` reads all of them in
         // that order, so the session's own entries win name lookups (TS `findByNameOrSlug`).
-        let mut all_entries = Vec::new();
+        let mut folders: Vec<Vec<AdvancedMemoryEntry>> = Vec::new();
         for (label, dir) in store.readable_scope_dirs() {
             let wanted = match scope {
                 "workspace" => label == WORKSPACE_SCOPE_LABEL,
@@ -951,23 +951,28 @@ impl BuiltinTool for RecallMemoryTool {
                 _ => true,
             };
             if wanted {
-                all_entries.extend(store.list_entries_in_dir(&dir, label)?);
+                folders.push(store.list_entries_in_dir(&dir, label)?);
             }
         }
 
         if let Some(target_name) = args.get("name").and_then(Value::as_str) {
+            // TS `findByNameOrSlug`: try the slug and then the display name within each folder
+            // before moving to the next, so a workspace entry's name beats a shared slug.
             let exact = target_name.trim();
             let target_slug = slugify_memory_name(target_name);
-            let found = all_entries
-                .iter()
-                .position(|e| e.slug == target_name || e.slug == exact)
-                .or_else(|| all_entries.iter().position(|e| e.slug == target_slug))
-                .or_else(|| {
-                    all_entries
-                        .iter()
-                        .position(|e| e.name.eq_ignore_ascii_case(exact))
-                })
-                .map(|idx| all_entries.swap_remove(idx));
+            let wanted_name = exact.to_lowercase();
+            let found = folders.into_iter().find_map(|mut entries| {
+                entries
+                    .iter()
+                    .position(|e| e.slug == target_name || e.slug == exact)
+                    .or_else(|| entries.iter().position(|e| e.slug == target_slug))
+                    .or_else(|| {
+                        entries.iter().position(|e| {
+                            e.name.trim().to_lowercase() == wanted_name || e.slug == wanted_name
+                        })
+                    })
+                    .map(|idx| entries.swap_remove(idx))
+            });
             if let Some(found) = found {
                 return Ok(ToolOutput::Text(format!(
                     "# {} ({}, scope={})\n{}\n\n{}",
@@ -984,8 +989,9 @@ impl BuiltinTool for RecallMemoryTool {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let filtered: Vec<AdvancedMemoryEntry> = all_entries
+        let filtered: Vec<AdvancedMemoryEntry> = folders
             .into_iter()
+            .flatten()
             .filter(|e| {
                 q.is_empty()
                     || e.name.to_ascii_lowercase().contains(&q)

@@ -347,3 +347,32 @@ fn render_index_reflects_entry_files_not_a_stale_memory_md() {
     assert!(summary.contains("### Shared (chats) Memories"), "{summary}");
     assert!(summary.contains("kept-desc"), "{summary}");
 }
+
+/// TS `findByNameOrSlug` tries slug and display name within each folder before the next one, so
+/// a workspace entry's display name beats a shared `(chats)` entry whose slug matches.
+#[tokio::test]
+async fn workspace_display_name_beats_a_shared_slug_match() {
+    let f = fixture();
+    write_ts_memory(
+        &f.workspace_dir(),
+        "local-style",
+        "Coding style",
+        "Workspace rules",
+        "project",
+        "workspace coding style body",
+    );
+    write_ts_memory(
+        &f.chats_dir(),
+        "coding-style",
+        "Shared coding style",
+        "Shared rules",
+        "feedback",
+        "shared coding style body",
+    );
+
+    let by_name = recall(&f, json!({ "name": "Coding style" })).await;
+    assert!(by_name.contains("workspace coding style body"), "{by_name}");
+    // The shared entry is still reachable by its slug when the workspace has no match for it.
+    let shared = recall(&f, json!({ "name": "coding-style", "scope": "global" })).await;
+    assert!(shared.contains("shared coding style body"), "{shared}");
+}

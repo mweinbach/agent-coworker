@@ -318,4 +318,167 @@ describe("TranscriptInbox recovery", () => {
       ]);
     },
   );
+
+  test("rejects unsafe batch ids before they consume inbox capacity", async () => {
+    const userDataDir = await makeTempDir("cowork-transcript-batch-id-");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      maxBatches: 1,
+      retentionMs: Number.MAX_SAFE_INTEGER,
+      now: () => 1_000,
+      hardenPrivateDir: () => {},
+      hardenPrivateFile: () => {},
+    });
+    const event = {
+      ts: "2026-07-26T10:00:00.000Z",
+      threadId: "thread-batch-id",
+      direction: "server" as const,
+      payload: { text: "kept" },
+    };
+    for (const batchId of ["", "../evil", "has space", "a".repeat(257), "batch\\id"]) {
+      let error: unknown;
+      try {
+        inbox.appendBatch([event], batchId);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(TranscriptInboxError);
+      if (error instanceof TranscriptInboxError) {
+        expect(error.message).toBe("batchId contains invalid characters");
+        expect(error.status).toBe(400);
+      }
+    }
+
+    const accepted = "a".repeat(256);
+    inbox.appendBatch([event], accepted);
+
+    const database = new Database(path.join(userDataDir, "transcript-inbox.sqlite"));
+    try {
+      const rows = database
+        .query("SELECT batch_id FROM transcript_batches ORDER BY rowid")
+        .all() as Array<{ batch_id: string }>;
+      expect(rows).toEqual([{ batch_id: accepted }]);
+    } finally {
+      database.close(false);
+    }
+  });
+
+  test("fails closed when a blocked projection fills the inbox", async () => {
+    const userDataDir = await makeTempDir("cowork-transcript-capacity-");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      maxBatches: 1,
+      retentionMs: Number.MAX_SAFE_INTEGER,
+      now: () => 1_000,
+      hardenPrivateDir: () => {},
+      hardenPrivateFile: () => {},
+    });
+    await fs.mkdir(path.join(userDataDir, "transcripts", "blocked-thread.jsonl"), {
+      recursive: true,
+    });
+    const blocked = {
+      ts: "2026-07-26T10:00:00.000Z",
+      threadId: "blocked-thread",
+      direction: "server" as const,
+      payload: { text: "blocked" },
+    };
+    expect(() => inbox.appendBatch([blocked], "blocked-batch")).toThrow(TranscriptInboxError);
+
+    let error: unknown;
+    try {
+      inbox.appendBatch(
+        [{ ...blocked, threadId: "other-thread", payload: { text: "should not land" } }],
+        "other-batch",
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(TranscriptInboxError);
+    if (error instanceof TranscriptInboxError) {
+      expect(error.message).toBe("Transcript inbox capacity reached");
+      expect(error.status).toBe(503);
+    }
+
+    const database = new Database(path.join(userDataDir, "transcript-inbox.sqlite"));
+    try {
+      const rows = database
+        .query("SELECT batch_id FROM transcript_batches ORDER BY rowid")
+        .all() as Array<{ batch_id: string }>;
+      expect(rows).toEqual([{ batch_id: "blocked-batch" }]);
+    } finally {
+      database.close(false);
+    }
+    await expect(
+      fs.access(path.join(userDataDir, "transcripts", "other-thread.jsonl")),
+    ).rejects.toThrow();
+  });
+
+  test("refuses to project a delivery id whose transcript bytes changed", async () => {
+    const userDataDir = await makeTempDir("cowork-transcript-projection-conflict-");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      now: () => 1_000,
+      hardenPrivateDir: () => {},
+      hardenPrivateFile: () => {},
+    });
+    inbox.appendBatch(
+      [
+        {
+          ts: "2026-07-26T10:00:00.000Z",
+          threadId: "thread-conflict",
+          direction: "server",
+          payload: { text: "first" },
+        },
+      ],
+      "proj-a",
+    );
+    const filePath = path.join(userDataDir, "transcripts", "thread-conflict.jsonl");
+    const original = JSON.parse(await fs.readFile(filePath, "utf8")) as {
+      payload: { text: string };
+    };
+    original.payload.text = "tampered";
+    const tampered = `${JSON.stringify(original)}\n`;
+    await fs.writeFile(filePath, tampered);
+
+    const databasePath = path.join(userDataDir, "transcript-inbox.sqlite");
+    const database = new Database(databasePath);
+    try {
+      database
+        .query("UPDATE transcript_events SET projected = 0 WHERE delivery_id = ?")
+        .run("proj-a:0");
+      database
+        .query(
+          "UPDATE transcript_batches SET state = 'pending', completed_at_ms = NULL WHERE batch_id = ?",
+        )
+        .run("proj-a");
+    } finally {
+      database.close(false);
+    }
+
+    let error: unknown;
+    try {
+      inbox.projectPending("thread-conflict");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(TranscriptInboxError);
+    if (error instanceof TranscriptInboxError) {
+      expect(error.message).toBe(
+        "Idempotency key conflicts with the existing transcript projection",
+      );
+      expect(error.status).toBe(409);
+    }
+    expect(await fs.readFile(filePath, "utf8")).toBe(tampered);
+
+    const verify = new Database(databasePath);
+    try {
+      const row = verify
+        .query("SELECT projected, event_json FROM transcript_events WHERE delivery_id = ?")
+        .get("proj-a:0") as { projected: number; event_json: string };
+      expect(row.projected).toBe(0);
+      expect(JSON.parse(row.event_json)).toMatchObject({ payload: { text: "first" } });
+    } finally {
+      verify.close(false);
+    }
+  });
 });

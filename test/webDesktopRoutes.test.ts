@@ -1145,6 +1145,184 @@ describe("web desktop routes", () => {
     expect(oversized?.status).toBe(413);
   });
 
+  test("rejects a transcript batch whose idempotency key does not match its body", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-idempotency-mismatch-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "header-batch",
+        },
+        body: JSON.stringify({
+          batchId: "body-batch",
+          events: [
+            {
+              ts: "2026-07-26T10:00:00.000Z",
+              threadId: "thread-mismatch",
+              direction: "client",
+              payload: { text: "should not land" },
+            },
+          ],
+        }),
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await response?.text()).toBe("Idempotency-Key must match batchId");
+    await expect(service.readTranscript("thread-mismatch")).resolves.toEqual([]);
+  });
+
+  test("accepts a trimmed idempotency key and ignores a blank one", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-idempotency-trim-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const event = {
+      ts: "2026-07-26T10:00:00.000Z",
+      direction: "server" as const,
+      payload: { text: "kept" },
+    };
+    const requests = [
+      {
+        threadId: "thread-blank-key",
+        batchId: "blank-header-batch",
+        idempotencyKey: "   ",
+      },
+      {
+        threadId: "thread-padded-key",
+        batchId: "padded-batch",
+        idempotencyKey: "  padded-batch  ",
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await handleWebDesktopRoute(
+        new Request("http://localhost/cowork/desktop/transcript/batch", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": request.idempotencyKey,
+          },
+          body: JSON.stringify({
+            batchId: request.batchId,
+            events: [{ ...event, threadId: request.threadId }],
+          }),
+        }),
+        { cwd: workspace, desktopService: service },
+      );
+      expect(response?.status).toBe(204);
+      await expect(service.readTranscript(request.threadId)).resolves.toEqual([
+        {
+          ...event,
+          threadId: request.threadId,
+          deliveryId: `${request.batchId}:0`,
+        },
+      ]);
+    }
+  });
+
+  test("rejects transcript events with an invalid direction or generation", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-event-validation-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const cases = [
+      {
+        threadId: "thread-direction",
+        direction: "upstream",
+        generation: 0,
+        message: "direction must be 'server' or 'client'",
+      },
+      {
+        threadId: "thread-negative-generation",
+        direction: "server",
+        generation: -1,
+        message: "generation must be a non-negative integer",
+      },
+      {
+        threadId: "thread-fractional-generation",
+        direction: "server",
+        generation: 1.5,
+        message: "generation must be a non-negative integer",
+      },
+      {
+        threadId: "thread-string-generation",
+        direction: "client",
+        generation: "2",
+        message: "generation must be a non-negative integer",
+      },
+    ];
+
+    for (const entry of cases) {
+      const response = await handleWebDesktopRoute(
+        new Request("http://localhost/cowork/desktop/transcript/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            batchId: entry.threadId,
+            events: [
+              {
+                ts: "2026-07-26T10:00:00.000Z",
+                threadId: entry.threadId,
+                direction: entry.direction,
+                generation: entry.generation,
+                payload: { text: "should not land" },
+              },
+            ],
+          }),
+        }),
+        { cwd: workspace, desktopService: service },
+      );
+      expect(response?.status).toBe(400);
+      expect(await response?.text()).toBe(entry.message);
+      await expect(service.readTranscript(entry.threadId)).resolves.toEqual([]);
+    }
+  });
+
+  test("does not tombstone a transcript when delete generation is not canonical", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-delete-generation-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const event = {
+      ts: "2026-07-26T10:00:00.000Z",
+      direction: "server" as const,
+      payload: { text: "kept" },
+      generation: 0,
+    };
+
+    for (const [index, generation] of ["0", "01", "1.5", "+1"].entries()) {
+      const threadId = `thread-delete-${index}`;
+      const response = await handleWebDesktopRoute(
+        new Request(
+          `http://localhost/cowork/desktop/transcript?threadId=${threadId}&generation=${encodeURIComponent(generation)}`,
+          { method: "DELETE" },
+        ),
+        { cwd: workspace, desktopService: service },
+      );
+      expect(response?.status).toBe(400);
+      expect(await response?.text()).toBe("generation must be a positive integer");
+
+      await service.appendTranscriptBatch([{ ...event, threadId }], {
+        batchId: `kept-delete-${index}`,
+      });
+      await expect(service.readTranscript(threadId)).resolves.toEqual([
+        {
+          ts: event.ts,
+          threadId,
+          direction: event.direction,
+          payload: event.payload,
+          deliveryId: `kept-delete-${index}:0`,
+        },
+      ]);
+    }
+  });
+
   test("returns canonical version metadata for contained previews and rejects escaping symlinks", async () => {
     const workspace = await makeTempDir("cowork-web-desktop-preview-");
     const outside = await makeTempDir("cowork-web-desktop-preview-outside-");

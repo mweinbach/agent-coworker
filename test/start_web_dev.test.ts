@@ -15,7 +15,7 @@ import {
   type WebDevDependencies,
 } from "../apps/desktop/scripts/start_web_dev";
 import { buildWorkspaceBinary, resolveWorkspaceServerBinary } from "../scripts/workspaceRustBinary";
-import { hostPlatform } from "../src/platform/host";
+import { hostArch, hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const encoder = new TextEncoder();
@@ -229,8 +229,8 @@ describe("web dev process lifecycle", () => {
       JSON.stringify({
         filename: resolvePackagedSidecarFilename(),
         targetTriple: resolveDesktopTargetTriple(),
-        platform: process.platform,
-        arch: process.arch,
+        platform: hostPlatform(),
+        arch: hostArch(),
       }),
     );
     // A tiny offline crate exercises Cargo's real artifact/target-dir behavior without building Cowork.

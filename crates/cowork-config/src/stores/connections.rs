@@ -74,6 +74,20 @@ impl ConnectionStore {
             tool_api_keys: None,
         }
     }
+
+    /// The trimmed API key saved for `provider`, when its connection is in API-key mode.
+    pub fn provider_api_key(&self, provider: ProviderName) -> Option<String> {
+        let entry = self.services.get(&provider)?;
+        if entry.mode != ConnectionMode::ApiKey {
+            return None;
+        }
+        entry
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+    }
 }
 
 fn validate_iso_timestamp(ts: &str) -> bool {

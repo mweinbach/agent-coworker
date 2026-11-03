@@ -18,6 +18,7 @@
 pub mod error;
 pub mod feature_flags;
 pub mod file_lock;
+pub mod lmstudio;
 pub mod merge;
 pub mod migration;
 pub mod models;
@@ -38,6 +39,10 @@ pub use feature_flags::{
 pub use file_lock::{
     FILE_LOCK_ACQUIRE_TIMEOUT_MS, FileLockOptions, file_lock_root_for_cowork_home,
     lock_database_path_for, with_file_lock, with_file_lock_sync,
+};
+pub use lmstudio::{
+    DEFAULT_LM_STUDIO_BASE_URL, LmStudioDiscoveryEndpoint, lmstudio_discovery_cache_scope,
+    normalize_lmstudio_base_url, resolve_lmstudio_discovery_endpoint,
 };
 pub use merge::{
     AgentConfig, CommandTemplateConfig, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,

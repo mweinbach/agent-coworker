@@ -5,10 +5,12 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::lmstudio::resolve_lmstudio_discovery_endpoint;
 use crate::paths::{AiCoworkerPaths, get_ai_coworker_paths};
 use crate::providers::{ChildModelRoutingMode, ProviderName};
 use crate::stores::{
-    CachedModelDiscoveryModel, read_custom_model_store_sync, read_model_discovery_cache_sync,
+    CachedModelDiscoveryModel, parse_connection_store_json, read_custom_model_store_sync,
+    read_model_discovery_cache_sync,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,6 +156,8 @@ impl ModelRegistry {
         fallback_supported_model(provider, fallback_default_model_id(provider))
     }
 
+    /// [`Self::resolve_model_for_config_with_provider_options`] without configured
+    /// `providerOptions` (LM Studio defaults then resolve against the env / default endpoint).
     pub fn resolve_model_for_config(
         &self,
         provider: ProviderName,
@@ -161,10 +165,43 @@ impl ModelRegistry {
         homedir: &Path,
         env: &HashMap<String, String>,
     ) -> SupportedModel {
-        let paths = get_ai_coworker_paths(Some(homedir), env);
-        let Some(raw_id) = requested_model.map(str::trim).filter(|s| !s.is_empty()) else {
-            if provider.is_runtime_discovery_provider()
-                && let Some(cache) = read_model_discovery_cache_sync(&paths, provider, None)
+        self.resolve_model_for_config_with_provider_options(
+            provider,
+            requested_model,
+            homedir,
+            env,
+            None,
+        )
+    }
+
+    /// The provider's default model when none is configured, like `resolveDefaultModelMetadata`
+    /// (`src/models/metadata.ts`). For LM Studio, TypeScript asks the live server and picks
+    /// its default LLM (`selectDefaultLmStudioModel`); config resolution here is synchronous and
+    /// offline, so it reads the catalog's discovery snapshot instead — from the cache file
+    /// scoped to the same `[baseUrl, apiKey]` the catalog writes — and falls back to the
+    /// provider's placeholder default only when nothing has been discovered.
+    ///
+    /// `provider_options` must be the trusted merged `providerOptions` (untrusted workspace
+    /// endpoints already stripped), so the scope names the endpoint the catalog discovers against.
+    pub fn default_model_for_config(
+        &self,
+        provider: ProviderName,
+        homedir: &Path,
+        env: &HashMap<String, String>,
+        provider_options: Option<&Map<String, Value>>,
+    ) -> SupportedModel {
+        if provider.is_runtime_discovery_provider() {
+            let paths = get_ai_coworker_paths(Some(homedir), env);
+            let scope = (provider == ProviderName::Lmstudio).then(|| {
+                // Read-only: config resolution must not create the cowork home.
+                let saved_key = fs::read_to_string(&paths.connections_file)
+                    .ok()
+                    .and_then(|raw| parse_connection_store_json(&raw, &paths.connections_file).ok())
+                    .and_then(|store| store.provider_api_key(provider));
+                resolve_lmstudio_discovery_endpoint(env, provider_options, saved_key.as_deref())
+                    .cache_scope()
+            });
+            if let Some(cache) = read_model_discovery_cache_sync(&paths, provider, scope.as_deref())
                 && let Some(first) = cache
                     .models
                     .iter()
@@ -173,8 +210,25 @@ impl ModelRegistry {
             {
                 return fallback_supported_model(provider, &first.id);
             }
-            return self.default_for(provider);
+        }
+        self.default_for(provider)
+    }
+
+    /// Resolves the configured model (or the provider default when none is configured).
+    /// `provider_options` is the trusted merged `providerOptions`; it locates the LM Studio
+    /// discovery snapshot used for the default (see [`Self::default_model_for_config`]).
+    pub fn resolve_model_for_config_with_provider_options(
+        &self,
+        provider: ProviderName,
+        requested_model: Option<&str>,
+        homedir: &Path,
+        env: &HashMap<String, String>,
+        provider_options: Option<&Map<String, Value>>,
+    ) -> SupportedModel {
+        let Some(raw_id) = requested_model.map(str::trim).filter(|s| !s.is_empty()) else {
+            return self.default_model_for_config(provider, homedir, env, provider_options);
         };
+        let paths = get_ai_coworker_paths(Some(homedir), env);
 
         let normalized_id = legacy_model_alias(provider, raw_id).unwrap_or(raw_id);
         if let Some(static_model) = self.get(provider, normalized_id) {

@@ -629,11 +629,18 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
         });
 
     let registry = ModelRegistry::load_from_builtin_dir(&built_in_dir);
-    let supported_model =
-        registry.resolve_model_for_config(provider, configured_model.as_deref(), &homedir, &env);
+    // `merged` carries the project tier only after `strip_untrusted_provider_endpoints`, so the
+    // LM Studio endpoint used to locate the discovery snapshot is a trusted one.
+    let merged_provider_opts_raw = merged.get("providerOptions").and_then(Value::as_object);
+    let supported_model = registry.resolve_model_for_config_with_provider_options(
+        provider,
+        configured_model.as_deref(),
+        &homedir,
+        &env,
+        merged_provider_opts_raw,
+    );
 
     // Merge providerOptions defaults with configured providerOptions and reconcile gated reasoning keys.
-    let merged_provider_opts_raw = merged.get("providerOptions").and_then(Value::as_object);
     let mut combined_provider_opts = merged_provider_opts_raw.cloned().unwrap_or_default();
     let current_section = combined_provider_opts
         .get(provider.as_str())

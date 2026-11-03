@@ -10,7 +10,9 @@ use serde_json::{Map, Value, json};
 
 use crate::sse::build_http_client;
 
-pub const DEFAULT_LM_STUDIO_BASE_URL: &str = "http://localhost:1234";
+/// Shared with `cowork-config` so the discovery-cache writer (provider catalog) and reader
+/// (config default-model resolution) normalize endpoints identically.
+pub use cowork_config::{DEFAULT_LM_STUDIO_BASE_URL, normalize_lmstudio_base_url};
 const MODEL_LIST_TIMEOUT_MS: u64 = 2_000;
 const MODEL_MUTATION_TIMEOUT_MS: u64 = 120_000;
 const START_DEFAULT_TIMEOUT_MS: u64 = 20_000;
@@ -109,24 +111,6 @@ pub struct LmStudioLocalStartResult {
     pub base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-}
-
-pub fn normalize_lmstudio_base_url(raw: Option<&str>) -> String {
-    let trimmed = raw
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_LM_STUDIO_BASE_URL);
-    let mut normalized = trimmed.trim_end_matches('/').to_string();
-    if let Some(stripped) = normalized.strip_suffix("/api/v1") {
-        normalized = stripped.to_string();
-    } else if let Some(stripped) = normalized.strip_suffix("/v1") {
-        normalized = stripped.to_string();
-    }
-    if normalized.is_empty() {
-        DEFAULT_LM_STUDIO_BASE_URL.to_string()
-    } else {
-        normalized
-    }
 }
 
 pub fn is_loopback_lmstudio_url(url: &str) -> bool {

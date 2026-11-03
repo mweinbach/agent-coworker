@@ -6,18 +6,19 @@ use std::time::Duration;
 use chrono::Utc;
 use cowork_config::{
     AiCoworkerPaths, CachedModelDiscoveryModel, CachedModelReasoning, ConnectionMode,
-    ConnectionStore, CustomModelEntry, ModelDiscoveryCacheFile, ModelDiscoveryResult,
-    ModelDiscoverySource, ModelPreferenceEntry, ModelRegistry, ProviderDiscoveryMode, ProviderName,
-    ProviderWireProtocol, SupportedModel, get_ai_coworker_paths, is_model_discovery_cache_fresh,
+    ConnectionStore, CustomModelEntry, LmStudioDiscoveryEndpoint, ModelDiscoveryCacheFile,
+    ModelDiscoveryResult, ModelDiscoverySource, ModelPreferenceEntry, ModelRegistry,
+    ProviderDiscoveryMode, ProviderName, ProviderWireProtocol, SupportedModel,
+    get_ai_coworker_paths, is_model_discovery_cache_fresh, normalize_lmstudio_base_url,
     read_connection_store, read_custom_model_store, read_model_discovery_cache,
-    read_model_preferences_store, write_model_discovery_cache,
+    read_model_preferences_store, resolve_lmstudio_discovery_endpoint, write_model_discovery_cache,
 };
 pub use cowork_config::{ProviderAuthMethod, ProviderAuthMethodField};
 use regex::Regex;
 use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::bedrock::{
     compute_bedrock_auth_fingerprint, discover_bedrock_models, mask_bedrock_field_values,
@@ -135,16 +136,7 @@ pub fn validate_structured_provider_config(
 }
 
 pub fn stored_provider_api_key(store: &ConnectionStore, provider: ProviderName) -> Option<String> {
-    let entry = store.services.get(&provider)?;
-    if entry.mode != ConnectionMode::ApiKey {
-        return None;
-    }
-    entry
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
+    store.provider_api_key(provider)
 }
 
 fn env_non_empty<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
@@ -237,6 +229,28 @@ pub struct CatalogBuildOptions {
     pub refresh: bool,
     pub discovery_timeout_ms: Option<u64>,
     pub base_url_overrides: HashMap<ProviderName, String>,
+}
+
+/// The LM Studio endpoint the catalog discovers against. Its
+/// [`LmStudioDiscoveryEndpoint::cache_scope`] keys the discovery cache this catalog writes; it is
+/// resolved with the same `cowork_config::resolve_lmstudio_discovery_endpoint` that config
+/// default-model resolution uses to read that cache back, so the two cannot drift apart.
+/// `base_url_overrides` (derived by the server from the same trusted `providerOptions`/env)
+/// take precedence when present.
+pub fn lmstudio_catalog_endpoint(
+    opts: &CatalogBuildOptions,
+    store: &ConnectionStore,
+) -> LmStudioDiscoveryEndpoint {
+    let saved_key = stored_provider_api_key(store, ProviderName::Lmstudio);
+    let mut endpoint = resolve_lmstudio_discovery_endpoint(
+        &opts.env,
+        opts.provider_options.as_ref(),
+        saved_key.as_deref(),
+    );
+    if let Some(ov) = opts.base_url_overrides.get(&ProviderName::Lmstudio) {
+        endpoint.base_url = normalize_lmstudio_base_url(Some(ov));
+    }
+    endpoint
 }
 
 fn load_builtin_models_for(built_in_dir: &Path, provider: ProviderName) -> Vec<SupportedModel> {
@@ -1207,21 +1221,8 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
     for provider in ProviderName::ALL {
         let (raw_entry, is_connected) = match provider {
             ProviderName::Lmstudio => {
-                let saved_key = stored_provider_api_key(&store, ProviderName::Lmstudio);
-                let mut lm_opts = resolve_lmstudio_options(
-                    &opts.env,
-                    opts.provider_options.as_ref(),
-                    saved_key.as_deref(),
-                );
-                if let Some(ov) = opts.base_url_overrides.get(&ProviderName::Lmstudio) {
-                    lm_opts.base_url =
-                        crate::chat_completions::normalize_lmstudio_base_url(Some(ov));
-                }
-                let scope = json!([
-                    lm_opts.base_url,
-                    lm_opts.api_key.clone().unwrap_or_default()
-                ])
-                .to_string();
+                let lm_opts = lmstudio_catalog_endpoint(opts, &store);
+                let scope = lm_opts.cache_scope();
                 let cached = read_model_discovery_cache(&paths, provider, Some(&scope)).await;
                 match discover_lmstudio_models_read_only(
                     &client,
@@ -1794,20 +1795,8 @@ pub async fn read_provider_catalog_snapshot(opts: &CatalogBuildOptions) -> Provi
         .unwrap_or_else(|_| cowork_config::ModelPreferencesStore::empty());
     let has_codex_auth_file = paths.codex_auth_dir.join("auth.json").is_file();
 
-    let saved_lmstudio_key = stored_provider_api_key(&store, ProviderName::Lmstudio);
-    let mut lmstudio = resolve_lmstudio_options(
-        &opts.env,
-        opts.provider_options.as_ref(),
-        saved_lmstudio_key.as_deref(),
-    );
-    if let Some(ov) = opts.base_url_overrides.get(&ProviderName::Lmstudio) {
-        lmstudio.base_url = crate::chat_completions::normalize_lmstudio_base_url(Some(ov));
-    }
-    let lmstudio_scope = json!([
-        lmstudio.base_url,
-        lmstudio.api_key.clone().unwrap_or_default()
-    ])
-    .to_string();
+    let lmstudio = lmstudio_catalog_endpoint(opts, &store);
+    let lmstudio_scope = lmstudio.cache_scope();
 
     // Profile-based Bedrock auth may run a credential process / SSO / STS exchange (cached per
     // credential lifetime); keep it off the async executor.
@@ -1971,15 +1960,7 @@ pub async fn build_provider_statuses(
         let saved_field_masks = build_saved_field_masks(provider, &store);
 
         if provider == ProviderName::Lmstudio {
-            let saved_key = stored_provider_api_key(&store, ProviderName::Lmstudio);
-            let mut lm_opts = resolve_lmstudio_options(
-                &opts.env,
-                opts.provider_options.as_ref(),
-                saved_key.as_deref(),
-            );
-            if let Some(ov) = opts.base_url_overrides.get(&ProviderName::Lmstudio) {
-                lm_opts.base_url = crate::chat_completions::normalize_lmstudio_base_url(Some(ov));
-            }
+            let lm_opts = lmstudio_catalog_endpoint(opts, &store);
             match discover_lmstudio_models_read_only(
                 &client,
                 &lm_opts.base_url,
@@ -1989,11 +1970,7 @@ pub async fn build_provider_statuses(
             .await
             {
                 Ok(disc) => {
-                    let scope = json!([
-                        lm_opts.base_url,
-                        lm_opts.api_key.clone().unwrap_or_default()
-                    ])
-                    .to_string();
+                    let scope = lm_opts.cache_scope();
                     let _ = write_model_discovery_cache(
                         &paths,
                         ProviderName::Lmstudio,

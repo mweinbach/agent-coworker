@@ -1788,7 +1788,14 @@ impl ServerRuntimeState {
                 if provider == cfg.provider {
                     cfg.model.clone()
                 } else {
-                    self.model_registry().default_for(provider).id
+                    self.model_registry()
+                        .default_model_for_config(
+                            provider,
+                            &self.homedir,
+                            &self.env,
+                            cfg.provider_options.as_ref(),
+                        )
+                        .id
                 }
             });
 

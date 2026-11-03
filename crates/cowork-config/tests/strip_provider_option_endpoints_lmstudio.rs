@@ -62,3 +62,15 @@ fn still_strips_other_endpoint_overrides() {
     assert_eq!(out["openai"], json!({ "reasoningEffort": "low" }));
     assert_eq!(out["lmstudio"], json!({}));
 }
+
+#[test]
+fn strips_untrusted_cowork_home_at_every_level() {
+    let out = strip(json!({
+        "coworkHome": "/repo/evil",
+        "bedrock": { "coworkHome": "/repo/evil", "profile": "dev", "region": "us-east-1" }
+    }));
+    assert!(out.get("coworkHome").is_none());
+    assert!(out["bedrock"].get("coworkHome").is_none());
+    assert_eq!(out["bedrock"]["profile"], "dev");
+    assert_eq!(out["bedrock"]["region"], "us-east-1");
+}

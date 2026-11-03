@@ -409,7 +409,7 @@ fn parse_commands_config(
 
 /// Provider-option keys that redirect where requests (and their credentials) are sent, or
 /// that replace the credentials or request headers sent with them.
-const PROVIDER_ENDPOINT_KEYS: [&str; 9] = [
+const PROVIDER_ENDPOINT_KEYS: [&str; 10] = [
     "baseUrl",
     "base_url",
     "baseURL",
@@ -419,6 +419,8 @@ const PROVIDER_ENDPOINT_KEYS: [&str; 9] = [
     "extra_headers",
     "apiKey",
     "api_key",
+    // Where Bedrock reads `.aws` config/credentials from: only the server supplies it.
+    "coworkHome",
 ];
 
 /// Removes endpoint, header and credential overrides from an untrusted `providerOptions` map,

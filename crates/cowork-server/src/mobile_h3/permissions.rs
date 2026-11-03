@@ -337,6 +337,9 @@ pub enum H3RequestDenial {
     /// The request would install, update, enable, disable or delete a user-scoped plugin. User
     /// plugins can bundle MCP servers, which join the user MCP layer.
     UserPluginConfigMutation,
+    /// The request would add a skill to the user (`global`) layer, which every workspace's turns
+    /// load as instructions.
+    UserSkillConfigMutation,
 }
 
 impl H3RequestDenial {
@@ -345,6 +348,7 @@ impl H3RequestDenial {
         match self {
             Self::UserMcpConfigMutation => "userMcpConfigReadOnly",
             Self::UserPluginConfigMutation => "userPluginConfigReadOnly",
+            Self::UserSkillConfigMutation => "userSkillConfigReadOnly",
         }
     }
 
@@ -357,6 +361,10 @@ impl H3RequestDenial {
             Self::UserPluginConfigMutation => {
                 "Paired mobile devices can only change workspace plugins. Install or change user \
                  (global) plugins in Cowork Desktop."
+            }
+            Self::UserSkillConfigMutation => {
+                "Paired mobile devices can only add workspace skills. Install or copy user \
+                 (global) skills in Cowork Desktop."
             }
         }
     }
@@ -371,9 +379,12 @@ impl H3RequestDenial {
 /// therefore a deferred, global command execution primitive, so no grant combination lets a
 /// paired device change the user MCP or plugin layer; that stays a desktop-only action. Workspace
 /// MCP servers and workspace plugins stay editable because their MCP servers only start once the
-/// desktop user sets `trustWorkspaceMcp`. User-scoped (`global`) skill installs stay allowed:
-/// skills are instruction bundles that cannot declare MCP servers and only run through a turn,
-/// which needs `turns`. TS had no such check.
+/// desktop user sets `trustWorkspaceMcp`. Skills cannot declare MCP servers, but a user-scoped
+/// (`global`) skill is loaded as instructions into every workspace's turns, so a device trusted
+/// for one workspace could steer the agent in all of them. Adding skills to the user layer
+/// (install, copy, import) is therefore desktop-only too; workspace skills stay installable.
+/// Enabling, disabling, deleting or updating an already-installed skill is not refused: it only
+/// acts on content the desktop user chose. TS had none of these checks.
 pub fn get_h3_request_denial(
     message: &JsonRpcLiteClientMessage,
     workspace_targets_allowed: impl FnOnce(Option<&str>, &[&str]) -> bool,
@@ -411,6 +422,21 @@ pub fn get_h3_request_denial(
     if let Some((key, destinations)) = plugin_mutation {
         return (!is_workspace(param(key)) || !workspace_targets_allowed(cwd, destinations))
             .then_some(H3RequestDenial::UserPluginConfigMutation);
+    }
+
+    // `cowork/skills/*` scopes are `project` | `global`; `cowork/import/skill` uses
+    // `workspace` | `user`. Anything but the workspace value (including a missing one) is refused.
+    let skill_workspace_scope = match method {
+        "cowork/skills/install" | "cowork/skills/installation/copy" => Some("project"),
+        "cowork/import/skill" => Some("workspace"),
+        _ => None,
+    };
+    if let Some(workspace_value) = skill_workspace_scope {
+        let is_workspace_skill_scope = param("targetScope")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.trim() == workspace_value);
+        return (!is_workspace_skill_scope || !workspace_targets_allowed(cwd, &[".cowork/skills"]))
+            .then_some(H3RequestDenial::UserSkillConfigMutation);
     }
 
     let (workspace_scope, destinations): (bool, &[&str]) = match method {
@@ -610,6 +636,56 @@ mod tests {
     }
 
     #[test]
+    fn user_scoped_skill_additions_are_denied_and_workspace_scoped_allowed() {
+        let denied = Some(H3RequestDenial::UserSkillConfigMutation);
+        for (method, workspace, user) in [
+            ("cowork/skills/install", "project", "global"),
+            ("cowork/skills/installation/copy", "project", "global"),
+            ("cowork/import/skill", "workspace", "user"),
+        ] {
+            assert_eq!(
+                scope_denial(&request(method, json!({ "targetScope": workspace }))),
+                None,
+                "{method}"
+            );
+            for params in [
+                json!({ "targetScope": user }),
+                json!({ "targetScope": null }),
+                json!({}),
+                json!({ "targetScope": 1 }),
+            ] {
+                assert_eq!(
+                    scope_denial(&request(method, params.clone())),
+                    denied,
+                    "{method} {params}"
+                );
+            }
+        }
+        // A workspace scope still needs an authorized workspace destination.
+        assert_eq!(
+            get_h3_request_denial(
+                &request("cowork/skills/install", json!({ "targetScope": "project" })),
+                |_, _| false
+            ),
+            denied
+        );
+        // Changing already-installed skills and previewing a source are not refused.
+        for method in [
+            "cowork/skills/enable",
+            "cowork/skills/disable",
+            "cowork/skills/delete",
+            "cowork/skills/installation/update",
+            "cowork/skills/install/preview",
+        ] {
+            assert_eq!(
+                scope_denial(&request(method, json!({ "targetScope": "global" }))),
+                None,
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
     fn user_scoped_plugin_changes_are_denied_and_workspace_scoped_allowed() {
         let denied = Some(H3RequestDenial::UserPluginConfigMutation);
         for (method, key) in [
@@ -639,14 +715,6 @@ mod tests {
                 );
             }
         }
-        // Skills cannot carry MCP servers; global skill installs are not refused.
-        assert_eq!(
-            scope_denial(&request(
-                "cowork/skills/install",
-                json!({ "targetScope": "global" })
-            )),
-            None
-        );
         // Previews only read the source.
         assert_eq!(
             scope_denial(&request(

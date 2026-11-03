@@ -157,8 +157,12 @@ it is refused too); anything else gets the same `-32600` error with `data.reason
 `userPluginConfigReadOnly`. Plugin and MCP configuration mutations also require an authorized workspace directory.
 Before dispatch, the server checks each destination for links and for overlap with user-level
 plugin, config, or credential directories. User-layer servers start in every workspace and skip the
-`trustWorkspaceMcp` gate, so changing them stays a desktop-only action. Global skill installs are not
-refused, because skills cannot declare MCP servers. The `turns` requirement and the user-layer
+`trustWorkspaceMcp` gate, so changing them stays a desktop-only action. A user-scoped (`global`)
+skill is loaded as instructions into every workspace's turns, so `cowork/skills/install` and
+`cowork/skills/installation/copy` require `targetScope: "project"` and `cowork/import/skill`
+requires `targetScope: "workspace"`; anything else is refused with `data.reason`
+`userSkillConfigReadOnly`. Enabling, disabling, deleting, or updating an installed skill is not
+refused. The `turns` requirement and the user-layer
 refusals are deliberately stricter than the TypeScript server, which gated the whole
 `cowork/mcp/*` and plugin surfaces on `workspaceSettings` alone. The `cowork/memory/*` surface (including the
 `cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the

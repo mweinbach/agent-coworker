@@ -3,6 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use cowork_config::ProviderName;
 use cowork_inference::ToolDefinition;
 use cowork_storage::SessionKind;
 use futures::stream::{self, StreamExt};
@@ -34,6 +35,63 @@ pub const MAX_PARALLEL_READ_BATCH: usize = 4;
 
 pub type ToolMap = BTreeMap<String, Arc<dyn BuiltinTool>>;
 
+/// Legacy `pickBoolean`: a boolean, or a string spelling one.
+fn pick_boolean(value: Option<&Value>) -> Option<bool> {
+    match value? {
+        Value::Bool(b) => Some(*b),
+        Value::String(raw) => match raw.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "y" | "on" => Some(true),
+            "0" | "false" | "no" | "n" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Legacy `getCodexWebSearchBackendFromProviderOptions(options, "native")`: the
+/// `codex-cli.webSearchBackend` value when it is exactly `native`, `exa`, or `parallel`.
+fn codex_web_search_backend(options: &Map<String, Value>) -> &'static str {
+    options
+        .get("codex-cli")
+        .and_then(Value::as_object)
+        .and_then(|codex| codex.get("webSearchBackend"))
+        .and_then(Value::as_str)
+        .and_then(|raw| {
+            ["native", "exa", "parallel"]
+                .into_iter()
+                .find(|b| *b == raw)
+        })
+        .unwrap_or("native")
+}
+
+/// Legacy `getGoogleNativeWebSearchFromProviderOptions` (mirrors
+/// `cowork_providers::web_search_options::google_native_web_search_enabled`, which the Google
+/// transport uses to attach native `google_search`): an explicit `google.nativeWebSearch` wins,
+/// otherwise native search is on while the Codex backend is `native` (the default).
+fn google_native_web_search_enabled(options: &Map<String, Value>) -> bool {
+    if let Some(explicit) = pick_boolean(
+        options
+            .get("google")
+            .and_then(Value::as_object)
+            .and_then(|google| google.get("nativeWebSearch")),
+    ) {
+        return explicit;
+    }
+    codex_web_search_backend(options) == "native"
+}
+
+/// TS `createTools`' `includeLegacyWebSearch` (`src/tools/index.ts`): the custom Exa/Parallel
+/// `webSearch` tool is omitted when Gemini's native Google Search is active, and for
+/// `codex-cli` unless its web-search backend is a local one (`exa` / `parallel`), since the
+/// native backend (the default) already searches.
+pub fn includes_custom_web_search(ctx: &ToolExecutionContext) -> bool {
+    match ctx.provider {
+        ProviderName::Google => !google_native_web_search_enabled(&ctx.provider_options),
+        ProviderName::CodexCli => codex_web_search_backend(&ctx.provider_options) != "native",
+        _ => true,
+    }
+}
+
 pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
     let mut map: ToolMap = BTreeMap::new();
     let mut register = |tool: Arc<dyn BuiltinTool>| {
@@ -57,7 +115,9 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
     register(Arc::new(GlobTool));
     register(Arc::new(GrepTool));
     register(Arc::new(WebFetchTool));
-    register(Arc::new(WebSearchTool));
+    if includes_custom_web_search(ctx) {
+        register(Arc::new(WebSearchTool));
+    }
     if !ctx.in_task_context && ctx.can_ask_user && ctx.session_kind == SessionKind::Root {
         register(Arc::new(AskUserQuestionTool));
     }
@@ -108,7 +168,9 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
         && ctx.thread_control.is_some()
         && !has_target_paths
     {
-        for t in ThreadManagementTool::all_tools() {
+        // Read-only thread actions stay available; mutating / turn-starting ones are withheld
+        // from sessions that cannot write or have no network (`thread_action_denial`).
+        for t in ThreadManagementTool::tools_for(ctx) {
             register(t);
         }
     }

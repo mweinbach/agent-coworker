@@ -43,6 +43,7 @@ use crate::context::{
     ToolResult, assert_read_path_allowed, create_read_path_checker, lexical_tool_path,
     normalize_and_validate_args,
 };
+use crate::fs_tools::CheckedOpenError;
 
 /// TS `glob` `maxResults` default (`.default(2000)`).
 const DEFAULT_GLOB_MAX_RESULTS: u64 = 2000;
@@ -64,85 +65,49 @@ const GREP_MAX_OUTPUT_BYTES: usize = 1024 * 1024 * 10;
 /// Opens a file the search walk produced, checking and opening in one step.
 ///
 /// * `checker` must allow `path` (the walked spelling, so lexical credential denies apply);
-/// * the final component is opened with `O_NOFOLLOW` (and `O_NONBLOCK`, so a FIFO swapped in
-///   cannot block the open), so a symlink swapped in after the walk fails with `ELOOP`;
-/// * the opened handle must be a regular file (`fstat`);
-/// * where the platform can report it, the handle's real path must also pass `checker`, which
-///   catches a swapped intermediate directory.
-///
-/// Local stand-in for the `open_read_checked(ctx, path) -> File` helper being added to
-/// `fs_tools.rs`; callers only depend on "path + checker in, regular-file handle out".
+/// * the open, regular-file check, real-path re-check and blocking-mode restore are
+///   [`crate::fs_tools::open_checked_with`], the same core as the `read` tool's
+///   `open_read_checked`: the final component is opened without following a symlink
+///   (`O_NOFOLLOW | O_NONBLOCK` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows), the handle
+///   must be a regular file, its real path must also pass `checker` (catching a swapped
+///   intermediate directory), an undeterminable real path fails closed, and `O_NONBLOCK` is
+///   cleared before the search reads the handle.
 pub(crate) fn open_search_file(path: &Path, checker: &dyn Fn(&Path) -> bool) -> io::Result<File> {
-    if !checker(path) {
-        return Err(io::Error::new(
+    let denied = |p: &Path| {
+        io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("read access denied: {}", path.display()),
-        ));
+            format!("read access denied: {}", p.display()),
+        )
+    };
+    if !checker(path) {
+        return Err(denied(path));
     }
-    let file = open_no_follow(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
+    let verify_real = |real: &Path| -> ToolResult<()> {
+        if real == path || checker(real) {
+            Ok(())
+        } else {
+            Err(ToolError::PathDenied(real.display().to_string()))
+        }
+    };
+    crate::fs_tools::open_checked_with(path, &verify_real).map_err(|err| match err {
+        CheckedOpenError::Open(err) | CheckedOpenError::Stat(err) => err,
+        CheckedOpenError::NotRegular => io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("not a regular file: {}", path.display()),
-        ));
-    }
-    if let Some(real) = handle_real_path(&file)
-        && real != path
-        && !checker(&real)
-    {
-        return Err(io::Error::new(
+        ),
+        CheckedOpenError::RealPath(err) => io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("read access denied: {}", real.display()),
-        ));
-    }
-    Ok(file)
-}
-
-#[cfg(unix)]
-fn open_no_follow(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_no_follow(path: &Path) -> io::Result<File> {
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("refusing to follow symlink: {}", path.display()),
-        ));
-    }
-    File::open(path)
-}
-
-#[cfg(target_os = "linux")]
-fn handle_real_path(file: &File) -> Option<PathBuf> {
-    use std::os::fd::AsRawFd;
-    fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
-}
-
-#[cfg(target_os = "macos")]
-fn handle_real_path(file: &File) -> Option<PathBuf> {
-    use std::ffi::CStr;
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    let mut buf = vec![0u8; libc::PATH_MAX as usize + 1];
-    // SAFETY: F_GETPATH writes at most PATH_MAX bytes (NUL-terminated) into `buf`, which is
-    // PATH_MAX + 1 bytes long, and `file` keeps the descriptor open for the call.
-    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
-    if rc == -1 {
-        return None;
-    }
-    let cstr = CStr::from_bytes_until_nul(&buf).ok()?;
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(cstr.to_bytes())))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn handle_real_path(_file: &File) -> Option<PathBuf> {
-    None
+            format!(
+                "could not verify the real path of {}: {err}",
+                path.display()
+            ),
+        ),
+        CheckedOpenError::Denied(ToolError::PathDenied(real)) => io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("read access denied: {real}"),
+        ),
+        CheckedOpenError::Denied(_) => denied(path),
+    })
 }
 
 fn is_cancelled(cancel_rx: Option<&watch::Receiver<bool>>) -> bool {
@@ -680,6 +645,8 @@ pub(crate) struct GrepParams<'a> {
     pub matcher: &'a RegexMatcher,
     pub context_lines: usize,
     pub file_glob: Option<&'a str>,
+    /// Separator semantics for `file_glob` (production: [`PathFlavor::host`]).
+    pub path_flavor: PathFlavor,
 }
 
 /// Accumulates rg's standard (non-heading, non-tty) output.
@@ -847,7 +814,10 @@ pub(crate) fn run_grep(
         .follow_links(false)
         .add_custom_ignore_filename(".rgignore")
         .sort_by_file_path(|a, b| a.cmp(b));
-    if let Some(glob_pat) = params.file_glob {
+    if let Some(raw_glob) = params.file_glob {
+        // TS grep: `--glob normalizeGlobPattern(fileGlob)`; on Windows `src\**\*.ts` uses `\`
+        // as a separator, while POSIX escapes such as `\*` are kept.
+        let glob_pat = &*normalize_glob_pattern(raw_glob, params.path_flavor);
         let mut ov = OverrideBuilder::new(root);
         ov.add(glob_pat).map_err(|e| {
             ToolError::InvalidArguments(format!("Invalid fileGlob '{glob_pat}': {e}"))
@@ -898,11 +868,12 @@ pub(crate) fn run_grep(
 /// Directories grep never enters, even when `fileGlob` would whitelist them: VCS internals
 /// and credential stores. (rg with `--glob '**/*'` would descend into these; the deny is a
 /// deliberate safety floor on top of the per-file read checks.)
+/// Matched ASCII case-insensitively: on case-insensitive volumes (macOS, Windows) `.GIT` or
+/// `.SSH` name the same directory.
 fn is_never_searched_dir_name(name: &str) -> bool {
-    matches!(
-        name,
-        ".git" | ".ssh" | ".aws" | ".gnupg" | ".kube" | ".azure"
-    )
+    [".git", ".ssh", ".aws", ".gnupg", ".kube", ".azure"]
+        .iter()
+        .any(|denied| name.eq_ignore_ascii_case(denied))
 }
 
 /// The stop check used by the tool: the whole-search deadline, then user cancellation.
@@ -1034,6 +1005,7 @@ impl BuiltinTool for GrepTool {
                 matcher: &matcher,
                 context_lines,
                 file_glob: file_glob.as_deref(),
+                path_flavor: PathFlavor::host(),
             };
             let should_stop = deadline_stop_check(deadline, cancel_rx);
             let text = match run_grep(&root, &params, &checker, &should_stop)? {
@@ -1130,6 +1102,88 @@ mod tests {
         );
     }
 
+    /// The shared checked open clears `O_NONBLOCK` (set so a swapped-in FIFO cannot block the
+    /// open) before the search reads the handle.
+    #[cfg(unix)]
+    #[test]
+    fn open_search_file_restores_blocking_mode() {
+        use std::os::fd::AsRawFd;
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("f.txt");
+        fs::write(&target, "x").unwrap();
+        let file = open_search_file(&target, &allow_all).unwrap();
+        // SAFETY: `file` owns a valid descriptor for the duration of the call.
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(flags & libc::O_NONBLOCK, 0, "O_NONBLOCK left set");
+    }
+
+    #[test]
+    fn never_searched_dir_names_match_case_insensitively() {
+        for name in [
+            ".git", ".GIT", ".Git", ".SSH", ".Aws", ".GnuPG", ".KUBE", ".Azure",
+        ] {
+            assert!(is_never_searched_dir_name(name), "{name}");
+        }
+        for name in ["git", ".github", "ssh", ".gitx"] {
+            assert!(!is_never_searched_dir_name(name), "{name}");
+        }
+    }
+
+    /// `.GIT` (another spelling of `.git` on case-insensitive volumes) stays unsearched even
+    /// when `fileGlob` whitelists hidden paths.
+    #[test]
+    fn grep_never_enters_uppercase_vcs_or_credential_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in [".GIT", ".SSH", "src"] {
+            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+            fs::write(tmp.path().join(dir).join("f.txt"), "needle\n").unwrap();
+        }
+        let matcher = RegexMatcherBuilder::new().build("needle").unwrap();
+        let params = GrepParams {
+            matcher: &matcher,
+            context_lines: 0,
+            file_glob: Some("**/*"),
+            path_flavor: PathFlavor::Posix,
+        };
+        let GrepOutcome::Output(out) = run_grep(tmp.path(), &params, &allow_all, &|| None).unwrap()
+        else {
+            panic!("expected output");
+        };
+        assert!(out.contains("src"), "{out}");
+        assert!(!out.contains(".GIT") && !out.contains(".SSH"), "{out}");
+    }
+
+    /// TS grep passes `normalizeGlobPattern(fileGlob)` to rg: on Windows `\` in `fileGlob` is a
+    /// separator, while POSIX keeps `\*` as an escape.
+    #[test]
+    fn grep_file_glob_backslashes_are_separators_on_windows_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub").join("a.rs"), "needle\n").unwrap();
+        fs::write(tmp.path().join("b.rs"), "needle\n").unwrap();
+        let matcher = RegexMatcherBuilder::new().build("needle").unwrap();
+        let run = |glob: &str, flavor: PathFlavor| {
+            let params = GrepParams {
+                matcher: &matcher,
+                context_lines: 0,
+                file_glob: Some(glob),
+                path_flavor: flavor,
+            };
+            match run_grep(tmp.path(), &params, &allow_all, &|| None).unwrap() {
+                GrepOutcome::Output(out) => out,
+                other => panic!("{other:?}"),
+            }
+        };
+        let windows = run(r"sub\*.rs", PathFlavor::Windows);
+        assert!(
+            windows.contains("a.rs") && !windows.contains("b.rs"),
+            "{windows}"
+        );
+        // POSIX: `\*` is a literal `*`, so nothing matches.
+        assert_eq!(run(r"sub\*.rs", PathFlavor::Posix), "");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn open_search_file_rechecks_the_handle_real_path() {
@@ -1170,6 +1224,7 @@ mod tests {
             matcher: &matcher,
             context_lines: 0,
             file_glob: None,
+            path_flavor: PathFlavor::host(),
         };
 
         // Unbounded run sees both matches.

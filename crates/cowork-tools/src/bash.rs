@@ -7,9 +7,9 @@ use cowork_env::{
     materialize_temp_script, select_shell_candidate,
 };
 use cowork_sandbox::{
-    CommandRiskLevel, ResolveSandboxPolicyInput, SandboxCommand, SandboxDenialCategory,
-    SandboxErrorCode, SandboxExecutionRequest, SandboxPolicy, SandboxRunner, SandboxType,
-    classify_command_detailed, host_platform, resolve_sandbox_policy,
+    CommandRiskLevel, SandboxCommand, SandboxDenialCategory, SandboxErrorCode,
+    SandboxExecutionRequest, SandboxPolicy, SandboxRunner, SandboxType, classify_command_detailed,
+    host_platform,
 };
 use parking_lot::Mutex;
 use regex::Regex;
@@ -27,26 +27,14 @@ const MAX_BUFFER_BYTES: usize = 10 * 1024 * 1024;
 pub struct BashTool;
 
 impl BashTool {
+    /// TS `bash.ts`: `const policy = ctx.sandboxPolicy ?? resolveSandboxPolicy(...)`. The Rust
+    /// context always carries the policy the server resolved for this turn (mode, network,
+    /// read-only role / `no-project-write` floor, `targetPaths`, managed scratch roots and the
+    /// project root), so it is used as-is. Re-resolving here from `sandbox_config` would widen it
+    /// (e.g. `no-project-write` -> `workspace-write`, a lost `network: false`, or a `read-only`
+    /// turn demoted to the `no-project-write` temp-scratch floor).
     fn resolve_effective_policy(ctx: &ToolExecutionContext) -> SandboxPolicy {
-        let target_strs = ctx.target_paths.as_ref().map(|paths| {
-            paths
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-        });
-        resolve_sandbox_policy(&ResolveSandboxPolicyInput {
-            config: Some(ctx.sandbox_config.clone()),
-            working_directory: ctx.working_directory.clone(),
-            project_root: Some(ctx.working_directory.clone()),
-            output_directory: Some(ctx.output_directory.clone()),
-            uploads_directory: Some(ctx.uploads_directory.clone()),
-            tool_runtime_writable_roots: Vec::new(),
-            target_paths: target_strs,
-            read_only_role: ctx.read_only_role
-                || matches!(ctx.sandbox_policy, SandboxPolicy::ReadOnly { .. }),
-            yolo: ctx.yolo,
-            platform: None,
-        })
+        ctx.sandbox_policy.clone()
     }
 }
 

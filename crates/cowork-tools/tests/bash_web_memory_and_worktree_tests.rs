@@ -169,6 +169,11 @@ async fn bash_enforces_seatbelt_kills_child_process_tree_on_cancel_and_escalates
     );
     cancel_ctx.cancel_rx = Some(cancel_rx);
     cancel_ctx.yolo = true; // isolate pure cancellation without Seatbelt wrapper PID indirection or with Seatbelt
+    // bash runs under the turn's resolved policy; a yolo turn without hard floors resolves to
+    // danger-full-access (as the server does), so the grandchild PID is a host PID.
+    cancel_ctx.sandbox_policy = cowork_sandbox::SandboxPolicy::DangerFullAccess {
+        network: Some(true),
+    };
 
     let bash_cancel = create_builtin_tools(&cancel_ctx)
         .remove("bash")
@@ -236,6 +241,20 @@ async fn bash_enforces_seatbelt_kills_child_process_tree_on_cancel_and_escalates
     );
     scoped_yolo_ctx.yolo = true;
     scoped_yolo_ctx.target_paths = Some(vec![ws.join("scoped")]);
+    // The scoped hard floor as the server resolves it for this turn (yolo cannot lift it).
+    scoped_yolo_ctx.sandbox_policy =
+        cowork_sandbox::resolve_sandbox_policy(&cowork_sandbox::ResolveSandboxPolicyInput {
+            config: Some(scoped_yolo_ctx.sandbox_config.clone()),
+            working_directory: ws.clone(),
+            project_root: Some(ws.clone()),
+            output_directory: Some(scoped_yolo_ctx.output_directory.clone()),
+            uploads_directory: Some(scoped_yolo_ctx.uploads_directory.clone()),
+            tool_runtime_writable_roots: Vec::new(),
+            target_paths: Some(vec![ws.join("scoped").to_string_lossy().into_owned()]),
+            read_only_role: false,
+            yolo: true,
+            platform: None,
+        });
     scoped_yolo_ctx.env.insert(
         "OPENAI_API_KEY".to_owned(),
         "sk-live-bash-secret".to_owned(),

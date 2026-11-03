@@ -14,7 +14,7 @@ use crate::context::{
     assert_read_path_allowed, assert_write_path_allowed, lexical_tool_path,
     normalize_and_validate_args, resolve_tool_path,
 };
-use crate::mutation::with_file_mutation;
+use crate::mutation::{ExistingRead, StagedContent, with_file_mutation, with_file_mutation_staged};
 use crate::text_codec::{
     LineEnding, TextEncoding, decode_text_buffer, detect_bom, detect_dominant_eol,
     encode_text_buffer, normalize_to_lf, replace_respecting_eol,
@@ -135,32 +135,66 @@ fn display_file_name(path: &Path) -> String {
 /// opened). Fails closed when the real path cannot be determined. Blocking; call it from a
 /// blocking context for slow filesystems.
 pub fn open_read_checked(ctx: &ToolExecutionContext, path: &Path) -> ToolResult<File> {
-    let file = open_no_follow(path).map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => {
-            ToolError::Execution(format!("File not found: {}", path.display()))
-        }
-        _ if is_symlink_open_error(&err) => ToolError::PathDenied(format!(
-            "Refusing to read '{}': the path is a symbolic link (it changed after it was checked).",
-            path.display()
-        )),
-        _ => ToolError::Execution(format!("Failed to open '{}': {err}", path.display())),
-    })?;
-    let meta = file.metadata().map_err(|err| {
-        ToolError::Execution(format!("Failed to stat '{}': {err}", path.display()))
-    })?;
+    open_checked_with(path, &|real| assert_read_path_allowed(real, ctx).map(|_| ())).map_err(
+        |err| match err {
+            CheckedOpenError::Open(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                ToolError::Execution(format!("File not found: {}", path.display()))
+            }
+            CheckedOpenError::Open(err) if is_symlink_open_error(&err) => {
+                ToolError::PathDenied(format!(
+                    "Refusing to read '{}': the path is a symbolic link (it changed after it was checked).",
+                    path.display()
+                ))
+            }
+            CheckedOpenError::Open(err) => {
+                ToolError::Execution(format!("Failed to open '{}': {err}", path.display()))
+            }
+            CheckedOpenError::Stat(err) => {
+                ToolError::Execution(format!("Failed to stat '{}': {err}", path.display()))
+            }
+            CheckedOpenError::NotRegular => ToolError::Execution(format!(
+                "Cannot read {}: not a regular file.",
+                display_file_name(path)
+            )),
+            CheckedOpenError::RealPath(err) => ToolError::PathDenied(format!(
+                "Refusing to read '{}': could not verify the opened file's real path ({err}).",
+                path.display()
+            )),
+            CheckedOpenError::Denied(err) => err,
+        },
+    )
+}
+
+/// Why [`open_checked_with`] refused a path.
+pub(crate) enum CheckedOpenError {
+    /// The no-follow open failed (missing file, a symlink final component, permissions).
+    Open(std::io::Error),
+    /// `fstat` on the opened handle failed.
+    Stat(std::io::Error),
+    /// The opened handle is not a regular file (directory, FIFO, device, socket, reparse point).
+    NotRegular,
+    /// The handle's real path could not be determined (fails closed).
+    RealPath(std::io::Error),
+    /// `verify_real` refused the handle's real path.
+    Denied(ToolError),
+}
+
+/// The shared checked open behind [`open_read_checked`] and grep's per-file open: opens `path`
+/// without following a final-component symlink (`O_NOFOLLOW | O_NONBLOCK` on Unix,
+/// `FILE_FLAG_OPEN_REPARSE_POINT` on Windows), requires the handle to be a regular file, passes
+/// the handle's real path (`/proc/self/fd`, `F_GETPATH`, `GetFinalPathNameByHandleW`) to
+/// `verify_real` (failing closed when it cannot be determined), and restores blocking mode.
+pub(crate) fn open_checked_with(
+    path: &Path,
+    verify_real: &dyn Fn(&Path) -> ToolResult<()>,
+) -> Result<File, CheckedOpenError> {
+    let file = open_no_follow(path).map_err(CheckedOpenError::Open)?;
+    let meta = file.metadata().map_err(CheckedOpenError::Stat)?;
     if !meta.is_file() {
-        return Err(ToolError::Execution(format!(
-            "Cannot read {}: not a regular file.",
-            display_file_name(path)
-        )));
+        return Err(CheckedOpenError::NotRegular);
     }
-    let real = opened_file_real_path(&file, path).map_err(|err| {
-        ToolError::PathDenied(format!(
-            "Refusing to read '{}': could not verify the opened file's real path ({err}).",
-            path.display()
-        ))
-    })?;
-    assert_read_path_allowed(&real, ctx)?;
+    let real = opened_file_real_path(&file, path).map_err(CheckedOpenError::RealPath)?;
+    verify_real(&real).map_err(CheckedOpenError::Denied)?;
     restore_blocking_mode(&file);
     Ok(file)
 }
@@ -739,9 +773,8 @@ impl BuiltinTool for ReadTool {
         };
 
         if meta.is_dir() {
-            return Ok(ToolOutput::Text(format!(
-                "\"{}\" is a directory, not a file. Use the glob tool (for example pattern \"*\" with path \"{}\") to list its contents, or pass a concrete file path to read.",
-                raw_path, raw_path
+            return Ok(ToolOutput::Text(read_directory_guard_message(
+                &path, raw_path,
             )));
         }
 
@@ -914,38 +947,59 @@ impl BuiltinTool for WriteTool {
         // TS `write.ts` reports `content.length` (UTF-16 code units) for appends.
         let appended_chars = append.then(|| content.encode_utf16().count());
 
-        let (existed, byte_len) = with_file_mutation(&target, ctx, "write", move |snapshot| {
-            let decoded = snapshot
-                .bytes
-                .as_deref()
-                .and_then(|prev| decode_text_buffer(prev).ok());
-            let (encoding, eol) = if let Some(decoded) = &decoded {
-                (decoded.encoding, decoded.dominant_eol)
-            } else {
-                let explicit_eol = detect_dominant_eol(&content);
-                (
-                    if content.starts_with('\u{feff}') {
-                        TextEncoding::Utf8Bom
-                    } else {
-                        TextEncoding::Utf8
-                    },
-                    if explicit_eol == LineEnding::Crlf {
-                        LineEnding::Crlf
-                    } else {
-                        LineEnding::Lf
-                    },
-                )
-            };
-            let encoded = match (append, snapshot.bytes) {
-                (true, Some(mut prev_bytes)) => {
-                    append_chunk(&mut prev_bytes, &content, decoded.is_some(), encoding, eol);
-                    prev_bytes
-                }
-                _ => encode_text_buffer(&normalize_to_lf(&content), encoding, eol),
-            };
-            let len = encoded.len();
-            Ok((encoded, (snapshot.exists, len)))
-        })
+        // Only a bounded prefix of an existing file is read (to keep its encoding and dominant
+        // line ending); an append stages a streamed copy instead of buffering the file, as TS
+        // `writeFileAtomic` did with `copyFile`.
+        let (existed, byte_len) = with_file_mutation_staged(
+            &target,
+            ctx,
+            "write",
+            ExistingRead::Prefix(WRITE_SNIFF_PREFIX_BYTES),
+            move |snapshot| {
+                let decoded = snapshot
+                    .bytes
+                    .as_deref()
+                    .and_then(|prefix| sniff_existing_text(prefix, snapshot.bytes_truncated));
+                let (encoding, eol) = if let Some(decoded) = decoded {
+                    decoded
+                } else {
+                    let explicit_eol = detect_dominant_eol(&content);
+                    (
+                        if content.starts_with('\u{feff}') {
+                            TextEncoding::Utf8Bom
+                        } else {
+                            TextEncoding::Utf8
+                        },
+                        if explicit_eol == LineEnding::Crlf {
+                            LineEnding::Crlf
+                        } else {
+                            LineEnding::Lf
+                        },
+                    )
+                };
+                let staged = if append && snapshot.exists {
+                    StagedContent::AppendToExisting(append_chunk(
+                        &content,
+                        decoded.is_some(),
+                        encoding,
+                        eol,
+                    ))
+                } else {
+                    StagedContent::Replace(encode_text_buffer(
+                        &normalize_to_lf(&content),
+                        encoding,
+                        eol,
+                    ))
+                };
+                // Only reported for overwrites (appends report the chunk's char count).
+                let len = match &staged {
+                    StagedContent::Replace(bytes) | StagedContent::AppendToExisting(bytes) => {
+                        bytes.len()
+                    }
+                };
+                Ok((staged, (snapshot.exists, len)))
+            },
+        )
         .await?;
 
         if let Some(chars) = appended_chars {
@@ -960,20 +1014,29 @@ impl BuiltinTool for WriteTool {
     }
 }
 
+/// How much of an existing file `write` reads to keep its encoding and dominant line ending.
+const WRITE_SNIFF_PREFIX_BYTES: usize = 1024 * 1024;
+
+/// Encoding and dominant EOL of an existing text file from its first bytes, or `None` for an
+/// undecodable (binary / invalid) file. A truncated prefix may end inside a UTF-8 sequence or a
+/// UTF-16 code unit / surrogate pair, so up to three trailing bytes are dropped before decoding.
+fn sniff_existing_text(prefix: &[u8], truncated: bool) -> Option<(TextEncoding, LineEnding)> {
+    let max_cut = if truncated { 3.min(prefix.len()) } else { 0 };
+    (0..=max_cut).find_map(|cut| {
+        decode_text_buffer(&prefix[..prefix.len() - cut])
+            .ok()
+            .map(|d| (d.encoding, d.dominant_eol))
+    })
+}
+
 /// TS `writeFileAtomic(..., { append: true })` stages a copy of the current file and appends to
 /// it, so the existing bytes are kept verbatim and the whole result is published atomically. A
 /// decodable text file's chunk is encoded like an overwrite (the file's encoding and dominant
-/// EOL, never a second BOM); an undecodable file gets the raw UTF-8 chunk, as in TS.
-fn append_chunk(
-    prev_bytes: &mut Vec<u8>,
-    content: &str,
-    is_text: bool,
-    encoding: TextEncoding,
-    eol: LineEnding,
-) {
+/// EOL, never a second BOM); an undecodable file gets the raw UTF-8 chunk, as in TS. Returns the
+/// bytes to append.
+fn append_chunk(content: &str, is_text: bool, encoding: TextEncoding, eol: LineEnding) -> Vec<u8> {
     if !is_text {
-        prev_bytes.extend_from_slice(content.as_bytes());
-        return;
+        return content.as_bytes().to_vec();
     }
     let chunk = encode_text_buffer(&normalize_to_lf(content), encoding, eol);
     let bom_len = match encoding {
@@ -981,7 +1044,17 @@ fn append_chunk(
         TextEncoding::Utf8Bom => 3,
         TextEncoding::Utf16LeBom | TextEncoding::Utf16BeBom => 2,
     };
-    prev_bytes.extend_from_slice(&chunk[bom_len..]);
+    chunk[bom_len..].to_vec()
+}
+
+/// TS `read.ts` directory guard, plus a concrete `glob` call whose arguments match
+/// [`crate::search_tools::GlobTool`]'s schema (the directory goes in `cwd`; glob has no `path`).
+pub(crate) fn read_directory_guard_message(path: &Path, raw_path: &str) -> String {
+    let glob_args = json!({ "pattern": "*", "cwd": raw_path });
+    format!(
+        "Cannot read {} because it is a directory. The read tool accepts concrete file paths only. To list it, call glob with {glob_args}; or use grep, or choose a file inside the directory.",
+        display_file_name(path)
+    )
 }
 
 pub struct EditTool;

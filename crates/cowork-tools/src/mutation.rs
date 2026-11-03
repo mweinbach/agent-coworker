@@ -23,8 +23,11 @@ pub struct FileVersion {
     pub dev: u64,
 }
 
+/// Stats `path` itself, never a symlink's target (TS `fs.lstat`): a dangling symlink reports
+/// `exists: true`, so the mutation reaches the regular-file check and is refused instead of
+/// the link being silently replaced by the rename.
 pub fn stat_file_version(path: &Path) -> ToolResult<FileVersion> {
-    match fs::metadata(path) {
+    match fs::symlink_metadata(path) {
         Ok(meta) => {
             let modified_ns = meta
                 .modified()
@@ -245,8 +248,71 @@ fn with_cancellable_file_lock<R>(
 
 pub struct ExistingFileSnapshot {
     pub exists: bool,
+    /// The existing file's bytes, as requested by [`ExistingRead`]: the whole file for
+    /// [`ExistingRead::Full`], at most the first `n` bytes for [`ExistingRead::Prefix`].
     pub bytes: Option<Vec<u8>>,
+    /// True when `bytes` holds only a prefix of a longer file.
+    pub bytes_truncated: bool,
     pub permissions: Option<fs::Permissions>,
+}
+
+/// How much of an existing target [`with_file_mutation_staged`] reads for the callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExistingRead {
+    /// The whole file (`edit`, which rewrites the content it read).
+    Full,
+    /// At most this many leading bytes (`write`, which only sniffs encoding / line endings and
+    /// never needs the rest in memory).
+    Prefix(usize),
+}
+
+/// What [`with_file_mutation_staged`] publishes over the target.
+pub enum StagedContent {
+    /// Replace the file with these bytes.
+    Replace(Vec<u8>),
+    /// Stage a streamed copy of the existing file (none when it does not exist) and append these
+    /// bytes, as TS `writeFileAtomic(..., { append: true })` did with `copyFile`, so a large
+    /// file is never buffered in memory.
+    AppendToExisting(Vec<u8>),
+}
+
+/// Reads at most `limit` bytes of the regular file `path` (verified by the caller), reporting
+/// whether the file was longer.
+fn read_existing(path: &Path, read: ExistingRead) -> ToolResult<(Vec<u8>, bool)> {
+    use std::io::Read;
+    let read_err = |e: std::io::Error| {
+        ToolError::Execution(format!("Failed to read '{}': {e}", path.display()))
+    };
+    let file = open_existing_no_follow(path).map_err(read_err)?;
+    match read {
+        ExistingRead::Full => {
+            let mut bytes = Vec::new();
+            (&file).read_to_end(&mut bytes).map_err(read_err)?;
+            Ok((bytes, false))
+        }
+        ExistingRead::Prefix(limit) => {
+            let mut bytes = Vec::with_capacity(limit.min(1 << 20));
+            (&file)
+                .take(limit as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(read_err)?;
+            let truncated = bytes.len() > limit;
+            bytes.truncate(limit);
+            Ok((bytes, truncated))
+        }
+    }
+}
+
+/// Opens an existing target for reading without following a final-component symlink and
+/// requires the handle to be a regular file (a FIFO swapped in is opened non-blocking and
+/// refused by the handle's `fstat`, never read).
+fn open_existing_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    let file = crate::fs_tools::open_no_follow(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    crate::fs_tools::restore_blocking_mode(&file);
+    Ok(file)
 }
 
 /// Coordinates exclusive per-target-file mutations across tasks & processes using
@@ -267,6 +333,30 @@ pub async fn with_file_mutation<F, R>(
 ) -> ToolResult<R>
 where
     F: FnOnce(ExistingFileSnapshot) -> ToolResult<(Vec<u8>, R)> + Send + 'static,
+    R: Send + 'static,
+{
+    with_file_mutation_staged(
+        target_path,
+        ctx,
+        tool_name,
+        ExistingRead::Full,
+        move |snapshot| mutate(snapshot).map(|(bytes, out)| (StagedContent::Replace(bytes), out)),
+    )
+    .await
+}
+
+/// [`with_file_mutation`] with control over how much of the existing file is read
+/// ([`ExistingRead`]) and whether the result replaces it or is appended to a streamed copy of it
+/// ([`StagedContent`]).
+pub async fn with_file_mutation_staged<F, R>(
+    target_path: &Path,
+    ctx: &ToolExecutionContext,
+    tool_name: &'static str,
+    read: ExistingRead,
+    mutate: F,
+) -> ToolResult<R>
+where
+    F: FnOnce(ExistingFileSnapshot) -> ToolResult<(StagedContent, R)> + Send + 'static,
     R: Send + 'static,
 {
     assert_can_mutate(ctx, tool_name, target_path)?;
@@ -322,15 +412,13 @@ where
             let parent = assert_parent_unchanged(parent)?;
 
             let v_before_read = stat_file_version(&resolved)?;
-            let (existing_bytes, permissions) = if v_before_read.exists {
+            let (existing_bytes, bytes_truncated, permissions) = if v_before_read.exists {
                 // Never open a FIFO/device/socket: reading one can block forever.
                 let meta = assert_regular_file(&resolved)?;
-                let bytes = fs::read(&resolved).map_err(|e| {
-                    ToolError::Execution(format!("Failed to read '{}': {e}", resolved.display()))
-                })?;
-                (Some(bytes), Some(meta.permissions()))
+                let (bytes, truncated) = read_existing(&resolved, read)?;
+                (Some(bytes), truncated, Some(meta.permissions()))
             } else {
-                (None, None)
+                (None, false, None)
             };
 
             let v_after_read = stat_file_version(&resolved)?;
@@ -341,9 +429,10 @@ where
                 )));
             }
 
-            let (new_bytes, output) = mutate(ExistingFileSnapshot {
+            let (staged, output) = mutate(ExistingFileSnapshot {
                 exists: v_before_read.exists,
                 bytes: existing_bytes,
+                bytes_truncated,
                 permissions: permissions.clone(),
             })?;
 
@@ -368,6 +457,28 @@ where
                 if let Some(perms) = permissions {
                     let _ = tmp_file.set_permissions(perms);
                 }
+                let new_bytes = match staged {
+                    StagedContent::Replace(bytes) => bytes,
+                    StagedContent::AppendToExisting(bytes) => {
+                        if v_before_read.exists {
+                            // Streamed copy (`copy_file_range` on Linux); the version check
+                            // below rejects a target that changed since it was stat'ed.
+                            let mut src = open_existing_no_follow(&resolved).map_err(|e| {
+                                ToolError::Execution(format!(
+                                    "Failed to read '{}': {e}",
+                                    resolved.display()
+                                ))
+                            })?;
+                            std::io::copy(&mut src, &mut tmp_file).map_err(|e| {
+                                ToolError::Execution(format!(
+                                    "Failed to copy '{}' into the staging file: {e}",
+                                    resolved.display()
+                                ))
+                            })?;
+                        }
+                        bytes
+                    }
+                };
                 tmp_file.write_all(&new_bytes).map_err(|e| {
                     ToolError::Execution(format!("Failed to write staging file: {e}"))
                 })?;
@@ -408,4 +519,81 @@ where
     })
     .await
     .map_err(|e| ToolError::Execution(format!("File mutation worker panicked: {e}")))?
+}
+
+#[cfg(test)]
+mod staged_read_tests {
+    use cowork_config::ProviderName;
+
+    use super::*;
+
+    fn ctx_in(base: &Path) -> (PathBuf, ToolExecutionContext) {
+        let home = base.join("home");
+        let ws = base.join("ws");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&ws).unwrap();
+        let ws = fs::canonicalize(ws).unwrap();
+        let ctx = ToolExecutionContext::new_for_tests(
+            fs::canonicalize(home).unwrap(),
+            ws.clone(),
+            ProviderName::Openai,
+            "gpt-5.4",
+        );
+        (ws, ctx)
+    }
+
+    /// A prefix read hands the callback at most `n` bytes of a larger file, and an append
+    /// publishes the untouched existing bytes (streamed, never handed to the callback) plus the
+    /// chunk.
+    #[tokio::test]
+    async fn prefix_read_is_bounded_and_append_streams_the_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws, ctx) = ctx_in(tmp.path());
+        let target = ws.join("big.bin");
+        let existing: Vec<u8> = (0..3 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+        fs::write(&target, &existing).unwrap();
+
+        let seen = with_file_mutation_staged(
+            &target,
+            &ctx,
+            "write",
+            ExistingRead::Prefix(4096),
+            |snapshot| {
+                let seen = (
+                    snapshot.exists,
+                    snapshot.bytes.as_ref().map(Vec::len),
+                    snapshot.bytes_truncated,
+                );
+                Ok((StagedContent::AppendToExisting(b"TAIL".to_vec()), seen))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(seen, (true, Some(4096), true));
+        let published = fs::read(&target).unwrap();
+        assert_eq!(published.len(), existing.len() + 4);
+        assert!(published.starts_with(&existing) && published.ends_with(b"TAIL"));
+
+        // A file no longer than the prefix is handed over whole and not marked truncated.
+        let small = ws.join("small.txt");
+        fs::write(&small, b"abc").unwrap();
+        let seen =
+            with_file_mutation_staged(&small, &ctx, "write", ExistingRead::Prefix(3), |snapshot| {
+                let seen = (snapshot.bytes.clone(), snapshot.bytes_truncated);
+                Ok((StagedContent::Replace(b"new".to_vec()), seen))
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen, (Some(b"abc".to_vec()), false));
+        assert_eq!(fs::read(&small).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_file_version_does_not_follow_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("dangling");
+        std::os::unix::fs::symlink(tmp.path().join("missing"), &link).unwrap();
+        assert!(stat_file_version(&link).unwrap().exists);
+    }
 }

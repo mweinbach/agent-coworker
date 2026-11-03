@@ -97,6 +97,35 @@ fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
         || (seg[0] == 0x0064 && seg[1] == 0xff9b)
 }
 
+/// TS `raceWithAbort(promise, ctx.abortSignal)`: awaits `fut` unless the turn is (or becomes)
+/// cancelled, in which case the request is dropped and `aborted` is returned right away instead
+/// of waiting out the HTTP timeout.
+async fn race_with_cancel<T>(
+    ctx: &ToolExecutionContext,
+    aborted: &str,
+    fut: impl std::future::Future<Output = ToolResult<T>>,
+) -> ToolResult<T> {
+    let abort_err = || ToolError::Execution(aborted.to_owned());
+    let Some(mut rx) = ctx.cancel_rx.clone() else {
+        return fut.await;
+    };
+    if *rx.borrow() {
+        return Err(abort_err());
+    }
+    tokio::select! {
+        res = fut => res,
+        _ = async {
+            while rx.changed().await.is_ok() {
+                if *rx.borrow() {
+                    return;
+                }
+            }
+            // The sender is gone without cancelling: never resolve this branch.
+            std::future::pending::<()>().await;
+        } => Err(abort_err()),
+    }
+}
+
 async fn resolve_and_validate_url_target(
     url: &Url,
     dns_override: Option<&DnsOverrideFn>,
@@ -547,10 +576,9 @@ async fn download_response_to_workspace(
     }
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
-    while let Some(chunk_res) = stream.next().await {
-        if ctx.is_cancelled() {
-            return Err(ToolError::Execution("webFetch aborted.".to_owned()));
-        }
+    while let Some(chunk_res) =
+        race_with_cancel(ctx, WEB_FETCH_ABORTED, async { Ok(stream.next().await) }).await?
+    {
         let chunk = chunk_res.map_err(|e| ToolError::Execution(format!("Body read error: {e}")))?;
         if bytes.len() + chunk.len() > MAX_WEBFETCH_DOWNLOAD_BYTES {
             return Err(limit_err());
@@ -653,9 +681,13 @@ impl BuiltinTool for WebFetchTool {
                 if ctx.is_cancelled() {
                     return Err(ToolError::Execution("webFetch aborted.".to_owned()));
                 }
-                let (host, pinned_addr) = resolve_and_validate_url_target(
-                    &current_url,
-                    ctx.dns_override_for_tests.as_ref(),
+                let (host, pinned_addr) = race_with_cancel(
+                    ctx,
+                    WEB_FETCH_ABORTED,
+                    resolve_and_validate_url_target(
+                        &current_url,
+                        ctx.dns_override_for_tests.as_ref(),
+                    ),
                 )
                 .await?;
 
@@ -669,15 +701,19 @@ impl BuiltinTool for WebFetchTool {
                     .build()
                     .map_err(|e| ToolError::Execution(format!("HTTP client error: {e}")))?;
 
-                let resp = client
+                let request = client
                     .get(current_url.clone())
                     .header(
                         "Accept",
                         "text/markdown, text/html;q=0.9, application/json;q=0.8, text/plain;q=0.7, */*;q=0.5",
                     )
-                    .send()
-                    .await
-                    .map_err(|e| ToolError::Execution(format!("Fetch failed: {e}")))?;
+                    .send();
+                let resp = race_with_cancel(ctx, WEB_FETCH_ABORTED, async {
+                    request
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Fetch failed: {e}")))
+                })
+                .await?;
 
                 if resp.status().is_redirection() {
                     if hop == MAX_REDIRECTS {
@@ -750,10 +786,9 @@ impl BuiltinTool for WebFetchTool {
 
         let mut stream = response.bytes_stream();
         let mut buf = Vec::new();
-        while let Some(chunk_res) = stream.next().await {
-            if ctx.is_cancelled() {
-                return Err(ToolError::Execution("webFetch aborted.".to_owned()));
-            }
+        while let Some(chunk_res) =
+            race_with_cancel(ctx, WEB_FETCH_ABORTED, async { Ok(stream.next().await) }).await?
+        {
             let chunk =
                 chunk_res.map_err(|e| ToolError::Execution(format!("Body read error: {e}")))?;
             if buf.len() + chunk.len() > MAX_FETCH_BYTES {
@@ -781,6 +816,9 @@ impl BuiltinTool for WebFetchTool {
         )))
     }
 }
+
+const WEB_FETCH_ABORTED: &str = "webFetch aborted.";
+const WEB_SEARCH_ABORTED: &str = "webSearch aborted.";
 
 pub struct WebSearchTool;
 
@@ -1101,23 +1139,26 @@ impl BuiltinTool for WebSearchTool {
                 .cloned()
                 .unwrap_or_else(|| "https://api.exa.ai/search".to_owned());
             let payload = build_exa_search_payload(&query, max_results, &args);
-            let resp = client
+            let request = client
                 .post(&endpoint)
                 .header("x-api-key", api_key)
                 .json(&payload)
-                .send()
-                .await
-                .map_err(|e| ToolError::Execution(format!("Exa search request failed: {e}")))?;
-            if !resp.status().is_success() {
-                return Err(ToolError::Execution(format!(
-                    "Exa search failed with HTTP {}",
-                    resp.status().as_u16()
-                )));
-            }
-            let data: Value = resp
-                .json()
-                .await
-                .map_err(|e| ToolError::Execution(format!("Invalid Exa JSON: {e}")))?;
+                .send();
+            let data: Value = race_with_cancel(ctx, WEB_SEARCH_ABORTED, async {
+                let resp = request
+                    .await
+                    .map_err(|e| ToolError::Execution(format!("Exa search request failed: {e}")))?;
+                if !resp.status().is_success() {
+                    return Err(ToolError::Execution(format!(
+                        "Exa search failed with HTTP {}",
+                        resp.status().as_u16()
+                    )));
+                }
+                resp.json()
+                    .await
+                    .map_err(|e| ToolError::Execution(format!("Invalid Exa JSON: {e}")))
+            })
+            .await?;
             let results = data
                 .get("results")
                 .and_then(Value::as_array)
@@ -1137,23 +1178,26 @@ impl BuiltinTool for WebSearchTool {
             .cloned()
             .unwrap_or_else(|| "https://api.parallel.ai/v1beta/search".to_owned());
         let payload = build_parallel_search_payload(&query, max_results);
-        let resp = client
+        let request = client
             .post(&endpoint)
             .header("x-api-key", api_key)
             .json(&payload)
-            .send()
-            .await
-            .map_err(|e| ToolError::Execution(format!("Parallel search request failed: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(ToolError::Execution(format!(
-                "Parallel search failed with HTTP {}",
-                resp.status().as_u16()
-            )));
-        }
-        let data: Value = resp
-            .json()
-            .await
-            .map_err(|e| ToolError::Execution(format!("Invalid Parallel JSON: {e}")))?;
+            .send();
+        let data: Value = race_with_cancel(ctx, WEB_SEARCH_ABORTED, async {
+            let resp = request.await.map_err(|e| {
+                ToolError::Execution(format!("Parallel search request failed: {e}"))
+            })?;
+            if !resp.status().is_success() {
+                return Err(ToolError::Execution(format!(
+                    "Parallel search failed with HTTP {}",
+                    resp.status().as_u16()
+                )));
+            }
+            resp.json()
+                .await
+                .map_err(|e| ToolError::Execution(format!("Invalid Parallel JSON: {e}")))
+        })
+        .await?;
         let results = data
             .get("results")
             .and_then(Value::as_array)

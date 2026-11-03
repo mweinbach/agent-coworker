@@ -272,27 +272,33 @@ impl BuiltinTool for McpToolSearchTool {
             return Ok(ToolOutput::Json(val));
         };
 
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("MCP tool search aborted.".to_owned()));
+        }
         let ctx_clone = ctx.clone();
         let query_owned = query.to_owned();
-        let val = cache
-            .with_tools(cfg, &ctx.env, &ctx.session_id, move |tools, errors| {
-                let filtered = filter_mcp_tools_for_context(tools, &ctx_clone);
-                let searchable: Vec<SearchableToolEntry> = filtered
-                    .into_iter()
-                    .map(|t| SearchableToolEntry {
-                        name: t.qualified_name,
-                        description: t.description,
-                        input_schema: t.input_schema,
-                    })
-                    .collect();
-                let errs = errors.to_vec();
-                Box::pin(async move {
-                    let (v, _) =
-                        score_and_paginate_tools(&searchable, &query_owned, limit, offset, &errs);
-                    v
+        // `with_tools` may connect MCP servers first; a Stop must not wait for that. Dropping
+        // the call is safe: its generation lease and connection refs release on drop.
+        let search = cache.with_tools(cfg, &ctx.env, &ctx.session_id, move |tools, errors| {
+            let filtered = filter_mcp_tools_for_context(tools, &ctx_clone);
+            let searchable: Vec<SearchableToolEntry> = filtered
+                .into_iter()
+                .map(|t| SearchableToolEntry {
+                    name: t.qualified_name,
+                    description: t.description,
+                    input_schema: t.input_schema,
                 })
+                .collect();
+            let errs = errors.to_vec();
+            Box::pin(async move {
+                let (v, _) =
+                    score_and_paginate_tools(&searchable, &query_owned, limit, offset, &errs);
+                v
             })
+        });
+        let val = unless_cancelled(search, ctx.cancel_rx.clone())
             .await
+            .ok_or_else(|| ToolError::Execution("MCP tool search aborted.".to_owned()))?
             .map_err(ToolError::Execution)?;
 
         Ok(ToolOutput::Json(val))
@@ -359,8 +365,7 @@ impl BuiltinTool for McpCallTool {
             .get("arguments")
             .and_then(Value::as_object)
             .cloned()
-            .map(Value::Object)
-            .unwrap_or_else(|| json!({}));
+            .unwrap_or_default();
 
         let (Some(cache), Some(cfg)) = (&ctx.mcp_tool_cache, &ctx.agent_config) else {
             return Err(ToolError::Execution(
@@ -368,6 +373,10 @@ impl BuiltinTool for McpCallTool {
             ));
         };
 
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
+        }
+        let cancel_rx = ctx.cancel_rx.clone();
         let ctx_clone = ctx.clone();
         let target_clone = target_tool.clone();
         let res = cache
@@ -376,18 +385,26 @@ impl BuiltinTool for McpCallTool {
                 let found = filtered
                     .into_iter()
                     .find(|t| t.qualified_name == target_clone);
+                // As in `LoadedMcpBuiltinToolAdapter`: arguments are validated against the
+                // tool's `inputSchema`, and cancellation is handled inside the leased future so
+                // `with_tools` always completes and releases the generation's active call.
                 Box::pin(async move {
                     let Some(tool_handle) = found else {
-                        return Err(format!(
+                        return Err(ToolError::Execution(format!(
                             "MCP tool '{target_clone}' was not found or is not allowed. Call toolSearch first."
-                        ));
+                        )));
                     };
-                    tool_handle.call(call_args).await
+                    let validated = Value::Object(normalize_and_validate_args(
+                        &tool_handle.input_schema,
+                        &call_args,
+                    )?);
+                    call_unless_cancelled(tool_handle.call(validated), cancel_rx)
+                        .await
+                        .map_err(ToolError::Execution)
                 })
             })
             .await
-            .map_err(ToolError::Execution)?
-            .map_err(ToolError::Execution)?;
+            .map_err(ToolError::Execution)??;
 
         Ok(ToolOutput::Json(res))
     }
@@ -410,27 +427,37 @@ impl LoadedMcpBuiltinToolAdapter {
     }
 }
 
-/// Runs `call` unless the turn is cancelled first.
-async fn call_unless_cancelled(
-    call: impl std::future::Future<Output = Result<Value, String>>,
+/// Runs `fut` unless the turn is cancelled first or meanwhile; `None` when cancelled.
+async fn unless_cancelled<T>(
+    fut: impl std::future::Future<Output = T>,
     cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
-) -> Result<Value, String> {
+) -> Option<T> {
     let Some(mut rx) = cancel_rx else {
-        return call.await;
+        return Some(fut.await);
     };
     if *rx.borrow() {
-        return Err("MCP tool call aborted.".to_owned());
+        return None;
     }
     tokio::select! {
-        r = call => r,
+        r = fut => Some(r),
         _ = async {
             while rx.changed().await.is_ok() {
                 if *rx.borrow() {
                     break;
                 }
             }
-        } => Err("MCP tool call aborted.".to_owned()),
+        } => None,
     }
+}
+
+/// Runs `call` unless the turn is cancelled first.
+async fn call_unless_cancelled(
+    call: impl std::future::Future<Output = Result<Value, String>>,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<Value, String> {
+    unless_cancelled(call, cancel_rx)
+        .await
+        .unwrap_or_else(|| Err("MCP tool call aborted.".to_owned()))
 }
 
 #[async_trait]

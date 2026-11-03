@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cowork_sandbox::{SandboxPolicy, policy_allows_network};
 use cowork_storage::SessionKind;
 use serde_json::{Map, Value, json};
 
@@ -70,6 +71,142 @@ pub const THREAD_ID_DEFAULTS_TO_CURRENT: &[&str] = &[
     "set_thread_archived",
 ];
 
+/// TS `threadEnvironmentSchema` (`src/tools/threadManagement.ts`), plus the legacy string
+/// shorthand: `"local"` / `"worktree"`, `{ type: "local" }`, or
+/// `{ type: "worktree", ref?, branchName?, startingState?: { ref?, branchName? } }`. Objects are
+/// strict, so a malformed spec is rejected here instead of reaching the server bridge (whose
+/// `fork_thread` drops an undecodable object and forks locally).
+pub fn thread_environment_schema() -> Value {
+    let non_empty = json!({ "type": "string", "minLength": 1 });
+    json!({
+        "anyOf": [
+            { "type": "string", "enum": ["local", "worktree"] },
+            {
+                "type": "object",
+                "properties": { "type": { "type": "string", "const": "local" } },
+                "required": ["type"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string", "const": "worktree" },
+                    "ref": non_empty,
+                    "branchName": non_empty,
+                    "startingState": {
+                        "type": "object",
+                        "properties": { "ref": non_empty, "branchName": non_empty },
+                        "additionalProperties": false
+                    }
+                },
+                "required": ["type"],
+                "additionalProperties": false
+            }
+        ],
+        "description": "\"local\" or \"worktree\", or an object: { \"type\": \"local\" } or { \"type\": \"worktree\", \"ref\"?, \"branchName\"?, \"startingState\"?: { \"ref\"?, \"branchName\"? } }."
+    })
+}
+
+/// The server's `create_thread` bridge reads `environment` only as a string (plus a top-level
+/// `branchName`) and creates worktrees from the default base, so an object-form spec is folded
+/// into that shape here. A worktree spec carrying a base `ref` (directly or in
+/// `startingState`) is rejected rather than silently created from a different base.
+pub fn fold_create_thread_environment(args: &mut Map<String, Value>) -> Result<(), String> {
+    let Some(Value::Object(env)) = args.get("environment") else {
+        return Ok(());
+    };
+    let env = env.clone();
+    match env.get("type").and_then(Value::as_str) {
+        Some("local") => {
+            args.insert("environment".to_owned(), json!("local"));
+        }
+        Some("worktree") => {
+            let starting = env.get("startingState").and_then(Value::as_object);
+            if env.get("ref").is_some() || starting.is_some_and(|s| s.get("ref").is_some()) {
+                return Err(CREATE_THREAD_WORKTREE_REF_UNSUPPORTED.to_owned());
+            }
+            let branch = env
+                .get("branchName")
+                .or_else(|| starting.and_then(|s| s.get("branchName")))
+                .cloned();
+            if let Some(branch) = branch {
+                match args.get("branchName").filter(|v| !v.is_null()) {
+                    Some(existing) if existing != &branch => {
+                        return Err(CREATE_THREAD_BRANCH_CONFLICT.to_owned());
+                    }
+                    _ => {
+                        args.insert("branchName".to_owned(), branch);
+                    }
+                }
+            }
+            args.insert("environment".to_owned(), json!("worktree"));
+        }
+        _ => return Err("environment.type must be \"local\" or \"worktree\".".to_owned()),
+    }
+    Ok(())
+}
+
+pub const CREATE_THREAD_WORKTREE_REF_UNSUPPORTED: &str = "create_thread does not support a \
+     worktree base ref: new worktrees start from the workspace's current HEAD. Omit ref.";
+
+pub const CREATE_THREAD_BRANCH_CONFLICT: &str = "create_thread received different branchName \
+     values in environment and at the top level. Pass one.";
+
+/// Thread actions that only read server state.
+const READ_ONLY_THREAD_ACTIONS: &[&str] = &["list_projects", "list_threads", "read_thread"];
+
+/// Thread actions that start a model turn in another thread (a new root thread, a fork, or a
+/// follow-up on an existing thread). That turn runs under the target thread's own sandbox, so
+/// these are withheld from sessions confined more tightly than a default root turn.
+const TURN_STARTING_THREAD_ACTIONS: &[&str] =
+    &["create_thread", "fork_thread", "send_message_to_thread"];
+
+/// Why this session may not run the mutating thread action `action`, or `None` when it may.
+///
+/// TS gated the whole tool set on scope only (`!agentRole && !taskContext && !scopedChild`); the
+/// Rust port additionally refuses mutating actions from sessions that cannot write the project
+/// (read-only role, `read-only` / `no-project-write` sandbox), and turn-starting actions from
+/// sessions without network access, because `create_thread` / `fork_thread` /
+/// `send_message_to_thread` run a new turn under the target thread's (default
+/// `workspace-write` + network) sandbox and `read_thread` returns its result, escaping this
+/// session's floor.
+pub fn thread_action_denial(ctx: &ToolExecutionContext, action: &str) -> Option<String> {
+    if ctx.in_task_context {
+        return Some("Thread management tools are unavailable inside a task.".to_owned());
+    }
+    if ctx.target_paths.as_ref().is_some_and(|t| !t.is_empty()) {
+        return Some(
+            "Thread management tools are unavailable to path-scoped (targetPaths) sessions."
+                .to_owned(),
+        );
+    }
+    if READ_ONLY_THREAD_ACTIONS.contains(&action) {
+        return None;
+    }
+    let cannot_write = ctx.read_only_role
+        || matches!(
+            ctx.sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::NoProjectWrite { .. }
+        );
+    if cannot_write {
+        let mode = if ctx.read_only_role {
+            "a read-only role"
+        } else {
+            ctx.sandbox_policy.kind_str()
+        };
+        return Some(format!(
+            "{action} is blocked: this session runs under {mode} and may not modify threads or start turns in them."
+        ));
+    }
+    if TURN_STARTING_THREAD_ACTIONS.contains(&action) && !policy_allows_network(&ctx.sandbox_policy)
+    {
+        return Some(format!(
+            "{action} is blocked: this session's sandbox has network access disabled, and the started turn would not be."
+        ));
+    }
+    None
+}
+
 pub struct ThreadManagementTool {
     tool_name: &'static str,
     desc: &'static str,
@@ -78,6 +215,19 @@ pub struct ThreadManagementTool {
 }
 
 impl ThreadManagementTool {
+    /// The thread tools this session may call: per-action tools whose action
+    /// [`thread_action_denial`] refuses are withheld, while the combined `threadManagement`
+    /// tool stays (its read actions remain usable; refused actions fail at execution).
+    pub fn tools_for(ctx: &ToolExecutionContext) -> Vec<Arc<dyn BuiltinTool>> {
+        Self::all_tools()
+            .into_iter()
+            .filter(|tool| {
+                tool.name() == "threadManagement"
+                    || thread_action_denial(ctx, tool.name()).is_none()
+            })
+            .collect()
+    }
+
     pub fn all_tools() -> Vec<Arc<dyn BuiltinTool>> {
         vec![
             Arc::new(Self {
@@ -126,7 +276,7 @@ impl ThreadManagementTool {
                         "title": { "type": "string" },
                         "model": { "type": "string" },
                         "thinking": { "type": "string", "minLength": 1 },
-                        "environment": { "type": "string", "enum": ["local", "worktree"] },
+                        "environment": thread_environment_schema(),
                         "branchName": { "type": "string" }
                     },
                     "required": ["prompt"]
@@ -159,7 +309,7 @@ impl ThreadManagementTool {
                         "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
                         "model": { "type": "string" },
                         "thinking": { "type": "string", "minLength": 1 },
-                        "environment": { "type": "string", "enum": ["local", "worktree"] },
+                        "environment": thread_environment_schema(),
                         "branchName": { "type": "string" }
                     }
                 }),
@@ -239,7 +389,7 @@ impl ThreadManagementTool {
                         "includeOutputs": { "type": "boolean" },
                         "maxOutputCharsPerItem": { "type": "integer", "minimum": 1, "maximum": 20000 },
                         "turnLimit": { "type": "integer", "minimum": 1, "maximum": 50 },
-                        "environment": { "type": "string", "enum": ["local", "worktree"] },
+                        "environment": thread_environment_schema(),
                         "branchName": { "type": "string" }
                     },
                     "required": ["action"]
@@ -301,6 +451,15 @@ impl BuiltinTool for ThreadManagementTool {
         } else {
             self.tool_name.to_owned()
         };
+        // Scope and sandbox are rechecked here, not only at registration: the registry may have
+        // been built for a different context than the one executing (code mode, deferred
+        // catalogs), and `threadManagement` multiplexes read and mutating actions.
+        if let Some(denial) = thread_action_denial(ctx, &dispatch_name) {
+            return Err(ToolError::PathDenied(denial));
+        }
+        if dispatch_name == "create_thread" {
+            fold_create_thread_environment(&mut args).map_err(ToolError::InvalidArguments)?;
+        }
         // TS `ThreadManagementService.createControl(currentThreadId)`: an omitted `threadId`
         // on `fork_thread` and the title/pinned/archived setters resolves to the calling
         // thread (this tool's session).

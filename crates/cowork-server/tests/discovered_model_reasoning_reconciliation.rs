@@ -472,3 +472,41 @@ async fn discovered_non_reasoning_google_model_prunes_thinking_config() {
         "thinking payload forwarded for a non-reasoning model: {last}"
     );
 }
+
+/// A thread's requested reasoning effort follows the model too: after switching a thinking
+/// Google thread onto a non-reasoning model, its next turn must not carry a thinking level,
+/// neither from `thinkingConfig` nor from the requested effort (TS `applyReasoningEffort` only
+/// wrote `reasoningEffort` for OpenAI-compatible providers).
+#[tokio::test]
+async fn switched_non_reasoning_google_thread_sends_no_thinking_level() {
+    let mut iso = Iso::new("cowork-switched-plain-");
+    iso.seed_google_discovery_cache().await;
+    let mock = start_mock(&mut iso).await;
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+
+    // `thread/fork { thinking }` records the requested reasoning effort on the thread.
+    let source_id = start_thread(&mut ws, &cwd, "gemini-3.1-pro-preview").await;
+    let mut ignored = Vec::new();
+    let forked = call(
+        &mut ws,
+        "fork",
+        "thread/fork",
+        json!({ "threadId": source_id, "thinking": "low" }),
+        &mut ignored,
+    )
+    .await;
+    let thread_id = forked["result"]["thread"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("thread/fork failed: {forked}"))
+        .to_owned();
+    switch_model(&mut ws, &thread_id, PLAIN_MODEL).await;
+    run_turn(&mut ws, &thread_id, "hello", "turn-1").await;
+    let last = last_turn_body(&mock, PLAIN_MODEL);
+    let gen_cfg = last.get("generation_config");
+    assert!(
+        gen_cfg.and_then(|g| g.get("thinking_level")).is_none(),
+        "thinking level forwarded to a non-reasoning model after a switch: {last}"
+    );
+}

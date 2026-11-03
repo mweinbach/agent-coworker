@@ -39,6 +39,10 @@ use crate::startup::MobileH3AdminState;
 pub const DEFAULT_IDLE_EVICTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const THREAD_READ_JOURNAL_BATCH_SIZE: usize = 250;
+/// Workspace RPCs whose `cwd` may name a directory that is not a workspace yet.
+const UNREGISTERED_WORKSPACE_METHODS: &[&str] = &["cowork/creation/preflight"];
+/// TS `MAX_ATTACHMENT_UPLOAD_BASE64_SIZE`: the base64 length of a 100 MB upload.
+const MAX_ATTACHMENT_UPLOAD_BASE64_SIZE: usize = (100usize * 1024 * 1024).div_ceil(3) * 4;
 
 /// Turn id of the synthetic leading turn `thread/read` uses for unjournaled seed messages
 /// (matches the TS thread-management `readThread` "seed" turn).
@@ -104,6 +108,9 @@ fn unjournaled_seed_messages(
                 Some(Value::String(s)) => s.clone(),
                 Some(Value::Array(arr)) => arr
                     .iter()
+                    // Reasoning parts (`ContentBlock::Thinking`, legacy `reasoning`) carry the
+                    // model's chain of thought, never visible assistant text.
+                    .filter(|p| !is_reasoning_part(p))
                     .filter_map(|p| p.get("text").and_then(Value::as_str))
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>()
@@ -128,6 +135,13 @@ fn unjournaled_seed_messages(
             Some(SeedMessage { id, role, ts, text })
         })
         .collect()
+}
+
+fn is_reasoning_part(part: &Value) -> bool {
+    matches!(
+        part.get("type").and_then(Value::as_str),
+        Some("thinking" | "reasoning" | "redacted_thinking" | "redactedThinking")
+    )
 }
 
 /// Projects seed messages as a completed leading `thread/read` turn of journal-shaped items.
@@ -184,6 +198,60 @@ struct RootModelSelection {
     model: String,
     overrides: Map<String, Value>,
 }
+
+/// Serializes a thread's journaled live emissions against `thread/resume`'s replay cut.
+///
+/// The turn sink journals every notification and server request asynchronously (through the
+/// turn's journal writer) and broadcasts it to the thread's subscribers in the same step. Both
+/// happen under [`ThreadEmitGate::lock`], and the journal write stays counted in `unpersisted`
+/// until it is durable. `thread/resume` takes the lock once `unpersisted` is zero, so every
+/// event it has not been sent live is already in the journal slice it reads, and every later
+/// event reaches it live because it subscribes before releasing the lock (TS did journal replay
+/// and subscribe in one synchronous step).
+#[derive(Default)]
+pub(crate) struct ThreadEmitGate {
+    state: Mutex<ThreadEmitGateState>,
+    unpersisted: std::sync::atomic::AtomicUsize,
+    persisted: Notify,
+}
+
+#[derive(Default)]
+pub(crate) struct ThreadEmitGateState {
+    /// Server requests already journaled and broadcast that are not resolved yet. A prompt the
+    /// interaction manager registered but has not emitted is left for its own live broadcast.
+    pub(crate) emitted_requests: HashSet<String>,
+}
+
+impl ThreadEmitGate {
+    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, ThreadEmitGateState> {
+        self.state.lock()
+    }
+
+    /// Counts an emitted event whose journal write is not durable yet. Called under
+    /// [`Self::lock`] so the resume cut never observes a broadcast without its pending write.
+    pub(crate) fn begin_journal_write(&self) {
+        self.unpersisted
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn finish_journal_write(&self) {
+        if self
+            .unpersisted
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            self.persisted.notify_waiters();
+        }
+    }
+
+    fn all_persisted(&self) -> bool {
+        self.unpersisted.load(std::sync::atomic::Ordering::SeqCst) == 0
+    }
+}
+
+/// Upper bound on how long `thread/resume` waits for in-flight journal writes before replaying
+/// whatever is durable (a stalled journal must not wedge the resume).
+const RESUME_JOURNAL_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct LiveSession {
@@ -635,6 +703,10 @@ pub struct ServerRuntimeState {
     /// removes it (see `MemoryGenerationGuard`).
     pub(crate) memory_generation_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(crate) interaction_managers: DashMap<String, Arc<cowork_harness::InteractionManager>>,
+    /// Serializes each session's `persist_live_session` writes.
+    pub(crate) session_persist_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    /// Per-thread emission/resume cut (see [`ThreadEmitGate`]).
+    pub(crate) thread_emit_gates: DashMap<String, Arc<ThreadEmitGate>>,
     pub(crate) idempotency_ledgers: DashMap<String, Arc<cowork_harness::TurnIdempotencyLedger>>,
     pub(crate) sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
     pub(crate) creation_keys: DashMap<String, String>,
@@ -813,6 +885,8 @@ impl ServerRuntimeState {
             deleted_sessions: DashMap::new(),
             memory_generation_locks: DashMap::new(),
             interaction_managers: DashMap::new(),
+            thread_emit_gates: DashMap::new(),
+            session_persist_locks: DashMap::new(),
             idempotency_ledgers: DashMap::new(),
             sessions: DashMap::new(),
             creation_keys: DashMap::new(),
@@ -1037,29 +1111,6 @@ impl ServerRuntimeState {
         }
         let canonical = canonicalize_sync(&resolved_input);
 
-        if method == "thread/start" || method == "thread/list" {
-            let one_off_root = canonicalize_sync(&get_one_off_chats_root(&self.homedir));
-            let wt_root = canonicalize_sync(&self.worktree_service.worktrees_root());
-            if canonical == fallback
-                || is_inside(&one_off_root, &canonical)
-                || is_inside(&wt_root, &canonical)
-            {
-                return Ok(canonical);
-            }
-            if method == "thread/list"
-                && let Some(svc) = &self.desktop_service
-                && svc
-                    .workspace_entries(&self.working_directory)
-                    .iter()
-                    .any(|w| canonicalize_sync(Path::new(&w.path)) == canonical)
-            {
-                return Ok(canonical);
-            }
-            return Err(format!(
-                "{method} cwd must match the server workspace or a one-off chat workspace"
-            ));
-        }
-
         if method == "create_thread" {
             if self.is_create_thread_workspace(&canonical) {
                 return Ok(canonical);
@@ -1068,8 +1119,39 @@ impl ServerRuntimeState {
                 "{method} cwd must match a registered project workspace or a managed one-off chat"
             ));
         }
+        // Creation preflight inspects a directory the user is about to turn into a workspace.
+        if UNREGISTERED_WORKSPACE_METHODS.contains(&method) {
+            return Ok(canonical);
+        }
 
-        Ok(canonical)
+        // Every other workspace-scoped RPC (thread start/list, uploads, defaults, memory,
+        // documents, backups, provider settings, ...) acts only on an authorized workspace: the
+        // server workspace, a managed one-off chat or worktree, or a desktop-registered project.
+        // Any other host directory would let a client read or write outside its workspaces.
+        let one_off_root = canonicalize_sync(&get_one_off_chats_root(&self.homedir));
+        let wt_root = canonicalize_sync(&self.worktree_service.worktrees_root());
+        if canonical == fallback
+            || is_inside(&one_off_root, &canonical)
+            || is_inside(&wt_root, &canonical)
+            || self.is_create_thread_workspace(&canonical)
+        {
+            return Ok(canonical);
+        }
+        if method == "thread/list"
+            && let Some(svc) = &self.desktop_service
+            && svc
+                .workspace_entries(&self.working_directory)
+                .iter()
+                .any(|w| canonicalize_sync(Path::new(&w.path)) == canonical)
+        {
+            return Ok(canonical);
+        }
+        if method == "thread/start" || method == "thread/list" {
+            return Err(format!(
+                "{method} cwd must match the server workspace or a one-off chat workspace"
+            ));
+        }
+        Err(format!("{method} cwd must match an authorized workspace"))
     }
 
     /// Whether a canonical directory is a target for the model-callable `create_thread` tool
@@ -1628,6 +1710,18 @@ impl ServerRuntimeState {
         event_type: &str,
         live_is_authoritative: bool,
     ) -> anyhow::Result<()> {
+        // One persist per session at a time, snapshotting only once it holds the lock
+        // (`PersistenceManager.queuePersistSessionSnapshot` serialized them): otherwise an older
+        // snapshot taken before a concurrent persist could land after it and roll back newer
+        // state such as a finished turn.
+        let lock_id = live_arc.lock().id.clone();
+        let persist_lock = Arc::clone(
+            self.session_persist_locks
+                .entry(lock_id)
+                .or_default()
+                .value(),
+        );
+        let _persisting = persist_lock.lock().await;
         let (session_id, snapshot_data, child_budget) = {
             let live = live_arc.lock();
             let reconcile_child =
@@ -1676,7 +1770,7 @@ impl ServerRuntimeState {
         let effective_seq = seq.max(self.journal_tail_seq(&session_id));
         let snapshot_json = {
             let mut live = live_arc.lock();
-            live.last_event_seq = effective_seq;
+            live.last_event_seq = live.last_event_seq.max(effective_seq);
             if seq > 0 {
                 live.stored_seq = live.stored_seq.max(seq);
             }
@@ -2103,48 +2197,109 @@ impl ServerRuntimeState {
         after_seq: u64,
     ) -> Result<(JsonRpcThread, Option<ReplayHealth>), String> {
         let connection_id = &conn.connection_id;
-        let Some(live_arc) = self.try_load_thread(thread_id)? else {
+        let Some(mut live_arc) = self.try_load_thread(thread_id)? else {
             return Err(format!("Unknown thread: {thread_id}"));
         };
-        self.journal.wait_for_idle(thread_id).await;
         let replay = conn.replay_gate.lock().await;
-        let replay_health = self.build_replay_health(thread_id, after_seq);
-
-        if after_seq > 0
-            && replay_health.as_ref().is_none_or(|h| h.trusted)
-            && let Ok(events) = self.journal.list(thread_id, after_seq, None)
-        {
-            for ev in events {
-                if ev.event_type.starts_with("internal/") {
-                    continue;
+        let gate = self.thread_emit_gate(thread_id);
+        let settle_deadline = tokio::time::Instant::now() + RESUME_JOURNAL_SETTLE_TIMEOUT;
+        loop {
+            self.journal.wait_for_idle(thread_id).await;
+            let persisted = gate.persisted.notified();
+            tokio::pin!(persisted);
+            persisted.as_mut().enable();
+            // Every event emitted before this point is either still being written (wait for it)
+            // or durable; nothing can be emitted while the gate is held.
+            let settled = gate.all_persisted() || tokio::time::Instant::now() >= settle_deadline;
+            if settled {
+                let emitted = gate.lock();
+                let replay_health = self.build_replay_health(thread_id, after_seq);
+                let mut replayed_request_ids = HashSet::new();
+                if after_seq > 0
+                    && replay_health.as_ref().is_none_or(|h| h.trusted)
+                    && let Ok(events) = self.journal.list(thread_id, after_seq, None)
+                {
+                    for ev in events {
+                        self.replay_journal_event(connection_id, thread_id, ev, &mut |id| {
+                            replayed_request_ids.insert(id.to_owned());
+                        });
+                    }
                 }
-                if let Some(req_method) = ev.event_type.strip_prefix("request:") {
-                    let req_id = ev
-                        .request_id
-                        .unwrap_or_else(|| format!("{thread_id}:{}", ev.seq));
-                    let frame = JsonRpcLiteOutbound::ServerRequest(JsonRpcLiteRequest {
-                        id: JsonRpcLiteId::String(req_id),
-                        method: req_method.to_owned(),
-                        params: Some(ev.payload),
-                    });
-                    self.send_to_connection(connection_id, &frame);
-                    continue;
+                if let Some(subscribed) = self.subscribe(connection_id, thread_id) {
+                    live_arc = subscribed;
                 }
-                let frame = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
-                    method: ev.event_type,
-                    params: Some(ev.payload),
-                });
-                self.send_to_connection(connection_id, &frame);
+                // Prompts still awaiting an answer that the journal slice did not carry go to the
+                // resuming connection only: they are already journaled and were broadcast to the
+                // other subscribers (TS `pendingPromptEvents` / `skipPendingPromptRequestIds`).
+                if let Some(im) = self
+                    .interaction_managers
+                    .get(thread_id)
+                    .map(|im| Arc::clone(im.value()))
+                {
+                    for (request_id, method, params) in
+                        crate::turn_runner::capture_pending_server_requests(&im)
+                    {
+                        if replayed_request_ids.contains(&request_id)
+                            || !emitted.emitted_requests.contains(&request_id)
+                        {
+                            continue;
+                        }
+                        let frame = JsonRpcLiteOutbound::ServerRequest(JsonRpcLiteRequest {
+                            id: JsonRpcLiteId::String(request_id),
+                            method,
+                            params: Some(params),
+                        });
+                        self.send_to_connection(connection_id, &frame);
+                    }
+                }
+                let thread = self.build_thread_from_live(&live_arc.lock());
+                drop(emitted);
+                drop(replay);
+                return Ok((thread, replay_health));
             }
+            let _ = tokio::time::timeout_at(settle_deadline, persisted).await;
         }
+    }
 
-        self.subscribe(connection_id, thread_id);
-        drop(replay);
-        if let Some(im) = self.interaction_managers.get(thread_id) {
-            im.replay_pending_requests();
+    /// Sends one journaled event to `connection_id` as its original frame; `request:*` events
+    /// become server requests and report their id through `on_request`.
+    fn replay_journal_event(
+        &self,
+        connection_id: &str,
+        thread_id: &str,
+        ev: cowork_storage::PersistedThreadJournalEvent,
+        on_request: &mut dyn FnMut(&str),
+    ) {
+        if ev.event_type.starts_with("internal/") {
+            return;
         }
-        let thread = self.build_thread_from_live(&live_arc.lock());
-        Ok((thread, replay_health))
+        if let Some(req_method) = ev.event_type.strip_prefix("request:") {
+            let req_id = ev
+                .request_id
+                .unwrap_or_else(|| format!("{thread_id}:{}", ev.seq));
+            on_request(&req_id);
+            let frame = JsonRpcLiteOutbound::ServerRequest(JsonRpcLiteRequest {
+                id: JsonRpcLiteId::String(req_id),
+                method: req_method.to_owned(),
+                params: Some(ev.payload),
+            });
+            self.send_to_connection(connection_id, &frame);
+            return;
+        }
+        let frame = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+            method: ev.event_type,
+            params: Some(ev.payload),
+        });
+        self.send_to_connection(connection_id, &frame);
+    }
+
+    pub(crate) fn thread_emit_gate(&self, thread_id: &str) -> Arc<ThreadEmitGate> {
+        Arc::clone(
+            self.thread_emit_gates
+                .entry(thread_id.to_owned())
+                .or_default()
+                .value(),
+        )
     }
 
     pub async fn read_or_hydrate_thread(
@@ -2391,7 +2546,10 @@ impl ServerRuntimeState {
             })
             .await
             .map_err(|e| e.to_string())?;
-        let live_arc = self.load_thread(thread_id).unwrap();
+        // A concurrent delete can remove the thread while the metadata write is in flight.
+        let Some(live_arc) = self.load_thread(thread_id) else {
+            return Err(format!("Unknown thread: {thread_id}"));
+        };
         let out = self.build_thread_from_live(&live_arc.lock());
         Ok(out)
     }
@@ -2419,7 +2577,10 @@ impl ServerRuntimeState {
             })
             .await
             .map_err(|e| e.to_string())?;
-        let live_arc = self.load_thread(thread_id).unwrap();
+        // A concurrent delete can remove the thread while the metadata write is in flight.
+        let Some(live_arc) = self.load_thread(thread_id) else {
+            return Err(format!("Unknown thread: {thread_id}"));
+        };
         let out = self.build_thread_from_live(&live_arc.lock());
         Ok(out)
     }
@@ -2430,8 +2591,9 @@ impl ServerRuntimeState {
         };
         let trimmed = title.trim();
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let event = {
+        let (event, changed) = {
             let mut live = live_arc.lock();
+            let prev = (live.title.clone(), live.title_source);
             live.title = if trimmed.is_empty() {
                 "New session".to_owned()
             } else {
@@ -2443,7 +2605,8 @@ impl ServerRuntimeState {
                 SessionTitleSource::Manual
             };
             live.updated_at = now;
-            json!({
+            let changed = prev != (live.title.clone(), live.title_source);
+            let event = json!({
                 "type": "session_info",
                 "sessionId": live.id,
                 "title": live.title,
@@ -2453,12 +2616,31 @@ impl ServerRuntimeState {
                 "updatedAt": live.updated_at,
                 "provider": live.provider,
                 "model": live.model,
-            })
+            });
+            (event, changed)
         };
         self.persist_live_session(&live_arc, "session_info")
             .await
             .map_err(|e| e.to_string())?;
+        // `SessionMetadataManager.updateSessionInfo` emitted `session_info` (projected as
+        // `cowork/session/info`) to every subscriber when the title actually changed.
+        if changed {
+            self.broadcast_session_event(thread_id, "cowork/session/info", &event);
+        }
         Ok(event)
+    }
+
+    /// Sends a session-scoped event to every connection subscribed to `thread_id`, mirroring
+    /// TS `notificationProjector` (the requester gets it too when subscribed).
+    pub(crate) fn broadcast_session_event(&self, thread_id: &str, method: &str, event: &Value) {
+        self.broadcast_to_thread(
+            thread_id,
+            None,
+            &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                method: method.to_owned(),
+                params: Some(event.clone()),
+            }),
+        );
     }
 
     pub async fn set_session_model(
@@ -2477,6 +2659,11 @@ impl ServerRuntimeState {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let (event, root_selection) = {
             let mut live = live_arc.lock();
+            // `ProviderAuthManager.setModel` rejected a switch while the agent was running: the
+            // turn writes its provider continuation state back to the session when it settles.
+            if live.busy {
+                return Err("Agent is busy".to_owned());
+            }
             let prev_provider = live.provider;
             let prev_model = live.model.clone();
             if let Some(p_str) = provider_raw.map(str::trim).filter(|s| !s.is_empty()) {
@@ -2578,36 +2765,13 @@ impl ServerRuntimeState {
             &mut current,
             &selection.overrides,
         );
-        // A stale preferred child target must not survive a provider switch, and a child model
-        // that followed the main model keeps following it.
-        let preferred_ref =
-            if current.child_model_routing_mode == ChildModelRoutingMode::CrossProviderAllowlist {
-                current.preferred_child_model_ref.clone()
-            } else if current.provider != selection.provider
-                || current.preferred_child_model == current.model
-            {
-                format!("{}:{}", selection.provider.as_str(), selection.model)
-            } else if !current.preferred_child_model_ref.trim().is_empty() {
-                current.preferred_child_model_ref.clone()
-            } else {
-                current.preferred_child_model.clone()
-            };
-        let routing = normalize_child_routing_config(
-            selection.provider,
-            &selection.model,
-            current.child_model_routing_mode,
-            Some(&preferred_ref),
-            Some(&current.allowed_child_model_refs),
-        );
-        let patch = ProjectConfigPatch {
+        apply_model_selection_child_routing(&mut current, selection.provider, &selection.model);
+        let mut patch = ProjectConfigPatch {
             provider: Some(selection.provider),
             model: Some(selection.model.clone()),
-            preferred_child_model: Some(routing.preferred_child_model),
-            child_model_routing_mode: Some(routing.child_model_routing_mode),
-            preferred_child_model_ref: Some(routing.preferred_child_model_ref),
-            allowed_child_model_refs: Some(routing.allowed_child_model_refs),
             ..ProjectConfigPatch::default()
         };
+        set_child_routing_patch(&mut patch, current);
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         persist_project_config_patch(
             &selection.cwd.join(".cowork"),
@@ -2653,20 +2817,48 @@ impl ServerRuntimeState {
                 }
             }
         }
-        if let Some(effort) = live.requested_reasoning_effort.clone() {
-            let mut probe = Map::new();
-            probe.insert(
-                provider.as_str().to_owned(),
-                json!({ "reasoningEffort": effort }),
-            );
-            let kept = reconcile_reasoning_provider_options(&probe, provider, &defaults)
-                .and_then(|m| m.get(provider.as_str()).cloned())
-                .is_some_and(|sec| sec.get("reasoningEffort").is_some());
-            if !kept {
-                live.requested_reasoning_effort = None;
-                live.effective_reasoning_effort = None;
-            }
+        if let Some(effort) = live.requested_reasoning_effort.clone()
+            && !self.model_accepts_reasoning_effort(provider, &live.model, &effort, &defaults)
+        {
+            live.requested_reasoning_effort = None;
+            live.effective_reasoning_effort = None;
         }
+    }
+
+    /// Whether `provider`/`model` takes reasoning effort `effort` (TS
+    /// `assertModelReasoningEffort`): the model must declare a reasoning configuration in its
+    /// resolved provider-option defaults, and the effort must be one it advertises (discovery
+    /// cache first, then the bundled catalog; no list keeps the declared-reasoning check only).
+    /// Providers without a reasoning option never take one.
+    pub(crate) fn model_accepts_reasoning_effort(
+        &self,
+        provider: ProviderName,
+        model: &str,
+        effort: &str,
+        defaults: &Map<String, Value>,
+    ) -> bool {
+        let declares_reasoning = match provider {
+            ProviderName::Openai => defaults.contains_key("reasoningEffort"),
+            ProviderName::Google => defaults.contains_key("thinkingConfig"),
+            ProviderName::Anthropic => {
+                defaults.contains_key("effort") || defaults.contains_key("thinking")
+            }
+            ProviderName::CodexCli => true,
+            _ => false,
+        };
+        if !declares_reasoning {
+            return false;
+        }
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let declared = cowork_config::models::find_discovered_model_sync(&paths, provider, model)
+            .and_then(|cached| cached.reasoning)
+            .and_then(|reasoning| reasoning.available_efforts)
+            .or_else(|| {
+                self.model_registry()
+                    .get(provider, model.trim())
+                    .and_then(|m| m.supported_reasoning_efforts.clone())
+            });
+        declared.is_none_or(|efforts| efforts.iter().any(|e| e == effort))
     }
 
     pub async fn set_session_usage_budget(
@@ -2720,6 +2912,9 @@ impl ServerRuntimeState {
         self.persist_live_session(&live_arc, "session_usage")
             .await
             .map_err(|e| e.to_string())?;
+        // `setSessionUsageBudget` emitted `session_usage` (`cowork/session/usage`) to the
+        // thread's subscribers.
+        self.broadcast_session_event(thread_id, "cowork/session/usage", &event);
         Ok(event)
     }
 
@@ -2834,6 +3029,9 @@ impl ServerRuntimeState {
         // (`SessionMetadataManager.prepareConfigUpdate` / `buildPersistPatch` parity).
         let mut proj_patch = ProjectConfigPatch::default();
         apply_session_config_to_project_patch(&patch, &mut proj_patch)?;
+        // The config the session reported before this update (the workspace write below can
+        // change `cfg` itself).
+        let cfg_before = cfg.clone();
         if self.should_persist_session_config(&live_arc, &cfg, &patch, &mut proj_patch) {
             // Root sessions persist accepted settings to the workspace (and, for user-scoped
             // keys, the user) config before applying them, as `applyPreparedConfigUpdate` did
@@ -2855,10 +3053,11 @@ impl ServerRuntimeState {
         let refreshes_prompt = SYSTEM_PROMPT_REFRESH_CONFIG_KEYS
             .iter()
             .any(|k| patch.contains_key(*k));
-        let (event, meta_for_backup, refreshed_child_prompt) = {
+        let (event, meta_for_backup, refreshed_child_prompt, config_changed) = {
             let mut live = live_arc.lock();
             let before =
                 self.build_session_config_event(&live.id, &cfg, Some(&live.config_overrides));
+            let prior_overrides = live.config_overrides.clone();
             merge_session_config_overrides(&mut live.config_overrides, patch);
             live.updated_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -2895,7 +3094,13 @@ impl ServerRuntimeState {
                 live.provider.as_str().to_owned(),
                 live.model.clone(),
             );
-            (evt, meta, refreshed_child_prompt)
+            let config_changed = self.build_session_config_event(
+                &live.id,
+                &cfg_before,
+                Some(&prior_overrides),
+            )["config"]
+                != evt["config"];
+            (evt, meta, refreshed_child_prompt, config_changed)
         };
         // The parent's hydrated controller runs the child's executor turns and persists the
         // child with its own copy of the prompt; update it before persisting so neither path
@@ -2912,6 +3117,12 @@ impl ServerRuntimeState {
             .await
             .map_err(|e| e.to_string())?;
         self.refresh_agent_control_config(thread_id);
+        // `SessionMetadataManager.applyPreparedConfigUpdate` emitted `session_config`
+        // (`cowork/session/config`) to the thread's subscribers once an accepted change was
+        // persisted; an update that leaves the effective config unchanged emitted nothing.
+        if config_changed {
+            self.broadcast_session_event(thread_id, "cowork/session/config", &event);
+        }
         if let Some(enabled) = backups_toggled {
             let state = if enabled {
                 self.backup_manager
@@ -3045,6 +3256,33 @@ impl ServerRuntimeState {
         Ok(event)
     }
 
+    /// `cowork/session/defaults/apply` targets only an idle, unlocked thread of `cwd`
+    /// (TS `applySessionDefaults` rejected a running agent with `Agent is busy`).
+    fn check_session_defaults_target(
+        &self,
+        cwd: &Path,
+        thread_id: &str,
+        live_arc: &Arc<Mutex<LiveSession>>,
+    ) -> Result<(), String> {
+        {
+            let live = live_arc.lock();
+            if !same_workspace_path(&cwd.to_string_lossy(), &live.cwd) {
+                return Err("Target session is outside the active workspace".to_owned());
+            }
+            if live.busy {
+                return Err("Agent is busy".to_owned());
+            }
+        }
+        if let Some(active_task) = self
+            .session_db
+            .get_active_task_for_source_session(thread_id)
+            .map_err(|e| e.to_string())?
+        {
+            return Err(format!("Chat is locked by active task {}", active_task.id));
+        }
+        Ok(())
+    }
+
     pub async fn apply_session_defaults(
         &self,
         cwd: &Path,
@@ -3060,6 +3298,18 @@ impl ServerRuntimeState {
         let parsed_provider = match provider {
             Some(p) => {
                 Some(ProviderName::parse(p).ok_or_else(|| format!("Unknown provider: {p}"))?)
+            }
+            None => None,
+        };
+        // Resolve and validate the target thread before any write: an unknown, foreign,
+        // running or task-locked thread must not change the workspace defaults either.
+        let target = match thread_id {
+            Some(tid) => {
+                let Some(live_arc) = self.load_thread(tid) else {
+                    return Err("Unknown thread".to_owned());
+                };
+                self.check_session_defaults_target(cwd, tid, &live_arc)?;
+                Some((tid, live_arc))
             }
             None => None,
         };
@@ -3080,6 +3330,31 @@ impl ServerRuntimeState {
         if let Some(cp) = &config_patch {
             apply_session_config_to_project_patch(cp, &mut proj_patch)?;
         }
+        let prev_cfg = self.load_workspace_config(cwd).map_err(|e| e.to_string())?;
+        if let (Some(next_provider), Some(next_model)) = (parsed_provider, model) {
+            // `prepareModelSelection`'s `persistSelection`: the child routing is re-normalized for
+            // the new selection (from the thread's effective routing when one is targeted), and a
+            // routing change in the same patch is then normalized against the new model
+            // (`prepareConfigUpdate` ran on `preparedModel.nextConfig`).
+            let mut routed = prev_cfg.clone();
+            if let Some((_, live_arc)) = &target {
+                let live = live_arc.lock();
+                routed.provider = live.provider;
+                routed.model = live.model.clone();
+                crate::extension_mcp_agent_routes::apply_session_child_routing_overrides(
+                    &mut routed,
+                    &live.config_overrides,
+                );
+            }
+            apply_model_selection_child_routing(&mut routed, next_provider, next_model);
+            if let Some(cp) = &config_patch {
+                crate::extension_mcp_agent_routes::apply_session_child_routing_overrides(
+                    &mut routed,
+                    cp,
+                );
+            }
+            set_child_routing_patch(&mut proj_patch, routed);
+        }
 
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let project_cowork_dir = cwd.join(".cowork");
@@ -3093,12 +3368,20 @@ impl ServerRuntimeState {
         .map_err(|e| e.to_string())?;
 
         let refreshed_cfg = self.load_workspace_config(cwd).map_err(|e| e.to_string())?;
-        if let Some(tid) = thread_id {
-            let Some(live_arc) = self.load_thread(tid) else {
-                return Err("Unknown thread".to_owned());
-            };
+        if let Some((tid, live_arc)) = target {
             let (event, notifications) = {
                 let mut live = live_arc.lock();
+                // A turn that started after the validation above owns the session now.
+                if live.busy {
+                    return Err("Agent is busy".to_owned());
+                }
+                let config_before = config_patch.as_ref().map(|_| {
+                    self.build_session_config_event(
+                        &live.id,
+                        &prev_cfg,
+                        Some(&live.config_overrides),
+                    )
+                });
                 let prev_provider = live.provider;
                 let prev_model = live.model.clone();
                 let prev_enable_mcp = live.enable_mcp;
@@ -3161,6 +3444,11 @@ impl ServerRuntimeState {
                     &refreshed_cfg,
                     Some(&live.config_overrides),
                 );
+                // A config patch that changed the effective session config was applied through
+                // `applyPreparedConfigUpdate`, which emitted `session_config`.
+                if config_before.is_some_and(|before| before["config"] != event["config"]) {
+                    notifications.push(("cowork/session/config", event.clone()));
+                }
                 (event, notifications)
             };
             self.persist_live_session(&live_arc, "session_config")
@@ -3190,6 +3478,9 @@ impl ServerRuntimeState {
         filename: &str,
         content_base64: &str,
     ) -> Result<Value, String> {
+        if content_base64.len() > MAX_ATTACHMENT_UPLOAD_BASE64_SIZE {
+            return Err("File too large (max 100MB)".to_owned());
+        }
         let bytes = decode_base64_permissive(content_base64)?;
         let (clean_name, dst) = write_workspace_upload(cwd, filename, &bytes)?;
         let state_id = self.get_or_create_workspace_state_id(cwd);
@@ -3257,6 +3548,8 @@ impl ServerRuntimeState {
             self.journal.wait_for_idle(id).await;
             self.mcp_tool_cache.close_session(id).await;
             self.sessions.remove(id);
+            self.thread_emit_gates.remove(id);
+            self.session_persist_locks.remove(id);
         }
         self.creation_keys
             .retain(|_, bound_id| !tree_ids.contains(bound_id));
@@ -4732,6 +5025,44 @@ fn string_list(cp: &Map<String, Value>, key: &str) -> Option<Vec<String>> {
 
 /// Forwards every persistable field of a `cowork/session/defaults/apply` config patch
 /// (`SessionMetadataManager.buildPersistPatch` parity), including the `clear*` sentinels.
+/// Switches `cfg` to `provider`/`model` and re-normalizes its child routing for the new
+/// selection (`ProviderAuthManager.prepareModelSelection`): a stale preferred child target must
+/// not survive a provider switch, and a child model that followed the main model keeps
+/// following it.
+fn apply_model_selection_child_routing(cfg: &mut AgentConfig, provider: ProviderName, model: &str) {
+    let preferred_ref =
+        if cfg.child_model_routing_mode == ChildModelRoutingMode::CrossProviderAllowlist {
+            cfg.preferred_child_model_ref.clone()
+        } else if cfg.provider != provider || cfg.preferred_child_model == cfg.model {
+            format!("{}:{model}", provider.as_str())
+        } else if !cfg.preferred_child_model_ref.trim().is_empty() {
+            cfg.preferred_child_model_ref.clone()
+        } else {
+            cfg.preferred_child_model.clone()
+        };
+    let routing = normalize_child_routing_config(
+        provider,
+        model,
+        cfg.child_model_routing_mode,
+        Some(&preferred_ref),
+        Some(&cfg.allowed_child_model_refs),
+    );
+    cfg.provider = provider;
+    cfg.model = model.to_owned();
+    cfg.child_model_routing_mode = routing.child_model_routing_mode;
+    cfg.preferred_child_model = routing.preferred_child_model;
+    cfg.preferred_child_model_ref = routing.preferred_child_model_ref;
+    cfg.allowed_child_model_refs = routing.allowed_child_model_refs;
+}
+
+/// Writes `routed`'s child routing into `patch` (`persistSelection`'s routing fields).
+fn set_child_routing_patch(patch: &mut ProjectConfigPatch, routed: AgentConfig) {
+    patch.child_model_routing_mode = Some(routed.child_model_routing_mode);
+    patch.preferred_child_model = Some(routed.preferred_child_model);
+    patch.preferred_child_model_ref = Some(routed.preferred_child_model_ref);
+    patch.allowed_child_model_refs = Some(routed.allowed_child_model_refs);
+}
+
 fn apply_session_config_to_project_patch(
     cp: &Map<String, Value>,
     patch: &mut ProjectConfigPatch,
@@ -4839,4 +5170,35 @@ fn apply_session_config_to_project_patch(
         patch.provider_options = Some(v.clone());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_messages_skip_thinking_and_reasoning_parts() {
+        let messages = vec![
+            json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] }),
+            json!({
+                "role": "assistant",
+                "content": [
+                    { "type": "thinking", "text": "secret chain of thought", "redacted": false },
+                    { "type": "reasoning", "text": "legacy reasoning" },
+                    { "type": "text", "text": "visible answer" }
+                ]
+            }),
+            json!({
+                "role": "assistant",
+                "content": [{ "type": "thinking", "text": "only thinking" }]
+            }),
+        ];
+        let seed = unjournaled_seed_messages("t", &messages, None, false, "ts");
+        let texts: Vec<(&str, &str)> = seed.iter().map(|m| (m.role, m.text.as_str())).collect();
+        assert_eq!(
+            texts,
+            vec![("user", "hello"), ("assistant", "visible answer")],
+            "reasoning parts must not become visible seed text"
+        );
+    }
 }

@@ -57,7 +57,7 @@ use uuid::Uuid;
 use crate::memory_and_fork_routes::{
     ServerThreadControlBridge, advance_memory_cursor, memory_generation_model_ref,
 };
-use crate::registry::{LiveSession, ServerRuntimeState};
+use crate::registry::{LiveSession, ServerRuntimeState, ThreadEmitGate};
 
 const DEFAULT_MAX_TURN_STEPS: usize = 100;
 const USER_MESSAGE_ACCEPTED_EVENT: &str = "internal/userMessageAccepted";
@@ -107,6 +107,42 @@ struct ServerHarnessEventSink {
     live_session: Arc<Mutex<LiveSession>>,
     journal_tx: Mutex<Option<mpsc::UnboundedSender<ThreadJournalEventInput>>>,
     deferred_turn_completed: Mutex<Option<Value>>,
+    /// Orders this thread's journaled broadcasts against the `thread/resume` replay cut.
+    emit_gate: Arc<ThreadEmitGate>,
+}
+
+/// Pending server requests collected by [`capture_pending_server_requests`] on this thread.
+type CapturedServerRequests = Vec<(String, String, Value)>;
+
+thread_local! {
+    /// Set only while [`capture_pending_server_requests`] runs
+    /// `InteractionManager::replay_pending_requests` on this OS thread: the sink's
+    /// `send_server_request` then records the prompt here instead of journaling and
+    /// broadcasting it again.
+    static PENDING_REQUEST_CAPTURE: std::cell::RefCell<Option<CapturedServerRequests>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Snapshots `im`'s unanswered prompts as `(request_id, method, params)` without re-emitting
+/// them, so `thread/resume` can deliver them to the resuming connection alone.
+pub(crate) fn capture_pending_server_requests(im: &InteractionManager) -> CapturedServerRequests {
+    PENDING_REQUEST_CAPTURE.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+    // `replay_pending_requests` calls the sink synchronously on this thread.
+    im.replay_pending_requests();
+    PENDING_REQUEST_CAPTURE
+        .with(|slot| slot.borrow_mut().take())
+        .unwrap_or_default()
+}
+
+/// Records a replayed prompt while a capture is active; returns whether it was captured.
+fn capture_replayed_request(request_id: &str, method: &str, params: &Value) -> bool {
+    PENDING_REQUEST_CAPTURE.with(|slot| match slot.borrow_mut().as_mut() {
+        Some(captured) => {
+            captured.push((request_id.to_owned(), method.to_owned(), params.clone()));
+            true
+        }
+        None => false,
+    })
 }
 
 impl ServerHarnessEventSink {
@@ -137,15 +173,20 @@ impl ServerHarnessEventSink {
         }
     }
 
+    /// Queues `entry` for the journal; called under the emit gate. The turn's journal writer
+    /// (or the fallback task) marks the write finished once it is durable.
     fn enqueue_journal(&self, entry: ThreadJournalEventInput) {
+        self.emit_gate.begin_journal_write();
         if let Some(tx) = self.journal_tx.lock().as_ref()
             && tx.send(entry.clone()).is_ok()
         {
             return;
         }
         let journal = Arc::clone(&self.runtime.journal);
+        let gate = Arc::clone(&self.emit_gate);
         tokio::spawn(async move {
             let _ = journal.enqueue(entry).await;
+            gate.finish_journal_write();
         });
     }
 }
@@ -236,6 +277,12 @@ impl HarnessEventSink for ServerHarnessEventSink {
             .map(str::to_owned)
             .or_else(|| self.turn_id.lock().clone());
 
+        let mut gate = self.emit_gate.lock();
+        if method == "serverRequest/resolved"
+            && let Some(request_id) = req_id.as_deref()
+        {
+            gate.emitted_requests.remove(request_id);
+        }
         self.enqueue_journal(ThreadJournalEventInput {
             thread_id: self.thread_id.clone(),
             ts,
@@ -261,6 +308,9 @@ impl HarnessEventSink for ServerHarnessEventSink {
     }
 
     fn send_server_request(&self, request_id: &str, method: &str, params: Value) {
+        if capture_replayed_request(request_id, method, &params) {
+            return;
+        }
         {
             let mut live = self.live_session.lock();
             if method == "item/tool/requestUserInput" {
@@ -277,6 +327,8 @@ impl HarnessEventSink for ServerHarnessEventSink {
             .map(str::to_owned)
             .or_else(|| self.turn_id.lock().clone());
 
+        let mut gate = self.emit_gate.lock();
+        gate.emitted_requests.insert(request_id.to_owned());
         self.enqueue_journal(ThreadJournalEventInput {
             thread_id: self.thread_id.clone(),
             ts,
@@ -1474,7 +1526,15 @@ impl ServerRuntimeState {
                 }
             }
         }
-        if let Some(effort) = &requested_reasoning {
+        // TS `applyReasoningEffort` wrote the effort only into OpenAI-compatible provider options
+        // (`openai`, `codex-cli`), and only for a model that takes it; Google thinking travels
+        // as `thinkingConfig`, so injecting `reasoningEffort` there would make the Google
+        // request builder send `thinking_level` to non-reasoning models.
+        let model_defaults = self.model_provider_option_defaults(provider, &model_id);
+        if let Some(effort) = requested_reasoning.as_ref().filter(|effort| {
+            matches!(provider, ProviderName::Openai | ProviderName::CodexCli)
+                && self.model_accepts_reasoning_effort(provider, &model_id, effort, &model_defaults)
+        }) {
             let sub = merged_provider_opts
                 .entry(provider.as_str().to_owned())
                 .or_insert_with(|| Value::Object(Map::new()));
@@ -1487,7 +1547,6 @@ impl ServerRuntimeState {
         // Workspace defaults are reconciled against the workspace model, not this thread's
         // model; drop gated reasoning keys the thread's model does not support so the provider
         // serializer never emits an unsupported `reasoning` payload.
-        let model_defaults = self.model_provider_option_defaults(provider, &model_id);
         merged_provider_opts =
             reconcile_reasoning_provider_options(&merged_provider_opts, provider, &model_defaults)
                 .unwrap_or_default();
@@ -1689,6 +1748,7 @@ impl ServerRuntimeState {
             live_session: Arc::clone(&live_arc),
             journal_tx: Mutex::new(None),
             deferred_turn_completed: Mutex::new(None),
+            emit_gate: self.thread_emit_gate(&params.thread_id),
         });
         let sink: Arc<dyn HarnessEventSink> = sink_impl.clone();
 
@@ -2009,9 +2069,11 @@ impl ServerRuntimeState {
             let turn_started_instant = std::time::Instant::now();
             let (journal_tx, mut journal_rx) = mpsc::unbounded_channel::<ThreadJournalEventInput>();
             let journal_for_writer = Arc::clone(&runtime.journal);
+            let gate_for_writer = Arc::clone(&sink_impl.emit_gate);
             let journal_writer = tokio::spawn(async move {
                 while let Some(entry) = journal_rx.recv().await {
                     let _ = journal_for_writer.enqueue(entry).await;
+                    gate_for_writer.finish_journal_write();
                 }
             });
             sink_impl.set_turn_context(&conn_id, &turn_id, journal_tx);
@@ -2787,6 +2849,23 @@ impl ServerRuntimeState {
                 format!(
                     "Active turn {} does not match requested turnId {}",
                     ctrl.turn_id, expected_turn
+                ),
+            ));
+        }
+        // A subagent turn run by its parent's `AgentControl` executor emits nothing to thread
+        // subscribers and has no live session here, so an external steer would be applied
+        // silently (text) or fail on the missing session (attachments). Only turns this server
+        // runs for the thread (whose interaction manager is the registered one) take steers.
+        let server_run_turn = self
+            .interaction_managers
+            .get(&params.thread_id)
+            .is_some_and(|im| Arc::ptr_eq(im.value(), &ctrl.interactions));
+        if !server_run_turn {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_REQUEST,
+                format!(
+                    "Thread {} is running a subagent turn driven by its parent agent; turn/steer is not supported for it. Send input through the parent agent instead.",
+                    params.thread_id
                 ),
             ));
         }

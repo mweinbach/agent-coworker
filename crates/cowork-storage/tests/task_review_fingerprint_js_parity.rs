@@ -122,3 +122,39 @@ fn snapshot_fingerprint_matches_typescript_for_integral_confidence() {
         "3d5aa812eb269f8986366ca31ba6a3b17aacf0251d0fe394cfc834d6864fa63c"
     );
 }
+
+/// JavaScript objects enumerate array-index keys (canonical decimal strings below `2^32 - 1`)
+/// first, in numeric order, ahead of the other keys in insertion order. `stableNormalize`
+/// inserts `Object.keys(record).sort()`, so `{"2", "10", "b", "a"}` stringifies as
+/// `{"2", "10", "a", "b"}`, not in plain UTF-16 order. Artifact provenance can carry such keys,
+/// and the fingerprint must not change for unchanged content. Expected output computed with
+/// Bun running the origin/main `stableNormalize`/`stableStringify`.
+#[test]
+fn object_keys_follow_javascript_array_index_ordering() {
+    assert_eq!(
+        stable_stringify(&json!({ "2": "two", "10": "ten", "b": "bee", "a": "ay" })),
+        r#"{"2":"two","10":"ten","a":"ay","b":"bee"}"#
+    );
+
+    let snapshot = json!({
+        "schemaVersion": 1,
+        "artifacts": [{
+            "id": "a1",
+            "provenance": {
+                "b": "bee", "2": "two", "a": "ay", "10": "ten", "01": "zero-one", "-1": "neg",
+                "4294967294": "maxidx", "4294967295": "notidx", "1.5": "frac", "Z": "zed"
+            }
+        }]
+    });
+    assert_eq!(
+        stable_stringify(&snapshot),
+        r#"{"artifacts":[{"id":"a1","provenance":{"2":"two","10":"ten","4294967294":"maxidx","-1":"neg","01":"zero-one","1.5":"frac","4294967295":"notidx","Z":"zed","a":"ay","b":"bee"}}],"schemaVersion":1}"#
+    );
+    let Value::Object(map) = snapshot else {
+        unreachable!()
+    };
+    assert_eq!(
+        fingerprint_task_review_material(&map),
+        "04519ba6261c97be0851757479394f5228dcdba6007c549ef8447af0ee25c112"
+    );
+}

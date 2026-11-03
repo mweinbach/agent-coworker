@@ -470,6 +470,34 @@ impl AdvancedMemoryStore {
         memory_type: &str,
         body: &str,
     ) -> ToolResult<AdvancedMemoryEntry> {
+        self.write_entry(
+            EntryWriteMode::Upsert,
+            scope,
+            explicit_folder,
+            slug_or_name,
+            name,
+            description,
+            memory_type,
+            body,
+        )?
+        .ok_or_else(|| ToolError::Execution("Memory upsert wrote no entry.".to_owned()))
+    }
+
+    /// Write an entry under the folder lock. `CreateNew` fails when the target already exists
+    /// (TS `manageMemory` create); `ExistingOnly` writes nothing and returns `None` when it does
+    /// not (TS `editMemory`).
+    #[allow(clippy::too_many_arguments)]
+    fn write_entry(
+        &self,
+        mode: EntryWriteMode,
+        scope: &str,
+        explicit_folder: Option<&str>,
+        slug_or_name: &str,
+        name: &str,
+        description: &str,
+        memory_type: &str,
+        body: &str,
+    ) -> ToolResult<Option<AdvancedMemoryEntry>> {
         let dir = self.resolve_scope_dir(scope, explicit_folder)?;
         // Reject the reserved index name before touching the filesystem (TS
         // `assertWritableMemoryName` runs before the folder lock).
@@ -477,11 +505,21 @@ impl AdvancedMemoryStore {
 
         self.with_dir_lock(&dir, || {
             let (slug, target) = resolve_entry_target(&dir, slug_or_name)?;
+            let is_update = target.is_file();
+            match mode {
+                EntryWriteMode::CreateNew if is_update => {
+                    return Err(ToolError::InvalidArguments(format!(
+                        "Memory \"{slug}\" already exists in active folder \"{}\".",
+                        folder_display_name(&dir)
+                    )));
+                }
+                EntryWriteMode::ExistingOnly if !is_update => return Ok(None),
+                _ => {}
+            }
             fs::create_dir_all(&dir).map_err(|e| {
                 ToolError::Execution(format!("Failed to create memory dir '{}': {e}", dir.display()))
             })?;
             let existing = self.list_entries_in_dir(&dir, scope)?;
-            let is_update = target.is_file();
             if !is_update && existing.len() >= MAX_MEMORY_ENTRIES_PER_DIR {
                 return Err(ToolError::Execution(format!(
                     "Memory folder reached maximum of {MAX_MEMORY_ENTRIES_PER_DIR} entries; consolidate or delete stale memories first."
@@ -531,7 +569,23 @@ impl AdvancedMemoryStore {
                 ToolError::Execution(format!("Failed to write '{}': {e}", target.display()))
             })?;
             self.rebuild_index_locked(&dir, scope)?;
-            Ok(entry)
+            Ok(Some(entry))
+        })
+    }
+
+    /// Regenerate a scope folder's `MEMORY.md` from its entry files under the folder lock (TS
+    /// `regenerateIndex`), returning the index path.
+    pub fn refresh_index(&self, scope: &str, explicit_folder: Option<&str>) -> ToolResult<PathBuf> {
+        let dir = self.resolve_scope_dir(scope, explicit_folder)?;
+        self.with_dir_lock(&dir, || {
+            fs::create_dir_all(&dir).map_err(|e| {
+                ToolError::Execution(format!(
+                    "Failed to create memory dir '{}': {e}",
+                    dir.display()
+                ))
+            })?;
+            self.rebuild_index_locked(&dir, scope)?;
+            Ok(dir.join(MEMORY_INDEX_FILE))
         })
     }
 
@@ -621,6 +675,56 @@ impl AdvancedMemoryStore {
         fs::write(dir.join("MEMORY.md"), render_memory_index(&entries) + "\n")
             .map_err(|e| ToolError::Execution(format!("Failed to update MEMORY.md: {e}")))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryWriteMode {
+    Upsert,
+    CreateNew,
+    ExistingOnly,
+}
+
+/// The memory folder name of a scope dir (its last path segment).
+fn folder_display_name(dir: &Path) -> String {
+    dir.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// TS `findByNameOrSlug` within one folder: the entry whose slug is `target` (as given, trimmed,
+/// or slugified), else the one whose display name or slug equals the lowercased target.
+fn take_entry_by_name_or_slug(
+    entries: &mut Vec<AdvancedMemoryEntry>,
+    target: &str,
+) -> Option<AdvancedMemoryEntry> {
+    let exact = target.trim();
+    let target_slug = slugify_memory_name(target);
+    let wanted_name = exact.to_lowercase();
+    entries
+        .iter()
+        .position(|e| e.slug == target || e.slug == exact)
+        .or_else(|| entries.iter().position(|e| e.slug == target_slug))
+        .or_else(|| {
+            entries
+                .iter()
+                .position(|e| e.name.trim().to_lowercase() == wanted_name || e.slug == wanted_name)
+        })
+        .map(|idx| entries.swap_remove(idx))
+}
+
+/// TS `manageMemory` `summarize`: the entry without its body.
+fn memory_summary(entry: &AdvancedMemoryEntry) -> Value {
+    let mut summary = json!({
+        "slug": entry.slug,
+        "name": entry.name,
+        "description": entry.description,
+        "type": entry.memory_type,
+        "updatedAt": entry.updated_at,
+    });
+    if let Some(origin) = entry.origin_session_id.as_deref() {
+        summary["originSessionId"] = json!(origin);
+    }
+    summary
 }
 
 /// `MEMORY.md` contents for a folder's entries (without the trailing newline).
@@ -958,21 +1062,9 @@ impl BuiltinTool for RecallMemoryTool {
         if let Some(target_name) = args.get("name").and_then(Value::as_str) {
             // TS `findByNameOrSlug`: try the slug and then the display name within each folder
             // before moving to the next, so a workspace entry's name beats a shared slug.
-            let exact = target_name.trim();
-            let target_slug = slugify_memory_name(target_name);
-            let wanted_name = exact.to_lowercase();
-            let found = folders.into_iter().find_map(|mut entries| {
-                entries
-                    .iter()
-                    .position(|e| e.slug == target_name || e.slug == exact)
-                    .or_else(|| entries.iter().position(|e| e.slug == target_slug))
-                    .or_else(|| {
-                        entries.iter().position(|e| {
-                            e.name.trim().to_lowercase() == wanted_name || e.slug == wanted_name
-                        })
-                    })
-                    .map(|idx| entries.swap_remove(idx))
-            });
+            let found = folders
+                .into_iter()
+                .find_map(|mut entries| take_entry_by_name_or_slug(&mut entries, target_name));
             if let Some(found) = found {
                 return Ok(ToolOutput::Text(format!(
                     "# {} ({}, scope={})\n{}\n\n{}",
@@ -1024,7 +1116,7 @@ impl BuiltinTool for ManageMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Create, update, or delete structured Markdown memories in workspace or global scope."
+        "List, read, create, edit, update, delete, or refresh structured Markdown memories. Writes target the workspace (default) or global scope. Use list/read before creating or editing."
     }
 
     fn input_schema(&self) -> Value {
@@ -1033,15 +1125,16 @@ impl BuiltinTool for ManageMemoryTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "update", "delete"]
+                    "enum": ["list", "read", "create", "edit", "refresh_index", "update", "delete"],
+                    "description": "Memory management action to perform."
                 },
                 "name": {
                     "type": "string",
-                    "description": "Human-facing memory name. Required for create. Without slug it is also the update/delete target, and an update keeps the existing name."
+                    "description": "Human-facing memory name. Required for create; usable as a read target. With edit it renames the memory. Without slug it is also the update/delete target, and an update keeps the existing name."
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Stable memory slug. Targets update/delete; optional for create. With slug, an update's name renames the memory."
+                    "description": "Stable memory slug. Required for edit; targets read/update/delete; optional for create. With slug, an update's name renames the memory."
                 },
                 "description": {
                     "type": "string",
@@ -1054,11 +1147,17 @@ impl BuiltinTool for ManageMemoryTool {
                 },
                 "body": {
                     "type": "string",
-                    "description": "Markdown body content."
+                    "description": "Markdown body for create, edit, or update."
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["auto", "active", "chats"],
+                    "description": "Read source: auto (default) searches every readable folder, active only this session's folder, chats only the shared (chats) folder."
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["workspace", "global"]
+                    "enum": ["workspace", "global"],
+                    "description": "Folder that create/edit/update/delete/refresh_index write to. Defaults to workspace."
                 }
             },
             "required": ["action"]
@@ -1097,16 +1196,28 @@ impl BuiltinTool for ManageMemoryTool {
         let slug_arg = non_blank_arg("slug");
         // TS `editMemory` targets the slug; `name` only renames. A call without `slug` keeps
         // the older shape where `name` is the target (title or slug).
-        let target = slug_arg.or(name).ok_or_else(|| {
-            ToolError::InvalidArguments("manageMemory name or slug is required.".to_owned())
-        })?;
+        let target = || {
+            slug_arg.or(name).ok_or_else(|| {
+                ToolError::InvalidArguments("manageMemory name or slug is required.".to_owned())
+            })
+        };
         let scope = args
             .get("scope")
             .and_then(Value::as_str)
             .unwrap_or("workspace");
 
         match action {
+            "list" => Ok(ToolOutput::Json(manage_memory_list(&store)?)),
+            "read" => {
+                let source = args.get("source").and_then(Value::as_str).unwrap_or("auto");
+                Ok(ToolOutput::Json(manage_memory_read(
+                    &store,
+                    target()?,
+                    source,
+                )?))
+            }
             "create" | "update" => {
+                let target = target()?;
                 // TS `editMemory` kept fields the edit did not supply, so an update that only
                 // changes the body must not reclassify the entry or replace its description.
                 if action == "create" && name.is_none() {
@@ -1115,16 +1226,7 @@ impl BuiltinTool for ManageMemoryTool {
                     ));
                 }
                 let existing = if action == "update" {
-                    let dir = store.resolve_scope_dir(scope, None)?;
-                    let (slug, target) = resolve_entry_target(&dir, target)?;
-                    if target.is_file() {
-                        store
-                            .list_entries_in_dir(&dir, scope)?
-                            .into_iter()
-                            .find(|e| e.slug == slug)
-                    } else {
-                        None
-                    }
+                    existing_entry(&store, scope, target)?
                 } else {
                     None
                 };
@@ -1151,22 +1253,100 @@ impl BuiltinTool for ManageMemoryTool {
                     ToolError::InvalidArguments("body is required for create/update".to_owned())
                 })?;
                 assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
-                let saved = store.upsert_entry(
-                    scope,
-                    None,
-                    target,
-                    display_name,
-                    description,
-                    mem_type,
-                    body,
-                )?;
+                // TS create rejected a slug that already exists instead of overwriting it; the
+                // check runs under the folder lock so a concurrent create cannot slip past it.
+                let mode = if action == "create" {
+                    EntryWriteMode::CreateNew
+                } else {
+                    EntryWriteMode::Upsert
+                };
+                let saved = store
+                    .write_entry(
+                        mode,
+                        scope,
+                        None,
+                        target,
+                        display_name,
+                        description,
+                        mem_type,
+                        body,
+                    )?
+                    .ok_or_else(|| {
+                        ToolError::Execution("manageMemory wrote no entry.".to_owned())
+                    })?;
                 Ok(ToolOutput::Json(json!({
                     "ok": true,
                     "action": action,
+                    "folder": folder_display_name(&store.resolve_scope_dir(scope, None)?),
                     "entry": saved,
                 })))
             }
+            "edit" => {
+                // TS `manageMemory` edit: `slug` targets, every other field is an optional patch
+                // (at least one required), and a missing memory is reported, not created.
+                let slug = slug_arg.ok_or_else(|| {
+                    ToolError::InvalidArguments("manageMemory edit slug is required.".to_owned())
+                })?;
+                let patch = |key: &str| args.get(key).and_then(Value::as_str);
+                if ["name", "description", "type", "body"]
+                    .iter()
+                    .all(|key| patch(key).is_none())
+                {
+                    return Err(ToolError::InvalidArguments(
+                        "manageMemory edit requires at least one field to update.".to_owned(),
+                    ));
+                }
+                assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
+                let dir = store.resolve_scope_dir(scope, None)?;
+                let folder = folder_display_name(&dir);
+                let not_found = || {
+                    json!({
+                        "ok": false,
+                        "action": "edit",
+                        "folder": folder,
+                        "slug": slugify_memory_name(slug),
+                        "reason": "not_found",
+                    })
+                };
+                let Some(existing) = existing_entry(&store, scope, slug)? else {
+                    return Ok(ToolOutput::Json(not_found()));
+                };
+                let saved = store.write_entry(
+                    EntryWriteMode::ExistingOnly,
+                    scope,
+                    None,
+                    slug,
+                    name.unwrap_or(&existing.name),
+                    patch("description").unwrap_or(&existing.description),
+                    patch("type").unwrap_or(&existing.memory_type),
+                    patch("body").unwrap_or(&existing.body),
+                )?;
+                Ok(ToolOutput::Json(match saved {
+                    Some(entry) => json!({
+                        "ok": true,
+                        "action": "edit",
+                        "folder": folder,
+                        "entry": entry,
+                    }),
+                    None => not_found(),
+                }))
+            }
+            "refresh_index" => {
+                assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
+                let index_path = store.refresh_index(scope, None)?;
+                let folder = index_path
+                    .parent()
+                    .map(folder_display_name)
+                    .unwrap_or_default();
+                Ok(ToolOutput::Json(json!({
+                    "ok": true,
+                    "action": "refresh_index",
+                    "folder": folder,
+                    "indexPath": index_path.to_string_lossy(),
+                })))
+            }
             "delete" => {
+                let target = target()?;
                 assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
                 let (slug, deleted) = store.delete_entry_resolved(scope, None, target)?;
                 Ok(ToolOutput::Json(json!({
@@ -1181,6 +1361,103 @@ impl BuiltinTool for ManageMemoryTool {
             ))),
         }
     }
+}
+
+/// The entry `target` addresses in a scope folder, if its file exists.
+fn existing_entry(
+    store: &AdvancedMemoryStore,
+    scope: &str,
+    target: &str,
+) -> ToolResult<Option<AdvancedMemoryEntry>> {
+    let dir = store.resolve_scope_dir(scope, None)?;
+    let (slug, path) = resolve_entry_target(&dir, target)?;
+    if !path.is_file() {
+        return Ok(None);
+    }
+    Ok(store
+        .list_entries_in_dir(&dir, scope)?
+        .into_iter()
+        .find(|e| e.slug == slug))
+}
+
+/// TS `manageMemory` list: the session's folders with entry summaries.
+fn manage_memory_list(store: &AdvancedMemoryStore) -> ToolResult<Value> {
+    let active_folder = store.workspace_folder_key();
+    let mut folders = Vec::new();
+    let mut readable_folders = Vec::new();
+    let mut read_roots = Vec::new();
+    let mut write_roots = Vec::new();
+    for (label, dir) in store.readable_scope_dirs() {
+        let folder = folder_display_name(&dir);
+        // Writes reach the session's own folder (scope workspace) and `_global` (scope global);
+        // the shared `(chats)` folder is read-only from a project workspace.
+        let writable = label != CHATS_SCOPE_LABEL;
+        let path = dir.to_string_lossy().into_owned();
+        let memories: Vec<Value> = store
+            .list_entries_in_dir(&dir, label)?
+            .iter()
+            .map(memory_summary)
+            .collect();
+        if writable {
+            write_roots.push(path.clone());
+        }
+        read_roots.push(path.clone());
+        readable_folders.push(folder.clone());
+        folders.push(json!({
+            "folder": folder,
+            "scope": label,
+            "path": path,
+            "writable": writable,
+            "memories": memories,
+        }));
+    }
+    Ok(json!({
+        "activeFolder": active_folder,
+        "writableFolder": active_folder,
+        "readableFolders": readable_folders,
+        "memoriesDir": store.memories_base_dir().to_string_lossy(),
+        "writeRoots": write_roots,
+        "readRoots": read_roots,
+        "folders": folders,
+    }))
+}
+
+/// TS `manageMemory` read: `findByNameOrSlug` over the folders `source` selects.
+fn manage_memory_read(
+    store: &AdvancedMemoryStore,
+    target: &str,
+    source: &str,
+) -> ToolResult<Value> {
+    let folders: Vec<(&'static str, PathBuf)> = store
+        .readable_scope_dirs()
+        .into_iter()
+        .filter(|(label, dir)| match source {
+            "active" => *label == WORKSPACE_SCOPE_LABEL,
+            "chats" => folder_display_name(dir) == CHATS_FOLDER,
+            _ => true,
+        })
+        .collect();
+    for (label, dir) in &folders {
+        let mut entries = store.list_entries_in_dir(dir, label)?;
+        if let Some(entry) = take_entry_by_name_or_slug(&mut entries, target) {
+            return Ok(json!({
+                "found": true,
+                "folder": folder_display_name(dir),
+                "scope": label,
+                "writable": *label != CHATS_SCOPE_LABEL,
+                "memory": entry,
+            }));
+        }
+    }
+    let searched: Vec<String> = folders
+        .iter()
+        .map(|(_, dir)| folder_display_name(dir))
+        .collect();
+    Ok(json!({
+        "found": false,
+        "target": target.trim(),
+        "searchedFolders": searched,
+    }))
 }
 
 pub struct ReadPastConversationTool;

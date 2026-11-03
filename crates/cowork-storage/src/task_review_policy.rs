@@ -499,7 +499,8 @@ pub fn stable_normalize_json(value: &Value) -> Value {
 }
 
 /// `JSON.stringify(stableNormalize(value))` parity: object keys sorted by UTF-16 code units
-/// (`Array.prototype.sort`), and numbers rendered the way JavaScript renders them (`1`, not
+/// (`Array.prototype.sort`) except that array-index keys (`"2"`, `"10"`) come first in numeric
+/// order, as JavaScript objects enumerate them, and numbers rendered the way JavaScript renders them (`1`, not
 /// `1.0`), so fingerprints persisted by the TypeScript server stay valid after migration.
 pub fn stable_stringify(value: &Value) -> String {
     let mut out = String::new();
@@ -525,7 +526,7 @@ fn write_js_canonical_json(value: &Value, out: &mut String) {
         }
         Value::Object(obj) => {
             let mut keys: Vec<&String> = obj.keys().collect();
-            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            keys.sort_by(|a, b| js_object_key_order(a, b));
             out.push('{');
             for (i, key) in keys.into_iter().enumerate() {
                 if i > 0 {
@@ -538,6 +539,32 @@ fn write_js_canonical_json(value: &Value, out: &mut String) {
             out.push('}');
         }
     }
+}
+
+/// Key order `JSON.stringify` emits for the object `stableNormalize` built by inserting
+/// `Object.keys(record).sort()`: ECMAScript `OrdinaryOwnPropertyKeys` lists array-index keys
+/// first in ascending numeric order, then the remaining string keys in insertion order, which
+/// here is the UTF-16 code-unit order of `Array.prototype.sort`.
+fn js_object_key_order(a: &str, b: &str) -> std::cmp::Ordering {
+    match (js_array_index(a), js_array_index(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.encode_utf16().cmp(b.encode_utf16()),
+    }
+}
+
+/// ECMAScript array index: a canonical decimal string (`ToString(ToUint32(key)) === key`, so no
+/// sign, leading zero, or fraction) whose value is below `2^32 - 1`.
+fn js_array_index(key: &str) -> Option<u32> {
+    if key.is_empty() || key.len() > 10 || !key.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if key.len() > 1 && key.starts_with('0') {
+        return None;
+    }
+    let value: u64 = key.parse().ok()?;
+    u32::try_from(value).ok().filter(|v| *v != u32::MAX)
 }
 
 fn write_json_string(s: &str, out: &mut String) {

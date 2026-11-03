@@ -571,12 +571,7 @@ fn convert_messages_to_anthropic(
                 })
                 .collect();
             satisfied.clear();
-            if !missing.is_empty() {
-                out.push(json!({
-                    "role": "user",
-                    "content": missing,
-                }));
-            }
+            push_anthropic_message(out, "user", missing);
         };
 
     let mut idx = 0;
@@ -625,12 +620,7 @@ fn convert_messages_to_anthropic(
                         _ => {}
                     }
                 }
-                if !blocks.is_empty() {
-                    out.push(json!({
-                        "role": "user",
-                        "content": blocks,
-                    }));
-                }
+                push_anthropic_message(&mut out, "user", blocks);
                 idx += 1;
             }
             MessageRole::Assistant => {
@@ -717,12 +707,7 @@ fn convert_messages_to_anthropic(
                         _ => {}
                     }
                 }
-                if !blocks.is_empty() {
-                    out.push(json!({
-                        "role": "assistant",
-                        "content": blocks,
-                    }));
-                }
+                push_anthropic_message(&mut out, "assistant", blocks);
                 idx += 1;
             }
             MessageRole::Tool => {
@@ -784,12 +769,7 @@ fn convert_messages_to_anthropic(
                     }
                     idx += 1;
                 }
-                if !tool_results.is_empty() {
-                    out.push(json!({
-                        "role": "user",
-                        "content": tool_results,
-                    }));
-                }
+                push_anthropic_message(&mut out, "user", tool_results);
             }
         }
     }
@@ -806,6 +786,38 @@ fn convert_messages_to_anthropic(
     }
 
     out
+}
+
+/// Appends `blocks` as a `role` turn, merging into the previous entry when it has the same role.
+///
+/// Anthropic requires `user` / `assistant` turns to alternate, but several history shapes produce
+/// adjacent same-role turns: synthesized orphan `tool_result`s followed by the next user message,
+/// a `turn/steer` user message right after tool results, an earlier failed turn (`[User, User]`),
+/// or a user message holding only unsupported media between two assistant turns. Merged `user`
+/// turns keep every `tool_result` block ahead of the other blocks, as the API requires.
+fn push_anthropic_message(out: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
+    if blocks.is_empty() {
+        return;
+    }
+    if let Some(last) = out.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some(role)
+        && let Some(existing) = last.get_mut("content").and_then(Value::as_array_mut)
+    {
+        existing.extend(blocks);
+        if role == "user" {
+            // Stable partition: tool_result blocks first, preserving relative order.
+            let (mut results, rest): (Vec<Value>, Vec<Value>) = std::mem::take(existing)
+                .into_iter()
+                .partition(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"));
+            results.extend(rest);
+            *existing = results;
+        }
+        return;
+    }
+    out.push(json!({
+        "role": role,
+        "content": blocks,
+    }));
 }
 
 fn sanitize_anthropic_tool_id(raw: &str) -> String {

@@ -9,7 +9,7 @@ use cowork_inference::{
     MessageRole, ProviderContinuationState, ProviderOpaqueMeta, ProviderTransportError,
     ReasoningStreamMode, StepBudget, StopReason, StreamEvent, TextPhase, ToolResultPart, TurnUsage,
     compose_openai_tool_call_id, compute_continuation_fingerprint, execute_step_with_sink,
-    extract_nested_citations, filter_persisted_assistant_history, parse_partial_json_object,
+    extract_nested_citations, filter_persisted_assistant_history,
     sanitize_openai_composite_tool_id, split_openai_tool_call_id, validate_continuation_state,
 };
 use futures_util::StreamExt;
@@ -1403,7 +1403,20 @@ impl OpenAiStreamState {
                                 .and_then(Value::as_str)
                                 .unwrap_or("{}"),
                         };
-                        let parsed_args = parse_partial_json_object(raw_args);
+                        // A completed call's arguments must be one whole JSON object: never
+                        // repair truncated/malformed arguments into an executable call.
+                        let parsed_args = if raw_args.trim().is_empty() {
+                            Map::new()
+                        } else {
+                            match serde_json::from_str::<Value>(raw_args) {
+                                Ok(Value::Object(obj)) => obj,
+                                _ => {
+                                    return Err(ProviderTransportError::protocol(format!(
+                                        "Invalid JSON arguments for OpenAI tool call \"{name}\"."
+                                    )));
+                                }
+                            }
+                        };
 
                         emit(StreamEvent::ToolCallEnd {
                             turn_id: self.turn_id.clone(),
@@ -1476,6 +1489,17 @@ impl OpenAiStreamState {
                     if env.event_type != "response.completed" {
                         return Err(openai_response_failed_error(&env));
                     }
+                    // `mapStopReason(response.status)`: a `failed` / `cancelled` / `incomplete`
+                    // (or unknown) status on the terminal event is never a normal completion.
+                    if let Some(status) = resp
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        && !matches!(status, "completed" | "in_progress" | "queued")
+                    {
+                        return Err(openai_response_failed_error(&env));
+                    }
                     self.stop_reason = if self
                         .finished_blocks
                         .values()
@@ -1489,16 +1513,9 @@ impl OpenAiStreamState {
                 self.completed = true;
             }
             "error" => {
-                let msg = env
-                    .error
-                    .as_ref()
-                    .and_then(|e| e.get("message"))
-                    .and_then(Value::as_str)
-                    .or(env.message.as_deref())
-                    .unwrap_or("OpenAI stream error");
-                let mut err = ProviderTransportError::protocol(msg);
-                err.code = env.code;
-                return Err(err);
+                // `buildOpenAiResponseFailedError(event)`: nested `error.code` (for example
+                // `previous_response_not_found` or `rate_limit_exceeded`) wins over `event.code`.
+                return Err(openai_response_failed_error(&env));
             }
             _ => {}
         }
@@ -1513,6 +1530,13 @@ impl OpenAiStreamState {
         if !self.completed {
             return Err(ProviderTransportError::network(
                 "OpenAI response stream ended before completion.",
+            ));
+        }
+        // An output item that was added but never finished was truncated: never surface its
+        // partial text or execute a partially streamed tool call (Anthropic/Google parity).
+        if !self.open_items.is_empty() {
+            return Err(ProviderTransportError::network(
+                "OpenAI response stream ended with unfinished content.",
             ));
         }
 

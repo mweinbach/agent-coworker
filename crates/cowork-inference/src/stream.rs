@@ -147,13 +147,19 @@ pub enum StreamEvent {
 impl StreamEvent {
     /// Returns `true` when this event surfaces visible assistant text, reasoning, or tool activity
     /// to connected clients. Once `true`, pre-output retry middleware MUST NOT restart the call.
+    ///
+    /// `TextStart` and whitespace-only text are not visible: the projector defers the assistant
+    /// item until non-whitespace text arrives, so nothing has been shown yet.
     pub fn is_visible_output(&self) -> bool {
+        match self {
+            Self::TextStart { .. } => return false,
+            Self::TextDelta { delta, .. } => return !delta.trim().is_empty(),
+            Self::TextEnd { text, .. } => return !text.trim().is_empty(),
+            _ => {}
+        }
         matches!(
             self,
-            Self::TextStart { .. }
-                | Self::TextDelta { .. }
-                | Self::TextEnd { .. }
-                | Self::ThinkingStart { .. }
+            Self::ThinkingStart { .. }
                 | Self::ThinkingDelta { .. }
                 | Self::ThinkingEnd { .. }
                 | Self::ToolCallStart { .. }

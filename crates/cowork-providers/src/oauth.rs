@@ -105,18 +105,32 @@ pub fn generate_oauth_state() -> String {
     BASE64URL_NOPAD.encode(&state_bytes)
 }
 
+/// Outcome delivered by the loopback callback: the authorization code, or the provider's
+/// `?error=` (with `error_description` when present) so a denied flow fails immediately.
+type CallbackOutcome = Option<Result<String, String>>;
+
 #[derive(Clone)]
 struct CallbackSharedState {
     expected_state: String,
-    code_tx: Arc<Mutex<Option<watch::Sender<Option<String>>>>>,
+    code_tx: Arc<Mutex<Option<watch::Sender<CallbackOutcome>>>>,
 }
 
 struct ActiveChallenge {
     config: PkceOAuthConfig,
     redirect_uri: String,
     code_verifier: String,
-    code_rx: Option<watch::Receiver<Option<String>>>,
+    code_rx: Option<watch::Receiver<CallbackOutcome>>,
     server_tasks: Vec<JoinHandle<()>>,
+}
+
+impl Drop for ActiveChallenge {
+    /// Dropping a `JoinHandle` only detaches its task: abort the loopback callback servers so a
+    /// timed-out, failed, or cancelled challenge never leaves its listeners bound.
+    fn drop(&mut self) {
+        for handle in self.server_tasks.drain(..) {
+            handle.abort();
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -141,9 +155,70 @@ fn format_redirect_host(host: &str) -> String {
     }
 }
 
-async fn bind_dual_stack_ephemeral()
--> Result<(u16, TcpListener, Option<TcpListener>), ProviderTransportError> {
-    for _ in 0..12 {
+const DUAL_STACK_BIND_ATTEMPTS: usize = 12;
+
+/// Whether the redirect advertised to the browser can resolve to `[::1]`. An IPv4 literal
+/// (`127.0.0.1`) never does, so its IPv6 listener is best effort (the TS MCP OAuth flow pins
+/// `127.0.0.1` the same way); `localhost` and every other host need the `[::1]` listener on the
+/// same port, or a browser that tries `::1` first would hand `code` and `state` to whichever
+/// local process owns `[::1]:port`.
+fn advertised_host_requires_ipv6(advertised_host: &str) -> bool {
+    advertised_host.trim().parse::<Ipv4Addr>().is_err()
+}
+
+/// The bind error means this host has no usable IPv6 loopback at all (rather than a conflict on
+/// one port): `EADDRNOTAVAIL`, or the address family being unsupported.
+fn is_ipv6_loopback_unavailable(err: &std::io::Error) -> bool {
+    #[cfg(target_os = "linux")]
+    const EAFNOSUPPORT: i32 = 97;
+    #[cfg(windows)]
+    const EAFNOSUPPORT: i32 = 10047;
+    #[cfg(not(any(target_os = "linux", windows)))]
+    const EAFNOSUPPORT: i32 = 47;
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::Unsupported
+    ) || err.raw_os_error() == Some(EAFNOSUPPORT)
+}
+
+/// The `[::1]` bind failed because another socket holds (or exclusively reserves) that port:
+/// `EADDRINUSE`, or `WSAEACCES` / `EACCES` from `SO_EXCLUSIVEADDRUSE` on Windows.
+fn is_ipv6_port_conflict(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+    )
+}
+
+async fn bind_dual_stack_ephemeral(
+    require_ipv6: bool,
+) -> Result<(u16, TcpListener, Option<TcpListener>), ProviderTransportError> {
+    bind_dual_stack_with(require_ipv6, |port| async move {
+        TcpListener::bind(SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::LOCALHOST,
+            port,
+            0,
+            0,
+        )))
+        .await
+    })
+    .await
+}
+
+/// Binds `127.0.0.1:0` and then `[::1]` on the same port, retrying with a fresh port whenever
+/// `[::1]:port` is taken. An IPv4-only result is returned only when IPv6 is optional
+/// (`require_ipv6 == false`) or the host has no IPv6 loopback (`[::1]:0` itself cannot bind);
+/// otherwise allocation fails closed once the retries are exhausted.
+async fn bind_dual_stack_with<V6, F, Fut>(
+    require_ipv6: bool,
+    mut bind_v6: F,
+) -> Result<(u16, TcpListener, Option<V6>), ProviderTransportError>
+where
+    F: FnMut(u16) -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<V6>>,
+{
+    let mut last_v6_error = None;
+    for _ in 0..DUAL_STACK_BIND_ATTEMPTS {
         let v4 = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
             .map_err(|err| {
@@ -156,31 +231,47 @@ async fn bind_dual_stack_ephemeral()
             .map_err(|err| ProviderTransportError::network(err.to_string()))?
             .port();
 
-        match TcpListener::bind(SocketAddr::V6(SocketAddrV6::new(
-            Ipv6Addr::LOCALHOST,
-            port,
-            0,
-            0,
-        )))
-        .await
-        {
+        let err = match bind_v6(port).await {
             Ok(v6) => return Ok((port, v4, Some(v6))),
-            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
-                // Retry another ephemeral port so both 127.0.0.1 and [::1] share the exact same port.
+            Err(err) => err,
+        };
+        if !require_ipv6 {
+            if is_ipv6_port_conflict(&err) {
+                // Prefer a port both families share, but IPv6 stays best effort.
+                last_v6_error = Some(err);
                 continue;
             }
-            Err(_) => {
-                // Host lacks IPv6 loopback interface
-                return Ok((port, v4, None));
+            return Ok((port, v4, None));
+        }
+        if !is_ipv6_port_conflict(&err) {
+            // Only a host without an IPv6 loopback may fall back to IPv4 alone.
+            match bind_v6(0).await {
+                Err(probe_err) if is_ipv6_loopback_unavailable(&probe_err) => {
+                    return Ok((port, v4, None));
+                }
+                Ok(_) | Err(_) => {}
             }
         }
+        // Retry another ephemeral port so both 127.0.0.1 and [::1] share the exact same port.
+        last_v6_error = Some(err);
     }
 
-    let v4 = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
-        .await
-        .map_err(|err| ProviderTransportError::network(err.to_string()))?;
-    let port = v4.local_addr().unwrap().port();
-    Ok((port, v4, None))
+    if !require_ipv6 {
+        let v4 = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .map_err(|err| ProviderTransportError::network(err.to_string()))?;
+        let port = v4
+            .local_addr()
+            .map_err(|err| ProviderTransportError::network(err.to_string()))?
+            .port();
+        return Ok((port, v4, None));
+    }
+    Err(ProviderTransportError::network(format!(
+        "Failed to bind the OAuth callback listener on the same port for 127.0.0.1 and [::1]{}",
+        last_v6_error
+            .map(|err| format!(": {err}"))
+            .unwrap_or_default()
+    )))
 }
 
 async fn handle_oauth_callback(
@@ -197,9 +288,21 @@ async fn handle_oauth_callback(
     }
 
     if let Some(err) = params.get("error") {
+        let detail = match params
+            .get("error_description")
+            .map(|d| d.trim())
+            .filter(|d| !d.is_empty())
+        {
+            Some(description) => format!("{err}: {description}"),
+            None => err.clone(),
+        };
+        // Fail the waiting challenge now instead of letting it run out the callback timeout.
+        if let Some(tx) = shared.code_tx.lock().take() {
+            let _ = tx.send(Some(Err(detail.clone())));
+        }
         return (
             StatusCode::BAD_REQUEST,
-            format!("OAuth authorization failed: {err}"),
+            format!("OAuth authorization failed: {detail}"),
         )
             .into_response();
     }
@@ -214,7 +317,7 @@ async fn handle_oauth_callback(
     };
 
     if let Some(tx) = shared.code_tx.lock().take() {
-        let _ = tx.send(Some(code.to_string()));
+        let _ = tx.send(Some(Ok(code.to_string())));
     }
 
     (
@@ -269,12 +372,15 @@ impl PkceOAuthManager {
 
         let redirect_uri = match config.mode {
             OAuthMode::Auto => {
-                let (port, v4_listener, v6_listener_opt) = bind_dual_stack_ephemeral().await?;
+                let (port, v4_listener, v6_listener_opt) = bind_dual_stack_ephemeral(
+                    advertised_host_requires_ipv6(&config.advertised_redirect_host),
+                )
+                .await?;
                 bound_port = Some(port);
                 ipv4_listening = true;
                 ipv6_listening = v6_listener_opt.is_some();
 
-                let (tx, rx) = watch::channel::<Option<String>>(None);
+                let (tx, rx) = watch::channel::<CallbackOutcome>(None);
                 code_rx_opt = Some(rx);
 
                 let cb_state = CallbackSharedState {
@@ -372,8 +478,14 @@ impl PkceOAuthManager {
                 Duration::from_secs(CALLBACK_WAIT_TIMEOUT_SECS),
                 async move {
                     loop {
-                        if let Some(c) = rx.borrow().clone() {
-                            return Ok(c);
+                        match rx.borrow().clone() {
+                            Some(Ok(c)) => return Ok(c),
+                            Some(Err(err)) => {
+                                return Err(ProviderTransportError::protocol(format!(
+                                    "OAuth authorization failed: {err}"
+                                )));
+                            }
+                            None => {}
                         }
                         if rx.changed().await.is_err() {
                             return Err(ProviderTransportError::protocol(
@@ -393,7 +505,7 @@ impl PkceOAuthManager {
             ));
         };
 
-        for handle in challenge.server_tasks {
+        for handle in challenge.server_tasks.drain(..) {
             handle.abort();
         }
 
@@ -485,4 +597,98 @@ async fn exchange_oauth_token(
         scope: parsed.scope,
         updated_at: now.to_rfc3339(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// Drives `bind_dual_stack_with` with a scripted `[::1]` binder: `script(call, port)`.
+    async fn bind_with(
+        require_ipv6: bool,
+        script: impl Fn(usize, u16) -> std::io::Result<()>,
+    ) -> (Result<(u16, bool), ProviderTransportError>, Vec<u16>) {
+        let calls = AtomicUsize::new(0);
+        let ports = Mutex::new(Vec::new());
+        let result = bind_dual_stack_with(require_ipv6, |port| {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            ports.lock().push(port);
+            let outcome = script(call, port);
+            async move { outcome }
+        })
+        .await
+        .map(|(port, _v4, v6)| (port, v6.is_some()));
+        (result, ports.into_inner())
+    }
+
+    #[test]
+    fn only_ipv4_literal_redirect_hosts_make_ipv6_optional() {
+        assert!(!advertised_host_requires_ipv6("127.0.0.1"));
+        assert!(!advertised_host_requires_ipv6(" 127.0.0.1 "));
+        assert!(advertised_host_requires_ipv6("localhost"));
+        assert!(advertised_host_requires_ipv6("::1"));
+    }
+
+    #[tokio::test]
+    async fn permission_denied_on_ipv6_port_retries_a_fresh_port() {
+        // `WSAEACCES`: another process holds `[::1]:port` with `SO_EXCLUSIVEADDRUSE`.
+        let (result, ports) = bind_with(true, |call, _| {
+            if call < 2 {
+                Err(Error::from(ErrorKind::PermissionDenied))
+            } else {
+                Ok(())
+            }
+        })
+        .await;
+        let (port, ipv6) = result.expect("third port binds both families");
+        assert!(ipv6, "localhost redirect keeps the [::1] listener");
+        assert_eq!(ports.len(), 3);
+        assert!(
+            ports.iter().all(|p| *p != 0),
+            "no [::1]:0 probe on conflicts"
+        );
+        assert_eq!(ports.last(), Some(&port));
+    }
+
+    #[tokio::test]
+    async fn exhausted_ipv6_retries_fail_closed_for_localhost_redirects() {
+        for kind in [ErrorKind::AddrInUse, ErrorKind::PermissionDenied] {
+            let (result, ports) = bind_with(true, |_, _| Err(Error::from(kind))).await;
+            let err = result.expect_err("never advertise localhost with an IPv4-only listener");
+            assert!(err.message.contains("[::1]"), "{}", err.message);
+            assert_eq!(ports.len(), DUAL_STACK_BIND_ATTEMPTS);
+        }
+        // `[::1]` itself works (the `[::1]:0` probe binds) but every same-port bind fails.
+        let (result, _) = bind_with(true, |_, port| {
+            if port == 0 {
+                Ok(())
+            } else {
+                Err(Error::other("unexpected bind failure"))
+            }
+        })
+        .await;
+        result.expect_err("an unexplained [::1] failure is not treated as missing IPv6");
+    }
+
+    #[tokio::test]
+    async fn host_without_ipv6_loopback_falls_back_to_ipv4_only() {
+        let (result, ports) =
+            bind_with(true, |_, _| Err(Error::from(ErrorKind::AddrNotAvailable))).await;
+        let (_, ipv6) = result.expect("IPv4-only host still gets a listener");
+        assert!(!ipv6);
+        assert_eq!(ports.len(), 2, "port bind + [::1]:0 probe");
+        assert_eq!(ports[1], 0);
+    }
+
+    #[tokio::test]
+    async fn ipv4_literal_redirects_keep_ipv6_best_effort() {
+        let (result, ports) =
+            bind_with(false, |_, _| Err(Error::from(ErrorKind::PermissionDenied))).await;
+        let (_, ipv6) = result.expect("127.0.0.1 redirect never needs [::1]");
+        assert!(!ipv6);
+        assert_eq!(ports.len(), DUAL_STACK_BIND_ATTEMPTS);
+    }
 }

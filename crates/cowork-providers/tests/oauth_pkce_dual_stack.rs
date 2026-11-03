@@ -245,3 +245,101 @@ async fn binds_dual_stack_ipv4_and_ipv6_loopback_verifies_pkce_s256_state_and_re
     token_srv.abort();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn loopback_config(token_url: String) -> PkceOAuthConfig {
+    PkceOAuthConfig {
+        client_id: "client-test-err".into(),
+        authorize_url: "https://auth.example.com/authorize".into(),
+        token_url,
+        scopes: vec!["openid".into()],
+        advertised_redirect_host: "127.0.0.1".into(),
+        callback_path: "/oauth/callback".into(),
+        mode: OAuthMode::Auto,
+        resource: None,
+    }
+}
+
+/// Polls until nothing accepts connections on `127.0.0.1:port` (the listener task was aborted).
+async fn wait_until_listener_closed(port: u16) -> bool {
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn denied_callback_fails_the_challenge_immediately_and_closes_listeners() {
+    let mgr = PkceOAuthManager::new();
+    let ch = mgr
+        .start_challenge(loopback_config("http://127.0.0.1:9/oauth/token".into()))
+        .await
+        .unwrap();
+    let port = ch.bound_port.unwrap();
+
+    let waiter = {
+        let mgr = mgr.clone();
+        let id = ch.challenge_id.clone();
+        tokio::spawn(async move { mgr.complete_challenge(&id, None, None).await })
+    };
+    tokio::task::yield_now().await;
+
+    let resp = reqwest::Client::new()
+        .get(format!(
+            "http://127.0.0.1:{port}/oauth/callback?error=access_denied&error_description=User%20denied&state={}",
+            ch.state
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+
+    // Must not wait out the 180s callback timeout.
+    let err = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+        .await
+        .expect("denied consent fails the challenge immediately")
+        .unwrap()
+        .expect_err("denied consent is an error");
+    assert!(
+        err.message.contains("access_denied") && err.message.contains("User denied"),
+        "{}",
+        err.message
+    );
+    assert!(
+        wait_until_listener_closed(port).await,
+        "loopback listener must be aborted when the challenge fails"
+    );
+}
+
+#[tokio::test]
+async fn cancelled_challenge_wait_aborts_loopback_listeners() {
+    let mgr = PkceOAuthManager::new();
+    let ch = mgr
+        .start_challenge(loopback_config("http://127.0.0.1:9/oauth/token".into()))
+        .await
+        .unwrap();
+    let port = ch.bound_port.unwrap();
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok(),
+        "listener is up while the challenge is pending"
+    );
+
+    // The caller gives up (or its own timeout fires) while waiting for the browser.
+    let wait = mgr.complete_challenge(&ch.challenge_id, None, None);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), wait)
+            .await
+            .is_err()
+    );
+    assert!(
+        wait_until_listener_closed(port).await,
+        "dropping the challenge must abort its loopback servers"
+    );
+}

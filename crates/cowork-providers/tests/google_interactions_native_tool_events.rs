@@ -481,3 +481,245 @@ async fn google_native_tool_arguments_delta_streams_tool_input_deltas() {
         ]
     );
 }
+
+/// `function_call` payloads on `content.delta` / `step.delta` update the call's name, Gemini
+/// thought signature and arguments and stream the arguments as tool input
+/// (`processEvent.ts` / `mapToStreamParts.ts` `function_call` delta branches).
+#[tokio::test]
+async fn google_function_call_delta_updates_name_signature_and_arguments() {
+    let stream = sse(&[
+        json!({ "event_type": "interaction.start", "interaction": { "id": "inter_fc" } }),
+        json!({
+            "event_type": "content.start",
+            "index": 0,
+            "content": { "type": "function_call", "id": "fc_1" }
+        }),
+        json!({
+            "event_type": "content.delta",
+            "index": 0,
+            "delta": {
+                "type": "function_call",
+                "name": "bash",
+                "signature": "sig_fc",
+                "arguments": { "command": "ls" }
+            }
+        }),
+        json!({
+            "event_type": "content.delta",
+            "index": 0,
+            "delta": { "type": "function_call", "arguments": { "cwd": "/tmp" } }
+        }),
+        json!({ "event_type": "content.stop", "index": 0 }),
+        // A `function_call` that first appears as a delta (no start) still becomes a call.
+        json!({
+            "event_type": "step.delta",
+            "index": 1,
+            "delta": {
+                "type": "function_call",
+                "id": "fc_2",
+                "name": "read",
+                "signature": "sig_fc2",
+                "arguments": { "path": "a.txt" }
+            }
+        }),
+        json!({ "event_type": "step.stop", "index": 1 }),
+        json!({
+            "event_type": "interaction.complete",
+            "interaction": { "id": "inter_fc", "status": "requires_action" }
+        }),
+    ]);
+    let (base_url, _mock) = spawn_mock(vec![stream]).await;
+    let mut events = Vec::new();
+    let result = run_step(
+        &base_url,
+        vec![text_message("u1", MessageRole::User, "list files")],
+        &mut events,
+    )
+    .await;
+
+    let turn_id = "turn-native".to_string();
+    assert_eq!(
+        tool_events(&events),
+        vec![
+            StreamEvent::ToolCallStart {
+                turn_id: turn_id.clone(),
+                key: "fc_1".into(),
+                name: "tool".into(),
+                initial_args: None,
+            },
+            StreamEvent::ToolCallDelta {
+                turn_id: turn_id.clone(),
+                key: "fc_1".into(),
+                name: "bash".into(),
+                delta: "{\"command\":\"ls\"}".into(),
+            },
+            StreamEvent::ToolCallDelta {
+                turn_id: turn_id.clone(),
+                key: "fc_1".into(),
+                name: "bash".into(),
+                delta: "{\"cwd\":\"/tmp\"}".into(),
+            },
+            StreamEvent::ToolCallEnd {
+                turn_id: turn_id.clone(),
+                key: "fc_1".into(),
+                name: "bash".into(),
+                arguments: Some(obj(json!({ "command": "ls", "cwd": "/tmp" }))),
+                retry_of: None,
+                input_digest: None,
+            },
+            StreamEvent::ToolCallStart {
+                turn_id: turn_id.clone(),
+                key: "fc_2".into(),
+                name: "read".into(),
+                initial_args: Some(obj(json!({ "path": "a.txt" }))),
+            },
+            StreamEvent::ToolCallEnd {
+                turn_id,
+                key: "fc_2".into(),
+                name: "read".into(),
+                arguments: Some(obj(json!({ "path": "a.txt" }))),
+                retry_of: None,
+                input_digest: None,
+            },
+        ]
+    );
+
+    let calls: Vec<_> = result
+        .assistant
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolCall {
+                id,
+                name,
+                arguments,
+                provider_meta,
+                ..
+            } => Some((
+                id.clone(),
+                name.clone(),
+                Value::Object(arguments.clone()),
+                provider_meta.google_thought_signature.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            (
+                "fc_1".to_string(),
+                "bash".to_string(),
+                json!({ "command": "ls", "cwd": "/tmp" }),
+                Some("sig_fc".to_string()),
+            ),
+            (
+                "fc_2".to_string(),
+                "read".to_string(),
+                json!({ "path": "a.txt" }),
+                Some("sig_fc2".to_string()),
+            ),
+        ]
+    );
+}
+
+/// `mcp_server_tool_call` carries the MCP tool `name` and `server_name` at the top level;
+/// `processEvent.ts` folds both into the call's arguments on start and delta.
+#[tokio::test]
+async fn google_mcp_server_tool_call_keeps_name_and_server_name() {
+    let stream = sse(&[
+        json!({ "event_type": "interaction.start", "interaction": { "id": "inter_mcp" } }),
+        json!({
+            "event_type": "content.start",
+            "index": 0,
+            "content": {
+                "type": "mcp_server_tool_call",
+                "id": "mcp_1",
+                "name": "search_docs",
+                "server_name": "docs",
+                "arguments": { "q": "rust" }
+            }
+        }),
+        json!({ "event_type": "content.stop", "index": 0 }),
+        json!({
+            "event_type": "content.start",
+            "index": 1,
+            "content": { "type": "mcp_server_tool_call" }
+        }),
+        json!({
+            "event_type": "content.delta",
+            "index": 1,
+            "delta": {
+                "type": "mcp_server_tool_call",
+                "id": "mcp_2",
+                "name": "fetch_page",
+                "server_name": "web",
+                "arguments": { "url": "https://example.com" }
+            }
+        }),
+        json!({ "event_type": "content.stop", "index": 1 }),
+        json!({
+            "event_type": "content.start",
+            "index": 2,
+            "content": { "type": "text", "text": "Done." }
+        }),
+        json!({ "event_type": "content.stop", "index": 2 }),
+        json!({
+            "event_type": "interaction.complete",
+            "interaction": { "id": "inter_mcp", "status": "completed" }
+        }),
+    ]);
+    let (base_url, _mock) = spawn_mock(vec![stream]).await;
+    let mut events = Vec::new();
+    let result = run_step(
+        &base_url,
+        vec![text_message("u1", MessageRole::User, "search docs")],
+        &mut events,
+    )
+    .await;
+
+    let ends: Vec<_> = events
+        .iter()
+        .filter_map(|ev| match ev {
+            StreamEvent::ToolCallEnd { key, arguments, .. } => {
+                Some((key.clone(), arguments.clone().map(Value::Object)))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ends,
+        vec![
+            (
+                "mcp_1".to_string(),
+                Some(json!({ "q": "rust", "name": "search_docs", "server_name": "docs" })),
+            ),
+            // The call keeps its first emitted id; the delta's wire id becomes an alias.
+            (
+                "native_1".to_string(),
+                Some(json!({
+                    "url": "https://example.com",
+                    "name": "fetch_page",
+                    "server_name": "web"
+                })),
+            ),
+        ]
+    );
+    let native_args: Vec<_> = result
+        .assistant
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ProviderNativeTool {
+                role: ProviderNativeToolRole::Call,
+                arguments,
+                ..
+            } => Some(Value::Object(arguments.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(native_args[0]["server_name"], "docs");
+    assert_eq!(native_args[0]["name"], "search_docs");
+    assert_eq!(native_args[1]["server_name"], "web");
+    assert_eq!(native_args[1]["name"], "fetch_page");
+}

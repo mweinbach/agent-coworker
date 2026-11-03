@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::ast::Citation;
 use crate::partial_json::{StreamingToolDeltaParser, parse_partial_json_object};
 use crate::stream::{ReasoningStreamMode, StreamEvent};
 
@@ -108,6 +109,27 @@ impl ActiveToolItem {
     }
 }
 
+/// Projects a canonical citation as a `url_citation` annotation (the shape clients read for
+/// inline citation markers and source lists).
+fn citation_to_annotation(citation: &Citation) -> Value {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!("url_citation"));
+    obj.insert("url".to_string(), json!(citation.url));
+    if let Some(title) = &citation.title {
+        obj.insert("title".to_string(), json!(title));
+    }
+    if let Some(start) = citation.start_index {
+        obj.insert("start_index".to_string(), json!(start));
+    }
+    if let Some(end) = citation.end_index {
+        obj.insert("end_index".to_string(), json!(end));
+    }
+    if let Some(cited_text) = &citation.cited_text {
+        obj.insert("cited_text".to_string(), json!(cited_text));
+    }
+    Value::Object(obj)
+}
+
 /// Occurrence-stable `StreamEvent` -> JSON-RPC `item/*` & `turn/*` projector (`conversationProjection*.ts` parity).
 #[derive(Debug)]
 pub struct StreamEventProjector {
@@ -207,21 +229,33 @@ impl StreamEventProjector {
                 }
             }
             StreamEvent::TextStart { turn_id, .. } => {
+                // `item/started` waits for visible text: a block that ends empty or
+                // whitespace-only (e.g. `"\n\n"` ahead of a tool call, or a stream cut right after
+                // `TextStart`) never gets an `item/completed`, so starting it here would leave an
+                // orphaned empty assistant bubble. Like TS `assistant_text_start`, it does not
+                // allocate an assistant occurrence either; the first text delta does.
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
-                let item_id = self.ensure_active_assistant(turn_id).item_id.clone();
-                self.start_active_assistant_if_needed(&mut out, turn_id, &item_id);
             }
             StreamEvent::TextDelta { turn_id, delta, .. } => {
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
                 if delta.is_empty() {
                     return out;
                 }
-                let item_id = {
+                let (item_id, started, buffered) = {
                     let state = self.ensure_active_assistant(turn_id);
                     state.text.push_str(delta);
-                    state.item_id.clone()
+                    (state.item_id.clone(), state.started, state.text.clone())
                 };
-                self.start_active_assistant_if_needed(&mut out, turn_id, &item_id);
+                let delta = if started {
+                    delta.clone()
+                } else if buffered.trim().is_empty() {
+                    // Whitespace-only so far: buffer until visible text arrives.
+                    return out;
+                } else {
+                    // First visible text: start the item and flush the buffered prefix with it.
+                    self.start_active_assistant_if_needed(&mut out, turn_id, &item_id);
+                    buffered
+                };
                 self.push_notification(
                     &mut out,
                     "item/agentMessage/delta",
@@ -237,9 +271,22 @@ impl StreamEventProjector {
                 turn_id,
                 text,
                 annotations,
+                citations,
                 ..
             } => {
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
+                // Providers with native citations but no raw annotations (Anthropic
+                // `citations_delta`) still surface them as `url_citation` annotations.
+                let citation_annotations;
+                let annotations = if annotations.is_empty() && !citations.is_empty() {
+                    citation_annotations = citations
+                        .iter()
+                        .map(citation_to_annotation)
+                        .collect::<Vec<_>>();
+                    &citation_annotations
+                } else {
+                    annotations
+                };
                 self.complete_active_assistant(&mut out, turn_id, Some(text.as_str()), annotations);
             }
             StreamEvent::ThinkingStart {

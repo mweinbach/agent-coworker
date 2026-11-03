@@ -150,8 +150,8 @@ impl BedrockConverseTransport {
     }
 
     /// Home dir and env used to read `~/.aws` and the connection store: the isolated context,
-    /// else the `coworkHome` provider option (with an env holding only that home), else the
-    /// process.
+    /// else the trusted top-level `coworkHome` provider option (with an env holding only that
+    /// home), else the process.
     fn auth_context(&self, request: &ProviderStepRequest) -> (PathBuf, HashMap<String, String>) {
         if let Some((h, e)) = &self.isolated_context {
             return (h.clone(), e.clone());
@@ -170,8 +170,15 @@ impl BedrockConverseTransport {
         (h, proc_env)
     }
 
+    /// The trusted cowork home the server injects as the top-level `coworkHome` option (it always
+    /// overwrites any configured value). A nested `bedrock.coworkHome` is workspace-controllable
+    /// (a cloned repo's `.cowork` config) and decides where `~/.aws/config` / `credentials` are
+    /// read from, so honoring it would let a repo point the SDK at its own `credential_process`;
+    /// it is never read. TS likewise resolved the Bedrock home from the server's paths only.
     fn cowork_home_dir(&self, request: &ProviderStepRequest) -> Option<PathBuf> {
-        read_bedrock_opt(&request.provider_options, "coworkHome")
+        request
+            .provider_options
+            .get("coworkHome")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())

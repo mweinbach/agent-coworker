@@ -1271,6 +1271,27 @@ fn native_google_wire_type(name: &str, role: ProviderNativeToolRole) -> Option<&
 }
 
 /// Object entries of a JSON array (`asRecordArray` parity).
+/// Arguments of a native `*_call` payload: its `arguments` object plus the top-level `name` /
+/// `server_name` an `mcp_server_tool_call` carries (`processEvent.ts` parity).
+fn native_call_payload_arguments(payload: &Map<String, Value>) -> Map<String, Value> {
+    let mut arguments = payload
+        .get("arguments")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for key in ["name", "server_name"] {
+        if let Some(value) = payload
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            arguments.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    arguments
+}
+
 fn native_record_array(value: Option<&Value>) -> Vec<Value> {
     value
         .and_then(Value::as_array)
@@ -1713,11 +1734,14 @@ impl GoogleStreamState {
                         .get(if is_call { "id" } else { "call_id" })
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned);
-                    let arguments = c
-                        .get("arguments")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default();
+                    let arguments = if is_call {
+                        native_call_payload_arguments(c)
+                    } else {
+                        c.get("arguments")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default()
+                    };
                     let result = c.get("result").cloned();
                     let is_error = c.get("is_error").and_then(Value::as_bool).unwrap_or(false);
                     let signature = c
@@ -1847,6 +1871,9 @@ impl GoogleStreamState {
 
         if d_type.ends_with("_call") {
             let delta_args = d.get("arguments").and_then(Value::as_object);
+            // `processEvent.ts` folds the top-level `name` / `server_name` of an
+            // `mcp_server_tool_call` into the call's arguments alongside `arguments`.
+            let merged_args = native_call_payload_arguments(d);
             match self.slots.get_mut(&idx) {
                 Some(GoogleSlotState::NativeTool {
                     id,
@@ -1859,9 +1886,7 @@ impl GoogleStreamState {
                     if let Some(sig) = signature {
                         *slot_signature = Some(sig);
                     }
-                    if let Some(args) = delta_args {
-                        arguments.extend(args.iter().map(|(k, v)| (k.clone(), v.clone())));
-                    }
+                    arguments.extend(merged_args);
                     let (id, name) = (id.clone(), name.clone());
                     if let Some(alias) = wire_id.filter(|w| *w != id) {
                         self.native_call_slots.insert(alias, idx);
@@ -1877,7 +1902,7 @@ impl GoogleStreamState {
                 }
                 None => {
                     let id = wire_id.unwrap_or_else(|| format!("native_{idx}"));
-                    let arguments = delta_args.cloned().unwrap_or_default();
+                    let arguments = merged_args;
                     self.native_call_slots.insert(id.clone(), idx);
                     emit(StreamEvent::ToolCallStart {
                         turn_id: self.turn_id.clone(),
@@ -2057,12 +2082,13 @@ impl GoogleStreamState {
                         Some(GoogleSlotState::ToolCall {
                             id,
                             name,
-                            arguments,
                             arg_buffer,
                             ..
                         }) => {
+                            // Buffered until the block ends, where the whole buffer is parsed
+                            // strictly and merged over arguments already received from
+                            // `function_call` payloads (`appendJsonObjectDelta` parity).
                             arg_buffer.push_str(chunk);
-                            *arguments = parse_partial_json_object(arg_buffer);
                             emit(StreamEvent::ToolCallDelta {
                                 turn_id: self.turn_id.clone(),
                                 key: id.clone(),
@@ -2093,11 +2119,81 @@ impl GoogleStreamState {
                     }
                 }
             }
+            "function_call" => self.handle_function_call_delta(idx, d, emit),
             other => {
                 if let Some(native_name) = canonical_native_google_name(other) {
                     self.handle_native_delta(idx, other, native_name, d, emit);
                 }
             }
+        }
+    }
+
+    /// `function_call` payloads arriving as `content.delta` / `step.delta`: update the call's
+    /// name, Gemini `thoughtSignature` (`delta.signature`) and arguments, and stream the delta
+    /// arguments as tool input (`processEvent.ts` + `mapToStreamParts.ts` delta branches).
+    fn handle_function_call_delta(
+        &mut self,
+        idx: usize,
+        d: &Map<String, Value>,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) {
+        // `asNonEmptyString`: trimmed, and absent when blank.
+        let non_empty = |key: &str| {
+            d.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let delta_name = non_empty("name");
+        let delta_signature = non_empty("signature");
+        let delta_args = d.get("arguments").and_then(Value::as_object);
+        match self.slots.get_mut(&idx) {
+            Some(GoogleSlotState::ToolCall {
+                id,
+                name,
+                arguments,
+                signature,
+                ..
+            }) => {
+                if let Some(n) = delta_name {
+                    *name = n;
+                }
+                if let Some(sig) = delta_signature {
+                    *signature = Some(sig);
+                }
+                if let Some(args) = delta_args {
+                    arguments.extend(args.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    emit(StreamEvent::ToolCallDelta {
+                        turn_id: self.turn_id.clone(),
+                        key: id.clone(),
+                        name: name.clone(),
+                        delta: Value::Object(args.clone()).to_string(),
+                    });
+                }
+            }
+            None => {
+                let id = non_empty("id").unwrap_or_else(|| format!("gcall_{idx}"));
+                let name = delta_name.unwrap_or_else(|| "tool".to_string());
+                let arguments = delta_args.cloned().unwrap_or_default();
+                emit(StreamEvent::ToolCallStart {
+                    turn_id: self.turn_id.clone(),
+                    key: id.clone(),
+                    name: name.clone(),
+                    initial_args: (!arguments.is_empty()).then(|| arguments.clone()),
+                });
+                self.slots.insert(
+                    idx,
+                    GoogleSlotState::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        arg_buffer: String::new(),
+                        signature: delta_signature,
+                    },
+                );
+            }
+            Some(_) => {}
         }
     }
 
@@ -2181,7 +2277,7 @@ impl GoogleStreamState {
                             "Invalid JSON arguments for Google tool call \"{name}\"."
                         )));
                     };
-                    arguments = obj.clone();
+                    arguments.extend(obj.iter().map(|(k, v)| (k.clone(), v.clone())));
                 }
                 emit(StreamEvent::ToolCallEnd {
                     turn_id: self.turn_id.clone(),

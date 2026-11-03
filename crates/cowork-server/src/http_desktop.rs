@@ -13,13 +13,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::desktop_state_normalize::{build_fallback_workspace, default_state, normalize_state};
+use crate::desktop_state_normalize::{
+    build_fallback_workspace, default_state, is_safe_id, normalize_state,
+};
 use crate::desktop_state_watcher::StateChangeHub;
 use crate::desktop_transcript_inbox::{
     MAX_SAFE_INTEGER, TRANSCRIPT_REQUEST_BODY_MAX_BYTES, TRANSCRIPT_REQUEST_MAX_EVENTS,
     TranscriptInbox, TranscriptInboxError, TranscriptInboxEvent, is_valid_batch_id,
 };
+use crate::registry::ServerRuntimeState;
 use crate::startup::MobileH3AdminState;
+use crate::workspace_servers::WorkspaceServers;
 
 /// TS `fnv1a32`: FNV-1a over UTF-16 code units, zero-padded hex.
 pub fn fnv1a32_hex(input: &str) -> String {
@@ -63,16 +67,11 @@ pub fn resolve_user_data_dir(homedir: &Path, env: &HashMap<String, String>) -> P
 pub struct WebDesktopService {
     homedir: PathBuf,
     user_data_dir: PathBuf,
-    ws_url_for_primary: RwLockUrl,
+    pub(crate) workspace_servers: WorkspaceServers,
     /// `state.json` change listeners and last-seen file signature.
     state_changes: StateChangeHub,
     /// SQLite-backed transcript inbox (TS `TranscriptInbox`).
     transcript_inbox: TranscriptInbox,
-}
-
-#[derive(Debug, Default)]
-struct RwLockUrl {
-    inner: parking_lot::RwLock<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,14 +102,10 @@ impl WebDesktopService {
         Self {
             homedir,
             user_data_dir,
-            ws_url_for_primary: RwLockUrl::default(),
+            workspace_servers: WorkspaceServers::default(),
             state_changes: StateChangeHub::default(),
             transcript_inbox,
         }
-    }
-
-    pub fn set_primary_ws_url(&self, ws_url: String) {
-        *self.ws_url_for_primary.inner.write() = ws_url;
     }
 
     pub fn user_data_dir(&self) -> &Path {
@@ -556,6 +551,68 @@ fn legacy_batch_id() -> String {
     format!("legacy-{}", Uuid::new_v4())
 }
 
+pub(crate) enum WorkspaceAction {
+    Start,
+    Status,
+    Stop,
+}
+
+pub(crate) async fn handle_workspace_lifecycle(
+    action: WorkspaceAction,
+    body: &[u8],
+    runtime: &ServerRuntimeState,
+) -> Response<Body> {
+    let Some(service) = &runtime.desktop_service else {
+        return plain_response(StatusCode::NOT_FOUND, "Desktop web service unavailable");
+    };
+    let Ok(params) = serde_json::from_slice::<Value>(body) else {
+        return plain_response(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    let id = params["workspaceId"].as_str().unwrap_or_default().trim();
+    if !is_safe_id(id) {
+        return plain_response(StatusCode::BAD_REQUEST, "Invalid workspaceId");
+    }
+    match action {
+        WorkspaceAction::Status => {
+            let (reason, url) = service.workspace_servers.status(id).await;
+            return json_response(
+                StatusCode::OK,
+                &json!({
+                    "workspaceId": id, "running": url.is_some(), "reason": reason, "url": url
+                }),
+            );
+        }
+        WorkspaceAction::Stop => {
+            service.workspace_servers.stop(id).await;
+            return no_content();
+        }
+        WorkspaceAction::Start => {}
+    }
+
+    let Some(path) = params["workspacePath"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return plain_response(StatusCode::BAD_REQUEST, "Missing workspacePath");
+    };
+    let Ok(path) = tokio::fs::canonicalize(path).await else {
+        return plain_response(StatusCode::BAD_REQUEST, "Workspace path does not exist");
+    };
+    if !path.is_dir() {
+        return plain_response(StatusCode::BAD_REQUEST, "Workspace path is not a directory");
+    }
+    let yolo = params["yolo"].as_bool().unwrap_or(false);
+    match service
+        .workspace_servers
+        .start(id, &path, yolo, runtime)
+        .await
+    {
+        Ok(url) => json_response(StatusCode::OK, &json!({ "url": url })),
+        Err(err) => plain_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")),
+    }
+}
+
 pub fn handle_desktop_route(
     method: &Method,
     pathname: &str,
@@ -647,11 +704,6 @@ fn route_desktop_request(
                 )),
             }
         }
-        ("POST", "/cowork/desktop/workspace/start") => {
-            let ws_url = svc.ws_url_for_primary.inner.read().clone();
-            Ok(json_response(StatusCode::OK, &json!({ "url": ws_url })))
-        }
-        ("POST", "/cowork/desktop/workspace/stop") => Ok(no_content()),
         ("GET", "/cowork/desktop/transcript") => {
             let thread_id = required_param(&parse_query(query), "threadId")?;
             let items = svc.read_transcript(&thread_id)?;

@@ -38,6 +38,82 @@ describe("Rust cowork-server HTTP security, filesystem routes, and sticky loopba
     }
   }, 30_000);
 
+  test("starts, reuses, and stops an authenticated sidecar for a second browser workspace", async () => {
+    const primary = await startRustTestServer({ env: { COWORK_WEB_DESKTOP_SERVICE: "1" } });
+    try {
+      const project = path.join(path.dirname(primary.workspaceDir), "second-project");
+      await fs.mkdir(project);
+      const headers = {
+        Origin: "http://127.0.0.1:14330",
+        "Content-Type": "application/json",
+        "X-Cowork-Browser-Token": primary.listening.browserAccessToken!,
+      };
+      const post = (action: string, params: Record<string, unknown>) =>
+        fetch(`${primary.httpBaseUrl}/cowork/desktop/workspace/${action}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ workspaceId: "second", ...params }),
+        });
+      const start = async (yolo: boolean) => {
+        const response = await post("start", { workspacePath: project, yolo });
+        expect(response.status).toBe(200);
+        return ((await response.json()) as { url: string }).url;
+      };
+      const status = async () => {
+        const response = await post("status", {});
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      const [url, retry] = await Promise.all([start(false), start(false)]);
+      expect(retry).toBe(url);
+      expect(await status()).toMatchObject({
+        workspaceId: "second",
+        running: true,
+        url,
+        reason: "running",
+      });
+      const child = new URL(url);
+      expect(child.origin).not.toBe(new URL(primary.wsUrl).origin);
+      const childToken = child.searchParams.get("coworkBrowserToken");
+      expect(childToken).toBeTruthy();
+      expect(childToken).not.toBe(primary.listening.browserAccessToken);
+      const health = `http://${child.host}/cowork/health`;
+      const childHeaders = { ...headers, "X-Cowork-Browser-Token": childToken! };
+      expect((await fetch(health, { headers })).status).toBe(401);
+      expect((await fetch(health, { headers: childHeaders })).status).toBe(200);
+
+      const rpc = await connectRustJsonRpc(url);
+      try {
+        const { thread } = await rpc.request<{ thread: { id: string; cwd: string } }>(
+          "thread/start",
+          { cwd: project },
+        );
+        expect(typeof thread.id).toBe("string");
+        expect(await fs.realpath(thread.cwd)).toBe(await fs.realpath(project));
+        const otherWorkspace = await rpc.requestRaw("thread/start", { cwd: primary.workspaceDir });
+        expect(otherWorkspace.error?.code).toBe(-32602);
+      } finally {
+        rpc.close();
+      }
+      const changed = await start(true);
+      expect(changed).not.toBe(url);
+      // A replacement can listen on the same ephemeral port. Either way the old token loses access.
+      const previous = await fetch(health, { headers: childHeaders }).catch(() => null);
+      expect(previous === null || previous.status === 401).toBe(true);
+      expect((await post("stop", {})).status).toBe(204);
+      expect(await status()).toMatchObject({
+        workspaceId: "second",
+        running: false,
+        url: null,
+        reason: "not_found",
+      });
+      await expect(fetch(`http://${new URL(changed).host}/cowork/health`)).rejects.toThrow();
+      expect((await fetch(`${primary.httpBaseUrl}/cowork/health`, { headers })).status).toBe(200);
+    } finally {
+      await primary.stop();
+    }
+  }, 60_000);
+
   test("enforces X-Cowork-Browser-Token when bound to non-loopback 0.0.0.0", async () => {
     const srv = await startRustTestServer({ host: "0.0.0.0" });
     try {

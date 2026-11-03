@@ -32,6 +32,7 @@ pub mod task_routes;
 pub mod transport;
 pub mod turn_runner;
 pub mod workspace_file_monitor;
+mod workspace_servers;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -226,6 +227,9 @@ impl ServerHandle {
     pub async fn shutdown(self) {
         self.shutdown.trigger();
         self.evict_task.abort();
+        if let Some(service) = &self.runtime.desktop_service {
+            service.workspace_servers.stop_all().await;
+        }
         if let Some(monitor) = &self.workspace_file_monitor {
             monitor.stop();
         }
@@ -369,10 +373,6 @@ async fn start_server_inner(
     let host_port_for_url = format_host_port(connect_host, actual_port);
     let ws_url = format!("ws://{host_port_for_url}/ws");
     let rpc_url = format!("http://{host_port_for_url}/rpc");
-
-    if let Some(svc) = &desktop_service {
-        svc.set_primary_ws_url(ws_url.clone());
-    }
 
     let runtime = Arc::new(ServerRuntimeState::new(
         working_directory,

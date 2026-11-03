@@ -20,7 +20,8 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::http_desktop::{
-    handle_desktop_route, handle_http_workspaces, handle_mobile_h3_admin_route,
+    WorkspaceAction, handle_desktop_route, handle_http_workspaces, handle_mobile_h3_admin_route,
+    handle_workspace_lifecycle,
 };
 use crate::http_fs::{
     handle_fs_create_directory, handle_fs_list, handle_fs_open, handle_fs_preview, handle_fs_read,
@@ -176,6 +177,17 @@ async fn dispatch_http_or_ws(
         let Ok(body) = to_bytes(req.into_body(), MAX_HTTP_BODY_BYTES).await else {
             return plain_text(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large");
         };
+        if method == Method::POST {
+            let action = match pathname {
+                "/cowork/desktop/workspace/start" => Some(WorkspaceAction::Start),
+                "/cowork/desktop/workspace/status" => Some(WorkspaceAction::Status),
+                "/cowork/desktop/workspace/stop" => Some(WorkspaceAction::Stop),
+                _ => None,
+            };
+            if let Some(action) = action {
+                return handle_workspace_lifecycle(action, &body, &state.runtime).await;
+            }
+        }
         return handle_desktop_route(
             method,
             pathname,

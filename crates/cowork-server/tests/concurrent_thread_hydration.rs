@@ -196,6 +196,72 @@ async fn persisted_evicted_thread(server: &cowork_server::ServerHandle, env: &En
     id
 }
 
+#[tokio::test]
+async fn unreadable_history_survives_rename_and_retried_thread_creation() {
+    let env = Env::new().await;
+    let server = start_server(env.options()).await.unwrap();
+    let rt = server.runtime();
+    let start = || rt.start_or_get_thread(&env.workspace, Some("stable-key"), None, None, "client");
+    let (thread, _) = start().await.unwrap();
+    rt.unsubscribe("client", &thread.id);
+    assert_eq!(rt.evict_idle_sessions(Duration::ZERO), 1);
+
+    let conn = rusqlite::Connection::open(rt.session_db.db_path()).unwrap();
+    let set_history = |history: &str| {
+        conn.execute(
+            "UPDATE session_state SET messages_json = ? WHERE session_id = ?",
+            [history, thread.id.as_str()],
+        )
+        .unwrap();
+    };
+    let nested_history = |depth| {
+        format!(
+            r#"[{{"role":"tool","content":[{{"type":"tool-result","toolCallId":"id","toolName":"lookup","output":{}1{}}}]}}]"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+    };
+
+    // A valid legacy tool result beyond serde_json's default depth is still usable.
+    set_history(&nested_history(140));
+    let (before, count) = rt.session_db.get_messages(&thread.id, 0, 1).unwrap();
+    assert_eq!(count, 1);
+    rt.set_session_title(&thread.id, "Renamed").await.unwrap();
+    assert_eq!(
+        rt.session_db.get_messages(&thread.id, 0, 1).unwrap().0,
+        before
+    );
+    assert_eq!(rt.evict_idle_sessions(Duration::ZERO), 1);
+
+    for history in [
+        r#"[{"role":"user","content":"truncated"#.to_owned(),
+        nested_history(512),
+    ] {
+        set_history(&history);
+        assert!(rt.session_db.get_messages(&thread.id, 0, 1).is_err());
+        assert!(rt.set_session_title(&thread.id, "Rename").await.is_err());
+        assert!(
+            rt.read_or_hydrate_thread(&thread.id, 0, false)
+                .await
+                .unwrap_err()
+                .contains("Failed to load thread")
+        );
+        assert!(start().await.is_err());
+        assert!(rt.delete_session(&env.home, &thread.id).await.is_err());
+        let stored: String = conn
+            .query_row(
+                "SELECT messages_json FROM session_state WHERE session_id = ?",
+                [&thread.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, history);
+    }
+    // Deletion from the owning workspace needs only intact session metadata.
+    rt.delete_session(&env.workspace, &thread.id).await.unwrap();
+    server.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_hydration_of_an_evicted_thread_shares_one_live_session() {
     const CALLERS: usize = 8;

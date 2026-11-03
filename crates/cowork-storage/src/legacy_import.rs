@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::session_db::read_session_record_from_conn;
+use crate::session_db::{decode_stored_json, read_session_record_from_conn};
 use crate::types::{PersistedSessionRecord, SessionKind, SessionTitleSource};
 
 /// Imports legacy `sessions/*.json` snapshots (versions `1..=7`) idempotently during migration `2`.
@@ -32,7 +32,7 @@ pub fn import_legacy_snapshots_from_dir(conn: &mut Connection, sessions_dir: &Pa
         let Ok(raw) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
+        let Ok(parsed) = decode_stored_json::<Value>(&raw) else {
             continue;
         };
         let Some(legacy) = parse_legacy_snapshot(&parsed) else {

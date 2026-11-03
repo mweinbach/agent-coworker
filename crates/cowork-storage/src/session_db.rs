@@ -29,6 +29,48 @@ use crate::write_coordinator::{
 
 pub const DEFAULT_BUSY_TIMEOUT_MS: u64 = 5_000;
 const ANONYMOUS_IN_MEMORY_DB_PATH: &str = ":memory:";
+// Legacy JS tool results may exceed serde_json's default limit of 128. Keep the
+// resulting Value bounded for subsequent recursive clones, serialization and drop.
+const MAX_STORED_JSON_DEPTH: usize = 192;
+
+pub(crate) fn decode_stored_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
+    if let Ok(value) = serde_json::from_str(raw) {
+        return Ok(value);
+    }
+    let mut bytes = raw.bytes();
+    let mut depth = 0_usize;
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'"' => {
+                while let Some(ch) = bytes.next() {
+                    match ch {
+                        b'"' => break,
+                        b'\\' => {
+                            bytes.next();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > MAX_STORED_JSON_DEPTH {
+                    return Err(StorageError::Validation {
+                        field: "stored JSON".to_owned(),
+                        message: format!("nesting depth exceeds {MAX_STORED_JSON_DEPTH}"),
+                    });
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    let mut decoder = serde_json::Deserializer::from_str(raw);
+    decoder.disable_recursion_limit();
+    let value = T::deserialize(&mut decoder)?;
+    decoder.end()?;
+    Ok(value)
+}
 
 /// Durable SQLite session database engine compatible with `src/server/sessionDb.ts`.
 ///
@@ -249,7 +291,7 @@ impl SessionDb {
             let Some(json_str) = raw else {
                 return Ok(None);
             };
-            let mut parsed: Value = serde_json::from_str(&json_str)?;
+            let mut parsed: Value = decode_stored_json(&json_str)?;
             if let Some(obj) = parsed.as_object_mut() {
                 obj.entry("taskType").or_insert(Value::Null);
                 obj.entry("targetPaths").or_insert(Value::Null);
@@ -268,6 +310,18 @@ impl SessionDb {
 
     pub fn get_session_record(&self, session_id: &str) -> Result<Option<PersistedSessionRecord>> {
         self.with_read_conn(|conn| read_session_record_from_conn(conn, session_id))
+    }
+
+    pub fn get_session_working_directory(&self, session_id: &str) -> Result<Option<String>> {
+        self.with_read_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT working_directory FROM sessions WHERE session_id = ?",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
     }
 
     /// Lists the ids of every persisted descendant of `session_id` (children, grandchildren, ...),
@@ -466,7 +520,7 @@ impl SessionDb {
             let Some(json_str) = raw else {
                 return Ok((Vec::new(), 0));
             };
-            let all: Vec<Value> = serde_json::from_str(&json_str).unwrap_or_default();
+            let all: Vec<Value> = decode_stored_json(&json_str)?;
             let total = all.len();
             let safe_limit = limit.max(1);
             let slice = all
@@ -1941,8 +1995,8 @@ pub(crate) fn read_session_record_from_conn(
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .filter(|v: &Value| !v.is_null());
-    let messages: Vec<Value> = serde_json::from_str(&raw.messages_json).unwrap_or_default();
-    let todos: Vec<Value> = serde_json::from_str(&raw.todos_json).unwrap_or_default();
+    let messages: Vec<Value> = decode_stored_json(&raw.messages_json)?;
+    let todos: Vec<Value> = decode_stored_json(&raw.todos_json)?;
     let provider_state: Option<Value> = raw
         .provider_state_json
         .as_deref()

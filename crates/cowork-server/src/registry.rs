@@ -1592,7 +1592,7 @@ impl ServerRuntimeState {
 
         if let Some(key) = &creation_key
             && let Some(existing_id) = self.creation_keys.get(key).map(|v| v.value().clone())
-            && let Some(live_arc) = self.load_thread(&existing_id)
+            && let Some(live_arc) = self.try_load_thread(&existing_id)?
         {
             self.subscribe(connection_id, &existing_id);
             let thread = self.build_thread_from_live(&live_arc.lock());
@@ -1613,7 +1613,7 @@ impl ServerRuntimeState {
         };
 
         if winning_id != candidate_id
-            && let Some(existing_live) = self.load_thread(&winning_id)
+            && let Some(existing_live) = self.try_load_thread(&winning_id)?
         {
             self.subscribe(connection_id, &winning_id);
             let thread = self.build_thread_from_live(&existing_live.lock());
@@ -1765,17 +1765,23 @@ impl ServerRuntimeState {
 
     /// Gets a live thread or rehydrates it from `SessionDb` if previously evicted.
     pub fn load_thread(&self, thread_id: &str) -> Option<Arc<Mutex<LiveSession>>> {
+        self.try_load_thread(thread_id).ok().flatten()
+    }
+
+    fn try_load_thread(&self, thread_id: &str) -> Result<Option<Arc<Mutex<LiveSession>>>, String> {
         if self.is_session_deleted(thread_id) {
-            return None;
+            return Ok(None);
         }
         if let Some(existing) = self.get_live_thread(thread_id) {
-            return Some(existing);
+            return Ok(Some(existing));
         }
-        let record = self
+        let Some(record) = self
             .session_db
             .get_session_record(thread_id)
-            .ok()
-            .flatten()?;
+            .map_err(|e| format!("Failed to load thread {thread_id}: {e}"))?
+        else {
+            return Ok(None);
+        };
         let mut live = LiveSession::from_persisted(record);
         if let Some(snap) = self
             .session_db
@@ -1804,9 +1810,9 @@ impl ServerRuntimeState {
                 self.sessions
                     .remove_if(thread_id, |_, v| Arc::ptr_eq(v, &installed));
             }
-            return None;
+            return Ok(None);
         }
-        Some(installed)
+        Ok(Some(installed))
     }
 
     pub fn subscribe(
@@ -1935,7 +1941,7 @@ impl ServerRuntimeState {
         after_seq: u64,
     ) -> Result<(JsonRpcThread, Option<ReplayHealth>), String> {
         let connection_id = &conn.connection_id;
-        let Some(live_arc) = self.load_thread(thread_id) else {
+        let Some(live_arc) = self.try_load_thread(thread_id)? else {
             return Err(format!("Unknown thread: {thread_id}"));
         };
         self.journal.wait_for_idle(thread_id).await;
@@ -1987,7 +1993,13 @@ impl ServerRuntimeState {
     ) -> Result<Value, String> {
         self.journal.wait_for_idle(thread_id).await;
         let live_opt = self.get_live_thread(thread_id);
-        let record_opt = self.session_db.get_session_record(thread_id).ok().flatten();
+        let record_opt = if live_opt.is_some() {
+            None
+        } else {
+            self.session_db
+                .get_session_record(thread_id)
+                .map_err(|e| format!("Failed to load thread {thread_id}: {e}"))?
+        };
 
         let mut thread = if let Some(live_arc) = &live_opt {
             self.build_thread_from_live(&live_arc.lock())
@@ -2251,7 +2263,7 @@ impl ServerRuntimeState {
     }
 
     pub async fn set_session_title(&self, thread_id: &str, title: &str) -> Result<Value, String> {
-        let Some(live_arc) = self.load_thread(thread_id) else {
+        let Some(live_arc) = self.try_load_thread(thread_id)? else {
             return Err("cowork/session/title/set requires threadId and title".to_owned());
         };
         let trimmed = title.trim();
@@ -2976,16 +2988,13 @@ impl ServerRuntimeState {
         }
         // Workspace-scoped (SessionRegistry.ts `deleteSessionImpl`): a target whose live or
         // persisted working directory is another workspace is rejected before any side effect.
-        let target_cwd = self
-            .get_live_thread(target_session_id)
-            .map(|live| live.lock().cwd.clone())
-            .or_else(|| {
-                self.session_db
-                    .get_session_record(target_session_id)
-                    .ok()
-                    .flatten()
-                    .map(|record| record.working_directory)
-            });
+        let target_cwd = if let Some(live) = self.get_live_thread(target_session_id) {
+            Some(live.lock().cwd.clone())
+        } else {
+            self.session_db
+                .get_session_working_directory(target_session_id)
+                .map_err(|e| e.to_string())?
+        };
         if let Some(target_cwd) = target_cwd
             && !target_cwd.trim().is_empty()
             && !same_workspace_path(&cwd.to_string_lossy(), &target_cwd)

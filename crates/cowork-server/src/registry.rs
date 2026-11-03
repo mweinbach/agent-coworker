@@ -3044,13 +3044,23 @@ impl ServerRuntimeState {
             let Some(live_arc) = self.load_thread(tid) else {
                 return Err("Unknown thread".to_owned());
             };
-            let event = {
+            let (event, notifications) = {
                 let mut live = live_arc.lock();
+                let prev_provider = live.provider;
+                let prev_model = live.model.clone();
+                let prev_enable_mcp = live.enable_mcp;
                 if let Some(p) = parsed_provider {
                     live.provider = p;
                 }
                 if let Some(m) = model {
                     live.model = m.to_owned();
+                }
+                let model_changed = live.provider != prev_provider || live.model != prev_model;
+                if model_changed {
+                    // Same switch as `cowork/session/model/set` (`applyPreparedModelSelection`):
+                    // drop continuation and reasoning state the new model cannot use.
+                    live.provider_state = None;
+                    self.reconcile_live_reasoning_state(&mut live);
                 }
                 if let Some(mcp) = enable_mcp {
                     live.enable_mcp = mcp;
@@ -3058,16 +3068,62 @@ impl ServerRuntimeState {
                 if let Some(cp) = config_patch {
                     merge_session_config_overrides(&mut live.config_overrides, cp);
                 }
-                self.build_session_config_event(
+                // TS applied the model and MCP changes through their managers, which emitted
+                // `config_updated` / `session_settings` to the thread's subscribers; the
+                // response itself carries only the final `session_config`.
+                let mut notifications = Vec::new();
+                if model_changed {
+                    notifications.push((
+                        "cowork/session/configUpdated",
+                        json!({
+                            "type": "config_updated",
+                            "sessionId": live.id,
+                            "config": {
+                                "provider": live.provider,
+                                "model": live.model,
+                                "workingDirectory": live.cwd,
+                            }
+                        }),
+                    ));
+                }
+                if live.enable_mcp != prev_enable_mcp {
+                    let mut effective = refreshed_cfg.clone();
+                    crate::turn_runner::apply_session_config_overrides(
+                        &mut effective,
+                        &live.config_overrides,
+                    );
+                    notifications.push((
+                        "cowork/session/settings",
+                        json!({
+                            "type": "session_settings",
+                            "sessionId": live.id,
+                            "enableMcp": live.enable_mcp,
+                            "enableMemory": effective.enable_memory,
+                            "memoryRequireApproval": effective.memory_require_approval,
+                        }),
+                    ));
+                }
+                let event = self.build_session_config_event(
                     &live.id,
                     &refreshed_cfg,
                     Some(&live.config_overrides),
-                )
+                );
+                (event, notifications)
             };
             self.persist_live_session(&live_arc, "session_config")
                 .await
                 .map_err(|e| e.to_string())?;
             self.refresh_agent_control_config(tid);
+            for (method, params) in notifications {
+                self.broadcast_to_thread(
+                    tid,
+                    None,
+                    &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                        method: method.to_owned(),
+                        params: Some(params),
+                    }),
+                );
+            }
             return Ok(event);
         }
 

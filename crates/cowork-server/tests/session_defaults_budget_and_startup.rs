@@ -1,5 +1,6 @@
 //! Regression coverage for `cowork/session/defaults/apply` persisting the full supported config
-//! patch (including `clear*` sentinels), `cowork/session/config/set` persisting accepted settings
+//! patch (including `clear*` sentinels) and announcing thread model/MCP changes to subscribers,
+//! `cowork/session/config/set` persisting accepted settings
 //! across a restart, `cowork/session/usageBudget/set` clearing a cap with an
 //! explicit `null` and returning the real usage snapshot, and `turn/start` waiting for managed
 //! runtime startup before snapshotting the tool environment.
@@ -338,9 +339,167 @@ fn read_json(path: &Path) -> Value {
     .unwrap()
 }
 
+/// Reads `ws` until a `method` notification arrives (kept in `notifs`) or `wait` elapses.
+async fn find_notification(
+    ws: &mut WsStream,
+    notifs: &mut Vec<Value>,
+    method: &str,
+    wait: Duration,
+) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        if let Some(found) = notifs.iter().find(|n| n["method"] == method) {
+            return Some(found.clone());
+        }
+        let rem = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let Ok(frame) = tokio::time::timeout(rem, ws.next()).await else {
+            return None;
+        };
+        if let WsMessage::Text(txt) = frame.expect("ws open").expect("ws frame")
+            && let Ok(val) = serde_json::from_str::<Value>(&txt)
+            && val.get("method").is_some()
+        {
+            notifs.push(val);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------------------------
+
+/// Applying defaults that change a thread's model or MCP enablement emits `config_updated` and
+/// `session_settings` to every client subscribed to the thread, the requester included (TS ran
+/// those changes through the model and MCP managers, which emitted them); the response keeps
+/// its `{ event: session_config }` shape. An apply that changes neither emits neither.
+#[tokio::test]
+async fn defaults_apply_announces_model_and_mcp_changes_to_thread_subscribers() {
+    let iso = Iso::new("cowork-defaults-apply-events-");
+    let server = start_server(iso.options()).await.unwrap();
+    let mut first = connect(server.ws_url()).await;
+    let mut second = connect(server.ws_url()).await;
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let thread_id = start_thread(&mut first, &cwd).await;
+    let mut first_notifs = Vec::new();
+    let mut second_notifs = Vec::new();
+    let resumed = call(
+        &mut second,
+        "resume",
+        "thread/resume",
+        json!({ "threadId": thread_id }),
+        &mut second_notifs,
+    )
+    .await;
+    assert!(
+        resumed.get("error").is_none(),
+        "thread/resume failed: {resumed}"
+    );
+    second_notifs.clear();
+
+    let applied = call(
+        &mut first,
+        "apply",
+        "cowork/session/defaults/apply",
+        json!({
+            "cwd": cwd,
+            "threadId": thread_id,
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+            "enableMcp": false
+        }),
+        &mut first_notifs,
+    )
+    .await;
+    assert!(applied.get("error").is_none(), "apply failed: {applied}");
+    let result = applied["result"].as_object().unwrap();
+    assert_eq!(result.len(), 1, "response must stay {{ event }}: {applied}");
+    assert_eq!(result["event"]["type"], "session_config", "{applied}");
+
+    for (label, ws, notifs) in [
+        ("requester", &mut first, &mut first_notifs),
+        ("other subscriber", &mut second, &mut second_notifs),
+    ] {
+        let updated = find_notification(
+            ws,
+            notifs,
+            "cowork/session/configUpdated",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_or_else(|| panic!("{label} never received configUpdated: {notifs:?}"));
+        assert_eq!(updated["params"]["type"], "config_updated", "{updated}");
+        assert_eq!(
+            updated["params"]["sessionId"],
+            json!(thread_id),
+            "{updated}"
+        );
+        assert_eq!(
+            updated["params"]["config"]["provider"], "openai",
+            "{updated}"
+        );
+        assert_eq!(
+            updated["params"]["config"]["model"], "gpt-5.4-mini",
+            "{updated}"
+        );
+        let settings = find_notification(
+            ws,
+            notifs,
+            "cowork/session/settings",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_or_else(|| panic!("{label} never received settings: {notifs:?}"));
+        assert_eq!(settings["params"]["type"], "session_settings", "{settings}");
+        assert_eq!(
+            settings["params"]["sessionId"],
+            json!(thread_id),
+            "{settings}"
+        );
+        assert_eq!(settings["params"]["enableMcp"], false, "{settings}");
+        assert!(
+            settings["params"]["enableMemory"].is_boolean(),
+            "{settings}"
+        );
+        assert!(
+            settings["params"]["memoryRequireApproval"].is_boolean(),
+            "{settings}"
+        );
+    }
+
+    // Re-applying the same selection changes nothing and announces nothing.
+    first_notifs.clear();
+    let again = call(
+        &mut first,
+        "apply-again",
+        "cowork/session/defaults/apply",
+        json!({
+            "cwd": cwd,
+            "threadId": thread_id,
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+            "enableMcp": false
+        }),
+        &mut first_notifs,
+    )
+    .await;
+    assert!(again.get("error").is_none(), "apply failed: {again}");
+    let unexpected = find_notification(
+        &mut first,
+        &mut first_notifs,
+        "cowork/session/configUpdated",
+        Duration::from_millis(300),
+    )
+    .await;
+    assert!(unexpected.is_none(), "no-op apply announced a model change");
+    assert!(
+        !first_notifs
+            .iter()
+            .any(|n| n["method"] == "cowork/session/settings"),
+        "no-op apply announced an MCP change: {first_notifs:?}"
+    );
+
+    server.shutdown().await;
+}
 
 /// Desktop `workspaceDefaults.ts` fields beyond the original subset (memory model, overflow,
 /// child routing mode, workflow concurrency, user identity) and their `clear*` sentinels must be

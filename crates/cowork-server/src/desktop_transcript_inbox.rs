@@ -361,7 +361,7 @@ impl TranscriptInbox {
                 )
                 .optional()?;
             if let Some(existing) = existing {
-                if existing != digest {
+                if existing != digest && !matches_typescript_receipt(db, batch_id, events, &existing)? {
                     return Err(TranscriptInboxError::new(
                         "Idempotency key was reused with different transcript data",
                         409,
@@ -664,6 +664,52 @@ impl TranscriptInbox {
         )?;
         Ok(())
     }
+}
+
+fn matches_typescript_receipt(
+    db: &Connection,
+    batch_id: &str,
+    events: &[TranscriptInboxEvent],
+    digest: &str,
+) -> rusqlite::Result<bool> {
+    // The TS receipt hashed JSON.stringify after Zod ordered the event fields.
+    // Its projection kept those exact bytes, including nested payload key order,
+    // except that it appended deliveryId in place of the optional generation.
+    let mut stmt = db.prepare(
+        "SELECT event_json FROM transcript_events WHERE batch_id = ? ORDER BY event_index",
+    )?;
+    let mut rows = stmt.query([batch_id])?;
+    let mut original = String::from("[");
+    for (index, event) in events.iter().enumerate() {
+        let Some(row) = rows.next()? else {
+            return Ok(false);
+        };
+        let projected: String = row.get(0)?;
+        let suffix = format!(r#","deliveryId":"{batch_id}:{index}"}}"#);
+        let Some(fields) = projected.strip_suffix(&suffix) else {
+            return Ok(false);
+        };
+        if index != 0 {
+            original.push(',');
+        }
+        original.push_str(fields);
+        if let Some(generation) = event.generation {
+            original.push_str(r#","generation":"#);
+            original.push_str(&generation.to_string());
+        }
+        original.push('}');
+    }
+    original.push(']');
+    if rows.next()?.is_some() || hex::encode(Sha256::digest(original.as_bytes())) != digest {
+        return Ok(false);
+    }
+    // Verify the retry supplied the same events, in the same order. The receipt
+    // above distinguishes omitted and explicit generations even when the inbox
+    // resolved both to the same integer.
+    let Ok(stored) = serde_json::from_str::<Value>(&original) else {
+        return Ok(false);
+    };
+    Ok(serde_json::to_value(events).is_ok_and(|retry| stored == retry))
 }
 
 fn complete_settled_batches(db: &Connection, timestamp: i64) -> Result<(), rusqlite::Error> {

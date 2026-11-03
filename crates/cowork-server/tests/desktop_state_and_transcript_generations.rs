@@ -764,6 +764,53 @@ fn batch_receipts_survive_restart() {
     assert_eq!(status, StatusCode::CONFLICT);
 }
 
+#[test]
+fn retry_of_typescript_receipt_compares_original_content_and_generation() {
+    let env = Env::new();
+    let svc = env.service();
+    assert!(read_transcript(&svc, &env.workspace, "ts-thread").is_empty());
+    let conn = Connection::open(env.user_data.join("transcript-inbox.sqlite")).unwrap();
+    // SHA-256 of the TS server's JSON.stringify([event]), with payload keys z, a.
+    let digest = "eaf946809cbf0ac1a896640eeeed54a3dc34cfb788a3f110f03671bdf1764e7f";
+    conn.execute(
+        "INSERT INTO transcript_batches(batch_id, digest, state, event_count, byte_count, created_at_ms)
+         VALUES('ts-batch', ?, 'pending', 1, 95, 0)",
+        [digest],
+    )
+    .unwrap();
+    let projected = r#"{"ts":"t","threadId":"ts-thread","direction":"server","payload":{"z":1,"a":2},"deliveryId":"ts-batch:0"}"#;
+    conn.execute(
+        "INSERT INTO transcript_events(delivery_id, batch_id, event_index, thread_id, generation, event_json)
+         VALUES('ts-batch:0', 'ts-batch', 0, 'ts-thread', 0, ?)",
+        [projected],
+    )
+    .unwrap();
+
+    let retry = json!({"batchId":"ts-batch","events":[{
+        "threadId":"ts-thread","ts":"t","direction":"server","payload":{"a":2,"z":1},"generation":0
+    }]});
+    let mut changed = retry.clone();
+    changed["events"][0]["payload"]["a"] = json!(3);
+    let mut implicit = retry.clone();
+    implicit["events"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("generation");
+    for conflict in [changed, implicit] {
+        assert_eq!(
+            post_batch(&svc, &env.workspace, &conflict).0,
+            StatusCode::CONFLICT
+        );
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            post_batch(&svc, &env.workspace, &retry).0,
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert_eq!(read_transcript(&svc, &env.workspace, "ts-thread").len(), 1);
+}
+
 /// A `transcript-inbox.sqlite` left behind by the TS server (exact TS schema)
 /// with a pending batch, a canceled event, and a generation tombstone.
 #[test]

@@ -249,6 +249,10 @@ pub struct LiveSession {
     /// metadata persists never reopen a closed child agent; only an explicit
     /// `AgentControl::resume` or a direct user turn (`runUserMessageTurn.ts` parity) reopens it.
     pub persistence_status: SessionPersistenceStatus,
+    /// `sessions.last_event_seq` as of this cache's last read or write of the row. A larger
+    /// stored value means another writer (the parent's `AgentControl`, for a child) committed
+    /// since; only then is the child's run state taken from the row.
+    pub stored_seq: u64,
 }
 
 impl LiveSession {
@@ -359,11 +363,38 @@ impl LiveSession {
         self.persistence_status = written.status;
         self.execution_state = written.execution_state;
         self.last_message_preview = written.last_message_preview.clone();
+        self.provider_state = written.provider_state.clone();
         if let Some(usage) = stored_usage
             && self.active_cost_tracker.is_none()
         {
             self.cost_tracker_snapshot = Some(usage);
         }
+    }
+
+    /// Refreshes a child agent's run state from its stored row before this server runs a turn
+    /// on it, when another writer (the parent's `AgentControl` running a follow-up) committed
+    /// since this cache last saw the row; the turn then starts from the newest transcript.
+    pub(crate) fn refresh_child_run_state(&mut self, stored: &PersistedSessionRecord) {
+        if stored.last_event_seq <= self.stored_seq {
+            return;
+        }
+        self.messages = stored.messages.clone();
+        self.message_count = self.messages.len();
+        self.persistence_status = stored.status;
+        self.execution_state = stored.execution_state;
+        self.last_message_preview = stored.last_message_preview.clone();
+        // The continuation handle belongs to the transcript it was saved with (a Codex CLI
+        // thread id carries no fingerprint guarding it against a changed transcript).
+        self.provider_state = stored.provider_state.clone();
+        if self.active_cost_tracker.is_none()
+            && let Some(usage) = stored
+                .cost_tracker
+                .clone()
+                .and_then(stored_session_usage_snapshot)
+        {
+            self.cost_tracker_snapshot = Some(usage);
+        }
+        self.stored_seq = stored.last_event_seq;
     }
 
     pub(crate) fn from_persisted(record: PersistedSessionRecord) -> Self {
@@ -456,6 +487,7 @@ impl LiveSession {
             subscribers: HashSet::new(),
             idle_since: Some(Instant::now()),
             persistence_status: record.status,
+            stored_seq: record.last_event_seq,
         }
     }
 }
@@ -500,21 +532,26 @@ fn with_session_budget(
 /// Reconciles a child agent's snapshot against its stored row before a write that does not
 /// own the child's run state. The parent's `AgentControl` runs the child's turns and closes or
 /// resumes it, persisting the transcript, lifecycle status, execution state, preview and usage
-/// directly; the server's `LiveSession` copy of those is only a hydration-time cache. Keeping
-/// the stored values means a metadata update never rolls back a later follow-up turn and never
-/// reopens a closed child. Returns the adopted usage snapshot (without the session budget, which
-/// the server owns and overlays here).
+/// directly; the server's `LiveSession` copy of those is only a cache. Keeping the stored values
+/// means a metadata update never rolls back a later follow-up turn and never reopens a closed
+/// child. Nothing is adopted unless the row moved past `known_seq` (the cache's
+/// [`LiveSession::stored_seq`]): when it did not, the cache is at least as new, e.g. a direct
+/// turn that finished but is not yet persisted. Returns the adopted usage snapshot (without the
+/// session budget, which the server owns and overlays here).
 fn adopt_stored_child_agent_state(
     stored: Option<&PersistedSessionRecord>,
     snap: &mut PersistedSessionSnapshotData,
+    known_seq: u64,
     warn_at_usd: Option<f64>,
     stop_at_usd: Option<f64>,
 ) -> Option<Value> {
-    let stored = stored?;
+    let stored = stored.filter(|stored| stored.last_event_seq > known_seq)?;
     snap.messages = stored.messages.clone();
     snap.status = stored.status;
     snap.execution_state = stored.execution_state;
     snap.last_message_preview = stored.last_message_preview.clone();
+    // The provider continuation handle belongs to whichever transcript it was saved with.
+    snap.provider_state = stored.provider_state.clone();
     let usage = stored
         .cost_tracker
         .clone()
@@ -1598,7 +1635,7 @@ impl ServerRuntimeState {
             (
                 live.id.clone(),
                 live.to_snapshot_data(),
-                reconcile_child.then_some((live.warn_at_usd, live.stop_at_usd)),
+                reconcile_child.then_some((live.stored_seq, live.warn_at_usd, live.stop_at_usd)),
             )
         };
         if self.is_session_deleted(&session_id) {
@@ -1615,13 +1652,18 @@ impl ServerRuntimeState {
         };
         let seq = match child_budget {
             None => self.session_db.persist_session_mutation(mutation).await?,
-            Some((warn_at_usd, stop_at_usd)) => {
+            Some((known_seq, warn_at_usd, stop_at_usd)) => {
                 let mut stored_usage = None;
                 let (seq, written) = self
                     .session_db
                     .persist_session_mutation_reconciled(mutation, |stored, snap| {
-                        stored_usage =
-                            adopt_stored_child_agent_state(stored, snap, warn_at_usd, stop_at_usd);
+                        stored_usage = adopt_stored_child_agent_state(
+                            stored,
+                            snap,
+                            known_seq,
+                            warn_at_usd,
+                            stop_at_usd,
+                        );
                     })
                     .await?;
                 let mut live = live_arc.lock();
@@ -1635,6 +1677,9 @@ impl ServerRuntimeState {
         let snapshot_json = {
             let mut live = live_arc.lock();
             live.last_event_seq = effective_seq;
+            if seq > 0 {
+                live.stored_seq = live.stored_seq.max(seq);
+            }
             self.build_session_snapshot_for_live(&live)
         };
         self.session_db
@@ -1801,6 +1846,7 @@ impl ServerRuntimeState {
             subscribers,
             idle_since: None,
             persistence_status: SessionPersistenceStatus::Active,
+            stored_seq: 0,
         };
 
         // Concurrent `thread/start`s with the same `clientThreadId` all bind the same id; the

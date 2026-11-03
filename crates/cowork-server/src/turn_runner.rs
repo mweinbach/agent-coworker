@@ -1304,6 +1304,17 @@ impl ServerRuntimeState {
             None => Vec::new(),
         };
 
+        // A child agent's row may be newer than this cache (see `refresh_child_run_state`);
+        // read it before taking the session lock.
+        let stored_child_row = (live_arc.lock().session_kind != cowork_storage::SessionKind::Root)
+            .then(|| {
+                self.session_db
+                    .get_session_record(&params.thread_id)
+                    .ok()
+                    .flatten()
+            })
+            .flatten();
+
         let (
             provider,
             model_id,
@@ -1330,6 +1341,11 @@ impl ServerRuntimeState {
             // Reserve the thread in the same critical section as the check so concurrent
             // `turn/start` requests cannot both pass it while this one awaits setup.
             live.busy = true;
+            // The parent's `AgentControl` may have run a follow-up on this child since this
+            // cache last saw its row; start from the stored transcript then.
+            if let Some(stored) = &stored_child_row {
+                live.refresh_child_run_state(stored);
+            }
             // A direct user turn reopens a closed session (`runUserMessageTurn.ts` parity);
             // closing and resuming otherwise go through the parent's `AgentControl`.
             if live.persistence_status == cowork_storage::SessionPersistenceStatus::Closed {

@@ -803,6 +803,7 @@ impl ServerRuntimeState {
             subscribers: subscribers.clone(),
             idle_since: subscribers.is_empty().then(std::time::Instant::now),
             persistence_status: cowork_storage::SessionPersistenceStatus::Active,
+            stored_seq: 0,
         };
 
         let mut forked_live = forked_live;

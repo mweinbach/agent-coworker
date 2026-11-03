@@ -3,7 +3,9 @@
 //! The parent's `AgentControl` runs a child's turns and closes/resumes it, persisting the
 //! transcript and lifecycle straight to `sessions.db`; the server's hydrated `LiveSession` for
 //! the child is only a cache. Metadata writes (`cowork/session/title/set`, ...) must therefore
-//! never roll back a later follow-up turn or reopen a closed child.
+//! never roll back a later follow-up turn or reopen a closed child; in the other direction,
+//! `AgentControl`'s writes must keep server-owned metadata (a rename) and a follow-up must start
+//! from a direct `turn/start` the server ran on the child, and vice versa.
 //!
 //! A child's stored `system_prompt` is its role/profile prompt plus any spawn-time
 //! `systemPromptSuffix`; `AgentControl` can only rebuild the base prompt when the stored one is
@@ -716,6 +718,137 @@ async fn renaming_a_closed_child_keeps_it_closed_across_restart() {
     assert_eq!(sent["result"], json!({}), "input/send failed: {sent}");
     let _ = wait_for_request_with(&mock, "AFTER_RESUME_5e1d").await;
     let _ = wait_child_idle(&mut ws, &parent, &child, "after-resume").await;
+
+    drop(ws);
+    server.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Server-owned metadata and direct turns seen by AgentControl
+// ---------------------------------------------------------------------------------------------
+
+fn stored_title(iso: &Iso, session_id: &str) -> (String, String) {
+    let conn = rusqlite::Connection::open(iso.home.join(".cowork").join("sessions.db")).unwrap();
+    conn.query_row(
+        "SELECT title, title_source FROM sessions WHERE session_id = ?1",
+        [session_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )
+    .unwrap()
+}
+
+/// Runs a direct `turn/start` on `thread_id` and waits for its `turn/completed`.
+async fn run_direct_turn(ws: &mut WsStream, id: &str, thread_id: &str, text: &str) {
+    let res = call(
+        ws,
+        id,
+        "turn/start",
+        json!({ "threadId": thread_id, "input": text }),
+    )
+    .await;
+    let turn_id = res["result"]["turn"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("turn/start failed: {res}"))
+        .to_owned();
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(20), ws.next())
+            .await
+            .expect("turn/completed timeout")
+            .expect("ws open")
+            .expect("ws frame");
+        if let WsMessage::Text(txt) = frame {
+            let val: Value = serde_json::from_str(&txt).unwrap();
+            if val["method"] == "turn/completed" && val["params"]["turn"]["id"] == turn_id.as_str()
+            {
+                return;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_follow_up_through_the_parent_keeps_the_childs_rename_across_restart() {
+    let mut iso = Iso::new("cowork-child-rename-followup-");
+    let mock = start_mock(&mut iso).await;
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_parent(&mut ws, &iso).await;
+    let event = spawn_child_and_wait(&mut ws, &parent, "RENAME_CHILD_TASK", json!({})).await;
+    let child = event["agent"]["agentId"].as_str().unwrap().to_owned();
+
+    rename(&mut ws, &child, "Kept rename").await;
+    let sent = send_child_input(&mut ws, &parent, &child, "RENAME_FOLLOW_UP_3b7e").await;
+    assert_eq!(sent["result"], json!({}), "input/send failed: {sent}");
+    let _ = wait_for_request_with(&mock, "RENAME_FOLLOW_UP_3b7e").await;
+    let idle = wait_child_idle(&mut ws, &parent, &child, "rename-follow-up").await;
+    assert!(
+        stored_messages_json(&iso, &child).contains("RENAME_FOLLOW_UP_3b7e"),
+        "AgentControl must persist the follow-up"
+    );
+    assert_eq!(
+        stored_title(&iso, &child),
+        ("Kept rename".to_owned(), "manual".to_owned()),
+        "the follow-up's persist rolled back the child's rename"
+    );
+    assert_eq!(idle["agent"]["title"], "Kept rename", "{idle}");
+
+    drop(ws);
+    server.shutdown().await;
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    assert_eq!(
+        stored_title(&iso, &child),
+        ("Kept rename".to_owned(), "manual".to_owned())
+    );
+    let inspected = wait_child_idle(&mut ws, &parent, &child, "after-restart").await;
+    assert_eq!(inspected["agent"]["title"], "Kept rename", "{inspected}");
+    drop(ws);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn direct_turns_and_parent_follow_ups_on_a_child_each_see_the_other() {
+    let mut iso = Iso::new("cowork-child-direct-followup-");
+    let mock = start_mock(&mut iso).await;
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_parent(&mut ws, &iso).await;
+    let event = spawn_child_and_wait(&mut ws, &parent, "DIRECT_CHILD_TASK", json!({})).await;
+    let child = event["agent"]["agentId"].as_str().unwrap().to_owned();
+
+    // A direct turn on the child thread runs on the server's cached copy.
+    run_direct_turn(&mut ws, "direct-1", &child, "DIRECT_ONE_a41f").await;
+
+    // The parent's follow-up must start from the direct turn's transcript.
+    let sent = send_child_input(&mut ws, &parent, &child, "PARENT_FOLLOW_UP_a41f").await;
+    assert_eq!(sent["result"], json!({}), "input/send failed: {sent}");
+    let body = wait_for_request_with(&mock, "PARENT_FOLLOW_UP_a41f").await;
+    assert!(
+        body["input"].to_string().contains("DIRECT_ONE_a41f"),
+        "the follow-up ran without the direct turn's history: {body}"
+    );
+    let _ = wait_child_idle(&mut ws, &parent, &child, "parent-follow-up").await;
+
+    // The next direct turn must start from the follow-up's transcript.
+    run_direct_turn(&mut ws, "direct-2", &child, "DIRECT_TWO_a41f").await;
+    let body = wait_for_request_with(&mock, "DIRECT_TWO_a41f").await;
+    assert!(
+        body["input"].to_string().contains("PARENT_FOLLOW_UP_a41f"),
+        "the direct turn ran without the follow-up's history: {body}"
+    );
+
+    let stored = stored_messages_json(&iso, &child);
+    for marker in [
+        "DIRECT_CHILD_TASK",
+        "DIRECT_ONE_a41f",
+        "PARENT_FOLLOW_UP_a41f",
+        "DIRECT_TWO_a41f",
+    ] {
+        assert!(stored.contains(marker), "stored transcript lost {marker}");
+    }
 
     drop(ws);
     server.shutdown().await;

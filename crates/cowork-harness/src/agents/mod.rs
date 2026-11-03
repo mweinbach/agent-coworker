@@ -16,8 +16,9 @@ use cowork_inference::{
     SessionUsageSnapshot, TurnUsage, migrate_stored_message,
 };
 use cowork_storage::{
-    AgentExecutionState, PersistedSessionMutation, PersistedSessionSnapshotData, SessionDb,
-    SessionKind, SessionPersistenceStatus, SessionTitleSource,
+    AgentExecutionState, PersistedSessionMutation, PersistedSessionRecord,
+    PersistedSessionSnapshotData, SessionDb, SessionKind, SessionPersistenceStatus,
+    SessionTitleSource,
 };
 use cowork_tools::{
     AgentControlBridge, resolve_context_mode_and_briefing, validate_and_resolve_target_paths,
@@ -295,6 +296,10 @@ struct ChildRuntimeEntry {
     lifecycle_lock: Arc<tokio::sync::Mutex<()>>,
     report_required: bool,
     cost_tracker: SessionCostTracker,
+    /// `sessions.last_event_seq` as of this controller's last read or write of the child's row.
+    /// A larger stored value means another writer (a direct `turn/start` on the child, or a
+    /// metadata update) committed since, so the next turn first refreshes from the row.
+    persisted_seq: u64,
 }
 
 struct ParentSlotTracker {
@@ -529,6 +534,7 @@ impl AgentControl {
                         cost_tracker: saved_usage
                             .map(SessionCostTracker::from_snapshot)
                             .unwrap_or_else(|| SessionCostTracker::new(&row.session_id, None)),
+                        persisted_seq: row.last_event_seq,
                     },
                 );
             }
@@ -814,9 +820,10 @@ impl AgentControl {
             &prep.sandbox,
             "agent_spawned",
         );
-        if let Err(e) = self.cfg.session_db.persist_session_mutation(mutation).await {
-            return Err(format!("Failed saving child agent session: {e}"));
-        }
+        let persisted_seq = match self.cfg.session_db.persist_session_mutation(mutation).await {
+            Ok(seq) => seq,
+            Err(e) => return Err(format!("Failed saving child agent session: {e}")),
+        };
 
         let cancel_token = CancellationToken::new();
         let loop_finished = CancellationToken::new();
@@ -850,6 +857,7 @@ impl AgentControl {
                     report_required: !has_prompt_suffix
                         && (summary.task_type.is_some() || prep.role_spec.name != "default"),
                     cost_tracker: SessionCostTracker::new(&agent_id, None),
+                    persisted_seq,
                 },
             );
         }
@@ -889,13 +897,17 @@ impl AgentControl {
         tokio::spawn(async move {
             let mut next_prompt = Some((initial_prompt, initial_cancel));
             while let Some((prompt, cancel_token)) = next_prompt.take() {
+                let stored = session_db.get_session_record(&agent_id).ok().flatten();
                 let turn_input = {
-                    let guard = state.lock();
-                    let Some(entry) = guard.children.get(&agent_id) else {
+                    let mut guard = state.lock();
+                    let Some(entry) = guard.children.get_mut(&agent_id) else {
                         break;
                     };
                     if entry.summary.lifecycle_state == "closed" {
                         break;
+                    }
+                    if let Some(stored) = &stored {
+                        refresh_child_from_stored_row(entry, stored);
                     }
                     ChildTurnInput {
                         agent_id: agent_id.clone(),
@@ -1008,7 +1020,16 @@ impl AgentControl {
                     &sandbox,
                     "agent_status",
                 );
-                let _ = session_db.persist_session_mutation(mutation).await;
+                let mut updated_summary = updated_summary;
+                if let Ok((seq, written)) = session_db
+                    .persist_session_mutation_reconciled(mutation, keep_server_owned_child_metadata)
+                    .await
+                    && let Some(entry) = state.lock().children.get_mut(&agent_id)
+                {
+                    entry.persisted_seq = entry.persisted_seq.max(seq);
+                    entry.summary.title = written.title.clone();
+                    updated_summary.title = written.title;
+                }
 
                 (event_sink)(
                     "cowork/session/agentStatus",
@@ -1355,17 +1376,20 @@ impl AgentControl {
             );
             (summary, mutation)
         };
-        self.cfg
+        let (seq, written) = self
+            .cfg
             .session_db
-            .persist_session_mutation(mutation)
+            .persist_session_mutation_reconciled(mutation, keep_server_owned_child_metadata)
             .await
             .map_err(|e| e.to_string())?;
-        self.state
-            .lock()
-            .children
-            .get_mut(agent_id)
-            .ok_or_else(missing)?
-            .summary = summary.clone();
+        let mut summary = summary;
+        summary.title = written.title;
+        {
+            let mut guard = self.state.lock();
+            let entry = guard.children.get_mut(agent_id).ok_or_else(missing)?;
+            entry.summary = summary.clone();
+            entry.persisted_seq = entry.persisted_seq.max(seq);
+        }
         self.status_bus.notify_waiters();
         self.emit_event(
             "cowork/session/agentStatus",
@@ -1937,6 +1961,66 @@ fn restore_child_transcript(
             })
         })
         .collect()
+}
+
+/// Takes over what another writer committed to a child's row since this controller last saw it,
+/// before the child's next turn: a direct `turn/start` on the child thread runs on the server's
+/// own copy and persists the transcript (and todos/harness context) without telling this
+/// controller. A transcript that cannot be decoded is left alone (the turn runs on the cached
+/// one, as before).
+fn refresh_child_from_stored_row(entry: &mut ChildRuntimeEntry, stored: &PersistedSessionRecord) {
+    if stored.last_event_seq <= entry.persisted_seq || entry.unrestored_messages.is_some() {
+        return;
+    }
+    let Ok(messages) = restore_child_transcript(&stored.messages, &stored.created_at) else {
+        return;
+    };
+    entry.messages = messages;
+    entry.todos = stored.todos.clone();
+    entry.harness_context = stored.harness_context.clone();
+    entry.summary.title = stored.title.clone();
+    entry.persisted_seq = stored.last_event_seq;
+}
+
+/// Reconciles a child mutation built by this controller against the stored row, inside the
+/// write transaction (`SessionDb::persist_session_mutation_reconciled`). The server owns a
+/// child's metadata once it exists (`cowork/session/title/set`, `config/set`, `usageBudget/set`,
+/// `harnessContext/set`, direct-turn todos) and writes it to the row; this controller only knows
+/// the spawn-time values, so it keeps the stored ones instead of rolling them back. The
+/// transcript, lifecycle, execution state and usage remain this controller's.
+fn keep_server_owned_child_metadata(
+    stored: Option<&PersistedSessionRecord>,
+    snap: &mut PersistedSessionSnapshotData,
+) {
+    let Some(stored) = stored else {
+        return;
+    };
+    snap.title = stored.title.clone();
+    snap.title_source = stored.title_source;
+    snap.title_model = stored.title_model.clone();
+    snap.provider_options = stored.provider_options.clone();
+    snap.backups_enabled_override = stored.backups_enabled_override;
+    snap.todos = stored.todos.clone();
+    snap.harness_context = stored.harness_context.clone();
+    // The session budget is set through the server; carry its thresholds onto this
+    // controller's usage snapshot.
+    if let (Some(stored_budget), Some(budget)) = (
+        stored
+            .cost_tracker
+            .as_ref()
+            .and_then(|c| c.get("budgetStatus"))
+            .and_then(Value::as_object),
+        snap.cost_tracker
+            .as_mut()
+            .and_then(|c| c.get_mut("budgetStatus"))
+            .and_then(Value::as_object_mut),
+    ) {
+        for key in ["warnAtUsd", "stopAtUsd", "configured"] {
+            if let Some(v) = stored_budget.get(key) {
+                budget.insert(key.to_owned(), v.clone());
+            }
+        }
+    }
 }
 
 fn serialize_child_messages(entry: &ChildRuntimeEntry) -> Vec<Value> {

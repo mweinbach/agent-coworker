@@ -19,7 +19,7 @@ use cowork_harness::ooxml::{
     SpreadsheetCellStylePatch, SpreadsheetEditResult, SpreadsheetFileKind,
     SpreadsheetFileVersionResult, SpreadsheetWorkbookRequest, SpreadsheetWorkbookSnapshotResult,
     open_bounded_zip, patch_spreadsheet_batch, read_spreadsheet_file_version,
-    read_spreadsheet_workbook_snapshot, validate_zip_entry_name,
+    read_spreadsheet_workbook_snapshot, read_zip_bytes, validate_zip_entry_name,
 };
 use cowork_harness::presentation::{
     PresentationPreviewRequest, PresentationPreviewResult, preview_presentation_file,
@@ -103,6 +103,67 @@ fn zip_guard_rejects_path_traversal_absolute_drive_and_spoofed_zip_bombs() {
     }
     let bomb_err = open_bounded_zip(&bomb_zip).expect_err("oversized entry must fail");
     assert!(bomb_err.contains("limit"), "unexpected error: {bomb_err}");
+}
+
+/// Overwrites the declared uncompressed size of the first entry in both its local file header
+/// (offset 22) and its central-directory record (offset 24).
+fn spoof_first_entry_uncompressed_size(zip_bytes: &mut [u8], size: u32) {
+    zip_bytes[22..26].copy_from_slice(&size.to_le_bytes());
+    let cd_pos = zip_bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
+        .expect("central directory record");
+    zip_bytes[cd_pos + 24..cd_pos + 28].copy_from_slice(&size.to_le_bytes());
+}
+
+#[test]
+fn zip_guard_counts_actual_decompressed_bytes_not_header_sizes() {
+    // A 4 MiB deflate stream (a few KiB compressed) whose headers claim it inflates to 0 bytes:
+    // the read must stop just past the declared size, reject the part, and charge nothing.
+    let payload = vec![0u8; 4 * 1024 * 1024];
+    let mut spoofed = build_zip(&[("word/media/blob.bin", payload.as_slice())]);
+    assert!(spoofed.len() < 64 * 1024, "payload should deflate well");
+    spoof_first_entry_uncompressed_size(&mut spoofed, 0);
+    let mut archive = open_bounded_zip(&spoofed).expect("declared sizes pass the header check");
+    read_zip_bytes(&mut archive, "word/media/blob.bin")
+        .expect_err("decompressed size beyond the declared size must fail");
+    assert_eq!(archive.decompressed_bytes(), 0);
+
+    // Over-declared sizes (the stream ends early with a valid CRC) are a size mismatch too.
+    let body: &[u8] = b"<w:document>body</w:document>";
+    let mut short = build_zip(&[("word/document.xml", body)]);
+    spoof_first_entry_uncompressed_size(&mut short, 4096);
+    let mut archive = open_bounded_zip(&short).unwrap();
+    let err = read_zip_bytes(&mut archive, "word/document.xml").expect_err("mismatch must fail");
+    assert!(err.contains("declared size"), "unexpected error: {err}");
+    assert_eq!(archive.decompressed_bytes(), 0);
+
+    // Honest parts are charged to one archive-wide budget, each distinct part once.
+    let honest = build_zip(&[
+        ("word/document.xml", b"<w:document/>"),
+        ("word/media/a.bin", b"0123456789"),
+    ]);
+    let mut archive = open_bounded_zip(&honest).unwrap();
+    assert_eq!(
+        archive.part_names(),
+        [
+            "word/document.xml".to_owned(),
+            "word/media/a.bin".to_owned()
+        ]
+    );
+    assert_eq!(
+        read_zip_bytes(&mut archive, "word/document.xml").unwrap(),
+        b"<w:document/>"
+    );
+    assert_eq!(
+        read_zip_bytes(&mut archive, "word/media/a.bin").unwrap(),
+        b"0123456789"
+    );
+    assert_eq!(
+        read_zip_bytes(&mut archive, "word/media/a.bin").unwrap(),
+        b"0123456789"
+    );
+    assert_eq!(archive.decompressed_bytes(), 23);
 }
 
 #[test]
@@ -650,10 +711,10 @@ fn spreadsheet_csv_and_lossless_xlsx_batch_patching_enforce_versions_and_preserv
     assert_eq!(patch_xlsx, SpreadsheetEditResult::Ok { ok: true });
 
     let patched_bytes = std::fs::read(&xlsx_path).unwrap();
-    let mut patched_zip = open_bounded_zip(&patched_bytes).unwrap();
+    let patched_zip = open_bounded_zip(&patched_bytes).unwrap();
     // calcChain.xml removed so Excel recalculates, and customXml/item1.xml preserved losslessly!
-    assert!(patched_zip.by_name("xl/calcChain.xml").is_err());
-    assert!(patched_zip.by_name("customXml/item1.xml").is_ok());
+    assert!(!patched_zip.contains_part("xl/calcChain.xml"));
+    assert!(patched_zip.contains_part("customXml/item1.xml"));
 
     let reloaded = read_spreadsheet_workbook_snapshot(&SpreadsheetWorkbookRequest {
         cwd: ws,
@@ -849,6 +910,101 @@ async fn canvas_document_service_enforces_workspace_confinement_conflicts_supers
             assert_eq!(error.kind, "session_not_found");
         }
         other => panic!("expected session_not_found after close, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn canvas_save_as_conflict_never_hashes_symlinked_outside_target() {
+    let (_guard, root) = canonical_temp_dir("cowork-canvas-symlink-");
+    let ws = root.join("workspace");
+    let cowork_home = root.join("cowork-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&cowork_home).unwrap();
+    std::fs::write(ws.join("draft.md"), "# Draft\n").unwrap();
+    let outside = root.join("outside-secret.json");
+    std::fs::write(&outside, "{\"token\":\"do-not-leak\"}").unwrap();
+    std::os::unix::fs::symlink(&outside, ws.join("link.md")).unwrap();
+
+    let service = CanvasDocumentPersistenceService::new(&cowork_home);
+    let opened = service
+        .open(
+            &ws,
+            CanvasDocumentOpenRequest {
+                path: "draft.md".to_owned(),
+                document_id: "doc-link".to_owned(),
+                generation: 1,
+                max_bytes: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(opened, CanvasDocumentOpenResult::Ok { .. }),
+        "expected open ok, got {opened:?}"
+    );
+
+    let result = service
+        .save_as(
+            &ws,
+            CanvasDocumentSaveAsRequest {
+                document_id: "doc-link".to_owned(),
+                generation: 1,
+                edit_revision: 1,
+                content: "# Forked\n".to_owned(),
+                path: "link.md".to_owned(),
+            },
+        )
+        .await;
+    match result {
+        CanvasDocumentSaveResult::Err {
+            error,
+            current_revision,
+            ..
+        } => {
+            assert_eq!(error.kind, "conflict");
+            assert!(
+                current_revision.is_none(),
+                "conflict must not report the outside symlink target's revision: {current_revision:?}"
+            );
+        }
+        other => panic!("expected saveAs conflict, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "{\"token\":\"do-not-leak\"}"
+    );
+    assert!(
+        std::fs::symlink_metadata(ws.join("link.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    // A regular in-workspace conflict target still reports its current revision.
+    std::fs::write(ws.join("existing.md"), "keep me").unwrap();
+    let regular = service
+        .save_as(
+            &ws,
+            CanvasDocumentSaveAsRequest {
+                document_id: "doc-link".to_owned(),
+                generation: 1,
+                edit_revision: 2,
+                content: "# Forked\n".to_owned(),
+                path: "existing.md".to_owned(),
+            },
+        )
+        .await;
+    match regular {
+        CanvasDocumentSaveResult::Err {
+            error,
+            current_revision,
+            ..
+        } => {
+            assert_eq!(error.kind, "conflict");
+            let rev = current_revision.expect("regular conflict target reports its revision");
+            assert_eq!(rev.size, "keep me".len() as u64);
+        }
+        other => panic!("expected saveAs conflict, got {other:?}"),
     }
 }
 

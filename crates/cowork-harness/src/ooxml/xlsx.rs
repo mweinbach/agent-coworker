@@ -1,19 +1,17 @@
 //! Native Rust `.xlsx` OOXML parser (`src/server/artifacts/xlsx.ts` & `src/server/spreadsheet/ooxml.ts` parity).
 
 use std::collections::BTreeMap;
-use std::io::Cursor;
 
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
-use zip::ZipArchive;
 
 use super::zip_guard::{
-    decode_general_ref, decode_xml_text, local_tag_name, normalize_whitespace, open_bounded_zip,
-    read_relationships, read_zip_text, resolve_relationship_target, try_read_zip_text,
-    unescape_xml_str,
+    BoundedZipArchive, decode_general_ref, decode_xml_text, local_tag_name, normalize_whitespace,
+    open_bounded_zip, read_relationships, read_zip_text, resolve_relationship_target,
+    try_read_zip_text, unescape_xml_str,
 };
 
 pub const MAX_XLSX_CELLS: usize = 1_000_000;
@@ -540,6 +538,10 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, String> {
                 }
                 _ => {}
             },
+            // A self-closing `<si/>` is an empty shared-string item; it still occupies an index.
+            Ok(Event::Empty(e)) if !in_si && local_tag_name(e.name().as_ref()) == "si" => {
+                out.push(String::new());
+            }
             Ok(Event::Empty(_)) => {}
             Ok(Event::Text(t)) if in_si && in_t && phonetic_depth == 0 => {
                 cur.push_str(&decode_xml_text(&t));
@@ -1886,7 +1888,7 @@ pub fn excel_serial_to_iso_string(serial: f64, date1904: bool) -> String {
 }
 
 fn read_sheet_tables(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     worksheet_part: &str,
     rels: &BTreeMap<String, super::zip_guard::OoxmlRelationship>,
     table_rel_ids: &[String],
@@ -1955,7 +1957,7 @@ fn parse_table_summary(xml: &str, table_part: &str) -> Option<SpreadsheetTableSu
 }
 
 fn read_sheet_charts(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     worksheet_part: &str,
     rels: &BTreeMap<String, super::zip_guard::OoxmlRelationship>,
     drawing_rel_ids: &[String],
@@ -2184,7 +2186,22 @@ fn parse_chart_metadata(xml: &str) -> (Option<String>, Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::read_ooxml_color;
+    use super::{parse_shared_strings, read_ooxml_color};
+
+    #[test]
+    fn self_closing_shared_string_items_keep_their_index() {
+        let xml = r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4"><si><t>alpha</t></si><si/><si><r><t>be</t></r><r><t>ta</t></r></si><x:si xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/><si><t>gamma</t></si></sst>"#;
+        assert_eq!(
+            parse_shared_strings(xml).unwrap(),
+            vec![
+                "alpha".to_owned(),
+                String::new(),
+                "beta".to_owned(),
+                String::new(),
+                "gamma".to_owned(),
+            ]
+        );
+    }
 
     #[test]
     fn rgb_colors_parse_and_malformed_values_never_panic() {

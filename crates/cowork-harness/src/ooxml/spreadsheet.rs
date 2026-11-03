@@ -1346,17 +1346,7 @@ impl XlsxPatchSession {
         })?;
         let sheet_parts_by_name = resolve_all_worksheet_parts(&wb_xml, &wb_rels)?;
 
-        let names: Vec<String> = (0..archive.len())
-            .filter_map(|i| {
-                let f = archive.by_index_raw(i).ok()?;
-                let name = f.name().ok()?.into_owned();
-                if f.is_dir() || name.ends_with('/') {
-                    None
-                } else {
-                    Some(name)
-                }
-            })
-            .collect();
+        let names: Vec<String> = archive.part_names().to_vec();
         let mut raw_parts = BTreeMap::new();
         for name in &names {
             let b = read_zip_bytes(&mut archive, name).map_err(|message| BatchOpFailure {
@@ -2380,7 +2370,11 @@ fn apply_worksheet_col_width(
         )
     });
     static COLS_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let cols_re = COLS_RE.get_or_init(|| Regex::new(r"(?s)<cols\b[^>]*>(.*?)</cols>").unwrap());
+    static COLS_SELF_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    // The paired form must not start at a self-closing `<cols/>`.
+    let cols_re =
+        COLS_RE.get_or_init(|| Regex::new(r"(?s)<cols\b(?:[^>]*[^/>])?>(.*?)</cols>").unwrap());
+    let cols_self_re = COLS_SELF_RE.get_or_init(|| Regex::new(r"<cols\b[^>]*/>").unwrap());
     if let Some(caps) = cols_re.captures(xml) {
         let m = caps.get(0).unwrap();
         let next_inner = rewrite_cols_inner(&caps[1], col_idx, col_xml.as_deref());
@@ -2389,6 +2383,18 @@ fn apply_worksheet_col_width(
         } else {
             format!("<cols>{next_inner}</cols>")
         };
+        return Ok(format!(
+            "{}{replacement}{}",
+            &xml[..m.start()],
+            &xml[m.end()..]
+        ));
+    }
+    // An empty `<cols/>` holds no widths: replace it in place (or drop it when clearing) so the
+    // worksheet never ends up with two `<cols>` elements (`CT_Worksheet` allows at most one).
+    if let Some(m) = cols_self_re.find(xml) {
+        let replacement = col_xml
+            .map(|cx| format!("<cols>{cx}</cols>"))
+            .unwrap_or_default();
         return Ok(format!(
             "{}{replacement}{}",
             &xml[..m.start()],
@@ -3072,5 +3078,28 @@ mod tests {
             remove_calc_chain_content_type(xml),
             r#"<Types><Override PartName="/xl/other.xml" ContentType="y"></Override></Types>"#
         );
+    }
+
+    #[test]
+    fn self_closing_cols_is_replaced_not_duplicated() {
+        let xml = r#"<worksheet><cols/><sheetData><row r="1"/></sheetData></worksheet>"#;
+        let out = apply_worksheet_col_width(xml, 1, Some(120.0)).unwrap();
+        assert_eq!(out.matches("<cols").count(), 1, "{out}");
+        assert!(!out.contains("<cols/>"), "{out}");
+        let cols_at = out.find("<cols>").expect("cols block");
+        assert!(cols_at < out.find("<sheetData").unwrap(), "{out}");
+        assert!(out.contains(r#"<col min="2" max="2""#), "{out}");
+
+        // `<cols />` with whitespace, and clearing a width, strips the empty element.
+        let xml = r#"<worksheet><cols /><sheetData/></worksheet>"#;
+        let out = apply_worksheet_col_width(xml, 0, None).unwrap();
+        assert_eq!(out, "<worksheet><sheetData/></worksheet>");
+
+        // Paired `<cols>` keeps being rewritten in place.
+        let xml = r#"<worksheet><cols><col min="1" max="1" width="9" customWidth="1"/></cols><sheetData/></worksheet>"#;
+        let out = apply_worksheet_col_width(xml, 2, Some(80.0)).unwrap();
+        assert_eq!(out.matches("<cols").count(), 1, "{out}");
+        assert!(out.contains(r#"<col min="1" max="1""#), "{out}");
+        assert!(out.contains(r#"<col min="3" max="3""#), "{out}");
     }
 }

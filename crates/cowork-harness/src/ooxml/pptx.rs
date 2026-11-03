@@ -1,7 +1,6 @@
 //! Native Rust `.pptx` snapshot extractor (`src/server/artifacts/pptx.ts` parity).
 
 use std::collections::BTreeSet;
-use std::io::Cursor;
 use std::path::Path;
 
 use cowork_storage::sha256_hex;
@@ -10,12 +9,11 @@ use quick_xml::events::Event;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use zip::ZipArchive;
 
 use super::zip_guard::{
-    OoxmlMedia, archive_file_names, decode_general_ref, decode_xml_text, local_tag_name,
-    normalize_whitespace, open_bounded_zip, read_media, read_relationships, read_zip_text,
-    resolve_relationship_target, try_read_zip_text, unescape_xml_str,
+    BoundedZipArchive, OoxmlMedia, archive_file_names, decode_general_ref, decode_xml_text,
+    local_tag_name, normalize_whitespace, open_bounded_zip, read_media, read_relationships,
+    read_zip_text, resolve_relationship_target, try_read_zip_text, unescape_xml_str,
 };
 
 pub const MAX_PPTX_SLIDES: usize = 10_000;
@@ -117,7 +115,7 @@ pub fn extract_pptx_snapshot_with_options(
 }
 
 fn read_ordered_slide_parts(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
 ) -> Result<Vec<OrderedSlidePart>, String> {
     if let Some(pres_xml) = try_read_zip_text(archive, "ppt/presentation.xml")? {
         let rels = read_relationships(archive, "ppt/presentation.xml")?;
@@ -193,7 +191,7 @@ fn read_ordered_slide_parts(
 }
 
 fn read_slide(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     entry: OrderedSlidePart,
     index: usize,
     options: &PptxExtractOptions,

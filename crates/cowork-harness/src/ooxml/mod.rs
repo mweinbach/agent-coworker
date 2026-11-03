@@ -38,9 +38,9 @@ pub use xlsx::{
     parse_xlsx_workbook, read_ooxml_color, timestamp_ms_to_excel_serial,
 };
 pub use zip_guard::{
-    MAX_OOXML_COMPRESSED_BYTES, MAX_OOXML_ENTRIES, MAX_OOXML_ENTRY_BYTES, MAX_OOXML_TEXT_CHARS,
-    MAX_OOXML_UNCOMPRESSED_BYTES, OoxmlMedia, OoxmlRelationship, detect_media_mime,
-    open_bounded_zip, read_media, read_relationships, read_zip_bytes, read_zip_text,
-    relationship_part_path, resolve_relationship_target, try_read_zip_text,
+    BoundedZipArchive, MAX_OOXML_COMPRESSED_BYTES, MAX_OOXML_ENTRIES, MAX_OOXML_ENTRY_BYTES,
+    MAX_OOXML_TEXT_CHARS, MAX_OOXML_UNCOMPRESSED_BYTES, OoxmlMedia, OoxmlRelationship,
+    detect_media_mime, open_bounded_zip, read_media, read_relationships, read_zip_bytes,
+    read_zip_text, relationship_part_path, resolve_relationship_target, try_read_zip_text,
     validate_zip_entry_name,
 };

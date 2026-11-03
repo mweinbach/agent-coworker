@@ -1,16 +1,14 @@
 //! Native Rust `.docx` snapshot extractor (`src/server/artifacts/docx.ts` parity).
 
-use std::io::Cursor;
-
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use zip::ZipArchive;
 
 use super::zip_guard::{
-    OoxmlMedia, archive_file_names, decode_general_ref, decode_xml_text, local_tag_name,
-    normalize_whitespace, open_bounded_zip, read_media, read_zip_text, unescape_xml_str,
+    BoundedZipArchive, OoxmlMedia, archive_file_names, decode_general_ref, decode_xml_text,
+    local_tag_name, normalize_whitespace, open_bounded_zip, read_media, read_zip_text,
+    unescape_xml_str,
 };
 
 pub const MAX_DOCX_STRUCTURAL_ITEMS: usize = 100_000;
@@ -337,7 +335,7 @@ fn parse_document_body(xml: &str) -> Result<ParsedDocxBody, String> {
 }
 
 fn read_section_parts(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     prefix: &str,
 ) -> Result<Vec<DocxSectionText>, String> {
     let mut parts: Vec<String> = archive_file_names(archive)
@@ -427,7 +425,7 @@ fn collect_paragraphs_text(xml: &str) -> Result<Vec<String>, String> {
 }
 
 fn read_tracked_changes(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
 ) -> Result<Vec<DocxTrackedChange>, String> {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {

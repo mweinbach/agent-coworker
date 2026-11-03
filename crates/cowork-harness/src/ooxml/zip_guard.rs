@@ -1,7 +1,7 @@
 //! Bounded OOXML ZIP & XML readers enforcing entry count, compressed/uncompressed byte caps,
 //! XML text length limits, and path-traversal confinement.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Cursor, Read};
 use std::path::Path;
 
@@ -34,9 +34,49 @@ pub struct OoxmlRelationship {
     pub target_mode: Option<String>,
 }
 
+/// An OOXML ZIP archive opened through [`open_bounded_zip`].
+///
+/// Part contents are only reachable through [`read_zip_bytes`] (and the text/relationship/media
+/// readers built on it), which share one decompressed-byte budget per archive: every part's
+/// actual decompressed length must equal its declared `size()`, and the bytes actually inflated
+/// across all distinct parts may not exceed [`MAX_OOXML_UNCOMPRESSED_BYTES`]. Header sizes are
+/// never trusted on their own.
+pub struct BoundedZipArchive<'a> {
+    archive: ZipArchive<Cursor<&'a [u8]>>,
+    part_names: Vec<String>,
+    decompressed_bytes: u64,
+    counted_parts: HashSet<String>,
+}
+
+impl std::fmt::Debug for BoundedZipArchive<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundedZipArchive")
+            .field("part_names", &self.part_names)
+            .field("decompressed_bytes", &self.decompressed_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BoundedZipArchive<'_> {
+    /// Names of every non-directory entry, in central-directory order.
+    pub fn part_names(&self) -> &[String] {
+        &self.part_names
+    }
+
+    /// Whether the archive has an entry with exactly this name.
+    pub fn contains_part(&self, name: &str) -> bool {
+        self.archive.index_for_name(name).is_some()
+    }
+
+    /// Total decompressed bytes actually read so far (each distinct part counted once).
+    pub fn decompressed_bytes(&self) -> u64 {
+        self.decompressed_bytes
+    }
+}
+
 /// Validates and opens an OOXML ZIP archive, enforcing entry count, path confinement,
 /// cumulative uncompressed size, per-entry byte limits, and XML/rels text limits before extraction.
-pub fn open_bounded_zip(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, String> {
+pub fn open_bounded_zip(bytes: &[u8]) -> Result<BoundedZipArchive<'_>, String> {
     if bytes.len() > MAX_OOXML_COMPRESSED_BYTES {
         return Err(format!(
             "Office package exceeds the {MAX_OOXML_COMPRESSED_BYTES}-byte compressed-size limit."
@@ -47,6 +87,7 @@ pub fn open_bounded_zip(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, Strin
 
     let mut non_dir_entries = 0usize;
     let mut total_uncompressed: u64 = 0;
+    let mut part_names = Vec::new();
 
     for idx in 0..archive.len() {
         let entry = archive
@@ -60,6 +101,7 @@ pub fn open_bounded_zip(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, Strin
             continue;
         }
         non_dir_entries += 1;
+        part_names.push(raw_name.clone().into_owned());
         if non_dir_entries > MAX_OOXML_ENTRIES {
             return Err(format!(
                 "Office package exceeds the {MAX_OOXML_ENTRIES}-entry limit."
@@ -85,11 +127,17 @@ pub fn open_bounded_zip(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, Strin
         }
     }
 
-    Ok(archive)
+    Ok(BoundedZipArchive {
+        archive,
+        part_names,
+        decompressed_bytes: 0,
+        counted_parts: HashSet::new(),
+    })
 }
 
-pub fn archive_file_names(archive: &ZipArchive<Cursor<&[u8]>>) -> Vec<String> {
+pub fn archive_file_names(archive: &BoundedZipArchive<'_>) -> Vec<String> {
     archive
+        .archive
         .file_names()
         .filter_map(|n| n.ok().map(|c| c.into_owned()))
         .collect()
@@ -124,13 +172,20 @@ fn is_xml_or_rels_part(name: &str) -> bool {
     lower.ends_with(".xml") || lower.ends_with(".rels")
 }
 
-/// Reads a bounded binary part from the ZIP archive, capping actual decompressed bytes via `Read::take`.
-pub fn read_zip_bytes(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    part: &str,
-) -> Result<Vec<u8>, String> {
+/// Reads a bounded binary part from the ZIP archive.
+///
+/// The read is capped one byte past the part's declared size, so a spoofed (e.g. zero) header
+/// size cannot inflate more than that; a part whose decompressed length differs from its
+/// declared size is rejected. Bytes actually inflated are charged to the archive-wide
+/// [`MAX_OOXML_UNCOMPRESSED_BYTES`] budget (once per distinct part, since re-reads of an
+/// immutable part yield identical bytes).
+pub fn read_zip_bytes(archive: &mut BoundedZipArchive<'_>, part: &str) -> Result<Vec<u8>, String> {
     validate_zip_entry_name(part)?;
+    let already_counted = archive.counted_parts.contains(part);
+    let remaining =
+        (MAX_OOXML_UNCOMPRESSED_BYTES as u64).saturating_sub(archive.decompressed_bytes);
     let file = archive
+        .archive
         .by_name(part)
         .map_err(|_| format!("Missing Office package part: {part}"))?;
     let declared = file.size();
@@ -139,24 +194,30 @@ pub fn read_zip_bytes(
             "Office package part {part} exceeds the {MAX_OOXML_ENTRY_BYTES}-byte limit."
         ));
     }
-    let cap = (MAX_OOXML_ENTRY_BYTES + 1) as u64;
+    if !already_counted && declared > remaining {
+        return Err(format!(
+            "Office package exceeds the {MAX_OOXML_UNCOMPRESSED_BYTES}-byte uncompressed-size limit."
+        ));
+    }
     let mut buf = Vec::with_capacity((declared as usize).min(4 * 1024 * 1024));
-    file.take(cap)
+    file.take(declared + 1)
         .read_to_end(&mut buf)
         .map_err(|e| format!("Failed reading Office part {part}: {e}"))?;
-    if buf.len() > MAX_OOXML_ENTRY_BYTES {
+    let actual = buf.len() as u64;
+    if actual != declared {
         return Err(format!(
-            "Office package part {part} exceeds the {MAX_OOXML_ENTRY_BYTES}-byte decompressed limit."
+            "Office package part {part} decompressed size does not match its declared size."
         ));
+    }
+    if !already_counted {
+        archive.decompressed_bytes += actual;
+        archive.counted_parts.insert(part.to_owned());
     }
     Ok(buf)
 }
 
 /// Reads and UTF-8 decodes a bounded XML/text part, enforcing `MAX_OOXML_TEXT_CHARS`.
-pub fn read_zip_text(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    part: &str,
-) -> Result<String, String> {
+pub fn read_zip_text(archive: &mut BoundedZipArchive<'_>, part: &str) -> Result<String, String> {
     let bytes = read_zip_bytes(archive, part)?;
     if bytes.len() > MAX_OOXML_TEXT_CHARS * 4 {
         return Err(format!(
@@ -173,13 +234,10 @@ pub fn read_zip_text(
 }
 
 pub fn try_read_zip_text(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     part: &str,
 ) -> Result<Option<String>, String> {
-    let exists = archive
-        .file_names()
-        .any(|n| n.ok().as_deref() == Some(part));
-    if !exists {
+    if !archive.contains_part(part) {
         return Ok(None);
     }
     read_zip_text(archive, part).map(Some)
@@ -272,7 +330,7 @@ pub fn resolve_relationship_target(owner_part: &str, target: &str) -> String {
 }
 
 pub fn read_relationships(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     owner_part: &str,
 ) -> Result<BTreeMap<String, OoxmlRelationship>, String> {
     let rels_path = relationship_part_path(owner_part);
@@ -363,7 +421,7 @@ pub fn detect_media_mime(bytes: &[u8], filename: &str) -> String {
 }
 
 pub fn read_media(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &mut BoundedZipArchive<'_>,
     prefix: &str,
     filter: Option<&BTreeSet<String>>,
 ) -> Result<Vec<OoxmlMedia>, String> {

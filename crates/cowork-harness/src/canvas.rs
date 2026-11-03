@@ -421,6 +421,7 @@ impl CanvasDocumentPersistenceService {
                 req.edit_revision,
                 Some(&current_session.path),
                 err,
+                None,
             );
         }
 
@@ -476,13 +477,19 @@ impl CanvasDocumentPersistenceService {
                     status: "saved".to_owned(),
                 }
             }
-            Err(err) => save_failure_result(
-                &req.document_id,
-                req.generation,
-                req.edit_revision,
-                Some(&current_session.path),
-                err,
-            ),
+            Err(err) => {
+                let current_revision =
+                    conflict_current_revision(&current_session.workspace_root, &target_path, &err)
+                        .await;
+                save_failure_result(
+                    &req.document_id,
+                    req.generation,
+                    req.edit_revision,
+                    Some(&current_session.path),
+                    err,
+                    current_revision,
+                )
+            }
         }
     }
 
@@ -531,6 +538,7 @@ impl CanvasDocumentPersistenceService {
                 req.edit_revision,
                 Some(&current_session.path),
                 err,
+                None,
             );
         }
 
@@ -618,13 +626,19 @@ impl CanvasDocumentPersistenceService {
                     status: "saved".to_owned(),
                 }
             }
-            Err(err) => save_failure_result(
-                &req.document_id,
-                req.generation,
-                req.edit_revision,
-                Some(&target_path),
-                err,
-            ),
+            Err(err) => {
+                let current_revision =
+                    conflict_current_revision(&current_session.workspace_root, &target_path, &err)
+                        .await;
+                save_failure_result(
+                    &req.document_id,
+                    req.generation,
+                    req.edit_revision,
+                    Some(&target_path),
+                    err,
+                    current_revision,
+                )
+            }
         }
     }
 
@@ -669,30 +683,54 @@ fn session_not_found_save_result(
     }
 }
 
+/// Probes the on-disk revision reported alongside a save conflict.
+///
+/// The probe runs on the blocking pool and only reads `file_path` after
+/// `revalidate_existing_workspace_file` confirms it is still a regular, non-symlink file whose
+/// canonical path is inside `workspace_root`. A save-as target that is an in-workspace symlink to
+/// an outside file (or a FIFO/device) therefore yields no `currentRevision` instead of hashing
+/// (or blocking on) the external target.
+async fn conflict_current_revision(
+    workspace_root: &Path,
+    file_path: &Path,
+    err: &CanvasOpError,
+) -> Option<CanvasDocumentRevision> {
+    if !matches!(err, CanvasOpError::Conflict | CanvasOpError::AlreadyExists) {
+        return None;
+    }
+    let workspace_root = workspace_root.to_path_buf();
+    let file_path = file_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        revalidate_existing_workspace_file(&workspace_root, &file_path).ok()?;
+        read_file_revision(&file_path).ok()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 fn save_failure_result(
     document_id: &str,
     generation: u64,
     edit_revision: u64,
     file_path: Option<&Path>,
     err: CanvasOpError,
+    current_revision: Option<CanvasDocumentRevision>,
 ) -> CanvasDocumentSaveResult {
     let path_str = file_path.map(|p| p.to_string_lossy().into_owned());
     match err {
-        CanvasOpError::Conflict | CanvasOpError::AlreadyExists => {
-            let current_revision = file_path.and_then(|p| read_file_revision(p).ok());
-            CanvasDocumentSaveResult::Err {
-                ok: false,
-                document_id: document_id.to_owned(),
-                generation,
-                edit_revision,
-                path: path_str,
-                current_revision,
-                error: CanvasErrorPayload {
-                    kind: "conflict".to_owned(),
-                    message: CONFLICT_MESSAGE.to_owned(),
-                },
-            }
-        }
+        CanvasOpError::Conflict | CanvasOpError::AlreadyExists => CanvasDocumentSaveResult::Err {
+            ok: false,
+            document_id: document_id.to_owned(),
+            generation,
+            edit_revision,
+            path: path_str,
+            current_revision,
+            error: CanvasErrorPayload {
+                kind: "conflict".to_owned(),
+                message: CONFLICT_MESSAGE.to_owned(),
+            },
+        },
         CanvasOpError::OutsideWorkspace => CanvasDocumentSaveResult::Err {
             ok: false,
             document_id: document_id.to_owned(),
@@ -787,7 +825,15 @@ fn same_meta_snapshot(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 
 fn read_stable_file(path: &Path, max_bytes: usize) -> Result<StableFileRead, CanvasOpError> {
     for _ in 0..3 {
-        let mut file = File::open(path).map_err(|e| {
+        let mut opts = OpenOptions::new();
+        opts.read(true);
+        // Every caller passes a canonical, revalidated path, so a leaf symlink here means the
+        // file was swapped after validation; refuse to follow it. `O_NONBLOCK` keeps a FIFO
+        // swapped in from parking the blocking-pool thread in `open(2)` (it is then rejected by
+        // the `is_file` check below); it has no effect on regular-file reads.
+        #[cfg(unix)]
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        let mut file = opts.open(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 CanvasOpError::NotFound
             } else {

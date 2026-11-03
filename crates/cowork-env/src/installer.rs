@@ -40,6 +40,10 @@ const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CHECKSUM_BYTES: usize = 16 * 1024;
 const DOWNLOAD_PROGRESS_STEP_BYTES: u64 = 1024 * 1024;
+/// Upper bound on tar entries walked while looking for `pack.json` ahead of signature verification.
+const MAX_PACK_ID_SCAN_ENTRIES: usize = crate::archive::MAX_ARCHIVE_ENTRY_COUNT;
+/// Upper bound on the size of `pack.json` read ahead of signature verification.
+const MAX_PACK_JSON_BYTES: u64 = 1024 * 1024;
 
 pub fn runtime_root_dir(homedir: &Path) -> PathBuf {
     homedir.join(".cowork").join("runtime")
@@ -236,6 +240,7 @@ pub fn read_current_pointer(homedir: &Path) -> Option<InstalledRuntimePointer> {
 pub fn checksum_from_text(text: &str, expected_file_name: &str) -> Result<String> {
     let is_sha256_hex = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
     let mut fallback: Option<String> = None;
+    let mut mismatched_name: Option<String> = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -261,18 +266,22 @@ pub fn checksum_from_text(text: &str, expected_file_name: &str) -> Result<String
             if base == expected_file_name {
                 return Ok(hex_lower);
             }
-            if fallback.is_none() {
-                fallback = Some(hex_lower);
+            // A digest that names a different asset must never be used for this one.
+            if mismatched_name.is_none() {
+                mismatched_name = Some(base);
             }
         } else if fallback.is_none() {
             fallback = Some(hex_lower);
         }
     }
 
-    fallback.ok_or_else(|| {
-        EnvError::Integrity(format!(
+    fallback.ok_or_else(|| match mismatched_name {
+        Some(named) => EnvError::Integrity(format!(
+            "Checksum file names {named}, expected {expected_file_name}"
+        )),
+        None => EnvError::Integrity(format!(
             "No valid SHA-256 digest found in checksum file for {expected_file_name}"
-        ))
+        )),
     })
 }
 
@@ -435,7 +444,24 @@ fn copy_dir_tree_preserving_symlinks(
             }
             #[cfg(windows)]
             {
-                std::os::windows::fs::symlink_file(link_dest, &target)?;
+                use std::os::windows::fs::FileTypeExt;
+                // Windows distinguishes file and directory symlinks (pnpm `node_modules` links
+                // are directory links). Trust the source link's own kind first, then fall back
+                // to resolving the target relative to the link's parent in the source tree.
+                let points_at_dir = ft.is_symlink_dir()
+                    || std::fs::metadata(de.path())
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    || de
+                        .path()
+                        .parent()
+                        .map(|parent| parent.join(&link_dest).is_dir())
+                        .unwrap_or(false);
+                if points_at_dir {
+                    std::os::windows::fs::symlink_dir(&link_dest, &target)?;
+                } else {
+                    std::os::windows::fs::symlink_file(&link_dest, &target)?;
+                }
             }
         } else if ft.is_file() {
             if let Some(p) = target.parent() {
@@ -579,16 +605,39 @@ pub fn install_v2_pack_set(
                         .map_err(|e| {
                             EnvError::Integrity(format!("Invalid pack-integrity.json: {e}"))
                         })?;
+                    if pack_int.schema_version != 2 {
+                        return Err(EnvError::Integrity(format!(
+                            "Unsupported pack-integrity.json schemaVersion {}",
+                            pack_int.schema_version
+                        )));
+                    }
+                    if pack_int.key_id != envelope.key_id {
+                        return Err(EnvError::Signature(
+                            "pack-integrity.json keyId does not match signature envelope keyId"
+                                .to_owned(),
+                        ));
+                    }
                     if pack_int.pack_id != Some(*expected_pack_id) {
                         return Err(EnvError::Integrity(
                             "pack-integrity.json packId mismatch".to_owned(),
                         ));
                     }
+                    if pack_int.runtime_version != pack_manifest.version
+                        || pack_int.asset != pack_manifest.asset
+                    {
+                        return Err(EnvError::Integrity(
+                            "pack-integrity.json version/asset does not match pack.json".to_owned(),
+                        ));
+                    }
+                    // pack.json carries providedPaths and trustedSymlinks: it must be signed so
+                    // `verify_integrity_tree_parallel` below rejects any tampering with it.
+                    if !pack_int.files.iter().any(|f| f.path == "pack.json") {
+                        return Err(EnvError::Integrity(
+                            "pack-integrity.json does not sign pack.json".to_owned(),
+                        ));
+                    }
 
                     let mut excluded = HashSet::new();
-                    if !pack_int.files.iter().any(|f| f.path == "pack.json") {
-                        excluded.insert("pack.json".to_owned());
-                    }
                     excluded.insert("pack-integrity.json".to_owned());
                     excluded.insert("pack-integrity.sig".to_owned());
                     verify_integrity_tree_parallel(
@@ -885,9 +934,28 @@ fn read_pack_id_from_tar_zst(archive_path: &Path) -> Result<RuntimePackId> {
     let entries = tar_archive
         .entries()
         .map_err(|e| EnvError::Archive(format!("tar entries read failed: {e}")))?;
+    let mut scanned_entries: usize = 0;
+    let mut scanned_bytes: u64 = 0;
     for entry_res in entries {
+        scanned_entries += 1;
+        if scanned_entries > MAX_PACK_ID_SCAN_ENTRIES {
+            return Err(EnvError::Archive(format!(
+                "pack.json not found within the first {MAX_PACK_ID_SCAN_ENTRIES} entries of {}",
+                archive_path.display()
+            )));
+        }
         let mut entry =
             entry_res.map_err(|e| EnvError::Archive(format!("tar entry read failed: {e}")))?;
+        // Skipping an entry still decompresses its body, so bound the total bytes we walk
+        // before the signed pack-set verification in `install_v2_pack_set` gets a chance to run.
+        scanned_bytes = scanned_bytes.saturating_add(entry.size());
+        if scanned_bytes > crate::archive::MAX_ARCHIVE_UNPACKED_BYTES {
+            return Err(EnvError::Archive(format!(
+                "Archive {} exceeded {} unpacked bytes before pack.json was found",
+                archive_path.display(),
+                crate::archive::MAX_ARCHIVE_UNPACKED_BYTES
+            )));
+        }
         let raw_path = entry
             .path()
             .map_err(|e| EnvError::Archive(format!("tar entry path failed: {e}")))?
@@ -895,8 +963,26 @@ fn read_pack_id_from_tar_zst(archive_path: &Path) -> Result<RuntimePackId> {
             .into_owned();
         let trimmed = raw_path.trim_start_matches("./");
         if trimmed == "pack.json" {
+            if !entry.header().entry_type().is_file() {
+                return Err(EnvError::Archive(
+                    "pack.json inside runtime pack is not a regular file".to_owned(),
+                ));
+            }
+            if entry.size() > MAX_PACK_JSON_BYTES {
+                return Err(EnvError::Manifest(format!(
+                    "pack.json exceeds {MAX_PACK_JSON_BYTES} byte limit"
+                )));
+            }
             let mut raw = String::new();
-            std::io::Read::read_to_string(&mut entry, &mut raw)?;
+            std::io::Read::read_to_string(
+                &mut std::io::Read::take(&mut entry, MAX_PACK_JSON_BYTES + 1),
+                &mut raw,
+            )?;
+            if raw.len() as u64 > MAX_PACK_JSON_BYTES {
+                return Err(EnvError::Manifest(format!(
+                    "pack.json exceeds {MAX_PACK_JSON_BYTES} byte limit"
+                )));
+            }
             let manifest: RuntimePackManifest = serde_json::from_str(&raw)
                 .map_err(|e| EnvError::Manifest(format!("Invalid pack.json: {e}")))?;
             return Ok(manifest.pack_id);
@@ -1090,7 +1176,8 @@ async fn download_runtime_release_streaming(
 /// An installed runtime is reused only when it matches the target version (`COWORK_RUNTIME_VERSION`,
 /// else [`DEFAULT_COWORK_RUNTIME_VERSION`]). Any other verified installed runtime is used only as a
 /// recovery fallback when the target cannot be installed (network bootstrap disabled, or the
-/// archive/download install failed), matching TS `resolveFallback`.
+/// archive/download install failed), matching TS `resolveFallback`. That fallback is skipped when
+/// `COWORK_RUNTIME_FORCE=1` or an explicit `COWORK_RUNTIME_VERSION` was requested.
 pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<PreparedRuntime> {
     if env_truthy(&opts.env, "COWORK_DISABLE_RUNTIME") {
         return Err(EnvError::RuntimeDisabled);
@@ -1467,10 +1554,17 @@ fn resolve_fallback_runtime(
 }
 
 /// Falls back to a previously installed runtime after `err`, or returns `err` if none verifies.
+///
+/// No fallback is attempted when the caller demanded a specific outcome: `COWORK_RUNTIME_FORCE=1`
+/// (a forced reinstall must not silently keep the old runtime) or an explicit
+/// `COWORK_RUNTIME_VERSION` (an older cached runtime is not the version that was asked for).
 fn recover_with_fallback_runtime(
     opts: &EnsureRuntimeOptions,
     err: EnvError,
 ) -> Result<PreparedRuntime> {
+    if fallback_recovery_disallowed(opts) {
+        return Err(err);
+    }
     let force_full = env_truthy(&opts.env, "COWORK_RUNTIME_FULL_VERIFY");
     let Some(fallback) = resolve_fallback_runtime(&opts.homedir, &opts.trusted_keys, force_full)
     else {
@@ -1486,6 +1580,14 @@ fn recover_with_fallback_runtime(
         cb(StartupProgressEvent::ready(&fallback.version));
     }
     Ok(fallback)
+}
+
+fn fallback_recovery_disallowed(opts: &EnsureRuntimeOptions) -> bool {
+    env_truthy(&opts.env, "COWORK_RUNTIME_FORCE")
+        || opts
+            .env
+            .get("COWORK_RUNTIME_VERSION")
+            .is_some_and(|v| !v.trim().is_empty())
 }
 
 async fn recover_with_fallback_runtime_async(

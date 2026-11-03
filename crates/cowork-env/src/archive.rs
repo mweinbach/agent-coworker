@@ -102,91 +102,191 @@ pub fn assert_safe_symlink_target(target: &str) -> Result<()> {
     Ok(())
 }
 
-fn posix_dirname(rel: &str) -> &str {
-    match rel.rfind('/') {
-        Some(idx) => &rel[..idx],
-        None => "",
-    }
+/// Whether runtime archive paths must be compared case-insensitively on this host.
+///
+/// Windows (NTFS) and macOS (default APFS/HFS+) resolve `r/A/B` and `r/a/b` to the same entry, so
+/// symlink-graph validation and duplicate-entry detection must fold case there (TS `archive.ts`
+/// lowercased on `win32`; this also covers case-insensitive APFS).
+pub fn runtime_paths_fold_case() -> bool {
+    cfg!(any(windows, target_os = "macos"))
 }
 
-fn resolve_relative_posix(base_dir: &str, rel_target: &str) -> Result<String> {
-    let mut stack: Vec<&str> = if base_dir.is_empty() {
-        Vec::new()
+/// Folds a runtime-relative path into the key used for symlink and duplicate-entry lookups.
+pub fn runtime_path_key(rel: &str, fold_case: bool) -> String {
+    if fold_case {
+        rel.to_lowercase()
     } else {
-        base_dir.split('/').collect()
-    };
-    for seg in rel_target.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                if stack.pop().is_none() {
-                    return Err(EnvError::Archive(format!(
-                        "Symlink target escapes runtime root: base={base_dir:?} target={rel_target:?}"
-                    )));
-                }
-            }
-            other => stack.push(other),
-        }
+        rel.to_owned()
     }
-    if stack.is_empty() {
-        return Err(EnvError::Archive(format!(
-            "Symlink target resolves to empty root: base={base_dir:?} target={rel_target:?}"
-        )));
-    }
-    Ok(stack.join("/"))
 }
 
-/// Validates a symlink map `(link_rel_path -> target)` for cycles (`>40` hops) and root escapes.
+/// Validates a symlink map `(link_rel_path -> target)` for cycles (`>40` hops) and root escapes,
+/// folding case on hosts with case-insensitive filesystems ([`runtime_paths_fold_case`]).
 pub fn validate_symlink_graph(symlinks: &HashMap<String, String>) -> Result<()> {
-    let resolve_entry = |start_path: &str| -> Result<()> {
-        let mut current = start_path.to_owned();
-        let mut hops = 0usize;
+    validate_symlink_graph_with_case_folding(symlinks, runtime_paths_fold_case())
+}
 
-        loop {
-            let parts: Vec<&str> = current.split('/').collect();
-            let mut prefix = String::new();
-            let mut redirected: Option<String> = None;
-
-            for (i, part) in parts.iter().enumerate() {
-                if i > 0 {
-                    prefix.push('/');
-                }
-                prefix.push_str(part);
-                if let Some(link_target) = symlinks.get(&prefix) {
-                    hops += 1;
-                    if hops > MAX_SYMLINK_DEPTH {
-                        return Err(EnvError::Archive(format!(
-                            "Runtime symlink cycle or excessive depth at {start_path}"
-                        )));
-                    }
-                    assert_safe_symlink_target(link_target)?;
-                    let base = posix_dirname(&prefix);
-                    let resolved_prefix = resolve_relative_posix(base, link_target)?;
-                    let remainder = &parts[i + 1..];
-                    redirected = Some(if remainder.is_empty() {
-                        resolved_prefix
-                    } else {
-                        format!("{resolved_prefix}/{}", remainder.join("/"))
-                    });
-                    break;
-                }
-            }
-
-            match redirected {
-                Some(next) => current = next,
-                None => return Ok(()),
-            }
+/// [`validate_symlink_graph`] with explicit case folding, so case-insensitive host behavior can be
+/// exercised on every platform.
+///
+/// Every link is resolved where it physically lands: its parent directory is walked through the
+/// graph first (a link nested under another link materializes beneath that link's target), and
+/// only then is its own target applied, component by component, following further links before
+/// processing `..` (TS `validateSymlinkGraph`).
+pub fn validate_symlink_graph_with_case_folding(
+    symlinks: &HashMap<String, String>,
+    fold_case: bool,
+) -> Result<()> {
+    let mut links: HashMap<String, &str> = HashMap::with_capacity(symlinks.len());
+    for (name, target) in symlinks {
+        assert_safe_symlink_target(target)?;
+        if links
+            .insert(runtime_path_key(name, fold_case), target.as_str())
+            .is_some()
+        {
+            return Err(EnvError::Archive(format!(
+                "Duplicate runtime symlink (case-insensitive collision): {name}"
+            )));
         }
-    };
+    }
 
-    for link_path in symlinks.keys() {
-        resolve_entry(link_path)?;
+    for (name, target) in symlinks {
+        let mut resolved: Vec<String> = Vec::new();
+        let mut followed = 0usize;
+        let (parent, _) = name.rsplit_once('/').unwrap_or(("", name.as_str()));
+        walk_symlink_components(
+            &links,
+            fold_case,
+            name,
+            &mut resolved,
+            parent.split('/').map(str::to_owned).collect(),
+            &mut followed,
+        )?;
+        followed += 1;
+        walk_symlink_components(
+            &links,
+            fold_case,
+            name,
+            &mut resolved,
+            target.split('/').map(str::to_owned).collect(),
+            &mut followed,
+        )?;
+        if resolved.is_empty() {
+            return Err(EnvError::Archive(format!(
+                "Symlink target resolves to empty root: {name} -> {target:?}"
+            )));
+        }
     }
     Ok(())
 }
 
-fn ensure_canonical_inside(root_canonical: &Path, candidate: &Path) -> Result<()> {
-    let resolved = canonicalize_sync(candidate);
+fn walk_symlink_components(
+    links: &HashMap<String, &str>,
+    fold_case: bool,
+    link_name: &str,
+    resolved: &mut Vec<String>,
+    mut pending: std::collections::VecDeque<String>,
+    followed: &mut usize,
+) -> Result<()> {
+    while let Some(component) = pending.pop_front() {
+        match component.as_str() {
+            "" | "." => {}
+            ".." => {
+                if resolved.pop().is_none() {
+                    return Err(EnvError::Archive(format!(
+                        "Symlink target escapes runtime root: {link_name}"
+                    )));
+                }
+            }
+            _ => {
+                resolved.push(component);
+                let key = runtime_path_key(&resolved.join("/"), fold_case);
+                let Some(target) = links.get(&key) else {
+                    continue;
+                };
+                *followed += 1;
+                if *followed > MAX_SYMLINK_DEPTH {
+                    return Err(EnvError::Archive(format!(
+                        "Runtime symlink cycle or excessive depth at {link_name}"
+                    )));
+                }
+                resolved.pop();
+                for part in target.split('/').rev() {
+                    pending.push_front(part.to_owned());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolves `path` like `realpath`, following every symlink (including dangling ones) and
+/// appending any missing tail lexically, so a link to a not-yet-existing external target still
+/// resolves to that external location instead of to the link's own path.
+pub(crate) fn resolve_path_following_links(path: &Path) -> Result<PathBuf> {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+    use std::path::Component;
+
+    let (mut out, mut pending): (PathBuf, VecDeque<OsString>) =
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => (
+                canonicalize_sync(parent),
+                VecDeque::from([name.to_os_string()]),
+            ),
+            _ => (canonicalize_sync(path), VecDeque::new()),
+        };
+    let mut followed = 0usize;
+    while let Some(component) = pending.pop_front() {
+        if component == "." || component.is_empty() {
+            continue;
+        }
+        if component == ".." {
+            out.pop();
+            continue;
+        }
+        let candidate = out.join(&component);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                followed += 1;
+                if followed > MAX_SYMLINK_DEPTH {
+                    return Err(EnvError::Archive(format!(
+                        "Symlink cycle or excessive depth at {}",
+                        path.display()
+                    )));
+                }
+                let target = std::fs::read_link(&candidate)?;
+                if target.has_root() {
+                    // Absolute target: restart from its root (and drive prefix, on Windows).
+                    out = target
+                        .components()
+                        .take_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
+                        .collect();
+                }
+                let parts: Vec<OsString> = target
+                    .components()
+                    .filter_map(|c| match c {
+                        Component::ParentDir => Some(OsString::from("..")),
+                        Component::Normal(n) => Some(n.to_os_string()),
+                        Component::Prefix(_) | Component::RootDir | Component::CurDir => None,
+                    })
+                    .collect();
+                for part in parts.into_iter().rev() {
+                    pending.push_front(part);
+                }
+            }
+            _ => out = candidate,
+        }
+    }
+    if std::fs::symlink_metadata(&out).is_ok() {
+        return Ok(canonicalize_sync(&out));
+    }
+    Ok(out)
+}
+
+/// Fails unless `candidate` (following symlinks, dangling or not) resolves inside `root_canonical`.
+pub(crate) fn ensure_canonical_inside(root_canonical: &Path, candidate: &Path) -> Result<()> {
+    let resolved = resolve_path_following_links(candidate)?;
     if resolved == root_canonical || resolved.starts_with(root_canonical) {
         Ok(())
     } else {
@@ -265,9 +365,8 @@ fn create_deferred_symlinks(dest_dir: &Path, symlinks: &HashMap<String, String>)
                 std::os::windows::fs::symlink_file(&resolved_target, &full_path)?;
             }
         }
-        if std::fs::metadata(&full_path).is_ok() {
-            ensure_canonical_inside(&root_canonical, &full_path)?;
-        }
+        // Unconditional: a dangling link to a not-yet-existing external path must still fail.
+        ensure_canonical_inside(&root_canonical, &full_path)?;
     }
     Ok(())
 }
@@ -315,11 +414,7 @@ pub fn extract_v1_zip_archive(archive_path: &Path, dest_dir: &Path) -> Result<()
             continue;
         }
         let rel_path = assert_safe_relative_runtime_path(trimmed_dir, "zip entry")?;
-        let dedup_key = if cfg!(windows) {
-            rel_path.to_ascii_lowercase()
-        } else {
-            rel_path.clone()
-        };
+        let dedup_key = runtime_path_key(&rel_path, runtime_paths_fold_case());
         if !seen_entries.insert(dedup_key) {
             return Err(EnvError::Archive(format!(
                 "Duplicate runtime zip entry: {rel_path}"
@@ -441,11 +536,7 @@ pub fn extract_v2_tar_zst_archive(archive_path: &Path, dest_dir: &Path) -> Resul
         }
 
         let rel_path = assert_safe_relative_runtime_path(trimmed, "tar.zst entry")?;
-        let dedup_key = if cfg!(windows) {
-            rel_path.to_ascii_lowercase()
-        } else {
-            rel_path.clone()
-        };
+        let dedup_key = runtime_path_key(&rel_path, runtime_paths_fold_case());
         if !seen_entries.insert(dedup_key) {
             return Err(EnvError::Archive(format!(
                 "Duplicate runtime tar.zst entry: {rel_path}"

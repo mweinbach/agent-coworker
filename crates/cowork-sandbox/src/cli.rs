@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cowork_config::{SandboxConfig, SandboxMode as ConfigSandboxMode, canonicalize_sync};
+use cowork_config::{
+    SandboxConfig, SandboxMode as ConfigSandboxMode, canonicalize_sync, resolve_home_dir,
+};
 
 use crate::env_utils::{
     PARENT_MANAGED_ENV_VAR, host_platform, minimal_sandbox_env, remove_env, sanitized_process_env,
@@ -341,6 +343,51 @@ macro_rules! install_sandbox_exec_test_hook {
     };
 }
 
+/// Credential directories every `__sandbox-exec` run hides from the wrapped command: provider/MCP
+/// credentials (`~/.cowork/auth`, `<cwd>/.cowork/auth`), the mobile pairing identity
+/// (`~/.cowork/mobile-pairing`), and the well-known SSH/cloud credential stores under the user's
+/// home. Mirrors `cowork_tools::protected_credential_roots` / `cowork_env::soffice_read_denied_roots`
+/// (which cannot be called from here without a dependency cycle).
+///
+/// Both the Cowork-resolved home (`COWORK_HOME_OVERRIDE`, else `$HOME`) and the OS home
+/// (`$HOME` / `%USERPROFILE%`) are covered, so an override cannot un-hide the real credentials.
+pub fn default_credential_read_denied_roots(
+    env: &HashMap<String, String>,
+    platform: &str,
+    cwd: &Path,
+) -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = vec![resolve_home_dir(env, platform)];
+    let os_home_keys: &[&str] = if platform == "win32" {
+        &["USERPROFILE", "HOME"]
+    } else {
+        &["HOME"]
+    };
+    for key in os_home_keys {
+        if let Some(home) = env.get(*key).map(|v| v.trim()).filter(|v| !v.is_empty()) {
+            homes.push(canonicalize_sync(Path::new(home)));
+        }
+    }
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut push = |p: PathBuf| {
+        if !roots.contains(&p) {
+            roots.push(p);
+        }
+    };
+    for home in &homes {
+        let cowork_home = home.join(".cowork");
+        push(cowork_home.join("auth"));
+        push(cowork_home.join("mobile-pairing"));
+    }
+    push(cwd.join(".cowork").join("auth"));
+    for home in &homes {
+        for dir_name in [".ssh", ".aws", ".gnupg", ".kube", ".azure"] {
+            push(home.join(dir_name));
+        }
+    }
+    roots
+}
+
 /// Executes `cowork-server __sandbox-exec ...` synchronously on the main thread before Tokio starts,
 /// returning the process exit code.
 pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
@@ -377,6 +424,11 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 file: command[0].clone(),
                 args: command[1..].to_vec(),
             };
+            let read_denied_roots = default_credential_read_denied_roots(
+                &sanitized_process_env(),
+                host_platform(),
+                &cwd,
+            );
 
             if *json_result {
                 let Ok(rt) = tokio::runtime::Builder::new_current_thread()
@@ -395,6 +447,7 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 req.require_backend = require_backend;
                 req.has_scoped_target_paths = has_scoped_targets;
                 req.timeout = timeout_ms.map(Duration::from_millis);
+                req.read_denied_roots = read_denied_roots;
                 let res: SandboxExecutionResult = rt.block_on(runner.run_with_approval(
                     req,
                     None,
@@ -416,11 +469,13 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 require_backend,
                 has_scoped_targets,
                 timeout_ms.map(Duration::from_millis),
+                &read_denied_roots,
             )
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_transparent_cli_command(
     inner: &SandboxCommand,
     policy: &SandboxPolicy,
@@ -429,6 +484,7 @@ fn run_transparent_cli_command(
     require_backend: bool,
     has_scoped_targets: bool,
     timeout: Option<Duration>,
+    read_denied_roots: &[PathBuf],
 ) -> i32 {
     let platform = host_platform();
     let env_src = sanitized_process_env();
@@ -445,7 +501,7 @@ fn run_transparent_cli_command(
             capabilities: None,
             sandbox_exec_path: None,
             env_source: Some(&env_src),
-            ..Default::default()
+            read_denied_roots,
         },
     );
 
@@ -526,7 +582,7 @@ fn run_transparent_cli_command(
                     Ok(Some(status)) => return extract_exit_code(status),
                     Ok(None) => {
                         if Instant::now() >= deadline {
-                            kill_process_group(pid);
+                            kill_process_tree(pid);
                             let _ = child.kill();
                             let _ = child.wait();
                             let _ = writeln!(std::io::stderr(), "Command timed out");
@@ -535,7 +591,7 @@ fn run_transparent_cli_command(
                         std::thread::sleep(Duration::from_millis(10));
                     }
                     Err(_) => {
-                        kill_process_group(pid);
+                        kill_process_tree(pid);
                         let _ = child.kill();
                         let _ = child.wait();
                         return 1;
@@ -544,6 +600,26 @@ fn run_transparent_cli_command(
             }
         }
     }
+}
+
+/// Kills the wrapped command's whole process tree before the root is reaped: the POSIX process
+/// group on Unix (the child runs with `process_group(0)`), or `taskkill /PID <pid> /T /F` on
+/// Windows (TS `processTree.killTree`), where `kill_process_group` is a no-op and grandchildren
+/// would otherwise outlive the timeout.
+fn kill_process_tree(pid: Option<u32>) {
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    kill_process_group(pid);
 }
 
 #[cfg(target_os = "linux")]

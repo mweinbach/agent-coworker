@@ -15,7 +15,8 @@ use sha2::{Digest as Sha2Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::archive::{
-    assert_safe_relative_runtime_path, assert_safe_symlink_target, validate_symlink_graph,
+    assert_safe_relative_runtime_path, assert_safe_symlink_target, resolve_path_following_links,
+    validate_symlink_graph,
 };
 use crate::error::{EnvError, Result};
 use crate::manifest::{
@@ -298,14 +299,13 @@ pub fn verify_integrity_tree_parallel(
                     })?
                     .replace('\\', "/");
                 assert_safe_symlink_target(&target)?;
-                if std::fs::metadata(&full_path).is_ok() {
-                    let resolved = canonicalize_sync(&full_path);
-                    if resolved != root_canonical && !resolved.starts_with(&root_canonical) {
-                        return Err(EnvError::Integrity(format!(
-                            "Symlink {} escapes runtime root",
-                            entry.path
-                        )));
-                    }
+                // Unconditional: a dangling link to a missing external path still escapes.
+                let resolved = resolve_path_following_links(&full_path)?;
+                if resolved != root_canonical && !resolved.starts_with(&root_canonical) {
+                    return Err(EnvError::Integrity(format!(
+                        "Symlink {} escapes runtime root",
+                        entry.path
+                    )));
                 }
                 let (sha256_actual, blake3_actual, actual_len) = hash_bytes_dual(target.as_bytes());
                 if actual_len != entry.size {
@@ -337,7 +337,9 @@ pub fn verify_integrity_tree_parallel(
 }
 
 /// Computes a deterministic `blake3` fingerprint over `(path, kind, dev, ino, size, nlink, mtime, mode)`
-/// for every file, directory, and symlink in `root_dir` in parallel via `rayon`.
+/// for every file, directory, and symlink in `root_dir` in parallel via `rayon`. Symlink records also
+/// carry the link target, so a relinked symlink (same metadata, new target) changes the digest
+/// (TS `collectRuntimeTreeState`).
 pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
     let mut paths: Vec<(String, PathBuf)> = Vec::new();
     for item in WalkDir::new(root_dir).follow_links(false) {
@@ -377,6 +379,12 @@ pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
                     meta.mode() & 0o7777
                 )
             };
+            #[cfg(unix)]
+            let stat_line = if ft.is_symlink() {
+                format!("{stat_line}|target={}", symlink_target_fingerprint(p)?)
+            } else {
+                stat_line
+            };
             #[cfg(not(unix))]
             let stat_line = {
                 let mtime = meta
@@ -385,11 +393,16 @@ pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_nanos())
                     .unwrap_or(0);
-                format!(
+                let base = format!(
                     "{rel}|{kind}|sz={}|ro={}|mt={mtime}",
                     meta.len(),
                     meta.permissions().readonly()
-                )
+                );
+                if ft.is_symlink() {
+                    format!("{base}|target={}", symlink_target_fingerprint(p)?)
+                } else {
+                    base
+                }
             };
             Ok((rel.clone(), stat_line))
         })
@@ -403,6 +416,15 @@ pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
         hasher.update(b"\n");
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Hex-encodes a symlink's raw target so arbitrary (even non-UTF-8) targets fingerprint unambiguously.
+fn symlink_target_fingerprint(link: &Path) -> Result<String> {
+    let target = std::fs::read_link(link).map_err(|source| EnvError::IoPath {
+        path: link.to_path_buf(),
+        source,
+    })?;
+    Ok(hex::encode(target.as_os_str().as_encoded_bytes()))
 }
 
 /// Seals a verified runtime directory tree read-only (`0555` on executables/dirs, `0444` on files).
@@ -526,6 +548,8 @@ pub fn verify_installed_runtime(
     }
 
     crate::manifest::validate_runtime_version(&manifest.version)?;
+    // TS `parseRuntimeManifest`: reject absolute / prefixed / `..` paths before anything uses them.
+    manifest.paths.validate()?;
 
     if !is_asset_compatible_with_host(
         &manifest.asset,
@@ -568,7 +592,7 @@ pub fn verify_installed_runtime(
     let has_monolithic_integrity = canonical_root.join(&int_rel_path).is_file()
         && canonical_root.join(&sig_rel_path).is_file();
 
-    let (key_id_record, sig_digest, combined_files, excluded_rel_paths) =
+    let (key_id_record, sig_digest, combined_files, excluded_rel_paths, trusted_symlinks) =
         if has_monolithic_integrity {
             let integrity_bytes =
                 std::fs::read(canonical_root.join(&int_rel_path)).map_err(|e| {
@@ -649,11 +673,14 @@ pub fn verify_installed_runtime(
             let mut excluded = HashSet::new();
             excluded.insert(int_rel_path);
             excluded.insert(sig_rel_path);
+            // runtime.json is itself covered by the signed file list here (anything unlisted is
+            // rejected as an extra file), so its trustedSymlinks are signed data.
             (
                 envelope.key_id,
                 sig_hasher.finalize().to_hex().to_string(),
                 integrity.files,
                 excluded,
+                manifest.trusted_symlinks.clone(),
             )
         } else if !manifest.installed_packs.is_empty() {
             if !manifest.installed_packs.iter().any(|p| p == "core") {
@@ -667,6 +694,8 @@ pub fn verify_installed_runtime(
             excluded.insert("runtime.json".to_owned());
             let mut first_key_id = String::new();
             let mut aggregated_provided_paths: HashMap<String, String> = HashMap::new();
+            let mut signed_trusted_symlinks: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
 
             for pack_name in &manifest.installed_packs {
                 let pack_id = crate::manifest::RuntimePackId::parse(pack_name)?;
@@ -688,6 +717,17 @@ pub fn verify_installed_runtime(
 
                 let pack_int: RuntimeIntegrityManifest = serde_json::from_slice(&int_bytes)
                     .map_err(|e| EnvError::Integrity(format!("Invalid {int_rel}: {e}")))?;
+                if pack_int.schema_version != 2 {
+                    return Err(EnvError::Integrity(format!(
+                        "Unsupported pack integrity schemaVersion {} in {int_rel}",
+                        pack_int.schema_version
+                    )));
+                }
+                if pack_int.key_id != envelope.key_id {
+                    return Err(EnvError::Signature(format!(
+                        "{int_rel} keyId does not match signature envelope keyId"
+                    )));
+                }
                 if pack_int.pack_id != Some(pack_id) {
                     return Err(EnvError::Integrity(format!(
                         "Pack integrity manifest id mismatch in {int_rel}"
@@ -703,24 +743,44 @@ pub fn verify_installed_runtime(
                 let pack_json_path = canonical_root.join(&pack_json_rel);
                 let pack_json_raw = std::fs::read_to_string(&pack_json_path)
                     .map_err(|e| EnvError::Manifest(format!("Missing {pack_json_rel}: {e}")))?;
-                if let Some(signed_pack_entry) =
-                    pack_int.files.iter().find(|f| f.path == "pack.json")
+                // pack.json carries providedPaths and trustedSymlinks, so it must be signed.
+                let Some(signed_pack_entry) = pack_int
+                    .files
+                    .iter()
+                    .find(|f| f.path == "pack.json" && f.kind == IntegrityEntryKind::File)
+                else {
+                    return Err(EnvError::Integrity(format!(
+                        "{int_rel} does not sign pack.json"
+                    )));
+                };
+                if signed_pack_entry.sha256.is_none() && signed_pack_entry.blake3.is_none() {
+                    return Err(EnvError::Integrity(format!(
+                        "{int_rel} pack.json entry has no digest"
+                    )));
+                }
+                if std::fs::symlink_metadata(&pack_json_path)
+                    .map(|m| !m.file_type().is_file())
+                    .unwrap_or(true)
                 {
-                    let (actual_sha, actual_b3, actual_size) = hash_regular_file(&pack_json_path)?;
-                    if actual_size != signed_pack_entry.size
-                        || signed_pack_entry
-                            .sha256
-                            .as_deref()
-                            .is_some_and(|exp| exp != actual_sha)
-                        || signed_pack_entry
-                            .blake3
-                            .as_deref()
-                            .is_some_and(|exp| exp != actual_b3)
-                    {
-                        return Err(EnvError::Integrity(format!(
-                            "Tampered pack manifest {pack_json_rel}"
-                        )));
-                    }
+                    return Err(EnvError::Integrity(format!(
+                        "{pack_json_rel} is not a regular file"
+                    )));
+                }
+                let (actual_sha, actual_b3, actual_size) = hash_regular_file(&pack_json_path)?;
+                if actual_size != signed_pack_entry.size
+                    || actual_size != pack_json_raw.len() as u64
+                    || signed_pack_entry
+                        .sha256
+                        .as_deref()
+                        .is_some_and(|exp| !exp.eq_ignore_ascii_case(&actual_sha))
+                    || signed_pack_entry
+                        .blake3
+                        .as_deref()
+                        .is_some_and(|exp| !exp.eq_ignore_ascii_case(&actual_b3))
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "Tampered pack manifest {pack_json_rel}"
+                    )));
                 }
                 let pack_manifest: RuntimePackManifest = serde_json::from_str(&pack_json_raw)
                     .map_err(|e| EnvError::Manifest(format!("Invalid {pack_json_rel}: {e}")))?;
@@ -733,6 +793,14 @@ pub fn verify_installed_runtime(
                     )));
                 }
                 aggregated_provided_paths.extend(pack_manifest.provided_paths);
+                // The trusted-symlink allowlist comes only from signed pack.json, never from
+                // the installer-synthesized (unsigned) runtime.json.
+                for link in pack_manifest.trusted_symlinks {
+                    signed_trusted_symlinks.insert(assert_safe_relative_runtime_path(
+                        &link,
+                        "pack trustedSymlinks",
+                    )?);
+                }
 
                 if first_key_id.is_empty() {
                     first_key_id = envelope.key_id.clone();
@@ -797,6 +865,7 @@ pub fn verify_installed_runtime(
                 sig_hasher.finalize().to_hex().to_string(),
                 merged_files,
                 excluded,
+                signed_trusted_symlinks.into_iter().collect::<Vec<_>>(),
             )
         } else {
             return Err(EnvError::Integrity(format!(
@@ -810,6 +879,8 @@ pub fn verify_installed_runtime(
 
     let cache_hit = if !force_full_verify {
         if let Some(mem) = memory_attestation_cache().get(&canonical_root)
+            && mem.runtime_version == manifest.version
+            && mem.asset == manifest.asset
             && mem.signature_blake3 == sig_digest
             && mem.tree_state_blake3 == tree_digest
             && mem.key_id == key_id_record
@@ -818,6 +889,8 @@ pub fn verify_installed_runtime(
         } else if let Ok(disk_raw) = std::fs::read_to_string(&sidecar_path)
             && let Ok(disk_rec) = serde_json::from_str::<VerifiedAttestationRecord>(&disk_raw)
             && disk_rec.schema_version == 1
+            && disk_rec.runtime_version == manifest.version
+            && disk_rec.asset == manifest.asset
             && disk_rec.signature_blake3 == sig_digest
             && disk_rec.tree_state_blake3 == tree_digest
             && disk_rec.key_id == key_id_record
@@ -835,9 +908,21 @@ pub fn verify_installed_runtime(
         verify_integrity_tree_parallel(
             &canonical_root,
             &combined_files,
-            &manifest.trusted_symlinks,
+            &trusted_symlinks,
             &excluded_rel_paths,
         )?;
+
+        // Re-fingerprint after hashing so a tree that changed mid-verification is never attested
+        // (TS `trustVerifiedRuntimeTree`): only a stable tree earns the fast path.
+        let tree_digest_after = compute_tree_state_digest_parallel(&canonical_root)?;
+        if tree_digest_after != tree_digest {
+            memory_attestation_cache().remove(&canonical_root);
+            let _ = std::fs::remove_file(&sidecar_path);
+            return Err(EnvError::Integrity(format!(
+                "Runtime changed while it was being verified: {}",
+                canonical_root.display()
+            )));
+        }
 
         let rec = VerifiedAttestationRecord {
             schema_version: 1,
@@ -853,7 +938,7 @@ pub fn verify_installed_runtime(
         memory_attestation_cache().insert(canonical_root.clone(), rec);
     }
 
-    let paths = RuntimePaths::from_manifest_paths(&canonical_root, &manifest.paths);
+    let paths = RuntimePaths::from_manifest_paths(&canonical_root, &manifest.paths)?;
     for required in [&paths.node, &paths.python, &paths.node_resolver] {
         if !required.is_file() {
             return Err(EnvError::Manifest(format!(

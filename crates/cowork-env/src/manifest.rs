@@ -643,37 +643,108 @@ pub struct RuntimePaths {
     pub wheelhouse: Option<PathBuf>,
 }
 
+impl RuntimeManifestPaths {
+    /// Every `(json key, relative path)` pair declared by the manifest.
+    fn entries(&self) -> Vec<(&'static str, &str)> {
+        let mut out = vec![
+            ("bin", self.bin.as_str()),
+            ("node", self.node.as_str()),
+            ("python", self.python.as_str()),
+            ("nodeModules", self.node_modules.as_str()),
+            ("nodeResolver", self.node_resolver.as_str()),
+        ];
+        for (key, value) in [
+            ("git", &self.git),
+            ("artifactToolPackage", &self.artifact_tool_package),
+            ("pnpm", &self.pnpm),
+            ("popplerBin", &self.poppler_bin),
+            ("pdftoppm", &self.pdftoppm),
+            ("pdfinfo", &self.pdfinfo),
+            ("heifConvert", &self.heif_convert),
+            ("jxrDecApp", &self.jxr_dec_app),
+            ("libreOffice", &self.libreoffice),
+            ("soffice", &self.soffice),
+            ("libreOfficeBinary", &self.libreoffice_binary),
+            ("uv", &self.uv),
+            ("wheelhouse", &self.wheelhouse),
+        ] {
+            if let Some(v) = value {
+                out.push((key, v.as_str()));
+            }
+        }
+        out
+    }
+
+    /// TS `parseRuntimeManifest` `assertSafeRelativePath`: every `paths.*` entry must be a
+    /// normalized relative POSIX path (no absolute path, drive/UNC prefix, backslash, or `..`).
+    pub fn validate(&self) -> Result<()> {
+        for (key, value) in self.entries() {
+            crate::archive::assert_safe_relative_runtime_path(value, &format!("paths.{key}"))
+                .map_err(|e| EnvError::Manifest(format!("Invalid runtime manifest: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
 impl RuntimePaths {
-    pub fn from_manifest_paths(root_dir: &Path, rel: &RuntimeManifestPaths) -> Self {
-        let resolve = |p: &str| root_dir.join(p);
-        let bin = resolve(&rel.bin);
-        let uv_from_manifest = rel.uv.as_deref().map(resolve).or_else(|| {
-            let candidate = if cfg!(windows) {
-                bin.join("uv.exe")
-            } else {
-                bin.join("uv")
-            };
-            candidate.is_file().then_some(candidate)
-        });
-        let wheelhouse_from_manifest = rel.wheelhouse.as_deref().map(resolve).or_else(|| {
-            let candidate = root_dir.join("wheels");
-            candidate.is_dir().then_some(candidate)
-        });
-        Self {
+    /// Resolves manifest-relative paths under `root_dir`, rejecting any entry that is not a safe
+    /// relative path or that resolves (lexically or through symlinks) outside `root_dir`.
+    /// `Path::join` would otherwise discard `root_dir` for an absolute entry.
+    pub fn from_manifest_paths(root_dir: &Path, rel: &RuntimeManifestPaths) -> Result<Self> {
+        rel.validate()?;
+        let root_canonical = cowork_config::canonicalize_sync(root_dir);
+        let resolve = |key: &str, p: &str| -> Result<PathBuf> {
+            let clean =
+                crate::archive::assert_safe_relative_runtime_path(p, &format!("paths.{key}"))
+                    .map_err(|e| EnvError::Manifest(format!("Invalid runtime manifest: {e}")))?;
+            let joined = root_dir.join(&clean);
+            let resolved = crate::archive::resolve_path_following_links(&joined)?;
+            if !joined.starts_with(root_dir)
+                || (resolved != root_canonical && !resolved.starts_with(&root_canonical))
+            {
+                return Err(EnvError::Manifest(format!(
+                    "Runtime manifest paths.{key} escapes runtime root: {p:?}"
+                )));
+            }
+            Ok(joined)
+        };
+        let resolve_opt = |key: &str, p: &Option<String>| -> Result<Option<PathBuf>> {
+            p.as_deref().map(|v| resolve(key, v)).transpose()
+        };
+        let bin = resolve("bin", &rel.bin)?;
+        let uv_from_manifest = match resolve_opt("uv", &rel.uv)? {
+            Some(uv) => Some(uv),
+            None => {
+                let candidate = if cfg!(windows) {
+                    bin.join("uv.exe")
+                } else {
+                    bin.join("uv")
+                };
+                candidate.is_file().then_some(candidate)
+            }
+        };
+        let wheelhouse_from_manifest = match resolve_opt("wheelhouse", &rel.wheelhouse)? {
+            Some(wheels) => Some(wheels),
+            None => {
+                let candidate = root_dir.join("wheels");
+                candidate.is_dir().then_some(candidate)
+            }
+        };
+        Ok(Self {
             bin,
-            node: resolve(&rel.node),
-            python: resolve(&rel.python),
-            git: rel.git.as_deref().map(resolve),
-            node_modules: resolve(&rel.node_modules),
-            node_resolver: resolve(&rel.node_resolver),
-            poppler_bin: rel.poppler_bin.as_deref().map(resolve),
-            pdftoppm: rel.pdftoppm.as_deref().map(resolve),
-            libreoffice: rel.libreoffice.as_deref().map(resolve),
-            soffice: rel.soffice.as_deref().map(resolve),
-            libreoffice_binary: rel.libreoffice_binary.as_deref().map(resolve),
+            node: resolve("node", &rel.node)?,
+            python: resolve("python", &rel.python)?,
+            git: resolve_opt("git", &rel.git)?,
+            node_modules: resolve("nodeModules", &rel.node_modules)?,
+            node_resolver: resolve("nodeResolver", &rel.node_resolver)?,
+            poppler_bin: resolve_opt("popplerBin", &rel.poppler_bin)?,
+            pdftoppm: resolve_opt("pdftoppm", &rel.pdftoppm)?,
+            libreoffice: resolve_opt("libreOffice", &rel.libreoffice)?,
+            soffice: resolve_opt("soffice", &rel.soffice)?,
+            libreoffice_binary: resolve_opt("libreOfficeBinary", &rel.libreoffice_binary)?,
             uv: uv_from_manifest,
             wheelhouse: wheelhouse_from_manifest,
-        }
+        })
     }
 }
 

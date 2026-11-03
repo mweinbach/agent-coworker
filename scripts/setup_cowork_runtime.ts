@@ -41,6 +41,11 @@ const shutdownGraceMs = parsePositiveIntEnv(
   DEFAULT_SHUTDOWN_GRACE_MS,
 );
 const bin = resolveCoworkServerBinary();
+const forceReinstall = process.argv.includes("--force");
+// An explicit target must be what ends up ready: the server must not satisfy it with an older
+// cached runtime (it skips fallback recovery for explicit versions and --force, and this script
+// double-checks the version it reports).
+const requestedRuntimeVersion = process.env.COWORK_RUNTIME_VERSION?.trim() || null;
 // Compiling on a clean checkout is not part of runtime bootstrap.
 const deadline = Date.now() + timeoutMs;
 const proc = spawn(bin, ["--host", "127.0.0.1", "--port", "0", "--json"], {
@@ -51,7 +56,7 @@ const proc = spawn(bin, ["--host", "127.0.0.1", "--port", "0", "--json"], {
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DISABLE_RUNTIME: "0",
     COWORK_RUNTIME_ALLOW_NETWORK: "1",
-    ...(process.argv.includes("--force") ? { COWORK_RUNTIME_FORCE: "1" } : {}),
+    ...(forceReinstall ? { COWORK_RUNTIME_FORCE: "1" } : {}),
   },
   stdio: ["pipe", "pipe", "inherit"],
 });
@@ -251,6 +256,20 @@ try {
     const { startup } = parsed.diagnostics;
 
     if (startup.ready) {
+      // `ready` alone is not proof of success: the server also reports ready when the runtime is
+      // disabled or network bootstrap is off, and the resolved runtime might not be the one asked
+      // for. Require the final `ready` progress event and, when a target was given, its version.
+      const progress = startup.progress ?? null;
+      if (!progress || progress.phase !== "ready") {
+        throw new Error(
+          "Cowork runtime setup did not install a runtime: startup reported ready without a resolved runtime version.",
+        );
+      }
+      if (requestedRuntimeVersion && progress.version !== requestedRuntimeVersion) {
+        throw new Error(
+          `Cowork runtime setup resolved runtime ${progress.version}, but COWORK_RUNTIME_VERSION requested ${requestedRuntimeVersion}.`,
+        );
+      }
       console.log(JSON.stringify(parsed, null, 2));
       runtimeReady = true;
       break;

@@ -245,6 +245,10 @@ pub struct LiveSession {
     pub system_prompt: String,
     pub subscribers: HashSet<String>,
     pub idle_since: Option<Instant>,
+    /// Durable lifecycle status (`sessions.status`). Hydration keeps the stored value so
+    /// metadata persists never reopen a closed child agent; only an explicit
+    /// `AgentControl::resume` or a direct user turn (`runUserMessageTurn.ts` parity) reopens it.
+    pub persistence_status: SessionPersistenceStatus,
 }
 
 impl LiveSession {
@@ -253,25 +257,9 @@ impl LiveSession {
             Some(active) => active.with_tracker(|t| serde_json::to_value(t.get_snapshot()).ok()),
             None => self.cost_tracker_snapshot.clone(),
         };
-        if let Some(mut snap) = current
-            && snap.get("sessionId").and_then(Value::as_str).is_some()
-            && snap
-                .get("budgetStatus")
-                .and_then(Value::as_object)
-                .is_some()
+        if let Some(snap) =
+            current.and_then(|snap| with_session_budget(snap, self.warn_at_usd, self.stop_at_usd))
         {
-            if let Some(obj) = snap.as_object_mut() {
-                obj.remove("warnAtUsd");
-                obj.remove("stopAtUsd");
-                if let Some(bs) = obj.get_mut("budgetStatus").and_then(Value::as_object_mut) {
-                    bs.insert("warnAtUsd".to_owned(), json!(self.warn_at_usd));
-                    bs.insert("stopAtUsd".to_owned(), json!(self.stop_at_usd));
-                    bs.insert(
-                        "configured".to_owned(),
-                        json!(self.warn_at_usd.is_some() || self.stop_at_usd.is_some()),
-                    );
-                }
-            }
             return Some(snap);
         }
 
@@ -329,7 +317,7 @@ impl LiveSession {
                 .and_then(Value::as_bool),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
-            status: SessionPersistenceStatus::Active,
+            status: self.persistence_status,
             has_pending_ask: self.has_pending_ask,
             has_pending_approval: self.has_pending_approval,
             system_prompt: self.system_prompt.clone(),
@@ -359,6 +347,25 @@ impl LiveSession {
         Some(po)
     }
 
+    /// Takes over the child-agent state a reconciled persist wrote from the stored row (see
+    /// [`adopt_stored_child_agent_state`]), so this cache matches `sessions.db` again.
+    fn adopt_child_agent_state(
+        &mut self,
+        written: &PersistedSessionSnapshotData,
+        stored_usage: Option<Value>,
+    ) {
+        self.messages = written.messages.clone();
+        self.message_count = self.messages.len();
+        self.persistence_status = written.status;
+        self.execution_state = written.execution_state;
+        self.last_message_preview = written.last_message_preview.clone();
+        if let Some(usage) = stored_usage
+            && self.active_cost_tracker.is_none()
+        {
+            self.cost_tracker_snapshot = Some(usage);
+        }
+    }
+
     pub(crate) fn from_persisted(record: PersistedSessionRecord) -> Self {
         let warn_at_usd = record
             .cost_tracker
@@ -376,19 +383,7 @@ impl LiveSession {
                     .or_else(|| c.get("stopAtUsd"))
             })
             .and_then(Value::as_f64);
-        let cost_tracker_snapshot = record.cost_tracker.and_then(|mut c| {
-            if c.get("sessionId").and_then(Value::as_str).is_some()
-                && c.get("budgetStatus").and_then(Value::as_object).is_some()
-            {
-                if let Some(obj) = c.as_object_mut() {
-                    obj.remove("warnAtUsd");
-                    obj.remove("stopAtUsd");
-                }
-                Some(c)
-            } else {
-                None
-            }
-        });
+        let cost_tracker_snapshot = record.cost_tracker.and_then(stored_session_usage_snapshot);
         // Legacy model alias migration (`AgentSessionFromPersisted.ts` parity): resume on the
         // aliased model and drop continuation state that belongs to the old model id.
         let (model, provider_state) = match legacy_model_alias(record.provider, &record.model)
@@ -460,8 +455,72 @@ impl LiveSession {
             },
             subscribers: HashSet::new(),
             idle_since: Some(Instant::now()),
+            persistence_status: record.status,
         }
     }
+}
+
+/// A stored session usage snapshot in the shape the session cost tracker restores from (it has
+/// a `sessionId` and a `budgetStatus`), without the legacy top-level budget keys.
+fn stored_session_usage_snapshot(mut usage: Value) -> Option<Value> {
+    if usage.get("sessionId").and_then(Value::as_str).is_none()
+        || usage
+            .get("budgetStatus")
+            .and_then(Value::as_object)
+            .is_none()
+    {
+        return None;
+    }
+    if let Some(obj) = usage.as_object_mut() {
+        obj.remove("warnAtUsd");
+        obj.remove("stopAtUsd");
+    }
+    Some(usage)
+}
+
+/// `usage` (a cost tracker snapshot) with the session's budget thresholds as its
+/// `budgetStatus`; `None` when `usage` is not a restorable snapshot.
+fn with_session_budget(
+    usage: Value,
+    warn_at_usd: Option<f64>,
+    stop_at_usd: Option<f64>,
+) -> Option<Value> {
+    let mut usage = stored_session_usage_snapshot(usage)?;
+    if let Some(bs) = usage.get_mut("budgetStatus").and_then(Value::as_object_mut) {
+        bs.insert("warnAtUsd".to_owned(), json!(warn_at_usd));
+        bs.insert("stopAtUsd".to_owned(), json!(stop_at_usd));
+        bs.insert(
+            "configured".to_owned(),
+            json!(warn_at_usd.is_some() || stop_at_usd.is_some()),
+        );
+    }
+    Some(usage)
+}
+
+/// Reconciles a child agent's snapshot against its stored row before a write that does not
+/// own the child's run state. The parent's `AgentControl` runs the child's turns and closes or
+/// resumes it, persisting the transcript, lifecycle status, execution state, preview and usage
+/// directly; the server's `LiveSession` copy of those is only a hydration-time cache. Keeping
+/// the stored values means a metadata update never rolls back a later follow-up turn and never
+/// reopens a closed child. Returns the adopted usage snapshot (without the session budget, which
+/// the server owns and overlays here).
+fn adopt_stored_child_agent_state(
+    stored: Option<&PersistedSessionRecord>,
+    snap: &mut PersistedSessionSnapshotData,
+    warn_at_usd: Option<f64>,
+    stop_at_usd: Option<f64>,
+) -> Option<Value> {
+    let stored = stored?;
+    snap.messages = stored.messages.clone();
+    snap.status = stored.status;
+    snap.execution_state = stored.execution_state;
+    snap.last_message_preview = stored.last_message_preview.clone();
+    let usage = stored
+        .cost_tracker
+        .clone()
+        .and_then(stored_session_usage_snapshot)?;
+    snap.cost_tracker = with_session_budget(usage.clone(), warn_at_usd, stop_at_usd);
+    Some(usage)
 }
 
 pub(crate) type SkillImprovementHandle = (
@@ -1499,30 +1558,79 @@ impl ServerRuntimeState {
         })
     }
 
+    /// Writes the session's full snapshot from its live state.
+    ///
+    /// For a child agent session that this server is not running a turn on, the transcript and
+    /// run state are reconciled against the stored row first ([`adopt_stored_child_agent_state`])
+    /// and adopted back into the cache: the parent's `AgentControl` persists those directly, so
+    /// the cached copy can be older than `sessions.db`. Use
+    /// [`Self::persist_live_session_after_turn`] for the write that stores a turn's own result.
     pub(crate) async fn persist_live_session(
         &self,
         live_arc: &Arc<Mutex<LiveSession>>,
         event_type: &str,
     ) -> anyhow::Result<()> {
-        let (session_id, snapshot_data) = {
+        self.persist_live_session_with(live_arc, event_type, false)
+            .await
+    }
+
+    /// [`Self::persist_live_session`] for the end of a turn this server ran on the session: the
+    /// live transcript is the newest copy and is written as is.
+    pub(crate) async fn persist_live_session_after_turn(
+        &self,
+        live_arc: &Arc<Mutex<LiveSession>>,
+        event_type: &str,
+    ) -> anyhow::Result<()> {
+        self.persist_live_session_with(live_arc, event_type, true)
+            .await
+    }
+
+    async fn persist_live_session_with(
+        &self,
+        live_arc: &Arc<Mutex<LiveSession>>,
+        event_type: &str,
+        live_is_authoritative: bool,
+    ) -> anyhow::Result<()> {
+        let (session_id, snapshot_data, child_budget) = {
             let live = live_arc.lock();
-            (live.id.clone(), live.to_snapshot_data())
+            let reconcile_child =
+                !live_is_authoritative && live.session_kind != SessionKind::Root && !live.busy;
+            (
+                live.id.clone(),
+                live.to_snapshot_data(),
+                reconcile_child.then_some((live.warn_at_usd, live.stop_at_usd)),
+            )
         };
         if self.is_session_deleted(&session_id) {
             return Ok(());
         }
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let seq = self
-            .session_db
-            .persist_session_mutation(PersistedSessionMutation {
-                session_id: session_id.clone(),
-                event_type: event_type.to_owned(),
-                event_ts: Some(now),
-                direction: Some("server".to_owned()),
-                payload: None,
-                snapshot: snapshot_data,
-            })
-            .await?;
+        let mutation = PersistedSessionMutation {
+            session_id: session_id.clone(),
+            event_type: event_type.to_owned(),
+            event_ts: Some(now),
+            direction: Some("server".to_owned()),
+            payload: None,
+            snapshot: snapshot_data,
+        };
+        let seq = match child_budget {
+            None => self.session_db.persist_session_mutation(mutation).await?,
+            Some((warn_at_usd, stop_at_usd)) => {
+                let mut stored_usage = None;
+                let (seq, written) = self
+                    .session_db
+                    .persist_session_mutation_reconciled(mutation, |stored, snap| {
+                        stored_usage =
+                            adopt_stored_child_agent_state(stored, snap, warn_at_usd, stop_at_usd);
+                    })
+                    .await?;
+                let mut live = live_arc.lock();
+                if seq > 0 && !live.busy {
+                    live.adopt_child_agent_state(&written, stored_usage);
+                }
+                seq
+            }
+        };
         let effective_seq = seq.max(self.journal_tail_seq(&session_id));
         let snapshot_json = {
             let mut live = live_arc.lock();
@@ -1692,6 +1800,7 @@ impl ServerRuntimeState {
             system_prompt: String::new(),
             subscribers,
             idle_since: None,
+            persistence_status: SessionPersistenceStatus::Active,
         };
 
         // Concurrent `thread/start`s with the same `clientThreadId` all bind the same id; the

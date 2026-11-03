@@ -706,6 +706,7 @@ impl ServerRuntimeState {
             system_prompt: String::new(),
             subscribers: HashSet::new(),
             idle_since: Some(Instant::now()),
+            persistence_status: cowork_storage::SessionPersistenceStatus::Active,
         };
 
         let live_arc = Arc::new(Mutex::new(live));

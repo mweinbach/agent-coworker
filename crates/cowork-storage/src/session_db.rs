@@ -17,10 +17,10 @@ use crate::types::{
     AgentExecutionState, ConversationImportPersistResult, CreateTaskInput,
     PersistedExternalConversationImport, PersistedExternalConversationImportMutation,
     PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord,
-    PersistedSessionSummary, PersistedThreadJournalEvent, PersistedThreadJournalFailure,
-    PersistedThreadMetadata, PersistedThreadMetadataPatch, SessionDbOptions, SessionKind,
-    SessionPersistenceStatus, SessionTitleSource, StartupReconciliationReport,
-    ThreadJournalEventInput,
+    PersistedSessionSnapshotData, PersistedSessionSummary, PersistedThreadJournalEvent,
+    PersistedThreadJournalFailure, PersistedThreadMetadata, PersistedThreadMetadataPatch,
+    SessionDbOptions, SessionKind, SessionPersistenceStatus, SessionTitleSource,
+    StartupReconciliationReport, ThreadJournalEventInput,
 };
 use crate::write_coordinator::{
     SessionDbWriteCoordinator, SessionDbWriteCoordinatorOptions, SessionDbWriteLockDiagnostics,
@@ -239,6 +239,40 @@ impl SessionDb {
                     return Ok(0);
                 }
                 self.with_rw_conn_mut(|conn| persist_session_mutation_sync(conn, &mutation))
+            })
+            .await
+    }
+
+    /// Persists `mutation` after letting `reconcile` adjust its snapshot against the session's
+    /// currently stored record, read in the same write transaction. A writer that owns only
+    /// part of a session's state (e.g. a metadata update to a child agent whose transcript and
+    /// lifecycle its parent's `AgentControl` persists directly) adopts the other writer's
+    /// committed fields here, so no concurrent commit can fall between the read and the write.
+    ///
+    /// Returns the event sequence (0 when the session was deleted) and the snapshot as written.
+    pub async fn persist_session_mutation_reconciled<F>(
+        &self,
+        mutation: PersistedSessionMutation,
+        reconcile: F,
+    ) -> Result<(u64, PersistedSessionSnapshotData)>
+    where
+        F: FnOnce(Option<&PersistedSessionRecord>, &mut PersistedSessionSnapshotData) + Send,
+    {
+        self.write_coordinator
+            .run_exclusive("persist_session_mutation", || async move {
+                let mut mutation = mutation;
+                // Checked under the write lock so it is ordered against `delete_session`.
+                if self.is_deleted_session_or_child(&mutation) {
+                    return Ok((0, mutation.snapshot));
+                }
+                self.with_rw_conn_mut(|conn| {
+                    let tx = conn.transaction()?;
+                    let stored = read_session_record_from_conn(&tx, &mutation.session_id)?;
+                    reconcile(stored.as_ref(), &mut mutation.snapshot);
+                    let next_seq = persist_session_mutation_in_tx(&tx, &mutation, None)?;
+                    tx.commit()?;
+                    Ok((next_seq, mutation.snapshot))
+                })
             })
             .await
     }

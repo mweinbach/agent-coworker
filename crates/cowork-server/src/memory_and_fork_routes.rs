@@ -802,6 +802,7 @@ impl ServerRuntimeState {
             system_prompt: String::new(),
             subscribers: subscribers.clone(),
             idle_since: subscribers.is_empty().then(std::time::Instant::now),
+            persistence_status: cowork_storage::SessionPersistenceStatus::Active,
         };
 
         let mut forked_live = forked_live;

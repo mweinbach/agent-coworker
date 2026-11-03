@@ -1,4 +1,9 @@
-//! Child agent system prompts survive metadata persists.
+//! Child agent state survives metadata persists.
+//!
+//! The parent's `AgentControl` runs a child's turns and closes/resumes it, persisting the
+//! transcript and lifecycle straight to `sessions.db`; the server's hydrated `LiveSession` for
+//! the child is only a cache. Metadata writes (`cowork/session/title/set`, ...) must therefore
+//! never roll back a later follow-up turn or reopen a closed child.
 //!
 //! A child's stored `system_prompt` is its role/profile prompt plus any spawn-time
 //! `systemPromptSuffix`; `AgentControl` can only rebuild the base prompt when the stored one is
@@ -480,6 +485,237 @@ async fn renaming_a_child_keeps_its_stored_system_prompt_suffix_across_restart()
     );
     let _ = wait_child_idle(&mut ws, &parent, &child, "after-restart").await;
     assert_eq!(stored_system_prompt(&iso, &child), before);
+
+    drop(ws);
+    server.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Transcript and lifecycle owned by AgentControl
+// ---------------------------------------------------------------------------------------------
+
+fn stored_messages_json(iso: &Iso, session_id: &str) -> String {
+    let conn = rusqlite::Connection::open(iso.home.join(".cowork").join("sessions.db")).unwrap();
+    conn.query_row(
+        "SELECT messages_json FROM session_state WHERE session_id = ?1",
+        [session_id],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap()
+}
+
+fn stored_status(iso: &Iso, session_id: &str) -> (String, Option<String>) {
+    let conn = rusqlite::Connection::open(iso.home.join(".cowork").join("sessions.db")).unwrap();
+    conn.query_row(
+        "SELECT status, execution_state FROM sessions WHERE session_id = ?1",
+        [session_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+    )
+    .unwrap()
+}
+
+async fn start_parent(ws: &mut WsStream, iso: &Iso) -> String {
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let th = call(
+        ws,
+        "start",
+        "thread/start",
+        json!({ "cwd": cwd, "provider": "openai", "model": "gpt-5.4" }),
+    )
+    .await;
+    th["result"]["thread"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("thread/start failed: {th}"))
+        .to_owned()
+}
+
+async fn rename(ws: &mut WsStream, thread_id: &str, title: &str) {
+    let res = call(
+        ws,
+        &format!("rename-{title}"),
+        "cowork/session/title/set",
+        json!({ "threadId": thread_id, "title": title }),
+    )
+    .await;
+    assert_eq!(res["result"]["event"]["title"], title, "{res}");
+}
+
+async fn send_child_input(ws: &mut WsStream, parent: &str, child: &str, message: &str) -> Value {
+    call(
+        ws,
+        &format!("send-{message}"),
+        "cowork/session/agent/input/send",
+        json!({ "threadId": parent, "agentId": child, "message": message }),
+    )
+    .await
+}
+
+async fn wait_for_request_with(mock: &MockState, marker: &str) -> Value {
+    for _ in 0..200 {
+        if let Some(body) = mock
+            .bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b["input"].to_string().contains(marker))
+            .cloned()
+        {
+            return body;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no Responses request carried {marker}");
+}
+
+#[tokio::test]
+async fn renaming_a_child_after_a_follow_up_keeps_the_follow_up_across_restart() {
+    let mut iso = Iso::new("cowork-child-followup-");
+    let mock = start_mock(&mut iso).await;
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_parent(&mut ws, &iso).await;
+    let event = spawn_child_and_wait(&mut ws, &parent, "FIRST_CHILD_TASK", json!({})).await;
+    let child = event["agent"]["agentId"].as_str().unwrap().to_owned();
+
+    // The first rename hydrates the child into the server's LiveSession cache.
+    rename(&mut ws, &child, "Rename one").await;
+
+    // A follow-up through the parent's controller is persisted by AgentControl directly.
+    let sent = send_child_input(&mut ws, &parent, &child, "FOLLOW_UP_MARKER_91c2").await;
+    assert_eq!(sent["result"], json!({}), "input/send failed: {sent}");
+    let _ = wait_for_request_with(&mock, "FOLLOW_UP_MARKER_91c2").await;
+    let _ = wait_child_idle(&mut ws, &parent, &child, "follow-up").await;
+    assert!(
+        stored_messages_json(&iso, &child).contains("FOLLOW_UP_MARKER_91c2"),
+        "AgentControl must persist the follow-up"
+    );
+
+    // The second rename must not write the cached pre-follow-up transcript back.
+    rename(&mut ws, &child, "Rename two").await;
+    assert!(
+        stored_messages_json(&iso, &child).contains("FOLLOW_UP_MARKER_91c2"),
+        "title/set rolled back the child's follow-up turn"
+    );
+
+    drop(ws);
+    server.shutdown().await;
+
+    // After a restart the restored child still carries the follow-up in its history.
+    assert!(stored_messages_json(&iso, &child).contains("FOLLOW_UP_MARKER_91c2"));
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let read = call(
+        &mut ws,
+        "read-child",
+        "thread/read",
+        json!({ "threadId": child, "includeTurns": true }),
+    )
+    .await;
+    assert!(
+        read.to_string().contains("FOLLOW_UP_MARKER_91c2"),
+        "restored child history lost the follow-up: {read}"
+    );
+    let sent = send_child_input(&mut ws, &parent, &child, "AFTER_RESTART_91c2").await;
+    assert_eq!(sent["result"], json!({}), "input/send failed: {sent}");
+    let body = wait_for_request_with(&mock, "AFTER_RESTART_91c2").await;
+    assert!(
+        body["input"].to_string().contains("FOLLOW_UP_MARKER_91c2"),
+        "restored child ran without its follow-up history: {body}"
+    );
+    let _ = wait_child_idle(&mut ws, &parent, &child, "after-restart").await;
+
+    drop(ws);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn renaming_a_closed_child_keeps_it_closed_across_restart() {
+    let mut iso = Iso::new("cowork-child-closed-");
+    let mock = start_mock(&mut iso).await;
+
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let parent = start_parent(&mut ws, &iso).await;
+    let event = spawn_child_and_wait(&mut ws, &parent, "CLOSED_CHILD_TASK", json!({})).await;
+    let child = event["agent"]["agentId"].as_str().unwrap().to_owned();
+
+    // Hydrate the child while it is still active, then close it through the controller.
+    rename(&mut ws, &child, "Before close").await;
+    let closed = call(
+        &mut ws,
+        "close",
+        "cowork/session/agent/close",
+        json!({ "threadId": parent, "agentId": child }),
+    )
+    .await;
+    assert_eq!(closed["result"], json!({}), "close failed: {closed}");
+    assert_eq!(stored_status(&iso, &child).0, "closed");
+
+    // Renaming the closed child must keep its durable lifecycle.
+    rename(&mut ws, &child, "After close").await;
+    assert_eq!(
+        stored_status(&iso, &child),
+        ("closed".to_owned(), Some("closed".to_owned())),
+        "title/set reopened the closed child"
+    );
+
+    drop(ws);
+    server.shutdown().await;
+
+    // A restart hydrates the closed child; renaming it again still keeps it closed.
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    rename(&mut ws, &child, "After restart").await;
+    assert_eq!(stored_status(&iso, &child).0, "closed");
+    drop(ws);
+    server.shutdown().await;
+
+    // The reconstructed controller sees the child closed and rejects input until resumed.
+    let server = start_server(iso.options()).await.unwrap();
+    let mut ws = connect(server.ws_url()).await;
+    let inspected = call(
+        &mut ws,
+        "inspect-closed",
+        "cowork/session/agent/inspect",
+        json!({ "threadId": parent, "agentId": child }),
+    )
+    .await;
+    assert_eq!(
+        inspected["result"]["event"]["agent"]["lifecycleState"], "closed",
+        "{inspected}"
+    );
+    let rejected = send_child_input(&mut ws, &parent, &child, "WHILE_CLOSED_5e1d").await;
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("is closed")),
+        "closed child accepted input: {rejected}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !mock
+            .bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|b| b["input"].to_string().contains("WHILE_CLOSED_5e1d")),
+        "closed child ran a turn"
+    );
+
+    let resumed = call(
+        &mut ws,
+        "resume",
+        "cowork/session/agent/resume",
+        json!({ "threadId": parent, "agentId": child }),
+    )
+    .await;
+    assert_eq!(resumed["result"], json!({}), "resume failed: {resumed}");
+    assert_eq!(stored_status(&iso, &child).0, "active");
+    let sent = send_child_input(&mut ws, &parent, &child, "AFTER_RESUME_5e1d").await;
+    assert_eq!(sent["result"], json!({}), "input/send failed: {sent}");
+    let _ = wait_for_request_with(&mock, "AFTER_RESUME_5e1d").await;
+    let _ = wait_child_idle(&mut ws, &parent, &child, "after-resume").await;
 
     drop(ws);
     server.shutdown().await;

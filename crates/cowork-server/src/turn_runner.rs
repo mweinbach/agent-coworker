@@ -1330,6 +1330,14 @@ impl ServerRuntimeState {
             // Reserve the thread in the same critical section as the check so concurrent
             // `turn/start` requests cannot both pass it while this one awaits setup.
             live.busy = true;
+            // A direct user turn reopens a closed session (`runUserMessageTurn.ts` parity);
+            // closing and resuming otherwise go through the parent's `AgentControl`.
+            if live.persistence_status == cowork_storage::SessionPersistenceStatus::Closed {
+                live.persistence_status = cowork_storage::SessionPersistenceStatus::Active;
+                if live.execution_state == Some(cowork_storage::AgentExecutionState::Closed) {
+                    live.execution_state = Some(cowork_storage::AgentExecutionState::Completed);
+                }
+            }
             let prev_idle_since = live.idle_since.take();
             (
                 live.provider,
@@ -2312,7 +2320,7 @@ impl ServerRuntimeState {
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     let _ = runtime
-                        .persist_live_session(&live_for_task, "turn/completed")
+                        .persist_live_session_after_turn(&live_for_task, "turn/completed")
                         .await;
                     sink_impl.flush_deferred_turn_completed();
 
@@ -2660,7 +2668,7 @@ impl ServerRuntimeState {
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     let _ = runtime
-                        .persist_live_session(&live_for_task, "turn/completed")
+                        .persist_live_session_after_turn(&live_for_task, "turn/completed")
                         .await;
                     sink_impl.flush_deferred_turn_completed();
                     let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;

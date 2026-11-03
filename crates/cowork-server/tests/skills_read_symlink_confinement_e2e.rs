@@ -283,5 +283,28 @@ async fn skills_routes_never_follow_links_out_of_a_skill_root() {
     let mut ws = connect(server.ws_url()).await;
 
     assert_cwd_is_confined(&mut ws, None).await;
-    assert_cwd_is_confined(&mut ws, Some(&attacker_cwd)).await;
+
+    // An unregistered client-chosen directory is refused outright by workspace authorization
+    // (and `call` still asserts no frame carries the secret).
+    let cwd = json!(attacker_cwd.to_string_lossy());
+    for (id, method, params) in [
+        ("atk-list", "cowork/skills/list", json!({ "cwd": cwd })),
+        (
+            "atk-read",
+            "cowork/skills/read",
+            json!({ "cwd": cwd, "skillName": "leak" }),
+        ),
+        (
+            "atk-catalog",
+            "cowork/skills/catalog/read",
+            json!({ "cwd": cwd }),
+        ),
+    ] {
+        let res = call(&mut ws, id, method, params).await;
+        let message = res["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("cwd must match an authorized workspace"),
+            "{method} with an unregistered cwd must be refused: {res}"
+        );
+    }
 }

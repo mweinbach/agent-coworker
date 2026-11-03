@@ -483,11 +483,7 @@ pub async fn set_openai_native_connector_enabled(
     enabled: bool,
 ) -> Result<OpenAiNativeConnectorsEvent, ProviderTransportError> {
     let trimmed = connector_id.trim();
-    if trimmed.is_empty() {
-        return Err(ProviderTransportError::protocol(
-            "connectorId is required.".to_string(),
-        ));
-    }
+    validate_codex_connector_id(trimmed)?;
 
     client
         .request(
@@ -503,10 +499,29 @@ pub async fn set_openai_native_connector_enabled(
     read_openai_native_connectors(session_id, codex_home, Some(client), true).await
 }
 
+/// The id becomes one segment of the `apps.<id>.enabled` config key path, so it must not be able
+/// to add path segments (`.`), break out of the key (quotes, brackets, backslashes, whitespace)
+/// or smuggle control characters into the app-server's config.
+fn validate_codex_connector_id(id: &str) -> Result<(), ProviderTransportError> {
+    if id.is_empty() {
+        return Err(ProviderTransportError::protocol(
+            "connectorId is required.".to_string(),
+        ));
+    }
+    if let Some(bad) = id.chars().find(|c| {
+        c.is_control() || c.is_whitespace() || matches!(c, '.' | '"' | '\'' | '[' | ']' | '\\')
+    }) {
+        return Err(ProviderTransportError::protocol(format!(
+            "connectorId contains an invalid character {bad:?}."
+        )));
+    }
+    Ok(())
+}
+
 fn is_valid_reasoning_effort(raw: &str) -> bool {
     matches!(
         raw,
-        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+        "none" | "minimal" | "light" | "low" | "medium" | "high" | "xhigh" | "max"
     )
 }
 

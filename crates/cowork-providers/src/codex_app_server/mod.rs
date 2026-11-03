@@ -37,8 +37,8 @@ use crate::transport::{
 };
 
 pub use client::{
-    CodexAppServerClient, CodexAppServerPool, CodexNotification, CodexTurnSteerParams,
-    DynamicToolCallOutput, DynamicToolHandler,
+    CodexAppServerClient, CodexAppServerPool, CodexNativeToolContext, CodexNotification,
+    CodexTurnSteerParams, DynamicToolCallOutput, DynamicToolHandler,
 };
 pub use connectors::{
     CodexAccountInfo, CodexChatGptLoginChallenge, CodexRateLimits, OpenAiNativeConnectorInfo,
@@ -56,8 +56,9 @@ pub use isolation::{
     sync_codex_windows_sandbox_setup_state,
 };
 pub use policy::{
-    CodexSandboxNarrowingInput, CodexSandboxNarrowingOutput, filter_codex_dynamic_tools,
-    from_codex_mcp_tool_name, resolve_codex_sandbox_and_approval_policy, to_codex_mcp_tool_name,
+    CodexSandboxNarrowingInput, CodexSandboxNarrowingOutput, codex_workspace_write_roots,
+    filter_codex_dynamic_tools, from_codex_mcp_tool_name,
+    resolve_codex_sandbox_and_approval_policy, to_codex_mcp_tool_name,
 };
 pub use turn_output::{
     CodexAssistantItems, CodexTurnUsageTracker, assistant_text_from_codex_turn, parse_codex_usage,
@@ -189,50 +190,54 @@ impl CodexAppServerTransport {
     }
 }
 
+/// TS `resolveCodexAppServerCommand` parity: an explicit override wins; otherwise a missing
+/// runtime (or a managed runtime that is not the app-pinned version) is installed from the
+/// pinned, checksum-verified release before the app-server spawns. A stale managed runtime that
+/// cannot be updated (e.g. offline) still runs; a missing one fails with the install error.
+/// The `PATH` is never searched for a foreign `codex` binary.
+pub(crate) async fn ensure_codex_runtime_command(
+    cowork_home: &Path,
+    env: &HashMap<String, String>,
+    opts: &CodexRuntimeInstallOptions,
+) -> Result<(String, Vec<String>), ProviderTransportError> {
+    let status = resolve_codex_app_server_status(cowork_home, env);
+    let stale_managed = status.source == "managed" && status.pin_matches_current == Some(false);
+    if !status.available || stale_managed {
+        match install_codex_app_server(cowork_home, CODEX_APP_SERVER_MANAGED_VERSION, false, opts)
+            .await
+        {
+            Ok(installed) => {
+                return Ok((installed.command.to_string_lossy().into_owned(), Vec::new()));
+            }
+            Err(err) if status.available => {
+                tracing::warn!(
+                    "[codex-app-server] could not update the managed runtime to {CODEX_APP_SERVER_MANAGED_VERSION}; using the installed one: {err}"
+                );
+            }
+            Err(err) => {
+                return Err(ProviderTransportError::protocol(format!(
+                    "Failed to install the Cowork-managed Codex runtime {CODEX_APP_SERVER_MANAGED_VERSION}: {err}"
+                )));
+            }
+        }
+    }
+    match status.command {
+        Some(command) => Ok((command, status.args.unwrap_or_default())),
+        None => Err(ProviderTransportError::protocol(status.message)),
+    }
+}
+
 impl CodexAppServerTransport {
-    /// TS `resolveCodexAppServerCommand` parity: before the turn spawns the app-server, a missing
-    /// runtime (or a managed runtime that is not the app-pinned version) is installed from the
-    /// pinned, checksum-verified release. A stale managed runtime that cannot be updated (e.g.
-    /// offline) still runs; a missing one fails the turn with the install error.
     async fn resolve_runtime_command(
         &self,
         cowork_home: &Path,
         env: &HashMap<String, String>,
     ) -> Result<(String, Vec<String>), ProviderTransportError> {
-        let status = resolve_codex_app_server_status(cowork_home, env);
-        let stale_managed = status.source == "managed" && status.pin_matches_current == Some(false);
-        if !status.available || stale_managed {
-            let opts = self
-                .install_options
-                .clone()
-                .unwrap_or_else(|| CodexRuntimeInstallOptions::from_env(env));
-            match install_codex_app_server(
-                cowork_home,
-                CODEX_APP_SERVER_MANAGED_VERSION,
-                false,
-                &opts,
-            )
-            .await
-            {
-                Ok(installed) => {
-                    return Ok((installed.command.to_string_lossy().into_owned(), Vec::new()));
-                }
-                Err(err) if status.available => {
-                    tracing::warn!(
-                        "[codex-app-server] could not update the managed runtime to {CODEX_APP_SERVER_MANAGED_VERSION}; using the installed one: {err}"
-                    );
-                }
-                Err(err) => {
-                    return Err(ProviderTransportError::protocol(format!(
-                        "Failed to install the Cowork-managed Codex runtime {CODEX_APP_SERVER_MANAGED_VERSION}: {err}"
-                    )));
-                }
-            }
-        }
-        Ok((
-            status.command.unwrap_or_else(|| "codex".to_string()),
-            status.args.unwrap_or_default(),
-        ))
+        let opts = self
+            .install_options
+            .clone()
+            .unwrap_or_else(|| CodexRuntimeInstallOptions::from_env(env));
+        ensure_codex_runtime_command(cowork_home, env, &opts).await
     }
 }
 
@@ -280,6 +285,14 @@ impl ProviderTransport for CodexAppServerTransport {
             self.sandbox_restrictions.as_ref(),
             &request.provider_options,
         );
+        // Scoped children keep Cowork's path-checked read/glob/grep (`runTurn.ts` parity).
+        let dynamic_tools =
+            filter_codex_dynamic_tools(&request.tools, !restrictions.target_paths.is_empty());
+        let native_ctx = self
+            .tool_handler
+            .as_ref()
+            .map(|h| h.native_tool_context())
+            .unwrap_or_default();
         let policy = resolve_codex_sandbox_and_approval_policy(&CodexSandboxNarrowingInput {
             mode: restrictions.mode.unwrap_or(SandboxMode::WorkspaceWrite),
             network: restrictions.network.unwrap_or(false),
@@ -287,12 +300,13 @@ impl ProviderTransport for CodexAppServerTransport {
             workspace_dir: cwd.clone(),
             agent_target_paths: restrictions.target_paths.clone(),
             read_only_role: restrictions.read_only_role,
-            has_mutation_guard_with_dynamic_tools: false,
+            // TS `codexApprovalPolicy`: YOLO keeps approvals on when a mutation guard is
+            // installed and the turn exposes Cowork dynamic tools, so native effects still cross
+            // `assertCanMutate` (the `createTask` source-chat lock) through `request_approval`.
+            has_mutation_guard_with_dynamic_tools: native_ctx.has_mutation_guard
+                && !dynamic_tools.is_empty(),
+            extra_writable_roots: native_ctx.writable_roots,
         });
-
-        // Scoped children keep Cowork's path-checked read/glob/grep (`runTurn.ts` parity).
-        let dynamic_tools =
-            filter_codex_dynamic_tools(&request.tools, !restrictions.target_paths.is_empty());
         let wire_dynamic_tools: Vec<Value> = dynamic_tools
             .iter()
             .map(|t| {
@@ -327,96 +341,117 @@ impl ProviderTransport for CodexAppServerTransport {
             "cwd": cwd.to_string_lossy(),
             "approvalPolicy": policy.approval_policy,
             "sandbox": policy.thread_sandbox,
-            "developerInstructions": request.system_prompt,
+            "developerInstructions": codex_developer_instructions(
+                &request.system_prompt,
+                &env,
+                &dynamic_tools,
+            ),
             "dynamicTools": wire_dynamic_tools,
             "config": config_overrides,
             // Code-mode `exec`/`wait` calls only surface as raw response items (`runTurn.ts`).
             "experimentalRawEvents": true,
         });
 
-        // Resume the stored Codex thread when the continuation fingerprint still matches the
-        // canonical prefix; otherwise (missing/invalid continuation, model switch, edited history)
-        // start a fresh thread seeded with the full serialized canonical history.
-        let mut resumed_thread_id: Option<String> = None;
-        let thread_res = match &resume_plan {
-            Some((stored_thread_id, _)) => {
-                let mut resume_payload = thread_payload.clone();
-                resume_payload["threadId"] = Value::String(stored_thread_id.clone());
-                match client.request("thread/resume", Some(resume_payload)).await {
-                    Ok(res) => {
-                        resumed_thread_id = Some(stored_thread_id.clone());
-                        res
+        // Any failure before the turn is running (thread start/resume, turn/start) or a caller
+        // abort during startup must not leak the spawned app-server.
+        let startup = async {
+            // Resume the stored Codex thread when the continuation fingerprint still matches the
+            // canonical prefix; otherwise (missing/invalid continuation, model switch, edited history)
+            // start a fresh thread seeded with the full serialized canonical history.
+            let mut resumed_thread_id: Option<String> = None;
+            let thread_res = match &resume_plan {
+                Some((stored_thread_id, _)) => {
+                    let mut resume_payload = thread_payload.clone();
+                    resume_payload["threadId"] = Value::String(stored_thread_id.clone());
+                    match client.request("thread/resume", Some(resume_payload)).await {
+                        Ok(res) => {
+                            resumed_thread_id = Some(stored_thread_id.clone());
+                            res
+                        }
+                        Err(err) if is_invalid_codex_thread_error(&err.message) => {
+                            client
+                                .request("thread/start", Some(thread_payload.clone()))
+                                .await?
+                        }
+                        Err(err) => return Err(err),
                     }
-                    Err(err) if is_invalid_codex_thread_error(&err.message) => {
-                        client
-                            .request("thread/start", Some(thread_payload.clone()))
-                            .await?
-                    }
-                    Err(err) => return Err(err),
                 }
+                None => {
+                    client
+                        .request("thread/start", Some(thread_payload.clone()))
+                        .await?
+                }
+            };
+
+            let thread_id = thread_res
+                .get("thread")
+                .and_then(|t| t.get("id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| resumed_thread_id.clone())
+                .ok_or_else(|| {
+                    ProviderTransportError::protocol("Codex thread/start did not return thread.id")
+                })?;
+
+            let turn_input = match (&resumed_thread_id, &resume_plan) {
+                (Some(_), Some((_, delta_start))) => {
+                    build_codex_turn_input(&request.messages[*delta_start..], false)
+                }
+                _ => build_codex_turn_input(&request.messages, true),
+            };
+            if turn_input.is_empty() {
+                return Err(ProviderTransportError::protocol(
+                    "codex app-server runtime requires a user message.",
+                ));
             }
-            None => {
-                client
-                    .request("thread/start", Some(thread_payload.clone()))
-                    .await?
+
+            let turn_res = client
+                .request(
+                    "turn/start",
+                    Some({
+                        let mut params = json!({
+                            "threadId": thread_id,
+                            "input": turn_input,
+                            "sandboxPolicy": policy.turn_sandbox_policy,
+                            "approvalPolicy": policy.approval_policy,
+                        });
+                        if let Some(effort) = codex_reasoning_effort(&request.provider_options) {
+                            params["effort"] = Value::String(effort);
+                        }
+                        if let Some(summary) = codex_reasoning_summary(
+                            &request.provider_options,
+                            codex_model_declares_reasoning_summary(
+                                self.built_in_dir.as_deref(),
+                                &request.model_id,
+                            ),
+                        ) {
+                            params["summary"] = Value::String(summary);
+                        }
+                        params
+                    }),
+                )
+                .await?;
+
+            let codex_turn_id = turn_res
+                .get("turn")
+                .and_then(|t| t.get("id"))
+                .or_else(|| turn_res.get("turnId"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok::<_, ProviderTransportError>((thread_id, codex_turn_id))
+        };
+        let cancel = budget.cancellation_token().clone();
+        let started = tokio::select! {
+            res = startup => res,
+            () = cancel.cancelled() => Err(ProviderTransportError::aborted("Model turn aborted.")),
+        };
+        let (thread_id, codex_turn_id) = match started {
+            Ok(started) => started,
+            Err(err) => {
+                client.close().await;
+                return Err(err);
             }
         };
-
-        let thread_id = thread_res
-            .get("thread")
-            .and_then(|t| t.get("id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .or_else(|| resumed_thread_id.clone())
-            .ok_or_else(|| {
-                ProviderTransportError::protocol("Codex thread/start did not return thread.id")
-            })?;
-
-        let turn_input = match (&resumed_thread_id, &resume_plan) {
-            (Some(_), Some((_, delta_start))) => {
-                build_codex_turn_input(&request.messages[*delta_start..], false)
-            }
-            _ => build_codex_turn_input(&request.messages, true),
-        };
-        if turn_input.is_empty() {
-            return Err(ProviderTransportError::protocol(
-                "codex app-server runtime requires a user message.",
-            ));
-        }
-
-        let turn_res = client
-            .request(
-                "turn/start",
-                Some({
-                    let mut params = json!({
-                        "threadId": thread_id,
-                        "input": turn_input,
-                        "sandboxPolicy": policy.turn_sandbox_policy,
-                        "approvalPolicy": policy.approval_policy,
-                    });
-                    if let Some(effort) = codex_reasoning_effort(&request.provider_options) {
-                        params["effort"] = Value::String(effort);
-                    }
-                    if let Some(summary) = codex_reasoning_summary(
-                        &request.provider_options,
-                        codex_model_declares_reasoning_summary(
-                            self.built_in_dir.as_deref(),
-                            &request.model_id,
-                        ),
-                    ) {
-                        params["summary"] = Value::String(summary);
-                    }
-                    params
-                }),
-            )
-            .await?;
-
-        let codex_turn_id = turn_res
-            .get("turn")
-            .and_then(|t| t.get("id"))
-            .or_else(|| turn_res.get("turnId"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
         if let Some(obs) = &self.turn_observer {
             obs.on_turn_started(Arc::clone(&client), &thread_id, codex_turn_id.as_deref());
         }
@@ -709,6 +744,24 @@ impl ProviderTransport for CodexAppServerTransport {
             })
             .await;
 
+        // Cancelled (or out of budget) mid-turn: like TS, interrupt the live turn and give the
+        // app-server a bounded grace period to settle it (persisting the interrupted thread)
+        // before the hard close kills its process tree.
+        if wait_res.is_err() && completed_turn.is_none() && !client.is_closed() {
+            interrupt_codex_turn_gracefully(
+                &client,
+                &mut notif_rx,
+                &thread_id,
+                codex_turn_id.as_deref(),
+            )
+            .await;
+        }
+        // Steers the app-server accepted for this turn were consumed by it; the harness records
+        // them ahead of the assistant output, so the continuation fingerprint must cover them.
+        let accepted_steers = codex_turn_id
+            .as_deref()
+            .map(|t| client.take_accepted_steer_inputs(&thread_id, t))
+            .unwrap_or_default();
         client.close().await;
         wait_res?;
 
@@ -778,21 +831,22 @@ impl ProviderTransport for CodexAppServerTransport {
             created_at: Utc::now().to_rfc3339(),
         };
         let persisted_assistant = filter_persisted_assistant_history(&assistant);
-        let mut next_prefix = request.messages.clone();
-        if let Some(ref p) = persisted_assistant {
-            next_prefix.push(p.clone());
-        } else {
-            next_prefix.push(assistant.clone());
-        }
-        let fp = compute_continuation_fingerprint(&ContinuationFingerprintInput {
-            provider: "codex-cli",
-            model_id: &request.model_id,
-            system_prompt: &request.system_prompt,
-            tools: &wire_dynamic_tools,
-            authorized_tool_names: request.authorized_tool_names.as_deref(),
-            canonical_prefix: &next_prefix,
-            stream_options: &request.provider_options,
-        });
+        // The harness's next history: this request's messages, the natively steered user
+        // messages (inserted ahead of the assistant output), then the persisted assistant.
+        let mut next_prefix: Vec<CanonicalMessage> = request
+            .messages
+            .iter()
+            .map(codex_fingerprint_message)
+            .collect();
+        next_prefix.extend(
+            accepted_steers
+                .iter()
+                .map(|input| codex_fingerprint_steer(input)),
+        );
+        next_prefix.push(codex_fingerprint_message(
+            persisted_assistant.as_ref().unwrap_or(&assistant),
+        ));
+        let fp = codex_continuation_fingerprint(&request, &wire_dynamic_tools, &next_prefix);
         let continuation = Some(ProviderContinuationState::CodexCli {
             model: request.model_id,
             thread_id,
@@ -888,21 +942,246 @@ fn resolve_codex_resume_plan(
         if !delta.iter().any(|m| m.role == MessageRole::User) {
             continue;
         }
-        let fp = compute_continuation_fingerprint(&ContinuationFingerprintInput {
-            provider: "codex-cli",
-            model_id: &request.model_id,
-            system_prompt: &request.system_prompt,
-            tools: wire_dynamic_tools,
-            authorized_tool_names: request.authorized_tool_names.as_deref(),
-            canonical_prefix: prefix,
-            stream_options: &request.provider_options,
-        });
+        let normalized: Vec<CanonicalMessage> =
+            prefix.iter().map(codex_fingerprint_message).collect();
+        let fp = codex_continuation_fingerprint(request, wire_dynamic_tools, &normalized);
         if validate_continuation_state(Some(stored), "codex-cli", &request.model_id, &fp).is_some()
         {
             return Some((thread_id.clone(), prefix.len()));
         }
     }
     None
+}
+
+/// Continuation fingerprint over a prefix already normalized by [`codex_fingerprint_message`] /
+/// [`codex_fingerprint_steer`].
+fn codex_continuation_fingerprint(
+    request: &ProviderStepRequest,
+    wire_dynamic_tools: &[Value],
+    normalized_prefix: &[CanonicalMessage],
+) -> String {
+    compute_continuation_fingerprint(&ContinuationFingerprintInput {
+        provider: "codex-cli",
+        model_id: &request.model_id,
+        system_prompt: &request.system_prompt,
+        tools: wire_dynamic_tools,
+        authorized_tool_names: request.authorized_tool_names.as_deref(),
+        canonical_prefix: normalized_prefix,
+        stream_options: &request.provider_options,
+    })
+}
+
+/// Fingerprint form of a canonical message: storage identity (`id`, `createdAt`) is dropped, and a
+/// user message is reduced to the Codex input it is delivered as. That makes a user message the
+/// harness records for a natively accepted `turn/steer` (fresh id, new timestamp) fingerprint
+/// identically to the steer input the app-server consumed ([`codex_fingerprint_steer`]).
+fn codex_fingerprint_message(message: &CanonicalMessage) -> CanonicalMessage {
+    if message.role == MessageRole::User {
+        return codex_fingerprint_user_input(&codex_input_parts_for_message(message, false));
+    }
+    CanonicalMessage {
+        id: String::new(),
+        created_at: String::new(),
+        ..message.clone()
+    }
+}
+
+/// Fingerprint form of a `turn/steer` input the app-server accepted for the turn.
+fn codex_fingerprint_steer(input: &[Value]) -> CanonicalMessage {
+    codex_fingerprint_user_input(input)
+}
+
+fn codex_fingerprint_user_input(input: &[Value]) -> CanonicalMessage {
+    CanonicalMessage {
+        id: String::new(),
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: Value::Array(input.to_vec()).to_string(),
+            phase: None,
+            citations: Vec::new(),
+            provider_meta: ProviderOpaqueMeta::default(),
+        }],
+        phase: None,
+        provider: None,
+        api: None,
+        model: None,
+        stop_reason: None,
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: String::new(),
+    }
+}
+
+/// How long a cancelled turn waits for the app-server to settle `turn/interrupt` before the
+/// process tree is killed.
+const CODEX_INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Sends `turn/interrupt` for the live turn and waits (bounded by [`CODEX_INTERRUPT_GRACE`]) for
+/// its `turn/completed`. A concurrent `SteerCoordinator::interrupt_codex_if_bound` interrupt is
+/// harmless: the app-server settles the turn once.
+async fn interrupt_codex_turn_gracefully(
+    client: &CodexAppServerClient,
+    notif_rx: &mut tokio::sync::mpsc::UnboundedReceiver<CodexNotification>,
+    thread_id: &str,
+    codex_turn_id: Option<&str>,
+) {
+    let settle = async {
+        let _ = client.interrupt_turn(thread_id, codex_turn_id).await;
+        while let Some(notif) = notif_rx.recv().await {
+            if notif.method != "turn/completed" {
+                continue;
+            }
+            let other_thread = notif
+                .params
+                .get("threadId")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t != thread_id);
+            let other_turn = match (
+                codex_turn_id,
+                notif
+                    .params
+                    .get("turn")
+                    .and_then(|t| t.get("id"))
+                    .and_then(Value::as_str),
+            ) {
+                (Some(expected), Some(got)) => expected != got,
+                _ => false,
+            };
+            if !other_thread && !other_turn {
+                return;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(CODEX_INTERRUPT_GRACE, settle).await;
+}
+
+/// TS `stripPromptSection`: removes the first `## <heading>` section (from the blank lines before
+/// it through the next `## ` heading or the end) and leaves a single newline in its place.
+fn strip_prompt_section(text: &str, heading: &str) -> String {
+    let wanted = format!("## {heading}");
+    let mut line_start = 0usize;
+    let mut found: Option<(usize, usize)> = None;
+    while line_start <= text.len() {
+        let line_end = text[line_start..]
+            .find('\n')
+            .map_or(text.len(), |i| line_start + i);
+        let line = &text[line_start..line_end];
+        if line.strip_suffix('\r').unwrap_or(line) == wanted {
+            found = Some((line_start, line_end));
+            break;
+        }
+        if line_end >= text.len() {
+            break;
+        }
+        line_start = line_end + 1;
+    }
+    let Some((heading_start, heading_end)) = found else {
+        return text.to_owned();
+    };
+    // `\n*` before the heading.
+    let start = text[..heading_start].trim_end_matches('\n').len();
+    // Lazily up to the next line starting with `## `, or the end of the text.
+    let mut end = text.len();
+    let mut cursor = heading_end;
+    while let Some(i) = text[cursor..].find('\n') {
+        let next_line = cursor + i + 1;
+        if text[next_line..].starts_with("## ") {
+            end = next_line;
+            break;
+        }
+        cursor = next_line;
+    }
+    format!("{}\n{}", &text[..start], &text[end..])
+}
+
+const COWORK_RUNTIME_INSTRUCTIONS_HEADING: &str = "## Cowork Runtime";
+
+/// TS `renderCoworkRuntimeInstructions`: guidance for Cowork's versioned tool runtime, when one
+/// is wired into the environment.
+fn render_cowork_runtime_instructions(env: &HashMap<String, String>) -> Option<String> {
+    let value = |key: &str| {
+        env.get(key)
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    value("COWORK_RUNTIME_NODE_MODULES")?;
+    let mut lines = vec![
+        COWORK_RUNTIME_INSTRUCTIONS_HEADING.to_owned(),
+        String::new(),
+        "Cowork's versioned runtime is already active for this turn. Its tools and dependencies are immutable shared runtime files; create artifacts in a writable workspace or scratch directory.".to_owned(),
+        "Bare Node imports such as `@oai/artifact-tool` resolve through the configured runtime resolver; do not install, copy, link, or search for a second copy.".to_owned(),
+    ];
+    if let Some(node) = value("COWORK_RUNTIME_NODE") {
+        lines.push(format!(
+            "Use bundled Node at `{node}` for document, presentation, and spreadsheet builders."
+        ));
+    }
+    if let Some(python) = value("COWORK_RUNTIME_PYTHON") {
+        lines.push(format!(
+            "Use bundled Python at `{python}` when a skill requires Python. Never run `pip install` directly into the bundled Python environment (modifying the signed runtime directory invalidates its integrity signature); if extra packages are needed, create a `venv` or use `pip install --target` inside a writable workspace or `/tmp` directory."
+        ));
+    }
+    if let Some(soffice) = value("COWORK_RUNTIME_SOFFICE") {
+        lines.push(format!(
+            "Use the managed headless-only soffice launcher at `{soffice}` for document conversion and visual QA. It blocks UI and printing modes; never bypass it by invoking LibreOffice's private program files."
+        ));
+    }
+    lines.push(
+        "Presentations and spreadsheets use `@oai/artifact-tool`; any soffice fallback resolves through the same managed runtime launcher.".to_owned(),
+    );
+    Some(lines.join("\n"))
+}
+
+/// TS `codexDeveloperInstructions`: drops Cowork's host-shell guidance (Codex runs commands
+/// through its own shell) and prepends the Codex app-server tool boundary.
+fn codex_developer_instructions(
+    system: &str,
+    env: &HashMap<String, String>,
+    dynamic_tools: &[crate::transport::ToolDefinition],
+) -> String {
+    let system = strip_prompt_section(system, "Shell Execution Policy");
+    let runtime_instructions = if system.contains(COWORK_RUNTIME_INSTRUCTIONS_HEADING) {
+        None
+    } else {
+        render_cowork_runtime_instructions(env)
+    };
+    let names: Vec<&str> = dynamic_tools.iter().map(|t| t.name.as_str()).collect();
+    let mut boundary = vec![
+        "## Codex App-Server Tool Boundary".to_owned(),
+        String::new(),
+        "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.".to_owned(),
+        "Use Codex-native tools for local files, commands, and web access.".to_owned(),
+    ];
+    if names.is_empty() {
+        boundary.push("No Cowork dynamic tools are available for this turn.".to_owned());
+    } else {
+        let listed: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+        boundary.push(format!(
+            "Available Cowork dynamic tools for this turn: {}.",
+            listed.join(", ")
+        ));
+        boundary.push(
+            "Use only the listed Cowork dynamic tools for capabilities described in their tool definitions.".to_owned(),
+        );
+    }
+    if names.contains(&"AskUserQuestion") {
+        boundary.push(
+            "For user clarification, call Cowork's dynamic `AskUserQuestion` tool directly."
+                .to_owned(),
+        );
+    }
+    boundary.push(
+        "Never call the native `request_user_input` tool, which is unavailable on Cowork's Default-mode turns.".to_owned(),
+    );
+    if names.iter().any(|n| n.starts_with("cowork_mcp__")) {
+        boundary.push(
+            "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.".to_owned(),
+        );
+    }
+    let mut sections = vec![boundary.join("\n")];
+    sections.extend(runtime_instructions);
+    sections.push(system);
+    sections.join("\n\n")
 }
 
 /// `isInvalidCodexThreadError` parity: a stored thread the app-server no longer knows about.

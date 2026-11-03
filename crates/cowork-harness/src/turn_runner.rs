@@ -1754,6 +1754,22 @@ impl DynamicToolHandler for CodexDynamicBridge {
         }
     }
 
+    /// The task-mutation lock keeps YOLO Codex turns on `approvalPolicy: "on-request"` (TS
+    /// `codexApprovalPolicy`), so native effects reach [`Self::request_approval`]; the resolved
+    /// sandbox's writable roots bound Codex's native `workspaceWrite` policy.
+    fn native_tool_context(&self) -> cowork_providers::codex_app_server::CodexNativeToolContext {
+        let ctx = &self.tool_ctx;
+        cowork_providers::codex_app_server::CodexNativeToolContext {
+            has_mutation_guard: ctx.before_tool_invocation.is_some(),
+            writable_roots: cowork_providers::codex_app_server::codex_workspace_write_roots(
+                &ctx.sandbox_policy,
+                &ctx.working_directory,
+                &ctx.output_directory,
+                &ctx.uploads_directory,
+            ),
+        }
+    }
+
     async fn request_approval(&self, method: &str, params: &Value) -> bool {
         let is_file_change = is_codex_file_change_approval(method);
         // TS `handleServerRequest`: the task-mutation lock (`assertCanMutate`) and hard-floor

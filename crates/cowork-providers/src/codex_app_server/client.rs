@@ -12,10 +12,10 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
-use crate::codex_app_server::isolation::{
-    build_codex_spawn_env, resolve_codex_app_server_status, resolve_codex_home,
-};
+use crate::codex_app_server::installer::CodexRuntimeInstallOptions;
+use crate::codex_app_server::isolation::{build_codex_spawn_env, resolve_codex_home};
 use crate::codex_app_server::policy::from_codex_mcp_tool_name;
 
 const DEFAULT_RPC_TIMEOUT_MS: u64 = 30_000;
@@ -26,8 +26,27 @@ pub struct DynamicToolCallOutput {
     pub is_error: bool,
 }
 
+/// What a dynamic tool bridge knows about the Cowork tool context that must also bound Codex's
+/// native tools, which bypass Cowork's own tool checks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexNativeToolContext {
+    /// A Cowork mutation guard (`before_tool_invocation`, TS `assertCanMutate`, e.g. the
+    /// `createTask` source-chat lock) is installed. With dynamic tools on the turn, YOLO then keeps
+    /// `approvalPolicy: "on-request"` so native effects still cross the guard via approvals.
+    pub has_mutation_guard: bool,
+    /// Writable roots of Cowork's resolved workspace-write sandbox (workspace, output and uploads
+    /// directories, tool-runtime roots); see [`super::policy::codex_workspace_write_roots`].
+    pub writable_roots: Vec<PathBuf>,
+}
+
 #[async_trait]
 pub trait DynamicToolHandler: Send + Sync {
+    /// Cowork tool-context facts for the native sandbox/approval policy. The default (no guard,
+    /// no extra roots) only ever narrows Codex.
+    fn native_tool_context(&self) -> CodexNativeToolContext {
+        CodexNativeToolContext::default()
+    }
+
     async fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> DynamicToolCallOutput;
 
     /// Native approval requests fail closed: a handler that does not evaluate the request
@@ -59,6 +78,15 @@ pub struct CodexNotification {
 
 type PendingRpcMap = HashMap<String, oneshot::Sender<Result<Value, ProviderTransportError>>>;
 
+/// A `turn/steer` input the app-server accepted for a live turn.
+#[derive(Debug, Clone)]
+struct AcceptedNativeSteer {
+    seq: u64,
+    thread_id: String,
+    turn_id: String,
+    input: Vec<Value>,
+}
+
 pub struct CodexAppServerClient {
     stdin_tx: mpsc::UnboundedSender<String>,
     pending: Arc<Mutex<PendingRpcMap>>,
@@ -66,6 +94,14 @@ pub struct CodexAppServerClient {
     child: AsyncMutex<Option<Child>>,
     next_id: AtomicU64,
     closed: Arc<AtomicBool>,
+    /// Cancels the stdout reader and every in-flight server-initiated request handler (dynamic
+    /// tool calls, approvals, user-input prompts) when the client closes or is dropped.
+    shutdown: CancellationToken,
+    /// `turn/steer` requests awaiting their response, keyed by request id. The reader loop moves
+    /// each one to `accepted_steers` when its success response arrives, i.e. in stdout order and
+    /// therefore before the `turn/completed` that ends the steered turn is dispatched.
+    pending_steers: Arc<Mutex<HashMap<String, AcceptedNativeSteer>>>,
+    accepted_steers: Arc<Mutex<Vec<AcceptedNativeSteer>>>,
 }
 
 impl CodexAppServerClient {
@@ -88,6 +124,15 @@ impl CodexAppServerClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Own process group so closing the client can kill the whole app-server tree (its
+        // sandboxed shells, code-mode host, MCP servers) instead of orphaning grandchildren.
+        #[cfg(unix)]
+        cmd.process_group(0);
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
 
         let mut child = cmd.spawn().map_err(|err| {
             ProviderTransportError::protocol(format!(
@@ -128,6 +173,7 @@ impl CodexAppServerClient {
         let subscribers: Arc<Mutex<Vec<mpsc::UnboundedSender<CodexNotification>>>> =
             Arc::new(Mutex::new(Vec::new()));
         let closed = Arc::new(AtomicBool::new(false));
+        let shutdown = CancellationToken::new();
 
         let client = Arc::new(Self {
             stdin_tx: stdin_tx.clone(),
@@ -136,6 +182,9 @@ impl CodexAppServerClient {
             child: AsyncMutex::new(Some(child)),
             next_id: AtomicU64::new(1),
             closed: closed.clone(),
+            shutdown: shutdown.clone(),
+            pending_steers: Arc::new(Mutex::new(HashMap::new())),
+            accepted_steers: Arc::new(Mutex::new(Vec::new())),
         });
 
         // Reader loop for newline-delimited JSON-RPC-lite messages from codex app-server
@@ -143,10 +192,21 @@ impl CodexAppServerClient {
         let subs_reader = subscribers.clone();
         let tx_for_server_reqs = stdin_tx;
         let closed_reader = closed;
+        let shutdown_reader = shutdown;
+        let pending_steers_reader = Arc::clone(&client.pending_steers);
+        let accepted_steers_reader = Arc::clone(&client.accepted_steers);
 
         tokio::spawn(async move {
             let mut lines = BufReader::new(child_stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            loop {
+                let line = tokio::select! {
+                    biased;
+                    () = shutdown_reader.cancelled() => break,
+                    next = lines.next_line() => match next {
+                        Ok(Some(line)) => line,
+                        _ => break,
+                    },
+                };
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -170,9 +230,15 @@ impl CodexAppServerClient {
                         let params = obj.get("params").cloned().unwrap_or(Value::Null);
                         let tx_reply = tx_for_server_reqs.clone();
                         let handler = tool_handler.clone();
+                        let shutdown_req = shutdown_reader.clone();
                         tokio::spawn(async move {
-                            let response =
-                                handle_server_initiated_request(&method, &params, handler).await;
+                            // Closing the client aborts the handler (e.g. a dynamic tool call or
+                            // a pending approval prompt) instead of leaving it detached.
+                            let response = tokio::select! {
+                                biased;
+                                () = shutdown_req.cancelled() => return,
+                                res = handle_server_initiated_request(&method, &params, handler) => res,
+                            };
                             let reply = match response {
                                 Ok(res) => json!({ "id": req_id, "result": res }),
                                 Err(err_msg) => json!({
@@ -186,6 +252,12 @@ impl CodexAppServerClient {
                     // Response to our outbound request
                     (Some(resp_id), None) => {
                         let id_key = id_value_to_key(&resp_id);
+                        let steer = pending_steers_reader.lock().remove(&id_key);
+                        if let Some(steer) = steer
+                            && obj.get("error").is_none()
+                        {
+                            accepted_steers_reader.lock().push(steer);
+                        }
                         let sender = pending_reader.lock().remove(&id_key);
                         if let Some(tx) = sender {
                             if let Some(err_obj) = obj.get("error") {
@@ -213,6 +285,7 @@ impl CodexAppServerClient {
             }
 
             closed_reader.store(true, Ordering::SeqCst);
+            pending_steers_reader.lock().clear();
             // Drop every notification sender so subscribers observe the closed stream instead of
             // waiting for a `turn/completed` that a dead app-server can never send.
             subs_reader.lock().clear();
@@ -225,7 +298,7 @@ impl CodexAppServerClient {
         });
 
         // Perform JSON-RPC-lite `initialize` -> `initialized` handshake
-        client
+        if let Err(err) = client
             .request(
                 "initialize",
                 Some(json!({
@@ -239,7 +312,11 @@ impl CodexAppServerClient {
                     }
                 })),
             )
-            .await?;
+            .await
+        {
+            client.close().await;
+            return Err(err);
+        }
         client.notify("initialized", Some(json!({})));
 
         Ok(client)
@@ -283,6 +360,17 @@ impl CodexAppServerClient {
         params: Option<Value>,
         timeout: Duration,
     ) -> Result<Value, ProviderTransportError> {
+        self.request_tracking_steer(method, params, timeout, None)
+            .await
+    }
+
+    async fn request_tracking_steer(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+        steer: Option<AcceptedNativeSteer>,
+    ) -> Result<Value, ProviderTransportError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(ProviderTransportError::protocol(
                 "Codex app-server client is closed.",
@@ -293,6 +381,11 @@ impl CodexAppServerClient {
         let id_key = numeric_id.to_string();
         let (tx, rx) = oneshot::channel();
         self.pending.lock().insert(id_key.clone(), tx);
+        if let Some(mut steer) = steer {
+            // Registered before the frame is written so the reader can never miss the response.
+            steer.seq = numeric_id;
+            self.pending_steers.lock().insert(id_key.clone(), steer);
+        }
 
         let frame = match params {
             Some(p) => json!({ "id": numeric_id, "method": method, "params": p }),
@@ -301,6 +394,7 @@ impl CodexAppServerClient {
 
         if self.stdin_tx.send(frame.to_string()).is_err() {
             self.pending.lock().remove(&id_key);
+            self.pending_steers.lock().remove(&id_key);
             return Err(ProviderTransportError::protocol(
                 "Failed to write request to codex app-server stdin.",
             ));
@@ -313,6 +407,7 @@ impl CodexAppServerClient {
             ))),
             Err(_) => {
                 self.pending.lock().remove(&id_key);
+                self.pending_steers.lock().remove(&id_key);
                 Err(ProviderTransportError::timeout(format!(
                     "Codex app-server request {method} timed out"
                 )))
@@ -324,23 +419,45 @@ impl CodexAppServerClient {
         &self,
         params: CodexTurnSteerParams,
     ) -> Result<Value, ProviderTransportError> {
-        self.request(
+        let input = if params.input.is_empty() {
+            vec![json!({
+                "type": "text",
+                "text": params.input_text,
+                "text_elements": [],
+            })]
+        } else {
+            params.input
+        };
+        let payload = json!({
+            "threadId": params.thread_id,
+            "expectedTurnId": params.expected_turn_id,
+            "input": input,
+        });
+        self.request_tracking_steer(
             "turn/steer",
-            Some(json!({
-                "threadId": params.thread_id,
-                "expectedTurnId": params.expected_turn_id,
-                "input": if params.input.is_empty() {
-                    vec![json!({
-                        "type": "text",
-                        "text": params.input_text,
-                        "text_elements": [],
-                    })]
-                } else {
-                    params.input
-                },
-            })),
+            Some(payload),
+            Duration::from_millis(DEFAULT_RPC_TIMEOUT_MS),
+            Some(AcceptedNativeSteer {
+                seq: 0,
+                thread_id: params.thread_id,
+                turn_id: params.expected_turn_id,
+                input,
+            }),
         )
         .await
+    }
+
+    /// Removes and returns (in send order) the `turn/steer` inputs the app-server accepted for
+    /// `turn_id` of `thread_id`. They were consumed by that turn, so the continuation recorded
+    /// for it must cover them.
+    pub fn take_accepted_steer_inputs(&self, thread_id: &str, turn_id: &str) -> Vec<Vec<Value>> {
+        let mut accepted = self.accepted_steers.lock();
+        let (mut mine, rest): (Vec<_>, Vec<_>) = accepted
+            .drain(..)
+            .partition(|s| s.thread_id == thread_id && s.turn_id == turn_id);
+        *accepted = rest;
+        mine.sort_by_key(|s| s.seq);
+        mine.into_iter().map(|s| s.input).collect()
     }
 
     pub async fn interrupt_turn(
@@ -363,13 +480,77 @@ impl CodexAppServerClient {
         self.closed.load(Ordering::SeqCst)
     }
 
+    /// Hard-closes the app-server: aborts in-flight server-initiated request handlers and kills
+    /// the whole process tree (its process group on Unix, `taskkill /T /F` on Windows).
     pub async fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        self.shutdown.cancel();
         if let Some(mut child) = self.child.lock().await.take() {
+            // Kill the tree while the root is still unreaped, so its pid/pgid cannot be reused.
+            if let Some(pid) = child.id() {
+                kill_process_tree(pid).await;
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
     }
+}
+
+impl Drop for CodexAppServerClient {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        // `kill_on_drop` only reaches the root process; take the rest of the tree with it.
+        if let Some(child) = self.child.get_mut().as_mut()
+            && let Some(pid) = child.id()
+        {
+            kill_process_tree_blocking(pid);
+            let _ = child.start_kill();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_tree_kill_command(pid: u32) -> std::process::Command {
+    // The app-server leads its own process group (`process_group(0)`): signal the group.
+    let mut cmd = std::process::Command::new("kill");
+    cmd.args(["-s", "KILL", "--", &format!("-{pid}")]);
+    cmd
+}
+
+#[cfg(windows)]
+fn process_tree_kill_command(pid: u32) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut cmd = std::process::Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+async fn kill_process_tree(pid: u32) {
+    #[cfg(any(unix, windows))]
+    {
+        let mut cmd = Command::from(process_tree_kill_command(pid));
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let _ = tokio::time::timeout(Duration::from_secs(5), cmd.status()).await;
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = pid;
+}
+
+fn kill_process_tree_blocking(pid: u32) {
+    #[cfg(any(unix, windows))]
+    {
+        let _ = process_tree_kill_command(pid)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = pid;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -390,6 +571,10 @@ impl CodexAppServerPool {
         }
     }
 
+    /// Returns the live pooled client for `(cwd, codex_home)`, spawning one when needed. Like TS
+    /// `resolveCodexAppServerCommand`, a missing (or stale) Cowork-managed runtime is installed
+    /// from the pinned, checksum-verified release first, so ChatGPT sign-in works on a clean
+    /// machine.
     pub async fn get_or_spawn(
         &self,
         cwd: &Path,
@@ -402,23 +587,37 @@ impl CodexAppServerPool {
             codex_home,
         };
 
-        let mut map = self.entries.lock().await;
-        if let Some(existing) = map.get(&key) {
-            if !existing.is_closed() {
-                return Ok(Arc::clone(existing));
+        {
+            let mut map = self.entries.lock().await;
+            if let Some(existing) = map.get(&key) {
+                if !existing.is_closed() {
+                    return Ok(Arc::clone(existing));
+                }
+                map.remove(&key);
             }
-            map.remove(&key);
         }
 
-        let status = resolve_codex_app_server_status(cowork_home, env);
-        if !status.available {
-            return Err(ProviderTransportError::protocol(status.message));
-        }
-        let command = status.command.unwrap_or_else(|| "codex".to_string());
-        let args = status.args.unwrap_or_default();
-
+        // Resolve (and, if needed, download) the runtime without holding the pool lock, so a
+        // slow install never blocks `close_for_home` / other workspaces.
+        let (command, args) = super::ensure_codex_runtime_command(
+            cowork_home,
+            env,
+            &CodexRuntimeInstallOptions::from_env(env),
+        )
+        .await?;
         let client =
             CodexAppServerClient::spawn_stdio(&command, &args, cwd, cowork_home, env, None).await?;
+
+        let mut map = self.entries.lock().await;
+        if let Some(existing) = map.get(&key)
+            && !existing.is_closed()
+        {
+            // A concurrent caller won the race; keep its client and discard ours.
+            let existing = Arc::clone(existing);
+            drop(map);
+            client.close().await;
+            return Ok(existing);
+        }
         map.insert(key, Arc::clone(&client));
         Ok(client)
     }
@@ -514,7 +713,19 @@ async fn handle_server_initiated_request(
             };
             Ok(json!({ "decision": if approved { "accept" } else { "decline" } }))
         }
-        "item/tool/requestUserInput" | "mcpServer/elicitation/request" => match tool_handler {
+        // TS `handleServerRequest`: MCP elicitations are unsupported and always declined; they
+        // carry no `questions`, so they must never reach the user-input bridge.
+        "mcpServer/elicitation/request" => {
+            let server = params
+                .get("serverName")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown MCP server");
+            tracing::info!(
+                "[codex-app-server] Declined unsupported MCP elicitation from {server}."
+            );
+            Ok(json!({ "action": "decline", "content": null, "_meta": null }))
+        }
+        "item/tool/requestUserInput" => match tool_handler {
             Some(h) => Ok(h.request_user_input(method, params).await),
             None => Ok(json!({ "answers": {} })),
         },

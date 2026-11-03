@@ -166,24 +166,6 @@ pub fn sync_codex_windows_sandbox_setup_state(cowork_home: &Path, codex_home: &P
     }
 }
 
-fn find_executable_in_path(bin_name: &str, path_env: Option<&str>) -> Option<PathBuf> {
-    let raw_path = path_env?;
-    for entry in std::env::split_paths(raw_path) {
-        let candidate = entry.join(bin_name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        #[cfg(windows)]
-        {
-            let exe = entry.join(format!("{bin_name}.exe"));
-            if exe.is_file() {
-                return Some(exe);
-            }
-        }
-    }
-    None
-}
-
 fn parse_override_args(raw: Option<&str>) -> Vec<String> {
     let Some(trimmed) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return Vec::new();
@@ -232,7 +214,7 @@ fn parse_override_args(raw: Option<&str>) -> Vec<String> {
 }
 
 /// True when `COWORK_CODEX_APP_SERVER_BIN`/`COWORK_CODEX_APP_SERVER_COMMAND` pins an explicit
-/// Codex binary, which wins over the managed and system runtimes.
+/// Codex binary, which wins over the managed runtime.
 pub fn codex_app_server_override_configured(env: &HashMap<String, String>) -> bool {
     codex_app_server_override(env).is_some()
 }
@@ -294,25 +276,9 @@ pub fn resolve_codex_app_server_status(
         };
     }
 
-    let path_var = env
-        .get("PATH")
-        .map(String::as_str)
-        .or_else(|| env.get("Path").map(String::as_str));
-    if let Some(sys_codex) = find_executable_in_path("codex", path_var) {
-        let cmd_str = sys_codex.to_string_lossy().into_owned();
-        return CodexInstallStatus {
-            available: true,
-            source: "system".to_string(),
-            command: Some(cmd_str),
-            args: Some(vec!["app-server".to_string()]),
-            version: None,
-            pinned_version: Some(CODEX_APP_SERVER_MANAGED_VERSION.to_string()),
-            pin_matches_current: None,
-            managed_path: Some(managed_str),
-            message: "System codex CLI is available.".to_string(),
-        };
-    }
-
+    // TS `getCodexAppServerInstallStatus` parity: only an explicit override or the pinned,
+    // checksum-verified managed runtime ever runs. `PATH` is never searched, so a foreign
+    // `codex` binary (or one planted in a relative/empty `PATH` entry) is never executed.
     CodexInstallStatus {
         available: false,
         source: "missing".to_string(),
@@ -322,6 +288,8 @@ pub fn resolve_codex_app_server_status(
         pinned_version: Some(CODEX_APP_SERVER_MANAGED_VERSION.to_string()),
         pin_matches_current: Some(false),
         managed_path: Some(managed_str),
-        message: "Codex app-server runtime is not installed.".to_string(),
+        message: format!(
+            "Cowork-managed Codex runtime {CODEX_APP_SERVER_MANAGED_VERSION} has not been downloaded yet. Account sign-in can still be connected; Cowork will download the runtime before first Codex turn."
+        ),
     }
 }

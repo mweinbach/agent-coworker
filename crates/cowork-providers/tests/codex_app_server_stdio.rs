@@ -107,6 +107,7 @@ fn narrows_danger_full_access_without_network_and_enforces_hybrid_dynamic_tool_b
         agent_target_paths: Vec::new(),
         read_only_role: false,
         has_mutation_guard_with_dynamic_tools: false,
+        extra_writable_roots: Vec::new(),
     });
     assert_eq!(narrowed.thread_sandbox, "workspace-write");
     assert_eq!(narrowed.turn_sandbox_policy["type"], "workspaceWrite");
@@ -141,6 +142,7 @@ fn narrows_danger_full_access_without_network_and_enforces_hybrid_dynamic_tool_b
         agent_target_paths: Vec::new(),
         read_only_role: false,
         has_mutation_guard_with_dynamic_tools: false,
+        extra_writable_roots: Vec::new(),
     });
     assert_eq!(ro.thread_sandbox, "read-only");
     assert_eq!(ro.turn_sandbox_policy["type"], "readOnly");
@@ -154,6 +156,7 @@ fn narrows_danger_full_access_without_network_and_enforces_hybrid_dynamic_tool_b
         agent_target_paths: vec![ws.join("src")],
         read_only_role: false,
         has_mutation_guard_with_dynamic_tools: true,
+        extra_writable_roots: Vec::new(),
     });
     assert_eq!(scoped.thread_sandbox, "workspace-write");
     assert_eq!(scoped.approval_policy, "on-request");

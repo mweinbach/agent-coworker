@@ -1,7 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use cowork_config::SandboxMode;
-use cowork_sandbox::policy::{scratch_roots, with_tmp_scratch};
+use cowork_config::{SandboxConfig, SandboxMode};
+use cowork_sandbox::SandboxPolicy;
+use cowork_sandbox::policy::{
+    ResolveSandboxPolicyInput, canonical_tmp_alias, resolve_sandbox_policy, scratch_roots,
+    with_tmp_scratch,
+};
 use serde_json::{Value, json};
 
 use crate::transport::ToolDefinition;
@@ -15,6 +19,10 @@ pub struct CodexSandboxNarrowingInput {
     pub agent_target_paths: Vec<PathBuf>,
     pub read_only_role: bool,
     pub has_mutation_guard_with_dynamic_tools: bool,
+    /// Further writable roots of Cowork's resolved workspace-write policy (output and uploads
+    /// directories, managed tool-runtime roots). Only widen an unscoped workspace-write turn;
+    /// scoped children stay confined to `agent_target_paths`.
+    pub extra_writable_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,7 +60,7 @@ pub fn resolve_codex_sandbox_and_approval_policy(
         let base_roots: Vec<PathBuf> = if has_scoped_paths {
             input.agent_target_paths.clone()
         } else {
-            vec![input.workspace_dir.clone()]
+            unscoped_workspace_write_roots(&input.workspace_dir, &input.extra_writable_roots)
         };
         // TS `codexSandboxPolicy`: grant temp scratch explicitly, filtered so a scratch dir that
         // is an ancestor of a writable root (a workspace or scoped target under `/tmp`) is never
@@ -97,6 +105,56 @@ pub fn resolve_codex_sandbox_and_approval_policy(
         turn_sandbox_policy,
         approval_policy,
         force_disable_web_search,
+    }
+}
+
+/// TS `codexSandboxPolicy` workspace-write roots: the workspace plus the rest of Cowork's resolved
+/// writable roots (output, uploads, tool-runtime roots). Temp scratch roots are dropped here
+/// because [`with_tmp_scratch`] re-adds them only when they do not widen another root.
+fn unscoped_workspace_write_roots(workspace_dir: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
+    let scratch: Vec<PathBuf> = scratch_roots(None)
+        .iter()
+        .map(|p| canonical_tmp_alias(p))
+        .collect();
+    let mut roots = vec![workspace_dir.to_path_buf()];
+    for root in extra {
+        if root.as_os_str().is_empty() || scratch.contains(&canonical_tmp_alias(root)) {
+            continue;
+        }
+        if !roots.contains(root) {
+            roots.push(root.clone());
+        }
+    }
+    roots
+}
+
+/// Writable roots of Cowork's workspace-write sandbox for a turn, used to bound Codex's native
+/// `workspaceWrite` policy (TS `resolveCodexCoworkSandboxPolicy`). A resolved workspace-write
+/// policy contributes its own roots; any other policy (e.g. `danger-full-access` narrowed for a
+/// network ban) is re-resolved as workspace-write over the workspace, output and uploads dirs.
+pub fn codex_workspace_write_roots(
+    policy: &SandboxPolicy,
+    working_directory: &Path,
+    output_directory: &Path,
+    uploads_directory: &Path,
+) -> Vec<PathBuf> {
+    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
+        return writable_roots.clone();
+    }
+    let resolved = resolve_sandbox_policy(&ResolveSandboxPolicyInput {
+        config: Some(SandboxConfig {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            ..SandboxConfig::default()
+        }),
+        project_root: Some(working_directory.to_path_buf()),
+        output_directory: Some(output_directory.to_path_buf()),
+        uploads_directory: Some(uploads_directory.to_path_buf()),
+        ..ResolveSandboxPolicyInput::new(working_directory)
+    });
+    match resolved {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => writable_roots,
+        _ => Vec::new(),
     }
 }
 

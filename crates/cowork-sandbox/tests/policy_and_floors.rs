@@ -217,13 +217,9 @@ fn filters_target_paths_for_symlinks_protected_metadata_windows_drives_and_creat
         None
     );
 
-    // Simulated Windows cross-drive and UNC target containment. On a real Windows host the
-    // existing `C:\` prefix canonicalizes to its verbatim (`\\?\`) form, like every other root.
-    let expected_win_target = if cfg!(windows) {
-        PathBuf::from(r"\\?\C:\repo\src\main.rs")
-    } else {
-        PathBuf::from(r"C:\repo\src\main.rs")
-    };
+    // Simulated Windows cross-drive and UNC target containment. `canonicalize_sync` strips the
+    // verbatim (`\\?\`) prefix on real Windows hosts, so the plain spelling is expected everywhere.
+    let expected_win_target = PathBuf::from(r"C:\repo\src\main.rs");
     assert_eq!(
         is_usable_target_path("src\\main.rs", Path::new(r"C:\repo"), None, Some("win32")),
         Some(expected_win_target)

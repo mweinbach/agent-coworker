@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "bun";
-import { resolveWorkspaceServerBinary } from "../../../scripts/workspaceRustBinary";
+import { cargoAvailable, resolveWorkspaceServerBinary } from "../../../scripts/workspaceRustBinary";
 import {
   findPackagedSidecarLaunchCommand,
   SIDECAR_MANIFEST_NAME,
@@ -172,6 +172,15 @@ function resolveWebDevSidecarCommand(
       throw new Error(`COWORK_DESKTOP_SIDECAR_PATH does not exist: ${explicitPath}`);
     }
     return findPackagedSidecarLaunchCommand([], { explicitPath });
+  }
+
+  // With a Rust toolchain, let Cargo build (or confirm freshness of) the server so a sidecar
+  // staged by an earlier `build:desktop-resources` never shadows newer `crates/` sources.
+  if (cargoAvailable(root, env)) {
+    return {
+      command: resolveWorkspaceServerBinary(root, env, { includeStaged: false }),
+      args: [],
+    };
   }
 
   const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");

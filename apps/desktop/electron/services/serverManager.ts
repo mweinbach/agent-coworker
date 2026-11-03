@@ -1522,11 +1522,12 @@ export class ServerManager {
     const devRepoRoot = !isPackaged ? resolveDevRepoRoot() : null;
     const builtInDir = isPackaged
       ? resolvePackagedBuiltinDistDir()
-      : process.env.COWORK_BUILTIN_DIR?.trim() ||
-        (devRepoRoot && fs.existsSync(path.join(devRepoRoot, "dist", "config", "defaults.json"))
-          ? path.join(devRepoRoot, "dist")
-          : devRepoRoot && fs.existsSync(path.join(devRepoRoot, "config", "defaults.json"))
-            ? devRepoRoot
+      : // Dev: the checked-out sources win over a possibly stale `<repo>/dist` build output.
+        process.env.COWORK_BUILTIN_DIR?.trim() ||
+        (devRepoRoot && fs.existsSync(path.join(devRepoRoot, "config", "defaults.json"))
+          ? devRepoRoot
+          : devRepoRoot && fs.existsSync(path.join(devRepoRoot, "dist", "config", "defaults.json"))
+            ? path.join(devRepoRoot, "dist")
             : null);
     if (isPackaged && !builtInDir) {
       throw new Error(

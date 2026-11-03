@@ -85,7 +85,8 @@ export async function buildWorkspaceReleaseBinaries(
   return names.map((name) => reportedExecutable(output, name));
 }
 
-function cargoAvailable(root: string, env: NodeJS.ProcessEnv): boolean {
+/** True when `root` is a Cargo workspace and a Rust toolchain can build it. */
+export function cargoAvailable(root: string, env: NodeJS.ProcessEnv): boolean {
   if (!existsSync(path.join(root, "Cargo.toml"))) return false;
   const probe = spawnSync("cargo", ["--version"], { cwd: root, env, stdio: "ignore" });
   return !probe.error && probe.status === 0;

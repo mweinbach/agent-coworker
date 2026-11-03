@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   resolveDesktopTargetTriple,
   resolvePackagedSidecarFilename,
+  SIDECAR_MANIFEST_NAME,
 } from "../apps/desktop/electron/services/sidecar";
 import {
   createServerStdoutMonitor,
@@ -219,8 +220,19 @@ describe("web dev process lifecycle", () => {
     expect(started[0].env.COWORK_SERVER_URL).toBe("ws://127.0.0.1:7337/ws");
   });
 
-  test("builds only the server on a clean checkout and launches Cargo's reported executable", async () => {
-    const fixture = createLauncherFixture({ staged: false });
+  test("builds only the server with Cargo even when a stale sidecar is staged", async () => {
+    const fixture = createLauncherFixture({ staged: true });
+    // A sidecar staged by an earlier desktop build (a non-runnable placeholder here) must not
+    // shadow a fresh Cargo build of the checked-out sources.
+    writeFixtureFile(
+      path.join(fixture.root, "apps", "desktop", "resources", "binaries", SIDECAR_MANIFEST_NAME),
+      JSON.stringify({
+        filename: resolvePackagedSidecarFilename(),
+        targetTriple: resolveDesktopTargetTriple(),
+        platform: process.platform,
+        arch: process.arch,
+      }),
+    );
     // A tiny offline crate exercises Cargo's real artifact/target-dir behavior without building Cowork.
     writeFixtureFile(
       path.join(fixture.root, "Cargo.toml"),

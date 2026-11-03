@@ -11,11 +11,11 @@ use cowork_inference::{
 };
 use cowork_providers::codex_app_server::{
     CodexAppServerClient, CodexAppServerTransport, CodexSandboxNarrowingInput,
-    CodexTurnSteerParams, DynamicToolCallOutput, DynamicToolHandler, build_codex_spawn_env,
-    filter_codex_dynamic_tools, from_codex_mcp_tool_name, read_codex_account,
-    read_openai_native_connectors, resolve_codex_home, resolve_codex_sandbox_and_approval_policy,
-    set_openai_native_connector_enabled, sync_codex_windows_sandbox_setup_state,
-    to_codex_mcp_tool_name,
+    CodexSandboxRestrictions, CodexTurnSteerParams, DynamicToolCallOutput, DynamicToolHandler,
+    build_codex_spawn_env, filter_codex_dynamic_tools, from_codex_mcp_tool_name,
+    read_codex_account, read_openai_native_connectors, resolve_codex_home,
+    resolve_codex_sandbox_and_approval_policy, set_openai_native_connector_enabled,
+    sync_codex_windows_sandbox_setup_state, to_codex_mcp_tool_name,
 };
 use cowork_providers::{ProviderStepRequest, ProviderTransport, ToolDefinition};
 use serde_json::{Map, Value, json};
@@ -829,6 +829,7 @@ async fn codex_native_sandbox_honors_read_only_role_target_paths_and_forwards_re
     // Scoped child: writable roots limited to its targetPaths, not the whole workspace.
     let scoped = fx.base.join("workspace/src");
     let mut opts = Map::new();
+    opts.insert("agentTargetPaths".into(), json!([fx.base.join("home")]));
     opts.insert("codex-cli".into(), json!({ "reasoningEffort": "none" }));
     fx.run_with(
         "scoped",
@@ -865,12 +866,67 @@ async fn codex_native_sandbox_honors_read_only_role_target_paths_and_forwards_re
     assert_eq!(turn["sandboxPolicy"]["excludeTmpdirEnvVar"], true);
     assert!(turn.get("effort").is_none(), "effort none must be omitted");
 
-    // Provider-option fallback for the read-only role (no transport restrictions set).
+    // Provider options can narrow a trusted workspace-write turn to read-only.
     let mut opts = Map::new();
     opts.insert("readOnlyRole".into(), json!(true));
-    fx.run_with("ro_opts", msgs, None, opts, None)
-        .await
-        .unwrap();
+    fx.run_with(
+        "ro_opts",
+        msgs,
+        None,
+        opts,
+        Some(CodexSandboxRestrictions {
+            mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
     let (thread, _) = thread_and_turn(&fx.logged("ro_opts"));
     assert_eq!(thread["sandbox"], "read-only");
+}
+
+#[tokio::test]
+async fn codex_provider_options_cannot_grant_native_tool_permissions() {
+    let fx = CodexOutcomeFixture::new();
+    let workspace = fx.base.join("workspace");
+    let outside = fx.base.join("home");
+    let opts = json!({
+        "agentTargetPaths": [&outside],
+        "sandboxMode": "danger-full-access",
+        "sandboxNetwork": true,
+        "yolo": true,
+    });
+    let root = CodexSandboxRestrictions {
+        mode: Some(SandboxMode::WorkspaceWrite),
+        ..Default::default()
+    };
+    for (run, context) in [("root", Some(root)), ("unprivileged", None)] {
+        fx.run_with(
+            run,
+            vec![codex_outcome_text_msg("u1", MessageRole::User, "hello")],
+            None,
+            opts.as_object().unwrap().clone(),
+            context,
+        )
+        .await
+        .unwrap();
+        let log = fx.logged(run);
+        let turn = &log.iter().find(|m| m["method"] == "turn/start").unwrap()["params"];
+        let policy = &turn["sandboxPolicy"];
+        assert_eq!(turn["approvalPolicy"], "on-request");
+        assert_eq!(policy["networkAccess"], false);
+        if run == "root" {
+            assert_eq!(policy["type"], "workspaceWrite");
+            let roots = policy["writableRoots"].as_array().unwrap();
+            assert!(roots.contains(&json!(workspace)));
+            assert!(
+                roots
+                    .iter()
+                    .all(|r| !outside.starts_with(r.as_str().unwrap()))
+            );
+        } else {
+            assert_eq!(policy["type"], "readOnly");
+            assert!(policy.get("writableRoots").is_none());
+        }
+    }
 }

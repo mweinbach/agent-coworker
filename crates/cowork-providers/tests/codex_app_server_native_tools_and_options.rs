@@ -12,7 +12,9 @@ use cowork_inference::{
     CanonicalMessage, ClientCapabilities, ContentBlock, MessageRole, ProviderOpaqueMeta,
     RequestPolicy, StepBudget, StreamEvent, StreamEventProjector,
 };
-use cowork_providers::codex_app_server::{CodexAppServerTransport, CodexTodosCallback};
+use cowork_providers::codex_app_server::{
+    CodexAppServerTransport, CodexSandboxRestrictions, CodexTodosCallback,
+};
 use cowork_providers::{ProviderStepRequest, ProviderStepResult, ProviderTransport};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -151,7 +153,7 @@ impl Fixture {
             model_id,
             codex_options,
             built_in_dir,
-            Map::new(),
+            false,
             None,
         )
         .await
@@ -165,10 +167,10 @@ impl Fixture {
         model_id: &str,
         codex_options: Value,
         built_in_dir: Option<PathBuf>,
-        top_level_options: Map<String, Value>,
+        network_allowed: bool,
         todos: Option<CodexTodosCallback>,
     ) -> (ProviderStepResult, Vec<StreamEvent>) {
-        let mut opts = top_level_options;
+        let mut opts = Map::new();
         opts.insert(
             "cwd".into(),
             json!(self.base.join("workspace").to_string_lossy()),
@@ -195,6 +197,10 @@ impl Fixture {
                 behavior.into(),
             ],
         )
+        .with_sandbox_restrictions(CodexSandboxRestrictions {
+            network: Some(network_allowed),
+            ..Default::default()
+        })
         .with_built_in_dir(built_in_dir)
         .with_todos_handler(todos);
         transport.env_override = Some(env);
@@ -494,15 +500,13 @@ async fn codex_forwards_web_search_mode_tool_config_and_disables_multi_agent() {
     });
 
     // Network allowed: the mode and the tool config pass through.
-    let mut network = Map::new();
-    network.insert("sandboxNetwork".into(), json!(true));
     fx.run_with(
         "net",
         "plain",
         "gpt-5.6-sol",
         web_options.clone(),
         None,
-        network,
+        true,
         None,
     )
     .await;
@@ -533,15 +537,13 @@ async fn codex_forwards_web_search_mode_tool_config_and_disables_multi_agent() {
     );
 
     // Invalid modes are dropped.
-    let mut network = Map::new();
-    network.insert("sandboxNetwork".into(), json!(true));
     fx.run_with(
         "bad",
         "plain",
         "gpt-5.6-sol",
         json!({ "webSearchMode": "always", "webSearch": { "contextSize": "huge" } }),
         None,
-        network,
+        true,
         None,
     )
     .await;
@@ -561,7 +563,7 @@ async fn codex_todo_list_updates_reach_the_session_todos() {
         "gpt-5.6-sol",
         json!({}),
         None,
-        Map::new(),
+        false,
         Some(handler),
     )
     .await;

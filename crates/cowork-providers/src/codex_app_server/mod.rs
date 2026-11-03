@@ -96,9 +96,8 @@ pub struct CodexAppServerTransport {
     pub install_options: Option<CodexRuntimeInstallOptions>,
 }
 
-/// Cowork session/agent restrictions applied to the native Codex sandbox. Merged fail-closed with
-/// the `sandboxMode` / `sandboxNetwork` / `yolo` / `readOnlyRole` / `agentTargetPaths` provider
-/// options: either source can only narrow, never widen, the resulting policy.
+/// Trusted tool-context grants for the native Codex sandbox. Only the server supplies writable
+/// roots. Workspace provider options may further restrict access or require approvals.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodexSandboxRestrictions {
     pub mode: Option<SandboxMode>,
@@ -1328,62 +1327,36 @@ fn codex_model_declares_reasoning_summary(
     })
 }
 
-fn and_restrict(a: Option<bool>, b: Option<bool>) -> Option<bool> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x && y),
-        (x, None) => x,
-        (None, y) => y,
-    }
-}
-
-/// Fail-closed merge of transport restrictions with provider options.
+/// Provider options can come from the workspace and cannot grant native tool permissions.
 fn resolve_effective_codex_restrictions(
     transport: Option<&CodexSandboxRestrictions>,
     provider_options: &serde_json::Map<String, Value>,
 ) -> CodexSandboxRestrictions {
-    let base = transport.cloned().unwrap_or_default();
-    let opt_mode = provider_options
-        .get("sandboxMode")
-        .and_then(|v| serde_json::from_value::<SandboxMode>(v.clone()).ok());
-    let mode = match (base.mode, opt_mode) {
-        (Some(SandboxMode::ReadOnly), _) | (_, Some(SandboxMode::ReadOnly)) => {
-            Some(SandboxMode::ReadOnly)
-        }
-        (Some(m), _) => Some(m),
-        (None, m) => m,
-    };
-    let opt_targets: Vec<PathBuf> = provider_options
-        .get("agentTargetPaths")
-        .and_then(Value::as_array)
-        .map(|paths| {
-            paths
-                .iter()
-                .filter_map(Value::as_str)
-                .map(PathBuf::from)
-                .collect()
-        })
-        .unwrap_or_default();
-    CodexSandboxRestrictions {
-        mode,
-        network: and_restrict(
-            base.network,
-            provider_options
-                .get("sandboxNetwork")
-                .and_then(Value::as_bool),
-        ),
-        yolo: and_restrict(
-            base.yolo,
-            provider_options.get("yolo").and_then(Value::as_bool),
-        ),
-        read_only_role: base.read_only_role
-            || provider_options
-                .get("readOnlyRole")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        target_paths: if base.target_paths.is_empty() {
-            opt_targets
-        } else {
-            base.target_paths
-        },
+    let mut restrictions = transport
+        .cloned()
+        .unwrap_or_else(|| CodexSandboxRestrictions {
+            mode: Some(SandboxMode::ReadOnly),
+            ..Default::default()
+        });
+    if provider_options.get("sandboxMode").and_then(Value::as_str) == Some("read-only") {
+        restrictions.mode = Some(SandboxMode::ReadOnly);
     }
+    if provider_options
+        .get("sandboxNetwork")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        restrictions.network = Some(false);
+    }
+    if provider_options.get("yolo").and_then(Value::as_bool) == Some(false) {
+        restrictions.yolo = Some(false);
+    }
+    if provider_options
+        .get("readOnlyRole")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        restrictions.read_only_role = true;
+    }
+    restrictions
 }

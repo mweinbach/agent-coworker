@@ -255,7 +255,7 @@ describe("in-app toast lifetime and overflow", () => {
       );
 
       const dismiss = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Dismiss notification"]',
+        'button[aria-label^="Dismiss notification"]',
       );
       await act(async () => {
         dismiss?.click();

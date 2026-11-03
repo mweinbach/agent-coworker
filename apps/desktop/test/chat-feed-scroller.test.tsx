@@ -464,6 +464,7 @@ describe("desktop chat message scroller", () => {
       ) as HTMLElement | null;
       if (!viewport) throw new Error("missing viewport");
       expect(viewport.scrollTop).toBe(0);
+      expect(viewport.tabIndex).toBe(0);
 
       heights.set("assistant-1", 500);
       await act(async () => {

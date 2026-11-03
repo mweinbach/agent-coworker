@@ -1087,13 +1087,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       if (!action || !isCurrentScope()) return;
 
       if (action === "open") {
-        if (entry.isDirectory) {
-          toggleDirectory(targetPath);
-        } else {
-          void openFile(workspaceId, targetPath, false).catch((error) =>
-            reportFileActionError("Open file", error),
-          );
-        }
+        void openFile(workspaceId, targetPath, false).catch((error) =>
+          reportFileActionError(entry.isDirectory ? "Open folder" : "Open file", error),
+        );
       } else if (action === "expand" || action === "collapse") {
         toggleDirectory(targetPath);
       } else if (action === "reveal") {

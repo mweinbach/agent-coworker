@@ -90,6 +90,41 @@ describe("CreationReadinessNotice", () => {
     expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "openai" });
   });
 
+  test("keeps blocked repair actions available when a repair fails", () => {
+    const onRepair = mock(() => {});
+    act(() => {
+      root.render(
+        createElement(CreationReadinessNotice, {
+          checking: false,
+          error: "Provider settings could not be opened.",
+          result: {
+            ready: false,
+            checks: [
+              {
+                id: "provider_credentials",
+                status: "blocked",
+                message: "Connect OpenAI with an API key to start this chat.",
+                repairAction: { type: "connectProvider", provider: "openai" },
+              },
+            ],
+          },
+          repairing: false,
+          onRepair,
+          onRetry: () => {},
+        }),
+      );
+    });
+
+    expect(container.textContent).toContain("Provider settings could not be opened.");
+    expect(container.textContent).toContain("Retry check");
+    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Connect OpenAI"),
+    );
+    expect(connect).not.toBeNull();
+    act(() => connect?.click());
+    expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "openai" });
+  });
+
   test("shows startup work as polite progress instead of an assertive failure", () => {
     act(() => {
       root.render(

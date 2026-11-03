@@ -126,11 +126,12 @@ describe("foreground operation feedback accessibility", () => {
 
       const alert = container.querySelector('[role="alert"]');
       const dismiss = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Dismiss notification"]',
+        'button[aria-label^="Dismiss notification"]',
       );
       expect(alert?.getAttribute("aria-live")).toBe("assertive");
       expect(alert?.getAttribute("aria-atomic")).toBe("true");
       expect(dismiss).not.toBeNull();
+      expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss notification: Memory not saved");
       expect(harness.dom.window.document.activeElement).toBe(focusTarget);
 
       await act(async () => {

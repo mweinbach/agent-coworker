@@ -36,9 +36,14 @@ const TAB_SEARCH_PLACEHOLDER: Record<ToolAccessTabId, string | null> = {
 
 function MutationErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-destructive/5 px-4 py-3">
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-3 rounded-lg bg-destructive/5 px-4 py-3"
+    >
       <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
-      <span className="min-w-0 flex-1 truncate text-xs text-destructive">{message}</span>
+      <span className="min-w-0 flex-1 basis-48 break-words text-xs leading-relaxed text-destructive">
+        {message}
+      </span>
       <Button size="sm" variant="outline" onClick={onDismiss}>
         Dismiss
       </Button>
@@ -166,7 +171,9 @@ export function ToolAccessTabs() {
             panelId={TOOL_ACCESS_PANEL_ID}
             value={effectiveTab}
             onValueChange={(value) => {
-              if (isToolAccessTabId(value)) setActiveTab(value);
+              if (!isToolAccessTabId(value)) return;
+              setActiveTab(value);
+              setSearchQuery("");
             }}
             items={tabs.map((tab) => {
               const count = tabCounts[tab.id];

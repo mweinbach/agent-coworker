@@ -426,6 +426,8 @@ describe("top bar toolbar variants", () => {
       });
     }
     expect(container.querySelector('[aria-label="Show usage summary"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Close thread details"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Open thread details"]')).toBeNull();
     await act(async () => {
       harness.dom.window.document.body.dispatchEvent(
         new harness.dom.window.MouseEvent("mousedown", { bubbles: true }),

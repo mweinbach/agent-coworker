@@ -126,7 +126,7 @@ export function NewChatLanding() {
   const creationAbortRef: { current: AbortController | null } = useRef(null);
   const submitting =
     composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending";
-  const composerLocked = submitting || attachmentIngestionPending;
+  const composerLocked = submitting;
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
   const setAttachmentPickerError = useCallback(
     (message: string | null) => {
@@ -716,13 +716,15 @@ export function NewChatLanding() {
             <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
               {submitting
                 ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
-                : readinessBlocked
-                  ? "Setup required"
-                  : readinessPending
-                    ? "Finishing setup — send now and your chat will start automatically."
-                    : readiness.checking && !readiness.result
-                      ? "Validating readiness…"
-                      : null}
+                : attachmentIngestionPending
+                  ? "Preparing attachments…"
+                  : readinessBlocked
+                    ? "Setup required"
+                    : readinessPending
+                      ? "Finishing setup — send now and your chat will start automatically."
+                      : readiness.checking && !readiness.result
+                        ? "Validating readiness…"
+                        : null}
             </MessageComposerStatus>
           </MessageComposerForm>
         </MessageComposerRoot>

@@ -1247,6 +1247,86 @@ describe("desktop activity group card", () => {
     }
   });
 
+  test("keeps keyboard scrolling inside a live activity timeline", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const outerKeyDown = mock(() => {});
+    let nestedScrollHeight = 900;
+
+    const renderActivity = async (toolCount: number) => {
+      await act(async () => {
+        root.render(
+          createElement(
+            "div",
+            { onKeyDown: outerKeyDown },
+            createElement(ActivityGroupCard, {
+              live: true,
+              liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+              items: Array.from({ length: toolCount }, (_, index) => ({
+                id: `tool-${index + 1}`,
+                kind: "tool" as const,
+                ts: `2024-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+                name: "read",
+                state: "output-available" as const,
+                args: { path: `file-${index + 1}.ts` },
+              })),
+            }),
+          ),
+        );
+      });
+    };
+
+    try {
+      await renderActivity(4);
+      await expandActivity(container);
+      const timeline = container.querySelector(
+        '[data-slot="activity-timeline-viewport"]',
+      ) as HTMLElement | null;
+      if (!timeline) throw new Error("missing activity timeline");
+      expect(timeline.tabIndex).toBe(0);
+      expect(timeline.tagName).toBe("SECTION");
+      expect(timeline.getAttribute("aria-label")).toBe("Activity timeline");
+      Object.defineProperty(timeline, "clientHeight", { configurable: true, value: 300 });
+      Object.defineProperty(timeline, "scrollHeight", {
+        configurable: true,
+        get: () => nestedScrollHeight,
+      });
+
+      timeline.focus();
+      expect(harness.dom.window.document.activeElement).toBe(timeline);
+      timeline.scrollTop = 500;
+      await act(async () => {
+        timeline.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            key: "PageUp",
+          }),
+        );
+        // Model the browser's default keyboard scroll after the key handler.
+        timeline.scrollTop = 200;
+      });
+
+      nestedScrollHeight = 1_100;
+      await renderActivity(6);
+      await act(async () => {
+        timeline.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+
+      expect(outerKeyDown).not.toHaveBeenCalled();
+      expect(timeline.scrollTop).toBe(200);
+      expect(
+        container.querySelector('[aria-label="2 new updates. Jump to latest activity"]'),
+      ).not.toBeNull();
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
   test("isolates an activity-card render failure with an inline fallback", async () => {
     const harness = setupJsdom();
     const container = harness.dom.window.document.getElementById("root");

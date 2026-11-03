@@ -390,6 +390,87 @@ describe("desktop sidebar", () => {
     },
   );
 
+  test.serial("opens a matching project with Enter instead of its first chat", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const selectWorkspace = mock(async (_workspaceId: string) => {});
+      const selectThread = mock(async (_threadId: string) => {});
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace({ name: "Migration project" })],
+          threads: makeThreads(2),
+          selectWorkspace,
+          selectThread,
+        });
+        root?.render(createElement(Sidebar));
+      });
+
+      await searchSidebar(harness, "Migration project");
+      const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+        'input[placeholder^="Search"]',
+      );
+      if (!input) throw new Error("missing sidebar search");
+      await act(async () => {
+        input.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      });
+
+      expect(selectWorkspace).toHaveBeenCalledWith("ws-1");
+      expect(selectThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test.serial("exposes the active search result to the focused combobox", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(2),
+        });
+        root?.render(createElement(Sidebar));
+      });
+
+      await searchSidebar(harness, "Thread");
+      const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+        'input[placeholder^="Search"]',
+      );
+      const listbox = harness.dom.window.document.querySelector<HTMLElement>('[role="listbox"]');
+      const options = Array.from(
+        harness.dom.window.document.querySelectorAll<HTMLElement>('[role="option"]'),
+      );
+      if (!input || !listbox) throw new Error("missing sidebar search results");
+      expect(input.getAttribute("role")).toBe("combobox");
+      expect(input.getAttribute("aria-controls")).toBe(listbox.id);
+      expect(input.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
+      await act(async () => {
+        input.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+        );
+      });
+
+      expect(harness.dom.window.document.activeElement).toBe(input);
+      expect(input.getAttribute("aria-activedescendant")).toBe(options[1]?.id);
+      expect(options[1]?.getAttribute("aria-selected")).toBe("true");
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
   test.serial("expands the task list independently from the compact chat list", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;

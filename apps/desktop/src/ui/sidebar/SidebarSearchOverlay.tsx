@@ -4,6 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -125,6 +126,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listboxId = useId();
   const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const lastPointerRef: { current: { x: number; y: number } | null } = useRef(null);
 
@@ -174,6 +176,17 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
       }
 
       const entries: SearchOverlayEntry[] = [
+        ...(workspaceMatches
+          ? [
+              {
+                key: `workspace:${workspace.id}`,
+                kind: "workspace" as const,
+                workspace,
+                title: workspace.name,
+                subtitle: "Project",
+              },
+            ]
+          : []),
         ...matchingThreads.map((thread): SearchOverlayEntry => {
           const age = formatSidebarRelativeAge(thread.lastMessageAt);
           return {
@@ -263,6 +276,8 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
 
   const clampedActiveIndex =
     flatEntries.length === 0 ? -1 : Math.min(activeIndex, flatEntries.length - 1);
+  const activeOptionId =
+    clampedActiveIndex >= 0 ? `${listboxId}-option-${clampedActiveIndex}` : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -373,6 +388,11 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
             aria-label={
               tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
             }
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls={listboxId}
+            aria-expanded={open}
+            aria-activedescendant={activeOptionId}
             className="h-10 min-w-0 flex-1 border-none bg-transparent text-[1.125rem] leading-tight tracking-[-0.012em] text-foreground shadow-none outline-none placeholder:text-muted-foreground focus:shadow-none focus:outline-none focus-visible:shadow-none focus-visible:outline-none"
           />
           {searchActive ? (
@@ -393,6 +413,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
         </div>
 
         <div
+          id={listboxId}
           role="listbox"
           aria-label={tasksEnabled ? "Chats, projects, and tasks" : "Chats and projects"}
           className="flex max-h-[min(24rem,56vh)] scroll-py-2 flex-col gap-2.5 overflow-x-hidden overflow-y-auto px-2.5 pt-2 pb-2.5"
@@ -457,6 +478,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
                     return (
                       <button
                         key={entry.key}
+                        id={`${listboxId}-option-${entryIndex}`}
                         ref={(node) => {
                           if (node) {
                             itemRefs.current.set(entryIndex, node);
@@ -466,6 +488,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
                         }}
                         type="button"
                         role="option"
+                        tabIndex={-1}
                         aria-selected={isActive}
                         data-search-overlay-item="true"
                         data-active={isActive ? "true" : undefined}

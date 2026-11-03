@@ -456,7 +456,7 @@ export function AppTopBar({
               <button
                 ref={detailsTriggerRef}
                 type="button"
-                aria-label="Open thread details"
+                aria-label={effectiveDetailsOpen ? "Close thread details" : "Open thread details"}
                 aria-haspopup="dialog"
                 aria-expanded={effectiveDetailsOpen}
                 aria-controls={detailsId}

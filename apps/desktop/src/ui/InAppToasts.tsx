@@ -197,7 +197,7 @@ function InAppToast({
         variant="ghost"
         size="icon-xs"
         className="shrink-0"
-        aria-label="Dismiss notification"
+        aria-label={`Dismiss notification: ${notification.title}`}
         onClick={() => onDismiss(notification.id)}
       >
         <XIcon />

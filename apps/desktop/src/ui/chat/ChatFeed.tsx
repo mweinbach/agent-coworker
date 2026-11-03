@@ -552,6 +552,7 @@ function TranscriptScroller(props: {
         aria-label="Conversation messages"
         className="[overflow-anchor:none]"
         data-scroll-mode={mode}
+        tabIndex={0}
         onKeyDown={handleKeyDown}
         onScroll={handleScroll}
         onTouchMove={handleTouchMove}

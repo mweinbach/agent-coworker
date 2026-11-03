@@ -151,7 +151,7 @@ export function CreationReadinessNotice({
     <Alert variant="destructive" role="alert" aria-live="assertive">
       <AlertTriangleIcon aria-hidden />
       <AlertTitle>Not ready to start</AlertTitle>
-      <AlertDescription>
+      <AlertDescription className="flex flex-col gap-2">
         {error ? (
           <div className="flex flex-wrap items-center gap-2">
             <p className="min-w-0 flex-1 break-words">{formatReadinessError(error)}</p>
@@ -160,7 +160,8 @@ export function CreationReadinessNotice({
               Retry check
             </Button>
           </div>
-        ) : (
+        ) : null}
+        {blockedChecks.length > 0 ? (
           <ul className="flex list-disc flex-col gap-2 pl-4">
             {blockedChecks.map((entry) => {
               const repairAction = entry.repairAction;
@@ -189,7 +190,7 @@ export function CreationReadinessNotice({
               );
             })}
           </ul>
-        )}
+        ) : null}
       </AlertDescription>
     </Alert>
   );

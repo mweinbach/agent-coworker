@@ -177,7 +177,7 @@ async fn mutation_cancelled_before_publish_leaves_file_unchanged() {
 
     // Stop arrives after the lock was acquired and the new contents computed,
     // i.e. while the replacement is being staged.
-    let result = with_file_mutation(&target, &ctx, move |snapshot| {
+    let result = with_file_mutation(&target, &ctx, "write", move |snapshot| {
         assert_eq!(snapshot.bytes.as_deref(), Some(&b"original"[..]));
         cancel_tx.send(true).unwrap();
         Ok((b"replaced".to_vec(), ()))

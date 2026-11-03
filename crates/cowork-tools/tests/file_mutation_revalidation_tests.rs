@@ -103,7 +103,7 @@ async fn with_file_mutation_fails_closed_when_parent_swapped_during_approval() {
 
     let mutate_ran = Arc::new(AtomicUsize::new(0));
     let mutate_ran_in = mutate_ran.clone();
-    let result = with_file_mutation(&target, &f.ctx, move |_snapshot| {
+    let result = with_file_mutation(&target, &f.ctx, "write", move |_snapshot| {
         mutate_ran_in.fetch_add(1, Ordering::SeqCst);
         Ok((b"pwned".to_vec(), ()))
     })
@@ -162,7 +162,7 @@ async fn with_file_mutation_still_writes_when_nothing_changes() {
         ToolExecutionContext::new_for_tests(home, ws.clone(), ProviderName::Openai, "gpt-5.4");
 
     let target = ws.join("new").join("nested").join("file.txt");
-    with_file_mutation(&target, &ctx, |snapshot| {
+    with_file_mutation(&target, &ctx, "write", |snapshot| {
         assert!(!snapshot.exists);
         Ok((b"hello".to_vec(), ()))
     })

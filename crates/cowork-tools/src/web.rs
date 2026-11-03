@@ -568,7 +568,7 @@ async fn download_response_to_workspace(
             continue;
         }
         let claimed = candidate.display().to_string();
-        with_file_mutation(&candidate, ctx, move |existing| {
+        with_file_mutation(&candidate, ctx, "webFetch", move |existing| {
             if existing.exists {
                 return Err(ToolError::Execution(format!(
                     "Download target '{claimed}' was created concurrently; retry webFetch."

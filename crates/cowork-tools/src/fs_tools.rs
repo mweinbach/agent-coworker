@@ -914,7 +914,7 @@ impl BuiltinTool for WriteTool {
         // TS `write.ts` reports `content.length` (UTF-16 code units) for appends.
         let appended_chars = append.then(|| content.encode_utf16().count());
 
-        let (existed, byte_len) = with_file_mutation(&target, ctx, move |snapshot| {
+        let (existed, byte_len) = with_file_mutation(&target, ctx, "write", move |snapshot| {
             let decoded = snapshot
                 .bytes
                 .as_deref()
@@ -1086,7 +1086,7 @@ impl BuiltinTool for EditTool {
             assert_edit_file_size(&display, meta.len())?;
         }
 
-        let replacements = with_file_mutation(&target, ctx, move |snapshot| {
+        let replacements = with_file_mutation(&target, ctx, "edit", move |snapshot| {
             let prev_bytes = snapshot.bytes.ok_or_else(|| {
                 ToolError::Execution(format!(
                     "File '{}' does not exist. Use the write tool to create new files.",

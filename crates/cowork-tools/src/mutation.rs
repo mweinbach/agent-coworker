@@ -139,6 +139,19 @@ fn assert_not_cancelled(ctx: &ToolExecutionContext, target: &Path) -> ToolResult
     Ok(())
 }
 
+/// TS `assertCanMutate(ctx, toolName)` in the removed `mutationGuard.ts`:
+/// cancellation, then the task-mutation lock (`before_tool_invocation`, TS
+/// `ctx.assertCanMutate(toolName)`), then cancellation again. Code mode can run
+/// `write`/`edit` concurrently with `createTask`; task creation may lock the
+/// source chat while this mutation waits for approval or another holder's file
+/// lock, so the dispatch-time check is stale by the time anything is written.
+/// Checked after every wait and immediately before the staged file is published.
+fn assert_can_mutate(ctx: &ToolExecutionContext, tool_name: &str, target: &Path) -> ToolResult<()> {
+    assert_not_cancelled(ctx, target)?;
+    ctx.check_before_tool_invocation(tool_name)?;
+    assert_not_cancelled(ctx, target)
+}
+
 /// Rejects an existing target that is not a regular file before it is opened.
 /// Reading a FIFO with no writer (or a device) would block the worker forever.
 /// Uses `symlink_metadata` on the canonical target, matching the TypeScript
@@ -243,17 +256,20 @@ pub struct ExistingFileSnapshot {
 /// Existing targets must be regular files. Cancellation (`ctx.cancel_rx`) is
 /// honoured while waiting for approval or the lock, after the lock is acquired,
 /// and immediately before publishing; a cancelled mutation leaves the target
-/// untouched.
+/// untouched. The task-mutation lock for `tool_name` (`write`, `edit`,
+/// `webFetch`) is rechecked at the same points, so a chat locked by a task
+/// created while this mutation waited never modifies the target.
 pub async fn with_file_mutation<F, R>(
     target_path: &Path,
     ctx: &ToolExecutionContext,
+    tool_name: &'static str,
     mutate: F,
 ) -> ToolResult<R>
 where
     F: FnOnce(ExistingFileSnapshot) -> ToolResult<(Vec<u8>, R)> + Send + 'static,
     R: Send + 'static,
 {
-    assert_not_cancelled(ctx, target_path)?;
+    assert_can_mutate(ctx, tool_name, target_path)?;
     let resolved = assert_write_path_allowed(target_path, ctx)?;
     if let Some(handler) = &ctx.approval_handler
         && !ctx.yolo
@@ -271,8 +287,9 @@ where
     }
 
     // The approval prompt is an asynchronous gate: the filesystem may have
-    // changed, or the turn been stopped, while it was pending.
-    assert_not_cancelled(ctx, target_path)?;
+    // changed, the turn been stopped, or the chat been locked by a task while
+    // it was pending.
+    assert_can_mutate(ctx, tool_name, target_path)?;
     assert_target_unchanged(target_path, &resolved, ctx)?;
 
     let lock_root = ctx.lock_root.clone();
@@ -285,7 +302,7 @@ where
 
         with_cancellable_file_lock(&resolved, &lock_root, &ctx, || -> ToolResult<R> {
             // Lock acquisition may have waited; recheck before touching disk.
-            assert_not_cancelled(&ctx, &resolved)?;
+            assert_can_mutate(&ctx, tool_name, &resolved)?;
             assert_target_unchanged(&requested, &resolved, &ctx)?;
             let parent = resolved.parent().ok_or_else(|| {
                 ToolError::InvalidArguments(format!(
@@ -369,9 +386,10 @@ where
                     )));
                 }
 
-                // Last gate before publication: a Stop that arrived while the
-                // mutation was staged must leave the target untouched.
-                assert_not_cancelled(&ctx, &resolved)?;
+                // Last gate before publication: a Stop or task lock that
+                // arrived while the mutation was staged must leave the target
+                // untouched.
+                assert_can_mutate(&ctx, tool_name, &resolved)?;
                 fs::rename(&tmp_path, &resolved).map_err(|e| {
                     ToolError::Execution(format!(
                         "Failed to atomically replace '{}': {e}",

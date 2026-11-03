@@ -178,19 +178,27 @@ pub fn build_bwrap_command(
 
         let mut seen_ro: HashSet<PathBuf> = HashSet::new();
         let mut ro_targets: Vec<PathBuf> = Vec::new();
+        // `lstat`-based so a symlinked or dangling `.git` / `.cowork` entry is never missed.
+        let entry_exists = |p: &Path| {
+            if custom_predicates {
+                exists_fn(p)
+            } else {
+                std::fs::symlink_metadata(p).is_ok()
+            }
+        };
+        let mut protect_entry = |entry: PathBuf| {
+            for target in protected_entry_ro_targets(&entry, custom_predicates) {
+                if seen_ro.insert(target.clone()) {
+                    ro_targets.push(target);
+                }
+            }
+        };
 
         for dir_root in &bound_dir_roots {
             for sub in PROTECTED_SUBDIRS {
                 let direct = dir_root.join(sub);
-                if exists_fn(&direct) {
-                    let sub_real = if custom_predicates {
-                        direct
-                    } else {
-                        canonicalize_sync(&direct)
-                    };
-                    if seen_ro.insert(sub_real.clone()) {
-                        ro_targets.push(sub_real);
-                    }
+                if entry_exists(&direct) {
+                    protect_entry(direct);
                 }
             }
         }
@@ -206,14 +214,7 @@ pub fn build_bwrap_command(
                 },
             );
             for sub in protected_paths {
-                let sub_real = if custom_predicates {
-                    sub
-                } else {
-                    canonicalize_sync(&sub)
-                };
-                if seen_ro.insert(sub_real.clone()) {
-                    ro_targets.push(sub_real);
-                }
+                protect_entry(sub);
             }
         }
 
@@ -280,6 +281,36 @@ pub fn build_bwrap_command(
         sandbox: SandboxType::Bwrap,
         unsandboxed: false,
     }
+}
+
+/// Read-only bind targets protecting one existing `.git` / `.cowork` entry below a writable root.
+///
+/// A regular file/directory entry is re-bound read-only at its canonical path (a mount point
+/// cannot be unlinked or renamed). A symlinked (or dangling) entry cannot be pinned that way:
+/// `mount(2)` follows the link, so only its target would be frozen while the link itself stays
+/// unlinkable through the writable parent (`rm .git && mkdir -p .git/hooks`). For those, the
+/// directory holding the link is re-bound read-only (fail closed) and an existing link target is
+/// frozen as well.
+fn protected_entry_ro_targets(entry: &Path, custom_predicates: bool) -> Vec<PathBuf> {
+    if custom_predicates {
+        return vec![entry.to_path_buf()];
+    }
+    let is_symlink = std::fs::symlink_metadata(entry).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_symlink {
+        return vec![canonicalize_sync(entry)];
+    }
+    let mut out = Vec::with_capacity(2);
+    if let Some(parent) = entry.parent()
+        && parent.is_absolute()
+        && parent.parent().is_some()
+    {
+        out.push(canonicalize_sync(parent));
+    }
+    let target = canonicalize_sync(entry);
+    if target != entry && std::fs::metadata(&target).is_ok() {
+        out.push(target);
+    }
+    out
 }
 
 /// Appends `--tmpfs <dir> --remount-ro <dir>` (directories) or `--ro-bind /dev/null <file>`

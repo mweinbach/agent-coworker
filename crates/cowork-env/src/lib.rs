@@ -65,14 +65,14 @@ pub use shell::{
     ShellExecutionOutput, ShellExecutionPlan, ShellPlanOptions, ShellTempScript,
     ShellTempScriptGuard, WIN32_ENCODED_COMMAND_LIMIT, build_canonical_shell_env,
     build_non_login_shell_plan, build_non_login_shell_plan_with, execute_non_login_shell,
-    materialize_temp_script, powershell_encoded_command, powershell_encoding_prelude,
-    powershell_script, redact_env_for_diagnostics, redact_secrets, select_shell_candidate,
-    select_shell_candidate_with,
+    join_path_value, materialize_temp_script, powershell_encoded_command,
+    powershell_encoding_prelude, powershell_script, redact_env_for_diagnostics, redact_secrets,
+    select_shell_candidate, select_shell_candidate_with, split_path_value,
 };
 pub use soffice::{
     LibreOfficeCapabilityDiagnostic, LibreOfficeCheckStatus, LibreOfficeSmokeResult,
     PdftoppmJobRequest, SofficeConvertRequest, SofficeConvertResult, SofficeRunner,
-    SofficeRunnerConfig, validate_pdftoppm_args, validate_soffice_args,
+    SofficeRunnerConfig, soffice_read_denied_roots, validate_pdftoppm_args, validate_soffice_args,
 };
 pub use uv::{EphemeralPythonEnv, UvEnvironmentPaths, UvManagerConfig, UvPythonManager};
 

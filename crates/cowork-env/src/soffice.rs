@@ -18,7 +18,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::{EnvError, Result};
-use crate::shell::redact_secrets;
+use crate::shell::{join_path_value, path_entry_matches, redact_secrets, split_path_value};
 
 /// Availability state returned by `cowork/runtime/libreoffice/check`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +315,17 @@ fn parse_libreoffice_version(output: &str) -> Option<String> {
         .map(|m| m.as_str().to_owned())
 }
 
+/// Removes every entry naming `dir` from the `PATH` value `path_value` (quote-aware win32 split,
+/// tolerant of trailing separators, quoting, win32 `/` vs `\\` and case on case-insensitive
+/// platforms), re-joining the remaining entries quote-safely.
+fn strip_path_dir(path_value: &str, dir: &str, platform: &str) -> String {
+    let kept: Vec<String> = split_path_value(path_value, platform)
+        .into_iter()
+        .filter(|entry| !path_entry_matches(entry, dir, platform))
+        .collect();
+    join_path_value(&kept, platform)
+}
+
 fn build_isolated_child_env(
     base_env: &HashMap<String, String>,
     scratch_home: &Path,
@@ -329,21 +340,10 @@ fn build_isolated_child_env(
         .map(|p| p.to_string_lossy().into_owned())
         && let Some(cur_path) = get_env(&env, "PATH", platform).map(str::to_owned)
     {
-        let delim = if platform == "win32" { ';' } else { ':' };
-        let filtered: Vec<&str> = cur_path
-            .split(delim)
-            .filter(|seg| {
-                if platform == "win32" {
-                    !seg.trim().eq_ignore_ascii_case(&lo_bin)
-                } else {
-                    seg.trim() != lo_bin
-                }
-            })
-            .collect();
         set_env(
             &mut env,
             "PATH",
-            filtered.join(&delim.to_string()),
+            strip_path_dir(&cur_path, &lo_bin, platform),
             platform,
         );
     }
@@ -376,6 +376,27 @@ pub struct SofficeRunner {
     in_flight: Arc<AtomicUsize>,
     next_job_id: AtomicU64,
     active_cancels: Arc<DashMap<u64, watch::Sender<bool>>>,
+    /// User home whose credential stores are hidden from every sandboxed run (see
+    /// [`soffice_read_denied_roots`]).
+    homedir: PathBuf,
+}
+
+/// Credential directories hidden from sandboxed LibreOffice / `pdftoppm` runs, so a crafted
+/// document using linked sections, frames, or `file://` inclusions cannot render their contents
+/// into a preview: provider/MCP credentials (`~/.cowork/auth`, `<cwd>/.cowork/auth`), the mobile
+/// pairing identity (`~/.cowork/mobile-pairing`), and the well-known SSH/cloud credential stores
+/// under `$HOME`. Mirrors `cowork_tools::protected_credential_roots` (the `bash` read-deny set).
+pub fn soffice_read_denied_roots(homedir: &Path, cwd: &Path) -> Vec<PathBuf> {
+    let cowork_home = homedir.join(".cowork");
+    let mut roots = vec![
+        cowork_home.join("auth"),
+        cowork_home.join("mobile-pairing"),
+        cwd.join(".cowork").join("auth"),
+    ];
+    for dir_name in [".ssh", ".aws", ".gnupg", ".kube", ".azure"] {
+        roots.push(homedir.join(dir_name));
+    }
+    roots
 }
 
 impl SofficeRunner {
@@ -388,6 +409,7 @@ impl SofficeRunner {
             in_flight: Arc::new(AtomicUsize::new(0)),
             next_job_id: AtomicU64::new(1),
             active_cancels: Arc::new(DashMap::new()),
+            homedir: cfg.homedir,
         }
     }
 
@@ -507,6 +529,7 @@ impl SofficeRunner {
         sreq.env_source = Some(req.env);
         sreq.child_env_source = Some(child_env.clone());
         sreq.extra_env = child_env;
+        sreq.read_denied_roots = soffice_read_denied_roots(&self.homedir, &req.cwd);
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -644,6 +667,7 @@ impl SofficeRunner {
         sreq.env_source = Some(req.env);
         sreq.child_env_source = Some(child_env.clone());
         sreq.extra_env = child_env;
+        sreq.read_denied_roots = soffice_read_denied_roots(&self.homedir, &req.cwd);
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -882,14 +906,15 @@ impl SofficeRunner {
         req.env_source = Some(env.clone());
         req.child_env_source = Some(child_env.clone());
         req.extra_env = child_env;
+        req.read_denied_roots = soffice_read_denied_roots(&self.homedir, cwd);
 
+        // `require_backend = false`: this fixed `--headless --version` probe (TS runs it
+        // unsandboxed) may fall back to running unsandboxed on hosts without an enforcing OS
+        // sandbox backend, so availability is still reported. Conversions and renders keep
+        // `require_backend = true` and never take this fallback.
         let res = self
             .sandbox_runner
-            .run_with_approval(
-                req,
-                None,
-                None::<fn(Option<&str>) -> std::future::Ready<bool>>,
-            )
+            .run_with_approval(req, None, Some(|_: Option<&str>| std::future::ready(true)))
             .await;
         scratch_guard.cleanup_now();
 
@@ -902,5 +927,35 @@ impl SofficeRunner {
         }
         let combined = format!("{}\n{}", res.stdout, res.stderr);
         Ok(parse_libreoffice_version(&combined))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_path_dir_normalizes_before_comparing() {
+        let win = strip_path_dir(
+            r#"C:\Windows;c:/LO/Program/;"C:\lo\program";"C:\odd;dir";C:\Tools"#,
+            r"C:\LO\program",
+            "win32",
+        );
+        assert_eq!(
+            split_path_value(&win, "win32"),
+            [r"C:\Windows", r"C:\odd;dir", r"C:\Tools"]
+        );
+        let mac = strip_path_dir(
+            "/usr/bin:/Apps/LO/Program/:/apps/lo/program:/bin",
+            "/Apps/LO/program",
+            "darwin",
+        );
+        assert_eq!(mac, "/usr/bin:/bin");
+        let linux = strip_path_dir(
+            "/usr/bin:/lo/program/:/LO/program:/bin",
+            "/lo/program",
+            "linux",
+        );
+        assert_eq!(linux, "/usr/bin:/LO/program:/bin");
     }
 }

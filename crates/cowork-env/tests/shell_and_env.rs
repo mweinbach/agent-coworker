@@ -197,10 +197,16 @@ fn canonical_shell_env_strips_secrets_and_injects_runtime_and_uv_vars_without_li
                 .as_ref()
         )
     );
-    assert_eq!(
-        built.get("UV_CACHE_DIR").map(String::as_str),
-        Some(home.join(".cowork/cache/uv").to_string_lossy().as_ref())
+    // Sandboxed children cannot write `<cowork_home>/cache/uv`; their uv cache lives under the
+    // writable temp scratch root instead.
+    let uv_cache = PathBuf::from(built.get("UV_CACHE_DIR").expect("UV_CACHE_DIR"));
+    assert!(
+        scratch_roots(Some("darwin"))
+            .iter()
+            .any(|root| uv_cache.starts_with(root)),
+        "sandboxed UV_CACHE_DIR must be temp scratch: {uv_cache:?}"
     );
+    assert!(!uv_cache.starts_with(home.join(".cowork")));
     assert_eq!(
         built.get("VIRTUAL_ENV").map(String::as_str),
         Some(venv_dir.to_string_lossy().as_ref())

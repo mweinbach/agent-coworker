@@ -297,26 +297,15 @@ pub fn find_windows_helper(
     env: &HashMap<String, String>,
     extra_candidate_dirs: &[PathBuf],
 ) -> Option<PathBuf> {
-    if let Some(override_raw) = get_env(env, "COWORK_WIN_SANDBOX_HELPER", "win32") {
-        let trimmed = override_raw.trim();
-        if !trimmed.is_empty() {
-            let helper = PathBuf::from(trimmed);
-            let dir = helper.parent().unwrap_or_else(|| Path::new("."));
-            let setup = get_env(env, "COWORK_WIN_SANDBOX_SETUP", "win32")
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| dir.join(WINDOWS_SANDBOX_SETUP_NAME));
-            let runner = get_env(env, "COWORK_WIN_SANDBOX_COMMAND_RUNNER", "win32")
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| dir.join(WINDOWS_SANDBOX_COMMAND_RUNNER_NAME));
-            if helper.is_file() && setup.is_file() && runner.is_file() {
-                return Some(helper);
-            }
-            return None;
+    // Require an absolute override (like `COWORK_BWRAP_PATH`): a relative value would resolve
+    // against the server's cwd during verification but against the session workspace when
+    // `SandboxRunner` spawns it (`current_dir(req.cwd)`). Relative values are ignored.
+    if let Some(helper) = absolute_env_path(env, "COWORK_WIN_SANDBOX_HELPER") {
+        let (setup, runner) = windows_companion_paths(&helper, env);
+        if helper.is_file() && setup.is_file() && runner.is_file() {
+            return Some(helper);
         }
+        return None;
     }
 
     let mut dirs = extra_candidate_dirs.to_vec();
@@ -480,37 +469,62 @@ fn compute_windows_sandbox_probe(
         }
     };
 
-    if output.signaled || output.exit_code != Some(0) {
-        let detail = if !output.stderr.trim().is_empty() {
+    interpret_windows_probe_output(&output)
+}
+
+/// Interprets `cowork-win-sandbox.exe probe` output. The helper prints its JSON `ProbeResult` and
+/// exits `3` whenever `ready` is false (e.g. `setup_required: true`), so stdout is parsed for any
+/// non-signaled exit to surface `setup_required`; enforcement is only `ready` after exit `0` with
+/// every capability (`filesystem`, `network`, `process`, `integrity`) explicitly `true`.
+fn interpret_windows_probe_output(output: &ProbeCommandOutput) -> WindowsSandboxProbeResult {
+    let exit_detail = || {
+        if !output.stderr.trim().is_empty() {
             output.stderr.trim().to_owned()
         } else if output.signaled {
             "terminated by signal".to_owned()
         } else {
             format!("exit {}", output.exit_code.unwrap_or(1))
-        };
+        }
+    };
+    if output.signaled {
         return failed_probe_after_integrity(format!(
-            "Windows sandbox helper probe failed ({detail})."
+            "Windows sandbox helper probe failed ({}).",
+            exit_detail()
         ));
     }
 
-    let Ok(parsed) = serde_json::from_str::<HelperProbePayload>(&output.stdout) else {
-        return failed_probe_after_integrity(
-            "Windows sandbox helper probe returned unreadable output.".to_owned(),
-        );
+    let Ok(parsed) = serde_json::from_str::<HelperProbePayload>(output.stdout.trim()) else {
+        return failed_probe_after_integrity(if output.exit_code == Some(0) {
+            "Windows sandbox helper probe returned unreadable output.".to_owned()
+        } else {
+            format!("Windows sandbox helper probe failed ({}).", exit_detail())
+        });
     };
 
-    let ready = parsed.ready == Some(true);
-    let setup_required = parsed.setup_required == Some(true);
+    let filesystem = parsed.filesystem == Some(true);
+    let network = parsed.network == Some(true);
+    let process = parsed.process == Some(true);
+    let integrity = parsed.integrity == Some(true);
+    let helper_setup_required = parsed.setup_required == Some(true);
+    let ready = output.exit_code == Some(0)
+        && parsed.ready == Some(true)
+        && !helper_setup_required
+        && filesystem
+        && network
+        && process
+        && integrity;
     WindowsSandboxProbeResult {
         ready,
-        filesystem: parsed.filesystem == Some(true),
-        network: parsed.network == Some(true),
-        process: parsed.process == Some(true),
-        integrity: parsed.integrity.unwrap_or(true),
-        setup_required,
+        filesystem,
+        network,
+        process,
+        integrity,
+        // TS parity (`setupRequired: !ready`): anything short of a fully enforcing probe needs
+        // the one-time setup/repair before the helper may wrap commands.
+        setup_required: !ready,
         warning: if ready {
             None
-        } else if setup_required {
+        } else if helper_setup_required {
             Some("Windows sandbox helper setup has not completed yet.".to_owned())
         } else {
             Some("Windows sandbox helper reported an incomplete capability set.".to_owned())
@@ -525,7 +539,7 @@ fn failed_probe_after_integrity(warning: String) -> WindowsSandboxProbeResult {
         network: false,
         process: false,
         integrity: true,
-        setup_required: false,
+        setup_required: true,
         warning: Some(warning),
     }
 }
@@ -535,17 +549,13 @@ fn verify_windows_bundle_integrity(
     env: &HashMap<String, String>,
     authenticode_override: Option<&dyn Fn(&Path) -> bool>,
 ) -> Result<(), String> {
-    let dir = helper_path.parent().unwrap_or_else(|| Path::new("."));
-    let setup_path = get_env(env, "COWORK_WIN_SANDBOX_SETUP", "win32")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dir.join(WINDOWS_SANDBOX_SETUP_NAME));
-    let runner_path = get_env(env, "COWORK_WIN_SANDBOX_COMMAND_RUNNER", "win32")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dir.join(WINDOWS_SANDBOX_COMMAND_RUNNER_NAME));
+    if !helper_path.is_absolute() {
+        return Err(format!(
+            "helper path must be absolute ({})",
+            helper_path.display()
+        ));
+    }
+    let (setup_path, runner_path) = windows_companion_paths(helper_path, env);
 
     let require_authenticode =
         get_env(env, "COWORK_WIN_SANDBOX_REQUIRE_AUTHENTICODE", "win32") == Some("1");
@@ -591,6 +601,27 @@ fn verify_windows_bundle_integrity(
     }
 
     Ok(())
+}
+
+/// Trimmed, non-empty, ABSOLUTE path from `env[name]`; relative values are ignored (TS
+/// `configuredBundlePath` / `findWindowsHelper` parity).
+fn absolute_env_path(env: &HashMap<String, String>, name: &str) -> Option<PathBuf> {
+    get_env(env, name, "win32")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
+/// `(setup, command-runner)` companion paths: absolute `COWORK_WIN_SANDBOX_SETUP` /
+/// `COWORK_WIN_SANDBOX_COMMAND_RUNNER` overrides, else the bundled names next to `helper`.
+fn windows_companion_paths(helper: &Path, env: &HashMap<String, String>) -> (PathBuf, PathBuf) {
+    let dir = helper.parent().unwrap_or_else(|| Path::new("."));
+    let setup = absolute_env_path(env, "COWORK_WIN_SANDBOX_SETUP")
+        .unwrap_or_else(|| dir.join(WINDOWS_SANDBOX_SETUP_NAME));
+    let runner = absolute_env_path(env, "COWORK_WIN_SANDBOX_COMMAND_RUNNER")
+        .unwrap_or_else(|| dir.join(WINDOWS_SANDBOX_COMMAND_RUNNER_NAME));
+    (setup, runner)
 }
 
 fn normalize_sha256(value: Option<&str>) -> Option<String> {
@@ -663,5 +694,153 @@ fn run_command_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Prob
                 return None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn probe_output(exit_code: Option<i32>, signaled: bool, stdout: &str) -> ProbeCommandOutput {
+        ProbeCommandOutput {
+            exit_code,
+            signaled,
+            stdout: stdout.to_owned(),
+            stderr: String::new(),
+        }
+    }
+
+    const READY_JSON: &str = r#"{"schema_version":1,"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":false}"#;
+
+    #[test]
+    fn windows_probe_exit_3_json_surfaces_setup_required() {
+        // Exactly what `cowork-win-sandbox.exe probe` prints (and exits 3 with) before setup.
+        let res = interpret_windows_probe_output(&probe_output(
+            Some(3),
+            false,
+            "{\"schema_version\":1,\"ready\":false,\"filesystem\":false,\"network\":false,\"process\":false,\"integrity\":true,\"setup_required\":true}\n",
+        ));
+        assert!(!res.ready);
+        assert!(res.setup_required, "{res:?}");
+        assert!(res.integrity);
+        assert_eq!(
+            res.warning.as_deref(),
+            Some("Windows sandbox helper setup has not completed yet.")
+        );
+    }
+
+    #[test]
+    fn windows_probe_ready_requires_clean_exit_and_every_capability() {
+        let ok = interpret_windows_probe_output(&probe_output(Some(0), false, READY_JSON));
+        assert!(
+            ok.ready && !ok.setup_required && ok.warning.is_none(),
+            "{ok:?}"
+        );
+
+        // A "ready" claim is only trusted after exit 0 and without a signal.
+        for (code, signaled) in [(Some(3), false), (Some(1), false), (None, true)] {
+            let res = interpret_windows_probe_output(&probe_output(code, signaled, READY_JSON));
+            assert!(
+                !res.ready && res.setup_required,
+                "{code:?}/{signaled}: {res:?}"
+            );
+        }
+
+        // Missing `integrity` no longer defaults to true; any false/missing capability or a
+        // contradictory `setup_required` blocks readiness.
+        for stdout in [
+            r#"{"ready":true,"filesystem":true,"network":true,"process":true,"setup_required":false}"#,
+            r#"{"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":true}"#,
+            r#"{"ready":true,"filesystem":false,"network":true,"process":true,"integrity":true}"#,
+            r#"{"ready":true,"filesystem":true,"network":false,"process":true,"integrity":true}"#,
+            r#"{"ready":true,"filesystem":true,"network":true,"process":false,"integrity":true}"#,
+        ] {
+            let res = interpret_windows_probe_output(&probe_output(Some(0), false, stdout));
+            assert!(!res.ready && res.setup_required, "{stdout}: {res:?}");
+        }
+        let missing_integrity = interpret_windows_probe_output(&probe_output(
+            Some(0),
+            false,
+            r#"{"ready":true,"filesystem":true,"network":true,"process":true}"#,
+        ));
+        assert!(!missing_integrity.integrity);
+
+        // Unparseable output after a failing exit stays a failed probe that requires setup.
+        let garbage = interpret_windows_probe_output(&probe_output(Some(3), false, "boom"));
+        assert!(!garbage.ready && garbage.setup_required && garbage.integrity);
+    }
+
+    #[test]
+    fn windows_helper_and_companion_overrides_must_be_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = cowork_config::canonicalize_sync(tmp.path());
+        for name in [
+            WINDOWS_SANDBOX_HELPER_NAME,
+            WINDOWS_SANDBOX_SETUP_NAME,
+            WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+        ] {
+            std::fs::write(bundle.join(name), b"x").unwrap();
+        }
+        // A relative override set up so it WOULD resolve against the process cwd.
+        let cwd = std::env::current_dir().unwrap();
+        let rel_helper = pathdiff_relative(&bundle.join(WINDOWS_SANDBOX_HELPER_NAME), &cwd);
+        assert!(rel_helper.is_relative() && rel_helper.is_file());
+        let mut env = HashMap::new();
+        env.insert(
+            "COWORK_WIN_SANDBOX_HELPER".to_owned(),
+            rel_helper.to_string_lossy().into_owned(),
+        );
+        // Ignored: falls back to the trusted candidate dirs only.
+        assert_eq!(find_windows_helper(&env, &[]), None);
+        assert_eq!(
+            find_windows_helper(&env, std::slice::from_ref(&bundle)),
+            Some(bundle.join(WINDOWS_SANDBOX_HELPER_NAME))
+        );
+
+        // Absolute helper + relative companion overrides: companions resolve next to the helper.
+        let helper = bundle.join(WINDOWS_SANDBOX_HELPER_NAME);
+        env.insert(
+            "COWORK_WIN_SANDBOX_HELPER".to_owned(),
+            helper.to_string_lossy().into_owned(),
+        );
+        env.insert(
+            "COWORK_WIN_SANDBOX_SETUP".to_owned(),
+            "elsewhere/setup.exe".to_owned(),
+        );
+        env.insert(
+            "COWORK_WIN_SANDBOX_COMMAND_RUNNER".to_owned(),
+            "elsewhere/runner.exe".to_owned(),
+        );
+        assert_eq!(
+            windows_companion_paths(&helper, &env),
+            (
+                bundle.join(WINDOWS_SANDBOX_SETUP_NAME),
+                bundle.join(WINDOWS_SANDBOX_COMMAND_RUNNER_NAME)
+            )
+        );
+        assert_eq!(find_windows_helper(&env, &[]), Some(helper.clone()));
+
+        // Bundle verification refuses a relative helper outright.
+        let err = verify_windows_bundle_integrity(&rel_helper, &env, None).unwrap_err();
+        assert!(err.contains("must be absolute"), "{err}");
+    }
+
+    /// `target` expressed relative to `base` via `..` components.
+    fn pathdiff_relative(target: &Path, base: &Path) -> PathBuf {
+        let base = cowork_config::canonicalize_sync(base);
+        let mut common = 0;
+        let t: Vec<_> = target.components().collect();
+        let b: Vec<_> = base.components().collect();
+        while common < t.len() && common < b.len() && t[common] == b[common] {
+            common += 1;
+        }
+        let mut out = PathBuf::new();
+        for _ in common..b.len() {
+            out.push("..");
+        }
+        for c in &t[common..] {
+            out.push(c.as_os_str());
+        }
+        out
     }
 }

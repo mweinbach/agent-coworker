@@ -514,3 +514,236 @@ wait "$grandchild_pid"
         );
     }
 }
+
+#[test]
+fn soffice_read_denied_roots_cover_the_standard_credential_set() {
+    let home = std::path::Path::new("/home/alice");
+    let cwd = std::path::Path::new("/work/project");
+    let roots = cowork_env::soffice_read_denied_roots(home, cwd);
+    for expected in [
+        home.join(".cowork").join("auth"),
+        home.join(".cowork").join("mobile-pairing"),
+        cwd.join(".cowork").join("auth"),
+        home.join(".ssh"),
+        home.join(".aws"),
+        home.join(".gnupg"),
+        home.join(".kube"),
+        home.join(".azure"),
+    ] {
+        assert!(roots.contains(&expected), "{expected:?} missing: {roots:?}");
+    }
+}
+
+/// Live bwrap: a crafted document (simulated by a fixture `soffice` / `pdftoppm` that tries to
+/// inline credential files into its output) must not be able to read `~/.ssh`,
+/// `~/.cowork/auth` or `<cwd>/.cowork/auth` during conversion, rendering or the version probe.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn soffice_runner_hides_credential_dirs_from_convert_render_and_version_probe() {
+    let (_tmp, root) = canonical_temp_dir("cowork-soffice-creds-");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    let runtime_bin = root.join("runtime/bin");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh").join("id_rsa"), "SSH-SENTINEL").unwrap();
+    std::fs::create_dir_all(home.join(".cowork").join("auth")).unwrap();
+    std::fs::write(
+        home.join(".cowork").join("auth").join("connections.json"),
+        "HOME-AUTH-SENTINEL",
+    )
+    .unwrap();
+    std::fs::create_dir_all(workspace.join(".cowork").join("auth")).unwrap();
+    std::fs::write(
+        workspace.join(".cowork").join("auth").join("mcp.json"),
+        "WS-AUTH-SENTINEL",
+    )
+    .unwrap();
+
+    let secrets = [
+        home.join(".ssh").join("id_rsa"),
+        home.join(".cowork").join("auth").join("connections.json"),
+        workspace.join(".cowork").join("auth").join("mcp.json"),
+    ]
+    .iter()
+    .map(|p| format!("'{}'", p.display()))
+    .collect::<Vec<_>>()
+    .join(" ");
+
+    let soffice_bin = runtime_bin.join("soffice");
+    let soffice_script = r#"#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == "--version" ]]; then
+    for f in __SECRETS__; do
+      if cat "$f" >/dev/null 2>&1; then echo "LEAKED $f" >&2; exit 42; fi
+    done
+    echo "LibreOffice 26.2.3.2 420(Build:2)"
+    exit 0
+  fi
+done
+outdir=""
+input_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --convert-to) shift 2 ;;
+    --outdir) outdir="$2"; shift 2 ;;
+    -*) shift ;;
+    *) input_file="$1"; shift ;;
+  esac
+done
+base="$(basename "$input_file")"
+{
+  printf '%%PDF-1.4\n'
+  for f in __SECRETS__; do cat "$f" 2>/dev/null; echo; done
+  printf '%%%%EOF\n'
+} > "${outdir}/${base%.*}.pdf"
+"#
+    .replace("__SECRETS__", &secrets);
+    write_executable(&soffice_bin, &soffice_script);
+
+    let pdftoppm_bin = runtime_bin.join("pdftoppm");
+    let pdftoppm_script = r#"#!/bin/bash
+prefix="${@: -1}"
+{
+  printf '\x89PNG\r\n\x1a\n'
+  for f in __SECRETS__; do cat "$f" 2>/dev/null; echo; done
+} > "${prefix}-1.png"
+"#
+    .replace("__SECRETS__", &secrets);
+    write_executable(&pdftoppm_bin, &pdftoppm_script);
+
+    let mut env = HashMap::new();
+    env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+    env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());
+    env.insert(
+        "COWORK_RUNTIME_SOFFICE".to_owned(),
+        soffice_bin.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "COWORK_RUNTIME_PDFTOPPM".to_owned(),
+        pdftoppm_bin.to_string_lossy().into_owned(),
+    );
+
+    let runner = SofficeRunner::new(SofficeRunnerConfig {
+        max_concurrent: 1,
+        default_timeout: Duration::from_secs(10),
+        sandbox_manager: SandboxManager::new(),
+        homedir: home.clone(),
+    });
+
+    let input = root.join("crafted.html");
+    std::fs::write(&input, "<html><body>crafted</body></html>").unwrap();
+    let out_dir = root.join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let converted = runner
+        .convert_document(SofficeConvertRequest {
+            input_path: input,
+            output_dir: out_dir,
+            convert_to: "pdf".to_owned(),
+            extra_args: Vec::new(),
+            cwd: workspace.clone(),
+            env: env.clone(),
+            timeout: Some(Duration::from_secs(10)),
+        })
+        .await
+        .expect("sandboxed conversion");
+    let pdf = std::fs::read_to_string(&converted.output_path).unwrap();
+    assert!(pdf.starts_with("%PDF-1.4"), "{pdf}");
+    assert!(
+        !pdf.contains("SENTINEL"),
+        "credential leaked into PDF: {pdf}"
+    );
+
+    let png_dir = root.join("png");
+    std::fs::create_dir_all(&png_dir).unwrap();
+    let pages = runner
+        .render_pdf_pages(PdftoppmJobRequest {
+            pdf_path: converted.output_path.clone(),
+            output_dir: png_dir,
+            dpi: 72,
+            first_page: None,
+            last_page: None,
+            cwd: workspace.clone(),
+            env: env.clone(),
+            timeout: Some(Duration::from_secs(10)),
+        })
+        .await
+        .expect("sandboxed render");
+    assert_eq!(pages.len(), 1);
+    let png = String::from_utf8_lossy(&std::fs::read(&pages[0]).unwrap()).into_owned();
+    assert!(!png.contains("SENTINEL"), "credential leaked into PNG");
+
+    let diag = runner.check_capability(&workspace, &env, false).await;
+    assert_eq!(
+        diag.status,
+        LibreOfficeCheckStatus::Available,
+        "version probe could read credentials: {}",
+        diag.message
+    );
+}
+
+/// `check_capability(smoke: false)` runs `soffice --version` with `require_backend = false`; on a
+/// host without an OS sandbox backend it must fall back to running unsandboxed (TS parity)
+/// instead of being declined, while conversions still refuse to run unsandboxed.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn soffice_version_probe_falls_back_unsandboxed_without_a_backend() {
+    let (_tmp, root) = canonical_temp_dir("cowork-soffice-nobackend-");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let soffice_bin = root.join("runtime/bin/soffice");
+    write_executable(
+        &soffice_bin,
+        "#!/bin/bash\necho 'LibreOffice 26.2.3.2 420(Build:2)'\n",
+    );
+
+    let mut env = HashMap::new();
+    env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+    env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());
+    env.insert(
+        "COWORK_RUNTIME_SOFFICE".to_owned(),
+        soffice_bin.to_string_lossy().into_owned(),
+    );
+    // An explicit-but-missing bwrap override disables the only Linux backend for this env.
+    env.insert(
+        "COWORK_BWRAP_PATH".to_owned(),
+        root.join("missing/bwrap").to_string_lossy().into_owned(),
+    );
+
+    let runner = SofficeRunner::new(SofficeRunnerConfig {
+        max_concurrent: 1,
+        default_timeout: Duration::from_secs(10),
+        sandbox_manager: SandboxManager::new(),
+        homedir: home,
+    });
+    let diag = runner.check_capability(&workspace, &env, false).await;
+    assert_eq!(
+        diag.status,
+        LibreOfficeCheckStatus::Available,
+        "{}",
+        diag.message
+    );
+    assert_eq!(diag.version.as_deref(), Some("26.2.3.2"));
+
+    let input = root.join("doc.html");
+    std::fs::write(&input, "<html></html>").unwrap();
+    let out_dir = root.join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let err = runner
+        .convert_document(SofficeConvertRequest {
+            input_path: input,
+            output_dir: out_dir,
+            convert_to: "pdf".to_owned(),
+            extra_args: Vec::new(),
+            cwd: workspace,
+            env,
+            timeout: Some(Duration::from_secs(10)),
+        })
+        .await
+        .expect_err("conversions must still require an enforcing sandbox");
+    assert!(
+        matches!(err, cowork_env::EnvError::SofficeSandboxUnenforced(_)),
+        "{err:?}"
+    );
+}

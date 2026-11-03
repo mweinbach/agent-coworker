@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cowork_config::canonicalize_sync;
 
@@ -155,10 +155,11 @@ pub fn build_seatbelt_command_with_read_denies(
                     metadata_scan_roots.push(resolved.clone());
                 }
                 for sub in PROTECTED_SUBDIRS {
-                    let cand = canonicalize_sync(&resolved.join(sub));
-                    if seen_excluded.insert(cand.clone()) {
-                        excluded_roots.push(cand);
-                    }
+                    push_lexical_and_canonical(
+                        &resolved.join(sub),
+                        &mut seen_excluded,
+                        &mut excluded_roots,
+                    );
                 }
             }
         }
@@ -174,10 +175,7 @@ pub fn build_seatbelt_command_with_read_denies(
                 },
             );
             for nested in nested_protected {
-                let resolved = canonicalize_sync(&nested);
-                if seen_excluded.insert(resolved.clone()) {
-                    excluded_roots.push(resolved);
-                }
+                push_lexical_and_canonical(&nested, &mut seen_excluded, &mut excluded_roots);
             }
         }
 
@@ -255,6 +253,21 @@ pub fn build_seatbelt_command_with_read_denies(
         env,
         sandbox: SandboxType::Seatbelt,
         unsandboxed: false,
+    }
+}
+
+/// Excludes both the lexical protected entry (`<root>/.git`, which may itself be a symlink or a
+/// dangling symlink whose directory entry `unlink`/`rename` would act on) and its canonical,
+/// symlink-resolved target (which writes through the link resolve to).
+fn push_lexical_and_canonical(
+    entry: &Path,
+    seen: &mut HashSet<PathBuf>,
+    excluded: &mut Vec<PathBuf>,
+) {
+    for candidate in [entry.to_path_buf(), canonicalize_sync(entry)] {
+        if seen.insert(candidate.clone()) {
+            excluded.push(candidate);
+        }
     }
 }
 

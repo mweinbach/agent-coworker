@@ -98,27 +98,156 @@ fn path_delimiter(platform: &str) -> char {
     if platform == "win32" { ';' } else { ':' }
 }
 
-fn dedup_path_list(entries: impl IntoIterator<Item = String>, platform: &str) -> String {
-    let delim = path_delimiter(platform);
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for raw in entries {
-        for part in raw.split(delim) {
-            let trimmed = part.trim();
-            if trimmed.is_empty() {
-                continue;
+/// Splits a `PATH`-style value into entries (TS `splitPathValue`). win32 is quote-aware:
+/// entries may be double-quoted and contain `;`, and the quotes are stripped. POSIX is a plain
+/// `:` split. Empty entries are dropped on every platform.
+pub fn split_path_value(value: &str, platform: &str) -> Vec<String> {
+    if platform != "win32" {
+        return value
+            .split(':')
+            .filter(|e| !e.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in value.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ';' if !in_quotes => {
+                if !current.is_empty() {
+                    entries.push(std::mem::take(&mut current));
+                }
             }
-            let key = if platform == "win32" {
-                trimmed.to_ascii_lowercase()
-            } else {
-                trimmed.to_owned()
-            };
-            if seen.insert(key) {
-                out.push(trimmed.to_owned());
-            }
+            _ => current.push(ch),
         }
     }
-    out.join(&delim.to_string())
+    if !current.is_empty() {
+        entries.push(current);
+    }
+    entries
+}
+
+/// Joins unquoted `PATH` directories (TS `joinPathValue`), double-quoting win32 entries that
+/// contain `;` so they survive a later [`split_path_value`].
+pub fn join_path_value<S: AsRef<str>>(dirs: &[S], platform: &str) -> String {
+    dirs.iter()
+        .map(|d| {
+            let d = d.as_ref();
+            if platform == "win32" && d.contains(';') {
+                format!("\"{d}\"")
+            } else {
+                d.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(&path_delimiter(platform).to_string())
+}
+
+/// Lexically normalizes a `PATH` entry for comparison: trims whitespace and surrounding quotes,
+/// maps win32 forward slashes to backslashes, collapses repeated separators, drops `.` segments and
+/// trailing separators, and case-folds on case-insensitive platforms (win32, darwin).
+fn path_entry_compare_key(entry: &str, platform: &str) -> String {
+    let trimmed = entry.trim().trim_matches('"').trim();
+    let sep = if platform == "win32" { '\\' } else { '/' };
+    let unified: String = if platform == "win32" {
+        trimmed.replace('/', "\\")
+    } else {
+        trimmed.to_owned()
+    };
+    let rooted = unified.starts_with(sep);
+    let unc = platform == "win32" && unified.starts_with("\\\\");
+    let segments: Vec<&str> = unified
+        .split(sep)
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect();
+    let mut key = String::new();
+    if unc {
+        key.push_str("\\\\");
+    } else if rooted {
+        key.push(sep);
+    }
+    key.push_str(&segments.join(&sep.to_string()));
+    if platform == "win32" || platform == "darwin" {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
+/// Whether `PATH` entry `entry` names the directory `target`, tolerant of trailing separators,
+/// quoting, alternate win32 separators, case on case-insensitive platforms, and (on the host)
+/// symlinked spellings.
+pub(crate) fn path_entry_matches(entry: &str, target: &str, platform: &str) -> bool {
+    if path_entry_compare_key(entry, platform) == path_entry_compare_key(target, platform) {
+        return true;
+    }
+    if platform != host_platform() {
+        return false;
+    }
+    let entry_path = Path::new(entry.trim().trim_matches('"').trim());
+    let target_path = Path::new(target.trim().trim_matches('"').trim());
+    if !entry_path.is_absolute() || !target_path.is_absolute() {
+        return false;
+    }
+    match (
+        std::fs::canonicalize(entry_path),
+        std::fs::canonicalize(target_path),
+    ) {
+        (Ok(a), Ok(b)) => {
+            path_entry_compare_key(&a.to_string_lossy(), platform)
+                == path_entry_compare_key(&b.to_string_lossy(), platform)
+        }
+        _ => false,
+    }
+}
+
+/// Deduplicates `PATH` directories (already split) preserving first occurrence and spelling
+/// (case-folded on win32), then joins them quote-safely.
+fn dedup_path_dirs(dirs: impl IntoIterator<Item = String>, platform: &str) -> String {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for dir in dirs {
+        let trimmed = dir.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = if platform == "win32" {
+            trimmed.to_ascii_lowercase()
+        } else {
+            trimmed.to_owned()
+        };
+        if seen.insert(key) {
+            out.push(trimmed.to_owned());
+        }
+    }
+    join_path_value(&out, platform)
+}
+
+/// `UV_CACHE_DIR` for sandboxed children: `<temp scratch>/cowork-uv-cache-<user>`, inside the
+/// temp scratch root every writable sandbox policy (workspace-write, no-project-write,
+/// targetPaths) mounts writable.
+fn sandbox_uv_cache_dir(base_env: &HashMap<String, String>, platform: &str) -> PathBuf {
+    let scratch = cowork_sandbox::scratch_roots(Some(platform))
+        .into_iter()
+        .next()
+        .unwrap_or_else(std::env::temp_dir);
+    let user: String = ["USER", "USERNAME", "LOGNAME"]
+        .iter()
+        .find_map(|k| get_env(base_env, k, platform).map(str::trim))
+        .filter(|u| !u.is_empty())
+        .unwrap_or("user")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    scratch.join(format!("cowork-uv-cache-{user}"))
 }
 
 fn append_node_option_import(existing: Option<&str>, resolver_path: &Path) -> String {
@@ -196,28 +325,23 @@ pub fn build_canonical_shell_env(opts: ShellEnvOptions<'_>) -> HashMap<String, S
             });
 
         if let Some(inherited) = get_env(&env, "PATH", opts.platform) {
-            let delim = path_delimiter(opts.platform);
-            for entry in inherited.split(delim) {
-                if let Some(forbid) = &forbidden_lo_program {
-                    let matches_forbid = if opts.platform == "win32" {
-                        entry.trim().eq_ignore_ascii_case(forbid)
-                    } else {
-                        entry.trim() == forbid
-                    };
-                    if matches_forbid {
-                        continue;
-                    }
+            for entry in split_path_value(inherited, opts.platform) {
+                if forbidden_lo_program
+                    .as_deref()
+                    .is_some_and(|forbid| path_entry_matches(&entry, forbid, opts.platform))
+                {
+                    continue;
                 }
-                path_parts.push(entry.to_owned());
+                path_parts.push(entry);
             }
         } else if opts.platform != "win32" {
-            path_parts.push("/usr/bin:/bin".to_owned());
+            path_parts.extend(["/usr/bin".to_owned(), "/bin".to_owned()]);
         }
 
         set_env(
             &mut env,
             "PATH",
-            dedup_path_list(path_parts, opts.platform),
+            dedup_path_dirs(path_parts, opts.platform),
             opts.platform,
         );
 
@@ -231,12 +355,12 @@ pub fn build_canonical_shell_env(opts: ShellEnvOptions<'_>) -> HashMap<String, S
                 .into_owned(),
         ];
         if let Some(existing_np) = get_env(&env, "NODE_PATH", opts.platform) {
-            node_paths.push(existing_np.to_owned());
+            node_paths.extend(split_path_value(existing_np, opts.platform));
         }
         set_env(
             &mut env,
             "NODE_PATH",
-            dedup_path_list(node_paths, opts.platform),
+            dedup_path_dirs(node_paths, opts.platform),
             opts.platform,
         );
 
@@ -368,14 +492,14 @@ pub fn build_canonical_shell_env(opts: ShellEnvOptions<'_>) -> HashMap<String, S
         }
     } else if !path_parts.is_empty() {
         if let Some(inherited) = get_env(&env, "PATH", opts.platform) {
-            path_parts.push(inherited.to_owned());
+            path_parts.extend(split_path_value(inherited, opts.platform));
         } else if opts.platform != "win32" {
-            path_parts.push("/usr/bin:/bin".to_owned());
+            path_parts.extend(["/usr/bin".to_owned(), "/bin".to_owned()]);
         }
         set_env(
             &mut env,
             "PATH",
-            dedup_path_list(path_parts, opts.platform),
+            dedup_path_dirs(path_parts, opts.platform),
             opts.platform,
         );
     }
@@ -387,11 +511,20 @@ pub fn build_canonical_shell_env(opts: ShellEnvOptions<'_>) -> HashMap<String, S
         opts.platform,
     );
 
-    // Configure `UV_*` environment variables canonically.
+    // Configure `UV_*` environment variables canonically. Sandboxed children cannot write
+    // `<cowork_home>/cache/uv` (it is outside every sandbox writable root), so they get a
+    // per-user cache under the platform temp scratch root instead.
     let resolved_uv_cache = opts
         .uv_env
         .map(|u| u.cache_dir.clone())
-        .or_else(|| opts.cowork_home.map(|h| h.join("cache").join("uv")));
+        .or_else(|| opts.cowork_home.map(|h| h.join("cache").join("uv")))
+        .map(|host_cache| {
+            if opts.sandboxed {
+                sandbox_uv_cache_dir(opts.base_env, opts.platform)
+            } else {
+                host_cache
+            }
+        });
     if let Some(cache_dir) = resolved_uv_cache {
         set_env(
             &mut env,
@@ -715,13 +848,8 @@ fn which_with(
     }
     let names = executable_name_candidates(name, env, platform);
     let path_value = get_env(env, "PATH", platform)?;
-    for entry in path_value.split(path_delimiter(platform)) {
+    for entry in split_path_value(path_value, platform) {
         let dir = entry.trim();
-        let dir = if platform == "win32" {
-            dir.trim_matches('"')
-        } else {
-            dir
-        };
         if dir.is_empty() {
             continue;
         }
@@ -993,4 +1121,149 @@ pub fn redact_env_for_diagnostics(env: &HashMap<String, String>) -> BTreeMap<Str
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::RuntimePaths;
+
+    fn runtime_with_libreoffice(lo_dir: &str) -> PreparedRuntime {
+        let rt = PathBuf::from("/rt");
+        PreparedRuntime {
+            version: "v".to_owned(),
+            asset: "a".to_owned(),
+            root_dir: rt.clone(),
+            installed_packs: Vec::new(),
+            paths: RuntimePaths {
+                bin: rt.join("bin"),
+                node: rt.join("node/node"),
+                python: rt.join("python/python3"),
+                git: None,
+                node_modules: rt.join("node_modules"),
+                node_resolver: rt.join("resolver.mjs"),
+                poppler_bin: None,
+                pdftoppm: None,
+                libreoffice: Some(PathBuf::from(lo_dir)),
+                soffice: None,
+                libreoffice_binary: None,
+                uv: None,
+                wheelhouse: None,
+            },
+        }
+    }
+
+    fn built_path(base_path: &str, lo_dir: &str, platform: &str) -> Vec<String> {
+        let mut base = HashMap::new();
+        base.insert("PATH".to_owned(), base_path.to_owned());
+        let rt = runtime_with_libreoffice(lo_dir);
+        let env = build_canonical_shell_env(ShellEnvOptions {
+            base_env: &base,
+            runtime: Some(&rt),
+            uv_env: None,
+            extra_env: None,
+            platform,
+            sandboxed: true,
+            cowork_home: None,
+        });
+        split_path_value(get_env(&env, "PATH", platform).unwrap(), platform)
+    }
+
+    #[test]
+    fn win32_path_split_and_join_are_quote_aware() {
+        let raw = r#"C:\Windows;"C:\odd;dir\bin";;C:\Tools"#;
+        let split = split_path_value(raw, "win32");
+        assert_eq!(split, [r"C:\Windows", r"C:\odd;dir\bin", r"C:\Tools"]);
+        let joined = join_path_value(&split, "win32");
+        assert_eq!(joined, r#"C:\Windows;"C:\odd;dir\bin";C:\Tools"#);
+        assert_eq!(split_path_value(&joined, "win32"), split);
+        assert_eq!(split_path_value("/a::/b", "linux"), ["/a", "/b"]);
+        assert_eq!(join_path_value(&["/a", "/b"], "linux"), "/a:/b");
+    }
+
+    #[test]
+    fn win32_quoted_path_entries_with_semicolons_survive_the_canonical_env() {
+        let entries = built_path(
+            r#"C:\Windows;"C:\odd;dir\bin";C:\Tools"#,
+            r"C:\rt\lo",
+            "win32",
+        );
+        assert!(
+            entries.contains(&r"C:\odd;dir\bin".to_owned()),
+            "{entries:?}"
+        );
+        assert!(!entries.iter().any(|e| e == r"C:\odd" || e == r"dir\bin"));
+    }
+
+    #[test]
+    fn libreoffice_program_dir_is_stripped_in_every_spelling() {
+        let win = built_path(
+            r#"C:\Windows;c:/RT/LO/Program/;"C:\rt\lo\program";C:\rt\lo\.\program\;C:\Tools"#,
+            r"C:\rt\lo",
+            "win32",
+        );
+        assert!(
+            !win.iter().any(|e| e.to_lowercase().contains("program")),
+            "{win:?}"
+        );
+        assert!(win.contains(&r"C:\Tools".to_owned()), "{win:?}");
+
+        let mac = built_path(
+            "/usr/bin:/RT/lo/Program/:/rt/lo/program//:/bin",
+            "/rt/lo",
+            "darwin",
+        );
+        assert!(
+            !mac.iter().any(|e| e.to_lowercase().contains("program")),
+            "{mac:?}"
+        );
+
+        // Linux is case-sensitive: only spellings of the same directory are stripped.
+        let linux = built_path(
+            "/usr/bin:/rt/lo/program/:/rt//lo/./program:/RT/lo/program:/bin",
+            "/rt/lo",
+            "linux",
+        );
+        assert_eq!(
+            linux
+                .iter()
+                .filter(|e| e.to_lowercase().contains("program"))
+                .collect::<Vec<_>>(),
+            ["/RT/lo/program"]
+        );
+    }
+
+    #[test]
+    fn sandboxed_children_get_a_writable_temp_uv_cache() {
+        let cowork_home = Path::new("/home/alice/.cowork");
+        let mut base = HashMap::new();
+        base.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+        base.insert("USER".to_owned(), "alice".to_owned());
+        let build = |sandboxed: bool| {
+            build_canonical_shell_env(ShellEnvOptions {
+                base_env: &base,
+                runtime: None,
+                uv_env: None,
+                extra_env: None,
+                platform: "linux",
+                sandboxed,
+                cowork_home: Some(cowork_home),
+            })
+        };
+        let sandboxed = build(true);
+        let cache = PathBuf::from(sandboxed.get("UV_CACHE_DIR").expect("uv cache"));
+        let scratch = cowork_sandbox::scratch_roots(Some("linux"));
+        assert!(
+            scratch.iter().any(|root| cache.starts_with(root)),
+            "{cache:?} must be under temp scratch {scratch:?}"
+        );
+        assert!(!cache.starts_with(cowork_home), "{cache:?}");
+        assert!(cache.ends_with("cowork-uv-cache-alice"), "{cache:?}");
+
+        let host = build(false);
+        assert_eq!(
+            host.get("UV_CACHE_DIR").map(String::as_str),
+            Some("/home/alice/.cowork/cache/uv")
+        );
+    }
 }

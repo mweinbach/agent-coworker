@@ -270,13 +270,13 @@ impl WorkspaceProtectedPathsCache {
                 };
 
                 // 1. Prune any cached candidate under or equal to `ev_path` that was removed or
-                // turned into a symlink.
+                // is now reachable only through a symlinked ancestor.
                 entry.candidates.retain(|cand| {
                     if cand == &ev_path
                         || is_lexical_inside(&ev_path, cand)
                         || is_lexical_inside(cand, &ev_path)
                     {
-                        is_valid_nonsymlink_descendant(&entry.canonical_root, cand)
+                        is_valid_protected_candidate(&entry.canonical_root, cand)
                     } else {
                         true
                     }
@@ -420,10 +420,16 @@ fn scan_protected_subpaths_parallel(root: &Path, dirs_walked: &AtomicUsize) -> B
                 dirs_walked.fetch_add(1, Ordering::Relaxed);
                 return WalkState::Continue;
             }
+            let name = entry.file_name().to_string_lossy();
             if entry.path_is_symlink() {
+                // Never traverse symlinks, but DO report a symlinked (possibly dangling)
+                // `.git` / `.cowork` entry: a writable parent lets a sandboxed command unlink or
+                // replace the link itself, so callers must protect the lexical entry too.
+                if is_protected_metadata_name(&name, true) {
+                    found_ref.lock().insert(entry.path().to_path_buf());
+                }
                 return WalkState::Skip;
             }
-            let name = entry.file_name().to_string_lossy();
             if is_protected_metadata_name(&name, true) {
                 found_ref.lock().insert(entry.path().to_path_buf());
                 // A mixed-case ancestor is ordinary on Linux. Look inside it for exact
@@ -512,7 +518,7 @@ fn record_protected_prefixes(entry: &mut WatchedRootEntry, ev_path: &Path) -> bo
         cur.push(os);
         let name = os.to_string_lossy();
         if is_protected_metadata_name(&name, true) {
-            if is_valid_nonsymlink_descendant(&entry.canonical_root, &cur) {
+            if is_valid_protected_candidate(&entry.canonical_root, &cur) {
                 entry.candidates.insert(cur.clone());
             }
             if is_protected_metadata_name(&name, false) {
@@ -546,6 +552,19 @@ fn is_valid_nonsymlink_descendant(canonical_root: &Path, target: &Path) -> bool 
     true
 }
 
+/// Whether `target` is a protected-metadata candidate below `canonical_root`: every ancestor
+/// component must be an existing non-symlink, while the final `.git` / `.cowork` entry itself may
+/// be a symlink (including a dangling one), which must stay protected as a directory entry.
+fn is_valid_protected_candidate(canonical_root: &Path, target: &Path) -> bool {
+    let Some(parent) = target.parent() else {
+        return false;
+    };
+    if target == canonical_root || std::fs::symlink_metadata(target).is_err() {
+        return false;
+    }
+    parent == canonical_root || is_valid_nonsymlink_descendant(canonical_root, parent)
+}
+
 fn is_valid_nonsymlink_dir_descendant(canonical_root: &Path, target: &Path) -> bool {
     if !is_valid_nonsymlink_descendant(canonical_root, target) {
         return false;
@@ -564,6 +583,65 @@ fn is_strictly_inside(root: &Path, target: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_and_dangling_metadata_entries_are_reported_without_traversal() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(workspace.path()).unwrap();
+        let external_gitdir = outside.path().join("gitdir");
+        std::fs::create_dir_all(external_gitdir.join(".cowork")).unwrap();
+        let git_link = root.join(".git");
+        let cowork_link = root.join(".cowork");
+        let nested_link = root.join("sub").join(".git");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::os::unix::fs::symlink(&external_gitdir, &git_link).unwrap();
+        std::os::unix::fs::symlink(root.join("missing-target"), &cowork_link).unwrap();
+        std::os::unix::fs::symlink(&external_gitdir, &nested_link).unwrap();
+
+        let uncached = protected_metadata_paths(
+            std::slice::from_ref(&root),
+            ProtectedMetadataOptions {
+                platform: Some("linux"),
+                ..Default::default()
+            },
+        );
+        let cache = WorkspaceProtectedPathsCache::new();
+        let cached = cache.protected_paths_for_roots(std::slice::from_ref(&root), Some("linux"));
+        for found in [&uncached, &cached] {
+            for link in [&git_link, &cowork_link, &nested_link] {
+                assert!(found.contains(link), "{link:?} missing from {found:?}");
+            }
+            assert!(
+                !found.iter().any(|p| p.ends_with(".git/.cowork")),
+                "symlinked metadata must never be traversed: {found:?}"
+            );
+        }
+
+        // A notify event touching the link must not prune it as "turned into a symlink".
+        let (tx, rx) = mpsc::channel();
+        cache.entries.lock().insert(
+            root.clone(),
+            WatchedRootEntry {
+                canonical_root: root.clone(),
+                candidates: [git_link.clone(), cowork_link.clone()]
+                    .into_iter()
+                    .collect(),
+                rx: Some(rx),
+                _watcher: None,
+            },
+        );
+        tx.send(Ok(Event::new(EventKind::Any)
+            .add_path(git_link.clone())
+            .add_path(cowork_link.clone())))
+            .unwrap();
+        let after = cache.protected_paths_for_roots(std::slice::from_ref(&root), Some("linux"));
+        assert!(
+            after.contains(&git_link) && after.contains(&cowork_link),
+            "{after:?}"
+        );
+    }
 
     #[test]
     fn lost_watch_does_not_leave_new_metadata_writable() {

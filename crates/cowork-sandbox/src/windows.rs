@@ -32,7 +32,16 @@ const IMAGE_FILE_MACHINE_ARM64: u16 = 0xaa64;
 ///
 /// Honors `COWORK_HOME_OVERRIDE` and ignores `HOME` on `win32`.
 pub fn windows_sandbox_home(env: &HashMap<String, String>) -> PathBuf {
-    windows_sandbox_home_for_platform(env, host_platform())
+    absolutize_host_path(&windows_sandbox_home_for_platform(env, host_platform()))
+}
+
+/// Resolves `path` against the server process cwd (TS `path.resolve`) so a relative value can
+/// never be re-resolved against the session workspace the helper is spawned in.
+fn absolutize_host_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Platform-parameterized variant of `windows_sandbox_home` for cross-platform unit tests.
@@ -88,30 +97,9 @@ pub fn build_windows_sandbox_command(
     cwd: &Path,
     env_source: &HashMap<String, String>,
 ) -> TransformedCommand {
-    let win_scratch = scratch_roots(Some("win32"));
-    let (mode_arg, writable_roots): (&str, Vec<PathBuf>) = match policy {
-        SandboxPolicy::DangerFullAccess { .. } => ("network-only", Vec::new()),
-        SandboxPolicy::NoProjectWrite { project_roots, .. } => {
-            let scratch = tmp_scratch_roots(project_roots, &win_scratch);
-            if scratch.is_empty() {
-                ("read-only", Vec::new())
-            } else {
-                ("workspace-write", dedupe_win_roots(&scratch))
-            }
-        }
-        SandboxPolicy::ReadOnly { .. } => ("read-only", Vec::new()),
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: raw,
-            ..
-        } => {
-            let roots = if !raw.is_empty() {
-                with_tmp_scratch(raw, &win_scratch)
-            } else {
-                tmp_scratch_roots(&[cwd.to_path_buf()], &win_scratch)
-            };
-            ("workspace-write", dedupe_win_roots(&roots))
-        }
-    };
+    let cwd_abs = absolutize_host_path(cwd);
+    let cwd = cwd_abs.as_path();
+    let (mode_arg, writable_roots) = windows_mode_and_writable_roots(policy, cwd);
 
     sync_windows_sandbox_for_env_if_applicable(env_source);
     let sandbox_home = windows_sandbox_home(env_source);
@@ -157,12 +145,49 @@ pub fn build_windows_sandbox_command(
     }
 }
 
+/// Maps `policy` to the helper `--mode` and its `--writable-root` set (TS
+/// `buildWindowsSandboxCommand` parity). `danger-full-access` (only wrapped when `network` is
+/// off) runs as `network-only`, which the helper still confines to `cwd` plus explicit writable
+/// roots, so it gets `cwd` and the filtered temp scratch like the other writable policies.
+fn windows_mode_and_writable_roots(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+) -> (&'static str, Vec<PathBuf>) {
+    let win_scratch = scratch_roots(Some("win32"));
+    match policy {
+        SandboxPolicy::DangerFullAccess { .. } => (
+            "network-only",
+            dedupe_win_roots(&with_tmp_scratch(&[cwd.to_path_buf()], &win_scratch)),
+        ),
+        SandboxPolicy::NoProjectWrite { project_roots, .. } => {
+            let scratch = tmp_scratch_roots(project_roots, &win_scratch);
+            if scratch.is_empty() {
+                ("read-only", Vec::new())
+            } else {
+                ("workspace-write", dedupe_win_roots(&scratch))
+            }
+        }
+        SandboxPolicy::ReadOnly { .. } => ("read-only", Vec::new()),
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: raw,
+            ..
+        } => {
+            let roots = if !raw.is_empty() {
+                with_tmp_scratch(raw, &win_scratch)
+            } else {
+                tmp_scratch_roots(&[cwd.to_path_buf()], &win_scratch)
+            };
+            ("workspace-write", dedupe_win_roots(&roots))
+        }
+    }
+}
+
 fn dedupe_win_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for r in roots {
         let resolved = if host_platform() == "win32" {
-            canonicalize_sync(r)
+            absolutize_host_path(&canonicalize_sync(r))
         } else {
             r.clone()
         };
@@ -577,4 +602,87 @@ fn write_atomic_private(dest: &Path, content: &str) -> std::io::Result<()> {
         return Err(err);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arg_after<'a>(args: &'a [String], flag: &str) -> Vec<&'a str> {
+        args.windows(2)
+            .filter(|w| w[0] == flag)
+            .map(|w| w[1].as_str())
+            .collect()
+    }
+
+    #[test]
+    fn danger_full_access_without_network_grants_cwd_and_temp_scratch() {
+        // A cwd outside the temp dir so the scratch root is not filtered as over-scoping it.
+        let cwd = Path::new("/cowork-test-nonexistent/workspace");
+        let (mode, roots) = windows_mode_and_writable_roots(
+            &SandboxPolicy::DangerFullAccess {
+                network: Some(false),
+            },
+            cwd,
+        );
+        assert_eq!(mode, "network-only");
+        assert!(roots.contains(&cwd.to_path_buf()), "{roots:?}");
+        for scratch in scratch_roots(Some("win32")) {
+            assert!(roots.contains(&scratch), "{scratch:?} missing: {roots:?}");
+        }
+        // Parity with workspace-write over the same root.
+        let (_, ww_roots) = windows_mode_and_writable_roots(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![cwd.to_path_buf()],
+                writable_root_kinds: HashMap::new(),
+                network: false,
+            },
+            cwd,
+        );
+        assert_eq!(roots, ww_roots);
+
+        let cmd = build_windows_sandbox_command(
+            Path::new("/opt/cowork/cowork-win-sandbox.exe"),
+            &SandboxCommand::new("cmd.exe", ["/c", "echo hi"]),
+            &SandboxPolicy::DangerFullAccess {
+                network: Some(false),
+            },
+            cwd,
+            &HashMap::new(),
+        );
+        let writable = arg_after(&cmd.args, "--writable-root");
+        assert!(writable.contains(&cwd.to_str().unwrap()), "{:?}", cmd.args);
+        assert!(writable.len() > 1, "temp scratch missing: {:?}", cmd.args);
+    }
+
+    #[test]
+    fn relative_sandbox_home_and_cwd_are_absolutized_against_the_server_cwd() {
+        let server_cwd = std::env::current_dir().unwrap();
+        let mut env = HashMap::new();
+        env.insert(
+            "COWORK_WIN_SANDBOX_HOME".to_owned(),
+            "cowork-test-relative-sbx-home".to_owned(),
+        );
+        assert_eq!(
+            windows_sandbox_home(&env),
+            server_cwd.join("cowork-test-relative-sbx-home")
+        );
+        let cmd = build_windows_sandbox_command(
+            Path::new("/opt/cowork/cowork-win-sandbox.exe"),
+            &SandboxCommand::new("cmd.exe", ["/c", "echo hi"]),
+            &SandboxPolicy::ReadOnly { network: false },
+            Path::new("relative-ws"),
+            &env,
+        );
+        for flag in ["--sandbox-home", "--cwd"] {
+            let values = arg_after(&cmd.args, flag);
+            assert_eq!(values.len(), 1, "{flag}: {:?}", cmd.args);
+            assert!(Path::new(values[0]).is_absolute(), "{flag}: {:?}", cmd.args);
+        }
+        assert_eq!(
+            arg_after(&cmd.args, "--cwd"),
+            [server_cwd.join("relative-ws").to_str().unwrap()]
+        );
+        assert!(!server_cwd.join("cowork-test-relative-sbx-home").exists());
+    }
 }

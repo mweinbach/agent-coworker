@@ -1201,11 +1201,15 @@ impl BuiltinTool for ReadPastConversationTool {
                     "type": "string",
                     "description": "Specific past session ID to read."
                 },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Index of the first message to read (default: 0). When a read stops early, its last line gives the offset to continue from."
+                },
                 "maxTurns": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 100,
-                    "description": "Maximum messages to return when reading a session (default: 30)."
+                    "description": "Maximum messages to return when reading a session. By default a read returns as many messages as fit in the transcript size limit."
                 }
             }
         })
@@ -1243,16 +1247,20 @@ impl BuiltinTool for ReadPastConversationTool {
                     "Access denied: requested session belongs to a different workspace.".to_owned(),
                 ));
             }
-            let max_turns = args.get("maxTurns").and_then(Value::as_u64).unwrap_or(30) as usize;
+            let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let max_turns = args
+                .get("maxTurns")
+                .and_then(Value::as_u64)
+                .map_or(usize::MAX, |n| n as usize);
             let mut lines = vec![format!(
                 "# {} ({})\nUpdated: {}",
                 detail.title, detail.session_id, detail.updated_at
             )];
-            let window = &detail.messages[..detail.messages.len().min(max_turns)];
-            let transcript = serialize_turn_delta(window);
-            if !transcript.is_empty() {
-                lines.push(transcript);
+            let page = read_transcript_page(&detail.messages, offset, max_turns);
+            if !page.transcript.is_empty() {
+                lines.push(page.transcript);
             }
+            lines.push(page.footer);
             return Ok(ToolOutput::Text(lines.join("\n\n")));
         }
 
@@ -1444,12 +1452,22 @@ fn push_tool_result_line(lines: &mut Vec<String>, name: &str, text: &str, is_err
 /// `toolResult` / `providerNativeTool` blocks) as well as legacy AI-SDK (`tool-call` with
 /// `toolName` + `input`|`args`, `tool-result` with `output`|`result`), OpenAI-style string tool
 /// messages, and pi-ai `toolResult`-role messages.
+#[cfg(test)]
 fn serialize_transcript_messages(messages: &[Value]) -> String {
+    transcript_lines_by_message(messages).0.join("\n")
+}
+
+/// The transcript lines for `messages`, plus the index of each message's first line, so callers
+/// can page through a transcript on message boundaries. Tool-result names resolve against calls
+/// in any earlier message.
+fn transcript_lines_by_message(messages: &[Value]) -> (Vec<String>, Vec<usize>) {
     let mut lines: Vec<String> = Vec::new();
+    let mut starts: Vec<usize> = Vec::with_capacity(messages.len());
     // Canonical results may omit `toolName`; recover it from the matching call.
     let mut call_names: HashMap<String, String> = HashMap::new();
 
     for message in messages {
+        starts.push(lines.len());
         let Some(obj) = message.as_object() else {
             continue;
         };
@@ -1544,10 +1562,61 @@ fn serialize_transcript_messages(messages: &[Value]) -> String {
             _ => {}
         }
     }
-    lines.join("\n")
+    (lines, starts)
+}
+
+struct TranscriptPage {
+    transcript: String,
+    footer: String,
+}
+
+/// One page of a past conversation for `readPastConversation`: whole messages from `offset`
+/// while they fit in `TRANSCRIPT_CHAR_CAP` (at least one, truncated if it alone is larger), at
+/// most `max_turns` of them. TS serialized the whole history and cut it at the cap, which left
+/// later messages unreachable; the footer names the offset to continue from instead.
+fn read_transcript_page(messages: &[Value], offset: usize, max_turns: usize) -> TranscriptPage {
+    let total = messages.len();
+    if offset >= total {
+        return TranscriptPage {
+            transcript: String::new(),
+            footer: format!("No messages at offset {offset}; this conversation has {total}."),
+        };
+    }
+    let (lines, starts) = transcript_lines_by_message(messages);
+    let line_range = |index: usize| {
+        let end = starts.get(index + 1).copied().unwrap_or(lines.len());
+        starts[index]..end
+    };
+    let mut used = 0usize;
+    let mut end = offset;
+    while end < total && end - offset < max_turns {
+        let size: usize = lines[line_range(end)]
+            .iter()
+            .map(|line| line.encode_utf16().count() + 1)
+            .sum();
+        if end > offset && used + size > TRANSCRIPT_CHAR_CAP {
+            break;
+        }
+        used += size;
+        end += 1;
+    }
+    let transcript = truncate_utf16(
+        &lines[starts[offset]..line_range(end - 1).end].join("\n"),
+        TRANSCRIPT_CHAR_CAP,
+    );
+    let footer = if end < total {
+        format!(
+            "Showing messages {}–{end} of {total}. More remain: call again with offset={end}.",
+            offset + 1
+        )
+    } else {
+        format!("Showing messages {}–{end} of {total}.", offset + 1)
+    };
+    TranscriptPage { transcript, footer }
 }
 
 /// Port of TS `serializeTurnDelta`: the compact transcript capped at 24,000 UTF-16 code units.
+#[cfg(test)]
 fn serialize_turn_delta(messages: &[Value]) -> String {
     truncate_utf16(
         &serialize_transcript_messages(messages),
@@ -1737,6 +1806,59 @@ mod tests {
             ]
             .join("\n")
         );
+    }
+
+    #[test]
+    fn past_conversation_pages_reach_every_message() {
+        fn next_offset(page: &TranscriptPage) -> Option<usize> {
+            let (_, rest) = page.footer.split_once("offset=")?;
+            rest.trim_end_matches('.').parse().ok()
+        }
+        let messages: Vec<Value> = (0..250)
+            .map(|i| json!({ "role": "user", "content": format!("message {i} {}", "x".repeat(200)) }))
+            .collect();
+        let first = read_transcript_page(&messages, 0, usize::MAX);
+        assert!(first.transcript.starts_with("USER: message 0 "));
+        assert!(first.transcript.encode_utf16().count() <= TRANSCRIPT_CHAR_CAP);
+        // Pages end on message boundaries and the next one starts where this one stopped.
+        assert!(first.transcript.ends_with(&"x".repeat(200)));
+        let mut offset = next_offset(&first).unwrap();
+        assert!(offset > 30 && offset < 250, "{}", first.footer);
+        let mut pages = 1;
+        let last = loop {
+            let page = read_transcript_page(&messages, offset, usize::MAX);
+            assert!(
+                page.transcript
+                    .starts_with(&format!("USER: message {offset} "))
+            );
+            pages += 1;
+            match next_offset(&page) {
+                Some(next) => offset = next,
+                None => break page,
+            }
+        };
+        assert!(pages >= 2);
+        assert!(last.transcript.contains("USER: message 249 "));
+        assert!(last.footer.ends_with("of 250."), "{}", last.footer);
+
+        // A short history fits in one page with no continuation, and maxTurns still limits it.
+        let short = read_transcript_page(&messages[..40], 0, usize::MAX);
+        assert!(short.transcript.contains("USER: message 39 "));
+        assert_eq!(short.footer, "Showing messages 1–40 of 40.");
+        let limited = read_transcript_page(&messages[..40], 5, 3);
+        assert_eq!(limited.transcript.lines().count(), 3);
+        assert!(limited.footer.contains("offset=8"), "{}", limited.footer);
+        assert!(
+            read_transcript_page(&messages[..40], 40, usize::MAX)
+                .transcript
+                .is_empty()
+        );
+
+        // A single message larger than the cap is still returned, truncated.
+        let huge = vec![json!({ "role": "user", "content": "y".repeat(30_000) })];
+        let page = read_transcript_page(&huge, 0, usize::MAX);
+        assert_eq!(page.transcript.encode_utf16().count(), TRANSCRIPT_CHAR_CAP);
+        assert_eq!(page.footer, "Showing messages 1–1 of 1.");
     }
 
     #[test]

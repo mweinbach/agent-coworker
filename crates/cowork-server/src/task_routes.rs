@@ -8,7 +8,9 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cowork_config::{ProviderName, canonicalize_sync, is_path_inside_one_off_chats_root};
+use cowork_config::{
+    ProviderName, canonicalize_sync, is_path_inside_one_off_chats_root, same_workspace_path,
+};
 use cowork_harness::tasks::{
     AcceptArtifactVersionRequest, ArtifactBlobInput, ArtifactComparisonService,
     ArtifactPreviewService, BriefRequirementInput, CaptureArtifactVersionRequest,
@@ -941,9 +943,13 @@ impl ServerRuntimeState {
                     &self.homedir,
                     self.desktop_service.as_deref(),
                 );
+                // Compare physical directories, not strings: persisted entries may be a plain
+                // or symlinked spelling of `canon` (`\\?\C:\...` verbatim vs `C:\...` on
+                // Windows).
+                let canon_str = canon.to_string_lossy();
                 let Some(found) = workspaces
                     .into_iter()
-                    .find(|w| w.path == canon.to_string_lossy())
+                    .find(|w| same_workspace_path(&w.path, &canon_str))
                 else {
                     return Err(one_off_err());
                 };
@@ -964,7 +970,10 @@ impl ServerRuntimeState {
                 Some(svc.as_ref()),
             );
             let canonical_str = resolved_path.to_string_lossy().into_owned();
-            if let Some(entry) = workspaces.iter().find(|w| w.path == canonical_str) {
+            if let Some(entry) = workspaces
+                .iter()
+                .find(|w| same_workspace_path(&w.path, &canonical_str))
+            {
                 if entry.workspace_kind != "project" {
                     return Err(format!(
                         "{method} cwd must match an authorized project workspace"

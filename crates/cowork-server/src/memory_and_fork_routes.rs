@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cowork_config::{
     AgentConfig, ProviderName, SupportedModel, canonicalize_sync, get_ai_coworker_paths,
     get_one_off_chats_root, normalize_child_routing_config, parse_child_model_ref,
-    project_memory_db_path, read_connection_store, user_memory_db_path,
+    project_memory_db_path, read_connection_store, same_workspace_path, user_memory_db_path,
 };
 use cowork_harness::{
     GeneratedNoteTarget, MemoryGenerator, RemoteMemoryModel, generated_note_target,
@@ -31,7 +31,7 @@ use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::http_desktop::build_workspace_summaries;
+use crate::http_desktop::{build_workspace_summaries, fnv1a32_hex};
 use crate::registry::{LiveSession, ServerRuntimeState};
 use crate::turn_runner::{
     CurrentModelConnection, provider_base_url_override, select_provider_transport,
@@ -705,6 +705,9 @@ impl ServerRuntimeState {
                         JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string())
                     })?;
                 let wt_cwd = wt.path.to_string_lossy().into_owned();
+                // TS `resolveForkTarget`: `ensureDesktopWorkspace(worktree.path,
+                // `${titleHint} worktree`, "project")`.
+                self.ensure_desktop_worktree_workspace(&wt.path, &format!("{fork_title} worktree"));
                 (
                     wt_cwd.clone(),
                     json!({
@@ -1315,7 +1318,7 @@ impl ListedThread {
         // when it is a project.
         let project = workspaces
             .iter()
-            .find(|w| Path::new(&w.path) == Path::new(&thread.cwd))
+            .find(|w| same_workspace_path(&w.path, &thread.cwd))
             .filter(|w| w.workspace_kind == "project")
             .map(|w| (w.id.clone(), w.name.clone()));
         Self { thread, project }
@@ -1528,6 +1531,86 @@ fn decode_read_thread_cursor(raw: Option<&str>, total_turns: usize) -> Result<us
 }
 
 impl ServerRuntimeState {
+    /// TS `LocalThreadHost.ensureDesktopWorkspace(path, name, "project")` for a managed git
+    /// worktree a thread was just created in (`thread/fork` and `create_thread` with
+    /// `environment: "worktree"`): registers the directory in the web desktop state so it shows
+    /// up in `workspace/list`, is accepted by `workspace/switch`, and falls inside the
+    /// `/cowork/fs/*` roots, then announces `workspace/listChanged`. Returns the workspace id
+    /// (existing or new); `None` without a desktop service or when the state cannot be saved,
+    /// which never fails the thread that already owns the worktree.
+    pub(crate) fn ensure_desktop_worktree_workspace(
+        &self,
+        worktree_path: &Path,
+        name: &str,
+    ) -> Option<String> {
+        let svc = self.desktop_service.as_deref()?;
+        let canon = canonicalize_sync(worktree_path);
+        let canon_str = canon.to_string_lossy().into_owned();
+        // Work on the raw normalized state so other workspaces keep fields the typed entry
+        // view does not model.
+        let mut state = svc.load_state_json(&self.working_directory);
+        let mut workspaces: Vec<Value> = state
+            .get("workspaces")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let field = |w: &Value, key: &str| w.get(key).and_then(Value::as_str).map(str::to_owned);
+        if let Some(existing) = workspaces
+            .iter()
+            .find(|w| field(w, "path").is_some_and(|path| same_workspace_path(&path, &canon_str)))
+        {
+            return field(existing, "id");
+        }
+
+        let mut id = format!("project-{}", fnv1a32_hex(&canon_str));
+        if workspaces
+            .iter()
+            .any(|w| field(w, "id").as_deref() == Some(id.as_str()))
+        {
+            let suffix: String = Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(6)
+                .collect();
+            id = format!("{id}-{suffix}");
+        }
+        let name = Some(name.trim())
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                canon
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|n| !n.is_empty())
+            })
+            .unwrap_or_else(|| canon_str.clone());
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        workspaces.push(json!({
+            "id": id,
+            "name": name,
+            "path": canon_str,
+            "workspaceKind": "project",
+            "createdAt": now,
+            "lastOpenedAt": now,
+            "wsProtocol": "jsonrpc",
+            "defaultEnableMcp": true,
+            "defaultBackupsEnabled": false,
+            "yolo": false,
+        }));
+        state["workspaces"] = Value::Array(workspaces);
+        if let Err(err) = svc.save_state_json(state, &self.working_directory) {
+            tracing::warn!(
+                path = %canon_str,
+                error = %err,
+                "failed to register worktree workspace in desktop state"
+            );
+            return None;
+        }
+        self.broadcast_workspace_list_changed();
+        Some(id)
+    }
+
     /// Listable root threads across every workspace (TS `LocalThreadHost.listThreads`
     /// enumeration). Same root/task/listability rules as [`Self::list_workspace_threads`],
     /// without its cwd filter.
@@ -1618,6 +1701,34 @@ fn require_thread_id<'a>(args: &'a Value, operation: &str) -> Result<&'a str, St
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .ok_or_else(|| format!("{operation} requires threadId"))
+}
+
+/// TS `LocalThreadHost.listProjects` projection: `project` workspaces only (one-off chats are
+/// filtered out), as `ProjectSummary` (`projectId`, `name`, `path`, `hostId`, `active`, plus
+/// `defaultProvider` / `defaultModel` when set).
+fn project_summaries(
+    workspaces: Vec<JsonRpcWorkspaceSummary>,
+    active_id: Option<&str>,
+) -> Vec<Value> {
+    workspaces
+        .into_iter()
+        .filter(|w| w.workspace_kind == "project")
+        .map(|w| {
+            let mut summary = Map::new();
+            summary.insert("projectId".to_owned(), json!(w.id));
+            summary.insert("name".to_owned(), json!(w.name));
+            summary.insert("path".to_owned(), json!(w.path));
+            summary.insert("hostId".to_owned(), json!(LOCAL_THREAD_HOST_ID));
+            summary.insert("active".to_owned(), json!(active_id == Some(w.id.as_str())));
+            if let Some(provider) = w.default_provider.filter(|p| !p.is_empty()) {
+                summary.insert("defaultProvider".to_owned(), json!(provider));
+            }
+            if let Some(model) = w.default_model.filter(|m| !m.is_empty()) {
+                summary.insert("defaultModel".to_owned(), json!(model));
+            }
+            Value::Object(summary)
+        })
+        .collect()
 }
 
 /// TS `LOCAL_HOST_ID` (`src/server/threads/localThreadHost.ts`): the `hostId` thread-tool
@@ -1712,16 +1823,15 @@ impl ServerThreadControlBridge {
 
 #[async_trait]
 impl ThreadControlBridge for ServerThreadControlBridge {
+    /// TS `LocalThreadHost.listProjects`: only `project` workspaces (managed one-off chat
+    /// directories stay hidden), projected to `ProjectSummary`.
     async fn list_projects(&self) -> Result<Value, String> {
         let (workspaces, active_id) = build_workspace_summaries(
             &self.runtime.working_directory,
             &self.runtime.homedir,
             self.runtime.desktop_service.as_deref(),
         );
-        Ok(json!({
-            "projects": workspaces,
-            "activeWorkspaceId": active_id,
-        }))
+        Ok(json!({ "projects": project_summaries(workspaces, active_id.as_deref()) }))
     }
 
     async fn list_threads(&self, args: Value) -> Result<Value, String> {
@@ -1885,7 +1995,29 @@ impl ThreadControlBridge for ServerThreadControlBridge {
         let base_cwd = self
             .runtime
             .resolve_workspace_path(raw_cwd, "create_thread")?;
-        let target_cwd = if env_kind == "worktree" {
+        let is_worktree = env_kind == "worktree";
+        // TS names the registered worktree workspace `${workspace.name} worktree` after the
+        // project it was branched from.
+        let worktree_workspace_name = is_worktree.then(|| {
+            let (workspaces, _) = build_workspace_summaries(
+                &self.runtime.working_directory,
+                &self.runtime.homedir,
+                self.runtime.desktop_service.as_deref(),
+            );
+            let base_name = workspaces
+                .into_iter()
+                .find(|w| same_workspace_path(&w.path, &base_cwd.to_string_lossy()))
+                .map(|w| w.name)
+                .filter(|n| !n.trim().is_empty())
+                .or_else(|| {
+                    base_cwd
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| base_cwd.to_string_lossy().into_owned());
+            format!("{base_name} worktree")
+        });
+        let target_cwd = if is_worktree {
             let wt = self
                 .runtime
                 .worktree_service
@@ -1909,6 +2041,11 @@ impl ThreadControlBridge for ServerThreadControlBridge {
                 "create_thread cwd must match a registered project workspace or a managed one-off chat"
                     .to_owned(),
             );
+        }
+        // TS `resolveCreateTarget`: `ensureDesktopWorkspace(worktree.path, ..., "project")`.
+        if let Some(name) = worktree_workspace_name.as_deref() {
+            self.runtime
+                .ensure_desktop_worktree_workspace(&target_cwd, name);
         }
 
         // TS `createThread` parses the model against the target workspace's provider

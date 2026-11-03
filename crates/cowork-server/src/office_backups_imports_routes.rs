@@ -930,6 +930,8 @@ impl ServerRuntimeState {
                 self.ensure_target_session_not_busy(&target_sid)?;
                 let lookup = self.collect_backup_session_lookup(&cwd);
                 let meta_hint = lookup.get(&target_sid).cloned();
+                // A thread of this workspace (live or persisted) may get its first backup here.
+                let owned_by_workspace = meta_hint.is_some();
                 let session_id = self.get_or_create_workspace_state_id(&cwd);
                 let bm = Arc::clone(&self.backup_manager);
                 let cwd_for_op = cwd.clone();
@@ -945,15 +947,18 @@ impl ServerRuntimeState {
                                 busy: false,
                             })
                         };
-                        // `WorkspaceBackupService.createCheckpoint` parity: only an existing,
-                        // readable backup recorded for this workspace may be checkpointed.
-                        // `create_checkpoint` would otherwise initialize a fresh backup for any
-                        // session id, claiming another workspace's session for `cwd`.
+                        // Only a backup recorded for this workspace, or a thread that belongs to
+                        // this workspace, may be checkpointed. `create_checkpoint` would
+                        // otherwise initialize a fresh backup for any session id, claiming
+                        // another workspace's session for `cwd`. (TS
+                        // `WorkspaceBackupService.createCheckpoint` required existing metadata;
+                        // Rust creates a thread's backup lazily, so its own threads are allowed.)
                         let existing = bm.read_workspace_backups(&cwd_for_op, None, lookup_fn)?;
-                        if !existing
-                            .backups
-                            .iter()
-                            .any(|entry| entry.target_session_id == target_for_op)
+                        if !owned_by_workspace
+                            && !existing
+                                .backups
+                                .iter()
+                                .any(|entry| entry.target_session_id == target_for_op)
                         {
                             return Err(format!("Unknown workspace backup: {target_for_op}"));
                         }

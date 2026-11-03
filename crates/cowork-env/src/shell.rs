@@ -318,10 +318,13 @@ pub fn build_canonical_shell_env(opts: ShellEnvOptions<'_>) -> HashMap<String, S
             .and_then(|b| b.parent())
             .map(|p| p.to_string_lossy().into_owned())
             .or_else(|| {
-                rt.paths
-                    .libreoffice
-                    .as_ref()
-                    .map(|lo| lo.join("program").to_string_lossy().into_owned())
+                // Join with the target platform's separator (not the host's) so the
+                // comparison key matches inherited PATH spellings.
+                rt.paths.libreoffice.as_ref().map(|lo| {
+                    let sep = if opts.platform == "win32" { '\\' } else { '/' };
+                    let base = lo.to_string_lossy();
+                    format!("{}{sep}program", base.trim_end_matches(['/', '\\']))
+                })
             });
 
         if let Some(inherited) = get_env(&env, "PATH", opts.platform) {
@@ -1261,9 +1264,10 @@ mod tests {
         assert!(cache.ends_with("cowork-uv-cache-alice"), "{cache:?}");
 
         let host = build(false);
+        let expected = cowork_home.join("cache").join("uv");
         assert_eq!(
             host.get("UV_CACHE_DIR").map(String::as_str),
-            Some("/home/alice/.cowork/cache/uv")
+            Some(expected.to_string_lossy().as_ref())
         );
     }
 }

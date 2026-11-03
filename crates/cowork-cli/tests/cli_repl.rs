@@ -775,11 +775,15 @@ async fn repl_sanitizes_terminal_control_sequences_in_server_supplied_text() {
         .await
         .unwrap();
 
+    // Prompt fields show control characters as visible escapes instead of stripping them.
     assert!(
-        output.contains("[question] Which one?"),
+        output.contains("[question] Which\\x1b]52;c;Y2xpcA==\\x07 one?"),
         "output={output:?}"
     );
-    assert!(output.contains("  1. alpha\n"), "output={output:?}");
+    assert!(
+        output.contains("  1. alpha\\x1bPdcs\\x1b\\"),
+        "output={output:?}"
+    );
     assert!(
         output.contains("beforemiddlelink \u{1b}[32mgreen\u{1b}[0m after"),
         "output={output:?}"
@@ -972,15 +976,14 @@ async fn repl_new_thread_refreshes_provider_and_model_selection() {
         after_new.contains("Current model: claude-opus-4-8 (anthropic)"),
         "output={output}"
     );
+    // `/reasoning` and `/verbosity` are OpenAI-compatible-only (TS `commandRouter`), so on the
+    // adopted anthropic selection both are refused instead of being applied as openai options.
+    let required = "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first";
+    assert_eq!(after_new.matches(required).count(), 2, "output={output}");
     assert!(
-        after_new.contains("anthropic reasoning effort set to high"),
+        !after_new.replace(required, "").contains("openai"),
         "output={output}"
     );
-    assert!(
-        after_new.contains("anthropic verbosity set to low"),
-        "output={output}"
-    );
-    assert!(!after_new.contains("openai"), "output={output}");
 }
 
 /// `/effort` (and `/reasoning`) accept the full canonical ladder, TS
@@ -1081,6 +1084,20 @@ async fn repl_resume_adopts_the_resumed_threads_workspace() {
     .unwrap();
     let a_thread = id_after(&output, "Thread: ");
     assert_ne!(a_thread, b_thread, "output={output}");
+    // The embedded server is bound to A, so resuming B's thread restarts it in B, which
+    // auto-resumes the thread there.
+    assert!(
+        output.contains("restarting server there..."),
+        "output={output}"
+    );
+    assert!(
+        output.contains(&format!("Workspace: {}", workspace_b.display())),
+        "output={output}"
+    );
+    assert!(
+        output.contains(&format!("Thread: {b_thread} ")),
+        "output={output}"
+    );
     let after_resume = output
         .split("Resumed thread:")
         .nth(1)
@@ -1289,4 +1306,248 @@ fn use_openai_provider(iso: &mut IsolatedCliEnv, base_url: &str) {
         .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
     iso.env
         .insert("OPENAI_BASE_URL".into(), base_url.to_owned());
+}
+
+/// SSE for one assistant message streamed as several `output_text.delta` events.
+fn responses_text_deltas_sse(resp_id: &str, deltas: &[&str]) -> String {
+    let text: String = deltas.concat();
+    let mut s = String::new();
+    s.push_str(&sse_event(
+        "response.created",
+        json!({ "type": "response.created", "response": { "id": resp_id } }),
+    ));
+    s.push_str(&sse_event(
+        "response.output_item.added",
+        json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "msg_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": []
+            }
+        }),
+    ));
+    for delta in deltas {
+        s.push_str(&sse_event(
+            "response.output_text.delta",
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": "msg_0",
+                "delta": delta
+            }),
+        ));
+    }
+    s.push_str(&sse_event(
+        "response.output_item.done",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "id": "msg_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{ "type": "output_text", "text": text }]
+            }
+        }),
+    ));
+    s.push_str(&sse_event(
+        "response.completed",
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": resp_id,
+                "status": "completed",
+                "output": [],
+                "usage": { "input_tokens": 18, "output_tokens": 9 }
+            }
+        }),
+    ));
+    s
+}
+
+/// Streamed deltas go through one stateful sanitizer per stream, so an OSC 52 clipboard write
+/// (or a non-SGR CSI) split across deltas is still stripped, while SGR colors survive.
+#[tokio::test]
+async fn repl_strips_escape_sequences_split_across_streamed_deltas() {
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![responses_text_deltas_sse(
+        "resp_split",
+        &[
+            "safe\u{1b}",
+            "]52;c;SGVs",
+            "bG8=",
+            "\u{7} done \u{1b}[",
+            "2J\u{9d}0;t\u{9c}\u{1b}[6",
+            "n\u{1b}[31",
+            "mred\u{1b}[0m!",
+        ],
+    )])
+    .await;
+    use_openai_provider(&mut iso, &base_url);
+
+    let output = run_repl_scripted(scripted_opts(&iso), &["Say something", "/exit"])
+        .await
+        .unwrap();
+
+    assert!(
+        output.contains("safe done \u{1b}[31mred\u{1b}[0m!"),
+        "output={output:?}"
+    );
+    for forbidden in [
+        "\u{1b}]",
+        "\u{1b}[2J",
+        "\u{1b}[6n",
+        "\u{9d}",
+        "\u{9c}",
+        "\u{7}",
+        "SGVs",
+    ] {
+        assert!(
+            !output.contains(forbidden),
+            "found {forbidden:?} in output={output:?}"
+        );
+    }
+}
+
+/// Approval prompts render the server-supplied command with every control character escaped,
+/// so `\r` / backspaces / CSI cannot overwrite the prompt with something harmless-looking.
+#[tokio::test]
+async fn repl_approval_prompt_escapes_control_characters_in_command() {
+    let mut iso = IsolatedCliEnv::new();
+    let command = "rm -f stale.tmp\r\u{1b}[2K\u{8}\u{8}echo harmless";
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        responses_tool_calls_sse(
+            "resp_approval",
+            &[(
+                "call_bash_escape",
+                "bash",
+                json!({ "command": command, "description": "cleanup" }),
+            )],
+        ),
+        responses_text_sse("resp_after", "Declined."),
+    ])
+    .await;
+    use_openai_provider(&mut iso, &base_url);
+
+    let output = run_repl_scripted(scripted_opts(&iso), &["Clean up", "n", "/exit"])
+        .await
+        .unwrap();
+
+    let approval_line = output
+        .lines()
+        .find(|l| l.starts_with("[approval] Command requires approval: "))
+        .unwrap_or_else(|| panic!("missing approval prompt; output={output:?}"));
+    assert!(
+        approval_line.contains("rm -f stale.tmp\\r\\x1b[2K\\x08\\x08echo harmless"),
+        "output={output:?}"
+    );
+    for forbidden in ["\r", "\u{8}", "\u{1b}[2K"] {
+        assert!(
+            !output.contains(forbidden),
+            "found {forbidden:?} in output={output:?}"
+        );
+    }
+}
+
+/// `/reasoning`, `/verbosity` and `/reasoning-summary` only apply to OpenAI-compatible providers
+/// (TS `commandRouter`: openai or codex-cli), and `/reasoning-summary` accepts only
+/// `auto|concise|detailed` (TS `OPENAI_REASONING_SUMMARY_VALUES`).
+#[tokio::test]
+async fn repl_openai_option_commands_require_openai_compatible_provider() {
+    let iso = IsolatedCliEnv::new();
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &[
+            "/provider google",
+            "/reasoning high",
+            "/verbosity low",
+            "/reasoning-summary auto",
+            "/provider openai",
+            "/reasoning-summary none",
+            "/reasoning-summary concise",
+            "/verbosity low",
+            "/exit",
+        ],
+    )
+    .await
+    .unwrap();
+
+    let required = "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first";
+    assert_eq!(output.matches(required).count(), 3, "output={output}");
+    assert!(!output.contains("google reasoning"), "output={output}");
+    assert!(!output.contains("google verbosity"), "output={output}");
+    assert!(
+        output.contains("usage: /reasoning-summary <auto|concise|detailed>"),
+        "output={output}"
+    );
+    assert!(!output.contains("set to none"), "output={output}");
+    assert!(
+        output.contains("openai reasoning summary set to concise"),
+        "output={output}"
+    );
+    assert!(
+        output.contains("openai verbosity set to low"),
+        "output={output}"
+    );
+}
+
+/// A `task/created` takeover (the model promoted the chat to a task, locking the source chat)
+/// switches the REPL to the task's primary thread and resumes it (TS `task/created` handler +
+/// `openTaskThread`), so later input is not sent to the locked source chat.
+#[tokio::test]
+async fn repl_task_created_switches_to_the_task_thread() {
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![responses_tool_calls_sse(
+        "resp_create_task",
+        &[(
+            "call_create_task",
+            "createTask",
+            json!({
+                "idempotencyKey": "cli-promo-1",
+                "title": "Ship Deliverable",
+                "objective": "Produce verified deliverable.md",
+                "context": "Promoted from CLI chat",
+                "reviewRequired": false,
+                "requirements": [
+                    { "kind": "acceptance_criterion", "text": "Create deliverable.md" }
+                ],
+                "workItems": [
+                    { "key": "build", "title": "Write deliverable.md", "expectedOutputs": ["deliverable.md"] }
+                ],
+                "decisions": []
+            }),
+        )],
+    )])
+    .await;
+    use_openai_provider(&mut iso, &base_url);
+    iso.env.insert("COWORK_ENABLE_TASKS".into(), "1".into());
+
+    let output = run_repl_scripted(
+        scripted_opts(&iso),
+        &["Promote this chat to a task", "/sessions", "/exit"],
+    )
+    .await
+    .unwrap();
+
+    let source_thread = id_after(&output, "Thread: ");
+    assert!(
+        output.contains("Task mode: Ship Deliverable"),
+        "output={output}"
+    );
+    let current = id_after(&output, "Current thread: ");
+    assert_ne!(current, source_thread, "output={output}");
+    assert!(
+        !output.contains("Unable to open task thread"),
+        "output={output}"
+    );
+    assert_eq!(
+        get_stored_session_for_cwd(&iso.home_dir, &iso.env, &iso.workspace_dir).as_deref(),
+        Some(current.as_str()),
+        "the task thread becomes the workspace's last session; output={output}"
+    );
 }

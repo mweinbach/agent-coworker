@@ -20,7 +20,9 @@ use uuid::Uuid;
 
 use crate::client::{InboundRpcEvent, ReplRpcClient, RpcRequestError};
 use crate::parser::{ParsedReplCommand, parse_repl_input};
-use crate::sanitize_terminal::sanitize_terminal_output as sanitize;
+use crate::sanitize_terminal::{
+    TerminalSanitizer, sanitize_prompt_field, sanitize_terminal_output as sanitize,
+};
 use crate::state_store::{
     get_stored_session_for_cwd, repl_history_file_path, set_stored_session_for_cwd,
 };
@@ -35,7 +37,19 @@ const REASONING_EFFORTS: [&str; 8] = [
     "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
 ];
 const TEXT_VERBOSITIES: [&str; 3] = ["low", "medium", "high"];
-const REASONING_SUMMARIES: [&str; 4] = ["auto", "concise", "detailed", "none"];
+/// TS `OPENAI_REASONING_SUMMARY_VALUES`.
+const REASONING_SUMMARIES: [&str; 3] = ["auto", "concise", "detailed"];
+
+/// Providers whose options take `reasoningEffort` / `textVerbosity` / `reasoningSummary`
+/// (TS `isOpenAiCompatibleProviderName`).
+fn is_openai_compatible_provider(provider: &str) -> bool {
+    matches!(provider, "openai" | "codex-cli")
+}
+
+const OPENAI_COMPATIBLE_PROVIDER_REQUIRED: &str = "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first";
+
+/// Indent for continuation lines of multi-line prompt fields (question text).
+const PROMPT_CONTINUATION_INDENT: &str = "    ";
 
 /// Options for running an interactive or scripted `cowork` CLI REPL session.
 #[derive(Debug, Clone)]
@@ -154,6 +168,9 @@ struct ActiveReplSession {
     port: u16,
     built_in_dir: Option<PathBuf>,
     server: ServerHandle,
+    /// The working directory the embedded server was started in (`cwd` may later move to a
+    /// resumed thread's workspace).
+    server_cwd: PathBuf,
     rpc: ReplRpcClient,
     thread_id: String,
     provider: String,
@@ -192,13 +209,14 @@ impl ActiveReplSession {
             .await?;
 
         let mut session = Self {
-            cwd,
+            cwd: cwd.clone(),
             homedir,
             env: opts.env,
             yolo: opts.yolo,
             port: opts.port,
             built_in_dir: opts.built_in_dir,
             server,
+            server_cwd: cwd,
             rpc,
             thread_id: String::new(),
             provider: "openai".to_owned(),
@@ -485,6 +503,32 @@ impl ActiveReplSession {
                         // TS `resumeSession` -> `connectToServer`: adopt the descriptor, then
                         // reload workspace metadata for the thread's (possibly new) workspace.
                         let adopted = self.apply_thread_descriptor(&res["thread"]);
+                        if let Some(tid) = &adopted
+                            && self.cwd != self.server_cwd
+                        {
+                            // The thread lives in another workspace, but the embedded server
+                            // (tools, config, skills, sandbox) stays bound to the one it was
+                            // started in. `apply_thread_descriptor` stored the thread as the new
+                            // workspace's last session, so restarting there (like `/cwd`)
+                            // auto-resumes it and renders its history.
+                            writeln!(
+                                out,
+                                "Resumed thread: {} ({} / {})",
+                                sanitize(tid),
+                                sanitize(&self.provider),
+                                sanitize(&self.model)
+                            )?;
+                            writeln!(
+                                out,
+                                "Thread belongs to workspace {}; restarting server there...",
+                                sanitize(&self.cwd.display().to_string())
+                            )?;
+                            out.flush()?;
+                            return Ok(LineOutcome::RestartServer {
+                                cwd: self.cwd.clone(),
+                                announce: None,
+                            });
+                        }
                         self.load_workspace_metadata().await;
                         let tid = match adopted {
                             Some(tid) => tid,
@@ -616,6 +660,11 @@ impl ActiveReplSession {
             }
 
             ParsedReplCommand::Reasoning(arg) => {
+                if !is_openai_compatible_provider(&self.provider) {
+                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
                 let val = arg
                     .split_whitespace()
                     .next()
@@ -649,6 +698,11 @@ impl ActiveReplSession {
             }
 
             ParsedReplCommand::Verbosity(arg) => {
+                if !is_openai_compatible_provider(&self.provider) {
+                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
                 let val = arg
                     .split_whitespace()
                     .next()
@@ -678,6 +732,11 @@ impl ActiveReplSession {
             }
 
             ParsedReplCommand::ReasoningSummary(arg) => {
+                if !is_openai_compatible_provider(&self.provider) {
+                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
                 let val = arg
                     .split_whitespace()
                     .next()
@@ -989,6 +1048,14 @@ impl ActiveReplSession {
         let mut in_reasoning = false;
         let mut in_agent_text = false;
         let mut interrupt_sent = false;
+        // Streamed deltas are sanitized statefully, so an escape sequence split across deltas
+        // is still stripped; reasoning and assistant text are separate streams.
+        let mut reasoning_sanitizer = TerminalSanitizer::new();
+        let mut agent_text_sanitizer = TerminalSanitizer::new();
+        // The thread this turn runs on. A `task/created` takeover moves `self.thread_id` to the
+        // task thread mid-turn, but this turn's own notifications (and its interrupt) still
+        // belong to the source thread.
+        let turn_thread_id = self.thread_id.clone();
 
         loop {
             let listen_ctrl_c = self.listen_os_ctrl_c && !interrupt_sent;
@@ -1035,7 +1102,7 @@ impl ActiveReplSession {
                         .rpc
                         .request(
                             "turn/interrupt",
-                            Some(json!({ "threadId": self.thread_id })),
+                            Some(json!({ "threadId": turn_thread_id })),
                         )
                         .await;
                 }
@@ -1062,7 +1129,7 @@ impl ActiveReplSession {
                             .rpc
                             .request(
                                 "turn/interrupt",
-                                Some(json!({ "threadId": self.thread_id })),
+                                Some(json!({ "threadId": turn_thread_id })),
                             )
                             .await;
                     }
@@ -1071,6 +1138,7 @@ impl ActiveReplSession {
                     let params = notif.params.unwrap_or(Value::Null);
                     if let Some(ev_tid) = params.get("threadId").and_then(Value::as_str)
                         && ev_tid != self.thread_id
+                        && ev_tid != turn_thread_id
                     {
                         continue;
                     }
@@ -1087,7 +1155,7 @@ impl ActiveReplSession {
                                     write!(out, "[thinking] ")?;
                                     in_reasoning = true;
                                 }
-                                write!(out, "{}", sanitize(delta))?;
+                                write!(out, "{}", reasoning_sanitizer.push(delta))?;
                                 out.flush()?;
                             }
                         }
@@ -1099,7 +1167,7 @@ impl ActiveReplSession {
                                     in_reasoning = false;
                                 }
                                 in_agent_text = true;
-                                write!(out, "{}", sanitize(delta))?;
+                                write!(out, "{}", agent_text_sanitizer.push(delta))?;
                                 out.flush()?;
                             }
                         }
@@ -1185,7 +1253,9 @@ impl ActiveReplSession {
                                         writeln!(out, "[error] {}", sanitize(msg))?;
                                         out.flush()?;
                                     }
+                                    Some("reasoning") => reasoning_sanitizer.reset(),
                                     Some("agentMessage") => {
+                                        agent_text_sanitizer.reset();
                                         if !in_agent_text {
                                             let text = item
                                                 .get("text")
@@ -1222,6 +1292,19 @@ impl ActiveReplSession {
                                 .unwrap_or("Turn error");
                             writeln!(out, "[error] {}", sanitize(message))?;
                             out.flush()?;
+                        }
+                        "task/created" => {
+                            let Some((task_thread_id, title)) =
+                                task_takeover_thread(&params, &self.thread_id)
+                            else {
+                                continue;
+                            };
+                            if in_reasoning || in_agent_text {
+                                writeln!(out)?;
+                                in_reasoning = false;
+                                in_agent_text = false;
+                            }
+                            self.open_task_thread(&task_thread_id, &title, out).await?;
                         }
                         "turn/completed" => {
                             let completed_tid = params
@@ -1274,6 +1357,37 @@ impl ActiveReplSession {
         }
     }
 
+    /// TS `task/created` notification handler + `openTaskThread`: the source chat was promoted
+    /// to a task (and is now locked), so switch the REPL to the task's primary thread and adopt
+    /// its descriptor.
+    async fn open_task_thread(
+        &mut self,
+        task_thread_id: &str,
+        title: &str,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        self.thread_id = task_thread_id.to_owned();
+        writeln!(out, "Task mode: {}", sanitize(title))?;
+        match self
+            .rpc
+            .request("thread/resume", Some(json!({ "threadId": task_thread_id })))
+            .await
+        {
+            Ok(res) => {
+                self.apply_thread_descriptor(&res["thread"]);
+            }
+            Err(err) => {
+                writeln!(
+                    out,
+                    "Unable to open task thread: {}",
+                    sanitize(&err.to_string())
+                )?;
+            }
+        }
+        out.flush()?;
+        Ok(())
+    }
+
     async fn handle_server_request(
         &mut self,
         req: JsonRpcLiteRequest,
@@ -1302,13 +1416,13 @@ impl ActiveReplSession {
                     writeln!(
                         out,
                         "[approval] Command requires approval: {}",
-                        sanitize(command)
+                        sanitize_prompt_field(command, None)
                     )?;
                 } else {
                     writeln!(out, "[approval] File modification requires approval")?;
                 }
                 if !reason.is_empty() {
-                    writeln!(out, "  Reason: {}", sanitize(reason))?;
+                    writeln!(out, "  Reason: {}", sanitize_prompt_field(reason, None))?;
                 }
                 out.flush()?;
 
@@ -1365,9 +1479,13 @@ impl ActiveReplSession {
                         })
                         .unwrap_or_default();
 
-                    writeln!(out, "[question] {}", sanitize(question_text))?;
+                    writeln!(
+                        out,
+                        "[question] {}",
+                        sanitize_prompt_field(question_text, Some(PROMPT_CONTINUATION_INDENT))
+                    )?;
                     for (idx, label) in option_labels.iter().enumerate() {
-                        writeln!(out, "  {}. {}", idx + 1, sanitize(label))?;
+                        writeln!(out, "  {}. {}", idx + 1, sanitize_prompt_field(label, None))?;
                     }
                     out.flush()?;
 
@@ -1446,21 +1564,21 @@ impl ActiveReplSession {
                     writeln!(
                         out,
                         "[question] {}: {}",
-                        sanitize(header),
-                        sanitize(question_text)
+                        sanitize_prompt_field(header, None),
+                        sanitize_prompt_field(question_text, Some(PROMPT_CONTINUATION_INDENT))
                     )?;
                     for (idx, opt) in options.iter().enumerate() {
                         let label = opt.get("label").and_then(Value::as_str).unwrap_or("");
                         let desc = opt.get("description").and_then(Value::as_str).unwrap_or("");
                         if desc.is_empty() {
-                            writeln!(out, "  {}. {}", idx + 1, sanitize(label))?;
+                            writeln!(out, "  {}. {}", idx + 1, sanitize_prompt_field(label, None))?;
                         } else {
                             writeln!(
                                 out,
                                 "  {}. {} - {}",
                                 idx + 1,
-                                sanitize(label),
-                                sanitize(desc)
+                                sanitize_prompt_field(label, None),
+                                sanitize_prompt_field(desc, None)
                             )?;
                         }
                     }
@@ -1572,6 +1690,35 @@ impl ActiveReplSession {
             }
         }
     }
+}
+
+/// TS `task/created` handling: the task's first thread (`task.threads[0].sessionId`) and title
+/// (default `Task`). A notification for a task promoted from another chat (`sourceSessionId`
+/// naming a different thread) is ignored.
+fn task_takeover_thread(params: &Value, current_thread_id: &str) -> Option<(String, String)> {
+    if let Some(source) = params.get("sourceSessionId").and_then(Value::as_str)
+        && !source.is_empty()
+        && source != current_thread_id
+    {
+        return None;
+    }
+    let task = params.get("task").filter(|t| t.is_object())?;
+    let thread_id = task
+        .get("threads")
+        .and_then(Value::as_array)
+        .and_then(|threads| threads.first())
+        .and_then(|t| t.get("sessionId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_owned();
+    let title = task
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("Task")
+        .to_owned();
+    Some((thread_id, title))
 }
 
 /// Whether a command failure leaves the REPL usable: the server answered the request with a

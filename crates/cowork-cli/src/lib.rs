@@ -5,8 +5,10 @@
 //!   session over the `cowork-protocol` JSON-RPC-lite contract (`cowork.jsonrpc.v1`).
 //! - **Slash command router**: Supports `/help`, `/provider`, `/model`, `/reasoning`, `/tools`,
 //!   `/skills`, `/mcp`, `/sessions`, `/resume`, `/new`, `/clear`, and `/exit`.
-//! - **Terminal output sanitization**: Strips OSC/DCS/APC/PM/SOS escape sequences from
-//!   server- and model-supplied text before it reaches the terminal (TS `sanitizeTerminalOutput`).
+//! - **Terminal output sanitization**: Strips every control sequence except SGR (and every
+//!   C0/C1 control except `\n`/`\t`) from server- and model-supplied text before it reaches the
+//!   terminal, statefully across streamed deltas; interactive prompt fields escape all controls
+//!   (hardened TS `sanitizeTerminalOutput`).
 //! - **CLI state store**: Persists per-workspace last active thread IDs in
 //!   `~/.cowork/state/cli-state.json` with `0600` private permissions.
 

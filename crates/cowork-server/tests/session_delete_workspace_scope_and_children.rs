@@ -344,8 +344,11 @@ async fn delete(ws: &mut WsStream, id: &str, cwd: &Path, target: &str) -> Value 
 
 fn assert_rejected_cross_workspace(res: &Value) {
     let message = res["error"]["message"].as_str().unwrap_or_default();
+    // An unregistered `cwd` is refused by workspace authorization before the target check;
+    // a registered-but-different workspace reaches the target-scope check.
     assert!(
-        message.contains("Target session is outside the active workspace"),
+        message.contains("Target session is outside the active workspace")
+            || message.contains("cwd must match an authorized workspace"),
         "cross-workspace delete must be rejected: {res}"
     );
 }

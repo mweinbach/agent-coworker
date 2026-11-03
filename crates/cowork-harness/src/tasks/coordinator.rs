@@ -3055,8 +3055,13 @@ impl TaskCoordinator {
         }))
     }
 
-    /// Failure settlement for an artifact revision: best-effort restore of the prior version
-    /// (when a safe target path is known), mark the revision `status`, then settle the task.
+    /// Failure settlement for an artifact revision: restore the prior version (when a safe
+    /// target path is known), mark the revision `status`, then settle the task.
+    ///
+    /// A failed restore is propagated before the revision is marked failed or the task is
+    /// settled (TS `failActiveRevisionOutcome` / `completeActiveRevisionOutcome` await
+    /// `restoreFile` first). Otherwise the revision's edited bytes would stay on disk while
+    /// settlement could auto-complete the task and accept the stored prior version.
     #[allow(clippy::too_many_arguments)]
     async fn fail_revision_and_settle(
         &self,
@@ -3073,14 +3078,13 @@ impl TaskCoordinator {
         defer_terminal_until_origin_settled: bool,
     ) -> Result<RevisionOutcomeResult, TaskCoordinatorError> {
         if let Some(file_path) = restore_path {
-            let _ = self
-                .artifact_store
+            self.artifact_store
                 .restore_file(RestoreArtifactFileInput {
                     blob_sha256: prior.sha256.clone(),
                     file_path,
                     expected_fingerprint: None,
                 })
-                .await;
+                .await?;
         }
         let failed_task = self
             .session_db

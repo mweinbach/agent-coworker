@@ -68,6 +68,7 @@ impl IsolatedServerEnv {
             base.join("desktop").to_string_lossy().into_owned(),
         );
         env.insert("COWORK_DISABLE_RUNTIME".into(), "1".into());
+        env.insert("COWORK_DISABLE_BROWSER_OPEN".into(), "1".into());
         env.insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "0".into());
         env.insert(
             "PATH".into(),

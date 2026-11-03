@@ -23,7 +23,7 @@ use cowork_mcp::{
     HydratedMcpServer, McpAuthMode, McpConfigSource, McpOAuthChallengeResult, McpServerAuthConfig,
     McpServerConfig, complete_mcp_oauth_callback, delete_mcp_server, read_mcp_servers_snapshot,
     resolve_target_mcp_server, set_mcp_server_api_key, set_mcp_server_enabled,
-    start_mcp_oauth_authorization, upsert_mcp_server, validate_mcp_server_with_env,
+    start_mcp_oauth_authorization_with_opener, upsert_mcp_server, validate_mcp_server_with_env,
     wait_and_complete_auto_mcp_oauth,
 };
 use cowork_protocol::{
@@ -1716,28 +1716,33 @@ impl ServerRuntimeState {
                         "event": mcp_oauth_unsupported_event(&session_id, &resolved.config.name)
                     }));
                 }
-                let challenge: McpOAuthChallengeResult = match start_mcp_oauth_authorization(
-                    &cfg,
-                    &name,
-                    source,
-                    plugin_id.as_deref(),
-                    plugin_scope.as_deref(),
-                )
-                .await
-                {
-                    Ok(challenge) => challenge,
-                    Err(err) => {
-                        return Ok(json!({
-                            "event": mcp_server_auth_result_event(
-                                &session_id,
-                                &name,
-                                false,
-                                McpAuthMode::Error,
-                                &format!("MCP OAuth authorization failed: {err}"),
-                            )
-                        }));
-                    }
-                };
+                // Browser-launch switches (`COWORK_DISABLE_BROWSER_OPEN`,
+                // `COWORK_BROWSER_OPENER_COMMAND`) come from the runtime env, not the process env.
+                let opener = cowork_mcp::SystemUrlOpener::new(self.env.clone());
+                let challenge: McpOAuthChallengeResult =
+                    match start_mcp_oauth_authorization_with_opener(
+                        &cfg,
+                        &name,
+                        source,
+                        plugin_id.as_deref(),
+                        plugin_scope.as_deref(),
+                        &opener,
+                    )
+                    .await
+                    {
+                        Ok(challenge) => challenge,
+                        Err(err) => {
+                            return Ok(json!({
+                                "event": mcp_server_auth_result_event(
+                                    &session_id,
+                                    &name,
+                                    false,
+                                    McpAuthMode::Error,
+                                    &format!("MCP OAuth authorization failed: {err}"),
+                                )
+                            }));
+                        }
+                    };
                 if let Ok(snap) = read_mcp_servers_snapshot(&cfg) {
                     self.broadcast_control_event(
                         &cwd,

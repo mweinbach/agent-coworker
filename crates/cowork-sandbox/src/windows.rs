@@ -626,7 +626,9 @@ mod tests {
             cwd,
         );
         assert_eq!(mode, "network-only");
-        assert!(roots.contains(&cwd.to_path_buf()), "{roots:?}");
+        // On a Windows host the rooted-but-driveless cwd is absolutized onto the current drive.
+        let abs_cwd = std::path::absolute(cwd).unwrap();
+        assert!(roots.contains(&abs_cwd), "{roots:?}");
         for scratch in scratch_roots(Some("win32")) {
             assert!(roots.contains(&scratch), "{scratch:?} missing: {roots:?}");
         }
@@ -651,7 +653,11 @@ mod tests {
             &HashMap::new(),
         );
         let writable = arg_after(&cmd.args, "--writable-root");
-        assert!(writable.contains(&cwd.to_str().unwrap()), "{:?}", cmd.args);
+        assert!(
+            writable.contains(&abs_cwd.to_str().unwrap()),
+            "{:?}",
+            cmd.args
+        );
         assert!(writable.len() > 1, "temp scratch missing: {:?}", cmd.args);
     }
 

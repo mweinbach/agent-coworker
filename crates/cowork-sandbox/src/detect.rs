@@ -772,7 +772,13 @@ mod tests {
 
     #[test]
     fn windows_helper_and_companion_overrides_must_be_absolute() {
-        let tmp = tempfile::tempdir().unwrap();
+        // Under the process cwd so a relative path to it exists (temp may be on another drive
+        // on Windows runners).
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = tempfile::Builder::new()
+            .prefix(".cowork-helper-override-")
+            .tempdir_in(&cwd)
+            .unwrap();
         let bundle = cowork_config::canonicalize_sync(tmp.path());
         for name in [
             WINDOWS_SANDBOX_HELPER_NAME,
@@ -782,7 +788,6 @@ mod tests {
             std::fs::write(bundle.join(name), b"x").unwrap();
         }
         // A relative override set up so it WOULD resolve against the process cwd.
-        let cwd = std::env::current_dir().unwrap();
         let rel_helper = pathdiff_relative(&bundle.join(WINDOWS_SANDBOX_HELPER_NAME), &cwd);
         assert!(rel_helper.is_relative() && rel_helper.is_file());
         let mut env = HashMap::new();

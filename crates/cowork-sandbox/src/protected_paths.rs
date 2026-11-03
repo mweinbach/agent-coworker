@@ -589,7 +589,7 @@ mod tests {
     fn symlinked_and_dangling_metadata_entries_are_reported_without_traversal() {
         let workspace = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(workspace.path()).unwrap();
+        let root = canonicalize_sync(workspace.path());
         let external_gitdir = outside.path().join("gitdir");
         std::fs::create_dir_all(external_gitdir.join(".cowork")).unwrap();
         let git_link = root.join(".git");
@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn lost_watch_does_not_leave_new_metadata_writable() {
         let workspace = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(workspace.path()).unwrap();
+        let root = canonicalize_sync(workspace.path());
         let nested = root.join("submodule").join(".git");
         let cache = WorkspaceProtectedPathsCache::new();
         let (tx, rx) = mpsc::channel();

@@ -308,7 +308,15 @@ pub fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<
             return Err(std::io::Error::last_os_error());
         }
         if len < buf.len() {
-            return Ok(PathBuf::from(OsString::from_wide(&buf[..len])));
+            // Same spelling as `canonicalize_sync` (which callers use for their roots): drop a
+            // safe `\\?\` prefix so `C:\` roots and opened paths compare equal.
+            let raw = OsString::from_wide(&buf[..len]);
+            let plain = raw
+                .to_str()
+                .and_then(cowork_config::strip_windows_verbatim_prefix);
+            return Ok(plain
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(raw)));
         }
         buf.resize(len + 1, 0);
     }

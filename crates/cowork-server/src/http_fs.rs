@@ -301,11 +301,11 @@ pub struct ConfinedFile {
 /// swap of a directory on `real` cannot change the answer.
 fn real_path_within_roots(canonical_roots: &[PathBuf], real: &Path) -> bool {
     if cfg!(windows) {
-        let real = real.to_string_lossy().to_lowercase();
+        let real = cowork_config::windows_path_compare_key(real);
         let real = Path::new(&real);
         canonical_roots
             .iter()
-            .any(|root| real.starts_with(root.to_string_lossy().to_lowercase()))
+            .any(|root| real.starts_with(cowork_config::windows_path_compare_key(root)))
     } else {
         canonical_roots.iter().any(|root| real.starts_with(root))
     }
@@ -415,7 +415,10 @@ pub fn handle_fs_read(
 
     let safe_file = assert_path_within_roots(allowed_roots, default_cwd, raw_path)?;
     // Re-canonicalize existing file to defeat broken/external symlinks
-    let real_file = std::fs::canonicalize(&safe_file).map_err(FsRouteError::from_io)?;
+    // `std::fs::canonicalize` proves the file exists; `canonicalize_sync` then gives the same
+    // spelling as the roots (it strips safe Windows `\\?\` prefixes).
+    let real_file =
+        canonicalize_sync(&std::fs::canonicalize(&safe_file).map_err(FsRouteError::from_io)?);
     let canonical_roots: Vec<PathBuf> =
         allowed_roots.iter().map(|p| canonicalize_sync(p)).collect();
     if !canonical_roots.iter().any(|r| is_inside(r, &real_file)) {
@@ -481,7 +484,10 @@ pub fn handle_fs_preview(
         .unwrap_or(MAX_FS_PREVIEW_BYTES);
 
     let safe_file = assert_path_within_roots(allowed_roots, default_cwd, raw_path)?;
-    let real_file = std::fs::canonicalize(&safe_file).map_err(FsRouteError::from_io)?;
+    // `std::fs::canonicalize` proves the file exists; `canonicalize_sync` then gives the same
+    // spelling as the roots (it strips safe Windows `\\?\` prefixes).
+    let real_file =
+        canonicalize_sync(&std::fs::canonicalize(&safe_file).map_err(FsRouteError::from_io)?);
     let canonical_roots: Vec<PathBuf> =
         allowed_roots.iter().map(|p| canonicalize_sync(p)).collect();
     if !canonical_roots.iter().any(|r| is_inside(r, &real_file)) {
@@ -728,7 +734,8 @@ fn resolve_open_target(
         .ok_or_else(|| FsRouteError::bad_request("Missing path parameter"))?;
 
     let safe_target = assert_path_within_roots(allowed_roots, default_cwd, raw_path)?;
-    let real_target = std::fs::canonicalize(&safe_target).map_err(FsRouteError::from_io)?;
+    let real_target =
+        canonicalize_sync(&std::fs::canonicalize(&safe_target).map_err(FsRouteError::from_io)?);
     let canonical_roots: Vec<PathBuf> =
         allowed_roots.iter().map(|p| canonicalize_sync(p)).collect();
     if !canonical_roots.iter().any(|r| is_inside(r, &real_target)) {

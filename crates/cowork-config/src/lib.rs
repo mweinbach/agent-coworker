@@ -70,7 +70,8 @@ pub use paths::{
     get_ai_coworker_paths, get_one_off_chats_root, harden_private_file_sync, host_platform,
     is_inside, is_inside_with_options, is_path_inside_one_off_chats_root, normalize_lexical_path,
     path_has_link_component, project_memory_cowork_dir, project_memory_db_path, resolve_home_dir,
-    same_path, same_workspace_path, user_memory_db_path, write_text_file_atomic,
+    same_path, same_workspace_path, strip_windows_verbatim_prefix, user_memory_db_path,
+    windows_path_compare_key, write_text_file_atomic,
 };
 pub use provider_specs::{
     ProviderAuthMethod, ProviderAuthMethodField, ProviderDiscoveryMode, ProviderSpec,

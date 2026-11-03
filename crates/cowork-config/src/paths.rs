@@ -150,6 +150,16 @@ pub fn normalize_lexical_path(path: &Path) -> PathBuf {
 /// without the `\\?\` verbatim prefix.
 const WINDOWS_MAX_PLAIN_PATH_LEN: usize = 259;
 
+/// Case- and verbatim-prefix-insensitive comparison key for a Windows path: a safe `\\?\`
+/// prefix is dropped (so `fs::canonicalize`, `canonicalize_sync` and `GetFinalPathNameByHandleW`
+/// spellings agree) and the result is lowercased. For prefix checks via `Path::starts_with`.
+pub fn windows_path_compare_key(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    strip_windows_verbatim_prefix(&raw)
+        .unwrap_or_else(|| raw.into_owned())
+        .to_lowercase()
+}
+
 /// Converts a Windows verbatim (`\\?\`) path into the plain spelling that
 /// `fs.realpathSync.native` (TS `canonicalizeSync`) returns, when that is lossless:
 /// `\\?\C:\dir` becomes `C:\dir` and `\\?\UNC\server\share\dir` becomes
@@ -616,6 +626,14 @@ pub fn write_text_file_atomic(target: &Path, contents: &str, mode: Option<u32>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_path_compare_key_ignores_verbatim_prefix_and_case() {
+        assert_eq!(
+            windows_path_compare_key(Path::new(r"\\?\C:\Repo\A.txt")),
+            windows_path_compare_key(Path::new(r"c:\repo\a.txt"))
+        );
+    }
 
     #[test]
     fn strip_windows_verbatim_prefix_returns_plain_drive_and_unc_paths() {

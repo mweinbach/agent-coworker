@@ -436,8 +436,8 @@ pub fn split_yaml_frontmatter(raw: &str) -> (Option<String>, String) {
 /// (no re-resolution), so a link swapped in after `child` was resolved cannot move the boundary.
 fn canonical_strictly_within(root: &Path, child: &Path) -> bool {
     if cfg!(windows) {
-        let root_low = PathBuf::from(root.to_string_lossy().to_lowercase());
-        let child_low = PathBuf::from(child.to_string_lossy().to_lowercase());
+        let root_low = PathBuf::from(cowork_config::windows_path_compare_key(root));
+        let child_low = PathBuf::from(cowork_config::windows_path_compare_key(child));
         child_low != root_low && child_low.starts_with(&root_low)
     } else {
         child != root && child.starts_with(root)

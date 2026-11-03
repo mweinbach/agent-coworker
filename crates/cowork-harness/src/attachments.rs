@@ -596,7 +596,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 fn real_path_within(root: &Path, child: &Path) -> bool {
     #[cfg(windows)]
     {
-        let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+        let lower = |p: &Path| PathBuf::from(cowork_config::windows_path_compare_key(p));
         lower(child).starts_with(lower(root))
     }
     #[cfg(not(windows))]

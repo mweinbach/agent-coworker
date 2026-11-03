@@ -3,16 +3,10 @@ import path from "node:path";
 
 import {
   buildSidecarManifest,
-  FOUNDATION_MODELS_KOFFI_TRIPLET,
   findPackagedSidecarLaunchCommand,
-  hasPackagedFoundationModelsSdk,
-  hasPackagedWindowsAiElectronPackage,
   resolveDesktopTargetTriple,
   resolvePackagedSidecarFilename,
-  resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_MANIFEST_NAME,
-  shouldBundleFoundationModelsSdk,
-  shouldBundleWindowsAiElectronPackage,
 } from "../electron/services/sidecar";
 
 describe("desktop sidecar packaging helpers", () => {
@@ -45,93 +39,6 @@ describe("desktop sidecar packaging helpers", () => {
         path: "cowork-server-aarch64-pc-windows-msvc.exe",
       },
     });
-  });
-
-  test("bundles the Foundation Models SDK only for Apple Silicon macOS", () => {
-    expect(shouldBundleFoundationModelsSdk("darwin", "arm64")).toBe(true);
-    expect(shouldBundleFoundationModelsSdk("darwin", "x64")).toBe(false);
-    expect(shouldBundleFoundationModelsSdk("win32", "arm64")).toBe(false);
-    expect(shouldBundleFoundationModelsSdk("linux", "arm64")).toBe(false);
-  });
-
-  test("recognizes the minimal packaged Foundation Models SDK payload", () => {
-    const dir = path.join(path.sep, "bundle", "Resources", "binaries", "tsfm-sdk");
-    const probedPaths: string[] = [];
-    const required = new Set([
-      path.join(dir, "dist", "index.js"),
-      path.join(dir, "native", "libFoundationModels.dylib"),
-      path.join(dir, "node_modules", "koffi", "index.js"),
-      path.join(dir, "node_modules", "koffi", "package.json"),
-      path.join(
-        dir,
-        "node_modules",
-        "koffi",
-        "build",
-        "koffi",
-        FOUNDATION_MODELS_KOFFI_TRIPLET,
-        "koffi.node",
-      ),
-    ]);
-
-    expect(
-      hasPackagedFoundationModelsSdk(dir, (candidate) =>
-        candidate.includes("linux_arm64") ? false : required.has(candidate),
-      ),
-    ).toBe(true);
-    expect(
-      hasPackagedFoundationModelsSdk(dir, (candidate) => {
-        probedPaths.push(candidate);
-        return required.has(candidate);
-      }),
-    ).toBe(true);
-    expect(probedPaths.some((candidate) => candidate.includes("linux_arm64"))).toBe(false);
-    expect(
-      hasPackagedFoundationModelsSdk(dir, (candidate) =>
-        candidate.endsWith("libFoundationModels.dylib") ? false : required.has(candidate),
-      ),
-    ).toBe(false);
-    expect(
-      hasPackagedFoundationModelsSdk(dir, (candidate) =>
-        candidate.endsWith(path.join("koffi", "package.json")) ? false : required.has(candidate),
-      ),
-    ).toBe(false);
-  });
-
-  test("bundles the Windows AI Electron package only for supported Windows targets", () => {
-    expect(shouldBundleWindowsAiElectronPackage("win32", "x64")).toBe(true);
-    expect(shouldBundleWindowsAiElectronPackage("win32", "arm64")).toBe(true);
-    expect(shouldBundleWindowsAiElectronPackage("win32", "ia32")).toBe(false);
-    expect(shouldBundleWindowsAiElectronPackage("darwin", "arm64")).toBe(false);
-    expect(resolveWindowsAiElectronPrebuildTriplet("win32", "x64")).toBe("win32-x64");
-    expect(resolveWindowsAiElectronPrebuildTriplet("win32", "arm64")).toBe("win32-arm64");
-  });
-
-  test("recognizes the minimal packaged Windows AI Electron payload for the target arch", () => {
-    const dir = path.join(path.sep, "bundle", "Resources", "binaries", "windows-ai-electron");
-    const x64Required = new Set([
-      path.join(dir, "index.js"),
-      path.join(dir, "windows-ai-electron", "prebuilds", "win32-x64", "node.node"),
-    ]);
-    const arm64Required = new Set([
-      path.join(dir, "index.js"),
-      path.join(dir, "windows-ai-electron", "prebuilds", "win32-arm64", "node.node"),
-    ]);
-
-    expect(
-      hasPackagedWindowsAiElectronPackage(dir, "win32", "x64", (candidate) =>
-        x64Required.has(candidate),
-      ),
-    ).toBe(true);
-    expect(
-      hasPackagedWindowsAiElectronPackage(dir, "win32", "arm64", (candidate) =>
-        arm64Required.has(candidate),
-      ),
-    ).toBe(true);
-    expect(
-      hasPackagedWindowsAiElectronPackage(dir, "win32", "x64", (candidate) =>
-        arm64Required.has(candidate),
-      ),
-    ).toBe(false);
   });
 
   test("findPackagedSidecarLaunchCommand prefers the explicit override path", () => {

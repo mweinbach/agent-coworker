@@ -90,10 +90,6 @@
     "react-dom": "^19.2.8",
     "zod": "4.4.3"
   },
-  "optionalDependencies": {
-    "@microsoft/windows-ai-electron": "^0.2.0",
-    "tsfm-sdk": "^0.3.1"
-  },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@biomejs/biome": "^2.5.10",

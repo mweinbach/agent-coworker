@@ -4,14 +4,8 @@ import path from "node:path";
 
 import {
   buildSidecarManifest,
-  FOUNDATION_MODELS_KOFFI_TRIPLET,
-  FOUNDATION_MODELS_SDK_DIR_NAME,
   resolvePackagedSidecarFilename,
-  resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_MANIFEST_NAME,
-  shouldBundleFoundationModelsSdk,
-  shouldBundleWindowsAiElectronPackage,
-  WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
 import { hostArch, hostPlatform } from "../src/platform/host";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
@@ -26,9 +20,11 @@ import {
 import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
-const CACHE_VERSION = 14;
+const CACHE_VERSION = 15;
 const LEGACY_BUN_EXECUTABLE_NAME = "bun.exe";
 const LEGACY_BUN_ENTRYPOINT_DIR = "server";
+// Node-API title-generation addons the Bun sidecar loaded; the Rust sidecar never reads them.
+const LEGACY_NATIVE_TITLE_ADDON_DIRS = ["tsfm-sdk", "windows-ai-electron"];
 
 type DesktopResourcesCache = {
   version: number;
@@ -40,8 +36,6 @@ type DesktopResourcesCache = {
   configFingerprint: string;
   skillsFingerprint: string;
   workflowsFingerprint: string;
-  foundationModelsSdkFingerprint: string | null;
-  windowsAiElectronFingerprint: string | null;
   windowsSandboxHelperFingerprint: string | null;
   docsFingerprint: string | null;
 };
@@ -132,10 +126,6 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
       typeof parsed.workflowsFingerprint !== "string" ||
-      (parsed.foundationModelsSdkFingerprint !== null &&
-        typeof parsed.foundationModelsSdkFingerprint !== "string") ||
-      (parsed.windowsAiElectronFingerprint !== null &&
-        typeof parsed.windowsAiElectronFingerprint !== "string") ||
       (parsed.windowsSandboxHelperFingerprint !== null &&
         typeof parsed.windowsSandboxHelperFingerprint !== "string") ||
       (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
@@ -187,6 +177,12 @@ async function syncCopiedDir(opts: {
   console.log(`[resources] ${opts.label}: updated`);
 }
 
+async function removeLegacyNativeTitleAddons(desktopBinariesDir: string): Promise<void> {
+  for (const dirName of LEGACY_NATIVE_TITLE_ADDON_DIRS) {
+    await rmrf(path.join(desktopBinariesDir, dirName));
+  }
+}
+
 async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise<void> {
   if (!(await pathExists(desktopBinariesDir))) {
     return;
@@ -204,200 +200,6 @@ async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise
       await rmrf(path.join(desktopBinariesDir, entry.name));
     }
   }
-}
-
-async function ensureFoundationModelsSdkInputs(root: string): Promise<{
-  sdkRoot: string;
-  koffiRoot: string;
-  fingerprintTargets: string[];
-}> {
-  const sdkRoot = path.join(root, "node_modules", "tsfm-sdk");
-  const koffiRoot = path.join(root, "node_modules", "koffi");
-  const requiredFiles = [
-    path.join(sdkRoot, "package.json"),
-    path.join(sdkRoot, "dist", "index.js"),
-    path.join(sdkRoot, "native", "libFoundationModels.dylib"),
-    path.join(koffiRoot, "index.js"),
-    path.join(koffiRoot, "package.json"),
-    path.join(koffiRoot, "build", "koffi", FOUNDATION_MODELS_KOFFI_TRIPLET, "koffi.node"),
-  ];
-
-  for (const requiredFile of requiredFiles) {
-    if (!(await pathExists(requiredFile))) {
-      throw new Error(
-        `Apple Foundation Models title support requires optional tsfm-sdk resources for macOS arm64 packaging, but this file is missing: ${requiredFile}. Run bun install on an Apple Silicon Mac first.`,
-      );
-    }
-  }
-
-  return {
-    sdkRoot,
-    koffiRoot,
-    fingerprintTargets: [
-      path.join(sdkRoot, "package.json"),
-      path.join(sdkRoot, "dist"),
-      path.join(sdkRoot, "native", "libFoundationModels.dylib"),
-      path.join(koffiRoot, "index.js"),
-      path.join(koffiRoot, "package.json"),
-      path.join(koffiRoot, "build", "koffi", FOUNDATION_MODELS_KOFFI_TRIPLET, "koffi.node"),
-    ],
-  };
-}
-
-async function ensureWindowsAiElectronInputs(
-  root: string,
-  platform: NodeJS.Platform,
-  arch: string,
-): Promise<{
-  packageRoot: string;
-  prebuildTriplet: string;
-  fingerprintTargets: string[];
-} | null> {
-  const packageRoot = path.join(root, "node_modules", "@microsoft", "windows-ai-electron");
-  const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(platform, arch);
-  const requiredFiles = [
-    path.join(packageRoot, "package.json"),
-    path.join(packageRoot, "index.js"),
-    path.join(packageRoot, "windows-ai-electron", "prebuilds", prebuildTriplet, "node.node"),
-  ];
-
-  for (const requiredFile of requiredFiles) {
-    if (!(await pathExists(requiredFile))) {
-      console.warn(
-        `[resources] Windows AI Electron: optional package payload missing, disabling Phi Silica support (${requiredFile})`,
-      );
-      return null;
-    }
-  }
-
-  return {
-    packageRoot,
-    prebuildTriplet,
-    fingerprintTargets: requiredFiles,
-  };
-}
-
-async function copyIfExists(src: string, dest: string): Promise<void> {
-  if (!(await pathExists(src))) {
-    return;
-  }
-  await fs.copyFile(src, dest);
-}
-
-async function syncWindowsAiElectronPackage(opts: {
-  root: string;
-  dest: string;
-  previousFingerprint: string | null;
-  nextFingerprint: string | null;
-  platform: NodeJS.Platform;
-  arch: string;
-}): Promise<void> {
-  if (!shouldBundleWindowsAiElectronPackage(opts.platform, opts.arch)) {
-    await rmrf(opts.dest);
-    console.log("[resources] Windows AI Electron: disabled");
-    return;
-  }
-
-  const inputs = await ensureWindowsAiElectronInputs(opts.root, opts.platform, opts.arch);
-  if (!inputs) {
-    await rmrf(opts.dest);
-    return;
-  }
-
-  const nativeRelativePath = path.join(
-    "windows-ai-electron",
-    "prebuilds",
-    inputs.prebuildTriplet,
-    "node.node",
-  );
-  const currentLooksComplete =
-    (await pathExists(path.join(opts.dest, "index.js"))) &&
-    (await pathExists(path.join(opts.dest, nativeRelativePath)));
-  if (opts.previousFingerprint === opts.nextFingerprint && currentLooksComplete) {
-    console.log("[resources] Windows AI Electron: cached");
-    return;
-  }
-
-  await rmrf(opts.dest);
-  await fs.mkdir(path.dirname(path.join(opts.dest, nativeRelativePath)), { recursive: true });
-  await fs.copyFile(path.join(inputs.packageRoot, "index.js"), path.join(opts.dest, "index.js"));
-  await copyIfExists(
-    path.join(inputs.packageRoot, "package.json"),
-    path.join(opts.dest, "package.json"),
-  );
-  await copyIfExists(path.join(inputs.packageRoot, "LICENSE"), path.join(opts.dest, "LICENSE"));
-  await fs.copyFile(
-    path.join(inputs.packageRoot, nativeRelativePath),
-    path.join(opts.dest, nativeRelativePath),
-  );
-  console.log("[resources] Windows AI Electron: updated");
-}
-
-async function syncFoundationModelsSdk(opts: {
-  root: string;
-  dest: string;
-  previousFingerprint: string | null;
-  nextFingerprint: string | null;
-  platform: NodeJS.Platform;
-  arch: string;
-}): Promise<void> {
-  if (!shouldBundleFoundationModelsSdk(opts.platform, opts.arch)) {
-    await rmrf(opts.dest);
-    console.log("[resources] Foundation Models SDK: disabled");
-    return;
-  }
-
-  const inputs = await ensureFoundationModelsSdkInputs(opts.root);
-  const currentLooksComplete =
-    (await pathExists(path.join(opts.dest, "dist", "index.js"))) &&
-    (await pathExists(path.join(opts.dest, "native", "libFoundationModels.dylib"))) &&
-    (await pathExists(path.join(opts.dest, "node_modules", "koffi", "index.js"))) &&
-    (await pathExists(path.join(opts.dest, "node_modules", "koffi", "package.json"))) &&
-    (await pathExists(
-      path.join(
-        opts.dest,
-        "node_modules",
-        "koffi",
-        "build",
-        "koffi",
-        FOUNDATION_MODELS_KOFFI_TRIPLET,
-        "koffi.node",
-      ),
-    ));
-  if (opts.previousFingerprint === opts.nextFingerprint && currentLooksComplete) {
-    console.log("[resources] Foundation Models SDK: cached");
-    return;
-  }
-
-  await rmrf(opts.dest);
-  await fs.mkdir(opts.dest, { recursive: true });
-  await copyDir(path.join(inputs.sdkRoot, "dist"), path.join(opts.dest, "dist"));
-  await fs.mkdir(path.join(opts.dest, "native"), { recursive: true });
-  await fs.copyFile(
-    path.join(inputs.sdkRoot, "native", "libFoundationModels.dylib"),
-    path.join(opts.dest, "native", "libFoundationModels.dylib"),
-  );
-  await copyIfExists(
-    path.join(inputs.sdkRoot, "package.json"),
-    path.join(opts.dest, "package.json"),
-  );
-  await copyIfExists(path.join(inputs.sdkRoot, "LICENSE.md"), path.join(opts.dest, "LICENSE.md"));
-  await copyIfExists(path.join(inputs.sdkRoot, "NOTICE"), path.join(opts.dest, "NOTICE"));
-
-  const koffiDest = path.join(opts.dest, "node_modules", "koffi");
-  await fs.mkdir(path.join(koffiDest, "build", "koffi", FOUNDATION_MODELS_KOFFI_TRIPLET), {
-    recursive: true,
-  });
-  await fs.copyFile(path.join(inputs.koffiRoot, "index.js"), path.join(koffiDest, "index.js"));
-  await fs.copyFile(
-    path.join(inputs.koffiRoot, "package.json"),
-    path.join(koffiDest, "package.json"),
-  );
-  await fs.copyFile(
-    path.join(inputs.koffiRoot, "build", "koffi", FOUNDATION_MODELS_KOFFI_TRIPLET, "koffi.node"),
-    path.join(koffiDest, "build", "koffi", FOUNDATION_MODELS_KOFFI_TRIPLET, "koffi.node"),
-  );
-  console.log("[resources] Foundation Models SDK: updated");
 }
 
 function resolveRustCompilerIdentity(): string {
@@ -458,18 +260,6 @@ async function main() {
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
   const workflowsFingerprint = await fingerprintInputs([workflowsSrc], root);
-  const foundationModelsSdkInputs = shouldBundleFoundationModelsSdk(platform, arch)
-    ? await ensureFoundationModelsSdkInputs(root)
-    : null;
-  const foundationModelsSdkFingerprint = foundationModelsSdkInputs
-    ? await fingerprintInputs(foundationModelsSdkInputs.fingerprintTargets, root)
-    : null;
-  const windowsAiElectronInputs = shouldBundleWindowsAiElectronPackage(platform, arch)
-    ? await ensureWindowsAiElectronInputs(root, platform, arch)
-    : null;
-  const windowsAiElectronFingerprint = windowsAiElectronInputs
-    ? await fingerprintInputs(windowsAiElectronInputs.fingerprintTargets, root)
-    : null;
   const windowsSandboxHelperInputs =
     platform === "win32"
       ? [
@@ -497,8 +287,6 @@ async function main() {
     resolvePackagedSidecarFilename(platform, arch),
   );
   const sidecarManifestPath = path.join(desktopBinariesDir, SIDECAR_MANIFEST_NAME);
-  const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
-  const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
   const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
   const sidecarNeedsBuild =
     cache?.platform !== platform ||
@@ -553,6 +341,7 @@ async function main() {
   }
 
   await removeLegacyCodexAppServerBinaries(desktopBinariesDir);
+  await removeLegacyNativeTitleAddons(desktopBinariesDir);
   console.log("[resources] codex app-server: runtime-managed");
 
   const promptsDest = path.join(distDir, "prompts");
@@ -592,24 +381,6 @@ async function main() {
     nextFingerprint: workflowsFingerprint,
   });
 
-  await syncFoundationModelsSdk({
-    root,
-    dest: foundationModelsSdkDest,
-    previousFingerprint: cache?.foundationModelsSdkFingerprint ?? null,
-    nextFingerprint: foundationModelsSdkFingerprint,
-    platform,
-    arch,
-  });
-
-  await syncWindowsAiElectronPackage({
-    root,
-    dest: windowsAiElectronDest,
-    previousFingerprint: cache?.windowsAiElectronFingerprint ?? null,
-    nextFingerprint: windowsAiElectronFingerprint,
-    platform,
-    arch,
-  });
-
   await syncWindowsSandboxHelper({
     root,
     dest: windowsSandboxHelperDest,
@@ -644,8 +415,6 @@ async function main() {
     configFingerprint,
     skillsFingerprint,
     workflowsFingerprint,
-    foundationModelsSdkFingerprint,
-    windowsAiElectronFingerprint,
     windowsSandboxHelperFingerprint,
     docsFingerprint,
   });
@@ -704,10 +473,7 @@ if (import.meta.main) {
 export const __internal = {
   fingerprintInputs,
   clearDesktopSidecarArtifacts,
-  ensureFoundationModelsSdkInputs,
-  syncFoundationModelsSdk,
-  ensureWindowsAiElectronInputs,
-  syncWindowsAiElectronPackage,
+  removeLegacyNativeTitleAddons,
   syncWindowsSandboxHelper,
   pruneStaleDesktopBinaryArtifacts,
 };

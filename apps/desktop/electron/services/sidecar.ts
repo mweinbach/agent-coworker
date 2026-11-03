@@ -6,9 +6,6 @@ import { SIDECAR_MANIFEST_NAME } from "../../../../src/shared/runtimeProgress";
 const SIDECAR_BASE_NAME = "cowork-server";
 
 export { SIDECAR_MANIFEST_NAME };
-export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
-export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
-export const WINDOWS_AI_ELECTRON_DIR_NAME = "windows-ai-electron";
 
 type ExecutableSidecarLaunchSpec = {
   kind: "executable";
@@ -69,71 +66,6 @@ export function resolvePackagedSidecarFilename(
 ): string {
   const ext = platform === "win32" ? ".exe" : "";
   return `${SIDECAR_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
-}
-
-export function shouldBundleFoundationModelsSdk(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): boolean {
-  return platform === "darwin" && arch === "arm64";
-}
-
-export function hasPackagedFoundationModelsSdk(
-  candidateDir: string,
-  existsSync: typeof fs.existsSync = fs.existsSync,
-): boolean {
-  return (
-    existsSync(path.join(candidateDir, "dist", "index.js")) &&
-    existsSync(path.join(candidateDir, "native", "libFoundationModels.dylib")) &&
-    existsSync(path.join(candidateDir, "node_modules", "koffi", "index.js")) &&
-    existsSync(path.join(candidateDir, "node_modules", "koffi", "package.json")) &&
-    existsSync(
-      path.join(
-        candidateDir,
-        "node_modules",
-        "koffi",
-        "build",
-        "koffi",
-        FOUNDATION_MODELS_KOFFI_TRIPLET,
-        "koffi.node",
-      ),
-    )
-  );
-}
-
-export function shouldBundleWindowsAiElectronPackage(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): boolean {
-  return platform === "win32" && (arch === "x64" || arch === "arm64");
-}
-
-export function resolveWindowsAiElectronPrebuildTriplet(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): string {
-  if (platform === "win32") {
-    if (arch === "x64") return "win32-x64";
-    if (arch === "arm64") return "win32-arm64";
-  }
-  throw new Error(`Unsupported Windows AI Electron platform/arch: ${platform}/${arch}`);
-}
-
-export function hasPackagedWindowsAiElectronPackage(
-  candidateDir: string,
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-  existsSync: typeof fs.existsSync = fs.existsSync,
-): boolean {
-  if (!shouldBundleWindowsAiElectronPackage(platform, arch)) {
-    return false;
-  }
-
-  const triplet = resolveWindowsAiElectronPrebuildTriplet(platform, arch);
-  return (
-    existsSync(path.join(candidateDir, "index.js")) &&
-    existsSync(path.join(candidateDir, "windows-ai-electron", "prebuilds", triplet, "node.node"))
-  );
 }
 
 export function buildSidecarManifest(

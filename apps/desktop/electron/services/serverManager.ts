@@ -42,14 +42,7 @@ import type {
 } from "./mobileRelayTypes";
 import { buildDesktopProductAnalyticsEnv } from "./productAnalytics";
 import { getServerTerminationSignal } from "./serverPlatform";
-import {
-  FOUNDATION_MODELS_SDK_DIR_NAME,
-  findPackagedSidecarLaunchCommand,
-  hasPackagedFoundationModelsSdk,
-  hasPackagedWindowsAiElectronPackage,
-  resolveDesktopTargetTriple,
-  WINDOWS_AI_ELECTRON_DIR_NAME,
-} from "./sidecar";
+import { findPackagedSidecarLaunchCommand, resolveDesktopTargetTriple } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 import { writeWindowsSandboxReadiness } from "./windowsSandboxReadiness";
 
@@ -744,26 +737,6 @@ function findSidecarLaunchCommand() {
   }
 }
 
-function findBundledFoundationModelsSdkDir(): string | null {
-  for (const dir of getSidecarSearchDirs()) {
-    const candidate = path.join(dir, FOUNDATION_MODELS_SDK_DIR_NAME);
-    if (hasPackagedFoundationModelsSdk(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-function findBundledWindowsAiElectronDir(): string | null {
-  for (const dir of getSidecarSearchDirs()) {
-    const candidate = path.join(dir, WINDOWS_AI_ELECTRON_DIR_NAME);
-    if (hasPackagedWindowsAiElectronPackage(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -1070,22 +1043,12 @@ function buildSpawnArgs(workspacePath: string, yolo: boolean, mobileH3 = false):
 function buildServerEnv(
   featureFlags?: WorkspaceServerFeatureFlags,
   opts: {
-    includeBundledFoundationModelsSdk?: boolean;
-    includeBundledWindowsAiElectron?: boolean;
     rotateMobileH3Tls?: boolean;
     privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
     productAnalyticsState?: PersistedProductAnalyticsState | null;
     windowsSandboxBundle?: WindowsSandboxBundle | null;
   } = {},
 ): NodeJS.ProcessEnv {
-  const bundledFoundationModelsSdk =
-    opts.includeBundledFoundationModelsSdk && !process.env.COWORK_TSFMSDK_DIR
-      ? findBundledFoundationModelsSdkDir()
-      : null;
-  const bundledWindowsAiElectron =
-    opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
-      ? findBundledWindowsAiElectronDir()
-      : null;
   const bundledWindowsSandbox = opts.windowsSandboxBundle;
   const telemetryConsentEnv = withoutInheritedTelemetryConsentEnv(process.env);
   const privacyTelemetrySettings = resolveTelemetryConsent({
@@ -1114,10 +1077,6 @@ function buildServerEnv(
       `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
     COWORK_BOOTSTRAP_DEFAULT_SKILLS: process.env.COWORK_BOOTSTRAP_DEFAULT_SKILLS ?? "1",
     COWORK_RUNTIME_ALLOW_NETWORK: process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1",
-    ...(bundledFoundationModelsSdk ? { COWORK_TSFMSDK_DIR: bundledFoundationModelsSdk } : {}),
-    ...(bundledWindowsAiElectron
-      ? { COWORK_WINDOWS_AI_ELECTRON_DIR: bundledWindowsAiElectron }
-      : {}),
     ...(bundledWindowsSandbox
       ? {
           COWORK_WIN_SANDBOX_HELPER: bundledWindowsSandbox.helperPath,
@@ -1592,8 +1551,6 @@ export class ServerManager {
 
     const outputMirror = shouldMirrorServerOutput() ? createServerOutputMirror() : null;
     const serverEnv = buildServerEnv(opts.featureFlags, {
-      includeBundledFoundationModelsSdk: true,
-      includeBundledWindowsAiElectron: true,
       rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
       privacyTelemetrySettings: opts.privacyTelemetrySettings,
       productAnalyticsState,
@@ -2012,10 +1969,8 @@ export const __internal = {
   buildServerEnv,
   createWindowsSandboxBundleLoader,
   featureFlagFingerprint,
-  findBundledFoundationModelsSdkDir,
   findBundledWindowsSandboxBundle,
   findBundledWindowsSandboxHelper,
-  findBundledWindowsAiElectronDir,
   findSidecarLaunchCommand,
   getServerTerminationSignal,
   gracefulKill,

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,6 +127,10 @@ pub struct CodexBridgeCatalog {
 struct BridgeCatalogState {
     tools: ToolMap,
     deferred: Option<(DeferredToolCatalog, Arc<Mutex<BTreeSet<String>>>)>,
+    /// The turn's live cost bridge. The Codex bridge clones its tool context before the turn
+    /// installs this, so nested tools (e.g. `workflow`) take it from here to charge and
+    /// budget-check against the session.
+    cost_tracker_bridge: Option<Arc<dyn CostTrackerBridge>>,
 }
 
 impl CodexBridgeCatalog {
@@ -135,6 +140,13 @@ impl CodexBridgeCatalog {
 
     fn snapshot(&self) -> Option<BridgeCatalogState> {
         self.inner.read().clone()
+    }
+
+    /// Drops the published cost bridge when the turn that installed it ends.
+    fn clear_cost_bridge(&self) {
+        if let Some(state) = self.inner.write().as_mut() {
+            state.cost_tracker_bridge = None;
+        }
     }
 }
 
@@ -388,6 +400,7 @@ impl TurnStepRunner {
                 .cfg
                 .deferred_tool_search
                 .then(|| (deferred_catalog.clone(), Arc::clone(&shared_activated))),
+            cost_tracker_bridge: tool_ctx.cost_tracker_bridge.clone(),
         });
 
         let mut projector = StreamEventProjector::new(
@@ -954,6 +967,7 @@ impl TurnStepRunner {
 
         if installed_cost_bridge {
             tool_ctx.cost_tracker_bridge = None;
+            self.codex_catalog.clear_cost_bridge();
         }
 
         emit_stream_event(
@@ -1678,6 +1692,20 @@ impl DynamicToolHandler for CodexDynamicBridge {
             };
         }
         let published = self.catalog.as_ref().and_then(CodexBridgeCatalog::snapshot);
+        // Nested tools charge the turn's live cost bridge, which the turn installs after this
+        // bridge cloned its context (so the clone's own bridge is usually unset).
+        let tool_ctx: Cow<'_, ToolExecutionContext> = match published
+            .as_ref()
+            .and_then(|p| p.cost_tracker_bridge.as_ref())
+        {
+            Some(bridge) if self.tool_ctx.cost_tracker_bridge.is_none() => {
+                let mut ctx = self.tool_ctx.clone();
+                ctx.cost_tracker_bridge = Some(Arc::clone(bridge));
+                Cow::Owned(ctx)
+            }
+            _ => Cow::Borrowed(&self.tool_ctx),
+        };
+        let tool_ctx = tool_ctx.as_ref();
         let raw_res = match published.as_ref().and_then(|p| p.deferred.as_ref()) {
             // Deferred meta-tools dispatch through the turn's catalog, like the harness loop.
             Some((catalog, activated)) if name == "toolSearch" => {
@@ -1690,7 +1718,7 @@ impl DynamicToolHandler for CodexDynamicBridge {
                 if let Some(inner) = arguments.get("name").and_then(Value::as_str) {
                     activated.lock().insert(inner.to_owned());
                 }
-                catalog.execute_tool_call(&arguments, &self.tool_ctx).await
+                catalog.execute_tool_call(&arguments, tool_ctx).await
             }
             _ => {
                 let tools = published.as_ref().map_or(&self.tools, |p| &p.tools);
@@ -1700,7 +1728,7 @@ impl DynamicToolHandler for CodexDynamicBridge {
                         is_error: true,
                     };
                 };
-                tool.execute(arguments, &self.tool_ctx).await
+                tool.execute(arguments, tool_ctx).await
             }
         };
         match raw_res {
@@ -1710,7 +1738,7 @@ impl DynamicToolHandler for CodexDynamicBridge {
                     None,
                     &Uuid::new_v4().to_string(),
                     out,
-                    &self.tool_ctx,
+                    tool_ctx,
                     self.overflow_threshold,
                 )
                 .unwrap_or_else(|e| ToolOutput::Text(e.to_string()));

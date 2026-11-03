@@ -600,11 +600,15 @@ pub fn create_legacy_session_snapshot(record: &PersistedSessionRecord) -> Value 
     })
 }
 
+/// `contentText` in `src/shared/messageContent.ts`, except that `thinking` / `reasoning` parts
+/// (`ContentBlock::Thinking` serializes as `{"type":"thinking","text":…}`) are skipped so
+/// internal chain-of-thought never surfaces in visible message bubbles.
 fn extract_message_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.trim().to_owned(),
         Some(Value::Array(parts)) => parts
             .iter()
+            .filter(|part| !matches!(part["type"].as_str(), Some("thinking" | "reasoning")))
             .filter_map(|part| {
                 [
                     part.as_str(),
@@ -682,4 +686,30 @@ fn opt_string(val: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_message_text_skips_thinking_and_reasoning_parts() {
+        let content = json!([
+            { "type": "thinking", "text": "secret chain of thought", "signature": "sig" },
+            { "type": "reasoning", "text": "more hidden reasoning" },
+            { "type": "text", "text": "  Visible answer.  " },
+            { "type": "inputText", "inputText": "Visible input." },
+            "Plain string part.",
+        ]);
+        assert_eq!(
+            extract_message_text(Some(&content)),
+            "Visible answer.\nVisible input.\nPlain string part."
+        );
+        assert_eq!(
+            extract_message_text(Some(
+                &json!([{ "type": "thinking", "text": "only thoughts" }])
+            )),
+            ""
+        );
+    }
 }

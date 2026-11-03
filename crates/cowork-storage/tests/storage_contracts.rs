@@ -1127,21 +1127,18 @@ async fn memory_legacy_import_traversal_failure_stays_retryable() {
 #[tokio::test]
 async fn memory_legacy_import_follows_symlinked_markdown_files() {
     let iso = IsolatedStorageEnv::new("memory-legacy-symlink-file");
-    let ws_cowork = iso.root.join("ws/.cowork");
+    let ws = iso.root.join("ws");
+    let ws_cowork = ws.join(".cowork");
     fs::create_dir_all(ws_cowork.join("memory")).unwrap();
-    let outside = iso.root.join("outside");
-    fs::create_dir_all(&outside).unwrap();
-    fs::write(outside.join("target.txt"), "Linked note.").unwrap();
+    let docs = ws.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    fs::write(docs.join("target.txt"), "Linked note.").unwrap();
     // TS `walkMarkdownFiles` uses `fs.stat`, so a symlink to a file is imported under the
-    // link's own name even when the target lives outside the memory directory.
-    symlink(
-        outside.join("target.txt"),
-        ws_cowork.join("memory/Linked.md"),
-    )
-    .unwrap();
+    // link's own name, here with a target elsewhere inside the workspace root.
+    symlink(docs.join("target.txt"), ws_cowork.join("memory/Linked.md")).unwrap();
     // A dangling symlink is a missing entry (ENOENT) and is skipped like in TS.
     symlink(
-        outside.join("missing.md"),
+        docs.join("missing.md"),
         ws_cowork.join("memory/Dangling.md"),
     )
     .unwrap();
@@ -1160,13 +1157,17 @@ async fn memory_legacy_import_follows_symlinked_markdown_files() {
 #[tokio::test]
 async fn memory_legacy_import_follows_symlinked_directories() {
     let iso = IsolatedStorageEnv::new("memory-legacy-symlink-dir");
-    let ws_cowork = iso.root.join("ws/.cowork");
+    let ws = iso.root.join("ws");
+    let ws_cowork = ws.join(".cowork");
     fs::create_dir_all(ws_cowork.join("memory")).unwrap();
-    let outside = iso.root.join("shared-notes");
-    fs::create_dir_all(outside.join("inner")).unwrap();
-    fs::write(outside.join("Top.md"), "Top note.").unwrap();
-    fs::write(outside.join("inner/Deep.md"), "Deep note.").unwrap();
-    symlink(&outside, ws_cowork.join("memory/shared")).unwrap();
+    let shared = ws.join("shared-notes");
+    fs::create_dir_all(shared.join("inner")).unwrap();
+    fs::write(shared.join("Top.md"), "Top note.").unwrap();
+    fs::write(shared.join("inner/Deep.md"), "Deep note.").unwrap();
+    symlink(&shared, ws_cowork.join("memory/shared")).unwrap();
+    // A symlinked hot cache that stays inside the workspace is imported too.
+    fs::write(ws.join("HOT.md"), "Linked hot memory.").unwrap();
+    symlink(ws.join("HOT.md"), ws_cowork.join("AGENT.md")).unwrap();
     let db_path = ws_cowork.join("memory.sqlite");
     let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
 
@@ -1175,6 +1176,7 @@ async fn memory_legacy_import_follows_symlinked_directories() {
     assert_eq!(
         legacy_memory_rows(&db_path),
         vec![
+            ("hot".to_string(), "Linked hot memory.".to_string()),
             ("shared/inner/deep".to_string(), "Deep note.".to_string()),
             ("shared/top".to_string(), "Top note.".to_string()),
         ]
@@ -1212,7 +1214,8 @@ async fn memory_legacy_import_symlink_cycles_terminate_without_duplicates() {
 #[tokio::test]
 async fn memory_legacy_import_unresolvable_symlinked_entry_stays_retryable() {
     let iso = IsolatedStorageEnv::new("memory-legacy-symlink-retry");
-    let ws_cowork = iso.root.join("ws/.cowork");
+    let ws = iso.root.join("ws");
+    let ws_cowork = ws.join(".cowork");
     let memory = ws_cowork.join("memory");
     fs::create_dir_all(&memory).unwrap();
     fs::write(memory.join("Plain.md"), "Plain note.").unwrap();
@@ -1227,10 +1230,10 @@ async fn memory_legacy_import_unresolvable_symlinked_entry_stays_retryable() {
     assert!(legacy_memory_rows(&db_path).is_empty());
 
     fs::remove_file(memory.join("Looped.md")).unwrap();
-    let outside = iso.root.join("outside");
-    fs::create_dir_all(&outside).unwrap();
-    fs::write(outside.join("looped.md"), "Recovered note.").unwrap();
-    symlink(outside.join("looped.md"), memory.join("Looped.md")).unwrap();
+    let docs = ws.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    fs::write(docs.join("looped.md"), "Recovered note.").unwrap();
+    symlink(docs.join("looped.md"), memory.join("Looped.md")).unwrap();
 
     store.list(Some(MemoryScope::Workspace)).unwrap();
     assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
@@ -1241,4 +1244,139 @@ async fn memory_legacy_import_unresolvable_symlinked_entry_stays_retryable() {
             ("plain".to_string(), "Plain note.".to_string()),
         ]
     );
+}
+
+/// An untrusted repository must not be able to import host files into workspace memory (and
+/// from there into `cowork/memory/list` and system prompts) through symlinks that resolve
+/// outside the workspace root. The refusal is permanent, so the import is still marked done.
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_rejects_links_outside_workspace_root() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-escape");
+    let ws = iso.root.join("ws");
+    let ws_cowork = ws.join(".cowork");
+    let memory = ws_cowork.join("memory");
+    fs::create_dir_all(&memory).unwrap();
+    let secrets = iso.home.join(".ssh");
+    fs::create_dir_all(secrets.join("nested")).unwrap();
+    fs::write(secrets.join("id_ed25519"), "PRIVATE KEY").unwrap();
+    fs::write(secrets.join("nested/Config.md"), "SECRET CONFIG").unwrap();
+    symlink(secrets.join("id_ed25519"), ws_cowork.join("AGENT.md")).unwrap();
+    symlink(secrets.join("id_ed25519"), memory.join("Key.md")).unwrap();
+    symlink(&secrets, memory.join("ssh")).unwrap();
+    // A link into the workspace's own `..` sibling escapes too, even via an in-root hop.
+    fs::write(iso.root.join("Sibling.md"), "SIBLING").unwrap();
+    symlink(iso.root.join("Sibling.md"), ws.join("hop.md")).unwrap();
+    symlink(ws.join("hop.md"), memory.join("Hop.md")).unwrap();
+    fs::write(memory.join("Kept.md"), "Kept note.").unwrap();
+    let db_path = ws_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    let entries = store.list(Some(MemoryScope::Workspace)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&db_path).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&db_path),
+        vec![("kept".to_string(), "Kept note.".to_string())]
+    );
+    assert!(entries.iter().all(|e| !e.content.contains("PRIVATE")));
+    assert_eq!(store.render_prompt_section().unwrap(), "");
+}
+
+/// A symlinked workspace `.cowork` is refused outright: nothing is imported through it and the
+/// completion marker is not written into the database at the link target (which may belong to
+/// another workspace whose own legacy import must still run).
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_rejects_symlinked_workspace_cowork_dir() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-cowork");
+    let ws = iso.root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let elsewhere = iso.root.join("elsewhere/.cowork");
+    fs::create_dir_all(elsewhere.join("memory")).unwrap();
+    fs::write(elsewhere.join("AGENT.md"), "Foreign hot memory.").unwrap();
+    fs::write(elsewhere.join("memory/Foreign.md"), "Foreign note.").unwrap();
+    symlink(&elsewhere, ws.join(".cowork")).unwrap();
+    let db_path = ws.join(".cowork/memory.sqlite");
+    let store = MemoryStore::new(db_path.clone(), iso.home.join("user-memory.sqlite"));
+
+    assert!(store.list(Some(MemoryScope::Workspace)).unwrap().is_empty());
+    assert_eq!(legacy_memory_import_marker(&db_path), None);
+    assert!(legacy_memory_rows(&db_path).is_empty());
+}
+
+/// User-level legacy memory may follow links that stay inside the user cowork home, but not
+/// links that leave it.
+#[cfg(unix)]
+#[tokio::test]
+async fn memory_legacy_import_user_scope_is_confined_to_cowork_home() {
+    let iso = IsolatedStorageEnv::new("memory-legacy-symlink-user");
+    let user_cowork = iso.home.join(".cowork");
+    let memory = user_cowork.join("memory");
+    fs::create_dir_all(&memory).unwrap();
+    fs::create_dir_all(user_cowork.join("notes")).unwrap();
+    fs::write(user_cowork.join("notes/Inside.md"), "Inside note.").unwrap();
+    symlink(
+        user_cowork.join("notes/Inside.md"),
+        memory.join("Inside.md"),
+    )
+    .unwrap();
+    fs::write(iso.home.join("Outside.md"), "OUTSIDE").unwrap();
+    symlink(iso.home.join("Outside.md"), memory.join("Outside.md")).unwrap();
+    symlink(iso.home.join("Outside.md"), user_cowork.join("AGENT.md")).unwrap();
+    let user_db = user_cowork.join("memory.sqlite");
+    let store = MemoryStore::new(iso.root.join("ws/.cowork/memory.sqlite"), user_db.clone());
+
+    store.list(Some(MemoryScope::User)).unwrap();
+    assert_eq!(legacy_memory_import_marker(&user_db).as_deref(), Some("1"));
+    assert_eq!(
+        legacy_memory_rows(&user_db),
+        vec![("inside".to_string(), "Inside note.".to_string())]
+    );
+}
+
+/// Journal payloads deeper than serde_json's default recursion limit (128) but within the
+/// stored-JSON bound must decode like snapshot/message JSON does (`decode_stored_json`).
+#[tokio::test]
+async fn thread_journal_readers_decode_deep_payloads_within_stored_json_bound() {
+    let iso = IsolatedStorageEnv::new("journal-deep-payload");
+    let db = SessionDb::open(SessionDbOptions {
+        root_dir: iso.cowork_root.clone(),
+        sessions_dir: iso.sessions_dir.clone(),
+        db_path: None,
+        busy_timeout_ms: Some(5_000),
+    })
+    .await
+    .unwrap();
+
+    let mut payload = json!("leaf");
+    for _ in 0..150 {
+        payload = json!([payload]);
+    }
+    db.append_thread_journal_events(&[ThreadJournalEventInput {
+        thread_id: "deep-thread".to_string(),
+        ts: "2026-04-17T12:00:01.000Z".to_string(),
+        event_type: "item/completed".to_string(),
+        turn_id: Some("turn-1".to_string()),
+        item_id: Some("item-1".to_string()),
+        request_id: None,
+        payload: payload.clone(),
+    }])
+    .await
+    .unwrap();
+
+    let listed = db
+        .list_thread_journal_events("deep-thread", 0, None)
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].payload, payload);
+    let limited = db
+        .list_thread_journal_events("deep-thread", 0, Some(10))
+        .unwrap();
+    assert_eq!(limited.len(), 1);
+    let by_type = db
+        .list_thread_journal_events_by_type("deep-thread", "item/completed")
+        .unwrap();
+    assert_eq!(by_type.len(), 1);
+    assert_eq!(by_type[0].payload, payload);
+    db.close();
 }

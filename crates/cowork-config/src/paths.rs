@@ -69,6 +69,52 @@ pub fn path_has_link_component(path: &Path) -> bool {
     false
 }
 
+/// Whether `path` stays inside `root` without traversing a link below it: `path` must be
+/// lexically under `root` with only normal components, no existing component below `root` may
+/// be a symbolic link or Windows reparse point (junction), and the canonical form of `path` must
+/// stay inside the canonical `root`. Components that do not exist yet are allowed (they would be
+/// created as real entries). `root` itself may be reached through links (a workspace opened via
+/// a symlinked path); only what lies below it is constrained.
+///
+/// Used for workspace-controlled locations such as `<cwd>/.cowork/config.json` and
+/// `<cwd>/.agent`: an untrusted repository must not redirect them at trusted files (for example
+/// `<cwd>/.cowork -> ~/.cowork/config`).
+pub fn is_confined_below(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(segment) = component else {
+            return false;
+        };
+        current.push(segment);
+        match fs::symlink_metadata(&current) {
+            Ok(meta) if metadata_is_link(&meta) => return false,
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return false,
+        }
+    }
+    canonicalize_sync(path).starts_with(canonicalize_sync(root))
+}
+
+/// Symbolic link, or on Windows any reparse point (junctions included).
+fn metadata_is_link(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 /// Purely lexical path normalization resolving `.` and `..` without touching the filesystem.
 pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     let base = if path.is_absolute() {
@@ -100,12 +146,112 @@ pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Longest legacy Win32 path (`MAX_PATH` minus the terminating NUL) that may be spelled
+/// without the `\\?\` verbatim prefix.
+const WINDOWS_MAX_PLAIN_PATH_LEN: usize = 259;
+
+/// Converts a Windows verbatim (`\\?\`) path into the plain spelling that
+/// `fs.realpathSync.native` (TS `canonicalizeSync`) returns, when that is lossless:
+/// `\\?\C:\dir` becomes `C:\dir` and `\\?\UNC\server\share\dir` becomes
+/// `\\server\share\dir`. Returns `None` (keep the verbatim form) for other verbatim
+/// namespaces (`\\?\Volume{…}`, `\\?\GLOBALROOT…`) and for paths whose meaning would change
+/// without the prefix: over-long paths, `/` separators, `.`/`..` or empty components, names
+/// with characters Win32 rejects, trailing dots/spaces, or reserved device names (`CON`,
+/// `NUL`, `COM1`, …). Platform-independent so the rules are unit-tested everywhere; only
+/// applied on Windows.
+pub fn strip_windows_verbatim_prefix(raw: &str) -> Option<String> {
+    let (plain, components) = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        let mut parts = rest.splitn(3, '\\');
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        if server.is_empty() || share.is_empty() {
+            return None;
+        }
+        (format!(r"\\{rest}"), rest)
+    } else {
+        // Only drive-letter verbatim paths have a plain spelling (`\\?\Volume{…}` does not).
+        let rest = raw.strip_prefix(r"\\?\")?;
+        let bytes = rest.as_bytes();
+        let has_drive = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'\\';
+        if !has_drive {
+            return None;
+        }
+        (rest.to_owned(), &rest[3..])
+    };
+    if plain.len() > WINDOWS_MAX_PLAIN_PATH_LEN || components.contains('/') {
+        return None;
+    }
+    let mut segments: Vec<&str> = components.split('\\').collect();
+    // A single trailing separator (`C:\dir\`) is harmless; any other empty segment is not.
+    if segments.len() > 1 && segments.last() == Some(&"") {
+        segments.pop();
+    }
+    let is_drive_root = segments == [""] && !raw.starts_with(r"\\?\UNC\");
+    if !is_drive_root
+        && !segments
+            .iter()
+            .all(|segment| is_plain_win32_segment(segment))
+    {
+        return None;
+    }
+    Some(plain)
+}
+
+fn is_plain_win32_segment(segment: &str) -> bool {
+    if segment.is_empty() || segment == "." || segment == ".." {
+        return false;
+    }
+    if segment.ends_with('.') || segment.ends_with(' ') {
+        return false;
+    }
+    if segment
+        .chars()
+        .any(|ch| (ch as u32) < 0x20 || matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return false;
+    }
+    let stem = segment
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    if matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) {
+        return false;
+    }
+    // `COM0`-`COM9` / `LPT0`-`LPT9`, including the superscript-digit spellings.
+    let is_port = stem.starts_with("COM") || stem.starts_with("LPT");
+    let port_suffix = stem.get(3..).unwrap_or_default();
+    !(is_port
+        && (matches!(port_suffix.as_bytes(), [b'0'..=b'9'])
+            || matches!(port_suffix, "\u{b9}" | "\u{b2}" | "\u{b3}")))
+}
+
+/// `fs::canonicalize` output in the spelling TS `realpathSync.native` produced: on Windows the
+/// `\\?\` verbatim prefix is dropped when that is lossless, so canonical paths keep matching
+/// rows that pre-upgrade sessions.db, Electron, and task workspaces stored in plain form.
+fn simplify_canonical(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(plain) = path.to_str().and_then(strip_windows_verbatim_prefix) {
+            return PathBuf::from(plain);
+        }
+    }
+    path
+}
+
 /// Canonicalizes `target_path` against the real filesystem, resolving the longest
 /// existing ancestor via `fs::canonicalize` and lexically appending any missing suffix.
 pub fn canonicalize_sync(target_path: &Path) -> PathBuf {
     let resolved = normalize_lexical_path(target_path);
     if let Ok(canon) = fs::canonicalize(&resolved) {
-        return canon;
+        return simplify_canonical(canon);
     }
 
     let mut pending_segments: Vec<std::ffi::OsString> = Vec::new();
@@ -113,7 +259,7 @@ pub fn canonicalize_sync(target_path: &Path) -> PathBuf {
 
     loop {
         if let Ok(canon_ancestor) = fs::canonicalize(current) {
-            let mut out = canon_ancestor;
+            let mut out = simplify_canonical(canon_ancestor);
             for seg in pending_segments.into_iter().rev() {
                 out.push(seg);
             }
@@ -465,4 +611,76 @@ pub fn write_text_file_atomic(target: &Path, contents: &str, mode: Option<u32>) 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_windows_verbatim_prefix_returns_plain_drive_and_unc_paths() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\Users\me\project").as_deref(),
+            Some(r"C:\Users\me\project")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\d:\work\").as_deref(),
+            Some(r"d:\work\")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\").as_deref(),
+            Some(r"C:\")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\dir").as_deref(),
+            Some(r"\\server\share\dir")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share").as_deref(),
+            Some(r"\\server\share")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\My Docs\notes.v2.md").as_deref(),
+            Some(r"C:\My Docs\notes.v2.md")
+        );
+    }
+
+    #[test]
+    fn strip_windows_verbatim_prefix_keeps_paths_that_would_change_meaning() {
+        for raw in [
+            // Not verbatim at all, or a verbatim namespace without a plain spelling.
+            r"C:\already\plain",
+            r"\\server\share",
+            r"\\?\Volume{0f2c5c1e-0000-0000-0000-100000000000}\dir",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1",
+            r"\\?\C:",
+            r"\\?\UNC\server",
+            r"\\?\UNC\\share",
+            // Components Win32 would reinterpret without the prefix.
+            r"\\?\C:\dir\..\secret",
+            r"\\?\C:\dir\.\file",
+            r"\\?\C:\dir\\file",
+            r"\\?\C:\dir/file",
+            r"\\?\C:\trailing.",
+            r"\\?\C:\trailing ",
+            r"\\?\C:\bad<name",
+            r"\\?\C:\ads:stream",
+            r"\\?\C:\dir\CON",
+            r"\\?\C:\dir\nul.txt",
+            r"\\?\C:\dir\com1",
+            r"\\?\C:\dir\LPT9.log",
+            r"\\?\UNC\server\share\aux",
+        ] {
+            assert_eq!(strip_windows_verbatim_prefix(raw), None, "{raw}");
+        }
+        let long = format!(r"\\?\C:\{}", "a".repeat(WINDOWS_MAX_PLAIN_PATH_LEN));
+        assert_eq!(strip_windows_verbatim_prefix(&long), None);
+        let fits = format!(r"\\?\C:\{}", "a".repeat(WINDOWS_MAX_PLAIN_PATH_LEN - 3));
+        assert_eq!(
+            strip_windows_verbatim_prefix(&fits).map(|p| p.len()),
+            Some(WINDOWS_MAX_PLAIN_PATH_LEN)
+        );
+        // Names that merely start with a device name are ordinary.
+        assert!(strip_windows_verbatim_prefix(r"\\?\C:\console\conf\com10\lpt").is_some());
+    }
 }

@@ -9,7 +9,7 @@ use crate::file_lock::{FileLockOptions, file_lock_root_for_cowork_home, with_fil
 use crate::merge::{
     AgentConfig, ProjectConfigOverrides, deep_merge_objects, load_json_object_safe,
 };
-use crate::paths::write_text_file_atomic;
+use crate::paths::{is_confined_below, normalize_lexical_path, write_text_file_atomic};
 use crate::providers::{
     ChildModelRoutingMode, ProviderName, SkillImprovementScope, default_runtime_name_for_provider,
 };
@@ -173,6 +173,40 @@ impl ProjectConfigPatch {
     }
 }
 
+/// Whether `path` (a file under the workspace `<cwd>/.cowork`) may be read or written as
+/// workspace-tier config: nothing below the workspace root may be a link and the canonical path
+/// must stay inside it, so an untrusted repository cannot point `.cowork` (or
+/// `.cowork/config.json`) at a trusted file such as `~/.cowork/config/config.json`. When the
+/// workspace is the home directory, `<cwd>/.cowork` *is* the user cowork home (which the user
+/// may legitimately link elsewhere) and is not constrained.
+pub(crate) fn is_workspace_cowork_path_confined(
+    project_cowork_dir: &Path,
+    path: &Path,
+    user_cowork_dir: Option<&Path>,
+) -> bool {
+    if user_cowork_dir.is_some_and(|user| {
+        normalize_lexical_path(user) == normalize_lexical_path(project_cowork_dir)
+    }) {
+        return true;
+    }
+    project_cowork_dir
+        .parent()
+        .is_some_and(|workspace_root| is_confined_below(workspace_root, path))
+}
+
+/// Reads the workspace-tier `<cwd>/.cowork/config.json` for `load_config`. A file reached
+/// through a link (or resolving outside the workspace) is ignored, i.e. reads as `{}`.
+pub(crate) fn load_workspace_config_object(
+    project_cowork_dir: &Path,
+    user_cowork_dir: &Path,
+) -> Result<Map<String, Value>> {
+    let config_path = project_cowork_dir.join("config.json");
+    if !is_workspace_cowork_path_confined(project_cowork_dir, &config_path, Some(user_cowork_dir)) {
+        return Ok(Map::new());
+    }
+    load_json_object_safe(&config_path)
+}
+
 async fn persist_config_patch_file(
     config_dir: &Path,
     patch: &ProjectConfigPatch,
@@ -293,6 +327,18 @@ pub async fn persist_project_config_patch(
 
     if has_observability_consent && global_config_dir.is_none() {
         return Err(ConfigError::UntrustedObservabilityChange);
+    }
+
+    // SECURITY BOUNDARY: never write the workspace tier through a link that leaves the
+    // workspace (e.g. `<cwd>/.cowork -> ~/.cowork/config` would overwrite the global config).
+    // Checked before any file is written so a rejected patch leaves every tier untouched.
+    let project_config_path = project_cowork_dir.join("config.json");
+    if !is_workspace_cowork_path_confined(
+        project_cowork_dir,
+        &project_config_path,
+        global_config_dir.and_then(Path::parent),
+    ) {
+        return Err(ConfigError::OutsidePermittedRoots(project_config_path));
     }
 
     let lock_root = global_config_dir

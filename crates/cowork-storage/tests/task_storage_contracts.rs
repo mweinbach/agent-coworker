@@ -7,11 +7,11 @@ use cowork_config::canonicalize_sync;
 use cowork_storage::{
     ArtifactVersionStore, ArtifactVersionStoreOptions, CreateTaskRecordInput,
     QueueTaskQuestionsInput, ResolveTaskQuestionsInput, RestoreArtifactFileInput, SessionDb,
-    SessionDbOptions, StorageError, TaskActivity, TaskActivityKind, TaskCreationOrigin,
-    TaskDecision, TaskQuestion, TaskQuestionOption, TaskQuestionResolutionRecordInput,
-    TaskQuestionStatus, TaskQuestionUrgency, TaskRequirement, TaskRequirementKind,
-    TaskReviewRecord, TaskReviewVerdict, TaskStatus, TaskThread, TaskWorkItemRecordInput,
-    WorkItemStatus, parse_and_validate_task_creation_input,
+    SessionDbOptions, SetTaskStatusInput, StorageError, TaskActivity, TaskActivityKind,
+    TaskCreationOrigin, TaskDecision, TaskQuestion, TaskQuestionOption,
+    TaskQuestionResolutionRecordInput, TaskQuestionStatus, TaskQuestionUrgency, TaskRecord,
+    TaskRequirement, TaskRequirementKind, TaskReviewRecord, TaskReviewVerdict, TaskStatus,
+    TaskThread, TaskWorkItemRecordInput, WorkItemStatus, parse_and_validate_task_creation_input,
 };
 use serde_json::{Map, json};
 use uuid::Uuid;
@@ -448,5 +448,115 @@ async fn task_repository_enforces_occ_claims_questions_and_reviews() {
             .contains("Work item dependencies contain a cycle")
     );
 
+    db.close();
+}
+
+/// `list_tasks(workspace)` must find tasks whose stored `workspace_path` is spelled differently
+/// from today's canonical form (pre-upgrade / Electron-written rows; on Windows plain `C:\…`
+/// versus `\\?\C:\…`), matching with `same_workspace_path` rather than SQL string equality.
+#[tokio::test]
+async fn list_tasks_matches_equivalent_workspace_path_spellings() {
+    let env = IsolatedTaskStorageEnv::new("list-equivalent");
+    let db = env.open_db().await;
+    let ws = env.workspace.to_string_lossy().into_owned();
+    let other_ws = env.root.join("other");
+    fs::create_dir_all(&other_ws).unwrap();
+
+    create_minimal_task(&db, "task-plain", &ws).await;
+    create_minimal_task(&db, "task-other", &other_ws.to_string_lossy()).await;
+    // Simulate a row persisted with a non-canonical spelling of the same workspace.
+    let alias = format!("{ws}{}", std::path::MAIN_SEPARATOR);
+    let conn = rusqlite::Connection::open(db.db_path()).unwrap();
+    conn.execute(
+        "UPDATE tasks SET workspace_path = ?1 WHERE task_id = 'task-plain'",
+        rusqlite::params![alias],
+    )
+    .unwrap();
+
+    let listed = db.list_tasks(Some(&ws)).unwrap();
+    assert_eq!(
+        listed.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec!["task-plain"]
+    );
+    assert_eq!(db.list_tasks(None).unwrap().len(), 2);
+    db.close();
+}
+
+async fn create_minimal_task(db: &SessionDb, task_id: &str, workspace: &str) -> TaskRecord {
+    let now = "2026-04-18T12:00:00.000Z".to_string();
+    db.create_task_record(CreateTaskRecordInput {
+        id: task_id.to_string(),
+        workspace_path: workspace.to_string(),
+        title: "Listed".to_string(),
+        objective: "Objective".to_string(),
+        context: String::new(),
+        source_session_id: None,
+        creation_origin: TaskCreationOrigin::Manual,
+        creation_idempotency_key: None,
+        initial_status: TaskStatus::Working,
+        review_required: false,
+        review_rounds: 0,
+        thread: TaskThread {
+            id: format!("tt-{task_id}"),
+            task_id: task_id.to_string(),
+            session_id: format!("sess-{task_id}"),
+            title: "Primary".to_string(),
+            created_by: "coordinator".to_string(),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        },
+        requirements: vec![],
+        work_items: vec![],
+        decisions: vec![],
+    })
+    .await
+    .unwrap()
+}
+
+/// A validated task write keeps a manual `BEGIN IMMEDIATE` open across its async validator.
+/// Cancelling the future mid-validation (interrupt, timeout, disconnected client) must roll the
+/// transaction back so the shared write connection is usable again and nothing half-applied
+/// is committed.
+#[tokio::test]
+async fn cancelled_validated_task_write_rolls_back_open_transaction() {
+    let env = IsolatedTaskStorageEnv::new("cancelled-validated-write");
+    let db = env.open_db().await;
+    let ws = env.workspace.to_string_lossy().into_owned();
+    let created = create_minimal_task(&db, "task-cancel", &ws).await;
+
+    let set_failed = |expected_revision: i64| SetTaskStatusInput {
+        task_id: "task-cancel".to_string(),
+        expected_revision,
+        status: TaskStatus::Failed,
+        summary: "Failed".to_string(),
+        detail: None,
+        updated_at: "2026-04-18T12:01:00.000Z".to_string(),
+        thread_id: None,
+    };
+    let stalled = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        db.set_task_status_validated(
+            set_failed(created.revision),
+            |_task| std::future::pending::<cowork_storage::Result<()>>(),
+            None,
+        ),
+    )
+    .await;
+    assert!(
+        stalled.is_err(),
+        "validator never completes, so the write times out"
+    );
+
+    // Nothing from the cancelled write was committed ...
+    let unchanged = db.get_task("task-cancel").unwrap().unwrap();
+    assert_eq!(unchanged.status, TaskStatus::Working);
+    assert_eq!(unchanged.revision, created.revision);
+    // ... and the shared write connection accepts new transactions.
+    let failed = db
+        .set_task_status(set_failed(created.revision))
+        .await
+        .unwrap();
+    assert_eq!(failed.status, TaskStatus::Failed);
+    create_minimal_task(&db, "task-after-cancel", &ws).await;
     db.close();
 }

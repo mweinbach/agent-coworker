@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::error::{ConfigError, Result};
-use crate::paths::{env_map_from_process, host_platform, resolve_home_dir, write_text_file_atomic};
+use crate::paths::{
+    env_map_from_process, host_platform, is_confined_below, resolve_home_dir,
+    write_text_file_atomic,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct MigrateAgentConfigOptions {
@@ -39,6 +42,9 @@ pub struct AgentConfigMigrationResult {
 
 struct ScopePaths {
     scope: &'static str,
+    /// Root every source/target path must stay inside without traversing a link (the
+    /// workspace for the workspace scope); `None` for the user's own home.
+    confine_root: Option<PathBuf>,
     source_dir: PathBuf,
     target_dir: PathBuf,
     source_config_file: PathBuf,
@@ -180,13 +186,19 @@ fn migrate_mcp_servers(source_file: &Path, target_file: &Path) -> Result<(usize,
     Ok((imported, skipped))
 }
 
+/// Cross-device fallback for `move_path`. Symlinks are skipped, never followed: copying a
+/// link's target would materialize files from outside the migrated tree.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
@@ -202,10 +214,22 @@ fn move_path(source: &Path, target: &Path) -> Result<()> {
             source: s,
         })?;
     }
+    // `rename` moves a symlink itself, never its target.
     match fs::rename(source, target) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            if source.is_dir() {
+        Err(rename_err) => {
+            let source_meta = fs::symlink_metadata(source).map_err(|s| ConfigError::Io {
+                path: source.to_path_buf(),
+                source: s,
+            })?;
+            if source_meta.file_type().is_symlink() {
+                // The copy fallback would follow the link and copy its target instead.
+                return Err(ConfigError::Io {
+                    path: source.to_path_buf(),
+                    source: rename_err,
+                });
+            }
+            if source_meta.is_dir() {
                 copy_dir_recursive(source, target).map_err(|s| ConfigError::Io {
                     path: target.to_path_buf(),
                     source: s,
@@ -302,6 +326,33 @@ fn migrate_scope(paths: ScopePaths) -> Result<AgentConfigMigrationScopeResult> {
         return Ok(res);
     }
 
+    // SECURITY BOUNDARY: an untrusted repository must not redirect the workspace `.agent` /
+    // `.cowork` (or the config files in them) through links, e.g. `.cowork -> ~/.cowork/config`
+    // would merge workspace keys into the trusted user config.
+    if let Some(root) = &paths.confine_root {
+        let unconfined: Vec<&PathBuf> = [
+            &paths.source_dir,
+            &paths.target_dir,
+            &paths.source_config_file,
+            &paths.target_config_file,
+            &paths.source_mcp_file,
+            &paths.target_mcp_file,
+        ]
+        .into_iter()
+        .filter(|path| !is_confined_below(root, path))
+        .collect();
+        if !unconfined.is_empty() {
+            for path in unconfined {
+                res.warnings.push(format!(
+                    "Skipped migration: {} is a link or resolves outside {}",
+                    path.display(),
+                    root.display()
+                ));
+            }
+            return Ok(res);
+        }
+    }
+
     match migrate_json_config(&paths.source_config_file, &paths.target_config_file) {
         Ok((imp, skip)) => {
             res.config_imported = imp;
@@ -364,6 +415,7 @@ pub async fn migrate_agent_config(
     let ws_target = cwd.join(".cowork");
     let workspace_paths = ScopePaths {
         scope: "workspace",
+        confine_root: Some(cwd.clone()),
         source_config_file: ws_source.join("config.json"),
         target_config_file: ws_target.join("config.json"),
         source_mcp_file: ws_source.join("mcp-servers.json"),
@@ -376,6 +428,7 @@ pub async fn migrate_agent_config(
     let user_target = homedir.join(".cowork");
     let user_paths = ScopePaths {
         scope: "user",
+        confine_root: None,
         source_config_file: user_source.join("config.json"),
         target_config_file: user_target.join("config").join("config.json"),
         source_mcp_file: user_source.join("mcp-servers.json"),
@@ -432,4 +485,31 @@ pub fn format_agent_config_migration_report(result: &AgentConfigMigrationResult)
     }
 
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_skips_symlinks_instead_of_copying_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secret = tmp.path().join("secret.txt");
+        fs::write(&secret, "SECRET").unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("nested")).unwrap();
+        fs::write(src.join("nested/keep.md"), "keep").unwrap();
+        std::os::unix::fs::symlink(&secret, src.join("link.md")).unwrap();
+        std::os::unix::fs::symlink(tmp.path(), src.join("nested/dir-link")).unwrap();
+
+        let dst = tmp.path().join("dst");
+        copy_dir_recursive(&src, &dst).unwrap();
+        assert_eq!(
+            fs::read_to_string(dst.join("nested/keep.md")).unwrap(),
+            "keep"
+        );
+        assert!(fs::symlink_metadata(dst.join("link.md")).is_err());
+        assert!(fs::symlink_metadata(dst.join("nested/dir-link")).is_err());
+    }
 }

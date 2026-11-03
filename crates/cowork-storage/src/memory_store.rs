@@ -71,7 +71,15 @@ impl MemoryStore {
         let conn = Connection::open(db_path)?;
         harden_sqlite_family(db_path);
         ensure_schema(&conn)?;
-        ensure_legacy_imported(&conn, db_path)?;
+        // `<home>/.cowork/memory.sqlite` doubles as the workspace database when the workspace is
+        // the home directory; it is the user's own cowork home, so it gets the user-scope policy.
+        let confinement =
+            if scope == MemoryScope::Workspace && self.workspace_db_path != self.user_db_path {
+                LegacyImportConfinement::WorkspaceRoot
+            } else {
+                LegacyImportConfinement::CoworkHome
+            };
+        ensure_legacy_imported(&conn, db_path, confinement)?;
         op(&conn)
     }
 
@@ -279,7 +287,37 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_legacy_imported(conn: &Connection, db_path: &Path) -> Result<()> {
+/// Which canonical root legacy Markdown memory sources must resolve inside before they are
+/// imported (TS `src/memoryStore.ts` read them unconfined; see `ensure_legacy_imported`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyImportConfinement {
+    /// `<workspace>/.cowork/memory.sqlite`: sources must stay inside the canonical workspace
+    /// root (the parent of `.cowork`), and `.cowork` itself must be a real directory.
+    WorkspaceRoot,
+    /// `~/.cowork/memory.sqlite`: sources must stay inside the canonical user cowork home.
+    CoworkHome,
+}
+
+/// One-time import of the pre-SQLite Markdown memory layout (`AGENT.md` + `memory/**/*.md`).
+///
+/// TS `readTextIfExists` / `walkMarkdownFiles` followed symlinks anywhere on disk. Because a
+/// workspace `.cowork` comes from an untrusted repository, symlinks are followed only when their
+/// canonical target stays inside the canonical root the store belongs to (see
+/// [`LegacyImportConfinement`]); this keeps TS parity for in-tree links while refusing links to
+/// host secrets such as `~/.ssh/id_ed25519` or `~/.cowork/auth/**`.
+///
+/// - A symlinked workspace `.cowork` skips the import entirely and leaves the marker unset: the
+///   database it would mark lives at the link target, which may be another workspace's store.
+/// - A source that resolves outside the root is a deliberate, permanent refusal: it is skipped
+///   (with a warning) and the import can still be marked done.
+/// - Only a missing file or directory (including a dangling symlink) is otherwise skipped. Any
+///   other read or traversal failure (`ELOOP`, permissions, I/O) propagates before the completion
+///   marker is written, so a transient error leaves the import retryable.
+fn ensure_legacy_imported(
+    conn: &Connection,
+    db_path: &Path,
+    confinement: LegacyImportConfinement,
+) -> Result<()> {
     let imported: Option<String> = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'legacy_import_done'",
@@ -294,24 +332,24 @@ fn ensure_legacy_imported(conn: &Connection, db_path: &Path) -> Result<()> {
     let Some(agent_dir) = db_path.parent() else {
         return Ok(());
     };
+    let Some(root) = legacy_import_root(agent_dir, confinement)? else {
+        return Ok(());
+    };
     let mut to_import: Vec<(String, String)> = Vec::new();
 
-    // TS `readTextIfExists` / `walkMarkdownFiles`: only a missing file or directory is
-    // skipped. Any other read or traversal failure propagates before the completion marker is
-    // written, so a transient error (permissions, I/O) leaves the import retryable.
     let hot_path = agent_dir.join("AGENT.md");
-    if let Some(hot) = read_text_if_exists(&hot_path)?
+    if let Some(hot) = read_confined_text(&hot_path, &root)?
         && !hot.trim().is_empty()
     {
         to_import.push((HOT_MEMORY_ID.to_string(), hot));
     }
 
     let memory_dir = agent_dir.join("memory");
-    let mut md_files = walk_markdown_files(&memory_dir)?;
+    let mut md_files = walk_markdown_files(&memory_dir, &root)?;
     md_files.sort();
 
     for file_path in md_files {
-        let Some(content) = read_text_if_exists(&file_path)? else {
+        let Some(content) = read_confined_text(&file_path, &root)? else {
             continue;
         };
         if content.trim().is_empty() {
@@ -353,42 +391,131 @@ fn ensure_legacy_imported(conn: &Connection, db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// TS `readTextIfExists`: `None` only for a missing file; every other error propagates. Bytes
-/// are decoded lossily like `Bun.file().text()`, so non-UTF-8 content never blocks the import.
-fn read_text_if_exists(path: &Path) -> Result<Option<String>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err.into()),
+/// Canonical confinement root for a legacy import, or `None` when the import must be skipped
+/// without marking it done (a symlinked workspace `.cowork`).
+fn legacy_import_root(
+    agent_dir: &Path,
+    confinement: LegacyImportConfinement,
+) -> Result<Option<PathBuf>> {
+    match confinement {
+        LegacyImportConfinement::WorkspaceRoot => {
+            if fs::symlink_metadata(agent_dir)?.file_type().is_symlink() {
+                tracing::warn!(
+                    path = %agent_dir.display(),
+                    "skipping legacy memory import: workspace .cowork is a symlink"
+                );
+                return Ok(None);
+            }
+            let workspace_root = match agent_dir.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => parent,
+                _ => Path::new("."),
+            };
+            Ok(Some(fs::canonicalize(workspace_root)?))
+        }
+        LegacyImportConfinement::CoworkHome => Ok(Some(fs::canonicalize(agent_dir)?)),
     }
 }
 
-/// TS `walkMarkdownFiles`: follows symlinked files and directories (`fs.stat`, not `lstat`)
-/// and guards against cycles by skipping any directory whose canonical path was already
-/// walked. Only a missing entry (including a dangling symlink) is skipped; every other error
-/// propagates so the caller leaves the legacy import retryable. Returned paths keep the
-/// walked (non-canonical) spelling so ids derive from the path under `root`.
-fn walk_markdown_files(root: &Path) -> Result<Vec<PathBuf>> {
+/// Resolves `path` (following symlinks like TS `fs.stat`) and reports whether it exists and
+/// stays inside `root`. `Ok(None)` means the entry is missing (including a dangling symlink) or
+/// was refused for resolving outside the root; other errors (`ELOOP`, permissions) propagate.
+fn resolve_confined(path: &Path, root: &Path) -> Result<Option<PathBuf>> {
+    let canonical = match fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if !canonical.starts_with(root) {
+        tracing::warn!(
+            path = %path.display(),
+            "skipping legacy memory source that resolves outside its root"
+        );
+        return Ok(None);
+    }
+    Ok(Some(canonical))
+}
+
+/// TS `readTextIfExists`, confined to `root`: `None` for a missing file or one that resolves
+/// outside `root`; every other error propagates. The resolved path is opened without following
+/// a final symlink (`O_NOFOLLOW` / `FILE_FLAG_OPEN_REPARSE_POINT`), so a link swapped in after
+/// resolution fails the (retryable) import instead of being read. Bytes are decoded lossily like
+/// `Bun.file().text()`, so non-UTF-8 content never blocks the import.
+fn read_confined_text(path: &Path, root: &Path) -> Result<Option<String>> {
+    use std::io::Read;
+
+    let Some(canonical) = resolve_confined(path, root)? else {
+        return Ok(None);
+    };
+    let mut file = match open_no_follow(&canonical) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if file.metadata()?.file_type().is_symlink() {
+        return Err(std::io::Error::other(format!(
+            "legacy memory source changed into a link while importing: {}",
+            canonical.display()
+        ))
+        .into());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_FLAG_OPEN_REPARSE_POINT: open a symlink/junction itself instead of its target.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+/// TS `walkMarkdownFiles`, confined to `root`: follows symlinked files and directories
+/// (`fs.stat`, not `lstat`) whose canonical target stays inside `root`, and guards against
+/// cycles by skipping any directory whose canonical path was already walked. Entries that are
+/// missing (including dangling symlinks) or resolve outside `root` are skipped; every other
+/// error propagates so the caller leaves the legacy import retryable. Returned paths keep the
+/// walked (non-canonical) spelling so ids derive from the path under the memory directory.
+fn walk_markdown_files(dir: &Path, root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut visited = HashSet::new();
-    walk_markdown_dir(root, &mut visited, &mut out)?;
+    walk_markdown_dir(dir, root, &mut visited, &mut out)?;
     Ok(out)
 }
 
 fn walk_markdown_dir(
     dir: &Path,
+    root: &Path,
     visited: &mut HashSet<PathBuf>,
     out: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    let canonical = match fs::canonicalize(dir) {
-        Ok(path) => path,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
+    let Some(canonical) = resolve_confined(dir, root)? else {
+        return Ok(());
     };
-    if !visited.insert(canonical) {
+    if !visited.insert(canonical.clone()) {
         return Ok(());
     }
-    let read_dir = match fs::read_dir(dir) {
+    // List the resolved directory so a link swapped in after the containment check is not
+    // followed out of `root`; children are still reported under the walked spelling.
+    let read_dir = match fs::read_dir(&canonical) {
         Ok(read_dir) => read_dir,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err.into()),
@@ -406,8 +533,9 @@ fn walk_markdown_dir(
             Err(err) => return Err(err.into()),
         };
         if metadata.is_dir() {
-            walk_markdown_dir(&full, visited, out)?;
+            walk_markdown_dir(&full, root, visited, out)?;
         } else if metadata.is_file() && name.to_string_lossy().to_lowercase().ends_with(".md") {
+            // Containment is enforced when the file is read (`read_confined_text`).
             out.push(full);
         }
     }

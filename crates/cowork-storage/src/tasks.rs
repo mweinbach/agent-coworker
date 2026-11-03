@@ -7,7 +7,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
-use cowork_config::canonicalize_sync;
+use cowork_config::{canonicalize_sync, same_workspace_path};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -1169,6 +1169,85 @@ fn set_status_in_open_tx(conn: &Connection, input: &SetTaskStatusInput) -> Resul
     Ok(())
 }
 
+/// Terminal-transition side effects for a task that startup reconciliation already moved to
+/// `failed` (its primary run crashed with the server). Mirrors what `set_status_in_open_tx`
+/// does for `failed` — and what `TaskCoordinator::fail_primary_task_run` records at runtime —
+/// so an active artifact revision does not survive into a later retry and the transition is
+/// visible in the activity log.
+pub(crate) fn record_startup_task_failure_in_open_tx(
+    conn: &Connection,
+    task_id: &str,
+    primary_thread_id: Option<&str>,
+    updated_at: &str,
+) -> Result<()> {
+    abandon_active_artifact_revisions_for_terminal_task_sync(conn, task_id, updated_at)?;
+    insert_activity_sync(
+        conn,
+        &TaskActivity {
+            id: Uuid::new_v4().to_string(),
+            seq: 1,
+            task_id: task_id.to_owned(),
+            thread_id: primary_thread_id.map(str::to_owned),
+            work_item_id: None,
+            kind: TaskActivityKind::StatusChanged,
+            summary: "Task run failed".to_string(),
+            detail: Some("The primary task run was interrupted by a server restart".to_string()),
+            created_at: updated_at.to_owned(),
+        },
+    )
+}
+
+/// Manual `BEGIN IMMEDIATE` transaction on `SessionDb::rw_conn` that stays open across
+/// `.await`s (async validators such as `ArtifactVersionStore::fingerprint_file`).
+///
+/// If the owning future is dropped mid-await (turn interrupt, codeMode timeout, disconnected
+/// RPC client), `Drop` issues `ROLLBACK`; without it `rw_conn` would stay inside the open
+/// transaction and every later `conn.transaction()` would fail with "cannot start a transaction
+/// within a transaction" until restart. The guard is a local of the `run_exclusive` callback
+/// future, which `SessionDbWriteCoordinator::run_exclusive` drops before its own lock guards
+/// (the in-process mutex and the cross-process lock directory), so the rollback always runs
+/// while the write lock is still held and no other writer can observe the open transaction.
+struct OpenWriteTx<'a> {
+    db: &'a SessionDb,
+    settled: bool,
+}
+
+impl<'a> OpenWriteTx<'a> {
+    fn begin(db: &'a SessionDb) -> Result<Self> {
+        db.with_rw_conn_mut(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
+                .map_err(StorageError::from)
+        })?;
+        Ok(Self { db, settled: false })
+    }
+
+    /// Commits. On failure the transaction is still open, so the guard rolls it back on drop.
+    fn commit(mut self) -> Result<()> {
+        self.db
+            .with_rw_conn_mut(|conn| conn.execute_batch("COMMIT").map_err(StorageError::from))?;
+        self.settled = true;
+        Ok(())
+    }
+
+    fn rollback(self) {
+        // `Drop` performs the rollback.
+    }
+}
+
+impl Drop for OpenWriteTx<'_> {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let _ = self.db.with_rw_conn_mut(|conn| {
+            if !conn.is_autocommit() {
+                conn.execute_batch("ROLLBACK")?;
+            }
+            Ok(())
+        });
+    }
+}
+
 fn accept_all_artifact_versions_in_open_tx(
     conn: &Connection,
     task_id: &str,
@@ -1644,21 +1723,24 @@ impl SessionDb {
                 })
             };
 
-            if let Some(ws) = canonical_ws {
-                let sql = format!("{base_sql} WHERE task.workspace_path = ?1 ORDER BY task.updated_at DESC");
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt
-                    .query_map(params![ws], map_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            } else {
-                let sql = format!("{base_sql} ORDER BY task.updated_at DESC");
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt
-                    .query_map([], map_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            }
+            let sql = format!("{base_sql} ORDER BY task.updated_at DESC");
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map([], map_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let Some((ws, canonical_ws)) = workspace_path.zip(canonical_ws.as_deref()) else {
+                return Ok(rows);
+            };
+            // Stored paths may be spelled differently from today's canonical form (pre-upgrade
+            // rows, Electron-written rows, Windows `\\?\` verbatim vs plain paths, case on
+            // win32), so match with the shared workspace comparison instead of SQL equality.
+            Ok(rows
+                .into_iter()
+                .filter(|row| {
+                    row.workspace_path == canonical_ws
+                        || same_workspace_path(&row.workspace_path, ws)
+                })
+                .collect())
         })
     }
 
@@ -3190,10 +3272,7 @@ impl SessionDb {
             .run_exclusive(
                 "accept_all_task_artifact_versions_validated",
                 || async move {
-                    self.with_rw_conn_mut(|conn| {
-                        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
-                            .map_err(StorageError::from)
-                    })?;
+                    let open_tx = OpenWriteTx::begin(self)?;
 
                     let outcome: Result<(TaskRecord, Option<TaskCheckpoint>)> = async {
                         let mid_task = self.with_rw_conn_mut(|conn| {
@@ -3219,9 +3298,7 @@ impl SessionDb {
 
                     match outcome {
                         Ok((task, checkpoint)) => {
-                            self.with_rw_conn_mut(|conn| {
-                                conn.execute_batch("COMMIT").map_err(StorageError::from)
-                            })?;
+                            open_tx.commit()?;
                             if let Some(mut h) = directive_commit
                                 && let Some(cb) = h.on_committed.take()
                             {
@@ -3230,9 +3307,7 @@ impl SessionDb {
                             Ok(task)
                         }
                         Err(e) => {
-                            let _ = self.with_rw_conn_mut(|conn| {
-                                conn.execute_batch("ROLLBACK").map_err(StorageError::from)
-                            });
+                            open_tx.rollback();
                             Err(e)
                         }
                     }
@@ -3261,10 +3336,7 @@ impl SessionDb {
             .run_exclusive(
                 "preview_artifact_revision_completion_readiness",
                 || async move {
-                    self.with_rw_conn_mut(|conn| {
-                        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
-                            .map_err(StorageError::from)
-                    })?;
+                    let open_tx = OpenWriteTx::begin(self)?;
 
                     let outcome: Result<PreviewCompletionReadinessResult> = async {
                         let initial_task = self.with_rw_conn_mut(|conn| {
@@ -3345,9 +3417,7 @@ impl SessionDb {
                     }
                     .await;
 
-                    let _ = self.with_rw_conn_mut(|conn| {
-                        conn.execute_batch("ROLLBACK").map_err(StorageError::from)
-                    });
+                    open_tx.rollback();
                     outcome
                 },
             )
@@ -3375,10 +3445,7 @@ impl SessionDb {
             .run_exclusive(
                 "finalize_artifact_revision_and_propose_task_completion",
                 || async move {
-                    self.with_rw_conn_mut(|conn| {
-                        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
-                            .map_err(StorageError::from)
-                    })?;
+                    let open_tx = OpenWriteTx::begin(self)?;
 
                     let outcome: Result<FinalizeArtifactRevisionCompletionResult> = async {
                         let initial_task = self.with_rw_conn_mut(|conn| {
@@ -3474,15 +3541,11 @@ impl SessionDb {
 
                     match outcome {
                         Ok(res) => {
-                            self.with_rw_conn_mut(|conn| {
-                                conn.execute_batch("COMMIT").map_err(StorageError::from)
-                            })?;
+                            open_tx.commit()?;
                             Ok(res)
                         }
                         Err(e) => {
-                            let _ = self.with_rw_conn_mut(|conn| {
-                                conn.execute_batch("ROLLBACK").map_err(StorageError::from)
-                            });
+                            open_tx.rollback();
                             Err(e)
                         }
                     }
@@ -3510,10 +3573,7 @@ impl SessionDb {
             .run_exclusive(
                 "propose_task_completion_with_pending_artifact_revision_settlements",
                 || async move {
-                    self.with_rw_conn_mut(|conn| {
-                        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
-                            .map_err(StorageError::from)
-                    })?;
+                    let open_tx = OpenWriteTx::begin(self)?;
 
                     let outcome: Result<(TaskRecord, Option<TaskCheckpoint>)> = async {
                         let ready_task = self.with_rw_conn_mut(|conn| {
@@ -3571,9 +3631,7 @@ impl SessionDb {
 
                     match outcome {
                         Ok((task, checkpoint)) => {
-                            self.with_rw_conn_mut(|conn| {
-                                conn.execute_batch("COMMIT").map_err(StorageError::from)
-                            })?;
+                            open_tx.commit()?;
                             if let Some(mut h) = directive_commit
                                 && let Some(cb) = h.on_committed.take()
                             {
@@ -3582,9 +3640,7 @@ impl SessionDb {
                             Ok(task)
                         }
                         Err(e) => {
-                            let _ = self.with_rw_conn_mut(|conn| {
-                                conn.execute_batch("ROLLBACK").map_err(StorageError::from)
-                            });
+                            open_tx.rollback();
                             Err(e)
                         }
                     }
@@ -3708,10 +3764,7 @@ impl SessionDb {
     {
         self.write_coordinator
             .run_exclusive("set_task_status", || async move {
-                self.with_rw_conn_mut(|conn| {
-                    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
-                        .map_err(StorageError::from)
-                })?;
+                let open_tx = OpenWriteTx::begin(self)?;
 
                 let outcome: Result<(TaskRecord, Option<TaskCheckpoint>)> = async {
                     let mid_task = self.with_rw_conn_mut(|conn| {
@@ -3732,9 +3785,7 @@ impl SessionDb {
 
                 match outcome {
                     Ok((task, checkpoint)) => {
-                        self.with_rw_conn_mut(|conn| {
-                            conn.execute_batch("COMMIT").map_err(StorageError::from)
-                        })?;
+                        open_tx.commit()?;
                         if let Some(mut h) = directive_commit
                             && let Some(cb) = h.on_committed.take()
                         {
@@ -3743,9 +3794,7 @@ impl SessionDb {
                         Ok(task)
                     }
                     Err(e) => {
-                        let _ = self.with_rw_conn_mut(|conn| {
-                            conn.execute_batch("ROLLBACK").map_err(StorageError::from)
-                        });
+                        open_tx.rollback();
                         Err(e)
                     }
                 }

@@ -9,7 +9,8 @@ use cowork_config::{ProviderName, canonicalize_sync};
 use cowork_storage::{
     AgentExecutionState, CreateTaskInput, PersistedSessionMutation, PersistedSessionSnapshotData,
     SessionDb, SessionDbOptions, SessionKind, SessionPersistenceStatus, SessionTitleSource,
-    TaskRecord, TaskStatus, TaskThread, TaskThreadInput, WorkItemInput, WorkItemStatus,
+    TaskActivityKind, TaskRecord, TaskStatus, TaskThread, TaskThreadInput, WorkItemInput,
+    WorkItemStatus,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -359,5 +360,89 @@ async fn startup_reconciliation_fails_task_when_primary_previously_errored() {
     let item = &after.work_items[0];
     assert_eq!(item.status, WorkItemStatus::Blocked);
     assert_eq!(item.claimed_by_thread_id, None);
+    db.close();
+}
+
+/// Failing a task at startup must apply the same terminal side effects as a runtime
+/// `set_status(failed)`: an active artifact revision is cancelled (so a later retry can start a
+/// new one and complete) and a `status_changed` activity records the transition.
+#[tokio::test]
+async fn startup_reconciliation_abandons_active_revisions_and_logs_status_change() {
+    let iso = IsolatedStorageEnv::new("startup-primary-active-revision");
+    let ws = iso.workspace();
+    let db = iso.open_db().await;
+    let task_id = "task-primary-revision";
+
+    seed_task_with_two_threads(
+        &db,
+        &ws,
+        task_id,
+        ("primary-revising", AgentExecutionState::Running),
+        ("secondary-idle", AgentExecutionState::Completed),
+    )
+    .await;
+    {
+        let conn = rusqlite::Connection::open(db.db_path()).unwrap();
+        conn.execute(
+            "INSERT INTO task_artifacts (
+               artifact_id, task_id, work_item_id, thread_id, path, kind, title, created_by,
+               provenance_json, created_at
+             ) VALUES ('artifact-1', ?1, ?2, ?3, 'report.md', 'document', 'Report', 'agent',
+                       '{}', '2026-04-17T12:00:15.000Z')",
+            rusqlite::params![task_id, WORK_ITEM_ID, PRIMARY_THREAD_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO task_artifact_versions (
+               version_id, task_id, artifact_id, version_number, parent_version_id, sha256,
+               size_bytes, media_type, created_by, created_at, change_summary, provenance_json,
+               review_status
+             ) VALUES ('v-base', ?1, 'artifact-1', 1, NULL, 'abc', 3, 'text/markdown', 'agent',
+                       '2026-04-17T12:00:15.000Z', 'Initial', '{}', 'accepted')",
+            rusqlite::params![task_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO task_artifact_revisions (
+               revision_id, task_id, artifact_id, work_item_id, task_thread_id, session_id,
+               base_version_id, prior_version_id, result_version_id, prior_task_status,
+               settlement_status, status, instruction, created_at, updated_at, completed_at
+             ) VALUES ('rev-1', ?1, 'artifact-1', ?2, ?3, 'primary-revising', 'v-base', 'v-base',
+                       NULL, 'working', 'none', 'active', 'Revise it',
+                       '2026-04-17T12:00:20.000Z', '2026-04-17T12:00:20.000Z', NULL)",
+            rusqlite::params![task_id, WORK_ITEM_ID, PRIMARY_THREAD_ID],
+        )
+        .unwrap();
+    }
+
+    let report = db
+        .reconcile_stale_execution_states(Some(&ws))
+        .await
+        .unwrap();
+    assert_eq!(report.tasks_reconciled, 1);
+
+    let conn = rusqlite::Connection::open(db.db_path()).unwrap();
+    let (status, completed_at): (String, Option<String>) = conn
+        .query_row(
+            "SELECT status, completed_at FROM task_artifact_revisions WHERE revision_id = 'rev-1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "cancelled");
+    assert!(completed_at.is_some());
+
+    let after = db.get_task(task_id).unwrap().unwrap();
+    assert_eq!(after.status, TaskStatus::Failed);
+    // The revision's work item is abandoned exactly as a runtime terminal transition does.
+    assert_eq!(after.work_items[0].status, WorkItemStatus::Abandoned);
+    assert_eq!(after.work_items[0].claimed_by_thread_id, None);
+    let status_change = after
+        .activity
+        .iter()
+        .find(|a| a.kind == TaskActivityKind::StatusChanged)
+        .expect("startup failure logs a status_changed activity");
+    assert_eq!(status_change.summary, "Task run failed");
+    assert_eq!(status_change.thread_id.as_deref(), Some(PRIMARY_THREAD_ID));
     db.close();
 }

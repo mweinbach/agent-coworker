@@ -941,3 +941,212 @@ async fn auth_connections_custom_models_preferences_and_24h_discovery_cache_stor
     assert!(!opts.contains_key("apiKey"));
     assert!(!opts.contains_key("bearer_token"));
 }
+
+fn load_child_routing_config(iso: &IsolatedEnv) -> cowork_config::AgentConfig {
+    load_config(LoadConfigOptions {
+        cwd: Some(iso.workspace.clone()),
+        homedir: Some(iso.home.clone()),
+        built_in_dir: Some(repo_root()),
+        env: Some(iso.base_env()),
+    })
+    .unwrap()
+}
+
+/// `loadConfig` (`src/config.ts`) drops a preferred child model that is neither bundled,
+/// discovered, nor a configured custom model, falling back to the main model; known ids
+/// (bundled, custom-store) are kept.
+#[tokio::test]
+async fn load_config_resets_unknown_preferred_child_model_to_main_model() {
+    let iso = IsolatedEnv::new("child-model-catalog");
+    let user_cfg_path = iso.home.join(".cowork/config/config.json");
+    write_json(
+        &user_cfg_path,
+        &json!({
+            "provider": "openai",
+            "model": "gpt-5.4",
+            "preferredChildModel": "gpt-retired-typo"
+        }),
+    );
+    let cfg = load_child_routing_config(&iso);
+    assert_eq!(cfg.model, "gpt-5.4");
+    assert_eq!(cfg.preferred_child_model, "gpt-5.4");
+    assert_eq!(cfg.preferred_child_model_ref, "openai:gpt-5.4");
+
+    // A bundled id is kept as-is.
+    write_json(
+        &user_cfg_path,
+        &json!({
+            "provider": "openai",
+            "model": "gpt-5.4",
+            "preferredChildModelRef": "openai:gpt-5.4-mini"
+        }),
+    );
+    let cfg = load_child_routing_config(&iso);
+    assert_eq!(cfg.preferred_child_model, "gpt-5.4-mini");
+    assert_eq!(cfg.preferred_child_model_ref, "openai:gpt-5.4-mini");
+
+    // A user-configured custom model id is kept too.
+    let paths = get_ai_coworker_paths(Some(&iso.home), &iso.base_env());
+    upsert_custom_model(&paths, ProviderName::Openai, "my-finetune")
+        .await
+        .unwrap();
+    write_json(
+        &user_cfg_path,
+        &json!({
+            "provider": "openai",
+            "model": "gpt-5.4",
+            "preferredChildModel": "my-finetune"
+        }),
+    );
+    let cfg = load_child_routing_config(&iso);
+    assert_eq!(cfg.preferred_child_model, "my-finetune");
+    assert_eq!(cfg.preferred_child_model_ref, "openai:my-finetune");
+}
+
+/// An empty cross-provider allowlist permits no foreign target: an untrusted workspace config
+/// pairing `cross-provider-allowlist` and `[]` with another provider's ref falls back to the
+/// parent model (`normalizeChildRoutingConfig` in `src/models/childModelRouting.ts`).
+#[test]
+fn load_config_empty_cross_provider_allowlist_falls_back_to_parent_model() {
+    let iso = IsolatedEnv::new("child-model-empty-allowlist");
+    write_json(
+        &iso.home.join(".cowork/config/config.json"),
+        &json!({ "provider": "openai", "model": "gpt-5.4" }),
+    );
+    write_json(
+        &iso.workspace.join(".cowork/config.json"),
+        &json!({
+            "childModelRoutingMode": "cross-provider-allowlist",
+            "allowedChildModelRefs": [],
+            "preferredChildModelRef": "anthropic:claude-opus-4-8"
+        }),
+    );
+    let cfg = load_child_routing_config(&iso);
+    assert!(cfg.allowed_child_model_refs.is_empty());
+    assert_eq!(cfg.preferred_child_model_ref, "openai:gpt-5.4");
+    assert_eq!(cfg.preferred_child_model, "gpt-5.4");
+}
+
+/// A workspace `.cowork` (or `.cowork/config.json`) that links outside the workspace, for
+/// example to the global `~/.cowork/config`, is neither read as workspace-tier config nor
+/// written through by config patches or `migrate-agent-config`.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinked_workspace_cowork_config_is_not_read_or_written() {
+    let iso = IsolatedEnv::new("ws-cowork-symlink");
+    let user_cfg_path = iso.home.join(".cowork/config/config.json");
+    write_json(
+        &user_cfg_path,
+        &json!({ "provider": "openai", "model": "gpt-5.4" }),
+    );
+    let fake_global = iso.root.join("fake-global");
+    let fake_global_cfg = fake_global.join("config.json");
+    let fake_contents = json!({ "provider": "openai", "model": "gpt-5.4-mini" });
+    write_json(&fake_global_cfg, &fake_contents);
+    let fake_raw = || fs::read_to_string(&fake_global_cfg).unwrap();
+    let original_fake = fake_raw();
+    symlink(&fake_global, iso.workspace.join(".cowork")).unwrap();
+
+    // Not read as workspace config.
+    let cfg = load_child_routing_config(&iso);
+    assert_eq!(cfg.model, "gpt-5.4");
+
+    // Not written through by `cowork/session/config/set` / `defaults/apply` patches.
+    let paths = get_ai_coworker_paths(Some(&iso.home), &iso.base_env());
+    let user_before = fs::read_to_string(&user_cfg_path).unwrap();
+    for patch in [
+        ProjectConfigPatch {
+            model: Some("gpt-5.2".to_string()),
+            ..Default::default()
+        },
+        ProjectConfigPatch {
+            observability_enabled: Some(true),
+            ..Default::default()
+        },
+    ] {
+        let err = persist_project_config_patch(
+            &iso.workspace.join(".cowork"),
+            &patch,
+            None,
+            Some(&paths.config_dir),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("outside the permitted roots"),
+            "{err}"
+        );
+    }
+    assert_eq!(fake_raw(), original_fake);
+    assert_eq!(fs::read_to_string(&user_cfg_path).unwrap(), user_before);
+
+    // `migrate-agent-config` does not merge workspace `.agent` keys through the link.
+    write_json(
+        &iso.workspace.join(".agent/config.json"),
+        &json!({ "observabilityEnabled": true, "userName": "attacker" }),
+    );
+    let migrated = migrate_agent_config(MigrateAgentConfigOptions {
+        cwd: Some(iso.workspace.clone()),
+        homedir: Some(iso.home.clone()),
+    })
+    .await
+    .unwrap();
+    let ws_scope = migrated
+        .scopes
+        .iter()
+        .find(|s| s.scope == "workspace")
+        .unwrap();
+    assert_eq!(ws_scope.config_imported, 0);
+    assert!(ws_scope.archived_path.is_none());
+    assert!(!ws_scope.warnings.is_empty());
+    assert_eq!(fake_raw(), original_fake);
+    assert!(iso.workspace.join(".agent/config.json").exists());
+
+    // A real `.cowork` whose `config.json` links out is ignored and not written through either.
+    fs::remove_file(iso.workspace.join(".cowork")).unwrap();
+    fs::create_dir_all(iso.workspace.join(".cowork")).unwrap();
+    symlink(&fake_global_cfg, iso.workspace.join(".cowork/config.json")).unwrap();
+    assert_eq!(load_child_routing_config(&iso).model, "gpt-5.4");
+    assert!(
+        persist_project_config_patch(
+            &iso.workspace.join(".cowork"),
+            &ProjectConfigPatch {
+                model: Some("gpt-5.2".to_string()),
+                ..Default::default()
+            },
+            None,
+            Some(&paths.config_dir),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(fake_raw(), original_fake);
+}
+
+/// When the workspace is the home directory, `<cwd>/.cowork` is the user cowork home itself and
+/// keeps working as before.
+#[tokio::test]
+async fn home_workspace_cowork_config_still_reads_and_writes() {
+    let iso = IsolatedEnv::new("ws-is-home");
+    let paths = get_ai_coworker_paths(Some(&iso.home), &iso.base_env());
+    persist_project_config_patch(
+        &iso.home.join(".cowork"),
+        &ProjectConfigPatch {
+            provider: Some(ProviderName::Openai),
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        },
+        None,
+        Some(&paths.config_dir),
+    )
+    .await
+    .unwrap();
+    let cfg = load_config(LoadConfigOptions {
+        cwd: Some(iso.home.clone()),
+        homedir: Some(iso.home.clone()),
+        built_in_dir: Some(repo_root()),
+        env: Some(iso.base_env()),
+    })
+    .unwrap();
+    assert_eq!(cfg.model, "gpt-5.4");
+}

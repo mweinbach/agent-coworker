@@ -679,7 +679,7 @@ impl SessionDb {
             };
 
             for raw in raw_rows {
-                let payload: Value = serde_json::from_str(&raw.payload_json)?;
+                let payload: Value = decode_stored_json(&raw.payload_json)?;
                 out.push(PersistedThreadJournalEvent {
                     thread_id: thread_id.to_string(),
                     seq: raw.seq.max(0) as u64,
@@ -767,7 +767,7 @@ impl SessionDb {
                     turn_id: raw.turn_id,
                     item_id: raw.item_id,
                     request_id: raw.request_id,
-                    payload: serde_json::from_str(&raw.payload_json)?,
+                    payload: decode_stored_json(&raw.payload_json)?,
                 });
             }
             Ok(out)
@@ -1816,26 +1816,33 @@ fn reconcile_stale_execution_states_sync(
     // An errored secondary thread must not fail the task: `TaskCoordinator::fail_primary_task_run`
     // and TS `reconcileFailedRuns` both ignore non-primary threads, and failing here would also
     // drop every work-item claim and block in-progress items of a recoverable task.
-    let active_tasks: Vec<(String, String)> = {
+    let active_tasks: Vec<(String, String, String)> = {
         let mut stmt = tx.prepare(
-            "SELECT t.task_id, t.workspace_path
+            "SELECT t.task_id, t.workspace_path, tt.thread_id
              FROM tasks t
-             JOIN sessions s ON s.session_id = (
-                 SELECT tt.session_id
-                 FROM task_threads tt
-                 WHERE tt.task_id = t.task_id
-                 ORDER BY tt.created_at, tt.thread_id
+             JOIN task_threads tt ON tt.thread_id = (
+                 SELECT first.thread_id
+                 FROM task_threads first
+                 WHERE first.task_id = t.task_id
+                 ORDER BY first.created_at, first.thread_id
                  LIMIT 1
              )
+             JOIN sessions s ON s.session_id = tt.session_id
              WHERE t.status IN ('working', 'planning')
                AND s.execution_state = 'errored'",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
     let mut tasks_reconciled = 0_usize;
-    for (task_id, ws_path) in active_tasks {
+    for (task_id, ws_path, primary_thread_id) in active_tasks {
         if let Some(target_ws) = workspace_filter
             && !same_workspace_path(&ws_path, target_ws)
         {
@@ -1851,6 +1858,14 @@ fn reconcile_stale_execution_states_sync(
             params![task_id, now],
         )?;
         if changed > 0 {
+            // Same terminal side effects as `set_status_in_open_tx` (cancel active artifact
+            // revisions, log `status_changed`) before the crash-specific claim/item cleanup.
+            crate::tasks::record_startup_task_failure_in_open_tx(
+                &tx,
+                &task_id,
+                Some(&primary_thread_id),
+                &now,
+            )?;
             tx.execute(
                 "DELETE FROM task_work_item_claims WHERE task_id = ?1",
                 params![task_id],

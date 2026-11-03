@@ -559,9 +559,11 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
     let user_config = load_json_object_safe(&user_config_dir.join("config.json"))?;
     // SECURITY BOUNDARY: workspace config may not redirect provider endpoints (saved API keys
     // would be sent to an attacker-chosen URL); see `strip_untrusted_provider_endpoints`.
-    let project_config = strip_untrusted_provider_endpoints(load_json_object_safe(
-        &project_cowork_dir.join("config.json"),
-    )?);
+    // A workspace `.cowork/config.json` reached through a link is ignored (see
+    // `is_workspace_cowork_path_confined`).
+    let project_config = strip_untrusted_provider_endpoints(
+        crate::patch_store::load_workspace_config_object(&project_cowork_dir, &user_cowork_dir)?,
+    );
 
     let inherited_merged = deep_merge_objects(&built_in_defaults, &user_config);
     let merged = deep_merge_objects(&inherited_merged, &project_config);
@@ -701,6 +703,13 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
         child_routing_mode,
         preferred_child_ref_raw.as_deref(),
         raw_allowed_refs.as_deref(),
+    );
+    // `loadConfig` catalog check: retired or mistyped preferred child ids fall back.
+    let child_routing = registry.validate_preferred_child_model(
+        child_routing,
+        provider,
+        &supported_model.id,
+        &cowork_paths,
     );
 
     let inherited_overflow =

@@ -590,11 +590,16 @@ pub fn normalize_child_routing_config(
         }
     }
 
-    if mode == ChildModelRoutingMode::CrossProviderAllowlist
-        && !allowed.is_empty()
-        && !allowed.contains(&preferred_ref)
-    {
-        preferred_ref = allowed[0].clone();
+    if mode == ChildModelRoutingMode::CrossProviderAllowlist {
+        // `normalizeChildRoutingConfig` (`src/models/childModelRouting.ts`): a non-empty
+        // allowlist clamps the target to its first entry; an empty one allows no cross-provider
+        // target at all, so the parent model is used (an untrusted workspace config must not
+        // route subagents to another provider by pairing `[]` with a foreign ref).
+        if allowed.is_empty() {
+            preferred_ref = fallback_ref.clone();
+        } else if !allowed.contains(&preferred_ref) {
+            preferred_ref = allowed[0].clone();
+        }
     }
 
     let preferred_child_model = parse_child_model_ref(&preferred_ref, Some(provider))
@@ -608,6 +613,69 @@ pub fn normalize_child_routing_config(
         preferred_child_model_ref: preferred_ref,
         allowed_child_model_refs: allowed,
     }
+}
+
+/// Providers whose catalogs are resolved entirely at runtime, so any configured model id
+/// passes through (`isRuntimeDiscoveryProvider` in `src/models/metadata.ts`).
+fn is_runtime_catalog_provider(provider: ProviderName) -> bool {
+    matches!(
+        provider,
+        ProviderName::Lmstudio | ProviderName::Bedrock | ProviderName::CodexCli
+    )
+}
+
+impl ModelRegistry {
+    /// Catalog check `loadConfig` (`src/config.ts`) applies after `normalizeChildRoutingConfig`:
+    /// outside runtime-discovery providers, a preferred child model that differs from the
+    /// resolved main model must be in the bundled registry, the provider's discovery cache, or
+    /// the user's custom-models store. A retired or mistyped id falls back to
+    /// `supported_model_id` (and, in same-provider mode, so does the preferred ref) so
+    /// `taskReview`, memory generation, and skill improvement never target an unknown model.
+    pub fn validate_preferred_child_model(
+        &self,
+        routing: NormalizedChildRouting,
+        provider: ProviderName,
+        supported_model_id: &str,
+        paths: &AiCoworkerPaths,
+    ) -> NormalizedChildRouting {
+        let preferred = routing.preferred_child_model.as_str();
+        if is_runtime_catalog_provider(provider)
+            || preferred == supported_model_id
+            || self.get(provider, preferred).is_some()
+            || find_discovered_model_sync(paths, provider, preferred).is_some()
+            || is_custom_model_id_sync(paths, provider, preferred)
+        {
+            return routing;
+        }
+        let same_provider = routing.child_model_routing_mode == ChildModelRoutingMode::SameProvider;
+        NormalizedChildRouting {
+            preferred_child_model: supported_model_id.to_owned(),
+            preferred_child_model_ref: if same_provider {
+                format!("{}:{supported_model_id}", provider.as_str())
+            } else {
+                routing.preferred_child_model_ref
+            },
+            ..routing
+        }
+    }
+}
+
+/// `getCustomModelMetadata(provider, id) != null`: the id is in the user's custom-models store.
+/// A missing or unreadable store reads as "not configured".
+fn is_custom_model_id_sync(
+    paths: &AiCoworkerPaths,
+    provider: ProviderName,
+    model_id: &str,
+) -> bool {
+    let trimmed = model_id.trim();
+    provider.supports_custom_model_ids()
+        && !trimmed.is_empty()
+        && read_custom_model_store_sync(paths).is_ok_and(|store| {
+            store
+                .providers
+                .get(&provider)
+                .is_some_and(|list| list.iter().any(|e| e.id == trimmed))
+        })
 }
 
 #[cfg(test)]
@@ -904,5 +972,34 @@ mod tests {
         );
         assert!(find_discovered_model_sync(&paths, ProviderName::Google, "other").is_none());
         assert!(find_discovered_model_sync(&paths, ProviderName::Openai, "gemini-alias").is_none());
+    }
+
+    #[test]
+    fn cross_provider_allowlist_with_empty_allowlist_uses_parent_model() {
+        for allowed in [None, Some(Vec::new())] {
+            let routing = normalize_child_routing_config(
+                ProviderName::Openai,
+                "gpt-5.4",
+                ChildModelRoutingMode::CrossProviderAllowlist,
+                Some("anthropic:claude-opus-4-8"),
+                allowed.as_deref(),
+            );
+            assert_eq!(routing.preferred_child_model_ref, "openai:gpt-5.4");
+            assert_eq!(routing.preferred_child_model, "gpt-5.4");
+            assert!(routing.allowed_child_model_refs.is_empty());
+        }
+        // A non-empty allowlist still admits a listed cross-provider target.
+        let routing = normalize_child_routing_config(
+            ProviderName::Openai,
+            "gpt-5.4",
+            ChildModelRoutingMode::CrossProviderAllowlist,
+            Some("anthropic:claude-opus-4-8"),
+            Some(&["anthropic:claude-opus-4-8".to_string()]),
+        );
+        assert_eq!(
+            routing.preferred_child_model_ref,
+            "anthropic:claude-opus-4-8"
+        );
+        assert_eq!(routing.preferred_child_model, "gpt-5.4");
     }
 }

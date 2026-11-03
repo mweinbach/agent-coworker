@@ -630,7 +630,12 @@ mod tests {
         let abs_cwd = std::path::absolute(cwd).unwrap();
         assert!(roots.contains(&abs_cwd), "{roots:?}");
         for scratch in scratch_roots(Some("win32")) {
-            assert!(roots.contains(&scratch), "{scratch:?} missing: {roots:?}");
+            // Roots are canonicalized on Windows hosts (8.3 short names, trailing separators).
+            let canonical = cowork_config::canonicalize_sync(&scratch);
+            assert!(
+                roots.contains(&scratch) || roots.contains(&canonical),
+                "{scratch:?} missing: {roots:?}"
+            );
         }
         // Parity with workspace-write over the same root.
         let (_, ww_roots) = windows_mode_and_writable_roots(

@@ -2367,6 +2367,17 @@ impl ServerRuntimeState {
         self.persist_live_session(&live_arc, "config_updated")
             .await
             .map_err(|e| e.to_string())?;
+        // TS `applyPreparedModelSelection` emitted the update through the notification
+        // projector, so every client subscribed to the thread (not only the requester) learns
+        // the new selection.
+        self.broadcast_to_thread(
+            thread_id,
+            None,
+            &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                method: "cowork/session/configUpdated".to_owned(),
+                params: Some(event.clone()),
+            }),
+        );
         if let Some(err) = persist_error {
             self.broadcast_to_thread(
                 thread_id,

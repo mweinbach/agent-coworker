@@ -350,3 +350,71 @@ async fn failed_workspace_write_keeps_the_session_switch_and_reports_an_error() 
     );
     server.shutdown().await;
 }
+
+/// Every client subscribed to the thread hears about a model switch, not only the requester
+/// (TS `applyPreparedModelSelection` emitted it through the notification projector).
+#[tokio::test]
+async fn model_switch_is_broadcast_to_other_subscribed_clients() {
+    let iso = Iso::new("cowork-model-broadcast-");
+    iso.write_workspace_config(json!({
+        "provider": "google",
+        "model": "gemini-3.1-pro-preview",
+        "enableMemory": false
+    }));
+    let server = start_server(iso.options()).await.unwrap();
+    let mut first = connect(server.ws_url()).await;
+    let mut second = connect(server.ws_url()).await;
+    let mut first_notifs = Vec::new();
+    let mut second_notifs = Vec::new();
+
+    let (thread_id, _, _) = start_bare_thread(&mut first, &iso, "start", &mut first_notifs).await;
+    let resumed = call(
+        &mut second,
+        "resume",
+        "thread/resume",
+        json!({ "threadId": thread_id }),
+        &mut second_notifs,
+    )
+    .await;
+    assert!(
+        resumed.get("error").is_none(),
+        "thread/resume failed: {resumed}"
+    );
+    second_notifs.clear();
+
+    set_model(
+        &mut first,
+        "set",
+        &thread_id,
+        "openai",
+        "gpt-5.4",
+        &mut first_notifs,
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let update = loop {
+        if let Some(found) = second_notifs
+            .iter()
+            .find(|n| n["method"] == "cowork/session/configUpdated")
+        {
+            break found.clone();
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = tokio::time::timeout(remaining, second.next())
+            .await
+            .expect("second client never received cowork/session/configUpdated")
+            .expect("ws open")
+            .expect("ws frame");
+        if let WsMessage::Text(txt) = frame {
+            let val: Value = serde_json::from_str(&txt).unwrap();
+            if val.get("method").is_some() {
+                second_notifs.push(val);
+            }
+        }
+    };
+    assert_eq!(update["params"]["type"], "config_updated", "{update}");
+    assert_eq!(update["params"]["sessionId"], json!(thread_id), "{update}");
+    assert_eq!(update["params"]["config"]["provider"], "openai", "{update}");
+    assert_eq!(update["params"]["config"]["model"], "gpt-5.4", "{update}");
+}

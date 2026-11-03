@@ -419,3 +419,150 @@ async fn close_session_does_not_wait_for_an_in_flight_connect() {
     cache.close_all().await;
     wait_for_deleted(&server, "sess-2").await;
 }
+
+/// A `with_tools` caller dropped mid-await (e.g. a tool call abandoned after its cancellation
+/// grace, or an aborted RPC handler) must give its generation lease back, so a later retirement
+/// still closes the MCP connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_with_tools_call_still_lets_its_generation_close() {
+    let (server, url) = start_mock(0).await;
+    let (cfg, env) = workspace_with_server("cancelled-call", &url);
+    let cache = Arc::new(WorkspaceMcpToolCache::new());
+
+    let hung = cache.with_tools(&cfg, &env, "session-1", |_tools, _errors| {
+        Box::pin(std::future::pending::<()>())
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), hung)
+            .await
+            .is_err(),
+        "the caller's future never completes"
+    );
+    assert_eq!(server.inits(), 1);
+
+    cache.invalidate_workspace(&cfg.working_directory).await;
+    wait_for_deleted(&server, "sess-1").await;
+    cache.close_all().await;
+}
+
+/// A session whose working directory changes must stop holding its previous workspace's
+/// generation open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_moving_workspaces_releases_the_previous_workspace() {
+    let (server_a, url_a) = start_mock(0).await;
+    let (server_b, url_b) = start_mock(0).await;
+    let (cfg_a, env_a) = workspace_with_server("move-a", &url_a);
+    let (cfg_b, env_b) = workspace_with_server("move-b", &url_b);
+    let cache = Arc::new(WorkspaceMcpToolCache::new());
+
+    assert_eq!(
+        call_whoami(&cache, &cfg_a, &env_a, "session-1").await,
+        "sess-1"
+    );
+    assert_eq!(
+        call_whoami(&cache, &cfg_b, &env_b, "session-1").await,
+        "sess-1"
+    );
+    wait_for_deleted(&server_a, "sess-1").await;
+
+    cache.close_session("session-1").await;
+    wait_for_deleted(&server_b, "sess-1").await;
+    cache.close_all().await;
+}
+
+/// `close_session` for a session whose call is still queued behind another session's build
+/// must stick: the queued call may not re-register the closed session, or the workspace would
+/// never retire once its remaining sessions close.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn closed_session_queued_on_a_build_is_not_re_registered() {
+    let (server, url) = start_mock(1).await;
+    let (cfg, env) = workspace_with_server("closed-queued", &url);
+    let cache = Arc::new(WorkspaceMcpToolCache::new());
+
+    let first = tokio::spawn(call_whoami(&cache, &cfg, &env, "session-1"));
+    wait_for_inits(&server, 1).await;
+    let queued = tokio::spawn(call_whoami(&cache, &cfg, &env, "session-2"));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    cache.close_session("session-2").await;
+
+    server.release_gate();
+    for handle in [first, queued] {
+        assert_eq!(
+            tokio::time::timeout(PROMPT, handle).await.unwrap().unwrap(),
+            "sess-1"
+        );
+    }
+    assert!(server.deleted_sessions.lock().is_empty());
+
+    cache.close_session("session-1").await;
+    wait_for_deleted(&server, "sess-1").await;
+    cache.close_all().await;
+}
+
+/// A cached stdio connection whose server process died is reconnected on the next call instead
+/// of being reused until every call times out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dead_stdio_connection_is_reconnected() {
+    let base = test_temp_base().join(format!("cowork-mcp-cache-dead-{}", Uuid::new_v4()));
+    fs::create_dir_all(&base).unwrap();
+    let script = base.join("exit_after_call.js");
+    // Answers one `tools/call` with its pid, then exits.
+    fs::write(
+        &script,
+        r#"
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === undefined) return;
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "dying", version: "1" } } });
+  } else if (msg.method === "tools/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "whoami", inputSchema: { type: "object", properties: {} } }] } });
+  } else if (msg.method === "tools/call") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: String(process.pid) }] } });
+    setTimeout(() => process.exit(0), 10);
+  }
+});
+"#,
+    )
+    .unwrap();
+    let (cfg, env) = workspace_with_server("dead-stdio", "http://127.0.0.1:9/unused");
+    upsert_mcp_server(
+        &cfg,
+        McpConfigSource::User,
+        McpServerConfig {
+            name: "mock".to_owned(),
+            transport: McpServerTransport::Stdio {
+                command: "node".to_owned(),
+                args: Some(vec![script.to_string_lossy().into_owned()]),
+                env: None,
+                cwd: None,
+            },
+            enabled: None,
+            required: None,
+            retries: Some(0),
+            auth: None,
+            icon: None,
+        },
+        None,
+    )
+    .unwrap();
+    let cache = Arc::new(WorkspaceMcpToolCache::new());
+
+    let first = tokio::time::timeout(PROMPT, call_whoami(&cache, &cfg, &env, "session-1"))
+        .await
+        .expect("first call");
+    // Let the server exit and the transport's reader observe EOF.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let second = tokio::time::timeout(PROMPT, call_whoami(&cache, &cfg, &env, "session-1"))
+        .await
+        .expect("a dead cached connection must be replaced, not reused until the request timeout");
+    assert_ne!(
+        first, second,
+        "second call must be served by a new server process"
+    );
+    cache.close_all().await;
+    let _ = fs::remove_dir_all(&base);
+}

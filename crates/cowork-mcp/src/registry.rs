@@ -12,7 +12,7 @@ use url::Url;
 use crate::credentials::{
     McpCredentialsFile, StoredApiKeyCredential, auth_scope_for_source, compute_auth_state,
     credential_key_for_server, credentials_path_for_scope, mask_secret,
-    mutate_credentials_for_scope, now_epoch_ms, read_credentials_file,
+    mutate_credentials_for_scope, now_epoch_ms, read_credentials_for_scope,
 };
 use crate::plugin_overrides::{
     DiscoveredPluginRoot, PluginEnableOverride, PluginScope, discover_installed_plugin_roots,
@@ -30,6 +30,7 @@ struct RawLayerServer {
     source: McpConfigSource,
     plugin_id: Option<String>,
     plugin_name: Option<String>,
+    plugin_display_name: Option<String>,
     plugin_scope: Option<String>,
 }
 
@@ -158,11 +159,41 @@ fn api_key_auth_header(
 }
 
 fn parse_standard_layer_file(
+    config: &AgentConfig,
     source: McpConfigSource,
     path: &Path,
 ) -> (Vec<McpServerConfig>, McpConfigFileSummary, Vec<String>) {
     let editable = matches!(source, McpConfigSource::Workspace | McpConfigSource::User);
     let mut warnings = Vec::new();
+    // A repository-controlled `.cowork/mcp-servers.json` must not be read through a link (it
+    // could point at the user's global MCP config or credentials).
+    if source == McpConfigSource::Workspace
+        && let Err(e) = crate::ensure_unlinked_workspace_path(&config.project_cowork_dir, path)
+    {
+        let msg = format!("Failed to read {}: {e}", path.display());
+        warnings.push(format!(
+            "[MCP] Ignoring unreadable {} config at {}: {e}",
+            source.as_str(),
+            path.display()
+        ));
+        return (
+            Vec::new(),
+            McpConfigFileSummary {
+                source,
+                path: path.to_string_lossy().into_owned(),
+                exists: true,
+                editable,
+                legacy: false,
+                parse_error: Some(msg),
+                server_count: 0,
+                plugin_id: None,
+                plugin_name: None,
+                plugin_display_name: None,
+                plugin_scope: None,
+            },
+            warnings,
+        );
+    }
     if !path.exists() {
         return (
             Vec::new(),
@@ -331,7 +362,7 @@ fn parse_plugin_mcp_file(
                 server_count: 0,
                 plugin_id: Some(plugin.id.clone()),
                 plugin_name: Some(plugin.name.clone()),
-                plugin_display_name: None,
+                plugin_display_name: Some(plugin.display_name.clone()),
                 plugin_scope: Some(plugin.scope.as_str().to_owned()),
             },
             warnings,
@@ -355,7 +386,7 @@ fn parse_plugin_mcp_file(
                     server_count: 0,
                     plugin_id: Some(plugin.id.clone()),
                     plugin_name: Some(plugin.name.clone()),
-                    plugin_display_name: None,
+                    plugin_display_name: Some(plugin.display_name.clone()),
                     plugin_scope: Some(plugin.scope.as_str().to_owned()),
                 },
                 warnings,
@@ -380,7 +411,7 @@ fn parse_plugin_mcp_file(
                     server_count: 0,
                     plugin_id: Some(plugin.id.clone()),
                     plugin_name: Some(plugin.name.clone()),
-                    plugin_display_name: None,
+                    plugin_display_name: Some(plugin.display_name.clone()),
                     plugin_scope: Some(plugin.scope.as_str().to_owned()),
                 },
                 warnings,
@@ -413,7 +444,7 @@ fn parse_plugin_mcp_file(
         for entry in arr {
             match serde_json::from_value::<McpServerConfig>(entry.clone())
                 .map_err(|e| e.to_string())
-                .and_then(|mut cfg| normalize_server_auth(&mut cfg).map(|()| cfg))
+                .and_then(|mut cfg| normalize_and_validate_server_config(&mut cfg).map(|()| cfg))
                 .and_then(|cfg| rebase_plugin_stdio_paths(cfg, &root_canon))
             {
                 Ok(cfg) => parsed_servers.push(cfg),
@@ -433,13 +464,18 @@ fn parse_plugin_mcp_file(
             .get(&ov_key)
             .map(|o| o.enabled)
             .unwrap_or_else(|| srv.enabled.unwrap_or(true));
-        let effective_enabled = plugin.enabled && server_override_enabled;
-        srv.enabled = Some(effective_enabled);
+        // Disabled plugins never reach here (see `collect_all_layers`).
+        srv.enabled = Some(server_override_enabled);
+        // TS `server.icon ?? pluginIcon`.
+        if srv.icon.is_none() {
+            srv.icon = plugin.icon.clone();
+        }
         layer_entries.push(RawLayerServer {
             config: srv,
             source: McpConfigSource::Plugin,
             plugin_id: Some(plugin.id.clone()),
             plugin_name: Some(plugin.name.clone()),
+            plugin_display_name: Some(plugin.display_name.clone()),
             plugin_scope: Some(plugin.scope.as_str().to_owned()),
         });
     }
@@ -454,7 +490,7 @@ fn parse_plugin_mcp_file(
         server_count: layer_entries.len(),
         plugin_id: Some(plugin.id.clone()),
         plugin_name: Some(plugin.name.clone()),
-        plugin_display_name: None,
+        plugin_display_name: Some(plugin.display_name.clone()),
         plugin_scope: Some(plugin.scope.as_str().to_owned()),
     };
 
@@ -674,7 +710,7 @@ fn collect_all_layers(
         let Some(path) = layer_file_path(config, source) else {
             continue;
         };
-        let (servers, summary, layer_warnings) = parse_standard_layer_file(source, &path);
+        let (servers, summary, layer_warnings) = parse_standard_layer_file(config, source, &path);
         files.push(summary);
         warnings.extend(layer_warnings);
 
@@ -684,6 +720,7 @@ fn collect_all_layers(
                 source,
                 plugin_id: None,
                 plugin_name: None,
+                plugin_display_name: None,
                 plugin_scope: None,
             };
             if let Some(prev) = merged.insert(entry.config.name.clone(), entry) {
@@ -698,6 +735,11 @@ fn collect_all_layers(
     warnings.extend(plugin_warnings);
 
     for plugin in plugins {
+        // TS `readPluginLayers`: a disabled plugin contributes no MCP layer at all, so it can
+        // neither shadow another plugin's server of the same name nor show up in Settings.
+        if !plugin.enabled {
+            continue;
+        }
         let Some((plugin_servers, summary, p_warns)) = parse_plugin_mcp_file(config, &plugin)
         else {
             continue;
@@ -735,9 +777,8 @@ pub fn read_mcp_servers_snapshot(config: &AgentConfig) -> Result<McpServersSnaps
         McpConfigSource::Plugin => 3u8,
     });
 
-    let ws_creds =
-        read_credentials_file(&credentials_path_for_scope(config, McpAuthScope::Workspace));
-    let user_creds = read_credentials_file(&credentials_path_for_scope(config, McpAuthScope::User));
+    let ws_creds = read_credentials_for_scope(config, McpAuthScope::Workspace);
+    let user_creds = read_credentials_for_scope(config, McpAuthScope::User);
 
     let mut entries = Vec::with_capacity(merged.len());
 
@@ -763,7 +804,7 @@ pub fn read_mcp_servers_snapshot(config: &AgentConfig) -> Result<McpServersSnaps
             auth_message: auth_state.message.clone(),
             plugin_id: winner.plugin_id,
             plugin_name: winner.plugin_name,
-            plugin_display_name: None,
+            plugin_display_name: winner.plugin_display_name,
             plugin_scope: winner.plugin_scope,
             auth_state,
         });
@@ -814,14 +855,11 @@ where
         auth_scope_for_source(c.source, c.plugin_scope.as_deref()) == McpAuthScope::Workspace
     });
     let ws_creds = if needs_ws_creds {
-        Some(read_credentials_file(&credentials_path_for_scope(
-            config,
-            McpAuthScope::Workspace,
-        )))
+        Some(read_credentials_for_scope(config, McpAuthScope::Workspace))
     } else {
         None
     };
-    let user_creds = read_credentials_file(&credentials_path_for_scope(config, McpAuthScope::User));
+    let user_creds = read_credentials_for_scope(config, McpAuthScope::User);
 
     let mut hydrated = Vec::with_capacity(candidates.len());
     for cand in candidates {
@@ -867,7 +905,7 @@ pub fn resolve_target_mcp_server(
     };
 
     let scope = auth_scope_for_source(raw.source, raw.plugin_scope.as_deref());
-    let creds = read_credentials_file(&credentials_path_for_scope(config, scope));
+    let creds = read_credentials_for_scope(config, scope);
     Ok(hydrate_server_with_credentials(config, raw, scope, &creds))
 }
 
@@ -957,10 +995,20 @@ where
     }
     let path = layer_file_path(config, source).ok_or_else(|| "Invalid MCP layer".to_owned())?;
     let lock_root = file_lock_root_for_cowork_home(&config.user_cowork_dir);
+    // Never read or rewrite a workspace layer through a link under `.cowork` (a workspace
+    // disable/delete must not modify the user's global files).
+    let guard = || -> Result<(), std::io::Error> {
+        if source == McpConfigSource::Workspace {
+            crate::ensure_unlinked_workspace_path(&config.project_cowork_dir, &path)?;
+        }
+        Ok(())
+    };
+    guard().map_err(|e| e.to_string())?;
 
     with_file_lock_sync::<(), anyhow::Error, _>(
         &path,
         || {
+            guard()?;
             let mut servers: Vec<McpServerConfig> = if path.exists() {
                 let raw = crate::read_config_file(&path)?;
                 let val: Value = serde_json::from_str(&raw)?;

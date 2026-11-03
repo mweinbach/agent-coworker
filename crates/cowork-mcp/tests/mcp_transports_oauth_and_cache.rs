@@ -17,7 +17,7 @@ use cowork_mcp::{
     McpAuthMode, McpConfigSource, McpServerAuthConfig, McpServerConfig, McpServerTransport,
     WorkspaceMcpToolCache, build_mcp_tool_name, complete_mcp_oauth_callback, load_mcp_servers,
     load_mcp_tools, normalize_mcp_json_schema, read_mcp_servers_snapshot, set_mcp_server_api_key,
-    set_mcp_server_enabled, start_mcp_oauth_authorization, upsert_mcp_server, validate_mcp_server,
+    set_mcp_server_enabled, upsert_mcp_server, validate_mcp_server,
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -1064,12 +1064,18 @@ async fn completes_rfc9728_rfc8414_oauth_pkce_flow_and_auto_refreshes_on_401() {
     .unwrap();
 
     // Start OAuth authorization (`auto` dual-stack loopback listener)
-    let challenge = start_mcp_oauth_authorization(
+    // Never launch a real browser from tests.
+    let no_browser = cowork_mcp::SystemUrlOpener::new(HashMap::from([(
+        "COWORK_DISABLE_BROWSER_OPEN".to_owned(),
+        "1".to_owned(),
+    )]));
+    let challenge = cowork_mcp::start_mcp_oauth_authorization_with_opener(
         &cfg,
         "oauth-srv",
         Some(McpConfigSource::Workspace),
         None,
         None,
+        &no_browser,
     )
     .await
     .unwrap();

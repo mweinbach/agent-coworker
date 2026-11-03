@@ -322,6 +322,66 @@ pub fn read_credentials_file(path: &Path) -> McpCredentialsFile {
     })
 }
 
+/// The workspace `.cowork` directory that contains a workspace-scoped credential store at
+/// `credentials_path` (`<workspace>/.cowork/auth/mcp-credentials.json`).
+fn workspace_cowork_dir_of(credentials_path: &Path) -> Option<&Path> {
+    credentials_path.parent()?.parent()
+}
+
+/// Rejects a workspace credential-store path that traverses a symlink under `.cowork`.
+fn guard_scoped_credentials_path(
+    scope: McpAuthScope,
+    credentials_path: &Path,
+) -> Result<(), String> {
+    if scope != McpAuthScope::Workspace {
+        return Ok(());
+    }
+    let cowork_dir = workspace_cowork_dir_of(credentials_path).ok_or_else(|| {
+        format!(
+            "Invalid MCP credential store path {}",
+            credentials_path.display()
+        )
+    })?;
+    crate::ensure_unlinked_workspace_path(cowork_dir, credentials_path).map_err(|error| {
+        format!(
+            "Failed to read MCP credential store at {}: {error}",
+            credentials_path.display()
+        )
+    })
+}
+
+/// [`try_read_credentials_file`] for `scope`'s store, refusing a workspace store reached through
+/// a symbolic link under `.cowork` (it could expose the user's global credentials).
+pub fn try_read_credentials_for_scope(
+    config: &AgentConfig,
+    scope: McpAuthScope,
+) -> Result<McpCredentialsFile, String> {
+    let path = credentials_path_for_scope(config, scope);
+    try_read_scoped_credentials_file(scope, &path)
+}
+
+/// Scope-aware read of a store at a known path (the path a runtime OAuth context carries).
+pub(crate) fn try_read_scoped_credentials_file(
+    scope: McpAuthScope,
+    path: &Path,
+) -> Result<McpCredentialsFile, String> {
+    guard_scoped_credentials_path(scope, path)?;
+    try_read_credentials_file(path)
+}
+
+/// Lenient [`try_read_credentials_for_scope`]: an unreadable or linked store reads as empty.
+pub fn read_credentials_for_scope(config: &AgentConfig, scope: McpAuthScope) -> McpCredentialsFile {
+    let path = credentials_path_for_scope(config, scope);
+    read_scoped_credentials_file(scope, &path)
+}
+
+pub(crate) fn read_scoped_credentials_file(scope: McpAuthScope, path: &Path) -> McpCredentialsFile {
+    try_read_scoped_credentials_file(scope, path).unwrap_or_else(|error| {
+        tracing::warn!(path = %path.display(), %error, "ignoring unreadable MCP credential store");
+        McpCredentialsFile::default()
+    })
+}
+
 pub fn mutate_credentials_file<F, R>(
     lock_root: &Path,
     credentials_path: &Path,
@@ -330,12 +390,30 @@ pub fn mutate_credentials_file<F, R>(
 where
     F: FnOnce(&mut McpCredentialsFile) -> R,
 {
+    mutate_scoped_credentials_file(McpAuthScope::User, lock_root, credentials_path, f)
+}
+
+/// [`mutate_credentials_file`] that, for a workspace store, refuses to create, read or write
+/// through a symbolic link under the workspace `.cowork` directory (checked before creating the
+/// `auth/` directory and again under the lock).
+pub(crate) fn mutate_scoped_credentials_file<F, R>(
+    scope: McpAuthScope,
+    lock_root: &Path,
+    credentials_path: &Path,
+    f: F,
+) -> Result<R, String>
+where
+    F: FnOnce(&mut McpCredentialsFile) -> R,
+{
+    guard_scoped_credentials_path(scope, credentials_path)?;
     if let Some(parent) = credentials_path.parent() {
         ensure_private_dir_sync(parent).map_err(|e| e.to_string())?;
     }
     with_file_lock_sync::<R, anyhow::Error, _>(
         credentials_path,
         || {
+            guard_scoped_credentials_path(scope, credentials_path)
+                .map_err(|e| anyhow::anyhow!(e))?;
             // Refuse to mutate a store we cannot decode: writing back a
             // default store here would permanently drop the user's credentials.
             let mut store = try_read_credentials_file(credentials_path).map_err(|error| {
@@ -371,7 +449,7 @@ where
 {
     let lock_root = file_lock_root_for_cowork_home(&config.user_cowork_dir);
     let cred_path = credentials_path_for_scope(config, scope);
-    mutate_credentials_file(&lock_root, &cred_path, f)
+    mutate_scoped_credentials_file(scope, &lock_root, &cred_path, f)
 }
 
 pub fn compute_auth_state(

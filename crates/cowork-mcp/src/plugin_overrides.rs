@@ -280,13 +280,33 @@ pub fn try_read_plugin_overrides_file(path: &Path) -> Result<PluginOverridesFile
     Ok(normalize_plugin_overrides_document(&value))
 }
 
+/// A workspace `.cowork/plugins.json` reached through a symbolic link under `.cowork` is
+/// refused: it could read or rewrite the user's global plugin overrides.
+fn guard_plugin_overrides_path(
+    config: &AgentConfig,
+    scope: PluginScope,
+    path: &Path,
+) -> Result<(), String> {
+    if scope != PluginScope::Workspace {
+        return Ok(());
+    }
+    crate::ensure_unlinked_workspace_path(&config.project_cowork_dir, path).map_err(|error| {
+        format!(
+            "Failed to read plugin overrides at {}: {error}",
+            path.display()
+        )
+    })
+}
+
 /// Lenient read (TS `readDocument`): an unreadable file is treated as empty for lookups only.
 pub fn read_plugin_overrides(config: &AgentConfig, scope: PluginScope) -> PluginOverridesFile {
     let path = plugin_overrides_path(config, scope);
-    try_read_plugin_overrides_file(&path).unwrap_or_else(|error| {
-        tracing::warn!(path = %path.display(), %error, "ignoring unreadable plugin overrides");
-        PluginOverridesFile::default()
-    })
+    guard_plugin_overrides_path(config, scope, &path)
+        .and_then(|()| try_read_plugin_overrides_file(&path))
+        .unwrap_or_else(|error| {
+            tracing::warn!(path = %path.display(), %error, "ignoring unreadable plugin overrides");
+            PluginOverridesFile::default()
+        })
 }
 
 /// TS `mutateScopeDocument`. Refuses (rather than clobbering) a file that exists but cannot be
@@ -301,9 +321,11 @@ where
 {
     let path = plugin_overrides_path(config, scope);
     let lock_root = file_lock_root_for_cowork_home(&config.user_cowork_dir);
+    guard_plugin_overrides_path(config, scope, &path)?;
     with_file_lock_sync::<R, anyhow::Error, _>(
         &path,
         || {
+            guard_plugin_overrides_path(config, scope, &path).map_err(|e| anyhow::anyhow!(e))?;
             let mut current =
                 try_read_plugin_overrides_file(&path).map_err(|e| anyhow::anyhow!(e))?;
             let result = f(&mut current);
@@ -334,6 +356,11 @@ where
 pub struct DiscoveredPluginRoot {
     pub id: String,
     pub name: String,
+    /// TS catalog `displayName`: manifest `interface.displayName`, else `name`.
+    pub display_name: String,
+    /// TS `plugin.interface?.composerIcon ?? plugin.interface?.logo` (raw manifest value), the
+    /// icon a plugin MCP server inherits when it sets none of its own.
+    pub icon: Option<String>,
     pub version: Option<String>,
     pub description: String,
     pub scope: PluginScope,
@@ -610,6 +637,18 @@ fn load_plugin_from_dir(
         .map(|o| o.enabled)
         .unwrap_or(default_enabled);
 
+    let interface = obj.get("interface").and_then(Value::as_object);
+    let interface_str = |key: &str| {
+        interface
+            .and_then(|i| i.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let display_name = interface_str("displayName").unwrap_or_else(|| name.clone());
+    let icon = interface_str("composerIcon").or_else(|| interface_str("logo"));
+
     let (effective_discovery_kind, effective_marketplace_name) =
         match read_install_marketplace_name(plugin_root) {
             Some(mp_from_install) => ("marketplace", marketplace_name.or(mp_from_install)),
@@ -619,6 +658,8 @@ fn load_plugin_from_dir(
     Some(DiscoveredPluginRoot {
         id,
         name,
+        display_name,
+        icon,
         version,
         description,
         scope,

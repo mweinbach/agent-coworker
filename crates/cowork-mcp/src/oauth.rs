@@ -20,7 +20,7 @@ use url::Url;
 
 use crate::credentials::{
     StoredOAuthClientInfo, StoredOAuthTokens, StoredPendingOAuthFlow, credential_key_for_server,
-    mutate_credentials_file, mutate_credentials_for_scope, now_epoch_ms, read_credentials_file,
+    mutate_credentials_for_scope, now_epoch_ms,
 };
 use crate::registry::resolve_target_mcp_server;
 use crate::types::{
@@ -29,6 +29,122 @@ use crate::types::{
 };
 
 const PENDING_OAUTH_TTL_MS: u64 = 10 * 60 * 1_000;
+const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Opens an MCP OAuth authorization URL in the user's browser (TS `UrlOpener`). Returns whether
+/// the browser was launched.
+#[async_trait::async_trait]
+pub trait McpOAuthUrlOpener: Send + Sync {
+    async fn open_url(&self, url: &str) -> bool;
+}
+
+/// The platform browser launcher (TS `openExternalUrl`: `open` on macOS,
+/// `rundll32 url.dll,FileProtocolHandler` on Windows, `xdg-open` elsewhere).
+///
+/// Honors the same switches as provider OAuth: `COWORK_DISABLE_BROWSER_OPEN=1|true` suppresses
+/// the launch (reported as not opened), and `COWORK_BROWSER_OPENER_COMMAND` replaces the
+/// platform command.
+#[derive(Debug, Clone, Default)]
+pub struct SystemUrlOpener {
+    env: HashMap<String, String>,
+}
+
+impl SystemUrlOpener {
+    /// Uses `env` (the server's runtime environment) for the switches and the launched command.
+    pub fn new(env: HashMap<String, String>) -> Self {
+        Self { env }
+    }
+
+    /// Reads the switches from the current process environment.
+    pub fn from_process_env() -> Self {
+        Self::new(std::env::vars().collect())
+    }
+
+    fn command(&self, url: &str) -> Option<tokio::process::Command> {
+        if self
+            .env
+            .get("COWORK_DISABLE_BROWSER_OPEN")
+            .map(|v| v.trim())
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
+            return None;
+        }
+        let mut cmd = if let Some(custom) = self
+            .env
+            .get("COWORK_BROWSER_OPENER_COMMAND")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
+            let mut c = tokio::process::Command::new(custom);
+            c.arg(url);
+            c
+        } else if cfg!(target_os = "macos") {
+            let mut c = tokio::process::Command::new("open");
+            c.arg(url);
+            c
+        } else if cfg!(target_os = "windows") {
+            let mut c = tokio::process::Command::new("rundll32.exe");
+            c.arg("url.dll,FileProtocolHandler").arg(url);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("xdg-open");
+            c.arg(url);
+            c
+        };
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .envs(&self.env)
+            .kill_on_drop(true);
+        Some(cmd)
+    }
+}
+
+#[async_trait::async_trait]
+impl McpOAuthUrlOpener for SystemUrlOpener {
+    async fn open_url(&self, url: &str) -> bool {
+        let Some(mut cmd) = self.command(url) else {
+            return false;
+        };
+        match tokio::time::timeout(BROWSER_OPEN_TIMEOUT, cmd.status()).await {
+            Ok(Ok(status)) => status.success(),
+            Ok(Err(err)) => {
+                tracing::debug!(%err, "failed to launch browser for MCP OAuth");
+                false
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Whether `host` names the local machine (`localhost`, `127.0.0.0/8`, `::1`).
+fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    }
+}
+
+/// Validates an OAuth endpoint taken from (untrusted) server metadata or a stored pending flow:
+/// it must be `https://`, or `http://` on a loopback host (OAuth 2.1 §1.5 / RFC 8252 §8.3).
+/// Anything else (`file:`, `javascript:`, plain `http://` to a remote host, …) is rejected so the
+/// browser is never pointed at, and codes/verifiers/refresh tokens are never sent to, a
+/// non-TLS or non-web endpoint.
+fn require_secure_oauth_endpoint(kind: &str, raw: &str) -> Result<Url, String> {
+    let url = Url::parse(raw.trim()).map_err(|e| format!("Invalid OAuth {kind}: {e}"))?;
+    let secure = match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => url.host().as_ref().is_some_and(is_loopback_host),
+        _ => false,
+    };
+    if !secure {
+        return Err(format!(
+            "OAuth {kind} must use https:// (or http:// on a loopback host): {raw}"
+        ));
+    }
+    Ok(url)
+}
 
 struct ActiveCallbackListener {
     state: String,
@@ -494,7 +610,9 @@ async fn spawn_loopback_callback_server(
     Ok((port, captured_code, notify, shutdown_tx))
 }
 
-/// Starts an RFC 9728 / RFC 8414 / RFC 7591 OAuth 2.1 PKCE S256 authorization flow.
+/// Starts an RFC 9728 / RFC 8414 / RFC 7591 OAuth 2.1 PKCE S256 authorization flow, opening the
+/// authorization URL with [`SystemUrlOpener::from_process_env`] when the server uses the `auto`
+/// (loopback) mode.
 pub async fn start_mcp_oauth_authorization(
     config: &AgentConfig,
     name: &str,
@@ -502,7 +620,39 @@ pub async fn start_mcp_oauth_authorization(
     plugin_id: Option<&str>,
     plugin_scope: Option<&str>,
 ) -> Result<McpOAuthChallengeResult, String> {
+    start_mcp_oauth_authorization_with_opener(
+        config,
+        name,
+        source,
+        plugin_id,
+        plugin_scope,
+        &SystemUrlOpener::from_process_env(),
+    )
+    .await
+}
+
+/// [`start_mcp_oauth_authorization`] with an explicit browser launcher. Like TS
+/// `authorizeMCPServerOAuth`, the `auto` mode opens the authorization URL server-side (Desktop
+/// neither opens nor renders it), so the loopback listener actually receives the redirect; the
+/// `code` mode only returns the URL.
+pub async fn start_mcp_oauth_authorization_with_opener(
+    config: &AgentConfig,
+    name: &str,
+    source: Option<McpConfigSource>,
+    plugin_id: Option<&str>,
+    plugin_scope: Option<&str>,
+    opener: &dyn McpOAuthUrlOpener,
+) -> Result<McpOAuthChallengeResult, String> {
     let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
+    // Same gate as validation and turn setup: a workspace-owned server (including a
+    // workspace-scoped plugin) is untrusted until the user opts in, so its repository-chosen
+    // endpoints must not drive discovery, client registration or a browser launch.
+    if resolved.auth_scope == crate::types::McpAuthScope::Workspace && !config.trust_workspace_mcp {
+        return Err(
+            "Workspace MCP servers are untrusted (set trustWorkspaceMcp: true to enable)."
+                .to_owned(),
+        );
+    }
     let Some(remote_url) = resolved.config.transport.remote_url().map(str::to_owned) else {
         return Err(format!(
             "MCP server \"{}\" does not use an HTTP/SSE transport.",
@@ -530,6 +680,9 @@ pub async fn start_mcp_oauth_authorization(
 
     let endpoints =
         discover_oauth_endpoints(&http_client, &remote_url, configured_resource.as_deref()).await?;
+    let mut auth_url =
+        require_secure_oauth_endpoint("authorization_endpoint", &endpoints.authorization_endpoint)?;
+    require_secure_oauth_endpoint("token_endpoint", &endpoints.token_endpoint)?;
 
     let verifier = random_base64url(48); // 64 base64url chars (RFC 7636 43..=128)
     let challenge = pkce_s256_challenge(&verifier);
@@ -546,12 +699,8 @@ pub async fn start_mcp_oauth_authorization(
         let _ = tx.send(());
     }
 
-    let (redirect_uri, instructions) = if oauth_mode == "code" {
-        (
-            "urn:ietf:wg:oauth:2.0:oob".to_owned(),
-            "Open the authorization URL, approve access, and paste the returned authorization code."
-                .to_owned(),
-        )
+    let redirect_uri = if oauth_mode == "code" {
+        "urn:ietf:wg:oauth:2.0:oob".to_owned()
     } else {
         let (port, captured, notify, shutdown_tx) =
             spawn_loopback_callback_server(state.clone()).await?;
@@ -565,14 +714,12 @@ pub async fn start_mcp_oauth_authorization(
                 expires_at,
             },
         );
-        (
-            format!("http://127.0.0.1:{port}/oauth/callback"),
-            "Open the authorization URL in your browser to finish signing in.".to_owned(),
-        )
+        format!("http://127.0.0.1:{port}/oauth/callback")
     };
 
     let cred_key = credential_key_for_server(&resolved.config.name);
-    let existing_creds = read_credentials_file(&cred_path);
+    let existing_creds =
+        crate::credentials::read_scoped_credentials_file(resolved.auth_scope, &cred_path);
     let existing_client = existing_creds
         .servers
         .get(&cred_key)
@@ -587,6 +734,7 @@ pub async fn start_mcp_oauth_authorization(
     let client_info = if let Some(reused) = existing_client {
         reused
     } else if let Some(reg_ep) = endpoints.registration_endpoint.as_ref() {
+        let reg_ep = require_secure_oauth_endpoint("registration_endpoint", reg_ep)?;
         let reg_resp = http_client
             .post(reg_ep)
             .json(&json!({
@@ -632,8 +780,6 @@ pub async fn start_mcp_oauth_authorization(
         }
     };
 
-    let mut auth_url = Url::parse(&endpoints.authorization_endpoint)
-        .map_err(|e| format!("Invalid authorization_endpoint: {e}"))?;
     {
         let mut qp = auth_url.query_pairs_mut();
         qp.append_pair("response_type", "code");
@@ -682,6 +828,16 @@ pub async fn start_mcp_oauth_authorization(
         "code".to_owned()
     } else {
         "auto".to_owned()
+    };
+    // TS `authorizeMCPServerOAuth`: launch the browser for `auto`, after the pending flow is
+    // stored so the loopback redirect can be completed, and word the instructions accordingly.
+    let instructions = if oauth_mode == "code" {
+        "Open the OAuth URL in a browser and paste the OAuth code.".to_owned()
+    } else if opener.open_url(&url_str).await {
+        "Complete sign-in in your browser. If redirect fails, paste the OAuth code manually."
+            .to_owned()
+    } else {
+        "Open the OAuth URL in a browser, then paste the OAuth code manually.".to_owned()
     };
 
     Ok(McpOAuthChallengeResult {
@@ -752,7 +908,7 @@ pub async fn wait_and_complete_auto_mcp_oauth(
     };
 
     let cred_key = credential_key_for_server(&resolved.config.name);
-    let store = read_credentials_file(&cred_path);
+    let store = crate::credentials::read_scoped_credentials_file(resolved.auth_scope, &cred_path);
     let current_state = store
         .servers
         .get(&cred_key)
@@ -812,7 +968,7 @@ async fn complete_mcp_oauth_callback_locked(
     map_key: &str,
     provided_code: Option<&str>,
 ) -> Result<McpAuthMutationResult, String> {
-    let store = read_credentials_file(cred_path);
+    let store = crate::credentials::read_scoped_credentials_file(resolved.auth_scope, cred_path);
     let oauth_entry = store
         .servers
         .get(cred_key)
@@ -853,19 +1009,7 @@ async fn complete_mcp_oauth_callback_locked(
     // Resolve code from explicit argument (supports raw code or full callback URL) or loopback listener
     let auth_code = if let Some(raw_input) = provided_code.map(str::trim).filter(|s| !s.is_empty())
     {
-        if let Ok(cb_url) = Url::parse(raw_input) {
-            let qp: HashMap<String, String> = cb_url.query_pairs().into_owned().collect();
-            if let Some(st) = qp.get("state")
-                && st != &pending.state
-            {
-                return Err("OAuth callback state mismatch.".to_owned());
-            }
-            qp.get("code")
-                .cloned()
-                .ok_or_else(|| "Callback URL did not contain a code query parameter.".to_owned())?
-        } else {
-            raw_input.to_owned()
-        }
+        manual_authorization_code(raw_input, &pending.state)?
     } else {
         // Poll briefly (up to 2s at 50ms intervals) if browser redirect just arrived
         let mut captured = None;
@@ -895,6 +1039,10 @@ async fn complete_mcp_oauth_callback_locked(
         let _ = tx.send(());
     }
 
+    // The pending flow is read back from disk (a workspace-scoped store is repository-controlled),
+    // so re-check its token endpoint before sending the code and verifier to it.
+    let token_endpoint = require_secure_oauth_endpoint("token_endpoint", &pending.token_endpoint)?;
+
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -912,7 +1060,7 @@ async fn complete_mcp_oauth_callback_locked(
 
     let tok_resp = send_token_request(
         &http_client,
-        &pending.token_endpoint,
+        token_endpoint.as_str(),
         form,
         &client_info,
         pending
@@ -976,10 +1124,33 @@ async fn complete_mcp_oauth_callback_locked(
     })
 }
 
+/// Extracts the authorization code from a manually pasted callback value.
+///
+/// Only an `http://`/`https://` value is a callback URL; anything else (including a raw code
+/// such as `ac:1234` that merely looks like `<scheme>:`) is the code itself. A callback URL must
+/// carry the pending flow's `state` (CSRF protection): a missing or different `state` is
+/// rejected rather than skipped.
+fn manual_authorization_code(raw_input: &str, expected_state: &str) -> Result<String, String> {
+    let lower = raw_input.get(..8).unwrap_or(raw_input).to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Ok(raw_input.to_owned());
+    }
+    let cb_url = Url::parse(raw_input).map_err(|e| format!("Invalid OAuth callback URL: {e}"))?;
+    let qp: HashMap<String, String> = cb_url.query_pairs().into_owned().collect();
+    if qp.get("state").map(String::as_str) != Some(expected_state) {
+        return Err("OAuth callback state mismatch.".to_owned());
+    }
+    qp.get("code")
+        .filter(|c| !c.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| "Callback URL did not contain a code query parameter.".to_owned())
+}
+
 /// Refreshes an OAuth access token on runtime `401`/`403` and persists rotated tokens (`0600`),
 /// preserving the existing `refresh_token` if the authorization server omits a new one.
 pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<String, String> {
-    let store = read_credentials_file(&ctx.credentials_path);
+    let store =
+        crate::credentials::read_scoped_credentials_file(ctx.auth_scope, &ctx.credentials_path);
     let oauth_entry = store
         .servers
         .get(&ctx.server_name)
@@ -1022,9 +1193,11 @@ pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<
     // protected-resource discovery, then the server URL), so the refreshed token keeps its audience.
     form.push(("resource".to_owned(), endpoints.resource.clone()));
 
+    let token_endpoint =
+        require_secure_oauth_endpoint("token_endpoint", &endpoints.token_endpoint)?;
     let resp = send_token_request(
         &http_client,
-        &endpoints.token_endpoint,
+        token_endpoint.as_str(),
         form,
         &client_info,
         &endpoints.token_endpoint_auth_methods_supported,
@@ -1056,26 +1229,31 @@ pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<
 
     let server_key = ctx.server_name.clone();
     let new_access_clone = new_access_token.clone();
-    mutate_credentials_file(&ctx.lock_root, &ctx.credentials_path, move |file| {
-        let entry = file.servers.entry(server_key).or_default();
-        let oauth = entry.oauth.get_or_insert_with(Default::default);
-        oauth.tokens = Some(StoredOAuthTokens {
-            access_token: new_access_clone,
-            token_type: tok_json
-                .get("token_type")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or(prev_tokens.token_type),
-            refresh_token: next_refresh_token,
-            expires_at,
-            scope: tok_json
-                .get("scope")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or(prev_tokens.scope),
-        });
-        oauth.updated_at = now_epoch_ms();
-    })?;
+    crate::credentials::mutate_scoped_credentials_file(
+        ctx.auth_scope,
+        &ctx.lock_root,
+        &ctx.credentials_path,
+        move |file| {
+            let entry = file.servers.entry(server_key).or_default();
+            let oauth = entry.oauth.get_or_insert_with(Default::default);
+            oauth.tokens = Some(StoredOAuthTokens {
+                access_token: new_access_clone,
+                token_type: tok_json
+                    .get("token_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or(prev_tokens.token_type),
+                refresh_token: next_refresh_token,
+                expires_at,
+                scope: tok_json
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or(prev_tokens.scope),
+            });
+            oauth.updated_at = now_epoch_ms();
+        },
+    )?;
 
     Ok(new_access_token)
 }

@@ -85,13 +85,86 @@ impl CacheGeneration {
         }
     }
 
-    fn begin_call(&self) {
+    /// Counts one more in-flight call and hands back the lease that uncounts it.
+    fn begin_call(self: &Arc<Self>) -> GenerationLease {
         self.lifecycle.lock().active_calls += 1;
+        GenerationLease(Some(Arc::clone(self)))
     }
 
-    async fn release_all_connections(&self) {
-        for conn in self.connections.values() {
-            conn.release_ref().await;
+    /// Whether every connection's transport is still usable; a reader/stream task that exited
+    /// (child died, SSE stream dropped) makes the generation unfit for reuse.
+    fn all_connections_healthy(&self) -> bool {
+        self.connections.values().all(|c| c.invoker.is_healthy())
+    }
+
+    /// Gives back this generation's connection refs, closing every connection that drops to
+    /// zero. The release runs as a detached task (awaited here when possible) so a caller
+    /// cancelled mid-close cannot leave a transport half-closed and still referenced.
+    async fn release_all_connections(self: &Arc<Self>) {
+        let generation = Arc::clone(self);
+        let release = async move {
+            for conn in generation.connections.values() {
+                conn.release_ref().await;
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let _ = handle.spawn(release).await;
+            }
+            Err(_) => release.await,
+        }
+    }
+
+    /// [`Self::release_all_connections`] for synchronous contexts (`Drop`): drops the refs now
+    /// and closes connections that reach zero on the runtime, if one is available.
+    fn release_all_connections_detached(self: Arc<Self>) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move { self.release_all_connections().await });
+            }
+            Err(_) => {
+                for conn in self.connections.values() {
+                    conn.ref_count.fetch_sub(1, Ordering::AcqRel);
+                }
+            }
+        }
+    }
+}
+
+/// RAII lease on one generation's `active_calls` count, taken by [`CacheGeneration::begin_call`].
+///
+/// `with_tools` awaits the retirement of a replaced generation and the caller's own future while
+/// holding a lease; if that future is dropped mid-await (a cancelled tool call, an aborted RPC
+/// handler), `Drop` gives the lease back so the generation can still reach "retired and idle"
+/// and close its MCP transports. [`Self::finish`] is the awaited, non-cancelled path.
+#[must_use = "dropping the lease immediately ends the call"]
+struct GenerationLease(Option<Arc<CacheGeneration>>);
+
+impl GenerationLease {
+    fn generation(&self) -> &Arc<CacheGeneration> {
+        self.0.as_ref().expect("lease is held until finish/drop")
+    }
+
+    /// Ends the call, awaiting the release of a retired generation's connections.
+    async fn finish(mut self) {
+        if let Some(generation) = self.0.take() {
+            WorkspaceMcpToolCache::finish_call(&generation).await;
+        }
+    }
+}
+
+impl Drop for GenerationLease {
+    fn drop(&mut self) {
+        let Some(generation) = self.0.take() else {
+            return;
+        };
+        let should_release = {
+            let mut lifecycle = generation.lifecycle.lock();
+            lifecycle.active_calls = lifecycle.active_calls.saturating_sub(1);
+            lifecycle.claim_release()
+        };
+        if should_release {
+            generation.release_all_connections_detached();
         }
     }
 }
@@ -154,19 +227,19 @@ impl WorkspaceCacheState {
     /// Leases the current generation when it matches `desired_fp` and no failed server is due
     /// for a retry. The lease is taken under the state lock, so the generation cannot be
     /// retired and released before the caller's call is counted.
-    fn lease_reusable(&self, desired_fp: &str) -> Option<Arc<CacheGeneration>> {
+    fn lease_reusable(&self, desired_fp: &str) -> Option<GenerationLease> {
         let now = now_epoch_ms();
         let cur = self.current.as_ref()?;
         let reusable = cur.fingerprint == desired_fp
             && cur
                 .failed_servers_retry_after_ms
                 .values()
-                .all(|&retry_at| now < retry_at);
+                .all(|&retry_at| now < retry_at)
+            && cur.all_connections_healthy();
         if !reusable {
             return None;
         }
-        cur.begin_call();
-        Some(Arc::clone(cur))
+        Some(cur.begin_call())
     }
 
     /// Starts a new epoch: in-flight loads become stale and the current generation is handed
@@ -250,28 +323,40 @@ impl WorkspaceMcpToolCache {
         }
 
         let ws_key = Self::workspace_key(config);
-        self.session_to_workspace
-            .insert(session_id.to_owned(), ws_key.clone());
-
         let ws_state = self
             .workspaces
-            .entry(ws_key)
+            .entry(ws_key.clone())
             .or_insert_with(|| Arc::new(parking_lot::Mutex::new(WorkspaceCacheState::new())))
             .value()
             .clone();
 
-        let (generation, to_retire) =
+        // Register the session once, under the workspace lock, so a concurrent `close_session`
+        // either sees both the binding and the membership or neither.
+        let previous_ws = {
+            let mut state = ws_state.lock();
+            state.sessions.insert(session_id.to_owned());
+            self.session_to_workspace
+                .insert(session_id.to_owned(), ws_key.clone())
+        };
+        if let Some(previous_ws) = previous_ws.filter(|prev| *prev != ws_key) {
+            // The session moved workspaces: drop its interest in the old one.
+            self.detach_session(&previous_ws, session_id).await;
+        }
+
+        let (lease, to_retire) =
             Self::acquire_generation(&ws_state, config, base_env, session_id).await?;
 
         if let Some(old_gen) = to_retire {
             Self::mark_retired(&old_gen).await;
         }
 
-        // Run caller outside every cache lock!
+        // Run caller outside every cache lock! A cancelled caller drops `lease`, which gives
+        // the call back to the generation.
+        let generation = lease.generation();
         let fut = f(&generation.tools, &generation.errors);
         let out = fut.await;
 
-        Self::finish_call(&generation).await;
+        lease.finish().await;
         Ok(out)
     }
 
@@ -283,16 +368,15 @@ impl WorkspaceMcpToolCache {
         config: &AgentConfig,
         base_env: &HashMap<String, String>,
         session_id: &str,
-    ) -> Result<(Arc<CacheGeneration>, Option<Arc<CacheGeneration>>), String> {
+    ) -> Result<(GenerationLease, Option<Arc<CacheGeneration>>), String> {
         loop {
             let desired_servers = load_mcp_servers(config, false, |_| {})?;
             let desired_fp = Self::desired_generation_fingerprint(&desired_servers);
 
             let (epoch, loader) = {
-                let mut state = ws_state.lock();
-                state.sessions.insert(session_id.to_owned());
-                if let Some(cur) = state.lease_reusable(&desired_fp) {
-                    return Ok((cur, None));
+                let state = ws_state.lock();
+                if let Some(lease) = state.lease_reusable(&desired_fp) {
+                    return Ok((lease, None));
                 }
                 (state.epoch, Arc::clone(&state.loader))
             };
@@ -302,15 +386,15 @@ impl WorkspaceMcpToolCache {
             let _building = loader.lock().await;
 
             let refs = {
-                let mut state = ws_state.lock();
+                let state = ws_state.lock();
                 if state.epoch != epoch {
                     // Invalidated while waiting: the config may have changed, so start over
-                    // under the new epoch (and its fresh gate).
+                    // under the new epoch (and its fresh gate). Session membership is not
+                    // re-added here: a `close_session` that ran meanwhile must stay closed.
                     continue;
                 }
-                state.sessions.insert(session_id.to_owned());
-                if let Some(cur) = state.lease_reusable(&desired_fp) {
-                    return Ok((cur, None));
+                if let Some(lease) = state.lease_reusable(&desired_fp) {
+                    return Ok((lease, None));
                 }
                 // Take refs on reusable connections while the previous generation is still
                 // current: it cannot be retired (and its connections closed) under this lock.
@@ -319,15 +403,16 @@ impl WorkspaceMcpToolCache {
 
             let next_gen =
                 Self::build_next_generation(&desired_servers, desired_fp, refs, base_env).await?;
-            next_gen.begin_call();
+            let lease = next_gen.begin_call();
 
             let mut state = ws_state.lock();
-            if state.epoch == epoch {
+            if state.epoch == epoch && state.sessions.contains(session_id) {
                 let prev = state.current.replace(Arc::clone(&next_gen));
-                return Ok((next_gen, prev));
+                return Ok((lease, prev));
             }
-            // Invalidated mid-connect: serve this call from the stale build, but never cache it.
-            return Ok((Arc::clone(&next_gen), Some(next_gen)));
+            // Invalidated mid-connect (or this session was closed meanwhile): serve this call
+            // from the stale build, but never cache it.
+            return Ok((lease, Some(next_gen)));
         }
     }
 
@@ -345,7 +430,7 @@ impl WorkspaceMcpToolCache {
             if let Some(existing) = prev
                 .connections
                 .get(&srv.config.name)
-                .filter(|c| c.config_fingerprint == srv_fp)
+                .filter(|c| c.config_fingerprint == srv_fp && c.invoker.is_healthy())
             {
                 existing.ref_count.fetch_add(1, Ordering::AcqRel);
                 reused.insert(srv.config.name.clone(), Arc::clone(existing));
@@ -493,7 +578,13 @@ impl WorkspaceMcpToolCache {
         let Some((_, ws_key)) = self.session_to_workspace.remove(session_id) else {
             return;
         };
-        let Some(ws_state) = self.workspaces.get(&ws_key).map(|e| Arc::clone(e.value())) else {
+        self.detach_session(&ws_key, session_id).await;
+    }
+
+    /// Removes `session_id` from `ws_key`'s sessions, retiring the workspace generation when it
+    /// was the last one.
+    async fn detach_session(&self, ws_key: &Path, session_id: &str) {
+        let Some(ws_state) = self.workspaces.get(ws_key).map(|e| Arc::clone(e.value())) else {
             return;
         };
         let prev = {
@@ -577,7 +668,8 @@ mod tests {
             Vec::new(),
             HashMap::new(),
         ));
-        generation.begin_call();
+        // These tests drive `finish_call` directly, so the lease's own drop must not count.
+        std::mem::forget(generation.begin_call());
         (generation, shared, invoker)
     }
 
@@ -642,5 +734,50 @@ mod tests {
             finish.await.expect("finish task");
             assert_released_once(&shared, &invoker);
         }
+    }
+
+    /// A caller cancelled while holding a lease (e.g. a tool call dropped after its cancellation
+    /// grace) must give the call back so the retired generation still closes its transports.
+    #[tokio::test]
+    async fn dropped_lease_releases_retired_generation() {
+        let invoker = Arc::new(CountingInvoker::default());
+        let shared = Arc::new(SharedServerConnection {
+            config_fingerprint: "fp".to_owned(),
+            server_name: "srv".to_owned(),
+            invoker: Arc::clone(&invoker) as Arc<dyn McpToolInvoker>,
+            raw_tools: Vec::new(),
+            ref_count: AtomicUsize::new(1),
+        });
+        let generation = Arc::new(CacheGeneration::new(
+            "gen-fp".to_owned(),
+            BTreeMap::from([("srv".to_owned(), Arc::clone(&shared))]),
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+        ));
+        let lease = generation.begin_call();
+        let call = tokio::spawn(async move {
+            let _lease = lease;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        WorkspaceMcpToolCache::mark_retired(&generation).await;
+        assert_eq!(
+            invoker.closes.load(Ordering::SeqCst),
+            0,
+            "call still active"
+        );
+
+        call.abort();
+        let _ = call.await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while invoker.closes.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled call never released the retired generation");
+        assert_eq!(generation.lifecycle.lock().active_calls, 0);
+        assert_eq!(shared.ref_count.load(Ordering::SeqCst), 0);
     }
 }

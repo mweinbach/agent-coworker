@@ -13,10 +13,12 @@ pub mod types;
 pub use cache::WorkspaceMcpToolCache;
 pub use credentials::{
     McpCredentialsFile, auth_scope_for_source, compute_auth_state, credentials_path_for_scope,
-    mask_secret, mutate_credentials_for_scope, read_credentials_file, try_read_credentials_file,
+    mask_secret, mutate_credentials_for_scope, read_credentials_file, read_credentials_for_scope,
+    try_read_credentials_file, try_read_credentials_for_scope,
 };
 pub use oauth::{
-    complete_mcp_oauth_callback, refresh_oauth_access_token, start_mcp_oauth_authorization,
+    McpOAuthUrlOpener, SystemUrlOpener, complete_mcp_oauth_callback, refresh_oauth_access_token,
+    start_mcp_oauth_authorization, start_mcp_oauth_authorization_with_opener,
     wait_and_complete_auto_mcp_oauth,
 };
 pub use plugin_overrides::{
@@ -64,6 +66,80 @@ fn read_config_file(path: &std::path::Path) -> std::io::Result<String> {
         return Err(not_regular());
     }
     io::read_to_string(file)
+}
+
+/// Whether `path` itself is a symbolic link (or, on Windows, any reparse point such as a
+/// junction). Missing paths are not links.
+fn is_link(path: &std::path::Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return Ok(true);
+                }
+            }
+            Ok(meta.file_type().is_symlink())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Refuses a workspace-scoped MCP file (`<workspace>/.cowork/mcp-servers.json`,
+/// `.cowork/plugins.json`, `.cowork/auth/mcp-credentials.json`) whose path traverses a symbolic
+/// link at or below the workspace `.cowork` directory.
+///
+/// A cloned repository controls everything under its `.cowork/`; a link there could make a
+/// workspace read expose the user's global `~/.cowork` credentials (even with
+/// `trustWorkspaceMcp` off), or make a workspace disable/delete rewrite global files.
+/// Components above `.cowork` (the workspace path itself, e.g. macOS `/tmp`) are not checked.
+pub(crate) fn ensure_unlinked_workspace_path(
+    workspace_cowork_dir: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::io;
+
+    let refuse = |what: &std::path::Path| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to follow a symbolic link in workspace MCP path {} (at {})",
+                path.display(),
+                what.display()
+            ),
+        )
+    };
+    let relative = path.strip_prefix(workspace_cowork_dir).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "workspace MCP path {} is outside {}",
+                path.display(),
+                workspace_cowork_dir.display()
+            ),
+        )
+    })?;
+    let mut current = workspace_cowork_dir.to_path_buf();
+    if is_link(&current)? {
+        return Err(refuse(&current));
+    }
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(_) => current.push(component),
+            _ => return Err(refuse(path)),
+        }
+        if is_link(&current)? {
+            return Err(refuse(&current));
+        }
+    }
+    // Defense in depth: the resolved file must stay inside the workspace `.cowork` directory.
+    if workspace_cowork_dir.exists() && !cowork_config::is_inside(workspace_cowork_dir, path) {
+        return Err(refuse(path));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

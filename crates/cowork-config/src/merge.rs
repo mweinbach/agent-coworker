@@ -425,7 +425,12 @@ const PROVIDER_ENDPOINT_KEYS: [&str; 9] = [
 /// both at the top level and inside every per-provider section.
 ///
 /// The single exception is `lmstudio.baseUrl` (local LM Studio server), which the legacy
-/// TypeScript editable-provider-options schema allowed.
+/// TypeScript editable-provider-options schema allowed — but only when it names a loopback
+/// server (`localhost`, `127.0.0.1`, `::1`). Every untrusted input (workspace config, session
+/// overrides, `cowork/session/defaults/apply`, child routing) goes through here, so a client or
+/// cloned repository cannot route prompts (and the saved LM Studio token) to a remote host.
+/// Trusted tiers (built-in defaults, user config, environment) never pass through this filter
+/// and may still name a non-loopback LM Studio server.
 pub fn strip_provider_option_endpoints(provider_options: &mut Map<String, Value>) {
     for key in PROVIDER_ENDPOINT_KEYS {
         provider_options.remove(key);
@@ -435,7 +440,13 @@ pub fn strip_provider_option_endpoints(provider_options: &mut Map<String, Value>
             continue;
         };
         for key in PROVIDER_ENDPOINT_KEYS {
-            if provider == "lmstudio" && key == "baseUrl" {
+            if provider == "lmstudio"
+                && key == "baseUrl"
+                && section
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(is_loopback_base_url)
+            {
                 continue;
             }
             section.remove(key);
@@ -446,22 +457,13 @@ pub fn strip_provider_option_endpoints(provider_options: &mut Map<String, Value>
 /// Removes provider endpoint overrides from an untrusted workspace `.cowork/config.json`.
 ///
 /// Endpoint overrides are honored only from trusted tiers (built-in defaults, user config,
-/// environment, desktop session settings). The single exception is the schema-permitted
-/// `providerOptions.lmstudio.baseUrl` (local LM Studio server), kept for parity with the
-/// legacy TypeScript config schema — but only when it names a loopback server, so a cloned
-/// repository cannot route prompts (and the saved LM Studio token) to a remote host.
+/// environment). See [`strip_provider_option_endpoints`] for the loopback-only
+/// `providerOptions.lmstudio.baseUrl` exception.
 pub(crate) fn strip_untrusted_provider_endpoints(
     mut project_config: Map<String, Value>,
 ) -> Map<String, Value> {
     if let Some(Value::Object(provider_options)) = project_config.get_mut("providerOptions") {
         strip_provider_option_endpoints(provider_options);
-        if let Some(Value::Object(lmstudio)) = provider_options.get_mut("lmstudio")
-            && lmstudio
-                .get("baseUrl")
-                .is_some_and(|url| !url.as_str().is_some_and(is_loopback_base_url))
-        {
-            lmstudio.remove("baseUrl");
-        }
     }
     project_config
 }

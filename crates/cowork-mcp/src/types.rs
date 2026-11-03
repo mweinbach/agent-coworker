@@ -370,6 +370,12 @@ pub struct McpToolErrorEntry {
 pub trait McpToolInvoker: Send + Sync {
     async fn call_tool(&self, raw_tool_name: &str, arguments: Value) -> Result<Value, String>;
     async fn close(&self);
+    /// Whether the underlying connection is still usable. A transport whose stdio reader or
+    /// SSE event stream has ended reports `false`, so the workspace tool cache reconnects it
+    /// instead of reusing a dead connection until every call times out.
+    fn is_healthy(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone)]

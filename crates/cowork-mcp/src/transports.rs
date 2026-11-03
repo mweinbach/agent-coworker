@@ -111,6 +111,43 @@ trait RpcTransport: Send + Sync {
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), String>;
     fn set_negotiated_protocol_version(&self, _version: String) {}
     async fn close(&self);
+    /// False once the connection can no longer deliver responses (see
+    /// [`McpToolInvoker::is_healthy`]).
+    fn is_healthy(&self) -> bool {
+        true
+    }
+}
+
+/// Aborts a spawned task when dropped, so a connect cancelled mid-handshake does not leave its
+/// background reader running detached.
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortOnDrop {
+    fn into_inner(mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.0.take()
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// Sends `signal` to the stdio child's whole process group (`-pgid`) and to the child itself.
+#[cfg(unix)]
+fn signal_process_group(pid: Option<u32>, signal: libc::c_int) {
+    let Some(raw_pid) = pid.and_then(|p| i32::try_from(p).ok()) else {
+        return;
+    };
+    // SAFETY: plain `kill(2)` calls with a pid we spawned (and still own: its `Child` has not
+    // been reaped, so the pid and its process group id cannot have been reused).
+    unsafe {
+        let _ = libc::kill(-raw_pid, signal);
+        let _ = libc::kill(raw_pid, signal);
+    }
 }
 
 // ============================================================================
@@ -126,9 +163,59 @@ struct StdioTransport {
     pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
     closed: AtomicBool,
+    /// Set by the stdout reader when it exits (EOF, read error, oversized frame): the server can
+    /// no longer answer, so requests fail fast and the cache reconnects.
+    reader_done: Arc<AtomicBool>,
     request_timeout: Duration,
     reader_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stderr_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for StdioTransport {
+    /// A transport dropped without [`RpcTransport::close`] (e.g. a connect or validation
+    /// cancelled mid-handshake) must not leak its child process tree or reader tasks:
+    /// `kill_on_drop` only reaches the direct child, not the `npx`/`uvx` grandchildren in its
+    /// process group.
+    fn drop(&mut self) {
+        if let Some(handle) = self.reader_task.get_mut().take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.stderr_task.get_mut().take() {
+            handle.abort();
+        }
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let child = self.child.get_mut().take();
+        let Some(mut child) = child else {
+            return;
+        };
+        // `child` is not reaped yet (only `close` and the task below wait on it), so its pid —
+        // and with it the process group id — cannot have been reused.
+        #[cfg(unix)]
+        signal_process_group(self.pid, libc::SIGTERM);
+        let pid = self.pid;
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if tokio::time::timeout(Duration::from_millis(600), child.wait())
+                        .await
+                        .is_err()
+                    {
+                        #[cfg(unix)]
+                        signal_process_group(pid, libc::SIGKILL);
+                        let _ = child.kill().await;
+                    }
+                });
+            }
+            Err(_) => {
+                #[cfg(unix)]
+                signal_process_group(pid, libc::SIGKILL);
+                let _ = pid;
+                // `kill_on_drop` kills the direct child as `child` drops here.
+            }
+        }
+    }
 }
 
 impl StdioTransport {
@@ -177,6 +264,8 @@ impl StdioTransport {
         let pending_reader = Arc::clone(&pending);
         let stdin: SharedStdin = Arc::new(tokio::sync::Mutex::new(Some(stdin)));
         let reply_stdin = Arc::clone(&stdin);
+        let reader_done = Arc::new(AtomicBool::new(false));
+        let reader_done_flag = Arc::clone(&reader_done);
 
         let reader_task = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -222,6 +311,8 @@ impl StdioTransport {
                     Err(_) => break,
                 }
             }
+            // Flag first, then drain: a request that registers after the drain sees the flag.
+            reader_done_flag.store(true, Ordering::SeqCst);
             let keys: Vec<u64> = pending_reader.iter().map(|e| *e.key()).collect();
             for k in keys {
                 if let Some((_, tx)) = pending_reader.remove(&k) {
@@ -250,6 +341,7 @@ impl StdioTransport {
             pending,
             next_id: AtomicU64::new(1),
             closed: AtomicBool::new(false),
+            reader_done,
             request_timeout: timeouts.request,
             reader_task: Mutex::new(Some(reader_task)),
             stderr_task: Mutex::new(stderr_task),
@@ -292,6 +384,10 @@ impl RpcTransport for StdioTransport {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id, tx);
+        if self.reader_done.load(Ordering::SeqCst) {
+            self.pending.remove(&id);
+            return Err("MCP stdio server closed stdout".to_owned());
+        }
 
         let mut payload = json!({
             "jsonrpc": "2.0",
@@ -312,6 +408,10 @@ impl RpcTransport for StdioTransport {
         .await;
         self.pending.remove(&id);
         outcome.unwrap_or_else(|_| Err(format!("MCP stdio request \"{method}\" timed out")))
+    }
+
+    fn is_healthy(&self) -> bool {
+        !self.closed.load(Ordering::SeqCst) && !self.reader_done.load(Ordering::SeqCst)
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), String> {
@@ -342,13 +442,7 @@ impl RpcTransport for StdioTransport {
 
         // 2. Signal the entire process group (`-pgid`) and wait briefly, escalating to SIGKILL
         #[cfg(unix)]
-        if let Some(raw_pid) = self.pid {
-            let pgid = raw_pid as i32;
-            unsafe {
-                let _ = libc::kill(-pgid, libc::SIGTERM);
-                let _ = libc::kill(pgid, libc::SIGTERM);
-            }
-        }
+        signal_process_group(self.pid, libc::SIGTERM);
 
         if let Some(mut child) = self.child.lock().await.take()
             && tokio::time::timeout(Duration::from_millis(600), child.wait())
@@ -356,13 +450,7 @@ impl RpcTransport for StdioTransport {
                 .is_err()
         {
             #[cfg(unix)]
-            if let Some(raw_pid) = self.pid {
-                let pgid = raw_pid as i32;
-                unsafe {
-                    let _ = libc::kill(-pgid, libc::SIGKILL);
-                    let _ = libc::kill(pgid, libc::SIGKILL);
-                }
-            }
+            signal_process_group(self.pid, libc::SIGKILL);
             let _ = child.kill().await;
             let _ = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
         }
@@ -396,8 +484,24 @@ struct SseTransport {
     pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
     request_timeout: Duration,
+    /// Set by the event-stream task when the SSE stream ends or errors: responses can no longer
+    /// arrive, so requests fail fast and the cache reconnects.
+    stream_done: Arc<AtomicBool>,
     stream_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     reply_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for SseTransport {
+    /// Dropping the transport without [`RpcTransport::close`] must still end the open event
+    /// stream and the reply task instead of leaving them detached.
+    fn drop(&mut self) {
+        if let Some(handle) = self.stream_task.get_mut().take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.reply_task.get_mut().take() {
+            handle.abort();
+        }
+    }
 }
 
 impl SseTransport {
@@ -432,8 +536,10 @@ impl SseTransport {
         // Replies to server-initiated requests are POSTed by a responder task that owns the
         // transport (headers/OAuth); the stream task only queues them.
         let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let stream_done = Arc::new(AtomicBool::new(false));
+        let stream_done_flag = Arc::clone(&stream_done);
 
-        let stream_task = tokio::spawn(async move {
+        let stream_task = AbortOnDrop(Some(tokio::spawn(async move {
             while let Some(item) = event_stream.next().await {
                 let Ok(ev) = item else {
                     break;
@@ -471,24 +577,21 @@ impl SseTransport {
                     "SSE stream closed before emitting endpoint event".to_owned()
                 ));
             }
+            // Flag first, then drain: a request that registers after the drain sees the flag.
+            stream_done_flag.store(true, Ordering::SeqCst);
             let keys: Vec<u64> = pending_reader.iter().map(|e| *e.key()).collect();
             for k in keys {
                 if let Some((_, tx)) = pending_reader.remove(&k) {
                     let _ = tx.send(Err("MCP SSE stream closed".to_owned()));
                 }
             }
-        });
+        })));
 
+        // `stream_task` aborts on every early return, and if this connect is cancelled.
         let endpoint_url = match tokio::time::timeout(timeouts.connect, ep_rx).await {
             Ok(Ok(Ok(u))) => u,
-            Ok(Ok(Err(e))) => {
-                stream_task.abort();
-                return Err(e);
-            }
-            _ => {
-                stream_task.abort();
-                return Err("Timed out waiting for MCP SSE endpoint event".to_owned());
-            }
+            Ok(Ok(Err(e))) => return Err(e),
+            _ => return Err("Timed out waiting for MCP SSE endpoint event".to_owned()),
         };
 
         let transport = Arc::new(Self {
@@ -499,7 +602,8 @@ impl SseTransport {
             pending,
             next_id: AtomicU64::new(1),
             request_timeout: timeouts.request,
-            stream_task: Mutex::new(Some(stream_task)),
+            stream_done,
+            stream_task: Mutex::new(stream_task.into_inner()),
             reply_task: Mutex::new(None),
         });
         let weak = Arc::downgrade(&transport);
@@ -602,6 +706,10 @@ impl RpcTransport for SseTransport {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id, tx);
+        if self.stream_done.load(Ordering::SeqCst) {
+            self.pending.remove(&id);
+            return Err("MCP SSE stream closed".to_owned());
+        }
 
         let mut payload = json!({
             "jsonrpc": "2.0",
@@ -644,12 +752,17 @@ impl RpcTransport for SseTransport {
     }
 
     async fn close(&self) {
+        self.stream_done.store(true, Ordering::SeqCst);
         if let Some(handle) = self.stream_task.lock().take() {
             handle.abort();
         }
         if let Some(handle) = self.reply_task.lock().take() {
             handle.abort();
         }
+    }
+
+    fn is_healthy(&self) -> bool {
+        !self.stream_done.load(Ordering::SeqCst)
     }
 }
 
@@ -893,6 +1006,10 @@ impl McpToolInvoker for ConnectedMcpServer {
 
     async fn close(&self) {
         self.transport.close().await;
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.transport.is_healthy()
     }
 }
 

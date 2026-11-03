@@ -196,7 +196,7 @@ describe("main CI workflow", () => {
       "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
       run: "bun src/run_raw_agent_loops.ts",
     });
-    expect(harnessPackage.devDependencies.typescript).toBeUndefined();
+    expect(harnessPackage.devDependencies?.typescript).toBeUndefined();
   });
 
   test("runs Windows path and desktop smoke coverage", () => {

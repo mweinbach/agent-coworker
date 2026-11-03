@@ -1,7 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "rules": {
-    "dependencies": "off",
     "optionalPeerDependencies": "off",
     "unlisted": "off",
     "unresolved": "off",
@@ -28,6 +27,7 @@
       "project": ["src/**/*.{ts,tsx}", "plugins/*.js"]
     },
     "apps/desktop": {
+      "ignoreDependencies": ["electron-builder", "posthog-node"],
       "entry": [
         "electron/main.ts",
         "electron/qualityGateMain.ts",
@@ -36,6 +36,7 @@
         "index.web.html",
         "src/main.tsx",
         "src/main.web.tsx",
+        "src/styles.css",
         "electron.vite.config.ts",
         "vite.config.web.ts",
         "scripts/*.ts",

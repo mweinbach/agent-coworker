@@ -117,6 +117,9 @@ jobs:
       - name: Install mobile dependencies
         run: bun install --cwd apps/mobile --frozen-lockfile
 
+      - name: Check for unused dependencies
+        run: bun run knip --include dependencies,devDependencies
+
       - name: Unit tests
         run: bun run test
 

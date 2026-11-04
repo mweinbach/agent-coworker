@@ -1,0 +1,669 @@
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use cowork_mcp::{LoadedMcpTool, McpToolErrorEntry, normalize_mcp_name};
+use serde_json::{Map, Value, json};
+
+use crate::context::{
+    BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
+    normalize_and_validate_args,
+};
+
+pub const DEFAULT_TOOL_SEARCH_LIMIT: usize = 5;
+pub const MAX_TOOL_SEARCH_LIMIT: usize = 20;
+
+#[derive(Debug, Clone)]
+pub struct SearchableToolEntry {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+/// Splits camelCase, kebab-case, snake_case, and whitespace into lowercase alphanumeric tokens.
+pub fn tokenize_search_text(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut prev_lower = false;
+
+    for ch in input.chars() {
+        if ch.is_alphanumeric() {
+            let is_upper = ch.is_uppercase();
+            if is_upper && prev_lower && !current.is_empty() {
+                tokens.push(current.to_lowercase());
+                current.clear();
+            }
+            current.push(ch);
+            prev_lower = ch.is_lowercase();
+        } else {
+            if !current.is_empty() {
+                tokens.push(current.to_lowercase());
+                current.clear();
+            }
+            prev_lower = false;
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current.to_lowercase());
+    }
+    tokens
+}
+
+/// Scores and paginates a catalog of tools using TS `toolCatalog.ts` camelCase-aware token scoring:
+/// - Exact full-name match ranks first
+/// - `+20` exact name token, `+10` substring name token, `+4` exact description token, `+1` substring description token
+/// - Ties break alphabetically by `name`.
+pub fn score_and_paginate_tools(
+    items: &[SearchableToolEntry],
+    raw_query: &str,
+    limit: usize,
+    offset: usize,
+    errors: &[McpToolErrorEntry],
+) -> (Value, Vec<String>) {
+    let trimmed = raw_query.trim();
+    let is_wildcard = trimmed.is_empty() || trimmed == "*";
+    let query_lc = trimmed.to_lowercase();
+    let query_tokens = if is_wildcard {
+        Vec::new()
+    } else {
+        tokenize_search_text(trimmed)
+    };
+
+    let mut matches: Vec<(bool, usize, &SearchableToolEntry)> = Vec::new();
+    for item in items {
+        if is_wildcard {
+            matches.push((false, 1, item));
+            continue;
+        }
+        let name_lc = item.name.to_lowercase();
+        let exact = name_lc == query_lc;
+        let name_tokens = tokenize_search_text(&item.name);
+        let desc_tokens = tokenize_search_text(&item.description);
+
+        let mut score = if exact { 1_000usize } else { 0usize };
+        for qt in &query_tokens {
+            if name_tokens.iter().any(|nt| nt == qt) {
+                score += 20;
+            } else if name_lc.contains(qt) || name_tokens.iter().any(|nt| nt.contains(qt)) {
+                score += 10;
+            }
+            if desc_tokens.iter().any(|dt| dt == qt) {
+                score += 4;
+            } else if desc_tokens.iter().any(|dt| dt.contains(qt)) {
+                score += 1;
+            }
+        }
+        if score > 0 {
+            matches.push((exact, score, item));
+        }
+    }
+
+    matches.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.name.cmp(&b.2.name))
+    });
+
+    let total = matches.len();
+    let page: Vec<&SearchableToolEntry> = matches
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(_, _, item)| item)
+        .collect();
+
+    let discovered: Vec<String> = page.iter().map(|i| i.name.clone()).collect();
+    let tool_entries: Vec<Value> = page
+        .into_iter()
+        .map(|i| {
+            json!({
+                "name": i.name,
+                "description": i.description,
+                "inputSchema": i.input_schema,
+            })
+        })
+        .collect();
+
+    let mut out = json!({
+        "tools": tool_entries,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    });
+    if offset + discovered.len() < total {
+        out["nextOffset"] = json!(offset + discovered.len());
+    }
+    if !errors.is_empty() {
+        out["errors"] = json!(errors);
+    }
+
+    (out, discovered)
+}
+
+/// Whether a session may use tools of the MCP server `server_name`. Every MCP gate (tool
+/// registration, discovery, execution, and the harness's deferred adapters) goes through this,
+/// so listing and calling always agree.
+///
+/// Matches TS `filterToolsForRole(..., { allowProfileMcp: true })` followed by
+/// `filterToolsForProfile`:
+/// - no profile (`allowed_mcp_servers == None`): every server, except for read-only roles
+///   (`explorer`/`research`/`reviewer`), which get no MCP at all;
+/// - with a profile: exactly the servers listed in `profile.allowedMcpServers` (an empty list
+///   denies all), including on read-only base roles — the profile opted into them explicitly.
+///
+/// Both sides are compared after `normalize_mcp_name` (TS `normalizeMcpNamePart`), so
+/// `"linear  server"` in a profile matches the server whose tools are `mcp__linear_server__*`.
+pub fn mcp_server_allowed(
+    read_only_role: bool,
+    allowed_mcp_servers: Option<&BTreeSet<String>>,
+    server_name: &str,
+) -> bool {
+    match allowed_mcp_servers {
+        None => !read_only_role,
+        Some(allowed) => {
+            let server = normalize_mcp_name(server_name);
+            allowed.iter().any(|a| normalize_mcp_name(a) == server)
+        }
+    }
+}
+
+/// Whether `ctx` can reach any MCP server at all (see [`mcp_server_allowed`]); used to decide
+/// whether MCP tools are registered for the session in the first place.
+pub fn mcp_access_enabled(ctx: &ToolExecutionContext) -> bool {
+    match &ctx.allowed_mcp_servers {
+        None => !ctx.read_only_role,
+        Some(allowed) => !allowed.is_empty(),
+    }
+}
+
+fn mcp_server_allowed_for_context(ctx: &ToolExecutionContext, server_name: &str) -> bool {
+    mcp_server_allowed(
+        ctx.read_only_role,
+        ctx.allowed_mcp_servers.as_ref(),
+        server_name,
+    )
+}
+
+const READ_ONLY_MCP_DENIED: &str =
+    "MCP tool calls are blocked because this session is running in read-only mode.";
+
+fn filter_mcp_tools_for_context(
+    tools: &[LoadedMcpTool],
+    ctx: &ToolExecutionContext,
+) -> Vec<LoadedMcpTool> {
+    if !mcp_access_enabled(ctx) {
+        return Vec::new();
+    }
+    tools
+        .iter()
+        .filter(|t| mcp_server_allowed_for_context(ctx, &t.server_name))
+        .cloned()
+        .collect()
+}
+
+/// Standard-mode `toolSearch` backed by `WorkspaceMcpToolCache`.
+pub struct McpToolSearchTool;
+
+#[async_trait]
+impl BuiltinTool for McpToolSearchTool {
+    fn name(&self) -> &str {
+        "toolSearch"
+    }
+
+    fn description(&self) -> &str {
+        "Search configured MCP server tools by keyword or '*' wildcard to inspect their names and JSON parameter schemas before calling mcpCall."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "Keywords, tool name, or '*' to list available MCP tools."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Maximum number of matching MCP tools to return (default: 5, max: 20)."
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Pagination offset (default: 0)."
+                }
+            },
+            "required": ["query"]
+        })
+    }
+
+    fn execution_policy(&self) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::ParallelRead
+    }
+
+    async fn execute(
+        &self,
+        raw_args: Map<String, Value>,
+        ctx: &ToolExecutionContext,
+    ) -> ToolResult<ToolOutput> {
+        let args = normalize_and_validate_args(&self.input_schema(), &raw_args)?;
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("query is required".to_owned()))?
+            .trim();
+        if query.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "query must not be empty (pass '*' to list all MCP tools)".to_owned(),
+            ));
+        }
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_TOOL_SEARCH_LIMIT as u64)
+            .clamp(1, MAX_TOOL_SEARCH_LIMIT as u64) as usize;
+        let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+
+        let (Some(cache), Some(cfg)) = (&ctx.mcp_tool_cache, &ctx.agent_config) else {
+            let (val, _) = score_and_paginate_tools(&[], query, limit, offset, &[]);
+            return Ok(ToolOutput::Json(val));
+        };
+
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("MCP tool search aborted.".to_owned()));
+        }
+        let ctx_clone = ctx.clone();
+        let query_owned = query.to_owned();
+        // `with_tools` may connect MCP servers first; a Stop must not wait for that. Dropping
+        // the call is safe: its generation lease and connection refs release on drop.
+        let search = cache.with_tools(cfg, &ctx.env, &ctx.session_id, move |tools, errors| {
+            let filtered = filter_mcp_tools_for_context(tools, &ctx_clone);
+            let searchable: Vec<SearchableToolEntry> = filtered
+                .into_iter()
+                .map(|t| SearchableToolEntry {
+                    name: t.qualified_name,
+                    description: t.description,
+                    input_schema: t.input_schema,
+                })
+                .collect();
+            let errs = errors.to_vec();
+            Box::pin(async move {
+                let (v, _) =
+                    score_and_paginate_tools(&searchable, &query_owned, limit, offset, &errs);
+                v
+            })
+        });
+        let val = unless_cancelled(search, ctx.cancel_rx.clone())
+            .await
+            .ok_or_else(|| ToolError::Execution("MCP tool search aborted.".to_owned()))?
+            .map_err(ToolError::Execution)?;
+
+        Ok(ToolOutput::Json(val))
+    }
+}
+
+/// Standard-mode `mcpCall` backed by `WorkspaceMcpToolCache`.
+pub struct McpCallTool;
+
+#[async_trait]
+impl BuiltinTool for McpCallTool {
+    fn name(&self) -> &str {
+        "mcpCall"
+    }
+
+    fn description(&self) -> &str {
+        "Invoke a discovered MCP tool by its qualified name (e.g. 'mcp__server__tool') and JSON arguments object."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "description": "Qualified MCP tool name discovered via toolSearch (e.g. 'mcp__server__tool')."
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "JSON arguments matching the MCP tool's inputSchema."
+                }
+            },
+            "required": ["tool"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        mut raw_args: Map<String, Value>,
+        ctx: &ToolExecutionContext,
+    ) -> ToolResult<ToolOutput> {
+        // Unprofiled read-only roles get no MCP; a profile's allowlist is applied below.
+        if ctx.read_only_role && ctx.allowed_mcp_servers.is_none() {
+            return Err(ToolError::PathDenied(READ_ONLY_MCP_DENIED.to_owned()));
+        }
+        if !raw_args.contains_key("tool")
+            && let Some(alias) = raw_args.remove("name")
+        {
+            raw_args.insert("tool".to_owned(), alias);
+        }
+        let args = normalize_and_validate_args(&self.input_schema(), &raw_args)?;
+        let target_tool = args
+            .get("tool")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("tool is required".to_owned()))?
+            .trim()
+            .to_owned();
+        if target_tool.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "tool must not be empty".to_owned(),
+            ));
+        }
+        let call_args = args
+            .get("arguments")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+
+        let (Some(cache), Some(cfg)) = (&ctx.mcp_tool_cache, &ctx.agent_config) else {
+            return Err(ToolError::Execution(
+                "MCP is not enabled for this session.".to_owned(),
+            ));
+        };
+
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
+        }
+        let cancel_rx = ctx.cancel_rx.clone();
+        let ctx_clone = ctx.clone();
+        let target_clone = target_tool.clone();
+        let res = cache
+            .with_tools(cfg, &ctx.env, &ctx.session_id, move |tools, _errors| {
+                let filtered = filter_mcp_tools_for_context(tools, &ctx_clone);
+                let found = filtered
+                    .into_iter()
+                    .find(|t| t.qualified_name == target_clone);
+                // As in `LoadedMcpBuiltinToolAdapter`: arguments are validated against the
+                // tool's `inputSchema`, and cancellation is handled inside the leased future so
+                // `with_tools` always completes and releases the generation's active call.
+                Box::pin(async move {
+                    let Some(tool_handle) = found else {
+                        return Err(ToolError::Execution(format!(
+                            "MCP tool '{target_clone}' was not found or is not allowed. Call toolSearch first."
+                        )));
+                    };
+                    let validated = Value::Object(normalize_and_validate_args(
+                        &tool_handle.input_schema,
+                        &call_args,
+                    )?);
+                    call_unless_cancelled(tool_handle.call(validated), cancel_rx)
+                        .await
+                        .map_err(ToolError::Execution)
+                })
+            })
+            .await
+            .map_err(ToolError::Execution)??;
+
+        Ok(ToolOutput::Json(res))
+    }
+}
+
+/// Wraps a `LoadedMcpTool` as a `BuiltinTool` so `DeferredToolCatalog` can search and call MCP tools directly!
+///
+/// The wrapped tool supplies the catalog metadata (name, description, schema) captured at
+/// discovery. Execution re-resolves the tool by qualified name through
+/// `WorkspaceMcpToolCache::with_tools` whenever the context carries the cache, so the call
+/// holds a generation lease (a concurrent config update cannot close its connection
+/// mid-call) and later calls use the current generation instead of a retired transport.
+pub struct LoadedMcpBuiltinToolAdapter {
+    tool: LoadedMcpTool,
+}
+
+impl LoadedMcpBuiltinToolAdapter {
+    pub fn into_builtin(tool: LoadedMcpTool) -> Arc<dyn BuiltinTool> {
+        Arc::new(Self { tool })
+    }
+}
+
+/// Runs `fut` unless the turn is cancelled first or meanwhile; `None` when cancelled.
+async fn unless_cancelled<T>(
+    fut: impl std::future::Future<Output = T>,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Option<T> {
+    let Some(mut rx) = cancel_rx else {
+        return Some(fut.await);
+    };
+    if *rx.borrow() {
+        return None;
+    }
+    tokio::select! {
+        r = fut => Some(r),
+        _ = async {
+            while rx.changed().await.is_ok() {
+                if *rx.borrow() {
+                    break;
+                }
+            }
+        } => None,
+    }
+}
+
+/// Runs `call` unless the turn is cancelled first.
+async fn call_unless_cancelled(
+    call: impl std::future::Future<Output = Result<Value, String>>,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<Value, String> {
+    unless_cancelled(call, cancel_rx)
+        .await
+        .unwrap_or_else(|| Err("MCP tool call aborted.".to_owned()))
+}
+
+#[async_trait]
+impl BuiltinTool for LoadedMcpBuiltinToolAdapter {
+    fn name(&self) -> &str {
+        &self.tool.qualified_name
+    }
+
+    fn description(&self) -> &str {
+        &self.tool.description
+    }
+
+    fn input_schema(&self) -> Value {
+        self.tool.input_schema.clone()
+    }
+
+    async fn execute(
+        &self,
+        raw_args: Map<String, Value>,
+        ctx: &ToolExecutionContext,
+    ) -> ToolResult<ToolOutput> {
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
+        }
+        if !mcp_server_allowed_for_context(ctx, &self.tool.server_name) {
+            return Err(ToolError::PathDenied(
+                if ctx.read_only_role && ctx.allowed_mcp_servers.is_none() {
+                    READ_ONLY_MCP_DENIED.to_owned()
+                } else {
+                    format!(
+                        "MCP tool '{}' is not allowed for this agent's profile.",
+                        self.tool.qualified_name
+                    )
+                },
+            ));
+        }
+        let validated = Value::Object(normalize_and_validate_args(
+            &self.tool.input_schema,
+            &raw_args,
+        )?);
+        let cancel_rx = ctx.cancel_rx.clone();
+
+        let (Some(cache), Some(cfg)) = (&ctx.mcp_tool_cache, &ctx.agent_config) else {
+            let res = call_unless_cancelled(self.tool.call(validated), cancel_rx)
+                .await
+                .map_err(ToolError::Execution)?;
+            return Ok(ToolOutput::Json(res));
+        };
+
+        let ctx_clone = ctx.clone();
+        let qualified_name = self.tool.qualified_name.clone();
+        let res = cache
+            .with_tools(cfg, &ctx.env, &ctx.session_id, move |tools, _errors| {
+                let found = filter_mcp_tools_for_context(tools, &ctx_clone)
+                    .into_iter()
+                    .find(|t| t.qualified_name == qualified_name);
+                // Cancellation is handled inside the leased future so `with_tools` always
+                // completes and releases the generation's active-call count.
+                Box::pin(async move {
+                    let Some(tool_handle) = found else {
+                        return Err(format!(
+                            "MCP tool '{qualified_name}' is no longer available."
+                        ));
+                    };
+                    call_unless_cancelled(tool_handle.call(validated), cancel_rx).await
+                })
+            })
+            .await
+            .map_err(ToolError::Execution)?
+            .map_err(ToolError::Execution)?;
+        Ok(ToolOutput::Json(res))
+    }
+}
+
+#[cfg(test)]
+mod profile_mcp_allowlist_tests {
+    use std::path::PathBuf;
+
+    use cowork_config::ProviderName;
+    use cowork_mcp::{McpToolInvoker, build_mcp_tool_name};
+
+    use super::*;
+
+    struct EchoInvoker {
+        server: String,
+    }
+
+    #[async_trait]
+    impl McpToolInvoker for EchoInvoker {
+        async fn call_tool(&self, raw_tool_name: &str, _arguments: Value) -> Result<Value, String> {
+            Ok(json!({ "called": format!("{}/{raw_tool_name}", self.server) }))
+        }
+        async fn close(&self) {}
+    }
+
+    fn tool(server: &str) -> LoadedMcpTool {
+        LoadedMcpTool {
+            qualified_name: build_mcp_tool_name(server, "ping"),
+            server_name: server.to_owned(),
+            raw_tool_name: "ping".to_owned(),
+            description: "ping".to_owned(),
+            input_schema: json!({ "type": "object" }),
+            invoker: Arc::new(EchoInvoker {
+                server: server.to_owned(),
+            }),
+        }
+    }
+
+    fn ctx(read_only_role: bool, allowed: Option<&[&str]>) -> ToolExecutionContext {
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            PathBuf::from("/nonexistent-home"),
+            PathBuf::from("/nonexistent-ws"),
+            ProviderName::Openai,
+            "gpt-5.4",
+        );
+        ctx.read_only_role = read_only_role;
+        ctx.allowed_mcp_servers =
+            allowed.map(|a| a.iter().map(|s| (*s).to_owned()).collect::<BTreeSet<_>>());
+        ctx
+    }
+
+    fn names(tools: Vec<LoadedMcpTool>) -> Vec<String> {
+        tools.into_iter().map(|t| t.qualified_name).collect()
+    }
+
+    fn servers() -> Vec<LoadedMcpTool> {
+        vec![tool("github"), tool("linear server"), tool("other")]
+    }
+
+    /// TS `filterToolsForRole(..., { allowProfileMcp: true })` + `filterToolsForProfile`: an
+    /// explorer-based profile keeps the MCP servers it lists.
+    #[test]
+    fn read_only_role_with_profile_keeps_only_listed_servers() {
+        let c = ctx(true, Some(&["github"]));
+        assert!(mcp_access_enabled(&c));
+        assert_eq!(
+            names(filter_mcp_tools_for_context(&servers(), &c)),
+            vec!["mcp__github__ping"]
+        );
+    }
+
+    #[test]
+    fn read_only_role_without_profile_gets_no_mcp() {
+        let c = ctx(true, None);
+        assert!(!mcp_access_enabled(&c));
+        assert!(filter_mcp_tools_for_context(&servers(), &c).is_empty());
+        assert!(!mcp_server_allowed(true, None, "github"));
+        // Non-read-only, unprofiled sessions keep every server.
+        let c = ctx(false, None);
+        assert!(mcp_access_enabled(&c));
+        assert_eq!(filter_mcp_tools_for_context(&servers(), &c).len(), 3);
+    }
+
+    #[test]
+    fn empty_profile_allowlist_denies_all_mcp() {
+        for read_only in [false, true] {
+            let c = ctx(read_only, Some(&[]));
+            assert!(!mcp_access_enabled(&c));
+            assert!(filter_mcp_tools_for_context(&servers(), &c).is_empty());
+        }
+    }
+
+    /// TS `normalizeMcpNamePart` on both sides: `"linear  server"` and `"linear_server"` name
+    /// the server whose tools are `mcp__linear_server__*`.
+    #[test]
+    fn profile_server_names_are_normalized_on_both_sides() {
+        for listed in ["linear  server", "linear_server", " linear server "] {
+            let c = ctx(true, Some(&[listed]));
+            assert_eq!(
+                names(filter_mcp_tools_for_context(&servers(), &c)),
+                vec!["mcp__linear_server__ping"],
+                "{listed:?}"
+            );
+        }
+        let allowed: BTreeSet<String> = ["linear_server".to_owned()].into();
+        assert!(mcp_server_allowed(false, Some(&allowed), "linear  server"));
+        assert!(!mcp_server_allowed(false, Some(&allowed), "linear"));
+        // Like TS `normalizeMcpNamePart` (and the case-preserving `mcp__<server>__` names),
+        // normalization does not fold case.
+        let allowed: BTreeSet<String> = ["GitHub".to_owned()].into();
+        assert!(mcp_server_allowed(true, Some(&allowed), "GitHub"));
+        assert!(!mcp_server_allowed(true, Some(&allowed), "github"));
+    }
+
+    #[tokio::test]
+    async fn adapter_executes_only_profile_allowed_servers_on_read_only_roles() {
+        let github = LoadedMcpBuiltinToolAdapter::into_builtin(tool("github"));
+        let other = LoadedMcpBuiltinToolAdapter::into_builtin(tool("other"));
+
+        let profiled = ctx(true, Some(&["github"]));
+        let out = github
+            .execute(Map::new(), &profiled)
+            .await
+            .expect("profile-listed server must run on a read-only base role");
+        assert!(
+            matches!(&out, ToolOutput::Json(v) if v["called"] == "github/ping"),
+            "{out:?}"
+        );
+        let err = other.execute(Map::new(), &profiled).await.unwrap_err();
+        assert!(matches!(err, ToolError::PathDenied(_)), "{err:?}");
+
+        let unprofiled = ctx(true, None);
+        let err = github.execute(Map::new(), &unprofiled).await.unwrap_err();
+        assert!(
+            matches!(&err, ToolError::PathDenied(m) if m.contains("read-only")),
+            "{err:?}"
+        );
+    }
+}

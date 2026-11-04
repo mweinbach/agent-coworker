@@ -1,3 +1,4 @@
+import { PROVIDER_NAMES, PROVIDER_SPECS } from "../generated/providerSpecs";
 import {
   defaultModelIdForProvider,
   getSupportedModel,
@@ -22,83 +23,31 @@ type ProviderModelDefinition = {
   availableModels: readonly string[];
 };
 
-export const USER_FACING_DISABLED_PROVIDERS = [
-  "baseten",
-] as const satisfies readonly ProviderName[];
-const USER_FACING_DISABLED_PROVIDER_SET = new Set<ProviderName>(USER_FACING_DISABLED_PROVIDERS);
-
 export function isUserFacingProviderEnabled(provider: ProviderName): boolean {
-  return !USER_FACING_DISABLED_PROVIDER_SET.has(provider);
+  return PROVIDER_SPECS[provider].userFacing;
 }
 
-const STATIC_PROVIDER_MODEL_CATALOG = {
-  anthropic: {
-    defaultModel: defaultModelIdForProvider("anthropic"),
-    availableModels: listSupportedModelIds("anthropic"),
-  },
-  bedrock: {
-    defaultModel: defaultModelIdForProvider("bedrock"),
-    availableModels: listSupportedModelIds("bedrock"),
-  },
-  baseten: {
-    defaultModel: defaultModelIdForProvider("baseten"),
-    availableModels: listSupportedModelIds("baseten"),
-  },
-  together: {
-    defaultModel: defaultModelIdForProvider("together"),
-    availableModels: listSupportedModelIds("together"),
-  },
-  fireworks: {
-    defaultModel: defaultModelIdForProvider("fireworks"),
-    availableModels: listSupportedModelIds("fireworks"),
-  },
-  firepass: {
-    defaultModel: defaultModelIdForProvider("firepass"),
-    availableModels: listSupportedModelIds("firepass"),
-  },
-  nvidia: {
-    defaultModel: defaultModelIdForProvider("nvidia"),
-    availableModels: listSupportedModelIds("nvidia"),
-  },
-  minimax: {
-    defaultModel: defaultModelIdForProvider("minimax"),
-    availableModels: listSupportedModelIds("minimax"),
-  },
-  "opencode-go": {
-    defaultModel: defaultModelIdForProvider("opencode-go"),
-    availableModels: listSupportedModelIds("opencode-go"),
-  },
-  "opencode-zen": {
-    defaultModel: defaultModelIdForProvider("opencode-zen"),
-    availableModels: listSupportedModelIds("opencode-zen"),
-  },
-  "codex-cli": {
-    defaultModel: defaultModelIdForProvider("codex-cli"),
-    availableModels: listSupportedModelIds("codex-cli"),
-  },
-  google: {
-    defaultModel: defaultModelIdForProvider("google"),
-    availableModels: listSupportedModelIds("google"),
-  },
-  openai: {
-    defaultModel: defaultModelIdForProvider("openai"),
-    availableModels: listSupportedModelIds("openai"),
-  },
-} as const satisfies Record<Exclude<ProviderName, "lmstudio">, ProviderModelDefinition>;
+function providerModelDefinition(provider: ProviderName): ProviderModelDefinition {
+  // Local-discovery providers (LM Studio) have no static registry; their models come from the
+  // live catalog only.
+  if (PROVIDER_SPECS[provider].discovery === "local") {
+    return { defaultModel: "", availableModels: [] };
+  }
+  return {
+    defaultModel: defaultModelIdForProvider(provider),
+    availableModels: listSupportedModelIds(provider),
+  };
+}
 
-export const PROVIDER_MODEL_CATALOG: Record<ProviderName, ProviderModelDefinition> = {
-  ...STATIC_PROVIDER_MODEL_CATALOG,
-  lmstudio: {
-    defaultModel: "",
-    availableModels: [],
-  },
-};
+const PROVIDER_MODEL_CATALOG = Object.fromEntries(
+  PROVIDER_NAMES.map((provider) => [provider, providerModelDefinition(provider)]),
+) as Record<ProviderName, ProviderModelDefinition>;
 
 export function defaultModelForProvider(provider: ProviderName): string {
   return PROVIDER_MODEL_CATALOG[provider].defaultModel;
 }
 
-export function availableModelsForProvider(provider: ProviderName): readonly string[] {
+function availableModelsForProvider(provider: ProviderName): readonly string[] {
   return PROVIDER_MODEL_CATALOG[provider].availableModels;
 }
 
@@ -112,7 +61,7 @@ export function userFacingAvailableModelsForProvider(provider: ProviderName): re
  * default effort always included); falls back to the default effort set
  * otherwise ("light" and "max" are never assumed — models must declare them).
  */
-export function openAiReasoningConfigForSupportedModel(
+function openAiReasoningConfigForSupportedModel(
   model: Pick<SupportedModel, "providerOptionsDefaults" | "supportedReasoningEfforts">,
 ): { defaultEffort: OpenAiReasoningEffort; availableEfforts: OpenAiReasoningEffort[] } | null {
   const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
@@ -143,31 +92,4 @@ export function reasoningConfigForProviderModel(
   return openAiConfig
     ? { defaultEffort: openAiConfig.defaultEffort, availableEfforts: openAiConfig.availableEfforts }
     : null;
-}
-
-export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
-  anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
-  bedrock: PROVIDER_MODEL_CATALOG.bedrock.availableModels,
-  baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
-  together: PROVIDER_MODEL_CATALOG.together.availableModels,
-  fireworks: PROVIDER_MODEL_CATALOG.fireworks.availableModels,
-  firepass: PROVIDER_MODEL_CATALOG.firepass.availableModels,
-  nvidia: PROVIDER_MODEL_CATALOG.nvidia.availableModels,
-  lmstudio: PROVIDER_MODEL_CATALOG.lmstudio.availableModels,
-  minimax: PROVIDER_MODEL_CATALOG.minimax.availableModels,
-  "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
-  "opencode-zen": PROVIDER_MODEL_CATALOG["opencode-zen"].availableModels,
-  "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
-  google: PROVIDER_MODEL_CATALOG.google.availableModels,
-  openai: PROVIDER_MODEL_CATALOG.openai.availableModels,
-};
-
-export function modelChoicesByProvider(): Record<ProviderName, readonly string[]> {
-  return PROVIDER_MODEL_CHOICES;
-}
-
-export function userFacingProviders(): ProviderName[] {
-  return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[]).filter((provider) =>
-    isUserFacingProviderEnabled(provider),
-  );
 }

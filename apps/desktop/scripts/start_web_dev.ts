@@ -1,15 +1,20 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "bun";
+import { cargoAvailable, resolveWorkspaceServerBinary } from "../../../scripts/workspaceRustBinary";
+import {
+  findPackagedSidecarLaunchCommand,
+  SIDECAR_MANIFEST_NAME,
+} from "../electron/services/sidecar";
 
-const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
-const desktopDir = path.join(repoRoot, "apps", "desktop");
+const defaultRepoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
 export type WebDevProcess = {
   exited: Promise<number>;
   kill(signal?: NodeJS.Signals): void;
+  stdin?: { end(): unknown } | null;
 };
 
 type WebDevSpawnOptions = {
@@ -23,7 +28,8 @@ export type WebDevDependencies = {
     options: WebDevSpawnOptions,
   ) => WebDevProcess & { stdout: ReadableStream<Uint8Array> };
   startVite?: (options: WebDevSpawnOptions) => WebDevProcess;
-  fileExists?: typeof existsSync;
+  repoRoot?: string;
+  env?: NodeJS.ProcessEnv;
   signals?: {
     on(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
     off(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
@@ -140,6 +146,11 @@ async function stopProcess(child: WebDevProcess): Promise<void> {
   }, 1_000);
   try {
     try {
+      child.stdin?.end();
+    } catch {
+      // Ignore closed stdin pipes during shutdown.
+    }
+    try {
       child.kill();
     } catch {
       // A process that exited between setup and cleanup no longer accepts a kill signal.
@@ -150,6 +161,44 @@ async function stopProcess(child: WebDevProcess): Promise<void> {
   }
 }
 
+function resolveWebDevSidecarCommand(
+  root: string,
+  env: NodeJS.ProcessEnv,
+): { command: string; args: string[] } {
+  const override = env.COWORK_DESKTOP_SIDECAR_PATH?.trim();
+  if (override) {
+    const explicitPath = path.resolve(override);
+    if (!existsSync(explicitPath)) {
+      throw new Error(`COWORK_DESKTOP_SIDECAR_PATH does not exist: ${explicitPath}`);
+    }
+    return findPackagedSidecarLaunchCommand([], { explicitPath });
+  }
+
+  // With a Rust toolchain, let Cargo build (or confirm freshness of) the server so a sidecar
+  // staged by an earlier `build:desktop-resources` never shadows newer `crates/` sources.
+  if (cargoAvailable(root, env)) {
+    return {
+      command: resolveWorkspaceServerBinary(root, env, { includeStaged: false }),
+      args: [],
+    };
+  }
+
+  const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+  const hasManifest = existsSync(path.join(binariesDir, SIDECAR_MANIFEST_NAME));
+  if (hasManifest) {
+    try {
+      return findPackagedSidecarLaunchCommand([binariesDir]);
+    } catch (error) {
+      // Cross-target packaging can leave another host's sidecar staged.
+      console.warn(`Ignoring staged sidecar: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  return {
+    command: resolveWorkspaceServerBinary(root, env, { includeStaged: !hasManifest }),
+    args: [],
+  };
+}
+
 export async function main(
   argv = process.argv.slice(2),
   dependencies: WebDevDependencies = {},
@@ -157,22 +206,18 @@ export async function main(
   const startServer =
     dependencies.startServer ??
     ((options: WebDevSpawnOptions) =>
-      spawn({ ...options, stdout: "pipe", stderr: "inherit", stdin: "ignore" }));
+      spawn({ ...options, stdout: "pipe", stderr: "inherit", stdin: "pipe" }));
   const startVite =
     dependencies.startVite ??
     ((options: WebDevSpawnOptions) =>
       spawn({ ...options, stdout: "inherit", stderr: "inherit", stdin: "inherit" }));
-  const fileExists = dependencies.fileExists ?? existsSync;
+  const repoRoot = dependencies.repoRoot ?? defaultRepoRoot;
+  const desktopDir = path.join(repoRoot, "apps", "desktop");
+  const env = dependencies.env ?? process.env;
   const signals = dependencies.signals ?? process;
   const logger = dependencies.logger ?? console;
   const startupTimeoutMs = dependencies.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
   const dirArg = parseDirArg(argv);
-
-  const serverArgs = ["src/server/index.ts"];
-  if (dirArg) {
-    serverArgs.push("--dir", dirArg);
-  }
-  serverArgs.push("--json");
 
   const children: WebDevProcess[] = [];
   const interruption = Promise.withResolvers<number>();
@@ -182,14 +227,23 @@ export async function main(
   signals.on("SIGINT", onInterrupt);
   signals.on("SIGTERM", onTerminate);
   try {
+    const sidecar = resolveWebDevSidecarCommand(repoRoot, env);
+    const serverArgs = [...sidecar.args];
+    if (dirArg) {
+      serverArgs.push("--dir", dirArg);
+    }
+    serverArgs.push("--json");
+
     const serverProc = startServer({
-      cmd: [process.execPath, ...serverArgs],
+      cmd: [sidecar.command, ...serverArgs],
       cwd: repoRoot,
       env: {
-        ...process.env,
+        ...env,
         FORCE_COLOR: "1",
+        COWORK_REPO_ROOT: env.COWORK_REPO_ROOT?.trim() || repoRoot,
         COWORK_WEB_DESKTOP_SERVICE: "1",
-        COWORK_HARNESS_TERMINAL_LOGS: process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
+        COWORK_DESKTOP_PARENT_MANAGED: "1",
+        COWORK_HARNESS_TERMINAL_LOGS: env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
       },
     });
     children.push(serverProc);
@@ -213,13 +267,13 @@ export async function main(
     clearTimeout(startupTimer);
     if (typeof ready === "number") return ready;
     const { url: serverUrl, browserAccessToken } = ready;
-    const webDevPort = process.env.COWORK_WEB_DEV_PORT?.trim() || "8281";
+    const webDevPort = env.COWORK_WEB_DEV_PORT?.trim() || "8281";
 
     const viteBinCandidates = [
       path.join(desktopDir, "node_modules", "vite-plus", "bin", "vp"),
       path.join(repoRoot, "node_modules", "vite-plus", "bin", "vp"),
     ];
-    const viteBin = viteBinCandidates.find((candidate) => fileExists(candidate));
+    const viteBin = viteBinCandidates.find((candidate) => existsSync(candidate));
     if (!viteBin) {
       throw new Error(`Could not find Vite+ bin; tried:\n${viteBinCandidates.join("\n")}`);
     }
@@ -234,7 +288,7 @@ export async function main(
       ],
       cwd: desktopDir,
       env: {
-        ...process.env,
+        ...env,
         FORCE_COLOR: "1",
         // Proxy HTTP and WebSocket traffic to the server owned by this launcher.
         COWORK_SERVER_URL: serverUrl,

@@ -3,7 +3,7 @@ import {
   type ArtifactPreview,
   artifactDiffSchema,
   artifactPreviewSchema,
-} from "../../../../../src/server/artifacts/types";
+} from "../../../../../src/shared/artifactTypes";
 import {
   type TaskArtifactDetail,
   type TaskCreationInput,

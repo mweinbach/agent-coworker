@@ -1,0 +1,71 @@
+[package]
+name = "cowork-server"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Axum WebSocket/HTTP/Mobile-TLS sidecar server, SocketSendQueue, NDJSON startup handshake, and stdin-EOF shutdown."
+
+[[bin]]
+name = "cowork-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+clap.workspace = true
+cowork-config.workspace = true
+cowork-env.workspace = true
+cowork-harness.workspace = true
+cowork-inference.workspace = true
+cowork-js-vm.workspace = true
+cowork-mcp.workspace = true
+cowork-protocol.workspace = true
+cowork-providers.workspace = true
+cowork-sandbox.workspace = true
+cowork-storage.workspace = true
+cowork-tools.workspace = true
+dashmap.workspace = true
+data-encoding.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+libc.workspace = true
+notify.workspace = true
+parking_lot.workspace = true
+percent-encoding.workspace = true
+rand.workspace = true
+rcgen.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+x509-parser.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+tempfile.workspace = true
+zip.workspace = true

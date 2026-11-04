@@ -1,99 +1,142 @@
 # Building Custom Tools
 
-The `agent-coworker` toolbelt is designed to be extensible. Developers can build and add custom tools to enable new capabilities for the agent. This guide explains how tools are structured, registered, and how to implement essential features like security approvals, cancellation, and logging.
+The `agent-coworker` toolbelt lives in the Rust `crates/cowork-tools/` crate. Developers can add new built-in tools by implementing the `BuiltinTool` trait and registering them in `create_builtin_tools()`. This guide explains how tools are structured, registered, and wired to approvals, cancellation, and path confinement.
 
 ## Tool Structure and Registration
 
-Custom tools are implemented in the `src/tools/` directory. Each tool should ideally be contained in its own file (e.g., `src/tools/myCustomTool.ts`) and export a function that returns the tool definition.
+Custom tools are implemented in `crates/cowork-tools/src/` (for example, `my_custom_tool.rs`) by implementing `BuiltinTool` from `crates/cowork-tools/src/context.rs`.
 
-Once a tool is created, it must be registered in the core toolbelt by adding it to the `createTools` function inside `src/tools/index.ts`.
+Once implemented, register the tool in `create_builtin_tools()` inside `crates/cowork-tools/src/catalog.rs` (and re-export it from `crates/cowork-tools/src/lib.rs` if needed by tests or downstream crates):
 
-```typescript
-// src/tools/index.ts
-import { myCustomTool } from './myCustomTool';
-import type { ToolContext } from './context';
-
-export function createTools(ctx: ToolContext) {
-  return {
-    // Built-in tools
-    bash: bashTool(ctx),
-    read: readTool(ctx),
-    // ...
-    
-    // Your custom tool
-    myCustomTool: myCustomTool(ctx),
-  };
+```rust
+// crates/cowork-tools/src/catalog.rs
+pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
+    let mut tools: ToolMap = BTreeMap::new();
+    // Built-in tools...
+    tools.insert("bash".to_owned(), Arc::new(BashTool));
+    tools.insert("read".to_owned(), Arc::new(ReadTool));
+    // Register your custom tool:
+    tools.insert("myCustomTool".to_owned(), Arc::new(MyCustomTool));
+    tools
 }
 ```
 
-## Tool Definitions and Zod
+## Tool Definitions and JSON Schema
 
-Tools use a local `defineTool()` helper with Zod-based `inputSchema` validation. This provides a consistent interface for defining a tool's description, parameters, and execution logic.
+Each `BuiltinTool` defines:
 
-The `parameters` property (the `inputSchema`) ensures that the agent provides correctly typed arguments before the tool's execution function is invoked.
+- `name(&self) -> &str` — canonical callable tool ID exposed to providers and prompts
+- `description(&self) -> &str` — concise model-facing guidance
+- `input_schema(&self) -> serde_json::Value` — JSON Schema object describing accepted arguments
+- `execution_policy(&self) -> ToolExecutionPolicy` — `ToolExecutionPolicy::Sequential` (default) or `ToolExecutionPolicy::ParallelRead` (for pure, side-effect-free read tools)
+- `async fn execute(&self, args: Value, ctx: &ToolExecutionContext) -> ToolResult<ToolOutput>` — validated execution logic
 
-## The `ToolContext` Object
+Use `normalize_and_validate_args(&args, &self.input_schema())` from `crates/cowork-tools/src/context.rs` to normalize provider-emitted `null` optionals and validate arguments against your JSON Schema before running side effects.
 
-Every tool is passed a `ToolContext` object (`ctx`). This context bridges the tool with the underlying system, providing access to logging, security mechanisms, and execution control.
+## The `ToolExecutionContext` Object
 
-### Security and Approvals: `ctx.approveCommand()`
+Every tool invocation receives `&ToolExecutionContext` (`crates/cowork-tools/src/context.rs`), which provides workspace confinement, interactive approvals, and cancellation controls:
 
-For tools that perform potentially destructive or sensitive actions (like executing terminal commands, modifying infrastructure, or sending emails), you must enforce the WebSocket-based command approval mechanism.
+### Path Confinement: `assert_read_path_allowed` & `assert_write_path_allowed`
 
-Call `await ctx.approveCommand(descriptionOfAction)` before performing the action. This will pause the tool execution and prompt the user in the TUI/CLI for approval.
+Always resolve user/model-supplied paths against `ctx.working_directory` and validate them with `assert_read_path_allowed(path, ctx)` or `assert_write_path_allowed(path, ctx)` so read-only roles, `no-project-write` policies, and child-agent `target_paths` remain enforced. File edits and writes should coordinate through `with_file_mutation` (`crates/cowork-tools/src/mutation.rs`).
 
-- If the user approves (or if the `--yolo` flag is active), the function resolves and execution continues.
-- If the user denies the request, an error is thrown, halting the tool execution safely.
+### Security and Approvals: `ctx.approval_handler`
 
-### Handling Cancellations: `ctx.abortSignal`
+For tools that perform potentially destructive or sensitive actions, request explicit user approval over the JSON-RPC server-request channel (`item/commandExecution/requestApproval`) via `ctx.approval_handler`:
 
-Tool executions can be cancelled by the user mid-flight. Always check `ctx.abortSignal?.aborted` during long-running operations or loops to ensure the tool stops processing promptly when cancelled.
+- When `ctx.yolo` is `true` (and no hard sandbox floor applies), command/file approvals auto-approve.
+- Otherwise, tool execution suspends until the client resolves the request; if denied, return `Err(ToolError::Execution(...))` without performing the side effect.
 
-### Logging: `ctx.log()`
+### Handling Cancellation: `ctx.is_cancelled()`
 
-Use `ctx.log(message)` to stream execution logs back to the user interface. This is crucial for providing real-time feedback on the tool's progress, especially for tools that take a long time to complete or have multiple steps.
+Turns can be interrupted mid-flight via `turn/interrupt`. Check `ctx.is_cancelled()` (or select on `ctx.cancel_rx.clone()`) across async waits and multi-step loops so cancelled turns stop promptly and reap any spawned child processes.
 
-## Code Example: A Simple Custom Tool
+## Code Example: A Custom Rust Tool
 
-Here is a complete example of a custom tool demonstrating these concepts:
+```rust
+use async_trait::async_trait;
+use serde_json::{Value, json};
+use tokio::time::{Duration, sleep};
 
-```typescript
-// src/tools/myCustomTool.ts
-import { z } from 'zod';
-import type { ToolContext } from './context';
-import { defineTool } from './defineTool';
+use crate::context::{
+    ApprovalDecisionRequest, BuiltinTool, ToolError, ToolExecutionContext, ToolOutput, ToolResult,
+    normalize_and_validate_args,
+};
 
-export function myCustomTool(ctx: ToolContext) {
-  return defineTool({
-    description: 'A custom tool that simulates a long-running, sensitive operation.',
-    inputSchema: z.object({
-      targetName: z.string().describe('The name of the target to operate on.'),
-      iterations: z.number().min(1).max(10).default(3).describe('Number of steps to perform.'),
-    }),
-    execute: async ({ targetName, iterations }) => {
-      // 1. Log the start of the operation
-      ctx.log(`Starting operation on target: ${targetName}`);
+pub struct MyCustomTool;
 
-      // 2. Request user approval for a sensitive action
-      await ctx.approveCommand(`Initialize custom operation on ${targetName}`);
+#[async_trait]
+impl BuiltinTool for MyCustomTool {
+    fn name(&self) -> &str {
+        "myCustomTool"
+    }
 
-      for (let i = 1; i <= iterations; i++) {
-        // 3. Check for cancellation
-        if (ctx.abortSignal?.aborted) {
-          ctx.log(`Operation cancelled by user at step ${i}.`);
-          throw new Error('Operation aborted');
+    fn description(&self) -> &str {
+        "Run a bounded, user-approved operation against a named target."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "targetName": {
+                    "type": "string",
+                    "description": "The name of the target to operate on."
+                },
+                "iterations": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "default": 3
+                }
+            },
+            "required": ["targetName"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(&self, args: Value, ctx: &ToolExecutionContext) -> ToolResult<ToolOutput> {
+        let normalized = normalize_and_validate_args(&args, &self.input_schema())?;
+        let target_name = normalized
+            .get("targetName")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("targetName is required".to_owned()))?;
+        let iterations = normalized
+            .get("iterations")
+            .and_then(Value::as_u64)
+            .unwrap_or(3);
+
+        if !ctx.yolo {
+            if let Some(handler) = &ctx.approval_handler {
+                let approved = handler
+                    .approve_command(ApprovalDecisionRequest {
+                        command: format!("myCustomTool {target_name}"),
+                        reason: "Sensitive custom operation".to_owned(),
+                        dangerous: false,
+                        detail: None,
+                        category: None,
+                    })
+                    .await
+                    .map_err(ToolError::Execution)?;
+                if !approved {
+                    return Err(ToolError::Execution("Operation denied by user.".to_owned()));
+                }
+            }
         }
 
-        // Simulate work
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // 4. Log progress
-        ctx.log(`Completed step ${i} of ${iterations}...`);
-      }
+        for step in 1..=iterations {
+            if ctx.is_cancelled() {
+                return Err(ToolError::Execution(format!(
+                    "Operation cancelled at step {step}."
+                )));
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
 
-      ctx.log('Operation finished successfully.');
-      return `Successfully completed ${iterations} steps on ${targetName}.`;
-    },
-  });
+        Ok(ToolOutput::Text(format!(
+            "Successfully completed {iterations} steps on {target_name}."
+        )))
+    }
 }
 ```

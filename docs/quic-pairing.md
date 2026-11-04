@@ -1,6 +1,6 @@
-# Direct mobile pairing over HTTP/3
+# Direct mobile pairing over pinned TLS (`h3` scheme)
 
-Cowork Mobile pairs to the desktop app directly over a local HTTPS endpoint served by the workspace sidecar. The endpoint enables Bun HTTP/3 with `h3: true` when available, but the route contract also works over ordinary HTTPS so the transport can fall back without changing mobile code.
+Cowork Mobile pairs to the desktop app directly over a local self-signed TLS (`tokio-rustls` + `rcgen`) HTTPS gateway served by the workspace sidecar (`cowork-server --mobile-h3` in `crates/cowork-server/src/mobile_h3/`). Pairing tickets and initialize metadata retain `"scheme": "h3"` and `transport.type: "h3"` for mobile client compatibility while serving the pinned HTTPS/SSE route contract directly from Rust.
 
 ## Pairing ticket
 
@@ -45,6 +45,7 @@ All routes are served from the direct endpoint advertised in the ticket.
   the same bearer token and mobile device id header. The server emits SSE comment keepalive frames
   every 15 seconds so idle streams are not dropped by NATs or mobile network stacks.
 - `GET /health` returns endpoint status for diagnostics.
+- `GET /ticket` returns the active pairing ticket payload on loopback (`127.0.0.1` / `::1`) for desktop supervisor diagnostics and QR rendering.
 
 ## JSON-RPC contract
 
@@ -77,6 +78,7 @@ Always allowed after pairing:
 
 Permission-gated methods:
 
+- conversations: `thread/archive`, `thread/unarchive`, `thread/name/set`, and `cowork/session/{close,delete,rename,fork}`
 - turns: `thread/start` and `turn/*`
 - server requests: JSON-RPC responses to server-initiated requests
 - provider auth: `cowork/provider/auth/*`

@@ -1,0 +1,101 @@
+{
+  "sessionId": "ts-retry-session",
+  "title": "Retry",
+  "titleSource": "default",
+  "titleModel": null,
+  "provider": "anthropic",
+  "model": "model",
+  "sessionKind": "root",
+  "parentSessionId": null,
+  "role": null,
+  "mode": null,
+  "depth": null,
+  "nickname": null,
+  "taskType": null,
+  "targetPaths": null,
+  "profile": null,
+  "requestedModel": null,
+  "effectiveModel": null,
+  "requestedReasoningEffort": null,
+  "effectiveReasoningEffort": null,
+  "executionState": null,
+  "lastMessagePreview": null,
+  "createdAt": "2026-07-10T00:00:00.000Z",
+  "updatedAt": "2026-07-10T00:00:00.000Z",
+  "messageCount": 2,
+  "lastEventSeq": 4,
+  "feed": [
+    {
+      "id": "user-1",
+      "kind": "message",
+      "role": "user",
+      "ts": "2026-07-10T00:00:00.000Z",
+      "text": "Run tests"
+    },
+    {
+      "id": "tool-failed",
+      "kind": "tool",
+      "ts": "2026-07-10T00:00:00.000Z",
+      "name": "bash",
+      "state": "output-error",
+      "args": {
+        "command": "bun test"
+      },
+      "result": {
+        "error": "failed"
+      }
+    },
+    {
+      "id": "tool-retry",
+      "kind": "tool",
+      "ts": "2026-07-10T00:00:00.000Z",
+      "name": "bash",
+      "state": "output-available",
+      "args": {
+        "command": "bun test"
+      },
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "id": "assistant-1",
+      "kind": "message",
+      "role": "assistant",
+      "ts": "2026-07-10T00:00:00.000Z",
+      "text": "Tests pass now.",
+      "annotations": [
+        {
+          "type": "cowork.toolRetryMetadata",
+          "version": 1,
+          "entries": [
+            {
+              "itemId": "tool-failed",
+              "inputDigest": {
+                "algorithm": "sha256",
+                "value": "36cb26544b5f5f9586faeb9a4069f9bfb1d95462ae08ca68ca5d917a5452a696",
+                "canonicalBytes": 49
+              }
+            },
+            {
+              "itemId": "tool-retry",
+              "inputDigest": {
+                "algorithm": "sha256",
+                "value": "36cb26544b5f5f9586faeb9a4069f9bfb1d95462ae08ca68ca5d917a5452a696",
+                "canonicalBytes": 49
+              },
+              "retryOf": "tool-failed"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "agents": [],
+  "workflowRuns": [],
+  "todos": [],
+  "sessionUsage": null,
+  "lastTurnUsage": null,
+  "hasPendingAsk": false,
+  "hasPendingApproval": false
+}

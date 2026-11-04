@@ -1,10 +1,10 @@
-import type { PresentationPreviewResult } from "../../../../../src/server/presentationPreview";
 import type {
   CanvasDocumentCloseResult,
   CanvasDocumentOpenResult,
   CanvasDocumentRevisionResult,
   CanvasDocumentSaveResult,
 } from "../../../../../src/shared/canvasDocument";
+import type { PresentationPreviewResult } from "../../../../../src/shared/presentationPreview";
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,

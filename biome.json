@@ -25,13 +25,14 @@
       "!!**/android",
       "!!**/.expo",
       "!!apps/mobile/dist-export",
-      "!!src/server/jsonrpc/codegen.ts",
-      "!!src/server/jsonrpc/schema.ts",
       "!!config/models",
       "!!.agents",
       "!!.claude",
       "!!skills",
-      "!!docs/generated"
+      "!!docs/generated",
+      "!!src/generated",
+      "!!crates/cowork-protocol/src/ws_jsonrpc_schema.json",
+      "!!crates/cowork-harness/tests/fixtures/conversation_import_parity"
     ]
   },
   "formatter": {
@@ -105,7 +106,7 @@
       }
     },
     {
-      "includes": ["test/**", "apps/desktop/test/**", "scripts/**", "test_model.ts"],
+      "includes": ["test/**", "apps/desktop/test/**", "scripts/**"],
       "linter": {
         "rules": {
           "correctness": {
@@ -234,57 +235,7 @@
       }
     },
     {
-      "includes": [
-        "src/agent.ts",
-        "src/cli/repl.ts",
-        "src/server/startServer.ts",
-        "src/store/connections.ts",
-        "src/types.ts",
-        "src/providers/googleReplay.ts",
-        "src/providers/bedrockShared.ts",
-        "src/providers/providerOptions.ts",
-        "src/runtime/googleInteractionsRuntime.ts",
-        "src/runtime/googleNativeInteractions.ts",
-        "src/runtime/openaiNativeResponses.ts",
-        "src/runtime/openaiResponsesProjector.ts",
-        "src/runtime/openaiResponsesRuntime.ts",
-        "src/runtime/openaiResponsesShared.ts",
-        "src/runtime/piRuntime.ts",
-        "src/runtime/piRuntimeOptions.ts",
-        "src/runtime/piMessageBridge.ts",
-        "src/runtime/piStreamParts.ts",
-        "src/runtime/types.ts",
-        "src/tools/defineTool.ts",
-        "src/server/jsonrpc/routes/session.ts",
-        "src/tools/index.ts"
-      ],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noExplicitAny": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": [
-        "src/agent.ts",
-        "src/config.ts",
-        "src/cli/repl.ts",
-        "src/providers/googleReplay.ts",
-        "src/providers/bedrockShared.ts",
-        "src/runtime/googleInteractionsRuntime.ts",
-        "src/runtime/openaiNativeResponses.ts",
-        "src/runtime/openaiResponsesProjector.ts",
-        "src/runtime/openaiResponsesRuntime.ts",
-        "src/runtime/openaiResponsesShared.ts",
-        "src/runtime/piMessageBridge.ts",
-        "src/runtime/piStreamParts.ts",
-        "src/runtime/types.ts",
-        "src/server/agents/toolPolicy.ts",
-        "src/server/agents/DelegateRunner.ts",
-        "src/server/jsonrpc/routes/mcp.ts"
-      ],
+      "includes": ["src/types.ts"],
       "linter": {
         "rules": {
           "suspicious": {
@@ -339,22 +290,6 @@
             "noUnusedImports": "error",
             "noUnusedVariables": "error",
             "noUnusedFunctionParameters": "error"
-          }
-        }
-      }
-    },
-    {
-      "includes": [
-        "src/workspace/map.ts",
-        "src/tools/webFetch.ts",
-        "src/tools/webSearch.ts",
-        "src/server/commands.ts"
-      ],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noControlCharactersInRegex": "off",
-            "noAssignInExpressions": "off"
           }
         }
       }

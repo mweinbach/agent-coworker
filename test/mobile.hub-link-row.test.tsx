@@ -65,7 +65,10 @@ mockLocalModule("react-native", "apps/mobile/node_modules/react-native", () => (
 }));
 mock.module(
   path.resolve("apps/mobile/node_modules/expo-router/build/link/useLinkToPathProps.js"),
+  // BaseExpoRouterLink consumes this CommonJS module through `__importDefault`;
+  // keep the real module's `__esModule` marker so `.default` is the hook itself.
   () => ({
+    __esModule: true,
     default: ({ href }: { href: string }) => ({
       href,
       onPress: () => navigations.push(href),

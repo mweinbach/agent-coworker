@@ -18,54 +18,53 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
         └────────────┴──────────────────┘
                       │
                       ▼ WebSocket Protocol
-                    ┌─────────────────────┐
-                    │   WebSocket Server  │
-                    │   (src/server/)     │
-                    └──────────┬──────────┘
-                               │
-        ┌──────────────────────┼──────────────────────┐
-        │                      │                      │
-        ▼                      ▼                      ▼
-┌───────────────┐    ┌─────────────────┐    ┌───────────────┐
-│ AgentSession  │    │  Agent Loop     │    │  MCP Manager  │
-│(AgentSession) │    │  (agent.ts)     │    │   (mcp/)      │
-└───────────────┘    └─────────────────┘    └───────────────┘
-        │                      │                      │
-        │                      ▼                      │
-        │            ┌─────────────────┐             │
-        │            │   AI Providers  │             │
-        │            │ (providers/)    │             │
-        │            └─────────────────┘             │
-        │                      │                      │
-        └──────────────────────┼──────────────────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │   Tool Execution    │
-                    │   (src/tools/)      │
-                    └─────────────────────┘
+                  ┌───────────────────────┐
+                  │   WebSocket Server    │
+                  │ (crates/cowork-server)│
+                  └───────────┬───────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌────────────────┐   ┌──────────────────┐   ┌────────────────┐
+│ SessionRuntime │   │    Agent Loop    │   │  MCP Manager   │
+│(cowork-server) │   │ (cowork-harness) │   │  (cowork-mcp)  │
+└───────┬────────┘   └────────┬─────────┘   └───────┬────────┘
+        │                     │                     │
+        │                     ▼                     │
+        │           ┌──────────────────┐            │
+        │           │   AI Providers   │            │
+        │           │(cowork-providers)│            │
+        │           └─────────┬────────┘            │
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              ▼
+                  ┌───────────────────────┐
+                  │    Tool Execution     │
+                  │ (crates/cowork-tools) │
+                  └───────────────────────┘
 ```
 
 ## Core Components
 
-### 1. WebSocket Server (`src/server/`)
+### 1. WebSocket Server (`crates/cowork-server/`)
 
 The server is the heart of the system. It handles:
 
-- **Session Management**: Each WebSocket connection gets an `AgentSession` instance
+- **Session Management**: Each WebSocket connection binds to a workspace/thread session runtime
 - **Protocol Handling**: Validates JSON-RPC requests and notifications, then routes them to the appropriate handlers
 - **Turn Orchestration**: Manages the agent turn lifecycle (start, stream, complete)
 - **State Persistence**: SQLite-based session storage with backup/restore
 
-**Key Files:**
+**Key Modules:**
 
-- `startServer.ts` — Server initialization and WebSocket routing
-- `session/AgentSession.ts` — Per-session orchestration facade over focused managers (`TurnExecutionManager`, `HistoryManager`, `InteractionManager`, `McpManager`, `PersistenceManager`, `ProviderAuthManager`, `ProviderCatalogManager`, `SessionAdminManager`, `SkillManager`, etc.)
-- `protocol.ts` — Internal `SessionEvent` payload types used by session managers, control envelopes, and persistence
-- `jsonrpc/` — JSON-RPC transport, schemas, routes, and notification projectors
-- `sessionBackup/` — Filesystem backup and checkpoint management (multiple modules: `command.ts`, `snapshot.ts`, `tar.ts`, `delta.ts`, etc.)
-- `sessionDb/` — SQLite persistence (`repository.ts`, `migrations.ts`, `writeCoordinator.ts`, etc.)
+- `crates/cowork-server/src/lib.rs` — Server initialization, HTTP routes, and WebSocket routing
+- `crates/cowork-harness/src/lib.rs` — Per-session turn orchestration, subagents, tasks, workflows, and backups
+- `src/shared/protocol.ts` — Shared `SessionEvent` payload types consumed by UI clients
+- `crates/cowork-server/src/jsonrpc.rs` — JSON-RPC transport, schemas, routes, and notification projectors
+- `crates/cowork-storage/src/lib.rs` — SQLite persistence and JSONL thread journal
 
-### 2. Agent Loop (`src/agent.ts`)
+### 2. Agent Loop (`crates/cowork-harness/`)
 
 The agent loop is where the AI reasoning happens:
 
@@ -73,25 +72,15 @@ The agent loop is where the AI reasoning happens:
 User Message → System Prompt + History + Tools → AI Model → Tool Calls → Results → Repeat
 ```
 
-**Key Function:** `createRunTurn()` — Factory that returns a `runTurn()` function with injectable dependencies (for testing).
-
 **Turn Lifecycle:**
 
 1. Build system prompt with skills, memory, and context
-2. Call the configured LLM runtime (`google-interactions` for Google, `pi` for Anthropic/OpenCode/local-compatible providers, `openai-responses` for OpenAI Responses flows, or `codex-app-server` for ChatGPT Subscription/Codex) with model, tools, and history
+2. Call the configured LLM wire transport in `crates/cowork-providers/` (`google` Interactions API, `anthropic` Messages API, `openai` Responses API, OpenAI-compatible Chat Completions, AWS Bedrock ConverseStream, or `codex-cli` Codex app-server) with model, tools, and history
 3. Execute tool calls (with approval for risky operations)
 4. Stream results back to client via WebSocket events
 5. Update message history
 
-The runtime boundary lives in `src/runtime/`:
-
-- `createRuntime()` selects `google-interactions`, `pi`, `openai-responses`, or `codex-app-server`; providers are normalized back to their supported default runtime when stale saved values are encountered
-- `googleInteractionsRuntime` handles Gemini Interactions API turns, including server-side interaction continuation and Google-native stream/raw event handling
-- `piRuntime` handles Anthropic/OpenCode/local-compatible streaming/tool loops and shared tool execution utilities
-- `openaiResponsesRuntime` handles OpenAI Responses flows
-- `codexAppServerRuntime` handles ChatGPT Subscription/Codex turns through Codex app-server
-
-### 3. Tools (`src/tools/`)
+### 3. Tools (`crates/cowork-tools/`)
 
 Built-in capabilities exposed to the agent:
 
@@ -120,26 +109,24 @@ When agent control is enabled, the following tools are also available: `listAgen
 
 For non-Codex providers, Cowork exposes the full built-in toolbelt plus the deferred MCP search/call tools. For `codex-cli`, Cowork uses a hybrid boundary: Codex app-server owns local shell execution, sandboxing, approvals, filesystem reads/writes/edits/search, and native web search/fetch. Cowork exposes only coordination tools such as subagents, ask/todos/memory/skills, plus Cowork-managed `toolSearch` and `mcpCall` as Codex app-server `dynamicTools`.
 
-`webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY`) and is not exposed to `codex-cli` turns in hybrid mode. Supporting modules like `exa.ts`, `parallel.ts`, and `api-keys.ts` are implementation helpers, not standalone tools.
+`webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY` or `toolApiKeys` in `~/.cowork/auth/connections.json`) and is not exposed to `codex-cli` turns in hybrid mode (`crates/cowork-tools/src/web.rs`).
 
-Each tool is a factory function accepting a `ToolContext` with access to:
+Each tool implements `BuiltinTool` (`crates/cowork-tools/src/context.rs`) and executes with a `ToolExecutionContext` providing access to:
 
-- `config` — Current agent configuration
-- `log()` — Emit log output
-- `askUser()` — Prompt user for input
-- `approveCommand()` — Request approval to escalate a sandbox-denied command out of the OS sandbox (see [Sandbox](./sandbox.md))
-- `sandboxPolicy` — Resolved OS sandbox policy enforced for `bash` execution
-- `updateTodos()` — Update progress indicators
+- `agent_config` — Current agent configuration
+- `working_directory` / `read_roots` — Confined workspace and skill/plugin read/write roots
+- `approval_handler` — Prompt the user for structured questions (`ask_user`) or command/file approvals (`approve_command` / `approve_file_change`, including OS sandbox denial escalation; see [Sandbox](./sandbox.md))
+- `sandbox_policy` — Resolved OS sandbox policy enforced for `bash` execution
+- `on_todos_updated` — Update progress indicators
+- `is_cancelled()` — Cooperative turn cancellation signal
 
-### 4. Providers (`src/providers/`)
+### 4. Providers (`crates/cowork-providers/`, `src/providers/catalog.ts`)
 
-There are 12 registered providers: `google`, `openai`, `anthropic`, `bedrock`, `together`, `fireworks`, `nvidia`, `lmstudio`, `baseten`, `opencode-go`, `opencode-zen`, and `codex-cli`.
+The registered providers and their static metadata (display name, wire transport, discovery mode, API-key env vars, base URLs, default/title models, auth methods, canonical order) are listed in `config/providers.json`. Wire transports live in `crates/cowork-providers/src/` (one module per protocol; OpenAI-compatible providers share the Chat Completions transport), TypeScript clients read the generated `src/generated/providerSpecs.ts`, and model metadata lives in per-provider config files under `config/models/<provider>/`.
 
-Each provider is registered in `src/providers/index.ts` and model metadata lives in per-provider config files under `config/models/<provider>/`.
+Provider selection flows through config with env var override (`AGENT_PROVIDER`).
 
-Provider selection flows through config with env var override (`AGENT_PROVIDER`). The runtime adapter (`google-interactions`, `pi`, or `openai-responses` in `src/runtime/`) is determined by the provider.
-
-### 5. MCP Integration (`src/mcp/`)
+### 5. MCP Integration (`crates/cowork-mcp/`)
 
 Model Context Protocol servers extend the agent with external tools:
 
@@ -171,7 +158,7 @@ Skills are discovered from layered directories:
 2. Global: `~/.cowork/skills/`
 3. Built-in: `skills/`
 
-### 7. Observability (`src/observability/`)
+### 7. Observability (`crates/cowork-server/src/observability.rs`)
 
 OpenTelemetry + Langfuse integration for production monitoring:
 
@@ -196,7 +183,7 @@ Electron + React wrapper (primary client):
 - Per-workspace server processes
 - Persistent workspace/thread state
 
-### CLI REPL (`src/cli/`)
+### CLI REPL (`crates/cowork-cli/`)
 
 Minimal readline-based interface:
 
@@ -218,20 +205,22 @@ JSON-RPC flow (`cowork.jsonrpc.v1` subprotocol):
 6. Turn completes → turn/completed notification
 ```
 
-Canonical chat UI updates are JSON-RPC notifications. `src/server/jsonrpc/notificationProjector.ts` maps internal `SessionEvent` payloads into `turn/*`, `item/*`, and `cowork/session/*` notifications, while `src/server/jsonrpc/threadJournalNotificationProjector.ts` writes the same notification stream to the thread journal for replay.
+Canonical chat UI updates are JSON-RPC notifications. `crates/cowork-server/src/jsonrpc.rs` maps session turn events into `turn/*`, `item/*`, and `cowork/session/*` notifications, and `crates/cowork-storage/src/lib.rs` writes the notification stream to the thread journal for replay.
 
 ### Session Persistence
 
 Sessions are stored in SQLite (`~/.cowork/sessions.db`):
 
-- **sessions** table — Metadata (status, message count, timestamps)
-- **session_state** table — Materialized state (messages, todos, prompt)
-- **session_events** table — Append-only event log
+- **sessions** table — Metadata (status, workspace, provider/model, message count, `last_event_seq`, timestamps)
+- **session_state** table — Materialized turn/provider state (`system_prompt`, `messages_json`, `todos_json`, `harness_context_json`)
+- **session_snapshots** table — Projected client replay snapshots (`SessionSnapshot`)
+- **session_events** / **thread_journal_events** — Append-only semantic and monotonic `seq` JSON-RPC replay logs
+- **tasks** & `task_*` tables — Durable Task mode briefs, DAG work items, claims, questions, and artifact versions
 
 Resume semantics:
 
 1. Try warm in-memory binding
-2. If missing, load from SQLite (cold rehydrate)
+2. If missing, load from SQLite (cold rehydrate) and replay monotonic journal events (`afterSeq`) or snapshot fallback
 3. If not found, create new session
 
 ## Configuration Hierarchy
@@ -267,23 +256,24 @@ Configuration merges across three tiers (each overrides the previous):
 
 ### Adding a New Tool
 
-1. Create `src/tools/myTool.ts`
-2. Export factory function accepting `ToolContext`
-3. Register in `src/tools/index.ts`
-4. Add targeted tests under `test/`
+1. Add the tool implementation in `crates/cowork-tools/src/`
+2. Register the tool in `crates/cowork-tools/src/lib.rs`
+3. Add targeted tests under `crates/cowork-tools/` or `test/`
 
 ### Adding a WebSocket Message
 
-1. Add JSON-RPC request/result/notification schemas in `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/`
-2. Add a `SessionEvent` type in `src/server/protocol.ts` only when server-internal session managers need a reusable event shape
-3. Add handler in `src/server/jsonrpc/routes/` or the appropriate manager under `src/server/session/`
-4. Document in `docs/websocket-protocol.md`
+1. Add JSON-RPC request/result/notification schemas in `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts`
+2. Add a `SessionEvent` type in `src/shared/protocol.ts` when consumed by clients
+3. Add handler in `crates/cowork-server/src/` or `crates/cowork-harness/`
+4. Document in `docs/websocket-protocol.md` and run `bun run docs:generate-jsonrpc` + `bun run docs:check`
 
 ### Adding a Provider
 
-1. Create `src/providers/myProvider.ts`
-2. Export `defaultModel`, `keyCandidates`, `createModel()`
-3. Register in `src/providers/index.ts`
+Static provider metadata lives in `config/providers.json` (Rust: `crates/cowork-config/src/provider_specs.rs`; TypeScript: generated `src/generated/providerSpecs.ts`). The full checklist is in [`agent_docs/adding-models.md`](../agent_docs/adding-models.md#adding-a-provider).
+
+1. OpenAI-compatible Chat Completions provider: add a `config/providers.json` entry, the matching `ProviderName` variant in `crates/cowork-config/src/providers.rs`, `config/models/<provider>/*.json` (imported in `src/models/registry.ts`), optional quirks in `crates/cowork-providers/src/chat_completions/quirks.rs`, and the id in the provider enums of `crates/cowork-protocol/src/ws_jsonrpc_schema.json`; then run `bun run providers:generate` and `bun run docs:generate-jsonrpc`.
+2. New wire protocol: additionally add a `ProviderWireProtocol` variant, a transport module in `crates/cowork-providers/src/` (see `anthropic_messages.rs` / `google_interactions.rs`), its branch in `select_provider_transport` (`crates/cowork-server/src/turn_runner.rs`), and legacy replay conversion in `crates/cowork-inference/src/legacy_messages.rs` when it carries provider-specific state.
+3. `bun run docs:check` fails when the generated module is stale or provider enums/default models drift.
 
 ### Adding a Skill
 
@@ -323,9 +313,9 @@ Write operations are restricted to:
 
 ### Streaming
 
-- Model responses stream in real-time via `model_stream_chunk` events
+- Model responses stream in real-time via JSON-RPC `item/*` notifications (`item/started`, `item/agentMessage/delta`, `item/reasoning/delta`, `item/completed`)
 - Tool outputs are streamed incrementally
-- Large outputs are truncated with file-based fallback
+- Large outputs are truncated with file-based fallback into `.cowork/.cowork-scratchpad/`
 
 ### Caching
 

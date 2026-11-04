@@ -1,0 +1,351 @@
+[
+  {
+    "source": "claude-code",
+    "sourceId": "claude-sess-1",
+    "sourcePath": "/fixtures/claude/projects/-work-app/claude-session.jsonl",
+    "createdAt": "2026-02-01T10:00:00.000Z",
+    "updatedAt": "2026-02-01T09:59:59.000Z",
+    "fingerprint": "45d7bdcecc5faabd0d103d55ea2c82efec72c20b81abe8e48791264c64b3e655",
+    "items": [
+      {
+        "kind": "user",
+        "id": "import-claude-code-9acef3e154cc3f70",
+        "ts": "2026-02-01T09:59:59.000Z",
+        "text": "Earlier note\ncamel input"
+      },
+      {
+        "kind": "user",
+        "id": "import-claude-code-3dcac41d471e5140",
+        "ts": "2026-02-01T10:00:00.000Z",
+        "text": "Fix the parser please é中 😀"
+      },
+      {
+        "kind": "reasoning",
+        "id": "import-claude-code-d7ff9e7913329c0b",
+        "ts": "2026-02-01T10:00:01.500Z",
+        "mode": "summary",
+        "text": "Plan the fix"
+      },
+      {
+        "kind": "assistant",
+        "id": "import-claude-code-b76cf2294e0edd31",
+        "ts": "2026-02-01T10:00:01.500Z",
+        "text": "Looking now."
+      },
+      {
+        "kind": "tool",
+        "id": "import-claude-code-bcf0b4552717c231",
+        "ts": "2026-02-01T10:00:01.500Z",
+        "name": "Read",
+        "args": {
+          "1": "one",
+          "2": "two",
+          "10": "ten",
+          "4294967294": "max index",
+          "path": "src/b.ts",
+          "01": "leading zero",
+          "4294967295": "not an index",
+          "limit": 1,
+          "offset": 1e+21,
+          "almost": 123456789012345680000,
+          "tiny": 1.5e-7,
+          "small": 0.000001,
+          "big": 12345678901234567000,
+          "neg": 0,
+          "negf": -2.5,
+          "exp": 100,
+          "ctrl": "tab\tnl\nq\"bs\\ \u0001 \u001f    /"
+        },
+        "result": {
+          "5": null,
+          "zeta": 1,
+          "alpha": [
+            3,
+            2,
+            1
+          ],
+          "nested": {
+            "0": [],
+            "b": true,
+            "a": false
+          }
+        },
+        "error": "  "
+      },
+      {
+        "kind": "assistant",
+        "id": "import-claude-code-7493bd6ca0e26c2e",
+        "ts": "2026-02-01T10:00:01.500Z",
+        "text": "bare string block"
+      },
+      {
+        "kind": "tool",
+        "id": "import-claude-code-444454474684de5a",
+        "ts": "2026-02-01T10:00:03.000Z",
+        "name": "Grep",
+        "error": "[object Object]"
+      },
+      {
+        "kind": "tool",
+        "id": "import-claude-code-7a27de611dacb8aa",
+        "ts": "2026-02-01T10:00:05.000Z",
+        "name": "tool",
+        "result": "orphan output"
+      },
+      {
+        "kind": "user",
+        "id": "import-claude-code-dbaa021578d02851",
+        "ts": "2026-02-01T10:00:05.000Z",
+        "text": "and a follow-up"
+      },
+      {
+        "kind": "tool",
+        "id": "import-claude-code-d25d2615ff9f2945",
+        "ts": "2026-02-01T10:00:10.500Z",
+        "name": "Bash",
+        "args": {
+          "cmd": "ls",
+          "nums": [
+            0.1,
+            100,
+            1e-7,
+            123456789012345680000,
+            -1.5e+300
+          ],
+          "z": {
+            "y": null,
+            "x": "é"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "source": "claude-code",
+    "sourceId": "claude-no-session",
+    "sourcePath": "/fixtures/claude/projects/-work-app/claude-no-session.jsonl",
+    "createdAt": "2026-03-01T00:00:00.000Z",
+    "updatedAt": "2026-03-01T00:00:01.000Z",
+    "fingerprint": "32662e94a2bd50ab020abf82d988614944db31f96126bc26b272879974cd7714",
+    "items": [
+      {
+        "kind": "user",
+        "id": "import-claude-code-35929565b6b39f2d",
+        "ts": "2026-03-01T00:00:00.000Z",
+        "text": "hi there"
+      },
+      {
+        "kind": "tool",
+        "id": "import-claude-code-7490946c4b69cc8d",
+        "ts": "2026-03-01T00:00:01.000Z",
+        "name": "tool",
+        "error": ""
+      }
+    ]
+  },
+  {
+    "source": "claude-code",
+    "sourceId": "empty-sess",
+    "sourcePath": "/fixtures/claude/projects/-work-app/claude-empty.jsonl",
+    "createdAt": "2026-03-02T00:00:00.000Z",
+    "updatedAt": "2026-03-02T00:00:00.000Z",
+    "fingerprint": "bf686ee772f360318e78626c226ead44d2306aea9ebab06d2c0d2648592cb297",
+    "items": []
+  },
+  {
+    "source": "codex",
+    "sourceId": "codex-thread-1",
+    "sourcePath": "/fixtures/codex/sessions/rollout-thread.jsonl",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:01:00.123Z",
+    "fingerprint": "4b09322f40c195697e039345cf27becc55bea502deec03453e5a36c809111cfe",
+    "items": [
+      {
+        "kind": "user",
+        "id": "import-codex-929f0d97cc311657",
+        "ts": "2026-01-01T00:00:02.000Z",
+        "text": "Run tests\nnow"
+      },
+      {
+        "kind": "reasoning",
+        "id": "import-codex-c7b2aaf5c21ae0f9",
+        "ts": "2026-01-01T00:00:03.000Z",
+        "mode": "summary",
+        "text": "Considering\nplain"
+      },
+      {
+        "kind": "tool",
+        "id": "import-codex-b44b6540155ace9a",
+        "ts": "2026-01-01T00:00:04.000Z",
+        "name": "shell",
+        "args": {
+          "2": 2,
+          "10": 1,
+          "cmd": [
+            "cargo",
+            "test"
+          ],
+          "workdir": "/w"
+        },
+        "result": {
+          "1": "x",
+          "stdout": "ok",
+          "exit": 0
+        }
+      },
+      {
+        "kind": "tool",
+        "id": "import-codex-dd61c8607eba9a59",
+        "ts": "2026-01-01T00:00:06.000Z",
+        "name": "apply_patch",
+        "args": "not json"
+      },
+      {
+        "kind": "tool",
+        "id": "import-codex-2f4b3bae2e30a93c",
+        "ts": "2026-01-01T00:00:07.000Z",
+        "name": "tool",
+        "result": [
+          1,
+          2.5,
+          "z"
+        ]
+      },
+      {
+        "kind": "assistant",
+        "id": "import-codex-31cebb26339dbd49",
+        "ts": "2026-01-01T00:00:08.000Z",
+        "text": "All green."
+      },
+      {
+        "kind": "tool",
+        "id": "import-codex-b854b41dcac71773",
+        "ts": "2026-01-01T00:00:09.000Z",
+        "name": "view",
+        "args": {
+          "3": "three",
+          "z": 1,
+          "a": {
+            "y": 2,
+            "x": 3
+          }
+        }
+      }
+    ]
+  },
+  {
+    "source": "codex",
+    "sourceId": "rollout-file.jsonl",
+    "sourcePath": "/fixtures/codex/rollout-file.jsonl",
+    "createdAt": "2026-01-02T03:04:05.678Z",
+    "updatedAt": "2026-01-02T03:04:05.678Z",
+    "fingerprint": "310ec9fac64a13211cc38d990c9c53f6bc95ffc09c5f2e266edad3fb7daf2f0e",
+    "items": [
+      {
+        "kind": "user",
+        "id": "import-codex-cdba4738c7be7f48",
+        "ts": "2026-01-02T00:00:01.000Z",
+        "text": "Standalone rollout"
+      },
+      {
+        "kind": "tool",
+        "id": "import-codex-471feacc93de0149",
+        "ts": "2026-01-02T00:00:02.000Z",
+        "name": "shell"
+      }
+    ]
+  },
+  {
+    "source": "cowork",
+    "sourceId": "cowork-snap",
+    "sourcePath": "cowork-fixture/sessions.db",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:05.000Z",
+    "fingerprint": "39feead1327c3a9d4bb16cb565b4433050389feaee0711212590aed6efad11b5",
+    "items": [
+      {
+        "kind": "user",
+        "id": "import-cowork-6cb14228b8a3e53d",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "text": "Run the deploy check."
+      },
+      {
+        "kind": "tool",
+        "id": "import-cowork-42b1f0f8d5f7058d",
+        "ts": "2026-01-01T00:00:01.000Z",
+        "name": "bash",
+        "args": {
+          "1": [
+            1,
+            "a"
+          ],
+          "2": true,
+          "command": "deploy"
+        },
+        "error": "[object Object]"
+      },
+      {
+        "kind": "reasoning",
+        "id": "import-cowork-c1c11174bf7a00cd",
+        "ts": "2026-01-01T00:00:02.000Z",
+        "mode": "summary",
+        "text": "The deploy command needs credentials."
+      },
+      {
+        "kind": "system",
+        "id": "import-cowork-79edf38449b77e97",
+        "ts": "2026-01-01T00:00:03.000Z",
+        "text": "Model switched."
+      },
+      {
+        "kind": "system",
+        "id": "import-cowork-0236d46e39d1c5fd",
+        "ts": "2026-01-01T00:00:04.000Z",
+        "text": "Command exited."
+      },
+      {
+        "kind": "assistant",
+        "id": "import-cowork-da7cc82c45ee750e",
+        "ts": "2026-01-01T00:00:05.000Z",
+        "text": "Credentials are missing."
+      },
+      {
+        "kind": "tool",
+        "id": "import-cowork-26724ee7ffc86f72",
+        "ts": "2026-01-01T00:00:06.000Z",
+        "name": "read",
+        "args": null,
+        "result": {
+          "zz": "last",
+          "aa": [
+            {
+              "k": 1e-7
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "source": "cowork",
+    "sourceId": "cowork-msgs",
+    "sourcePath": "cowork-fixture/sessions.db",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:02.000Z",
+    "fingerprint": "79c955bdf8832f6f20d9c6b6ebbd0492d39fe102382c3fbaa83f14aba4c6ebde",
+    "items": [
+      {
+        "kind": "user",
+        "id": "import-cowork-6db6a795e63ffdcf",
+        "ts": "2026-01-01T00:00:02.000Z",
+        "text": "fallback user"
+      },
+      {
+        "kind": "assistant",
+        "id": "import-cowork-da19eaef9810ee0a",
+        "ts": "2026-01-01T00:00:02.000Z",
+        "text": "fallback assistant"
+      }
+    ]
+  }
+]

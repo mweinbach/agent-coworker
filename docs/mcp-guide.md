@@ -21,7 +21,7 @@ Because `.cowork/mcp-servers.json` is part of a repository, an untrusted (e.g. f
 - set `"trustWorkspaceMcp": true` in `~/.cowork/config/config.json` (user-level), or
 - set the `AGENT_TRUST_WORKSPACE_MCP=1` environment variable.
 
-Until then, workspace servers using any transport are skipped (with a `[MCP] Not auto-starting …` log line); user/built-in/plugin servers continue to load. Explicitly validating a server (`cowork/mcp/server/validate`) is treated as per-command approval and may launch the workspace's own `stdio` server for that one test.
+Until then, workspace servers using any transport, including servers bundled by workspace-scoped plugins, are skipped (with a `[MCP] Not auto-starting …` log line); user, built-in, and user-scoped plugin servers continue to load. Explicitly validating an untrusted workspace server (`cowork/mcp/server/validate`) does not launch it either: the server answers with a failed `mcp_server_validation` event ("Workspace MCP servers are untrusted (set trustWorkspaceMcp: true to enable).") without spawning its command or connecting.
 
 ## Server Configuration Schema
 Workspace, user, and built-in `mcp-servers.json` files share one schema: a top-level `servers` array where each entry names the server and describes its transport and (optional) auth.

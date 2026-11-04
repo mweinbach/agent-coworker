@@ -1,6 +1,6 @@
 # agent-coworker
 
-A local-first AI coworker agent: Bun + TypeScript (ESM) harness with a JSON-RPC WebSocket server, a CLI REPL, and thin UI clients (Electron desktop, Expo mobile).
+A local-first AI coworker agent: Rust core harness (`crates/`), JSON-RPC WebSocket server (`cowork-server`), CLI REPL (`cowork`), and thin TypeScript UI clients (Electron desktop, Expo mobile).
 
 ## Execution and communication
 
@@ -14,17 +14,18 @@ These defaults incorporate [OpenAI's Astra guidance](agent_docs/astra.md); they 
 
 ## Core architecture rule: WebSocket-first
 
-All product logic lives in the harness/server (`src/`). UIs are thin clients that send typed JSON-RPC requests and consume typed notifications — never put business logic in a UI layer. Implement it in the harness, then expose it over the WebSocket.
+All product logic lives in the Rust harness/server (`crates/`). UIs are thin clients that send typed JSON-RPC requests and consume typed notifications — never put business logic in a UI layer. Implement it in the Rust harness, then expose it over the WebSocket.
 
 When adding a JSON-RPC method or notification:
 
-1. Add schema + validation in `src/server/jsonrpc/schema.ts` and the relevant module under `src/server/jsonrpc/`.
-2. Wire the handler in `src/server/jsonrpc/routes/` and/or the manager under `src/server/session/`.
-3. Document it in `docs/websocket-protocol.md` — the source of truth for alternative UI builders.
+1. Add schema + validation in `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts` when consumed by TS clients.
+2. Wire the handler in `crates/cowork-server/src/jsonrpc.rs` and/or the session runtime in `crates/cowork-harness/`.
+3. Document it in `docs/websocket-protocol.md` — the source of truth for alternative UI builders — and run `bun run docs:generate-jsonrpc` + `bun run docs:check`.
 
 ## Layout
 
-- `src/` — harness: agent loop (`src/agent.ts`), server (`src/server/`), tools (`src/tools/`), providers (`src/providers/`), runtime adapters (`src/runtime/`), CLI (`src/cli/`)
+- `crates/` — Rust harness & server workspace: agent loop (`crates/cowork-harness/`), server (`crates/cowork-server/`), tools (`crates/cowork-tools/`), providers (`crates/cowork-providers/`), MCP (`crates/cowork-mcp/`), storage (`crates/cowork-storage/`), CLI (`crates/cowork-cli/`)
+- `src/` — shared TypeScript client contracts (`src/shared/`), model/provider catalogs (`src/models/`, `src/providers/`), and desktop platform helpers (`src/platform/`)
 - `apps/desktop/` — Electron app, UI layer only (see `apps/desktop/AGENTS.md`)
 - `apps/mobile/` — Expo mobile app (React Native)
 - `packages/harness/` — dev harness, docs generation and checks
@@ -44,15 +45,17 @@ Use the root scripts to run both non-overlapping scopes; do not hand-maintain st
 - `bun install --cwd apps/mobile --frozen-lockfile` — install the locked mobile SDK dependencies required by the full test suite
 - `bun run start` / `bun run cli` / `bun run serve` — desktop app / CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
 - `bun run desktop:dev` — Electron dev mode
-- `bun run test` — full suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.
+- `cargo test --workspace` — run all Rust crate unit and integration tests
+- `cargo clippy --workspace --all-targets -- -D warnings` / `cargo fmt --all -- --check` — Rust lint and format checks
+- `bun run test` — full TypeScript/client/black-box suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.
 - `bun run typecheck` — TypeScript strict, root + `packages/harness` + `apps/desktop`
 - `bun run lint` / `bun run check:write` — scoped Biome + Vite+ lint / lint+format fix
 - `bun run check:tooling` — scoped Vite+ lint/format plus strict build-config TypeScript check
 - `bun run web:build` — browser production build through the local Vite+ CLI
-- `bun run docs:check` — protocol/docs consistency (runs in CI)
+- `bun run docs:check` — protocol/docs consistency against Rust's exported JSON-RPC manifest (runs in CI)
 - `bun run knip` — dead-export check
 
-For code, dependency, build, and runtime configuration changes, the canonical pre-commit verification lane is `bun run test`, `bun run typecheck`, `bun run check`, and `bun run docs:check`. `bun run check` includes lint and format checks for both tooling scopes. Run this lane for each committed logical slice; results from the same unchanged slice need not be repeated just to finish the task.
+For code, dependency, build, and runtime configuration changes, the canonical pre-commit verification lane is `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `bun run test`, `bun run typecheck`, `bun run check`, and `bun run docs:check`. `bun run check` includes lint and format checks for both tooling scopes. Run this lane for each committed logical slice; results from the same unchanged slice need not be repeated just to finish the task.
 
 Read-only audits require source-backed verification, not runtime tests. For instruction-only or prose-only changes, inspect the full diff, validate affected skill metadata and documentation links, and run applicable documentation checks; runtime tests are required only if executable behavior or a test-consumed contract changes, or the user explicitly requests them. Report which checks ran and any unresolved failures.
 
@@ -60,8 +63,8 @@ Read-only audits require source-backed verification, not runtime tests. For inst
 
 - Do not write tests for reversible, low-impact changes that mirror the implementation. If you do choose to verify your work with tests, make sure that the tests are meaningful and necessary to verify implementation.
 - Run tests appropriate to the change and complete required checks. Once those pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it; otherwise, continue toward completing the task.
-- `import { describe, test, expect } from "bun:test"`; files are `*.test.ts`.
-- Deterministic only: no network calls; isolate the filesystem in temp dirs; use the DI factories (`createRunTurn()`, `createTools()`, tool factories) or `mock.module()` instead of live calls.
+- `import { describe, test, expect } from "bun:test"`; TypeScript test files are `*.test.ts`.
+- Deterministic only: no network calls; isolate the filesystem in temp dirs; use deterministic local mock HTTP/SSE/stdio servers in Rust crate tests, `test/helpers/rustServerHarness.ts` for black-box WebSocket/HTTP integration tests, or `mock.module()` for client/UI tests instead of live calls.
 - Bug fixes: reproduce the issue and fix the root cause. Write a failing regression test when it meaningfully protects behavior, not when it only mirrors a reversible, low-impact implementation change. Keep the diff minimal — no opportunistic refactors.
 
 ## Conventions
@@ -82,7 +85,7 @@ Task-specific docs — load the one that matches your task before starting:
 - `agent_docs/mobile-ui.md` — Expo/mobile patterns and verification
 - `agent_docs/model-selection.md` — which models to use for which work
 - `agent_docs/astra.md` — GPT-6 Astra prompting guidance, skill audit rules, and API migration constraints
-- `agent_docs/adding-models.md` — model registry metadata rules
+- `agent_docs/adding-models.md` — model registry metadata rules and the add-a-provider checklist
 - `agent_docs/cursor-cloud.md` — Cursor Cloud environment specifics
 - `docs/websocket-protocol.md` — WebSocket protocol source of truth
 - `docs/harness/index.md` — harness context/observability/SLO docs map

@@ -107,24 +107,13 @@ import opencodeZenQwen36PlusFree from "../../config/models/opencode-zen/qwen3.6-
 import togetherMoonshotAiKimiK25 from "../../config/models/together/moonshotai-kimi-k2.5.json";
 import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.5-397b-a17b.json";
 import togetherZaiOrgGlm5 from "../../config/models/together/zai-org-glm-5.json";
+import { MODEL_REGISTRY_PROVIDER_NAMES } from "../generated/providerSpecs";
 import { OPENAI_REASONING_EFFORT_VALUES } from "../shared/openaiCompatibleOptions";
 import type { ProviderName } from "../types";
 
-const STATIC_MODEL_PROVIDER_NAMES = [
-  "google",
-  "openai",
-  "anthropic",
-  "bedrock",
-  "baseten",
-  "together",
-  "fireworks",
-  "firepass",
-  "nvidia",
-  "minimax",
-  "opencode-go",
-  "opencode-zen",
-  "codex-cli",
-] as const satisfies readonly ProviderName[];
+// Providers with a static model registry under config/models/<provider>/ (every provider in
+// config/providers.json except local-discovery ones such as LM Studio).
+const STATIC_MODEL_PROVIDER_NAMES = MODEL_REGISTRY_PROVIDER_NAMES;
 
 type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
 
@@ -265,21 +254,9 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
 // supplying the JSON file and including it in this array so buildRegistry actually sees it.
 
 function buildRegistry(entries: SupportedModel[]) {
-  const byProvider: Record<StaticModelProviderName, SupportedModel[]> = {
-    google: [],
-    openai: [],
-    anthropic: [],
-    bedrock: [],
-    baseten: [],
-    together: [],
-    fireworks: [],
-    firepass: [],
-    nvidia: [],
-    minimax: [],
-    "opencode-go": [],
-    "opencode-zen": [],
-    "codex-cli": [],
-  };
+  const byProvider = Object.fromEntries(
+    STATIC_MODEL_PROVIDER_NAMES.map((provider) => [provider, [] as SupportedModel[]]),
+  ) as Record<StaticModelProviderName, SupportedModel[]>;
   const byKey = new Map<string, SupportedModel>();
   const defaults = new Map<StaticModelProviderName, SupportedModel>();
 
@@ -436,7 +413,7 @@ export function providerOptionsDefaultsForModel(
  * Unknown-everywhere ids are NOT foreign — dynamic model discovery allows
  * providers to expose models outside the static registry.
  */
-export function isModelIdForeignToProvider(provider: ProviderName, modelId: string): boolean {
+function isModelIdForeignToProvider(provider: ProviderName, modelId: string): boolean {
   if (getSupportedModel(provider, modelId)) return false;
   const likelyProvider = inferLikelyProviderForModelId(modelId);
   if (likelyProvider && providerMatchesLikelyModelProvider(provider, likelyProvider)) {

@@ -1,80 +1,51 @@
 name: Setup Rust cache
-description: Restore Cargo dependency and build caches for the Windows sandbox helpers.
+description: Install the pinned Rust toolchain and restore Cargo registry and build caches for the Rust workspace (plus the Windows sandbox helper workspace on Windows).
 
 inputs:
   cache-scope:
-    description: Extra cache scope for jobs that build different Rust targets.
+    description: Cache key shared by jobs that build the same Rust targets with the same profile. Jobs that pass the same scope on the same OS/arch restore one another's cache.
     required: false
     default: root
   save-cache:
     description: Save a new Cargo cache on miss. Set to false for release validation legs where cache upload can block downstream smoke jobs.
     required: false
     default: "true"
-  cache-dependency-path:
-    description: Newline-separated files or globs that should invalidate the Rust dependency cache.
-    required: false
-    default: |
-      crates/cowork-win-sandbox/Cargo.lock
-      crates/cowork-win-sandbox/Cargo.toml
-      crates/cowork-win-sandbox/build.rs
-      crates/cowork-win-sandbox/vendor/**/Cargo.toml
 
 runs:
   using: composite
   steps:
-    - name: Compute Rust cache hash
-      id: cache-hash
+    # rust-toolchain.toml pins the channel and components; `rustup show` installs
+    # them up front so the cache key (which hashes `rustc -vV`) is stable.
+    - name: Install pinned Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install
+        rustc --version
+        cargo --version
+
+    - name: Select Cargo workspaces
+      id: workspaces
       shell: bash
       env:
-        CACHE_DEPENDENCY_PATH: ${{ inputs.cache-dependency-path }}
+        RUNNER_OS_NAME: ${{ runner.os }}
       run: |
-        set -euo pipefail
-        shopt -s globstar
+        {
+          echo "value<<EOF"
+          echo ". -> target"
+          # The Windows sandbox helpers are a separate Cargo workspace that only
+          # Windows jobs build (crates/cowork-win-sandbox is excluded from the root).
+          if [ "$RUNNER_OS_NAME" = "Windows" ]; then
+            echo "crates/cowork-win-sandbox -> target"
+          fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
-        digest="$(
-          while IFS= read -r path; do
-            if [ -z "$path" ]; then
-              continue
-            fi
-
-            matched=false
-            while IFS= read -r match; do
-              if [ -f "$match" ]; then
-                matched=true
-                git hash-object "$match"
-              fi
-            done < <(compgen -G "$path" || true)
-
-            if [ "$matched" = false ] && [ -f "$path" ]; then
-              git hash-object "$path"
-            fi
-          done <<< "$CACHE_DEPENDENCY_PATH" | git hash-object --stdin
-        )"
-
-        echo "value=$digest" >> "$GITHUB_OUTPUT"
-
-    - name: Restore and save Cargo caches
-      if: ${{ inputs.save-cache == 'true' }}
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          crates/cowork-win-sandbox/target
-        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
-        restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-
-          ${{ runner.os }}-${{ runner.arch }}-cargo-
-
+    # Keys on rustc version, Cargo.lock, every Cargo.toml / build.rs, and the
+    # selected scope; prunes stale workspace artifacts before saving so the
+    # target cache does not grow without bound across restores.
     - name: Restore Cargo caches
-      if: ${{ inputs.save-cache != 'true' }}
-      uses: actions/cache/restore@v4
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          crates/cowork-win-sandbox/target
-        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
-        restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-
-          ${{ runner.os }}-${{ runner.arch }}-cargo-
+        shared-key: ${{ inputs.cache-scope }}
+        workspaces: ${{ steps.workspaces.outputs.value }}
+        save-if: ${{ inputs.save-cache == 'true' }}

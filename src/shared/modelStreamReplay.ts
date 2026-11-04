@@ -1,24 +1,23 @@
 import {
-  createResponsesStreamProjector,
-  projectResponsesStreamEvent,
-  type ResponsesStreamProjector,
-} from "../runtime/openaiResponsesProjector";
-import { mapPiEventToRawParts } from "../runtime/piStreamParts";
-import { normalizeModelStreamPart } from "../server/modelStream";
-import type { SessionEvent } from "../server/protocol";
-import {
   type GoogleInteractionsContentBlock,
   type GoogleInteractionsProviderToolCallState,
   mapGoogleInteractionsEventToStreamParts,
   processGoogleInteractionsStreamEvent,
 } from "./googleInteractionsStreamParts";
-
 import {
   type ModelStreamChunkEvent,
   type ModelStreamUpdate,
   mapModelStreamChunk,
   mapModelStreamRawEvent,
 } from "./modelStream";
+import { normalizeModelStreamPart } from "./modelStreamParts";
+import {
+  createResponsesStreamProjector,
+  mapProjectedResponsesEventToRawParts,
+  projectResponsesStreamEvent,
+  type ResponsesStreamProjector,
+} from "./openaiResponsesReplay";
+import type { SessionEvent } from "./protocol";
 
 export type ModelStreamRawEvent = Extract<SessionEvent, { type: "model_stream_raw" }>;
 
@@ -218,7 +217,9 @@ export function replayModelStreamRawEvent(
 
   const updates: ModelStreamUpdate[] = [...directUpdates];
   for (const piEvent of piEvents) {
-    updates.push(...mapRawPartsToUpdates(evt, mapPiEventToRawParts(piEvent, evt.provider, true)));
+    updates.push(
+      ...mapRawPartsToUpdates(evt, mapProjectedResponsesEventToRawParts(piEvent, evt.provider)),
+    );
   }
 
   if (

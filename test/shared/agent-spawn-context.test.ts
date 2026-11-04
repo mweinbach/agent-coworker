@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { jsonRpcAgentRequestSchemas } from "../../src/server/jsonrpc/schema.agents";
 import {
   childAgentReportSchema,
   mapLegacyAgentTypeToRole,
   resolveAgentSpawnContextOptions,
 } from "../../src/shared/agents";
-
-const spawnSchema = jsonRpcAgentRequestSchemas["cowork/session/agent/spawn"];
+import { connectRustJsonRpc, startRustTestServer } from "../helpers/rustServerHarness";
 
 describe("resolveAgentSpawnContextOptions", () => {
   test("defaults to none and maps deprecated forkContext only when contextMode is omitted", () => {
@@ -55,29 +53,24 @@ describe("resolveAgentSpawnContextOptions", () => {
 });
 
 describe("cowork/session/agent/spawn context schema", () => {
-  test("rejects brief mode without a briefing before spawn runs", () => {
-    expect(
-      spawnSchema.safeParse({
-        threadId: "thread-1",
+  test("rejects brief mode without a briefing before spawn runs", async () => {
+    const srv = await startRustTestServer();
+    try {
+      const rpc = await connectRustJsonRpc(srv.wsUrl);
+      const started = await rpc.request<{ thread: { id: string } }>("thread/start", {
+        cwd: srv.workspaceDir,
+      });
+      const raw = await rpc.requestRaw("cowork/session/agent/spawn", {
+        threadId: started.thread.id,
         message: "Plan the change",
         contextMode: "brief",
-      }).success,
-    ).toBe(false);
-    expect(
-      spawnSchema.parse({
-        threadId: " thread-1 ",
-        message: " Plan the change ",
-        contextMode: "brief",
-        briefing: "  Focus on auth  ",
-        forkContext: false,
-      }),
-    ).toMatchObject({
-      threadId: "thread-1",
-      message: "Plan the change",
-      contextMode: "brief",
-      briefing: "Focus on auth",
-      forkContext: false,
-    });
+      });
+      expect(raw.error).toBeDefined();
+      expect(raw.error?.code).toBe(-32602);
+      rpc.close();
+    } finally {
+      await srv.stop();
+    }
   });
 });
 

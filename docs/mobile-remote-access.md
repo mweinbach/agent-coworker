@@ -1,6 +1,6 @@
 # Mobile Remote Access
 
-Cowork mobile remote access uses a direct device-to-device HTTP/3 (QUIC) pairing path.
+Cowork mobile remote access uses a direct device-to-device pinned TLS (`h3` scheme) pairing path served by `cowork-server --mobile-h3` (`crates/cowork-server/src/mobile_h3/`).
 The desktop app shows a `cowork-pair://` QR code. The mobile app scans it, verifies the
 desktop's ephemeral certificate fingerprint, exchanges a one-time pairing nonce, and then sends
 the normal Cowork JSON-RPC messages directly to the desktop sidecar. There is no hosted relay in
@@ -32,6 +32,7 @@ Renderer-persisted workspace state never stores pairing tokens or device trust s
 
 Trusted devices are keyed by the mobile device id. The desktop UI exposes these permission gates:
 
+- conversations: `thread/archive`, `thread/unarchive`, `thread/name/set`, and `cowork/session/{close,delete,rename,fork}`
 - turns: `thread/start` and `turn/*`
 - server requests: client responses to server-initiated requests
 - provider auth: `cowork/provider/auth/*`
@@ -51,8 +52,7 @@ The mobile app lives at:
 
 Important structure:
 
-- routes are under `apps/mobile/src/app`
-- there is intentionally no `apps/mobile/app` route tree
+- routes are under `apps/mobile/src/app` (there is intentionally no root `app/` route tree outside `src/`)
 
 Included areas:
 
@@ -152,13 +152,14 @@ Expected native surface:
 
 ## Validation run
 
-The current slices were validated with:
+Validate the mobile pairing and remote-access slices with:
 
 ```bash
-bun test apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/mobile-relay-ipc.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/remote-access-page.test.ts test/h3.mobile-server-pairing.test.ts test/h3.pairing-store.test.ts
-bun test test/mobile.native-permissions.test.ts test/mobile.native-module-autolinking.test.ts
-bun test test/mobile.secure-transport-client.test.ts test/mobile.jsonrpc-client.test.ts test/mobile.control-store.test.ts
-bun test test/shared.cowork-ticket.test.ts test/shared.quic-cert.test.ts test/mobile.pairing-qrcode.test.ts test/mobile.pairing-scan-handler.test.ts apps/desktop/test/remote-access-page.test.ts apps/desktop/test/desktop-schemas.test.ts
+cargo test -p cowork-server
+bun run test -- test/rust-server.mobile-h3.integration.test.ts apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/mobile-relay-ipc.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/remote-access-page.test.ts
+bun run test -- test/mobile.native-permissions.test.ts test/mobile.native-module-autolinking.test.ts
+bun run test -- test/mobile.secure-transport-client.test.ts test/mobile.jsonrpc-client.test.ts test/mobile.control-store.test.ts
+bun run test -- test/shared.cowork-ticket.test.ts test/mobile.pairing-qrcode.test.ts test/mobile.pairing-scan-handler.test.ts
 bun run typecheck
 bun run app:mobile:typecheck
 cd apps/mobile && bunx expo export --platform ios

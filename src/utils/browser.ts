@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-export type UrlOpener = (url: string) => Promise<boolean>;
+type UrlOpener = (url: string) => Promise<boolean>;
 
 type ExternalBrowserCommand = {
   cmd: string;

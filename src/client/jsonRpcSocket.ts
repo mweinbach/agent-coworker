@@ -4,7 +4,7 @@ import {
   type JsonRpcLiteClientResponse,
   type JsonRpcLiteRequest,
   parseJsonRpcClientMessage,
-} from "../server/jsonrpc/protocol";
+} from "../shared/jsonrpcProtocol";
 
 type WebSocketLike = Pick<WebSocket, "readyState" | "send" | "close"> &
   Partial<

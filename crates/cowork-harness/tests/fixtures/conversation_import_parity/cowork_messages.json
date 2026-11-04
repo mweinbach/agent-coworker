@@ -1,0 +1,1 @@
+[{"role":"user","content":"fallback user"},{"role":"system","content":"skip"},{"role":"assistant","content":[{"type":"text","text":"fallback assistant"}]}]

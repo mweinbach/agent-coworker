@@ -1,9 +1,9 @@
-import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
 import type {
   FileChangeVersion,
   WorkspaceFileChangeEvent,
 } from "../../../../src/shared/fileVersion";
 import { fileChangeVersionsEqual } from "../../../../src/shared/fileVersion";
+import type { PresentationPreviewResult } from "../../../../src/shared/presentationPreview";
 import type { ReadFileForPreviewOutput } from "./desktopApi";
 import { readFileForPreview } from "./desktopCommands";
 

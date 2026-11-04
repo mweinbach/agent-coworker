@@ -1,0 +1,1392 @@
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
+
+use axum::Router;
+use axum::extract::Query;
+use axum::http::StatusCode;
+use axum::response::Html;
+use axum::routing::get;
+use cowork_config::AgentConfig;
+use dashmap::DashMap;
+use parking_lot::Mutex;
+use rand::RngCore;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use url::Url;
+
+use crate::credentials::{
+    StoredOAuthClientInfo, StoredOAuthTokens, StoredPendingOAuthFlow, credential_key_for_server,
+    mutate_credentials_for_scope, now_epoch_ms,
+};
+use crate::registry::resolve_target_mcp_server;
+use crate::types::{
+    McpAuthMode, McpAuthMutationResult, McpConfigSource, McpOAuthChallengePayload,
+    McpOAuthChallengeResult, McpOAuthRuntimeContext, McpServerAuthConfig,
+};
+
+const PENDING_OAUTH_TTL_MS: u64 = 10 * 60 * 1_000;
+const BROWSER_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Opens an MCP OAuth authorization URL in the user's browser (TS `UrlOpener`). Returns whether
+/// the browser was launched.
+#[async_trait::async_trait]
+pub trait McpOAuthUrlOpener: Send + Sync {
+    async fn open_url(&self, url: &str) -> bool;
+}
+
+/// The platform browser launcher (TS `openExternalUrl`: `open` on macOS,
+/// `rundll32 url.dll,FileProtocolHandler` on Windows, `xdg-open` elsewhere).
+///
+/// Honors the same switches as provider OAuth: `COWORK_DISABLE_BROWSER_OPEN=1|true` suppresses
+/// the launch (reported as not opened), and `COWORK_BROWSER_OPENER_COMMAND` replaces the
+/// platform command.
+#[derive(Debug, Clone, Default)]
+pub struct SystemUrlOpener {
+    env: HashMap<String, String>,
+}
+
+impl SystemUrlOpener {
+    /// Uses `env` (the server's runtime environment) for the switches and the launched command.
+    pub fn new(env: HashMap<String, String>) -> Self {
+        Self { env }
+    }
+
+    /// Reads the switches from the current process environment.
+    pub fn from_process_env() -> Self {
+        Self::new(std::env::vars().collect())
+    }
+
+    fn command(&self, url: &str) -> Option<tokio::process::Command> {
+        if self
+            .env
+            .get("COWORK_DISABLE_BROWSER_OPEN")
+            .map(|v| v.trim())
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
+            return None;
+        }
+        let mut cmd = if let Some(custom) = self
+            .env
+            .get("COWORK_BROWSER_OPENER_COMMAND")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
+            let mut c = tokio::process::Command::new(custom);
+            c.arg(url);
+            c
+        } else if cfg!(target_os = "macos") {
+            let mut c = tokio::process::Command::new("open");
+            c.arg(url);
+            c
+        } else if cfg!(target_os = "windows") {
+            let mut c = tokio::process::Command::new("rundll32.exe");
+            c.arg("url.dll,FileProtocolHandler").arg(url);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("xdg-open");
+            c.arg(url);
+            c
+        };
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .envs(&self.env)
+            .kill_on_drop(true);
+        Some(cmd)
+    }
+}
+
+#[async_trait::async_trait]
+impl McpOAuthUrlOpener for SystemUrlOpener {
+    async fn open_url(&self, url: &str) -> bool {
+        let Some(mut cmd) = self.command(url) else {
+            return false;
+        };
+        match tokio::time::timeout(BROWSER_OPEN_TIMEOUT, cmd.status()).await {
+            Ok(Ok(status)) => status.success(),
+            Ok(Err(err)) => {
+                tracing::debug!(%err, "failed to launch browser for MCP OAuth");
+                false
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Whether `host` names the local machine (`localhost`, `127.0.0.0/8`, `::1`).
+fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    }
+}
+
+/// Validates an OAuth endpoint taken from (untrusted) server metadata or a stored pending flow:
+/// it must be `https://`, or `http://` on a loopback host (OAuth 2.1 §1.5 / RFC 8252 §8.3).
+/// Anything else (`file:`, `javascript:`, plain `http://` to a remote host, …) is rejected so the
+/// browser is never pointed at, and codes/verifiers/refresh tokens are never sent to, a
+/// non-TLS or non-web endpoint.
+fn require_secure_oauth_endpoint(kind: &str, raw: &str) -> Result<Url, String> {
+    let url = Url::parse(raw.trim()).map_err(|e| format!("Invalid OAuth {kind}: {e}"))?;
+    let secure = match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => url.host().as_ref().is_some_and(is_loopback_host),
+        _ => false,
+    };
+    if !secure {
+        return Err(format!(
+            "OAuth {kind} must use https:// (or http:// on a loopback host): {raw}"
+        ));
+    }
+    Ok(url)
+}
+
+struct ActiveCallbackListener {
+    state: String,
+    captured_code: Arc<Mutex<Option<String>>>,
+    notify: Arc<tokio::sync::Notify>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    expires_at: u64,
+}
+
+static CALLBACK_LISTENERS: LazyLock<DashMap<String, ActiveCallbackListener>> =
+    LazyLock::new(DashMap::new);
+
+static OAUTH_EXCHANGE_LOCKS: LazyLock<DashMap<String, Arc<tokio::sync::Mutex<()>>>> =
+    LazyLock::new(DashMap::new);
+
+fn exchange_lock_for_key(map_key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    OAUTH_EXCHANGE_LOCKS
+        .entry(map_key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .value()
+        .clone()
+}
+
+fn listener_map_key(scope_path: &std::path::Path, server_name: &str) -> String {
+    format!("{}::{server_name}", scope_path.display())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProtectedResourceMetadata {
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    authorization_servers: Option<Vec<String>>,
+    #[serde(default)]
+    scopes_supported: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthServerMetadata {
+    #[serde(default)]
+    issuer: Option<String>,
+    #[serde(default)]
+    authorization_endpoint: Option<String>,
+    #[serde(default)]
+    token_endpoint: Option<String>,
+    #[serde(default)]
+    registration_endpoint: Option<String>,
+    #[serde(default)]
+    token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredOAuthEndpoints {
+    issuer: String,
+    authorization_endpoint: String,
+    token_endpoint: String,
+    registration_endpoint: Option<String>,
+    /// AS metadata `token_endpoint_auth_methods_supported`; empty when the metadata omits it or
+    /// no metadata was found (MCP SDK `metadata?.token_endpoint_auth_methods_supported ?? []`).
+    token_endpoint_auth_methods_supported: Vec<String>,
+    resource: String,
+    default_scope: Option<String>,
+}
+
+/// OAuth token-endpoint client authentication methods (TS `mcpTokenEndpointAuthMethods`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientAuthMethod {
+    ClientSecretBasic,
+    ClientSecretPost,
+    None,
+}
+
+impl ClientAuthMethod {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "client_secret_basic" => Some(Self::ClientSecretBasic),
+            "client_secret_post" => Some(Self::ClientSecretPost),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientSecretBasic => "client_secret_basic",
+            Self::ClientSecretPost => "client_secret_post",
+            Self::None => "none",
+        }
+    }
+}
+
+/// The stored client secret, treating an empty one as absent (TS `storedClientInfoToSdk` only
+/// forwards a truthy `clientSecret`).
+fn client_secret_of(client: &StoredOAuthClientInfo) -> Option<&str> {
+    client.client_secret.as_deref().filter(|s| !s.is_empty())
+}
+
+/// MCP SDK `selectClientAuthMethod`: prefer the registered method when it is valid and either
+/// advertised by the server or the server advertises nothing; otherwise RFC 8414 §2's default of
+/// `client_secret_basic` (for a client with a secret) when the metadata omits the list, else the
+/// most secure advertised method.
+fn select_client_auth_method(
+    client: &StoredOAuthClientInfo,
+    supported_methods: &[String],
+) -> ClientAuthMethod {
+    let has_secret = client_secret_of(client).is_some();
+    let supports =
+        |method: ClientAuthMethod| supported_methods.iter().any(|m| m == method.as_str());
+    if let Some(registered) = client
+        .token_endpoint_auth_method
+        .as_deref()
+        .and_then(ClientAuthMethod::parse)
+        && (supported_methods.is_empty() || supports(registered))
+    {
+        return registered;
+    }
+    if supported_methods.is_empty() {
+        return if has_secret {
+            ClientAuthMethod::ClientSecretBasic
+        } else {
+            ClientAuthMethod::None
+        };
+    }
+    if has_secret && supports(ClientAuthMethod::ClientSecretBasic) {
+        return ClientAuthMethod::ClientSecretBasic;
+    }
+    if has_secret && supports(ClientAuthMethod::ClientSecretPost) {
+        return ClientAuthMethod::ClientSecretPost;
+    }
+    if supports(ClientAuthMethod::None) {
+        return ClientAuthMethod::None;
+    }
+    if has_secret {
+        ClientAuthMethod::ClientSecretPost
+    } else {
+        ClientAuthMethod::None
+    }
+}
+
+/// MCP SDK `applyClientAuthentication`: adds the client credentials for `method` to the token
+/// request form and returns the `Authorization` header value to send, if any.
+/// `client_secret_basic` sends `Basic base64(client_id:client_secret)` (SDK `applyBasicAuth`,
+/// which does not form-urlencode the id/secret) and keeps both out of the body.
+fn apply_client_authentication(
+    method: ClientAuthMethod,
+    client: &StoredOAuthClientInfo,
+    form: &mut Vec<(String, String)>,
+) -> Result<Option<String>, String> {
+    match method {
+        ClientAuthMethod::ClientSecretBasic => {
+            let secret = client_secret_of(client).ok_or_else(|| {
+                "client_secret_basic authentication requires a client_secret".to_owned()
+            })?;
+            let credentials =
+                data_encoding::BASE64.encode(format!("{}:{secret}", client.client_id).as_bytes());
+            Ok(Some(format!("Basic {credentials}")))
+        }
+        ClientAuthMethod::ClientSecretPost => {
+            form.push(("client_id".to_owned(), client.client_id.clone()));
+            if let Some(secret) = client_secret_of(client) {
+                form.push(("client_secret".to_owned(), secret.to_owned()));
+            }
+            Ok(None)
+        }
+        ClientAuthMethod::None => {
+            form.push(("client_id".to_owned(), client.client_id.clone()));
+            Ok(None)
+        }
+    }
+}
+
+/// Selects and applies the client authentication for one token-endpoint request, then sends it
+/// as `application/x-www-form-urlencoded` (MCP SDK `executeTokenRequest`).
+async fn send_token_request(
+    http_client: &reqwest::Client,
+    token_endpoint: &str,
+    mut form: Vec<(String, String)>,
+    client: &StoredOAuthClientInfo,
+    supported_methods: &[String],
+) -> Result<reqwest::Response, String> {
+    let method = select_client_auth_method(client, supported_methods);
+    let authorization = apply_client_authentication(method, client, &mut form)?;
+    let encoded_form: String = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(form.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .finish();
+    let mut request = http_client
+        .post(token_endpoint)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Accept", "application/json");
+    if let Some(value) = authorization {
+        request = request.header("Authorization", value);
+    }
+    request
+        .body(encoded_form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn check_resource_allowed(server_url: &Url, candidate_resource: &str) -> bool {
+    let Ok(res_url) = Url::parse(candidate_resource) else {
+        return false;
+    };
+    if res_url.scheme() != server_url.scheme()
+        || res_url.host_str() != server_url.host_str()
+        || res_url.port_or_known_default() != server_url.port_or_known_default()
+    {
+        return false;
+    }
+    let srv_path = server_url.path().trim_end_matches('/');
+    let res_path = res_url.path().trim_end_matches('/');
+    res_path.is_empty() || srv_path == res_path || srv_path.starts_with(&format!("{res_path}/"))
+}
+
+fn extract_www_authenticate_param(header_val: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}=");
+    let idx = header_val.find(&needle)?;
+    let rest = &header_val[idx + needle.len()..];
+    if let Some(quoted) = rest.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        Some(quoted[..end].to_owned())
+    } else {
+        let end = rest
+            .find(|c: char| c == ',' || c.is_whitespace())
+            .unwrap_or(rest.len());
+        Some(rest[..end].to_owned())
+    }
+}
+
+async fn discover_oauth_endpoints(
+    client: &reqwest::Client,
+    remote_url: &str,
+    configured_resource: Option<&str>,
+) -> Result<DiscoveredOAuthEndpoints, String> {
+    let server_url = Url::parse(remote_url).map_err(|e| format!("Invalid MCP URL: {e}"))?;
+    let origin = format!(
+        "{}://{}{}",
+        server_url.scheme(),
+        server_url.host_str().unwrap_or("127.0.0.1"),
+        match server_url.port() {
+            Some(p) => format!(":{p}"),
+            None => String::new(),
+        }
+    );
+    let path = server_url.path().trim_end_matches('/');
+
+    // Optional unauthenticated probe to inspect `WWW-Authenticate: Bearer resource_metadata="..."`
+    let mut header_resource_metadata_url: Option<String> = None;
+    if let Ok(probe_resp) = client
+        .post(remote_url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":0,"method":"ping"}"#)
+        .send()
+        .await
+        && probe_resp.status() == StatusCode::UNAUTHORIZED
+        && let Some(www) = probe_resp
+            .headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+    {
+        header_resource_metadata_url = extract_www_authenticate_param(www, "resource_metadata");
+    }
+
+    // RFC 9728 Protected Resource Metadata candidate URLs
+    let mut prm_candidates = Vec::new();
+    if let Some(u) = header_resource_metadata_url {
+        prm_candidates.push(u);
+    }
+    if !path.is_empty() {
+        prm_candidates.push(format!(
+            "{origin}/.well-known/oauth-protected-resource{path}"
+        ));
+    }
+    prm_candidates.push(format!("{origin}/.well-known/oauth-protected-resource"));
+
+    let mut prm: Option<ProtectedResourceMetadata> = None;
+    for url in prm_candidates {
+        if let Ok(resp) = client.get(&url).send().await
+            && resp.status().is_success()
+            && let Ok(meta) = resp.json::<ProtectedResourceMetadata>().await
+        {
+            if let Some(ref res_str) = meta.resource
+                && !check_resource_allowed(&server_url, res_str)
+            {
+                return Err(format!(
+                    "Protected resource metadata mismatch: {res_str} is not allowed for {remote_url}"
+                ));
+            }
+            prm = Some(meta);
+            break;
+        }
+    }
+
+    let resource = configured_resource
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| prm.as_ref().and_then(|m| m.resource.clone()))
+        .unwrap_or_else(|| remote_url.to_owned());
+
+    let default_scope = prm
+        .as_ref()
+        .and_then(|m| m.scopes_supported.as_ref())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.join(" "));
+
+    let issuer_str = prm
+        .as_ref()
+        .and_then(|m| m.authorization_servers.as_ref())
+        .and_then(|v| v.first())
+        .cloned()
+        .unwrap_or_else(|| origin.clone());
+
+    let issuer_url =
+        Url::parse(&issuer_str).map_err(|e| format!("Invalid authorization server URL: {e}"))?;
+    let issuer_origin = format!(
+        "{}://{}{}",
+        issuer_url.scheme(),
+        issuer_url.host_str().unwrap_or("127.0.0.1"),
+        match issuer_url.port() {
+            Some(p) => format!(":{p}"),
+            None => String::new(),
+        }
+    );
+    let issuer_path = issuer_url.path().trim_end_matches('/');
+
+    // RFC 8414 + OIDC discovery probes (path-aware first, then root)
+    let mut as_candidates = Vec::new();
+    if !issuer_path.is_empty() {
+        as_candidates.push(format!(
+            "{issuer_origin}/.well-known/oauth-authorization-server{issuer_path}"
+        ));
+        as_candidates.push(format!(
+            "{issuer_origin}/.well-known/openid-configuration{issuer_path}"
+        ));
+        as_candidates.push(format!(
+            "{issuer_origin}{issuer_path}/.well-known/openid-configuration"
+        ));
+    }
+    as_candidates.push(format!(
+        "{issuer_origin}/.well-known/oauth-authorization-server"
+    ));
+    as_candidates.push(format!("{issuer_origin}/.well-known/openid-configuration"));
+
+    for url in as_candidates {
+        if let Ok(resp) = client.get(&url).send().await
+            && resp.status().is_success()
+            && let Ok(meta) = resp.json::<AuthServerMetadata>().await
+            && let (Some(auth_ep), Some(tok_ep)) =
+                (meta.authorization_endpoint, meta.token_endpoint)
+        {
+            return Ok(DiscoveredOAuthEndpoints {
+                issuer: meta.issuer.unwrap_or_else(|| issuer_str.clone()),
+                authorization_endpoint: auth_ep,
+                token_endpoint: tok_ep,
+                registration_endpoint: meta.registration_endpoint,
+                token_endpoint_auth_methods_supported: meta
+                    .token_endpoint_auth_methods_supported
+                    .unwrap_or_default(),
+                resource,
+                default_scope,
+            });
+        }
+    }
+
+    // Fallback to standard `/authorize` + `/token` relative to issuer
+    let base = issuer_str.trim_end_matches('/');
+    Ok(DiscoveredOAuthEndpoints {
+        issuer: issuer_str.clone(),
+        authorization_endpoint: format!("{base}/authorize"),
+        token_endpoint: format!("{base}/token"),
+        registration_endpoint: None,
+        token_endpoint_auth_methods_supported: Vec::new(),
+        resource,
+        default_scope,
+    })
+}
+
+fn random_base64url(num_bytes: usize) -> String {
+    let mut buf = vec![0u8; num_bytes];
+    rand::rng().fill_bytes(&mut buf);
+    data_encoding::BASE64URL_NOPAD.encode(&buf)
+}
+
+fn pkce_s256_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    data_encoding::BASE64URL_NOPAD.encode(&digest)
+}
+
+async fn spawn_loopback_callback_server(
+    expected_state: String,
+) -> Result<
+    (
+        u16,
+        Arc<Mutex<Option<String>>>,
+        Arc<tokio::sync::Notify>,
+        oneshot::Sender<()>,
+    ),
+    String,
+> {
+    let v4_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Failed to bind OAuth loopback listener: {e}"))?;
+    let port = v4_listener.local_addr().map_err(|e| e.to_string())?.port();
+    let v6_listener = TcpListener::bind(format!("[::1]:{port}")).await.ok();
+
+    let captured_code: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+
+    let captured_for_route = Arc::clone(&captured_code);
+    let notify_for_route = Arc::clone(&notify);
+    let app = Router::new().route(
+        "/oauth/callback",
+        get(move |Query(params): Query<HashMap<String, String>>| {
+            let captured = Arc::clone(&captured_for_route);
+            let notify_cb = Arc::clone(&notify_for_route);
+            let exp_state = expected_state.clone();
+            async move {
+                if params.get("state").map(String::as_str) != Some(exp_state.as_str()) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Html("<html><body><h2>Invalid OAuth state.</h2></body></html>".to_owned()),
+                    );
+                }
+                let Some(code) = params.get("code").cloned().filter(|c| !c.trim().is_empty()) else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Html("<html><body><h2>Missing authorization code.</h2></body></html>".to_owned()),
+                    );
+                };
+                *captured.lock() = Some(code);
+                notify_cb.notify_waiters();
+                (
+                    StatusCode::OK,
+                    Html("<html><body><h2>Authorization complete. You may close this tab and return to Cowork.</h2></body></html>".to_owned()),
+                )
+            }
+        }),
+    );
+
+    let app_v6 = app.clone();
+    tokio::spawn(async move {
+        let v4_fut = axum::serve(v4_listener, app);
+        if let Some(v6) = v6_listener {
+            let v6_fut = axum::serve(v6, app_v6);
+            tokio::select! {
+                _ = v4_fut => {},
+                _ = v6_fut => {},
+                _ = &mut shutdown_rx => {},
+                _ = tokio::time::sleep(Duration::from_millis(PENDING_OAUTH_TTL_MS)) => {},
+            }
+        } else {
+            tokio::select! {
+                _ = v4_fut => {},
+                _ = &mut shutdown_rx => {},
+                _ = tokio::time::sleep(Duration::from_millis(PENDING_OAUTH_TTL_MS)) => {},
+            }
+        }
+    });
+
+    Ok((port, captured_code, notify, shutdown_tx))
+}
+
+/// Starts an RFC 9728 / RFC 8414 / RFC 7591 OAuth 2.1 PKCE S256 authorization flow, opening the
+/// authorization URL with [`SystemUrlOpener::from_process_env`] when the server uses the `auto`
+/// (loopback) mode.
+pub async fn start_mcp_oauth_authorization(
+    config: &AgentConfig,
+    name: &str,
+    source: Option<McpConfigSource>,
+    plugin_id: Option<&str>,
+    plugin_scope: Option<&str>,
+) -> Result<McpOAuthChallengeResult, String> {
+    start_mcp_oauth_authorization_with_opener(
+        config,
+        name,
+        source,
+        plugin_id,
+        plugin_scope,
+        &SystemUrlOpener::from_process_env(),
+    )
+    .await
+}
+
+/// [`start_mcp_oauth_authorization`] with an explicit browser launcher. Like TS
+/// `authorizeMCPServerOAuth`, the `auto` mode opens the authorization URL server-side (Desktop
+/// neither opens nor renders it), so the loopback listener actually receives the redirect; the
+/// `code` mode only returns the URL.
+pub async fn start_mcp_oauth_authorization_with_opener(
+    config: &AgentConfig,
+    name: &str,
+    source: Option<McpConfigSource>,
+    plugin_id: Option<&str>,
+    plugin_scope: Option<&str>,
+    opener: &dyn McpOAuthUrlOpener,
+) -> Result<McpOAuthChallengeResult, String> {
+    let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
+    // Same gate as validation and turn setup: a workspace-owned server (including a
+    // workspace-scoped plugin) is untrusted until the user opts in, so its repository-chosen
+    // endpoints must not drive discovery, client registration or a browser launch.
+    if resolved.auth_scope == crate::types::McpAuthScope::Workspace && !config.trust_workspace_mcp {
+        return Err(
+            "Workspace MCP servers are untrusted (set trustWorkspaceMcp: true to enable)."
+                .to_owned(),
+        );
+    }
+    let Some(remote_url) = resolved.config.transport.remote_url().map(str::to_owned) else {
+        return Err(format!(
+            "MCP server \"{}\" does not use an HTTP/SSE transport.",
+            resolved.config.name
+        ));
+    };
+
+    let (configured_scope, configured_resource, oauth_mode) = match resolved.config.auth.as_ref() {
+        Some(McpServerAuthConfig::OAuth {
+            scope,
+            resource,
+            oauth_mode,
+        }) => (
+            scope.clone(),
+            resource.clone(),
+            oauth_mode.as_deref().unwrap_or("auto").to_owned(),
+        ),
+        _ => (None, None, "auto".to_owned()),
+    };
+
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let endpoints =
+        discover_oauth_endpoints(&http_client, &remote_url, configured_resource.as_deref()).await?;
+    let mut auth_url =
+        require_secure_oauth_endpoint("authorization_endpoint", &endpoints.authorization_endpoint)?;
+    require_secure_oauth_endpoint("token_endpoint", &endpoints.token_endpoint)?;
+
+    let verifier = random_base64url(48); // 64 base64url chars (RFC 7636 43..=128)
+    let challenge = pkce_s256_challenge(&verifier);
+    let state = random_base64url(24);
+    let expires_at = now_epoch_ms() + PENDING_OAUTH_TTL_MS;
+
+    let cred_path = crate::credentials::credentials_path_for_scope(config, resolved.auth_scope);
+    let map_key = listener_map_key(&cred_path, &resolved.config.name);
+
+    // Tear down any previous pending listener for this server
+    if let Some((_, mut prev)) = CALLBACK_LISTENERS.remove(&map_key)
+        && let Some(tx) = prev.shutdown_tx.take()
+    {
+        let _ = tx.send(());
+    }
+
+    let redirect_uri = if oauth_mode == "code" {
+        "urn:ietf:wg:oauth:2.0:oob".to_owned()
+    } else {
+        let (port, captured, notify, shutdown_tx) =
+            spawn_loopback_callback_server(state.clone()).await?;
+        CALLBACK_LISTENERS.insert(
+            map_key,
+            ActiveCallbackListener {
+                state: state.clone(),
+                captured_code: captured,
+                notify,
+                shutdown_tx: Some(shutdown_tx),
+                expires_at,
+            },
+        );
+        format!("http://127.0.0.1:{port}/oauth/callback")
+    };
+
+    let cred_key = credential_key_for_server(&resolved.config.name);
+    let existing_creds =
+        crate::credentials::read_scoped_credentials_file(resolved.auth_scope, &cred_path);
+    let existing_client = existing_creds
+        .servers
+        .get(&cred_key)
+        .and_then(|s| s.oauth.as_ref())
+        .and_then(|o| o.client_info.clone())
+        .filter(|c| {
+            c.redirect_uris
+                .as_ref()
+                .is_some_and(|uris| uris.contains(&redirect_uri))
+        });
+
+    let client_info = if let Some(reused) = existing_client {
+        reused
+    } else if let Some(reg_ep) = endpoints.registration_endpoint.as_ref() {
+        let reg_ep = require_secure_oauth_endpoint("registration_endpoint", reg_ep)?;
+        let reg_resp = http_client
+            .post(reg_ep)
+            .json(&json!({
+                "client_name": "Cowork",
+                "redirect_uris": [redirect_uri],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none"
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("OAuth dynamic client registration failed: {e}"))?;
+        if !reg_resp.status().is_success() {
+            return Err(format!(
+                "OAuth dynamic client registration failed with HTTP {}",
+                reg_resp.status()
+            ));
+        }
+        let body: Value = reg_resp.json().await.map_err(|e| e.to_string())?;
+        let cid = body
+            .get("client_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Dynamic client registration response missing client_id".to_owned())?
+            .to_owned();
+        StoredOAuthClientInfo {
+            client_id: cid,
+            client_secret: body
+                .get("client_secret")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            token_endpoint_auth_method: body
+                .get("token_endpoint_auth_method")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            redirect_uris: Some(vec![redirect_uri.clone()]),
+        }
+    } else {
+        StoredOAuthClientInfo {
+            client_id: "cowork-mcp-client".to_owned(),
+            client_secret: None,
+            token_endpoint_auth_method: Some("none".to_owned()),
+            redirect_uris: Some(vec![redirect_uri.clone()]),
+        }
+    };
+
+    {
+        let mut qp = auth_url.query_pairs_mut();
+        qp.append_pair("response_type", "code");
+        qp.append_pair("client_id", &client_info.client_id);
+        qp.append_pair("redirect_uri", &redirect_uri);
+        qp.append_pair("code_challenge", &challenge);
+        qp.append_pair("code_challenge_method", "S256");
+        qp.append_pair("state", &state);
+        qp.append_pair("resource", &endpoints.resource);
+        qp.append_pair("prompt", "consent");
+        if let Some(sc) = configured_scope
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(endpoints.default_scope.as_deref())
+        {
+            qp.append_pair("scope", sc);
+        }
+    }
+
+    let pending = StoredPendingOAuthFlow {
+        state,
+        code_verifier: verifier,
+        redirect_uri,
+        authorization_endpoint: endpoints.authorization_endpoint,
+        token_endpoint: endpoints.token_endpoint,
+        token_endpoint_auth_methods_supported: Some(
+            endpoints.token_endpoint_auth_methods_supported,
+        ),
+        resource: Some(endpoints.resource),
+        expires_at,
+    };
+
+    mutate_credentials_for_scope(config, resolved.auth_scope, |store| {
+        let entry = store.servers.entry(cred_key).or_default();
+        let oauth = entry.oauth.get_or_insert_with(Default::default);
+        oauth.client_info = Some(client_info);
+        oauth.pending = Some(pending);
+        oauth.discovery_issuer = Some(endpoints.issuer);
+        oauth.updated_at = now_epoch_ms();
+    })?;
+
+    let url_str: String = auth_url.into();
+    let expires_iso =
+        chrono::DateTime::from_timestamp_millis(expires_at as i64).map(|dt| dt.to_rfc3339());
+    let method_str = if oauth_mode == "code" {
+        "code".to_owned()
+    } else {
+        "auto".to_owned()
+    };
+    // TS `authorizeMCPServerOAuth`: launch the browser for `auto`, after the pending flow is
+    // stored so the loopback redirect can be completed, and word the instructions accordingly.
+    let instructions = if oauth_mode == "code" {
+        "Open the OAuth URL in a browser and paste the OAuth code.".to_owned()
+    } else if opener.open_url(&url_str).await {
+        "Complete sign-in in your browser. If redirect fails, paste the OAuth code manually."
+            .to_owned()
+    } else {
+        "Open the OAuth URL in a browser, then paste the OAuth code manually.".to_owned()
+    };
+
+    Ok(McpOAuthChallengeResult {
+        name: resolved.config.name,
+        source: resolved.source,
+        url: url_str.clone(),
+        instructions: instructions.clone(),
+        expires_at,
+        challenge: McpOAuthChallengePayload {
+            method: method_str,
+            instructions,
+            url: Some(url_str),
+            expires_at: expires_iso,
+        },
+    })
+}
+
+/// Waits for the local loopback OAuth callback listener (`method == "auto"`) to capture an
+/// authorization code and exchanges it in the background without requiring a manual client
+/// `cowork/mcp/server/auth/callback` request. Returns `Ok(None)` if the pending challenge was
+/// superseded or manually completed before capture.
+pub async fn wait_and_complete_auto_mcp_oauth(
+    config: &AgentConfig,
+    name: &str,
+    source: Option<McpConfigSource>,
+    plugin_id: Option<&str>,
+    plugin_scope: Option<&str>,
+) -> Result<Option<McpAuthMutationResult>, String> {
+    let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
+    let cred_path = crate::credentials::credentials_path_for_scope(config, resolved.auth_scope);
+    let map_key = listener_map_key(&cred_path, &resolved.config.name);
+
+    let (expected_state, captured_arc, notify, expires_at) = {
+        let Some(listener) = CALLBACK_LISTENERS.get(&map_key) else {
+            return Ok(None);
+        };
+        (
+            listener.state.clone(),
+            Arc::clone(&listener.captured_code),
+            Arc::clone(&listener.notify),
+            listener.expires_at,
+        )
+    };
+
+    loop {
+        if now_epoch_ms() >= expires_at {
+            return Ok(None);
+        }
+        let still_current = CALLBACK_LISTENERS
+            .get(&map_key)
+            .is_some_and(|l| l.state == expected_state);
+        if !still_current {
+            return Ok(None);
+        }
+        if captured_arc.lock().is_some() {
+            break;
+        }
+        tokio::select! {
+            _ = notify.notified() => {},
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+        }
+    }
+
+    let lock = exchange_lock_for_key(&map_key);
+    let _guard = lock.lock().await;
+    let Some(code) = captured_arc.lock().take() else {
+        return Ok(None);
+    };
+
+    let cred_key = credential_key_for_server(&resolved.config.name);
+    let store = crate::credentials::read_scoped_credentials_file(resolved.auth_scope, &cred_path);
+    let current_state = store
+        .servers
+        .get(&cred_key)
+        .and_then(|s| s.oauth.as_ref())
+        .and_then(|o| o.pending.as_ref())
+        .map(|p| p.state.clone());
+    if current_state.as_deref() != Some(expected_state.as_str()) {
+        return Ok(None);
+    }
+
+    complete_mcp_oauth_callback_locked(
+        config,
+        &resolved,
+        &cred_path,
+        &cred_key,
+        &map_key,
+        Some(&code),
+    )
+    .await
+    .map(Some)
+}
+
+/// Completes a pending OAuth 2.1 PKCE callback using either a manual `code` (or callback URL)
+/// or the authorization code captured by the local loopback callback listener.
+pub async fn complete_mcp_oauth_callback(
+    config: &AgentConfig,
+    name: &str,
+    source: Option<McpConfigSource>,
+    plugin_id: Option<&str>,
+    plugin_scope: Option<&str>,
+    provided_code: Option<&str>,
+) -> Result<McpAuthMutationResult, String> {
+    let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
+    let cred_path = crate::credentials::credentials_path_for_scope(config, resolved.auth_scope);
+    let cred_key = credential_key_for_server(&resolved.config.name);
+    let map_key = listener_map_key(&cred_path, &resolved.config.name);
+
+    let lock = exchange_lock_for_key(&map_key);
+    let _guard = lock.lock().await;
+
+    complete_mcp_oauth_callback_locked(
+        config,
+        &resolved,
+        &cred_path,
+        &cred_key,
+        &map_key,
+        provided_code,
+    )
+    .await
+}
+
+async fn complete_mcp_oauth_callback_locked(
+    config: &AgentConfig,
+    resolved: &crate::types::HydratedMcpServer,
+    cred_path: &std::path::Path,
+    cred_key: &str,
+    map_key: &str,
+    provided_code: Option<&str>,
+) -> Result<McpAuthMutationResult, String> {
+    let store = crate::credentials::read_scoped_credentials_file(resolved.auth_scope, cred_path);
+    let oauth_entry = store
+        .servers
+        .get(cred_key)
+        .and_then(|s| s.oauth.clone())
+        .ok_or_else(|| format!("No pending OAuth flow for \"{}\".", resolved.config.name))?;
+    if provided_code
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+        && oauth_entry.pending.is_none()
+        && oauth_entry.tokens.is_some()
+        && now_epoch_ms().saturating_sub(oauth_entry.updated_at) <= 60_000
+    {
+        return Ok(McpAuthMutationResult {
+            name: resolved.config.name.clone(),
+            source: resolved.source,
+            mode: McpAuthMode::OAuth,
+            ok: true,
+            message: "OAuth authorization completed.".to_owned(),
+        });
+    }
+    let pending = oauth_entry.pending.ok_or_else(|| {
+        format!(
+            "No pending OAuth challenge for \"{}\".",
+            resolved.config.name
+        )
+    })?;
+    if now_epoch_ms() > pending.expires_at {
+        return Err(format!(
+            "OAuth challenge for \"{}\" has expired.",
+            resolved.config.name
+        ));
+    }
+    let client_info = oauth_entry
+        .client_info
+        .ok_or_else(|| "Missing OAuth client registration metadata.".to_owned())?;
+
+    // Resolve code from explicit argument (supports raw code or full callback URL) or loopback listener
+    let auth_code = if let Some(raw_input) = provided_code.map(str::trim).filter(|s| !s.is_empty())
+    {
+        manual_authorization_code(raw_input, &pending.state)?
+    } else {
+        // Poll briefly (up to 2s at 50ms intervals) if browser redirect just arrived
+        let mut captured = None;
+        for _ in 0..40 {
+            if let Some(listener) = CALLBACK_LISTENERS.get(map_key) {
+                if listener.expires_at < now_epoch_ms() {
+                    break;
+                }
+                if let Some(c) = listener.captured_code.lock().take() {
+                    captured = Some(c);
+                    break;
+                }
+            } else {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        captured.ok_or_else(|| {
+            "Authorization code has not been received yet; complete sign-in in your browser first."
+                .to_owned()
+        })?
+    };
+
+    if let Some((_, mut listener)) = CALLBACK_LISTENERS.remove(map_key)
+        && let Some(tx) = listener.shutdown_tx.take()
+    {
+        let _ = tx.send(());
+    }
+
+    // The pending flow is read back from disk (a workspace-scoped store is repository-controlled),
+    // so re-check its token endpoint before sending the code and verifier to it.
+    let token_endpoint = require_secure_oauth_endpoint("token_endpoint", &pending.token_endpoint)?;
+
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut form = vec![
+        ("grant_type".to_owned(), "authorization_code".to_owned()),
+        ("code".to_owned(), auth_code),
+        ("code_verifier".to_owned(), pending.code_verifier),
+        ("redirect_uri".to_owned(), pending.redirect_uri),
+    ];
+    if let Some(res) = pending.resource.as_ref() {
+        form.push(("resource".to_owned(), res.clone()));
+    }
+
+    let tok_resp = send_token_request(
+        &http_client,
+        token_endpoint.as_str(),
+        form,
+        &client_info,
+        pending
+            .token_endpoint_auth_methods_supported
+            .as_deref()
+            .unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| format!("OAuth token exchange failed: {e}"))?;
+    if !tok_resp.status().is_success() {
+        let status = tok_resp.status();
+        let body_txt = tok_resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "OAuth token exchange failed ({status}): {body_txt}"
+        ));
+    }
+
+    let tok_json: Value = tok_resp.json().await.map_err(|e| e.to_string())?;
+    let access_token = tok_json
+        .get("access_token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "OAuth token response missing access_token".to_owned())?
+        .to_owned();
+    let expires_at = tok_json
+        .get("expires_in")
+        .and_then(Value::as_u64)
+        .map(|secs| now_epoch_ms() + secs.saturating_mul(1_000));
+
+    let tokens = StoredOAuthTokens {
+        access_token,
+        token_type: tok_json
+            .get("token_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        refresh_token: tok_json
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        expires_at,
+        scope: tok_json
+            .get("scope")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    };
+
+    let cred_key_owned = cred_key.to_owned();
+    mutate_credentials_for_scope(config, resolved.auth_scope, |store| {
+        let entry = store.servers.entry(cred_key_owned).or_default();
+        let oauth = entry.oauth.get_or_insert_with(Default::default);
+        oauth.tokens = Some(tokens);
+        oauth.pending = None;
+        oauth.updated_at = now_epoch_ms();
+    })?;
+
+    Ok(McpAuthMutationResult {
+        name: resolved.config.name.clone(),
+        source: resolved.source,
+        mode: McpAuthMode::OAuth,
+        ok: true,
+        message: "OAuth authorization completed.".to_owned(),
+    })
+}
+
+/// Extracts the authorization code from a manually pasted callback value.
+///
+/// Only an `http://`/`https://` value is a callback URL; anything else (including a raw code
+/// such as `ac:1234` that merely looks like `<scheme>:`) is the code itself. A callback URL must
+/// carry the pending flow's `state` (CSRF protection): a missing or different `state` is
+/// rejected rather than skipped.
+fn manual_authorization_code(raw_input: &str, expected_state: &str) -> Result<String, String> {
+    let lower = raw_input.get(..8).unwrap_or(raw_input).to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Ok(raw_input.to_owned());
+    }
+    let cb_url = Url::parse(raw_input).map_err(|e| format!("Invalid OAuth callback URL: {e}"))?;
+    let qp: HashMap<String, String> = cb_url.query_pairs().into_owned().collect();
+    if qp.get("state").map(String::as_str) != Some(expected_state) {
+        return Err("OAuth callback state mismatch.".to_owned());
+    }
+    qp.get("code")
+        .filter(|c| !c.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| "Callback URL did not contain a code query parameter.".to_owned())
+}
+
+/// Refreshes an OAuth access token on runtime `401`/`403` and persists rotated tokens (`0600`),
+/// preserving the existing `refresh_token` if the authorization server omits a new one.
+pub async fn refresh_oauth_access_token(ctx: &McpOAuthRuntimeContext) -> Result<String, String> {
+    let store =
+        crate::credentials::read_scoped_credentials_file(ctx.auth_scope, &ctx.credentials_path);
+    let oauth_entry = store
+        .servers
+        .get(&ctx.server_name)
+        .and_then(|s| s.oauth.clone())
+        .ok_or_else(|| format!("No stored OAuth state for \"{}\".", ctx.server_name))?;
+    let prev_tokens = oauth_entry
+        .tokens
+        .ok_or_else(|| format!("No stored OAuth tokens for \"{}\".", ctx.server_name))?;
+    let refresh_token = prev_tokens.refresh_token.clone().ok_or_else(|| {
+        format!(
+            "OAuth token expired for \"{}\" and no refresh_token is available.",
+            ctx.server_name
+        )
+    })?;
+    let client_info = oauth_entry
+        .client_info
+        .unwrap_or_else(|| StoredOAuthClientInfo {
+            client_id: "cowork-mcp-client".to_owned(),
+            client_secret: None,
+            token_endpoint_auth_method: Some("none".to_owned()),
+            redirect_uris: None,
+        });
+
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let endpoints = discover_oauth_endpoints(
+        &http_client,
+        &ctx.remote_url,
+        ctx.configured_resource.as_deref(),
+    )
+    .await?;
+
+    let mut form = vec![
+        ("grant_type".to_owned(), "refresh_token".to_owned()),
+        ("refresh_token".to_owned(), refresh_token.clone()),
+    ];
+    // Same resolved resource indicator as authorization and code exchange (configured value, then
+    // protected-resource discovery, then the server URL), so the refreshed token keeps its audience.
+    form.push(("resource".to_owned(), endpoints.resource.clone()));
+
+    let token_endpoint =
+        require_secure_oauth_endpoint("token_endpoint", &endpoints.token_endpoint)?;
+    let resp = send_token_request(
+        &http_client,
+        token_endpoint.as_str(),
+        form,
+        &client_info,
+        &endpoints.token_endpoint_auth_methods_supported,
+    )
+    .await
+    .map_err(|e| format!("OAuth token refresh failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "OAuth token refresh failed with HTTP {}",
+            resp.status()
+        ));
+    }
+
+    let tok_json: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let new_access_token = tok_json
+        .get("access_token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "OAuth refresh response missing access_token".to_owned())?
+        .to_owned();
+    let expires_at = tok_json
+        .get("expires_in")
+        .and_then(Value::as_u64)
+        .map(|secs| now_epoch_ms() + secs.saturating_mul(1_000));
+    let next_refresh_token = tok_json
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(Some(refresh_token));
+
+    let server_key = ctx.server_name.clone();
+    let new_access_clone = new_access_token.clone();
+    crate::credentials::mutate_scoped_credentials_file(
+        ctx.auth_scope,
+        &ctx.lock_root,
+        &ctx.credentials_path,
+        move |file| {
+            let entry = file.servers.entry(server_key).or_default();
+            let oauth = entry.oauth.get_or_insert_with(Default::default);
+            oauth.tokens = Some(StoredOAuthTokens {
+                access_token: new_access_clone,
+                token_type: tok_json
+                    .get("token_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or(prev_tokens.token_type),
+                refresh_token: next_refresh_token,
+                expires_at,
+                scope: tok_json
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or(prev_tokens.scope),
+            });
+            oauth.updated_at = now_epoch_ms();
+        },
+    )?;
+
+    Ok(new_access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(secret: Option<&str>, method: Option<&str>) -> StoredOAuthClientInfo {
+        StoredOAuthClientInfo {
+            client_id: "client".to_owned(),
+            client_secret: secret.map(str::to_owned),
+            token_endpoint_auth_method: method.map(str::to_owned),
+            redirect_uris: None,
+        }
+    }
+
+    fn methods(list: &[&str]) -> Vec<String> {
+        list.iter().map(|m| (*m).to_owned()).collect()
+    }
+
+    /// Mirrors MCP SDK 1.30 `selectClientAuthMethod` branch by branch.
+    #[test]
+    fn selects_token_endpoint_auth_method_like_the_mcp_sdk() {
+        use ClientAuthMethod as M;
+        let cases = [
+            // Registered method wins when advertised, or when nothing is advertised.
+            (
+                Some("s"),
+                Some("client_secret_basic"),
+                &[][..],
+                M::ClientSecretBasic,
+            ),
+            (
+                Some("s"),
+                Some("client_secret_post"),
+                &[][..],
+                M::ClientSecretPost,
+            ),
+            (
+                Some("s"),
+                Some("client_secret_basic"),
+                &["client_secret_post", "client_secret_basic"][..],
+                M::ClientSecretBasic,
+            ),
+            // Registered method not advertised: fall back to the priority order.
+            (
+                Some("s"),
+                Some("client_secret_basic"),
+                &["client_secret_post"][..],
+                M::ClientSecretPost,
+            ),
+            // Unknown registered method is ignored.
+            (
+                Some("s"),
+                Some("private_key_jwt"),
+                &[][..],
+                M::ClientSecretBasic,
+            ),
+            // RFC 8414 default when the list is omitted.
+            (Some("s"), None, &[][..], M::ClientSecretBasic),
+            (None, None, &[][..], M::None),
+            (Some(""), None, &[][..], M::None),
+            // Most secure advertised method first.
+            (
+                Some("s"),
+                None,
+                &["none", "client_secret_post", "client_secret_basic"][..],
+                M::ClientSecretBasic,
+            ),
+            (None, None, &["client_secret_basic", "none"][..], M::None),
+            // Nothing usable advertised: use what we have.
+            (
+                Some("s"),
+                None,
+                &["private_key_jwt"][..],
+                M::ClientSecretPost,
+            ),
+            (None, None, &["client_secret_basic"][..], M::None),
+        ];
+        for (secret, method, supported, expected) in cases {
+            assert_eq!(
+                select_client_auth_method(&client(secret, method), &methods(supported)),
+                expected,
+                "secret={secret:?} method={method:?} supported={supported:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn applies_client_credentials_for_each_method() {
+        let confidential = client(Some("se:cret"), None);
+        let mut form = Vec::new();
+        let header = apply_client_authentication(
+            ClientAuthMethod::ClientSecretBasic,
+            &confidential,
+            &mut form,
+        )
+        .unwrap();
+        assert_eq!(
+            header.as_deref(),
+            Some(format!("Basic {}", data_encoding::BASE64.encode(b"client:se:cret")).as_str())
+        );
+        assert!(form.is_empty());
+
+        let mut form = Vec::new();
+        let header = apply_client_authentication(
+            ClientAuthMethod::ClientSecretPost,
+            &confidential,
+            &mut form,
+        )
+        .unwrap();
+        assert_eq!(header, None);
+        assert_eq!(
+            form,
+            [
+                ("client_id".to_owned(), "client".to_owned()),
+                ("client_secret".to_owned(), "se:cret".to_owned())
+            ]
+        );
+
+        let mut form = Vec::new();
+        let header =
+            apply_client_authentication(ClientAuthMethod::None, &confidential, &mut form).unwrap();
+        assert_eq!(header, None);
+        assert_eq!(form, [("client_id".to_owned(), "client".to_owned())]);
+
+        let err = apply_client_authentication(
+            ClientAuthMethod::ClientSecretBasic,
+            &client(None, Some("client_secret_basic")),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(err.contains("requires a client_secret"), "{err}");
+    }
+}

@@ -1,5 +1,9 @@
 import { act } from "react";
 
+// Route components are lazy chunks; their first import on a slow CI runner can
+// outlast a fixed number of macrotask turns, so bound the wait by time instead.
+const ROUTE_SETTLE_TIMEOUT_MS = 3_000;
+
 export async function waitForAppRoute(): Promise<void> {
   const { getAppRouter } = await import("../../src/app/router");
   const router = getAppRouter();
@@ -7,7 +11,8 @@ export async function waitForAppRoute(): Promise<void> {
   await act(async () => {
     load = router.load();
   });
-  for (let attempt = 0; attempt < 100; attempt++) {
+  const deadline = Date.now() + ROUTE_SETTLE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });

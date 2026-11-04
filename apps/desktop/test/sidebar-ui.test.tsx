@@ -390,6 +390,77 @@ describe("desktop sidebar", () => {
     },
   );
 
+  test.serial(
+    "search overlay resets active selection to the first item when normalized query changes",
+    async () => {
+      const harness = setupSidebarJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+        await act(async () => {
+          resetAppStore({
+            workspaces: [makeWorkspace({ name: "Migration project" })],
+            threads: makeThreads(3),
+            selectedWorkspaceId: "ws-1",
+            selectedThreadId: "thread-1",
+          });
+          root?.render(createElement(Sidebar));
+        });
+
+        await searchSidebar(harness, "Thread");
+        const getItems = () =>
+          Array.from(
+            harness.dom.window.document.querySelectorAll<HTMLButtonElement>(
+              '[data-search-overlay-item="true"]',
+            ),
+          );
+        expect(getItems().length).toBe(3);
+        expect(getItems()[0]?.getAttribute("data-active")).toBe("true");
+
+        await act(async () => {
+          const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+            'input[placeholder^="Search"]',
+          );
+          input?.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+          );
+        });
+        expect(getItems()[1]?.getAttribute("data-active")).toBe("true");
+
+        // Whitespace-only query update does not change normalizedQuery; active index stays on item 1.
+        await searchSidebar(harness, "Thread ");
+        expect(getItems()[1]?.getAttribute("data-active")).toBe("true");
+
+        // Changing normalizedQuery resets active index back to 0.
+        await searchSidebar(harness, "thread 2");
+        expect(getItems()[0]?.getAttribute("data-active")).toBe("true");
+
+        // Clear search button also resets active index when navigating multiple results.
+        await searchSidebar(harness, "Thread");
+        await act(async () => {
+          const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+            'input[placeholder^="Search"]',
+          );
+          input?.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+          );
+        });
+        expect(getItems()[1]?.getAttribute("data-active")).toBe("true");
+        await act(async () => {
+          harness.dom.window.document
+            .querySelector<HTMLButtonElement>('[aria-label="Clear search"]')
+            ?.click();
+        });
+        expect(getItems()[0]?.getAttribute("data-active")).toBe("true");
+      } finally {
+        if (root) await act(async () => root?.unmount());
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("expands the task list independently from the compact chat list", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;

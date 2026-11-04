@@ -46,9 +46,11 @@ bun run build:server-binary -- \
   --outfile dist/cowork-server-windows-arm64/cowork-server.exe
 ```
 
-The build script (`scripts/build_cowork_server_binary.ts`) uses `bun build --compile` for macOS, Windows, and Linux x64/ARM64 targets and copies the required resource directories (`prompts/`, `config/`, `docs/`) next to the binary. Every target, including Windows ARM64, receives one native executable; no separate Bun installation, JavaScript entrypoint, or launcher script is needed. Use `--platform` / `--arch` or `COWORK_BUILD_PLATFORM` / `COWORK_BUILD_ARCH` to select a different target.
+The build script (`scripts/build_cowork_server_binary.ts`) compiles the native Rust `cowork-server` release binary via `cargo build --release --locked -p cowork-server` across macOS, Windows, and Linux x64/ARM64 targets and copies the required resource directories (`prompts/`, `config/`, `docs/`, `skills/`) next to the binary. Every target, including Windows ARM64, receives a native Rust executable; no Bun or Node runtime is needed on target machines. Use `--platform` / `--arch` or `COWORK_BUILD_PLATFORM` / `COWORK_BUILD_ARCH` to select a target triple.
 
 **Spawn as a subprocess:**
+
+A standalone executable can run with embedded defaults. To use a resource bundle stored elsewhere, set `COWORK_BUILTIN_DIR` to its absolute path. The workspace passed to `--dir` supplies project settings and skills only.
 
 ```typescript
 import { spawn } from "node:child_process";
@@ -56,11 +58,13 @@ import { spawn } from "node:child_process";
 const child = spawn("./cowork-server", [
   "--dir", "/path/to/workspace",
   "--port", "0",     // ephemeral port
-  "--json",          // emit machine-readable startup event
+  "--json",          // emit machine-readable startup events
 ], {
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
+    // Exit cooperatively when parent closes stdin (cross-platform, <10s)
+    COWORK_DESKTOP_PARENT_MANAGED: "1",
     // Optional: point to bundled resources if not colocated
     COWORK_BUILTIN_DIR: "/path/to/dist",
   },
@@ -69,12 +73,13 @@ const child = spawn("./cowork-server", [
 
 **Wait for the startup event:**
 
-When launched with `--json`, the server prints a single JSON line to stdout once listening:
+With `--json`, wait for `server_listening` to discover the bound listener. This does not mean the runtime is installed: verification and downloads run in the background. With `COWORK_DESKTOP_STARTUP_EVENTS=1`, the server also emits `server_startup_progress` for actual installer progress, which may arrive before or after `server_listening`. A disabled or skipped bootstrap need not emit any progress. After connecting, use `cowork/runtime/diagnostics/read` to check the latest progress or startup error.
 
 ```json
 {
   "type": "server_listening",
   "url": "ws://127.0.0.1:54321/ws",
+  "wsUrl": "ws://127.0.0.1:54321/ws",
   "host": "127.0.0.1",
   "port": 54321,
   "cwd": "/path/to/workspace",
@@ -82,9 +87,7 @@ When launched with `--json`, the server prints a single JSON line to stdout once
 }
 ```
 
-Parse this to discover the WebSocket URL. When binding to a non-loopback host such as `0.0.0.0`, `browserAccessToken` is non-null and must be sent to `/ws` as the `coworkBrowserToken` query parameter and to `/cowork/*` HTTP routes as the `X-Cowork-Browser-Token` header. See `apps/desktop/electron/services/serverManager.ts` for a production-grade implementation including startup timeout, stderr capture, graceful shutdown, and retry logic for Bun crashes.
-
-Desktop launchers can also set `COWORK_DESKTOP_STARTUP_EVENTS=1` to receive validated `server_startup_progress` JSON lines while the Cowork runtime is downloading or installing. In that mode, treat stdout as newline-delimited JSON and keep reading until the `server_listening` event arrives.
+Parse this to discover the WebSocket URL. When binding to a non-loopback host such as `0.0.0.0` (or when serving browser Origins), `browserAccessToken` must be sent to `/ws` as the `coworkBrowserToken` query parameter and to `/cowork/*` HTTP routes as the `X-Cowork-Browser-Token` header. See `apps/desktop/electron/services/serverManager.ts` for a production-grade implementation including startup timeout, `server_startup_progress` forwarding, stderr capture, and cooperative stdin-EOF shutdown.
 
 **Server CLI flags:**
 
@@ -94,29 +97,12 @@ Desktop launchers can also set `COWORK_DESKTOP_STARTUP_EVENTS=1` to receive vali
 | `--host`, `-H` | Bind hostname (default: `127.0.0.1`) |
 | `--port`, `-p` | Bind port (default: `7337`, use `0` for ephemeral) |
 | `--yolo`, `-y` | YOLO mode: no approval prompts, shell commands run outside the OS sandbox |
-| `--json`, `-j` | Emit machine-readable startup JSON to stdout |
+| `--json`, `-j` | Emit machine-readable startup NDJSON to stdout |
+| `--mobile-h3` | Enable self-signed TLS QR-pairing gateway for mobile companions |
 
-### Mode 2: Embedded Server (Same Process)
+### Mode 2: Embedded Rust Library (In-Process)
 
-Import `startAgentServer()` directly if your host application also runs on Bun/Node.
-
-```typescript
-import { startAgentServer } from "agent-coworker/src/server/startServer";
-
-const { server, config, url } = await startAgentServer({
-  cwd: process.cwd(),
-  hostname: "127.0.0.1",
-  port: 0, // ephemeral
-});
-
-// url is the WebSocket endpoint, e.g. "ws://127.0.0.1:54321/ws"
-console.log("Server ready at", url);
-
-// Graceful shutdown
-process.on("SIGTERM", () => server.stop());
-```
-
-This is how the CLI entrypoint works (`src/index.ts`): it launches the REPL, which starts the server in-process on an ephemeral port and connects over WebSocket.
+If your host application is written in Rust, depend on `crates/cowork-server` and call `cowork_server::start_server` directly on an ephemeral loopback port. This is how the standalone Rust CLI binary (`crates/cowork-cli/src/main.rs`) embeds the server in-process when `--url` is not provided, before connecting over WebSocket (`cowork.jsonrpc.v1`).
 
 ## Connecting a Client
 
@@ -243,7 +229,7 @@ During a turn, the server emits `model_stream_chunk` events with streaming LLM o
 
 **Stream normalization**: The `modelStream.ts` module (`src/client/modelStream.ts`) provides `mapModelStreamChunk()` to normalize provider-specific streaming differences into a unified `ModelStreamUpdate` type. Use it to avoid writing provider-specific rendering logic.
 
-For session resume, `modelStreamReplay.ts` can reconstruct streamed turns from persisted raw events using provider-specific projectors (Google Interactions, OpenAI Responses).
+For client-side raw stream reconstruction, `src/shared/modelStreamReplay.ts` can replay streamed turns from persisted raw events using provider-specific projectors (Google Interactions, OpenAI Responses), complementing server-owned `ThreadJournal` (`crates/cowork-storage/src/thread_journal.rs`) and `SessionSnapshot` projection (`crates/cowork-inference/src/projector.rs`).
 
 ## Session Management
 
@@ -256,21 +242,24 @@ Each WebSocket connection binds to one session. To manage multiple sessions (lik
 
 ### Session Resume
 
-Sessions survive disconnects. To resume:
+Threads survive disconnects and server restarts:
 
-1. Store the `sessionId` from `server_hello`
-2. Reconnect with `?resumeSessionId=<id>` in the URL
-3. The server replays buffered events (up to 256) that occurred while disconnected
-4. Pending `ask`/`approval` prompts are re-emitted
+1. Store the `thread.id` returned by `thread/start` and the highest received journal sequence `seq`.
+2. Reconnect, complete `initialize` / `initialized`, and send `thread/resume` with `{ "threadId": "<id>", "afterSeq": <lastSeq> }`.
+3. The server replays missed monotonic `ThreadJournal` events (or falls back to a full `SessionSnapshot` via `thread/read`) and re-emits any pending `requestUserInput` / `requestApproval` prompts.
 
 ### Session Persistence
 
 Sessions are stored in SQLite (`~/.cowork/sessions.db`). Resume works across server restarts — the server rehydrates session state from the database.
 
-List and query sessions via:
+List persisted threads via:
 
 ```json
-{ "type": "list_sessions", "sessionId": "abc-123", "scope": "workspace" }
+{
+  "id": 3,
+  "method": "thread/list",
+  "params": { "cwd": "/path/to/workspace" }
+}
 ```
 
 ## Configuration
@@ -329,34 +318,37 @@ inspect and remove it only after confirming those older processes are stopped.
 
 ### Runtime Config Patching
 
-Clients can modify session config at runtime via `set_config`:
+Clients can modify session config at runtime via `cowork/session/config/set`:
 
 ```json
 {
-  "type": "set_config",
-  "sessionId": "abc-123",
-  "config": {
-    "yolo": true,
-    "maxSteps": 50,
-    "enableMemory": true,
-    "backupsEnabled": true
+  "id": 4,
+  "method": "cowork/session/config/set",
+  "params": {
+    "threadId": "abc-123",
+    "config": {
+      "yolo": true,
+      "maxSteps": 50,
+      "enableMemory": true,
+      "backupsEnabled": true
+    }
   }
 }
 ```
 
-`backupsEnabled` is opt-in and should usually stay off for git workspaces that can use `git diff`, `git stash`, and `git worktree` for checkpointing. See `SessionConfigPatch` in `src/server/protocol.ts` for all available fields.
+`backupsEnabled` is opt-in and should usually stay off for git workspaces that can use `git diff`, `git stash`, and `git worktree` for checkpointing. See `SessionConfigPatch` in `src/shared/protocolTypes.ts` and `crates/cowork-protocol/src/schemas.rs` for all available fields.
 
 ## Server Lifecycle Management
 
 For native apps that spawn the server as a sidecar, you need to handle:
 
-**Startup**: Spawn the process, wait for the `server_listening` JSON on stdout, then connect.
+**Startup**: Spawn `cowork-server --json` with `COWORK_DESKTOP_PARENT_MANAGED=1`, wait for the `server_listening` JSON line on stdout, then connect.
 
-**Health monitoring**: The server emits `pong` in response to `ping`. If pongs stop arriving, the server may have crashed.
+**Health monitoring**: Poll `GET /cowork/health` or observe WebSocket connectivity.
 
-**Graceful shutdown**: Send `SIGTERM` (or `SIGINT`) to the server process. It flushes pending session snapshots and stops child processes. If the server does not exit within 3 seconds, escalate to `SIGKILL`.
+**Graceful shutdown**: Close child `stdin` (EOF) when `COWORK_DESKTOP_PARENT_MANAGED=1` is set (cross-platform, works identically on Windows, macOS, and Linux) or send `SIGTERM`/`SIGINT` on POSIX. The server flushes pending session snapshots, closes active WebSockets, and reaps child processes within `<10s`.
 
-**Crash recovery**: If the server process exits unexpectedly, your app can restart it and reconnect clients using `resumeSessionId`. Sessions are persisted to SQLite, so state is not lost.
+**Crash recovery**: If the server process exits unexpectedly, your app can restart it and reconnect clients via `thread/resume`. Sessions are persisted to SQLite, so state is not lost.
 
 See `apps/desktop/electron/services/serverManager.ts` for a complete reference implementation of sidecar lifecycle management.
 
@@ -366,23 +358,23 @@ The Electron desktop app (`apps/desktop/`) is the canonical example of a native 
 
 | Concern | File | Pattern |
 |---------|------|---------|
-| Sidecar spawn & lifecycle | `electron/services/serverManager.ts` | Spawn binary, parse startup JSON, graceful kill |
-| Socket management | `src/app/store.helpers/controlSocket.ts` | Per-workspace control sockets |
-| Thread sockets | `src/app/store.helpers/runtimeState.ts` | Per-thread AgentSocket map |
-| Feed reduction | `src/app/store.helpers/threadEventReducer.ts` | JSON-RPC notifications -> Zustand state |
-| State management | `src/app/store.tsx` | Zustand store with action namespaces |
-| IPC bridge | `electron/ipc.ts` | Electron main <-> renderer communication |
+| Sidecar spawn & lifecycle | `apps/desktop/electron/services/serverManager.ts` | Spawn Rust binary, parse startup NDJSON, stdin-EOF shutdown |
+| Socket management | `apps/desktop/src/app/store.helpers/controlSocket.ts` | Per-workspace control sockets |
+| Thread sockets | `apps/desktop/src/app/store.helpers/runtimeState.ts` | Per-thread `JsonRpcSocket` map |
+| Feed reduction | `apps/desktop/src/app/store.helpers/threadEventReducer.ts` | JSON-RPC notifications -> Zustand state |
+| State management | `apps/desktop/src/app/store.ts` | Zustand store with action namespaces |
+| IPC bridge | `apps/desktop/electron/ipc.ts` | Electron main <-> renderer communication |
 
 ## Checklist: Building a New Client
 
-1. **Choose integration mode**: sidecar binary (recommended for native apps) or embedded server (for Bun/Node apps)
-2. **Connect via WebSocket**: Use `AgentSocket` (TS/JS) or implement the JSON protocol directly
-3. **Handle the core event loop**: `server_hello`, `session_busy`, `model_stream_chunk`, `assistant_message`, `ask`, `approval`, `error`
-4. **Implement ask/approval UX**: The agent will block waiting for your response
-5. **Handle session resume**: Store `sessionId`, reconnect with `resumeSessionId`
-6. **Optional: normalize model streams**: Use `modelStream.ts` or implement your own normalizer for `model_stream_chunk` events
-7. **Optional: multi-session support**: One control socket + per-thread sockets
-8. **Optional: provider auth flows**: Handle `provider_auth_challenge` events if you want in-app provider setup
+1. **Choose integration mode**: sidecar `cowork-server` binary (recommended for native/TS apps) or embedded `cowork_server::start_server` (for Rust apps)
+2. **Connect via WebSocket**: Use `JsonRpcSocket` (`src/client/jsonRpcSocket.ts`) or implement JSON-RPC-lite (`cowork.jsonrpc.v1`) directly
+3. **Handle the core event loop**: `initialize` / `initialized`, `thread/started`, `turn/started`, `item/*` deltas and completions, `item/tool/requestUserInput`, `item/commandExecution/requestApproval`, `turn/completed`
+4. **Implement ask/approval UX**: The agent blocks tool execution until the client responds with the matching JSON-RPC request `id`
+5. **Handle thread resume**: Store `threadId` + `lastSeq`, reconnect with `thread/resume`
+6. **Optional: normalize model streams**: Use `src/client/modelStream.ts` for stream chunk projection helpers
+7. **Optional: multi-session support**: One workspace control socket + per-thread sockets
+8. **Optional: provider auth flows**: Use `cowork/provider/*` routes for in-app provider setup and OAuth PKCE
 
 ## Further Reading
 

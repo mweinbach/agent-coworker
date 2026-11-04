@@ -634,7 +634,7 @@ const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodeProviderCo
   },
 };
 
-export function isOpenCodeProviderName(value: unknown): value is OpenCodeProviderName {
+function isOpenCodeProviderName(value: unknown): value is OpenCodeProviderName {
   return (
     typeof value === "string" && (OPENCODE_PROVIDER_NAMES as readonly string[]).includes(value)
   );
@@ -644,7 +644,7 @@ export function getOpenCodeProviderConfig(provider: OpenCodeProviderName): OpenC
   return OPENCODE_PROVIDER_CONFIGS[provider];
 }
 
-export function getOpenCodeDisplayName(provider: OpenCodeProviderName): string {
+function getOpenCodeDisplayName(provider: OpenCodeProviderName): string {
   return OPENCODE_PROVIDER_CONFIGS[provider].label;
 }
 
@@ -671,7 +671,7 @@ export function getOpenCodeModelPricing(
   return OPENCODE_ZEN_MODEL_PRICING[modelId as OpenCodeModelId] ?? null;
 }
 
-export function resolveOpenCodeApiKey(
+function resolveOpenCodeApiKey(
   provider: OpenCodeProviderName,
   opts: {
     savedKey?: string;
@@ -686,7 +686,7 @@ export function resolveOpenCodeApiKey(
   return envValue ? envValue : undefined;
 }
 
-export function isOpenCodeSiblingPair(
+function isOpenCodeSiblingPair(
   provider: ProviderName,
   sourceProvider: ProviderName,
 ): provider is OpenCodeProviderName {

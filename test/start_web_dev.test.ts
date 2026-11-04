@@ -1,15 +1,34 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 
+import {
+  resolveDesktopTargetTriple,
+  resolvePackagedSidecarFilename,
+  SIDECAR_MANIFEST_NAME,
+} from "../apps/desktop/electron/services/sidecar";
 import {
   createServerStdoutMonitor,
   main,
   normalizeProcessExitCode,
   type WebDevDependencies,
 } from "../apps/desktop/scripts/start_web_dev";
+import { buildWorkspaceBinary, resolveWorkspaceServerBinary } from "../scripts/workspaceRustBinary";
+import { hostArch, hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const encoder = new TextEncoder();
+const fixtureRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of fixtureRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+function writeFixtureFile(file: string, content = "") {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
 
 function createStdoutStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -76,7 +95,26 @@ describe("normalizeProcessExitCode", () => {
   });
 });
 
-function createLauncherFixture() {
+function createLauncherFixture({ staged = true, withVite = true } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(scratchRoots()[0], "cowork-web-launch-")));
+  fixtureRoots.push(root);
+  const stagedBinary = path.join(
+    root,
+    "apps",
+    "desktop",
+    "resources",
+    "binaries",
+    resolvePackagedSidecarFilename(),
+  );
+  if (staged) writeFixtureFile(stagedBinary);
+  if (withVite) writeFixtureFile(path.join(root, "node_modules", "vite-plus", "bin", "vp"));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CARGO_TARGET_DIR: "cargo output",
+    CARGO_NET_OFFLINE: "true",
+    COWORK_REPO_ROOT: undefined,
+  };
+  delete env.COWORK_DESKTOP_SIDECAR_PATH;
   const signals = new EventEmitter();
   const errors: string[] = [];
   const serverExit = Promise.withResolvers<number>();
@@ -111,12 +149,16 @@ function createLauncherFixture() {
   const dependencies: WebDevDependencies = {
     startServer: () => server,
     startVite: () => vite,
-    fileExists: () => true,
+    repoRoot: root,
+    env,
     signals,
     logger: { log: () => {}, error: (message: string) => errors.push(message) },
     startupTimeoutMs: 50,
   };
   return {
+    root,
+    env,
+    stagedBinary,
     dependencies,
     errors,
     signals,
@@ -133,12 +175,24 @@ function createLauncherFixture() {
 }
 
 describe("web dev process lifecycle", () => {
-  test("launches the project-local Vite+ dev command through Bun", async () => {
+  test("launches the project-local Vite+ dev command through Bun and spawns the Rust sidecar", async () => {
     const fixture = createLauncherFixture();
+    const startedServers: Array<Parameters<NonNullable<WebDevDependencies["startServer"]>>[0]> = [];
     const started: Array<Parameters<NonNullable<WebDevDependencies["startVite"]>>[0]> = [];
+    const originalStartServer = fixture.dependencies.startServer!;
     const originalStartVite = fixture.dependencies.startVite!;
-    fixture.dependencies.fileExists = (candidate) =>
-      String(candidate).endsWith(path.join("node_modules", "vite-plus", "bin", "vp"));
+    let stdinEnded = false;
+    fixture.dependencies.startServer = (options) => {
+      startedServers.push(options);
+      const child = originalStartServer(options);
+      return Object.assign(child, {
+        stdin: {
+          end() {
+            stdinEnded = true;
+          },
+        },
+      });
+    };
     fixture.dependencies.startVite = (options) => {
       started.push(options);
       return originalStartVite(options);
@@ -146,7 +200,15 @@ describe("web dev process lifecycle", () => {
     fixture.ready();
     fixture.viteExit.resolve(0);
 
-    expect(await main([], fixture.dependencies)).toBe(0);
+    expect(await main(["--dir", "/private/tmp/web-dev-ws"], fixture.dependencies)).toBe(0);
+    expect(startedServers).toHaveLength(1);
+    expect(startedServers[0].cmd[0]).toBe(fixture.stagedBinary);
+    expect(startedServers[0].cmd[0]).not.toBe(process.execPath);
+    expect(startedServers[0].cmd).not.toContain("src/server/index.ts");
+    expect(startedServers[0].cmd.slice(1)).toEqual(["--dir", "/private/tmp/web-dev-ws", "--json"]);
+    expect(startedServers[0].env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
+    expect(startedServers[0].env.COWORK_REPO_ROOT).toBe(fixture.root);
+    expect(stdinEnded).toBe(true);
     expect(started).toHaveLength(1);
     expect(started[0].cmd).toEqual([
       process.execPath,
@@ -158,9 +220,91 @@ describe("web dev process lifecycle", () => {
     expect(started[0].env.COWORK_SERVER_URL).toBe("ws://127.0.0.1:7337/ws");
   });
 
-  test("terminates the server when the Vite executable is missing", async () => {
+  test("builds only the server with Cargo even when a stale sidecar is staged", async () => {
+    const fixture = createLauncherFixture({ staged: true });
+    // A sidecar staged by an earlier desktop build (a non-runnable placeholder here) must not
+    // shadow a fresh Cargo build of the checked-out sources.
+    writeFixtureFile(
+      path.join(fixture.root, "apps", "desktop", "resources", "binaries", SIDECAR_MANIFEST_NAME),
+      JSON.stringify({
+        filename: resolvePackagedSidecarFilename(),
+        targetTriple: resolveDesktopTargetTriple(),
+        platform: hostPlatform(),
+        arch: hostArch(),
+      }),
+    );
+    // A tiny offline crate exercises Cargo's real artifact/target-dir behavior without building Cowork.
+    writeFixtureFile(
+      path.join(fixture.root, "Cargo.toml"),
+      '[package]\nname = "cowork-server"\nversion = "0.1.0"\nedition = "2024"\n',
+    );
+    const readyUrl = "ws://127.0.0.1:12345/ws";
+    writeFixtureFile(
+      path.join(fixture.root, "src", "main.rs"),
+      `fn main() { println!("{}", r#"{"type":"server_listening","url":"${readyUrl}"}"#); std::io::stdin().read_line(&mut String::new()).unwrap(); }`,
+    );
+    writeFixtureFile(
+      path.join(fixture.root, "src", "bin", "unrelated.rs"),
+      'compile_error!("unrelated binary was built");',
+    );
+    // A stale binary outside the selected target dir must not hide a missing build.
+    const exe = hostPlatform() === "win32" ? "cowork-server.exe" : "cowork-server";
+    writeFixtureFile(path.join(fixture.root, "target", "debug", exe));
+    delete fixture.dependencies.startServer;
+    fixture.dependencies.startupTimeoutMs = 1_000;
+    let serverUrl: string | undefined;
+    const originalStartVite = fixture.dependencies.startVite!;
+    fixture.dependencies.startVite = (opts) => {
+      serverUrl = opts.env.COWORK_SERVER_URL;
+      return originalStartVite(opts);
+    };
+    fixture.viteExit.resolve(0);
+    expect(await main([], fixture.dependencies)).toBe(0);
+    expect(serverUrl).toBe(readyUrl);
+
+    // The black-box test builder must refresh the same binary, not just check for its existence.
+    writeFixtureFile(
+      path.join(fixture.root, "src", "main.rs"),
+      'fn main() { println!("updated source"); }',
+    );
+    const binary = buildWorkspaceBinary(fixture.root, "cowork-server", fixture.env);
+    expect(path.relative(fixture.root, binary).split(path.sep)[0]).toBe("cargo output");
+    expect(Bun.spawnSync([binary]).stdout.toString().trim()).toBe("updated source");
+    // Two real (tiny) Cargo builds: allow for a cold toolchain on a loaded CI runner.
+  }, 120_000);
+
+  test("uses a host-triple build under an absolute CARGO_TARGET_DIR without compiling", () => {
+    const fixture = createLauncherFixture({ staged: false });
+    const targetDir = path.join(fixture.root, "absolute target");
+    const exe = hostPlatform() === "win32" ? "cowork-server.exe" : "cowork-server";
+    const candidate = path.join(targetDir, resolveDesktopTargetTriple(), "release", exe);
+    writeFixtureFile(candidate);
+    expect(resolveWorkspaceServerBinary(fixture.root, { CARGO_TARGET_DIR: targetDir })).toBe(
+      candidate,
+    );
+  });
+
+  test("reports a missing explicit override even when a staged sidecar exists", async () => {
     const fixture = createLauncherFixture();
-    fixture.dependencies.fileExists = () => false;
+    fixture.env.COWORK_DESKTOP_SIDECAR_PATH = path.join(fixture.root, "missing");
+    expect(await main([], fixture.dependencies)).toBe(1);
+    expect(fixture.errors).toContainEqual(
+      expect.stringContaining("COWORK_DESKTOP_SIDECAR_PATH does not exist"),
+    );
+    expect(fixture.serverSignals).toEqual([]);
+  });
+
+  test("reports a failed Cargo build instead of spawning a nonexistent binary", async () => {
+    const fixture = createLauncherFixture({ staged: false });
+    expect(await main([], fixture.dependencies)).toBe(1);
+    expect(fixture.errors).toContainEqual(
+      expect.stringContaining("Failed to build cowork-server with cargo build -p cowork-server"),
+    );
+    expect(fixture.serverSignals).toEqual([]);
+  });
+
+  test("terminates the server when the Vite executable is missing", async () => {
+    const fixture = createLauncherFixture({ withVite: false });
     fixture.ready();
 
     expect(await main([], fixture.dependencies)).toBe(1);
@@ -222,9 +366,8 @@ describe("web dev process lifecycle", () => {
   test("waits for a real child process to exit after a startup failure", async () => {
     const children: Array<Pick<Bun.Subprocess, "kill" | "exited">> = [];
     const exits: number[] = [];
-    const fixture = createLauncherFixture();
+    const fixture = createLauncherFixture({ withVite: false });
     fixture.dependencies.startupTimeoutMs = 1_000;
-    fixture.dependencies.fileExists = () => false;
     fixture.dependencies.startServer = () => {
       const child = Bun.spawn({
         cmd: [

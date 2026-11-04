@@ -1,6 +1,6 @@
 import { SparklesIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { CoworkRuntimeBootstrapProgress } from "../../../../../src/coworkRuntime/types";
+import type { CoworkRuntimeBootstrapProgress } from "../../../../../src/shared/runtimeProgress";
 import type { BootstrapStage } from "../../app/store.helpers";
 import { Spinner } from "../../components/ui/spinner";
 import { StartupRecovery } from "../recovery/StartupRecovery";

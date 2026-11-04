@@ -1,0 +1,46 @@
+[package]
+name = "cowork-providers"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "6 native Rust wire transports covering all 14 registered LLM providers, ProviderQuirks, and OAuth 2.1 PKCE."
+
+[dependencies]
+async-trait.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
+aws-runtime.workspace = true
+aws-sigv4.workspace = true
+aws-smithy-eventstream.workspace = true
+aws-smithy-runtime-api.workspace = true
+aws-smithy-types.workspace = true
+axum.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+cowork-config.workspace = true
+cowork-inference.workspace = true
+cowork-protocol.workspace = true
+cowork-sandbox.workspace = true
+data-encoding.workspace = true
+eventsource-stream.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

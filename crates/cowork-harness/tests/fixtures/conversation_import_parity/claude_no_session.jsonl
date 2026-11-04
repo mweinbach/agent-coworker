@@ -1,0 +1,3 @@
+{"type":"summary","summary":"Earlier work"}
+{"type":"user","sessionId":"late-id","uuid":7,"timestamp":"2026-03-01T00:00:00Z","message":{"content":"hi there"}}
+{"type":"user","sessionId":"late-id","timestamp":"2026-03-01T00:00:01Z","toolUseResult":"","message":{"content":[{"type":"tool_result","tool_use_id":"nope","isError":true}]}}

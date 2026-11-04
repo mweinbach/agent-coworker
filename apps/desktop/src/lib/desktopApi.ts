@@ -1,4 +1,3 @@
-import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
 import type { WorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
 import type {
   DesktopFeatureFlagOverrides,
@@ -8,6 +7,7 @@ import type {
   FileChangeVersion,
   WorkspaceFileChangeEvent as PreviewFileChangeEvent,
 } from "../../../../src/shared/fileVersion";
+import type { CoworkRuntimeBootstrapProgress } from "../../../../src/shared/runtimeProgress";
 import type {
   ProductAnalyticsEnvironment,
   ProductAnalyticsEventName,

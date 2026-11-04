@@ -16,6 +16,7 @@ import type {
   TelemetryStatusSnapshot,
   TranscriptCaptureResult,
   UpdaterState,
+  WorkspaceServerStatus,
 } from "./desktopApi";
 import { createDefaultUpdaterState } from "./desktopApi";
 import { createWebTranscriptDelivery, type WebTranscriptDelivery } from "./webTranscriptDelivery";
@@ -620,6 +621,11 @@ export function createWebAdapter(): DesktopApi {
     writeRendererLog: unavailableInBrowser,
 
     async getWorkspaceServerStatus(opts) {
+      const status = await maybePostWebJson<WorkspaceServerStatus>(
+        "/cowork/desktop/workspace/status",
+        opts,
+      );
+      if (status) return status;
       return {
         workspaceId: opts.workspaceId,
         running: true,

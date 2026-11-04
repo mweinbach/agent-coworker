@@ -31,9 +31,9 @@ export type SandboxPolicy =
       network: boolean;
     };
 
-export type WritableRootKind = "directory" | "file";
+type WritableRootKind = "directory" | "file";
 
-export type { SandboxConfig, SandboxMode } from "../../types";
+export type { SandboxConfig } from "../../types";
 
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   mode: "workspace-write",
@@ -213,7 +213,7 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
  * with `targetPaths` are scoped strictly to those paths; otherwise the working
  * directory and output directory are writable.
  */
-export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
+function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
   return deriveWritableRootInfo(input).writableRoots;
 }
 
@@ -312,11 +312,7 @@ export function filterTargetPathsToWorkspace(
  * stored targetPaths (consumed by both the OS sandbox and the built-in file
  * tools) are always valid.
  */
-export function isUsableTargetPath(
-  workingDirectory: string,
-  p: string,
-  projectRoot?: string,
-): boolean {
+function isUsableTargetPath(workingDirectory: string, p: string, projectRoot?: string): boolean {
   const resolveBase = path.resolve(workingDirectory);
   const containRoot = projectRoot ? path.resolve(projectRoot) : resolveBase;
   return (
@@ -392,7 +388,11 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
 
 export function tmpScratchRoots(blockedRoots: string[], scratch: string[]): string[] {
   const canonicalBlockedRoots = blockedRoots.map(canonicalizeRoot);
-  const blocked = new Set(blockedRoots.map((root) => path.resolve(canonicalTmpAlias(root))));
+  const blocked = new Set(
+    [...blockedRoots, ...canonicalBlockedRoots].map((root) =>
+      path.resolve(canonicalTmpAlias(root)),
+    ),
+  );
   return withTmpScratch(canonicalBlockedRoots, scratch).filter(
     (root) => !blocked.has(path.resolve(canonicalTmpAlias(root))),
   );

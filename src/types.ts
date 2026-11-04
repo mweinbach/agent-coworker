@@ -1,21 +1,10 @@
 import { z } from "zod";
 
-export const PROVIDER_NAMES = [
-  "google",
-  "openai",
-  "anthropic",
-  "bedrock",
-  "baseten",
-  "together",
-  "fireworks",
-  "firepass",
-  "nvidia",
-  "lmstudio",
-  "minimax",
-  "opencode-go",
-  "opencode-zen",
-  "codex-cli",
-] as const;
+import { PROVIDER_NAMES } from "./generated/providerSpecs";
+
+// Provider ids come from config/providers.json via the generated module
+// (`bun run providers:generate`); canonical order is the JSON array order.
+export { PROVIDER_NAMES };
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 const providerNameSchema = z.enum(PROVIDER_NAMES);
@@ -25,7 +14,7 @@ export const CHILD_MODEL_ROUTING_MODES = ["same-provider", "cross-provider-allow
 export type ChildModelRoutingMode = (typeof CHILD_MODEL_ROUTING_MODES)[number];
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 
-export type ModelMessage = {
+type ModelMessage = {
   role: "system" | "user" | "assistant" | "tool" | (string & {});
   content: unknown;
   [key: string]: unknown;
@@ -48,7 +37,7 @@ export type TurnReference = {
  * Rendered into a turn-scoped system block by `renderReferencedPluginsSection`
  * to bias the model toward the plugin's bundled skills.
  */
-export type ReferencedPluginContext = {
+type ReferencedPluginContext = {
   name: string;
   displayName: string;
   skillNames: string[];
@@ -63,11 +52,11 @@ export function resolveProviderName(v: unknown): ProviderName | null {
   return parsed.success ? parsed.data : null;
 }
 
-export function isChildModelRoutingMode(v: unknown): v is ChildModelRoutingMode {
+function isChildModelRoutingMode(v: unknown): v is ChildModelRoutingMode {
   return childModelRoutingModeSchema.safeParse(v).success;
 }
 
-export function resolveChildModelRoutingMode(v: unknown): ChildModelRoutingMode | null {
+function resolveChildModelRoutingMode(v: unknown): ChildModelRoutingMode | null {
   const parsed = childModelRoutingModeSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
 }
@@ -79,15 +68,15 @@ const RUNTIME_NAMES = [
   "codex-app-server",
 ] as const;
 
-export type RuntimeName = (typeof RUNTIME_NAMES)[number];
+type RuntimeName = (typeof RUNTIME_NAMES)[number];
 const runtimeNameSchema = z.enum(RUNTIME_NAMES);
 
-export function resolveRuntimeName(v: unknown): RuntimeName | null {
+function resolveRuntimeName(v: unknown): RuntimeName | null {
   const parsed = runtimeNameSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
 }
 
-export function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeName {
+function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeName {
   if (provider === "codex-cli") {
     return "codex-app-server";
   }
@@ -100,7 +89,7 @@ export function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeNa
   return "pi";
 }
 
-export function normalizeRuntimeNameForProvider(
+function normalizeRuntimeNameForProvider(
   provider: ProviderName,
   runtime: RuntimeName | null | undefined,
 ): RuntimeName {
@@ -123,7 +112,7 @@ export function normalizeRuntimeNameForProvider(
   return runtime ?? defaultRuntimeNameForProvider(provider);
 }
 
-export type CommandSource = "command" | "mcp" | "skill";
+type CommandSource = "command" | "mcp" | "skill";
 
 export interface CommandInfo {
   name: string;
@@ -132,7 +121,7 @@ export interface CommandInfo {
   hints: string[];
 }
 
-export interface CommandTemplateConfig {
+interface CommandTemplateConfig {
   description?: string;
   template: string;
   source?: CommandSource;
@@ -156,7 +145,7 @@ export type WorkspaceFeatureFlags = {
   openAiNativeConnectors?: boolean;
 };
 
-export type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
+type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
 
 export interface SandboxConfig {
   mode: SandboxMode;
@@ -370,10 +359,10 @@ export interface AgentConfig {
   };
 }
 
-export type PluginScope = "workspace" | "user";
-export type PluginDiscoveryKind = "marketplace" | "direct";
+type PluginScope = "workspace" | "user";
+type PluginDiscoveryKind = "marketplace" | "direct";
 
-export interface SkillInterfaceMeta {
+interface SkillInterfaceMeta {
   displayName?: string;
   shortDescription?: string;
   iconSmall?: string; // data: URI (best-effort)
@@ -382,7 +371,7 @@ export interface SkillInterfaceMeta {
   agents?: string[];
 }
 
-export interface PluginInterfaceMeta {
+interface PluginInterfaceMeta {
   displayName?: string;
   shortDescription?: string;
   longDescription?: string;
@@ -399,7 +388,7 @@ export interface PluginInterfaceMeta {
   screenshots?: string[];
 }
 
-export interface PluginAppSummary {
+interface PluginAppSummary {
   id: string;
   displayName: string;
   description?: string;
@@ -417,7 +406,7 @@ interface InstalledPluginSkillSummary {
   interface?: SkillInterfaceMeta;
 }
 
-export interface PluginMarketplaceMetadata {
+interface PluginMarketplaceMetadata {
   name: string;
   displayName?: string;
   category?: string;
@@ -462,7 +451,7 @@ export interface InstalledPluginCatalogEntry extends PluginCatalogEntryBase {
   apps: PluginAppSummary[];
 }
 
-export interface MarketplacePluginCatalogEntry extends PluginCatalogEntryBase {
+interface MarketplacePluginCatalogEntry extends PluginCatalogEntryBase {
   installed: false;
   discoveryKind: "marketplace";
   scope: "user";
@@ -485,7 +474,7 @@ export interface PluginCatalogSnapshot {
   warnings: string[];
 }
 
-export type PluginInstallTargetScope = "workspace" | "user";
+type PluginInstallTargetScope = "workspace" | "user";
 
 type PluginSourceInputKind =
   | "github_repo"
@@ -495,7 +484,7 @@ type PluginSourceInputKind =
   | "github_shorthand"
   | "local_path";
 
-export interface PluginSourceDescriptor {
+interface PluginSourceDescriptor {
   kind: PluginSourceInputKind;
   raw: string;
   displaySource: string;
@@ -507,7 +496,7 @@ export interface PluginSourceDescriptor {
   localPath?: string;
 }
 
-export interface PluginInstallPreviewCandidate {
+interface PluginInstallPreviewCandidate {
   pluginId: string;
   displayName: string;
   description: string;
@@ -525,7 +514,7 @@ export interface PluginInstallPreview {
   warnings: string[];
 }
 
-export interface SkillPluginOwner {
+interface SkillPluginOwner {
   pluginId: string;
   name: string;
   displayName: string;
@@ -553,7 +542,7 @@ type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
 
 type SkillInstallOriginKind = "github" | "skills.sh" | "local" | "manual" | "bootstrap" | "unknown";
 
-export interface SkillInstallOrigin {
+interface SkillInstallOrigin {
   kind: SkillInstallOriginKind;
   url?: string;
   repo?: string;
@@ -563,7 +552,7 @@ export interface SkillInstallOrigin {
   sourceHash?: string;
 }
 
-export interface SkillInstallManifest {
+interface SkillInstallManifest {
   version: 1;
   installationId: string;
   installedAt: string;
@@ -573,13 +562,13 @@ export interface SkillInstallManifest {
 
 type SkillInstallationDiagnosticSeverity = "info" | "warning" | "error";
 
-export interface SkillInstallationDiagnostic {
+interface SkillInstallationDiagnostic {
   code: string;
   severity: SkillInstallationDiagnosticSeverity;
   message: string;
 }
 
-export interface SkillScopeDescriptor {
+interface SkillScopeDescriptor {
   scope: SkillScope;
   skillsDir: string;
   disabledSkillsDir?: string;
@@ -656,7 +645,7 @@ export interface SkillCatalogSnapshot {
   availableSkills: MarketplaceSkillCatalogEntry[];
 }
 
-export type SkillSourceInputKind =
+type SkillSourceInputKind =
   | "skills.sh"
   | "github_repo"
   | "github_tree"
@@ -665,7 +654,7 @@ export type SkillSourceInputKind =
   | "github_shorthand"
   | "local_path";
 
-export interface SkillSourceDescriptor {
+interface SkillSourceDescriptor {
   kind: SkillSourceInputKind;
   raw: string;
   displaySource: string;
@@ -678,7 +667,7 @@ export interface SkillSourceDescriptor {
   requestedSkillName?: string;
 }
 
-export interface SkillInstallPreviewCandidate {
+interface SkillInstallPreviewCandidate {
   name: string;
   description: string;
   relativeRootPath: string;
@@ -745,7 +734,7 @@ export type SandboxDenialCategory = "filesystem" | "network";
  * context so clients can render a clear, sandbox-aware approval instead of a
  * generic prompt.
  */
-export interface ApproveCommandOptions {
+interface ApproveCommandOptions {
   reason?: string;
   detail?: string;
   category?: SandboxDenialCategory;
@@ -781,7 +770,7 @@ export const SERVER_ERROR_CODES = [
 
 export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
 
-export type TaskLockErrorData =
+type TaskLockErrorData =
   | {
       category: "task_locked";
       source: "session";
@@ -861,7 +850,7 @@ type MCPServerTransport =
     }
   | { type: "http" | "sse"; url: string; headers?: Record<string, string> };
 
-export type MCPServerAuthConfig =
+type MCPServerAuthConfig =
   | { type: "none" }
   | {
       type: "api_key";

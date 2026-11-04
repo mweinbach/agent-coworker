@@ -21,7 +21,7 @@ type OpenAiNativeConnectorConfigEntry = {
   enabled: boolean;
 };
 
-export type OpenAiNativeConnectorsConfig = {
+type OpenAiNativeConnectorsConfig = {
   version: 1;
   updatedAt: string;
   connectors: Record<string, OpenAiNativeConnectorConfigEntry>;

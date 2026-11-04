@@ -1,8 +1,8 @@
 import type { FileChangeVersion } from "./fileVersion";
 
-export type SpreadsheetFileKind = "csv" | "xlsx";
+type SpreadsheetFileKind = "csv" | "xlsx";
 
-export type SpreadsheetPreviewViewport = {
+type SpreadsheetPreviewViewport = {
   startRow: number;
   startCol: number;
   rowCount: number;
@@ -15,7 +15,7 @@ export type SpreadsheetPreviewViewport = {
   truncatedCols: boolean;
 };
 
-export type SpreadsheetSheetSummary = {
+type SpreadsheetSheetSummary = {
   name: string;
   rowCount: number;
   colCount: number;
@@ -44,7 +44,7 @@ export type SpreadsheetPreviewCell = {
   style?: SpreadsheetCellStyle;
 };
 
-export type SpreadsheetMergedRange = {
+type SpreadsheetMergedRange = {
   ref: string;
   startRow: number;
   startCol: number;
@@ -52,13 +52,13 @@ export type SpreadsheetMergedRange = {
   endCol: number;
 };
 
-export type SpreadsheetColumnWidth = {
+type SpreadsheetColumnWidth = {
   col: number;
   widthChars?: number;
   widthPx?: number;
 };
 
-export type SpreadsheetTableSummary = {
+type SpreadsheetTableSummary = {
   name: string;
   ref: string;
   startRow: number;
@@ -74,7 +74,7 @@ type SpreadsheetChartAnchor = {
   toCol?: number;
 };
 
-export type SpreadsheetChartSummary = {
+type SpreadsheetChartSummary = {
   id: string;
   title?: string;
   type?: string;
@@ -146,7 +146,7 @@ export type SpreadsheetWorkbookSnapshotResult =
 
 // ---- Single-cell edit (write-back) ----
 
-export type SpreadsheetCellEditFailureKind =
+type SpreadsheetCellEditFailureKind =
   | "unsupported_format"
   | "not_found"
   | "outside_workspace"
@@ -201,7 +201,7 @@ export type SpreadsheetBatchPatchOperation =
   | SpreadsheetBatchPatchMergeOperation
   | SpreadsheetBatchPatchColumnWidthOperation;
 
-export type SpreadsheetBatchPatchRequest = {
+type SpreadsheetBatchPatchRequest = {
   cwd: string;
   filePath: string;
   operations: SpreadsheetBatchPatchOperation[];

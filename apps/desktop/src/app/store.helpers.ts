@@ -1,10 +1,9 @@
-import type { ArtifactDiff, ArtifactPreview } from "../../../../src/server/artifacts/types";
-import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
 import type {
   AgentProfileCopyInput,
   AgentProfileScope,
   AgentProfileUpsertInput,
 } from "../../../../src/shared/agentProfiles";
+import type { ArtifactDiff, ArtifactPreview } from "../../../../src/shared/artifactTypes";
 import type {
   CanvasDocumentCloseResult,
   CanvasDocumentOpenResult,
@@ -21,6 +20,7 @@ import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
+import type { PresentationPreviewResult } from "../../../../src/shared/presentationPreview";
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,

@@ -1,44 +1,46 @@
 import { describe, expect, test } from "bun:test";
 import type fs from "node:fs/promises";
 
-import { resolveBuildTarget, resolveBunCompileTarget, rmrf } from "../scripts/releaseBuildUtils";
+import { resolveBuildTarget, resolveRustCompileTarget, rmrf } from "../scripts/releaseBuildUtils";
 
 describe("release build utils", () => {
-  describe("resolveBunCompileTarget", () => {
+  describe("resolveRustCompileTarget", () => {
     test.each([
-      { platform: "darwin", arch: "x64", target: "bun-darwin-x64" },
-      { platform: "darwin", arch: "arm64", target: "bun-darwin-arm64" },
-      { platform: "win32", arch: "x64", target: "bun-windows-x64" },
-      { platform: "win32", arch: "arm64", target: "bun-windows-arm64" },
-      { platform: "linux", arch: "x64", target: "bun-linux-x64" },
-      { platform: "linux", arch: "arm64", target: "bun-linux-arm64" },
+      { platform: "darwin", arch: "x64", target: "x86_64-apple-darwin" },
+      { platform: "darwin", arch: "arm64", target: "aarch64-apple-darwin" },
+      { platform: "win32", arch: "x64", target: "x86_64-pc-windows-msvc" },
+      { platform: "win32", arch: "arm64", target: "aarch64-pc-windows-msvc" },
+      { platform: "linux", arch: "x64", target: "x86_64-unknown-linux-gnu" },
+      { platform: "linux", arch: "arm64", target: "aarch64-unknown-linux-gnu" },
     ] as const)("maps $platform/$arch to $target", ({ platform, arch, target }) => {
-      expect(resolveBunCompileTarget(platform, arch)).toBe(target);
+      expect(resolveRustCompileTarget(platform, arch)).toBe(target);
     });
 
     test("rejects unsupported target platforms with an actionable error", () => {
-      expect(() => resolveBunCompileTarget("freebsd", "x64")).toThrow(
-        "Unsupported Bun executable target platform: freebsd; supported platforms are darwin, win32, and linux",
+      expect(() => resolveRustCompileTarget("freebsd", "x64")).toThrow(
+        "Unsupported Rust executable target platform: freebsd; supported platforms are darwin, win32, and linux",
       );
     });
 
     test.each(["ia32", "arm", "aarch64", "amd64", ""])(
       "rejects unsupported or noncanonical target architecture '%s'",
       (arch) => {
-        expect(() => resolveBunCompileTarget("linux", arch)).toThrow(
-          `Unsupported Bun executable target architecture: ${arch}; supported architectures are x64 and arm64`,
+        expect(() => resolveRustCompileTarget("linux", arch)).toThrow(
+          `Unsupported Rust executable target architecture: ${arch}; supported architectures are x64 and arm64`,
         );
       },
     );
 
-    test("compiles normalized Windows ARM64 CLI aliases as native executables", () => {
+    test("compiles normalized Windows ARM64 CLI aliases as native Rust executables", () => {
       const target = resolveBuildTarget(
         ["--target-platform", "windows", "--target-arch", "aarch64"],
         {},
       );
 
       expect(target).toEqual({ platform: "win32", arch: "arm64" });
-      expect(resolveBunCompileTarget(target.platform, target.arch)).toBe("bun-windows-arm64");
+      expect(resolveRustCompileTarget(target.platform, target.arch)).toBe(
+        "aarch64-pc-windows-msvc",
+      );
     });
   });
 

@@ -11,7 +11,7 @@ export type AgentProfileScope = (typeof AGENT_PROFILE_SCOPE_VALUES)[number];
 
 export const agentProfileScopeSchema = z.enum(AGENT_PROFILE_SCOPE_VALUES);
 
-export const agentProfileIdSchema = z
+const agentProfileIdSchema = z
   .string()
   .trim()
   .min(1)
@@ -90,7 +90,7 @@ const agentProfileDiagnosticSchema = z
   })
   .strict();
 
-export type AgentProfileDiagnostic = z.infer<typeof agentProfileDiagnosticSchema>;
+type AgentProfileDiagnostic = z.infer<typeof agentProfileDiagnosticSchema>;
 
 export const agentProfilesCatalogSchema = z
   .object({
@@ -118,14 +118,14 @@ export const agentProfileUpsertInputSchema = agentProfileDefinitionSchema.extend
   scope: agentProfileScopeSchema,
 });
 
-export const agentProfileWorkspaceOverridesSchema = z
+const agentProfileWorkspaceOverridesSchema = z
   .object({
     version: z.literal(1).default(1),
     disabledGlobalProfileIds: z.array(agentProfileIdSchema).default([]),
   })
   .strict();
 
-export type AgentProfileWorkspaceOverrides = z.infer<typeof agentProfileWorkspaceOverridesSchema>;
+type AgentProfileWorkspaceOverrides = z.infer<typeof agentProfileWorkspaceOverridesSchema>;
 
 export const agentProfileCopyInputSchema = z
   .object({
@@ -171,7 +171,7 @@ export function buildAgentProfileRef(scope: AgentProfileScope, id: string): stri
   return `${scope}:${id}`;
 }
 
-export function createAgentProfileSnapshot(
+function createAgentProfileSnapshot(
   scope: AgentProfileScope,
   profile: AgentProfileDefinition,
   resolvedAt = new Date().toISOString(),

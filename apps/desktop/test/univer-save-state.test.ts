@@ -20,12 +20,15 @@ import {
 } from "@univerjs/sheets";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import * as XLSX from "xlsx";
 
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
-import { readSpreadsheetWorkbookSnapshot } from "../../../src/server/spreadsheet/read";
-import { patchSpreadsheetBatch } from "../../../src/server/spreadsheet/write";
-import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadsheetPreview";
+import type {
+  SpreadsheetBatchPatchResult,
+  SpreadsheetWorkbookSnapshot,
+  SpreadsheetWorkbookSnapshotResult,
+} from "../../../src/shared/spreadsheetPreview";
+import { connectRustJsonRpc, startRustTestServer } from "../../../test/helpers/rustServerHarness";
+import { buildMinimalXlsxBuffer } from "../../../test/helpers/zipFixture";
 import { useAppStore } from "../src/app/store";
 import {
   registerCanvasDocumentTransitionHandler,
@@ -749,21 +752,25 @@ describe("Univer save state helpers", () => {
     async (kind) => {
       const dir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-univer-roundtrip-"));
       const filePath = path.join(dir, `model.${kind}`);
+      const server = await startRustTestServer({ workspaceDir: dir });
+      const rpc = await connectRustJsonRpc(server.wsUrl);
+      const readWorkbook = (p: string) =>
+        rpc.request<SpreadsheetWorkbookSnapshotResult>("cowork/workspace/spreadsheet/workbook", {
+          cwd: dir,
+          path: p,
+        });
       const univer = new Univer();
       const api = FUniver.newAPI(univer);
       try {
         if (kind === "csv") {
           await fs.writeFile(filePath, "Original,\n");
         } else {
-          const workbook = XLSX.utils.book_new();
-          XLSX.utils.book_append_sheet(
-            workbook,
-            XLSX.utils.aoa_to_sheet([["Original", ""]]),
-            "Summary",
+          await fs.writeFile(
+            filePath,
+            buildMinimalXlsxBuffer({ sheetName: "Summary", rows: [["Original", ""]] }),
           );
-          await fs.writeFile(filePath, XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
         }
-        const initial = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+        const initial = await readWorkbook(filePath);
         if (!initial.ok) throw new Error(initial.error.message);
         const baseline = spreadsheetSnapshotToUniverData(initial.workbook);
         const workbook = univer.createUnit(
@@ -819,7 +826,7 @@ describe("Univer save state helpers", () => {
               includeFormatting: true,
             }),
           ).toEqual([]);
-          const unchanged = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+          const unchanged = await readWorkbook(filePath);
           if (!unchanged.ok) throw new Error(unchanged.error.message);
           expect(unchanged.workbook.fileVersion).toEqual(initial.workbook.fileVersion);
           expect(unchanged.workbook.sheets[0]?.cells[0]?.value).toBe("Original");
@@ -882,14 +889,14 @@ describe("Univer save state helpers", () => {
           includeFormatting: kind === "xlsx",
         });
         expect(
-          await patchSpreadsheetBatch({
+          await rpc.request<SpreadsheetBatchPatchResult>("cowork/workspace/spreadsheet/patch", {
             cwd: dir,
-            filePath,
+            path: filePath,
             operations,
             expectedFileVersion: initial.workbook.fileVersion,
           }),
         ).toEqual({ ok: true });
-        const reloaded = await readSpreadsheetWorkbookSnapshot({ cwd: dir, filePath });
+        const reloaded = await readWorkbook(filePath);
         if (!reloaded.ok) throw new Error(reloaded.error.message);
         const sheet = reloaded.workbook.sheets[0];
         expect(sheet?.cells.find((cell) => cell.address === "A1")?.value).toBe("Typed value");
@@ -915,6 +922,8 @@ describe("Univer save state helpers", () => {
       } finally {
         api.dispose();
         univer.dispose();
+        rpc.close();
+        await server.stop();
         await fs.rm(dir, { recursive: true, force: true });
       }
     },

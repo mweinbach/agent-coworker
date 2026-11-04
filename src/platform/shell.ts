@@ -4,7 +4,7 @@ import path from "node:path";
 import { joinPathValue, runtimePathDirs } from "./env";
 import { hostPlatform } from "./host";
 
-export type PlatformShellExecutionStep = {
+type PlatformShellExecutionStep = {
   file: string;
   args: string[];
   /** The original model-authored script, for logs/UI — `args` may carry an
@@ -67,7 +67,7 @@ function envValue(env: Record<string, string | undefined>, name: string): string
  * Python child processes emit UTF-8 regardless of the ANSI code page.
  * Exported for tests. Empty on POSIX (UTF-8 is ambient there).
  */
-export function encodingPrelude(platform: NodeJS.Platform = hostPlatform()): string {
+function encodingPrelude(platform: NodeJS.Platform = hostPlatform()): string {
   if (platform !== "win32") return "";
   return [
     "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
@@ -117,7 +117,7 @@ function isShCompatibleUserShell(userShell: string): boolean {
  *   The script is wrapped with a UTF-8 encoding prelude and the pinned
  *   exit-code guard (see POWERSHELL_EXIT_CODE_GUARD).
  */
-export function buildPlatformShellExecutionPlan(
+function buildPlatformShellExecutionPlan(
   platform: NodeJS.Platform,
   command: string,
   opts: { userShell?: string; tempDir?: string; scriptId?: string } = {},
@@ -175,7 +175,7 @@ export function buildPlatformShellExecutionPlan(
  * prelude, which is how Windows sessions ended up on system Python with
  * missing packages while macOS/Linux sessions worked.
  */
-export function pythonInvocation(
+function pythonInvocation(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = hostPlatform(),
 ): { command: string; display: string } {
@@ -193,7 +193,7 @@ export function pythonInvocation(
  * vice versa. Codex executes through its own shell, so `executor: "codex"`
  * renders nothing (its runtime owns the equivalent guidance).
  */
-export function promptGuidance(
+function promptGuidance(
   opts: {
     platform?: NodeJS.Platform;
     executor?: "cowork" | "codex" | "external";
@@ -260,7 +260,7 @@ export function commands(
   };
 }
 
-export function buildPlatformShellCommandWithRuntimePrelude(opts: {
+function buildPlatformShellCommandWithRuntimePrelude(opts: {
   command: string;
   platform: NodeJS.Platform;
   env?: Record<string, string | undefined>;

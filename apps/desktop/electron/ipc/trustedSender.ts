@@ -5,9 +5,8 @@ import { app, type IpcMainInvokeEvent } from "electron";
 
 import { isTrustedDesktopSenderUrl } from "../services/ipcSecurity";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
+const trustedSenderDir = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGED_RENDERER_DIR = path.resolve(path.join(trustedSenderDir, "../renderer"));
 
 function resolveSenderUrl(event: IpcMainInvokeEvent): string {
   const senderFrameUrl = event.senderFrame?.url;

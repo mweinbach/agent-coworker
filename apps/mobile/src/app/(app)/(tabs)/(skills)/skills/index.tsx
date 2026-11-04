@@ -38,7 +38,9 @@ export default function SkillsScreen() {
   const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const workspaceLoading = useWorkspaceStore((s) => s.loading);
   const [sourceInput, setSourceInput] = useState("");
-  const [targetScope, setTargetScope] = useState<"project" | "global">("project");
+  // Paired devices may only add workspace skills; user (global) skills load into every
+  // workspace, so the server refuses them from a phone (`userSkillConfigReadOnly`).
+  const targetScope = "project";
   const installInFlight = useRef(false);
   const [installFailed, setInstallFailed] = useState(false);
   useAccessibilityAnnouncement(error);
@@ -147,38 +149,6 @@ export default function SkillsScreen() {
               fontSize: 14,
             }}
           />
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {(["project", "global"] as const).map((scope) => (
-              <Pressable
-                key={scope}
-                onPress={() => setTargetScope(scope)}
-                accessibilityLabel={
-                  scope === "project" ? "Install for workspace" : "Install for user"
-                }
-                accessibilityRole="radio"
-                accessibilityState={{ selected: targetScope === scope }}
-                style={{
-                  minHeight: minimumTouchTarget(),
-                  justifyContent: "center",
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: targetScope === scope ? theme.primary : theme.border,
-                  backgroundColor: targetScope === scope ? theme.primary : "transparent",
-                  paddingHorizontal: 12,
-                  paddingVertical: 7,
-                }}
-              >
-                <Text
-                  style={{
-                    color: targetScope === scope ? theme.primaryText : theme.text,
-                    fontWeight: "700",
-                  }}
-                >
-                  {scope === "project" ? "Workspace" : "User"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             <Pressable
               accessibilityLabel="Preview skill installation"
@@ -306,7 +276,8 @@ export default function SkillsScreen() {
           {installations.map((installation, index) => {
             const updateCheck = updateChecksByInstallationId[installation.installationId];
             const content = installationContentById[installation.installationId];
-            const copyScope = installation.scope === "global" ? "project" : "global";
+            // Only user skills can be copied from a phone, into the workspace.
+            const canCopyToWorkspace = installation.scope === "global";
             const isLast = index === installations.length - 1;
             return (
               <View
@@ -415,28 +386,30 @@ export default function SkillsScreen() {
                       Check update
                     </Text>
                   </Pressable>
-                  <Pressable
-                    accessibilityLabel={`Copy ${installation.name} to ${copyScope === "project" ? "workspace" : "user"}`}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      void copyInstallation(installation.installationId, copyScope);
-                    }}
-                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                    style={({ pressed }) => ({
-                      minHeight: minimumTouchTarget(),
-                      justifyContent: "center",
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: theme.border,
-                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                    })}
-                  >
-                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-                      Copy to {copyScope === "project" ? "workspace" : "user"}
-                    </Text>
-                  </Pressable>
+                  {canCopyToWorkspace ? (
+                    <Pressable
+                      accessibilityLabel={`Copy ${installation.name} to workspace`}
+                      accessibilityRole="button"
+                      onPress={() => {
+                        void copyInstallation(installation.installationId, "project");
+                      }}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                      style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: theme.border,
+                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                      })}
+                    >
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Copy to workspace
+                      </Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     accessibilityLabel={`Delete ${installation.name}`}
                     accessibilityRole="button"

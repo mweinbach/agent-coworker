@@ -4,9 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import JSZip from "jszip";
-
-import { FOUNDATION_MODELS_KOFFI_TRIPLET } from "../apps/desktop/electron/services/sidecar";
 import { __internal } from "../scripts/build_desktop_resources";
 import {
   computeSourceFingerprint,
@@ -20,6 +17,7 @@ import {
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
 } from "../src/platform/sandbox/windows";
+import { buildStoredZipBuffer } from "./helpers/zipFixture";
 
 describe("desktop resource build helpers", () => {
   test("invalidates sidecar fingerprints when only the compiler revision changes", async () => {
@@ -58,7 +56,6 @@ describe("desktop resource build helpers", () => {
 
     try {
       await fs.mkdir(path.join(binariesDir, "server"), { recursive: true });
-      await fs.mkdir(path.join(binariesDir, "windows-ai-electron"), { recursive: true });
       await fs.writeFile(path.join(binariesDir, "cowork-server-manifest.json"), "{}");
       await fs.writeFile(path.join(binariesDir, "cowork-server-x86_64-pc-windows-msvc.exe"), "");
       await fs.writeFile(path.join(binariesDir, "cowork-server-aarch64-apple-darwin"), "");
@@ -68,7 +65,6 @@ describe("desktop resource build helpers", () => {
       await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_SETUP_NAME), "setup");
       await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME), "runner");
       await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME), "{}");
-      await fs.writeFile(path.join(binariesDir, "windows-ai-electron", "index.js"), "native");
 
       await __internal.clearDesktopSidecarArtifacts(binariesDir);
 
@@ -87,8 +83,8 @@ describe("desktop resource build helpers", () => {
         fs.readFile(path.join(binariesDir, WINDOWS_SANDBOX_SETUP_NAME), "utf8"),
       ).resolves.toBe("setup");
       await expect(
-        fs.readFile(path.join(binariesDir, "windows-ai-electron", "index.js"), "utf8"),
-      ).resolves.toBe("native");
+        fs.readFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "utf8"),
+      ).resolves.toBe("sandbox");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -105,94 +101,24 @@ describe("desktop resource build helpers", () => {
     expect(desktopPackage.scripts?.dev).not.toContain("--force-windows-sandbox-build");
   });
 
-  test("refreshes cached Foundation Models SDK bundles missing Koffi runtime files", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-    const dest = path.join(root, "apps", "desktop", "resources", "binaries", "tsfm-sdk");
-    const sdkRoot = path.join(root, "node_modules", "tsfm-sdk");
-    const koffiRoot = path.join(root, "node_modules", "koffi");
-    const nativeKoffiPath = path.join(
-      koffiRoot,
-      "build",
-      "koffi",
-      FOUNDATION_MODELS_KOFFI_TRIPLET,
-      "koffi.node",
-    );
+  test("removes stale native title addons the Rust sidecar never loads", async () => {
+    const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-desktop-resources-"));
+    const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
 
     try {
-      await fs.mkdir(path.join(sdkRoot, "dist"), { recursive: true });
-      await fs.mkdir(path.join(sdkRoot, "native"), { recursive: true });
-      await fs.mkdir(path.dirname(nativeKoffiPath), { recursive: true });
-      await fs.writeFile(path.join(sdkRoot, "package.json"), "{}");
-      await fs.writeFile(path.join(sdkRoot, "dist", "index.js"), "export {};\n");
-      await fs.writeFile(path.join(sdkRoot, "native", "libFoundationModels.dylib"), "");
-      await fs.writeFile(path.join(koffiRoot, "index.js"), "module.exports = {};\n");
-      await fs.writeFile(path.join(koffiRoot, "package.json"), '{"version":"test"}');
-      await fs.writeFile(nativeKoffiPath, "");
+      await fs.mkdir(path.join(binariesDir, "tsfm-sdk", "native"), { recursive: true });
+      await fs.mkdir(path.join(binariesDir, "windows-ai-electron"), { recursive: true });
+      await fs.writeFile(path.join(binariesDir, "tsfm-sdk", "native", "lib.dylib"), "");
+      await fs.writeFile(path.join(binariesDir, "windows-ai-electron", "index.js"), "");
+      await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "sandbox");
 
-      await fs.mkdir(
-        path.join(dest, "node_modules", "koffi", "build", "koffi", FOUNDATION_MODELS_KOFFI_TRIPLET),
-        { recursive: true },
-      );
-      await fs.mkdir(path.join(dest, "dist"), { recursive: true });
-      await fs.mkdir(path.join(dest, "native"), { recursive: true });
-      await fs.writeFile(path.join(dest, "dist", "index.js"), "");
-      await fs.writeFile(path.join(dest, "native", "libFoundationModels.dylib"), "");
-      await fs.writeFile(
-        path.join(
-          dest,
-          "node_modules",
-          "koffi",
-          "build",
-          "koffi",
-          FOUNDATION_MODELS_KOFFI_TRIPLET,
-          "koffi.node",
-        ),
-        "",
-      );
-      await fs.writeFile(path.join(dest, "stale.txt"), "stale");
+      await __internal.removeLegacyNativeTitleAddons(binariesDir);
 
-      await __internal.syncFoundationModelsSdk({
-        root,
-        dest,
-        previousFingerprint: "same",
-        nextFingerprint: "same",
-        platform: "darwin",
-        arch: "arm64",
-      });
-
+      await expect(fs.stat(path.join(binariesDir, "tsfm-sdk"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "windows-ai-electron"))).rejects.toThrow();
       await expect(
-        fs.stat(path.join(dest, "node_modules", "koffi", "index.js")),
-      ).resolves.toBeDefined();
-      await expect(
-        fs.stat(path.join(dest, "node_modules", "koffi", "package.json")),
-      ).resolves.toBeDefined();
-      await expect(fs.stat(path.join(dest, "stale.txt"))).rejects.toThrow();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  }, 15_000);
-
-  test("soft-disables optional Windows AI Electron packaging when the addon is absent", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-    const dest = path.join(root, "apps", "desktop", "resources", "binaries", "windows-ai-electron");
-
-    try {
-      await fs.mkdir(dest, { recursive: true });
-      await fs.writeFile(path.join(dest, "stale.txt"), "stale");
-
-      const inputs = await __internal.ensureWindowsAiElectronInputs(root, "win32", "x64");
-      expect(inputs).toBeNull();
-
-      await __internal.syncWindowsAiElectronPackage({
-        root,
-        dest,
-        previousFingerprint: null,
-        nextFingerprint: null,
-        platform: "win32",
-        arch: "x64",
-      });
-
-      await expect(fs.stat(dest)).rejects.toThrow();
+        fs.readFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "utf8"),
+      ).resolves.toBe("sandbox");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -318,13 +244,7 @@ describe("desktop resource build helpers", () => {
   }
 
   function getPrebuiltZipBytes(): Promise<Buffer> {
-    prebuiltZipBytesPromise ??= (async () => {
-      const zip = new JSZip();
-      for (const [name, contents] of Object.entries(PREBUILT_BINARIES)) {
-        zip.file(name, contents);
-      }
-      return Buffer.from(await zip.generateAsync({ compression: "STORE", type: "uint8array" }));
-    })();
+    prebuiltZipBytesPromise ??= Promise.resolve(buildStoredZipBuffer(PREBUILT_BINARIES));
     return prebuiltZipBytesPromise;
   }
 

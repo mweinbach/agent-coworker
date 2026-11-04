@@ -1,4 +1,9 @@
-import { startAgentServer } from "../src/server/startServer";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import readline from "node:readline";
+
+import { binaryName } from "../src/platform/exec";
 
 type JsonRpcSmokeMessage = {
   id?: string | number;
@@ -7,28 +12,53 @@ type JsonRpcSmokeMessage = {
     thread?: {
       id?: string;
     };
+    threads?: unknown[];
   };
-  params?: {
-    item?: {
-      type?: string;
-    };
+  error?: {
+    code: number;
+    message: string;
   };
 };
 
+function resolveServerBin(repoRoot: string): string {
+  const exe = binaryName("cowork-server");
+  for (const profile of ["release", "debug"]) {
+    const candidate = path.join(repoRoot, "target", profile, exe);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Compiled ${exe} not found. Run \`cargo build -p cowork-server\` first.`);
+}
+
 async function main() {
-  const { server, url } = await startAgentServer({
-    cwd: process.cwd(),
-    hostname: "127.0.0.1",
-    port: 0,
-    env: {
-      ...process.env,
-      AGENT_WORKING_DIR: process.cwd(),
-      COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+  const repoRoot = path.resolve(import.meta.dir, "..");
+  const serverBin = resolveServerBin(repoRoot);
+  const child = spawn(
+    serverBin,
+    ["--dir", process.cwd(), "--host", "127.0.0.1", "--port", "0", "--json"],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        COWORK_DESKTOP_PARENT_MANAGED: "1",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP:
+          process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+      },
+      stdio: ["pipe", "pipe", "inherit"],
     },
-    runTurnImpl: (async () => ({
-      text: "jsonrpc smoke ok",
-      responseMessages: [],
-    })) as any,
+  );
+
+  const url = await new Promise<string>((resolve, reject) => {
+    const rl = readline.createInterface({ input: child.stdout });
+    rl.on("line", (line) => {
+      if (!line.trim().startsWith("{")) return;
+      const evt = JSON.parse(line) as { type?: string; url?: string; wsUrl?: string };
+      const wsUrl = evt.wsUrl ?? evt.url;
+      if (evt.type === "server_listening" && wsUrl) {
+        rl.close();
+        resolve(wsUrl);
+      }
+    });
+    child.once("exit", (code) => reject(new Error(`cowork-server exited early (${String(code)})`)));
   });
 
   const ws = new WebSocket(url, "cowork.jsonrpc.v1");
@@ -40,13 +70,13 @@ async function main() {
     return id;
   };
 
-  const shutdown = async (code: number) => {
+  const shutdown = (code: number) => {
     try {
       ws.close();
     } catch {
       // ignore
     }
-    void server.stop();
+    child.stdin.end();
     process.exit(code);
   };
 
@@ -65,8 +95,13 @@ async function main() {
     ) as JsonRpcSmokeMessage;
     console.log(JSON.stringify(message));
 
+    if (message.error) {
+      shutdown(1);
+      return;
+    }
+
     if (message.id === 1) {
-      ws.send(JSON.stringify({ method: "initialized" }));
+      ws.send(JSON.stringify({ method: "initialized", params: {} }));
       sendRequest("thread/start", { cwd: process.cwd() });
       return;
     }
@@ -74,38 +109,20 @@ async function main() {
     if (message.id === 2) {
       const threadId = message.result?.thread?.id ?? "";
       if (!threadId) {
-        void shutdown(1);
+        shutdown(1);
         return;
       }
-      sendRequest("turn/start", {
-        threadId,
-        input: [{ type: "text", text: "reply with exactly: jsonrpc smoke ok" }],
-      });
+      sendRequest("thread/list", { cwd: process.cwd() });
       return;
     }
 
-    if (message.id && message.method === "item/tool/requestUserInput") {
-      ws.send(JSON.stringify({ id: message.id, result: { answer: "ok" } }));
-      return;
-    }
-
-    if (message.id && message.method === "item/commandExecution/requestApproval") {
-      ws.send(JSON.stringify({ id: message.id, result: { decision: "accept" } }));
-      return;
-    }
-
-    if (message.method === "item/completed" && message.params?.item?.type === "agentMessage") {
-      void shutdown(0);
-      return;
-    }
-
-    if (message.method === "error") {
-      void shutdown(1);
+    if (message.id === 3) {
+      shutdown(0);
     }
   };
 
   ws.onerror = () => {
-    void shutdown(1);
+    shutdown(1);
   };
 }
 

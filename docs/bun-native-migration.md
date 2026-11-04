@@ -1,5 +1,7 @@
 # Bun-Native Migration: Audit & Plan
 
+> **Historical Planning Record:** This document is a pre-cutover archive audited at commit `e8c7bb66` during the earlier TypeScript/Bun server era. The Cowork server, agent harness, SQLite persistence, MCP pool, OS sandboxing, and provider wire transports have since been rewritten in native Rust under `crates/` (`cowork-server`, `cowork-harness`, `cowork-storage`, `cowork-tools`, `cowork-providers`), and the former `src/server/*` TypeScript server tree has been removed. See [`docs/architecture.md`](./architecture.md) for the current system architecture; shared `src/` Electron/browser runtime boundary checks remain enforced by `test/desktopSharedBunBoundary.test.ts` and `test/platform-boundary.test.ts`.
+
 Status: **Phases 0–6 implemented** (see "Implementation status" below). This document is the system-of-record for moving the harness from Node.js APIs to Bun-native APIs where it is a win, and for recording what deliberately stays on `node:` builtins.
 
 Audited at repo `e8c7bb66`. Scope: `src/`, `packages/`, `scripts/`. `apps/desktop` (Electron) and `apps/mobile` (Expo) run Node/Chromium/React Native and are only in scope as consumers of shared `src/` modules.

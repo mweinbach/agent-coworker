@@ -1,0 +1,1048 @@
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use cowork_config::canonicalize_sync;
+use cowork_sandbox::{host_arch, host_platform};
+use dashmap::DashMap;
+use data_encoding::BASE64;
+use ed25519_dalek::Signature;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as Sha2Digest, Sha256};
+use walkdir::WalkDir;
+
+use crate::archive::{
+    assert_safe_relative_runtime_path, assert_safe_symlink_target, resolve_path_following_links,
+    validate_symlink_graph,
+};
+use crate::error::{EnvError, Result};
+use crate::manifest::{
+    IntegrityEntryKind, IntegrityFileEntry, PreparedRuntime, RuntimeIntegrityManifest,
+    RuntimeManifest, RuntimeManifestPaths, RuntimePackManifest, RuntimePaths,
+    RuntimeSignatureEnvelope, TrustedKeyRing, is_asset_compatible_with_host,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifiedAttestationRecord {
+    schema_version: u32,
+    runtime_version: String,
+    asset: String,
+    key_id: String,
+    signature_blake3: String,
+    tree_state_blake3: String,
+}
+
+fn memory_attestation_cache() -> &'static DashMap<PathBuf, VerifiedAttestationRecord> {
+    static CACHE: OnceLock<DashMap<PathBuf, VerifiedAttestationRecord>> = OnceLock::new();
+    CACHE.get_or_init(DashMap::new)
+}
+
+pub fn attestation_sidecar_path(runtime_dir: &Path) -> PathBuf {
+    let mut os = runtime_dir.as_os_str().to_os_string();
+    os.push(".verified.json");
+    PathBuf::from(os)
+}
+
+/// Verifies a detached `RuntimeSignatureEnvelope` (`Ed25519`) against `TrustedKeyRing`.
+pub fn verify_ed25519_envelope(
+    raw_manifest_bytes: &[u8],
+    envelope: &RuntimeSignatureEnvelope,
+    trusted_keys: &TrustedKeyRing,
+) -> Result<()> {
+    if envelope.schema_version != 1 {
+        return Err(EnvError::Signature(format!(
+            "Unsupported signature envelope schemaVersion {}",
+            envelope.schema_version
+        )));
+    }
+    if envelope.algorithm != "Ed25519" {
+        return Err(EnvError::Signature(format!(
+            "Unsupported signature algorithm {:?}",
+            envelope.algorithm
+        )));
+    }
+    let Some(verifying_key) = trusted_keys.get(&envelope.key_id) else {
+        return Err(EnvError::Signature(format!(
+            "Untrusted runtime signing keyId {:?}",
+            envelope.key_id
+        )));
+    };
+    let sig_bytes = BASE64
+        .decode(envelope.signature.trim().as_bytes())
+        .map_err(|e| EnvError::Signature(format!("Malformed base64 Ed25519 signature: {e}")))?;
+    let sig_arr: [u8; 64] = sig_bytes.try_into().map_err(|_| {
+        EnvError::Signature("Invalid Ed25519 signature byte length (expected 64)".to_owned())
+    })?;
+    let signature = Signature::from_bytes(&sig_arr);
+    verifying_key
+        .verify_strict(raw_manifest_bytes, &signature)
+        .map_err(|e| EnvError::Signature(format!("Ed25519 signature check failed: {e}")))
+}
+
+/// Computes `(sha256_hex, blake3_hex, byte_len)` for a regular file in a single streaming read.
+pub fn hash_regular_file(path: &Path) -> Result<(String, String, u64)> {
+    let mut f = File::open(path).map_err(|source| EnvError::IoPath {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut sha = Sha256::new();
+    let mut b3 = blake3::Hasher::new();
+    let mut total = 0_u64;
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        sha.update(&buf[..n]);
+        b3.update(&buf[..n]);
+        total += n as u64;
+    }
+    Ok((
+        hex::encode(sha.finalize()),
+        b3.finalize().to_hex().to_string(),
+        total,
+    ))
+}
+
+/// Computes `(sha256_hex, blake3_hex, byte_len)` over UTF-8 bytes.
+pub fn hash_bytes_dual(bytes: &[u8]) -> (String, String, u64) {
+    let sha = hex::encode(Sha256::digest(bytes));
+    let b3 = blake3::hash(bytes).to_hex().to_string();
+    (sha, b3, bytes.len() as u64)
+}
+
+fn relative_posix_from_root(root: &Path, full: &Path) -> Result<String> {
+    let rel = full.strip_prefix(root).map_err(|_| {
+        EnvError::Integrity(format!(
+            "Path {} is outside runtime root {}",
+            full.display(),
+            root.display()
+        ))
+    })?;
+    let mut parts = Vec::new();
+    for comp in rel.components() {
+        let s = comp.as_os_str().to_str().ok_or_else(|| {
+            EnvError::Integrity(format!("Non-UTF-8 path inside runtime: {}", full.display()))
+        })?;
+        parts.push(s);
+    }
+    assert_safe_relative_runtime_path(&parts.join("/"), "runtime disk path")
+}
+
+/// Verifies every file and symlink under `root_dir` against `files` in parallel using `rayon`.
+pub fn verify_integrity_tree_parallel(
+    root_dir: &Path,
+    files: &[IntegrityFileEntry],
+    trusted_symlinks: &[String],
+    extra_excluded_rel_paths: &HashSet<String>,
+) -> Result<()> {
+    let root_canonical = canonicalize_sync(root_dir);
+    let trusted_symlink_set: HashSet<&str> = trusted_symlinks.iter().map(String::as_str).collect();
+
+    // Validate manifest entries & check for duplicates.
+    let mut expected_by_path: HashMap<String, &IntegrityFileEntry> =
+        HashMap::with_capacity(files.len());
+    for entry in files {
+        let clean = assert_safe_relative_runtime_path(&entry.path, "integrity file path")?;
+        if entry.sha256.is_none() && entry.blake3.is_none() {
+            return Err(EnvError::Integrity(format!(
+                "Integrity entry {clean} must declare sha256 and/or blake3 digest"
+            )));
+        }
+        if entry.kind == IntegrityEntryKind::Symlink
+            && !trusted_symlinks.is_empty()
+            && !trusted_symlink_set.contains(clean.as_str())
+        {
+            return Err(EnvError::Integrity(format!(
+                "Untrusted symlink in integrity manifest: {clean}"
+            )));
+        }
+        if expected_by_path.insert(clean.clone(), entry).is_some() {
+            return Err(EnvError::Integrity(format!(
+                "Duplicate integrity entry for {clean}"
+            )));
+        }
+    }
+
+    // Walk disk tree (no symlink following) to detect extra or unexpected files.
+    let mut disk_paths: HashSet<String> = HashSet::new();
+    let mut disk_symlinks: HashMap<String, String> = HashMap::new();
+
+    for item in WalkDir::new(root_dir).follow_links(false) {
+        let dir_entry =
+            item.map_err(|e| EnvError::Integrity(format!("Failed walking runtime tree: {e}")))?;
+        if dir_entry.path() == root_dir {
+            continue;
+        }
+        let rel = relative_posix_from_root(root_dir, dir_entry.path())?;
+        if extra_excluded_rel_paths.contains(&rel) {
+            continue;
+        }
+        let ft = dir_entry.file_type();
+        if ft.is_dir() {
+            continue;
+        }
+        if ft.is_symlink() {
+            let target_os = std::fs::read_link(dir_entry.path())?;
+            let target = target_os
+                .to_str()
+                .ok_or_else(|| EnvError::Integrity(format!("Non-UTF-8 symlink target at {rel}")))?
+                .replace('\\', "/");
+            assert_safe_symlink_target(&target)?;
+            disk_symlinks.insert(rel.clone(), target);
+            disk_paths.insert(rel);
+        } else if ft.is_file() {
+            // A second link would let a path outside the tree rewrite the signed bytes after
+            // verification (TS `verifyRuntimeIntegrity` rejects multiple links on every platform).
+            #[cfg(unix)]
+            let link_count = {
+                use std::os::unix::fs::MetadataExt;
+                std::fs::symlink_metadata(dir_entry.path())?.nlink()
+            };
+            #[cfg(windows)]
+            let link_count = u64::from(windows_file_identity(dir_entry.path())?.links);
+            #[cfg(not(any(unix, windows)))]
+            let link_count = 1_u64;
+            if link_count != 1 {
+                return Err(EnvError::Integrity(format!(
+                    "Hardlinked runtime file is forbidden ({rel}, nlink={link_count})"
+                )));
+            }
+            disk_paths.insert(rel);
+        } else {
+            return Err(EnvError::Integrity(format!(
+                "Unsupported special file inside runtime tree: {rel}"
+            )));
+        }
+    }
+
+    if !disk_symlinks.is_empty() {
+        validate_symlink_graph(&disk_symlinks)?;
+    }
+
+    for disk_rel in &disk_paths {
+        if !expected_by_path.contains_key(disk_rel) {
+            return Err(EnvError::Integrity(format!(
+                "Unexpected extra file in runtime tree: {disk_rel}"
+            )));
+        }
+    }
+    for expected_rel in expected_by_path.keys() {
+        if !disk_paths.contains(expected_rel) {
+            return Err(EnvError::Integrity(format!(
+                "Missing expected file in runtime tree: {expected_rel}"
+            )));
+        }
+    }
+
+    // Parallel verification across CPU cores via `rayon`.
+    files.par_iter().try_for_each(|entry| -> Result<()> {
+        let full_path = root_dir.join(&entry.path);
+        let meta = std::fs::symlink_metadata(&full_path).map_err(|source| EnvError::IoPath {
+            path: full_path.clone(),
+            source,
+        })?;
+        let ft = meta.file_type();
+
+        match entry.kind {
+            IntegrityEntryKind::File => {
+                if !ft.is_file() || ft.is_symlink() {
+                    return Err(EnvError::Integrity(format!(
+                        "Expected regular file at {}, found symlink/other",
+                        entry.path
+                    )));
+                }
+                if meta.len() != entry.size {
+                    return Err(EnvError::Integrity(format!(
+                        "File size mismatch at {}: expected {}, got {}",
+                        entry.path,
+                        entry.size,
+                        meta.len()
+                    )));
+                }
+                let (sha256_actual, blake3_actual, actual_len) = hash_regular_file(&full_path)?;
+                if actual_len != entry.size {
+                    return Err(EnvError::Integrity(format!(
+                        "Concurrent size change at {}: expected {}, read {}",
+                        entry.path, entry.size, actual_len
+                    )));
+                }
+                if let Some(expected_b3) = &entry.blake3
+                    && !blake3_actual.eq_ignore_ascii_case(expected_b3)
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "blake3 digest mismatch at {}",
+                        entry.path
+                    )));
+                }
+                if let Some(expected_sha) = &entry.sha256
+                    && !sha256_actual.eq_ignore_ascii_case(expected_sha)
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "sha256 digest mismatch at {}",
+                        entry.path
+                    )));
+                }
+            }
+            IntegrityEntryKind::Symlink => {
+                if !ft.is_symlink() {
+                    return Err(EnvError::Integrity(format!(
+                        "Expected symlink at {}, found non-symlink",
+                        entry.path
+                    )));
+                }
+                let target_raw = std::fs::read_link(&full_path)?;
+                let target = target_raw
+                    .to_str()
+                    .ok_or_else(|| {
+                        EnvError::Integrity(format!("Non-UTF-8 symlink at {}", entry.path))
+                    })?
+                    .replace('\\', "/");
+                assert_safe_symlink_target(&target)?;
+                // Unconditional: a dangling link to a missing external path still escapes.
+                let resolved = resolve_path_following_links(&full_path)?;
+                if resolved != root_canonical && !resolved.starts_with(&root_canonical) {
+                    return Err(EnvError::Integrity(format!(
+                        "Symlink {} escapes runtime root",
+                        entry.path
+                    )));
+                }
+                let (sha256_actual, blake3_actual, actual_len) = hash_bytes_dual(target.as_bytes());
+                if actual_len != entry.size {
+                    return Err(EnvError::Integrity(format!(
+                        "Symlink target length mismatch at {}",
+                        entry.path
+                    )));
+                }
+                if let Some(expected_b3) = &entry.blake3
+                    && !blake3_actual.eq_ignore_ascii_case(expected_b3)
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "Symlink blake3 digest mismatch at {}",
+                        entry.path
+                    )));
+                }
+                if let Some(expected_sha) = &entry.sha256
+                    && !sha256_actual.eq_ignore_ascii_case(expected_sha)
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "Symlink sha256 digest mismatch at {}",
+                        entry.path
+                    )));
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Computes a deterministic `blake3` fingerprint over `(path, kind, dev, ino, size, nlink, mtime, mode)`
+/// (Windows: `(path, kind, size, readonly, mtime, volume serial, file index, nlink)`)
+/// for every file, directory, and symlink in `root_dir` in parallel via `rayon`. Symlink records also
+/// carry the link target, so a relinked symlink (same metadata, new target) changes the digest
+/// (TS `collectRuntimeTreeState`).
+pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
+    let mut paths: Vec<(String, PathBuf)> = Vec::new();
+    for item in WalkDir::new(root_dir).follow_links(false) {
+        let de =
+            item.map_err(|e| EnvError::Integrity(format!("Failed walking tree state: {e}")))?;
+        let rel = if de.path() == root_dir {
+            ".".to_owned()
+        } else {
+            relative_posix_from_root(root_dir, de.path())?
+        };
+        paths.push((rel, de.path().to_path_buf()));
+    }
+
+    let mut records: Vec<(String, String)> = paths
+        .par_iter()
+        .map(|(rel, p)| -> Result<(String, String)> {
+            let meta = std::fs::symlink_metadata(p)?;
+            let ft = meta.file_type();
+            let kind = if ft.is_symlink() {
+                "L"
+            } else if ft.is_dir() {
+                "D"
+            } else {
+                "F"
+            };
+            #[cfg(unix)]
+            let stat_line = {
+                use std::os::unix::fs::MetadataExt;
+                format!(
+                    "{rel}|{kind}|dev={}|ino={}|sz={}|nl={}|mt={}.{}|mode={:o}",
+                    meta.dev(),
+                    meta.ino(),
+                    meta.len(),
+                    meta.nlink(),
+                    meta.mtime(),
+                    meta.mtime_nsec(),
+                    meta.mode() & 0o7777
+                )
+            };
+            #[cfg(unix)]
+            let stat_line = if ft.is_symlink() {
+                format!("{stat_line}|target={}", symlink_target_fingerprint(p)?)
+            } else {
+                stat_line
+            };
+            #[cfg(not(unix))]
+            let stat_line = {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let base = format!(
+                    "{rel}|{kind}|sz={}|ro={}|mt={mtime}",
+                    meta.len(),
+                    meta.permissions().readonly()
+                );
+                // File identity and NTFS link count, so adding a hard link (or swapping the file
+                // for another with equal metadata) invalidates a cached attestation.
+                #[cfg(windows)]
+                let base = {
+                    let id = windows_file_identity(p)?;
+                    format!(
+                        "{base}|vol={}|idx={}|nl={}",
+                        id.volume_serial, id.file_index, id.links
+                    )
+                };
+                if ft.is_symlink() {
+                    format!("{base}|target={}", symlink_target_fingerprint(p)?)
+                } else {
+                    base
+                }
+            };
+            Ok((rel.clone(), stat_line))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    records.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut hasher = blake3::Hasher::new();
+    for (_, line) in records {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Identity fields of `BY_HANDLE_FILE_INFORMATION` for one directory entry (never following a
+/// final symlink or junction).
+#[cfg(windows)]
+struct WindowsFileIdentity {
+    volume_serial: u32,
+    file_index: u64,
+    links: u32,
+}
+
+/// Reads the volume serial, file index, and `nNumberOfLinks` of `path` via
+/// `GetFileInformationByHandle`. `std` exposes these only behind the unstable `windows_by_handle`
+/// feature, so the one kernel32 call is declared here directly.
+#[cfg(windows)]
+fn windows_file_identity(path: &Path) -> Result<WindowsFileIdentity> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+
+    /// `BY_HANDLE_FILE_INFORMATION` (each `FILETIME` is two `DWORD`s).
+    #[repr(C)]
+    #[derive(Default)]
+    #[allow(dead_code)]
+    struct ByHandleFileInformation {
+        file_attributes: u32,
+        creation_time: [u32; 2],
+        last_access_time: [u32; 2],
+        last_write_time: [u32; 2],
+        volume_serial_number: u32,
+        file_size_high: u32,
+        file_size_low: u32,
+        number_of_links: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut std::ffi::c_void,
+            info: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0001 | 0x0002 | 0x0004;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+        // Backup semantics opens directories; reparse-point opens the link itself.
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|source| EnvError::IoPath {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut info = ByHandleFileInformation::default();
+    // SAFETY: `file` stays open for the call and `info` is a writable, correctly laid out
+    // `BY_HANDLE_FILE_INFORMATION`.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return Err(EnvError::IoPath {
+            path: path.to_path_buf(),
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    Ok(WindowsFileIdentity {
+        volume_serial: info.volume_serial_number,
+        file_index: (u64::from(info.file_index_high) << 32) | u64::from(info.file_index_low),
+        links: info.number_of_links,
+    })
+}
+
+/// Hex-encodes a symlink's raw target so arbitrary (even non-UTF-8) targets fingerprint unambiguously.
+fn symlink_target_fingerprint(link: &Path) -> Result<String> {
+    let target = std::fs::read_link(link).map_err(|source| EnvError::IoPath {
+        path: link.to_path_buf(),
+        source,
+    })?;
+    Ok(hex::encode(target.as_os_str().as_encoded_bytes()))
+}
+
+/// Seals a verified runtime directory tree read-only (`0555` on executables/dirs, `0444` on files).
+pub fn seal_tree_readonly(root_dir: &Path) -> Result<()> {
+    let mut dirs_by_depth: Vec<(usize, PathBuf)> = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
+
+    for item in WalkDir::new(root_dir).follow_links(false) {
+        let de = item.map_err(|e| EnvError::Integrity(format!("Seal walk failed: {e}")))?;
+        let ft = de.file_type();
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
+            dirs_by_depth.push((de.depth(), de.path().to_path_buf()));
+        } else if ft.is_file() {
+            files.push(de.path().to_path_buf());
+        }
+    }
+
+    for file_path in &files {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::symlink_metadata(file_path)?;
+            let old_mode = meta.permissions().mode();
+            let exec = (old_mode & 0o111) != 0;
+            let new_mode = if exec { 0o555 } else { 0o444 };
+            let mut perms = meta.permissions();
+            perms.set_mode(new_mode);
+            std::fs::set_permissions(file_path, perms)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut perms = std::fs::metadata(file_path)?.permissions();
+            perms.set_readonly(true);
+            std::fs::set_permissions(file_path, perms)?;
+        }
+    }
+
+    // Seal directories bottom-up so parent directories stay writable until all children are sealed.
+    dirs_by_depth.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (_, dir_path) in &dirs_by_depth {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::symlink_metadata(dir_path)?;
+            let mut perms = meta.permissions();
+            perms.set_mode(0o555);
+            std::fs::set_permissions(dir_path, perms)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir_path;
+        }
+    }
+
+    Ok(())
+}
+
+/// Restores owner write permissions top-down so a sealed runtime tree can be removed cleanly.
+pub fn unseal_tree_for_removal(root_dir: &Path) -> Result<()> {
+    // A version directory can contain damaged or replaced entries. Never traverse links,
+    // including a symlink passed as the root. On Unix only directories need write permission
+    // to unlink their entries; chmod on a hardlinked file would change the external inode.
+    for entry in WalkDir::new(root_dir).follow_root_links(false) {
+        let Ok(entry) = entry else { continue };
+        #[cfg(unix)]
+        if entry.file_type().is_dir() {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o700))?;
+        }
+        #[cfg(not(unix))]
+        if entry.file_type().is_file() {
+            let mut perms = std::fs::symlink_metadata(entry.path())?.permissions();
+            perms.set_readonly(false);
+            std::fs::set_permissions(entry.path(), perms)?;
+        }
+    }
+    Ok(())
+}
+
+/// Unseals and deletes an installed or staging runtime directory and its attestation sidecar.
+pub fn remove_sealed_tree(root_dir: &Path) -> Result<()> {
+    memory_attestation_cache().remove(&canonicalize_sync(root_dir));
+    let sidecar = attestation_sidecar_path(root_dir);
+    let _ = std::fs::remove_file(&sidecar);
+    if root_dir.exists() {
+        let _ = unseal_tree_for_removal(root_dir);
+        std::fs::remove_dir_all(root_dir)?;
+    }
+    Ok(())
+}
+
+/// Verifies an extracted Cowork runtime root (`runtime.json` + `runtime-integrity.json` + `runtime-integrity.sig`),
+/// consulting the `(inode, mtime, size)` attestation cache unless `force_full_verify` is set.
+pub fn verify_installed_runtime(
+    runtime_dir: &Path,
+    trusted_keys: &TrustedKeyRing,
+    force_full_verify: bool,
+) -> Result<PreparedRuntime> {
+    let canonical_root = canonicalize_sync(runtime_dir);
+    let manifest_raw =
+        std::fs::read_to_string(canonical_root.join("runtime.json")).map_err(|e| {
+            EnvError::Manifest(format!(
+                "Missing or unreadable runtime.json in {}: {e}",
+                canonical_root.display()
+            ))
+        })?;
+    let manifest: RuntimeManifest = serde_json::from_str(&manifest_raw).map_err(|e| {
+        EnvError::Manifest(format!(
+            "Invalid runtime.json in {}: {e}",
+            canonical_root.display()
+        ))
+    })?;
+    if manifest.schema_version != 2 {
+        return Err(EnvError::Manifest(format!(
+            "Unsupported runtime.json schemaVersion {} (expected 2)",
+            manifest.schema_version
+        )));
+    }
+
+    crate::manifest::validate_runtime_version(&manifest.version)?;
+    // TS `parseRuntimeManifest`: reject absolute / prefixed / `..` paths before anything uses them.
+    manifest.paths.validate()?;
+
+    if !is_asset_compatible_with_host(
+        &manifest.asset,
+        host_platform(),
+        host_arch(),
+        &manifest.compatible_hosts,
+    ) {
+        return Err(EnvError::Manifest(format!(
+            "Runtime asset {} is not compatible with {}-{}",
+            manifest.asset,
+            host_platform(),
+            host_arch()
+        )));
+    }
+
+    let (int_rel_path, sig_rel_path) = if let Some(ref int_ref) = manifest.integrity {
+        if int_ref.algorithm != "Ed25519" {
+            return Err(EnvError::Signature(format!(
+                "Unsupported runtime.json integrity algorithm {:?}",
+                int_ref.algorithm
+            )));
+        }
+        (
+            assert_safe_relative_runtime_path(
+                &int_ref.manifest,
+                "runtime.json integrity.manifest",
+            )?,
+            assert_safe_relative_runtime_path(
+                &int_ref.signature,
+                "runtime.json integrity.signature",
+            )?,
+        )
+    } else {
+        (
+            "runtime-integrity.json".to_owned(),
+            "runtime-integrity.sig".to_owned(),
+        )
+    };
+
+    let has_monolithic_integrity = canonical_root.join(&int_rel_path).is_file()
+        && canonical_root.join(&sig_rel_path).is_file();
+
+    let (key_id_record, sig_digest, combined_files, excluded_rel_paths, trusted_symlinks) =
+        if has_monolithic_integrity {
+            let integrity_bytes =
+                std::fs::read(canonical_root.join(&int_rel_path)).map_err(|e| {
+                    EnvError::Integrity(format!(
+                        "Missing {int_rel_path} in {}: {e}",
+                        canonical_root.display()
+                    ))
+                })?;
+            let sig_raw =
+                std::fs::read_to_string(canonical_root.join(&sig_rel_path)).map_err(|e| {
+                    EnvError::Signature(format!(
+                        "Missing {sig_rel_path} in {}: {e}",
+                        canonical_root.display()
+                    ))
+                })?;
+            let envelope: RuntimeSignatureEnvelope = serde_json::from_str(&sig_raw)
+                .map_err(|e| EnvError::Signature(format!("Invalid {sig_rel_path} JSON: {e}")))?;
+
+            if let Some(ref int_ref) = manifest.integrity
+                && int_ref.key_id != envelope.key_id
+            {
+                return Err(EnvError::Signature(
+                    "runtime.json integrity.keyId does not match signature envelope keyId"
+                        .to_owned(),
+                ));
+            }
+
+            verify_ed25519_envelope(&integrity_bytes, &envelope, trusted_keys)?;
+
+            let integrity: RuntimeIntegrityManifest = serde_json::from_slice(&integrity_bytes)
+                .map_err(|e| EnvError::Integrity(format!("Invalid {int_rel_path}: {e}")))?;
+            if integrity.schema_version != 2 {
+                return Err(EnvError::Integrity(format!(
+                    "Unsupported runtime-integrity.json schemaVersion {}",
+                    integrity.schema_version
+                )));
+            }
+            if integrity.key_id != envelope.key_id {
+                return Err(EnvError::Signature(
+                    "runtime-integrity.json keyId does not match signature envelope keyId"
+                        .to_owned(),
+                ));
+            }
+            if integrity.runtime_version != manifest.version || integrity.asset != manifest.asset {
+                return Err(EnvError::Integrity(
+                    "runtime-integrity.json version/asset does not match runtime.json".to_owned(),
+                ));
+            }
+
+            let known_files: HashSet<&str> =
+                integrity.files.iter().map(|f| f.path.as_str()).collect();
+            for (comp_id, closure) in &integrity.components {
+                for rel in closure {
+                    let clean =
+                        assert_safe_relative_runtime_path(rel, "integrity component closure")?;
+                    if !known_files.contains(clean.as_str()) {
+                        return Err(EnvError::Integrity(format!(
+                            "Component {comp_id} closure path {clean} missing from integrity files"
+                        )));
+                    }
+                }
+            }
+            for (ep_id, closure) in &integrity.entrypoints {
+                for rel in closure {
+                    let clean =
+                        assert_safe_relative_runtime_path(rel, "integrity entrypoint closure")?;
+                    if !known_files.contains(clean.as_str()) {
+                        return Err(EnvError::Integrity(format!(
+                            "Entrypoint {ep_id} closure path {clean} missing from integrity files"
+                        )));
+                    }
+                }
+            }
+
+            let mut sig_hasher = blake3::Hasher::new();
+            sig_hasher.update(&integrity_bytes);
+            sig_hasher.update(sig_raw.as_bytes());
+            let mut excluded = HashSet::new();
+            excluded.insert(int_rel_path);
+            excluded.insert(sig_rel_path);
+            // runtime.json is itself covered by the signed file list here (anything unlisted is
+            // rejected as an extra file), so its trustedSymlinks are signed data.
+            (
+                envelope.key_id,
+                sig_hasher.finalize().to_hex().to_string(),
+                integrity.files,
+                excluded,
+                manifest.trusted_symlinks.clone(),
+            )
+        } else if !manifest.installed_packs.is_empty() {
+            if !manifest.installed_packs.iter().any(|p| p == "core") {
+                return Err(EnvError::Manifest(
+                    "Modular v2 runtime must include the 'core' pack".to_owned(),
+                ));
+            }
+            let mut sig_hasher = blake3::Hasher::new();
+            let mut merged_files: Vec<IntegrityFileEntry> = Vec::new();
+            let mut excluded = HashSet::new();
+            excluded.insert("runtime.json".to_owned());
+            let mut first_key_id = String::new();
+            let mut aggregated_provided_paths: HashMap<String, String> = HashMap::new();
+            let mut signed_trusted_symlinks: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+
+            for pack_name in &manifest.installed_packs {
+                let pack_id = crate::manifest::RuntimePackId::parse(pack_name)?;
+                let meta_prefix = format!(".packs/{}", pack_id.as_str());
+                let pack_json_rel = format!("{meta_prefix}/pack.json");
+                let int_rel = format!("{meta_prefix}/pack-integrity.json");
+                let sig_rel = format!("{meta_prefix}/pack-integrity.sig");
+                excluded.insert(pack_json_rel.clone());
+                excluded.insert(int_rel.clone());
+                excluded.insert(sig_rel.clone());
+
+                let int_bytes = std::fs::read(canonical_root.join(&int_rel))
+                    .map_err(|e| EnvError::Integrity(format!("Missing {int_rel}: {e}")))?;
+                let sig_raw = std::fs::read_to_string(canonical_root.join(&sig_rel))
+                    .map_err(|e| EnvError::Signature(format!("Missing {sig_rel}: {e}")))?;
+                let envelope: RuntimeSignatureEnvelope = serde_json::from_str(&sig_raw)
+                    .map_err(|e| EnvError::Signature(format!("Invalid {sig_rel}: {e}")))?;
+                verify_ed25519_envelope(&int_bytes, &envelope, trusted_keys)?;
+
+                let pack_int: RuntimeIntegrityManifest = serde_json::from_slice(&int_bytes)
+                    .map_err(|e| EnvError::Integrity(format!("Invalid {int_rel}: {e}")))?;
+                if pack_int.schema_version != 2 {
+                    return Err(EnvError::Integrity(format!(
+                        "Unsupported pack integrity schemaVersion {} in {int_rel}",
+                        pack_int.schema_version
+                    )));
+                }
+                if pack_int.key_id != envelope.key_id {
+                    return Err(EnvError::Signature(format!(
+                        "{int_rel} keyId does not match signature envelope keyId"
+                    )));
+                }
+                if pack_int.pack_id != Some(pack_id) {
+                    return Err(EnvError::Integrity(format!(
+                        "Pack integrity manifest id mismatch in {int_rel}"
+                    )));
+                }
+                if pack_int.runtime_version != manifest.version || pack_int.asset != manifest.asset
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "Pack integrity version/asset mismatch in {int_rel}"
+                    )));
+                }
+
+                let pack_json_path = canonical_root.join(&pack_json_rel);
+                let pack_json_raw = std::fs::read_to_string(&pack_json_path)
+                    .map_err(|e| EnvError::Manifest(format!("Missing {pack_json_rel}: {e}")))?;
+                // pack.json carries providedPaths and trustedSymlinks, so it must be signed.
+                let Some(signed_pack_entry) = pack_int
+                    .files
+                    .iter()
+                    .find(|f| f.path == "pack.json" && f.kind == IntegrityEntryKind::File)
+                else {
+                    return Err(EnvError::Integrity(format!(
+                        "{int_rel} does not sign pack.json"
+                    )));
+                };
+                if signed_pack_entry.sha256.is_none() && signed_pack_entry.blake3.is_none() {
+                    return Err(EnvError::Integrity(format!(
+                        "{int_rel} pack.json entry has no digest"
+                    )));
+                }
+                if std::fs::symlink_metadata(&pack_json_path)
+                    .map(|m| !m.file_type().is_file())
+                    .unwrap_or(true)
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "{pack_json_rel} is not a regular file"
+                    )));
+                }
+                let (actual_sha, actual_b3, actual_size) = hash_regular_file(&pack_json_path)?;
+                if actual_size != signed_pack_entry.size
+                    || actual_size != pack_json_raw.len() as u64
+                    || signed_pack_entry
+                        .sha256
+                        .as_deref()
+                        .is_some_and(|exp| !exp.eq_ignore_ascii_case(&actual_sha))
+                    || signed_pack_entry
+                        .blake3
+                        .as_deref()
+                        .is_some_and(|exp| !exp.eq_ignore_ascii_case(&actual_b3))
+                {
+                    return Err(EnvError::Integrity(format!(
+                        "Tampered pack manifest {pack_json_rel}"
+                    )));
+                }
+                let pack_manifest: RuntimePackManifest = serde_json::from_str(&pack_json_raw)
+                    .map_err(|e| EnvError::Manifest(format!("Invalid {pack_json_rel}: {e}")))?;
+                if pack_manifest.pack_id != pack_id
+                    || pack_manifest.version != manifest.version
+                    || pack_manifest.asset != manifest.asset
+                {
+                    return Err(EnvError::Manifest(format!(
+                        "Mismatched metadata in {pack_json_rel}"
+                    )));
+                }
+                aggregated_provided_paths.extend(pack_manifest.provided_paths);
+                // The trusted-symlink allowlist comes only from signed pack.json, never from
+                // the installer-synthesized (unsigned) runtime.json.
+                for link in pack_manifest.trusted_symlinks {
+                    signed_trusted_symlinks.insert(assert_safe_relative_runtime_path(
+                        &link,
+                        "pack trustedSymlinks",
+                    )?);
+                }
+
+                if first_key_id.is_empty() {
+                    first_key_id = envelope.key_id.clone();
+                }
+                sig_hasher.update(&int_bytes);
+                sig_hasher.update(sig_raw.as_bytes());
+                merged_files.extend(pack_int.files.into_iter().filter(|f| f.path != "pack.json"));
+            }
+
+            let expected_paths = RuntimeManifestPaths {
+                bin: aggregated_provided_paths
+                    .get("bin")
+                    .cloned()
+                    .unwrap_or_else(|| "dependencies/bin".to_owned()),
+                node: aggregated_provided_paths
+                    .get("node")
+                    .cloned()
+                    .unwrap_or_else(|| "dependencies/node/bin/node".to_owned()),
+                python: aggregated_provided_paths
+                    .get("python")
+                    .cloned()
+                    .unwrap_or_else(|| "dependencies/python/bin/python3".to_owned()),
+                git: aggregated_provided_paths.get("git").cloned(),
+                node_modules: aggregated_provided_paths
+                    .get("nodeModules")
+                    .cloned()
+                    .unwrap_or_else(|| "node_modules".to_owned()),
+                node_resolver: aggregated_provided_paths
+                    .get("nodeResolver")
+                    .cloned()
+                    .unwrap_or_else(|| "cowork/node-resolver/register.mjs".to_owned()),
+                artifact_tool_package: aggregated_provided_paths
+                    .get("artifactToolPackage")
+                    .cloned(),
+                pnpm: aggregated_provided_paths.get("pnpm").cloned(),
+                poppler_bin: aggregated_provided_paths.get("popplerBin").cloned(),
+                pdftoppm: aggregated_provided_paths.get("pdftoppm").cloned(),
+                pdfinfo: aggregated_provided_paths.get("pdfinfo").cloned(),
+                heif_convert: aggregated_provided_paths.get("heifConvert").cloned(),
+                jxr_dec_app: aggregated_provided_paths.get("jxrDecApp").cloned(),
+                libreoffice: aggregated_provided_paths
+                    .get("libreOffice")
+                    .or_else(|| aggregated_provided_paths.get("libreoffice"))
+                    .cloned(),
+                soffice: aggregated_provided_paths.get("soffice").cloned(),
+                libreoffice_binary: aggregated_provided_paths
+                    .get("libreOfficeBinary")
+                    .or_else(|| aggregated_provided_paths.get("libreofficeBinary"))
+                    .cloned(),
+                uv: aggregated_provided_paths.get("uv").cloned(),
+                wheelhouse: aggregated_provided_paths.get("wheelhouse").cloned(),
+            };
+            if manifest.paths != expected_paths {
+                return Err(EnvError::Integrity(
+                    "Synthesized runtime.json paths do not match signed v2 pack providedPaths"
+                        .to_owned(),
+                ));
+            }
+
+            (
+                first_key_id,
+                sig_hasher.finalize().to_hex().to_string(),
+                merged_files,
+                excluded,
+                signed_trusted_symlinks.into_iter().collect::<Vec<_>>(),
+            )
+        } else {
+            return Err(EnvError::Integrity(format!(
+                "Missing signed integrity manifest in {}",
+                canonical_root.display()
+            )));
+        };
+
+    let tree_digest = compute_tree_state_digest_parallel(&canonical_root)?;
+    let sidecar_path = attestation_sidecar_path(&canonical_root);
+
+    let cache_hit = if !force_full_verify {
+        if let Some(mem) = memory_attestation_cache().get(&canonical_root)
+            && mem.runtime_version == manifest.version
+            && mem.asset == manifest.asset
+            && mem.signature_blake3 == sig_digest
+            && mem.tree_state_blake3 == tree_digest
+            && mem.key_id == key_id_record
+        {
+            true
+        } else if let Ok(disk_raw) = std::fs::read_to_string(&sidecar_path)
+            && let Ok(disk_rec) = serde_json::from_str::<VerifiedAttestationRecord>(&disk_raw)
+            && disk_rec.schema_version == 1
+            && disk_rec.runtime_version == manifest.version
+            && disk_rec.asset == manifest.asset
+            && disk_rec.signature_blake3 == sig_digest
+            && disk_rec.tree_state_blake3 == tree_digest
+            && disk_rec.key_id == key_id_record
+        {
+            memory_attestation_cache().insert(canonical_root.clone(), disk_rec);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !cache_hit {
+        verify_integrity_tree_parallel(
+            &canonical_root,
+            &combined_files,
+            &trusted_symlinks,
+            &excluded_rel_paths,
+        )?;
+
+        // Re-fingerprint after hashing so a tree that changed mid-verification is never attested
+        // (TS `trustVerifiedRuntimeTree`): only a stable tree earns the fast path.
+        let tree_digest_after = compute_tree_state_digest_parallel(&canonical_root)?;
+        if tree_digest_after != tree_digest {
+            memory_attestation_cache().remove(&canonical_root);
+            let _ = std::fs::remove_file(&sidecar_path);
+            return Err(EnvError::Integrity(format!(
+                "Runtime changed while it was being verified: {}",
+                canonical_root.display()
+            )));
+        }
+
+        let rec = VerifiedAttestationRecord {
+            schema_version: 1,
+            runtime_version: manifest.version.clone(),
+            asset: manifest.asset.clone(),
+            key_id: key_id_record,
+            signature_blake3: sig_digest,
+            tree_state_blake3: tree_digest,
+        };
+        if let Ok(json_bytes) = serde_json::to_vec_pretty(&rec) {
+            let _ = std::fs::write(&sidecar_path, json_bytes);
+        }
+        memory_attestation_cache().insert(canonical_root.clone(), rec);
+    }
+
+    let paths = RuntimePaths::from_manifest_paths(&canonical_root, &manifest.paths)?;
+    for required in [&paths.node, &paths.python, &paths.node_resolver] {
+        if !required.is_file() {
+            return Err(EnvError::Manifest(format!(
+                "Verified runtime missing entrypoint file: {}",
+                required.display()
+            )));
+        }
+    }
+
+    Ok(PreparedRuntime {
+        version: manifest.version,
+        asset: manifest.asset,
+        root_dir: canonical_root,
+        installed_packs: manifest.installed_packs,
+        paths,
+    })
+}

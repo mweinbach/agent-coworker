@@ -398,18 +398,48 @@ impl TimedOutPrompt for String {
     }
 }
 
+/// Normalizes an approval reply to approve/deny, or `None` when the payload is invalid.
+///
+/// Legacy parity (`transportAdapter.ts`): ANY denial signal wins. `approved: false` or an
+/// explicit denying `decision` rejects even when the other field says approve, so
+/// `{"approved": true, "decision": "decline"}` denies. A `decision` that is present but not
+/// recognized makes the payload invalid (the legacy schema was a closed enum) unless a denial
+/// signal already settled it.
 fn parse_approval_decision(result: &Value) -> Option<bool> {
-    if let Some(b) = result.get("approved").and_then(Value::as_bool) {
-        return Some(b);
-    }
-    if let Some(d) = result.get("decision").and_then(Value::as_str) {
-        return match d {
-            "accept" | "acceptForSession" | "approve" | "approved" => Some(true),
-            "decline" | "reject" | "cancel" | "deny" | "rejected" => Some(false),
+    let approved = result.get("approved").and_then(Value::as_bool);
+    let decision = result
+        .get("decision")
+        .filter(|d| !d.is_null())
+        .map(|d| match d.as_str() {
+            Some("accept" | "acceptForSession" | "approve" | "approved") => Some(true),
+            Some("decline" | "reject" | "cancel" | "deny" | "rejected") => Some(false),
             _ => None,
-        };
+        });
+    if approved == Some(false) || decision == Some(Some(false)) {
+        return Some(false);
+    }
+    if decision == Some(None) {
+        return None;
+    }
+    if approved == Some(true) || decision == Some(Some(true)) {
+        return Some(true);
     }
     result.as_bool()
+}
+
+/// Joins the text of `text` / `inputText` content parts (legacy `extractJsonRpcTextInput`).
+fn extract_content_text(content: &[Value]) -> String {
+    content
+        .iter()
+        .filter_map(|part| match part.get("type").and_then(Value::as_str) {
+            Some("text" | "inputText") => part.get("text").and_then(Value::as_str),
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
 }
 
 fn parse_single_user_input_answer(result: &Value) -> Result<String, String> {
@@ -424,6 +454,17 @@ fn parse_single_user_input_answer(result: &Value) -> Result<String, String> {
             ));
         }
         return Ok(ans_str.to_owned());
+    }
+
+    // Content-part replies: `{"content": [{"type": "text", "text": "Looks good"}]}`.
+    if let Some(content) = result.get("content").and_then(Value::as_array) {
+        let text = extract_content_text(content);
+        if text.is_empty() {
+            return Err(format!(
+                "Answer cannot be empty. Provide a response or '{ASK_SKIP_TOKEN}' to skip."
+            ));
+        }
+        return Ok(text);
     }
 
     if let Some(s) = result.as_str() {
@@ -462,7 +503,7 @@ fn parse_single_user_input_answer(result: &Value) -> Result<String, String> {
         return Ok(extracted);
     }
 
-    Err("User input response must include 'answer' or 'skipped: true'.".to_owned())
+    Err("User input response must include 'answer', text 'content', or 'skipped: true'.".to_owned())
 }
 
 #[async_trait]

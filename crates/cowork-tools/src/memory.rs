@@ -1525,7 +1525,9 @@ impl BuiltinTool for ReadPastConversationTool {
                 .ok_or_else(|| {
                     ToolError::Execution(format!("Past session '{session_id}' not found."))
                 })?;
-            if detail.working_directory != ws_str {
+            // Canonical comparison (TS `sameWorkspacePath`), matching `list_sessions`: a
+            // trailing slash or (on Windows) different casing is still the same workspace.
+            if !cowork_config::same_workspace_path(&detail.working_directory, &ws_str) {
                 return Err(ToolError::PathDenied(
                     "Access denied: requested session belongs to a different workspace.".to_owned(),
                 ));

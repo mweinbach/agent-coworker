@@ -11,6 +11,9 @@ use crate::context::{
 
 pub const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS: usize = 25_000;
 pub const TOOL_OUTPUT_PREVIEW_CHARS: usize = 5_000;
+/// Tool name the spill reports to the task-mutation lock check (TS
+/// `assertCanMutate("toolOutputOverflow")`).
+const SPILL_MUTATION_TOOL_NAME: &str = "toolOutputOverflow";
 
 pub fn is_overflow_exempt_tool(tool_name: &str, inner_called_tool: Option<&str>) -> bool {
     const EXEMPT: &[&str] = &[
@@ -102,13 +105,17 @@ enum SpillFailure {
     PolicyDenied,
     /// Refused because a scratchpad path component is a symlink.
     Symlink(String),
+    /// The task-mutation lock is held (TS `assertCanMutate("toolOutputOverflow")` threw), e.g.
+    /// a `createTask` in the same batch locked the source chat before this result finalized.
+    TaskLocked(String),
     /// Any other I/O failure.
     Io,
 }
 
-/// TS `maybeSpillToolOutputToWorkspace` write sequence: authorize the concrete spill file before
-/// creating any directory, re-authorize once the directories exist and before writing, and
-/// remove directories this call created if a later step fails.
+/// TS `maybeSpillToolOutputToWorkspace` write sequence: authorize the concrete spill file and
+/// check the task-mutation lock before creating any directory, re-check both once the
+/// directories exist and before writing, and remove directories this call created if a later
+/// step fails.
 fn write_spill_file(
     ctx: &ToolExecutionContext,
     target: &Path,
@@ -121,6 +128,13 @@ fn write_spill_file(
             .map(|_| ())
             .map_err(|_| SpillFailure::PolicyDenied)
     };
+    // Ordinary tool batches execute every call before finalizing results, so a `createTask`
+    // later in the batch can lock the workspace before this spill runs; the dispatch-time
+    // check is stale by now.
+    let assert_can_mutate = || {
+        ctx.check_before_tool_invocation(SPILL_MUTATION_TOOL_NAME)
+            .map_err(|err| SpillFailure::TaskLocked(err.to_string()))
+    };
     let classify = |err: String| {
         if err.contains("symlink") {
             SpillFailure::Symlink(err)
@@ -130,6 +144,7 @@ fn write_spill_file(
     };
 
     authorize()?;
+    assert_can_mutate()?;
     let mut created: Vec<&Path> = Vec::new();
     let result = (|| -> Result<(), SpillFailure> {
         for dir in [cowork_dir, scratchpad_dir] {
@@ -137,6 +152,7 @@ fn write_spill_file(
                 created.push(dir);
             }
         }
+        assert_can_mutate()?;
         authorize()?;
         if let Ok(meta) = fs::symlink_metadata(target)
             && meta.file_type().is_symlink()
@@ -261,6 +277,13 @@ pub fn maybe_spill_tool_output_with_inner(
                 // turn's authorized write scope (e.g. a child scoped by `targetPaths`).
                 hint = format!(
                     "Tool output truncated ({char_count} chars). Full output was not saved because this turn cannot write and read the spill file; narrow your query or filter output."
+                );
+            }
+            Err(SpillFailure::TaskLocked(reason)) => {
+                // Never write into a workspace whose task-mutation lock is held: truncate
+                // inline instead of spilling.
+                hint = format!(
+                    "Tool output truncated ({char_count} chars). Full output was not saved because the workspace is locked for task mutation ({reason}); narrow your query or filter output."
                 );
             }
             Err(SpillFailure::Io) => {

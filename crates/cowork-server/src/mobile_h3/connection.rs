@@ -279,7 +279,10 @@ pub struct H3DeviceConnections {
     runtime: Arc<ServerRuntimeState>,
     keepalive_interval: Duration,
     connections: DashMap<String, Arc<H3DeviceConnection>>,
-    stream_owners: DashMap<String, u64>,
+    /// The SSE stream that currently owns each device's connection. Every owner change and the
+    /// owner-conditional teardown in [`Self::release_sse_stream`] run under this lock, so a stale
+    /// stream can never read "still owner" and then tear down a replacement installed meanwhile.
+    stream_owners: Mutex<HashMap<String, u64>>,
     next_owner_id: AtomicU64,
 }
 
@@ -289,7 +292,7 @@ impl H3DeviceConnections {
             runtime,
             keepalive_interval,
             connections: DashMap::new(),
-            stream_owners: DashMap::new(),
+            stream_owners: Mutex::new(HashMap::new()),
             next_owner_id: AtomicU64::new(1),
         })
     }
@@ -323,10 +326,14 @@ impl H3DeviceConnections {
     }
 
     pub fn open_sse_stream(self: &Arc<Self>, device_id: &str) -> SseDeviceEventStream {
-        let connection = self.get_or_create(device_id);
-        let owner_id = self.next_owner_id.fetch_add(1, Ordering::Relaxed);
-        self.stream_owners.insert(device_id.to_owned(), owner_id);
-        let (sink_id, rx) = connection.add_event_sink();
+        let (connection, owner_id, sink_id, rx) = {
+            let mut owners = self.stream_owners.lock();
+            let connection = self.get_or_create(device_id);
+            let owner_id = self.next_owner_id.fetch_add(1, Ordering::Relaxed);
+            owners.insert(device_id.to_owned(), owner_id);
+            let (sink_id, rx) = connection.add_event_sink();
+            (connection, owner_id, sink_id, rx)
+        };
         SseDeviceEventStream {
             manager: Arc::clone(self),
             device_id: device_id.to_owned(),
@@ -337,21 +344,60 @@ impl H3DeviceConnections {
         }
     }
 
+    /// Tears down the device connection when the stream `owner_id` still owns it and `connection`
+    /// is still the device's current connection. Returns whether it closed the connection.
+    ///
+    /// The owner check, owner removal, and connection removal happen under one lock, so a
+    /// replacement stream opened by a reconnect either installs its owner first (and this call
+    /// is a no-op) or opens after this call (and gets a fresh connection). The connection itself
+    /// is closed after the lock is released.
+    fn release_sse_stream(
+        &self,
+        device_id: &str,
+        owner_id: u64,
+        connection: &Arc<H3DeviceConnection>,
+    ) -> bool {
+        let removed = {
+            let mut owners = self.stream_owners.lock();
+            if owners.get(device_id) != Some(&owner_id) {
+                return false;
+            }
+            owners.remove(device_id);
+            self.connections
+                .remove_if(device_id, |_, current| Arc::ptr_eq(current, connection))
+        };
+        match removed {
+            Some((_, conn)) => {
+                conn.close();
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn close(&self, device_id: &str) {
-        self.stream_owners.remove(device_id);
-        if let Some((_, conn)) = self.connections.remove(device_id) {
+        let removed = {
+            let mut owners = self.stream_owners.lock();
+            owners.remove(device_id);
+            self.connections.remove(device_id)
+        };
+        if let Some((_, conn)) = removed {
             conn.close();
         }
     }
 
     pub fn close_all(&self) {
-        self.stream_owners.clear();
-        let all: Vec<Arc<H3DeviceConnection>> = self
-            .connections
-            .iter()
-            .map(|e| Arc::clone(e.value()))
-            .collect();
-        self.connections.clear();
+        let all: Vec<Arc<H3DeviceConnection>> = {
+            let mut owners = self.stream_owners.lock();
+            owners.clear();
+            let all = self
+                .connections
+                .iter()
+                .map(|e| Arc::clone(e.value()))
+                .collect();
+            self.connections.clear();
+            all
+        };
         for conn in all {
             conn.close();
         }
@@ -382,18 +428,8 @@ impl Stream for SseDeviceEventStream {
 impl Drop for SseDeviceEventStream {
     fn drop(&mut self) {
         self.connection.remove_event_sink(self.sink_id);
-        let is_owner = self
-            .manager
-            .stream_owners
-            .get(&self.device_id)
-            .is_some_and(|o| *o.value() == self.owner_id);
-        if !is_owner {
-            return;
-        }
-        self.manager.stream_owners.remove(&self.device_id);
-        if self.manager.is_current(&self.device_id, &self.connection) {
-            self.manager.close(&self.device_id);
-        }
+        self.manager
+            .release_sse_stream(&self.device_id, self.owner_id, &self.connection);
     }
 }
 
@@ -413,5 +449,108 @@ mod tests {
         ] {
             assert!(!is_workspace_file_changed_frame(frame), "{frame}");
         }
+    }
+
+    async fn test_manager(root: &std::path::Path) -> Arc<H3DeviceConnections> {
+        use cowork_storage::{SessionDb, SessionDbOptions, ThreadJournal};
+        let session_db = Arc::new(
+            SessionDb::open(SessionDbOptions {
+                root_dir: root.to_path_buf(),
+                db_path: Some(root.join("sessions.db")),
+                sessions_dir: root.join("sessions"),
+                busy_timeout_ms: None,
+            })
+            .await
+            .expect("open session db"),
+        );
+        let journal = Arc::new(ThreadJournal::new(Arc::clone(&session_db)));
+        let runtime = Arc::new(ServerRuntimeState::new(
+            root.join("workspace"),
+            root.join("home"),
+            root.join("builtin"),
+            HashMap::new(),
+            false,
+            session_db,
+            journal,
+            None,
+            None,
+            None,
+            false,
+            16,
+        ));
+        H3DeviceConnections::new(runtime, Duration::from_secs(3600))
+    }
+
+    /// A stale stream's cleanup, run after a reconnect installed a new owner on the same shared
+    /// connection, must not close the replacement or drop its subscriptions.
+    #[tokio::test]
+    async fn stale_stream_release_keeps_the_replacement_stream_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = test_manager(tmp.path()).await;
+
+        let old_stream = manager.open_sse_stream("device-1");
+        let old_owner = old_stream.owner_id;
+        let shared = Arc::clone(&old_stream.connection);
+        let mut new_stream = manager.open_sse_stream("device-1");
+        assert!(Arc::ptr_eq(&shared, &new_stream.connection));
+        assert_ne!(old_owner, new_stream.owner_id);
+
+        // The old stream's teardown, with its now-stale owner id.
+        assert!(!manager.release_sse_stream("device-1", old_owner, &shared));
+        drop(old_stream);
+
+        assert!(manager.is_current("device-1", &shared));
+        assert!(!shared.closed.load(Ordering::Acquire));
+        assert_eq!(
+            manager.stream_owners.lock().get("device-1"),
+            Some(&new_stream.owner_id)
+        );
+        assert_eq!(
+            new_stream.rx.recv().await.as_deref(),
+            Some(&b": cowork events\n\n"[..])
+        );
+        shared.send_sse_frame(r#"{"method":"ping"}"#);
+        assert_eq!(
+            new_stream.rx.recv().await.as_deref(),
+            Some(&b"data: {\"method\":\"ping\"}\n\n"[..])
+        );
+
+        // The current owner's teardown closes the connection; a later stream gets a fresh one.
+        let new_owner = new_stream.owner_id;
+        assert!(manager.release_sse_stream("device-1", new_owner, &shared));
+        assert!(shared.closed.load(Ordering::Acquire));
+        assert!(!manager.is_current("device-1", &shared));
+        assert!(manager.stream_owners.lock().get("device-1").is_none());
+        drop(new_stream);
+
+        let fresh = manager.open_sse_stream("device-1");
+        assert!(!Arc::ptr_eq(&shared, &fresh.connection));
+        assert!(!fresh.connection.closed.load(Ordering::Acquire));
+        manager.close_all();
+    }
+
+    /// An owner whose connection was already replaced only clears its ownership.
+    #[tokio::test]
+    async fn owner_release_leaves_a_replaced_connection_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = test_manager(tmp.path()).await;
+
+        let stream = manager.open_sse_stream("device-1");
+        let stale = Arc::clone(&stream.connection);
+        let owner = stream.owner_id;
+        // Swap in another connection without touching the owner record.
+        let replacement =
+            H3DeviceConnection::new(Arc::clone(&manager.runtime), manager.keepalive_interval);
+        manager
+            .connections
+            .insert("device-1".to_owned(), Arc::clone(&replacement));
+
+        assert!(!manager.release_sse_stream("device-1", owner, &stale));
+        assert!(manager.is_current("device-1", &replacement));
+        assert!(!replacement.closed.load(Ordering::Acquire));
+        assert!(manager.stream_owners.lock().get("device-1").is_none());
+        drop(stream);
+        stale.close();
+        manager.close_all();
     }
 }

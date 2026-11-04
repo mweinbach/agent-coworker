@@ -655,6 +655,29 @@ async fn handle_mobile_request(
     plain_text(StatusCode::NOT_FOUND, "Not found")
 }
 
+/// Ticket hosts while an OpenTunnel bridge is attached: the tunnel hostname (reached on the
+/// public port) first, then each non-loopback LAN hint pinned to the local listener port as a
+/// direct-connection fallback.
+fn open_tunnel_host_hints(
+    tunnel_hostname: &str,
+    base_host_hints: &[String],
+    local_port: u16,
+) -> Vec<String> {
+    let tunnel_norm = tunnel_hostname.to_ascii_lowercase();
+    let mut hints = Vec::with_capacity(1 + base_host_hints.len());
+    hints.push(tunnel_hostname.to_owned());
+    hints.extend(
+        base_host_hints
+            .iter()
+            .filter(|h| {
+                let norm = h.trim().to_ascii_lowercase();
+                !matches!(norm.as_str(), "127.0.0.1" | "localhost" | "::1") && norm != tunnel_norm
+            })
+            .map(|h| format!("{}:{local_port}", format_url_host(h))),
+    );
+    hints
+}
+
 pub async fn start_mobile_h3_server(
     options: StartMobileH3ServerOptions,
 ) -> anyhow::Result<Arc<MobileH3Server>> {
@@ -746,21 +769,9 @@ pub async fn start_mobile_h3_server(
         .await
         {
             Ok(bridge) => {
-                let public_port = open_tunnel_cfg.public_port.unwrap_or(443);
-                let lan_fallbacks: Vec<String> = base_host_hints
-                    .iter()
-                    .filter(|h| {
-                        let norm = h.trim().to_ascii_lowercase();
-                        !matches!(norm.as_str(), "127.0.0.1" | "localhost" | "::1")
-                            && norm != bundle.hostname.to_ascii_lowercase()
-                    })
-                    .map(|h| format!("{}:{local_port}", format_url_host(h)))
-                    .collect();
-                let mut hints = Vec::with_capacity(1 + lan_fallbacks.len());
-                hints.push(bundle.hostname.clone());
-                hints.extend(lan_fallbacks);
-                advertised_host_hints = hints;
-                advertised_port = public_port;
+                advertised_host_hints =
+                    open_tunnel_host_hints(&bundle.hostname, &base_host_hints, local_port);
+                advertised_port = open_tunnel_cfg.public_port.unwrap_or(443);
                 open_tunnel_bridge = Some(bridge);
             }
             Err(err) => {
@@ -915,5 +926,44 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    /// LAN hints resolved from a Windows adapter list survive into the OpenTunnel ticket as
+    /// direct-connection fallbacks; only loopback hints are dropped.
+    #[test]
+    fn open_tunnel_ticket_hosts_keep_lan_fallbacks() {
+        let base = crate::startup::resolve_listening_hints_from_interfaces(
+            "0.0.0.0",
+            &[
+                crate::startup::InterfaceAddrInfo {
+                    address: "127.0.0.1".into(),
+                    is_ipv6: false,
+                    internal: true,
+                },
+                crate::startup::InterfaceAddrInfo {
+                    address: "192.168.1.23".into(),
+                    is_ipv6: false,
+                    internal: false,
+                },
+                crate::startup::InterfaceAddrInfo {
+                    address: "2001:db8::23".into(),
+                    is_ipv6: true,
+                    internal: false,
+                },
+            ],
+        );
+        assert_eq!(base, vec!["192.168.1.23", "2001:db8::23", "127.0.0.1"]);
+        assert_eq!(
+            open_tunnel_host_hints("tun_1.opentunnel.xyz", &base, 50_123),
+            vec![
+                "tun_1.opentunnel.xyz",
+                "192.168.1.23:50123",
+                "[2001:db8::23]:50123",
+            ]
+        );
+        assert_eq!(
+            open_tunnel_host_hints("tun_1.opentunnel.xyz", &["127.0.0.1".to_owned()], 50_123),
+            vec!["tun_1.opentunnel.xyz"]
+        );
     }
 }

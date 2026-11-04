@@ -204,7 +204,100 @@ fn enumerate_system_interfaces() -> Vec<InterfaceAddrInfo> {
     out
 }
 
-#[cfg(not(unix))]
+/// Lists the unicast addresses of every adapter that is up, like libuv's `uv_interface_addresses`
+/// (Node's `os.networkInterfaces()`): adapters whose `OperStatus` is not up are skipped, and the
+/// software loopback adapter is reported as internal.
+#[cfg(windows)]
+fn enumerate_system_interfaces() -> Vec<InterfaceAddrInfo> {
+    use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
+        GetAdaptersAddresses, IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::{
+        AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6,
+    };
+
+    const WORD: usize = std::mem::size_of::<u64>();
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut out = Vec::new();
+    // `u64` words keep the buffer 8-byte aligned, as `IP_ADAPTER_ADDRESSES_LH` requires.
+    let mut buf: Vec<u64> = Vec::new();
+    let mut size_bytes: u32 = 16 * 1024;
+    let mut fetched = false;
+    for _ in 0..4 {
+        buf.resize((size_bytes as usize).div_ceil(WORD).max(1), 0);
+        let mut len = u32::try_from(buf.len() * WORD).unwrap_or(u32::MAX);
+        // SAFETY: `buf` is writable for `len` bytes and suitably aligned; the reserved pointer is null.
+        let rc = unsafe {
+            GetAdaptersAddresses(
+                u32::from(AF_UNSPEC),
+                flags,
+                std::ptr::null(),
+                buf.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>(),
+                &mut len,
+            )
+        };
+        if rc == ERROR_SUCCESS {
+            fetched = true;
+            break;
+        }
+        if rc != ERROR_BUFFER_OVERFLOW {
+            return out;
+        }
+        size_bytes = len;
+    }
+    if !fetched {
+        return out;
+    }
+
+    // SAFETY: on `ERROR_SUCCESS` the buffer holds a null-terminated linked list of adapters whose
+    // address lists and sockaddrs all point into `buf`, which outlives this walk. Sockaddrs are read
+    // with `read_unaligned` after checking the family and the reported length.
+    unsafe {
+        let mut adapter: *const IP_ADAPTER_ADDRESSES_LH = buf.as_ptr().cast();
+        while !adapter.is_null() {
+            let entry = &*adapter;
+            if entry.OperStatus == IfOperStatusUp {
+                let internal = entry.IfType == IF_TYPE_SOFTWARE_LOOPBACK;
+                let mut unicast = entry.FirstUnicastAddress.cast_const();
+                while !unicast.is_null() {
+                    let addr = &*unicast;
+                    let sockaddr = addr.Address.lpSockaddr.cast_const();
+                    let sockaddr_len = usize::try_from(addr.Address.iSockaddrLength).unwrap_or(0);
+                    if !sockaddr.is_null() && sockaddr_len >= std::mem::size_of::<SOCKADDR>() {
+                        let family = std::ptr::read_unaligned(sockaddr).sa_family;
+                        if family == AF_INET && sockaddr_len >= std::mem::size_of::<SOCKADDR_IN>() {
+                            let sin = std::ptr::read_unaligned(sockaddr.cast::<SOCKADDR_IN>());
+                            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.S_un.S_addr));
+                            out.push(InterfaceAddrInfo {
+                                address: ip.to_string(),
+                                is_ipv6: false,
+                                internal: internal || ip.is_loopback(),
+                            });
+                        } else if family == AF_INET6
+                            && sockaddr_len >= std::mem::size_of::<SOCKADDR_IN6>()
+                        {
+                            let sin6 = std::ptr::read_unaligned(sockaddr.cast::<SOCKADDR_IN6>());
+                            let ip = Ipv6Addr::from(sin6.sin6_addr.u.Byte);
+                            out.push(InterfaceAddrInfo {
+                                address: ip.to_string(),
+                                is_ipv6: true,
+                                internal: internal || ip.is_loopback(),
+                            });
+                        }
+                    }
+                    unicast = addr.Next.cast_const();
+                }
+            }
+            adapter = entry.Next.cast_const();
+        }
+    }
+    out
+}
+
+#[cfg(not(any(unix, windows)))]
 fn enumerate_system_interfaces() -> Vec<InterfaceAddrInfo> {
     Vec::new()
 }

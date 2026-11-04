@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cowork_config::canonicalize_sync;
+use cowork_env::installer::skip_runtime_executable_probe;
 use cowork_env::{
     EnsureRuntimeOptions, RuntimeBootstrapPhase, RuntimeConsumerLease, RuntimeInstallOptions,
     RuntimePackId, StartupProgressEvent, TrustedKeyRing, UvManagerConfig, UvPythonManager,
@@ -174,6 +175,8 @@ exit 2
 fn v1_zip_runtime_install_verifies_ed25519_and_rayon_digests_and_seals_readonly() {
     let (_tmp, root) = canonical_temp_dir("cowork-v1-zip-");
     let home = root.join("home");
+    // Fixture stand-ins cannot run the real Node/Python/LibreOffice executable checks.
+    let _probe = skip_runtime_executable_probe(&home);
     let staging = root.join("staging");
     populate_full_runtime_staging(&staging);
 
@@ -303,6 +306,7 @@ fn v1_reinstall_restores_the_previous_runtime_if_activation_fails() {
     let (_tmp, root) = canonical_temp_dir("cowork-v1-rollback-");
     let staging = root.join("staging");
     populate_full_runtime_staging(&staging);
+    let _probe = skip_runtime_executable_probe(&root.join("home"));
     let asset = resolve_host_asset().unwrap();
     let (key_id, signing_key, trusted_keys) = test_keypair();
     let archive = root.join("runtime.zip");
@@ -516,6 +520,8 @@ async fn v2_modular_tar_zst_packs_and_uv_ephemeral_venv_work_offline_without_mut
  {
     let (_tmp, root) = canonical_temp_dir("cowork-v2-uv-");
     let home = root.join("home");
+    // Fixture stand-ins cannot run the real Node/Python/LibreOffice executable checks.
+    let _probe = skip_runtime_executable_probe(&home);
     let staging = root.join("staging");
     populate_full_runtime_staging(&staging);
 
@@ -683,6 +689,8 @@ async fn fs4_bootstrap_lock_serializes_concurrent_writers_emits_waiting_and_hono
  {
     let (_tmp, root) = canonical_temp_dir("cowork-fs4-lock-");
     let home = root.join("home");
+    // Fixture stand-ins cannot run the real Node/Python/LibreOffice executable checks.
+    let _probe = skip_runtime_executable_probe(&home);
     std::fs::create_dir_all(&home).unwrap();
 
     // 1. Offline guard: `COWORK_RUNTIME_ALLOW_NETWORK=0` fails closed when no local runtime is present!
@@ -1051,6 +1059,8 @@ async fn published_v1_zip_schema_all_five_assets_and_v1_current_pointer_are_full
 
     let (_tmp, root) = canonical_temp_dir("cowork-v1-compat-");
     let home = root.join("home");
+    // Fixture stand-ins cannot run the real Node/Python/LibreOffice executable checks.
+    let _probe = skip_runtime_executable_probe(&home);
     let asset = resolve_host_asset().unwrap();
     let (key_id, signing_key, trusted_keys) = test_keypair();
     let zip_path = root.join(format!("cowork-runtime-{asset}.zip"));
@@ -1132,6 +1142,8 @@ async fn online_github_release_download_streams_verifies_sha256_and_ed25519_and_
 
     let (_tmp, root) = canonical_temp_dir("cowork-online-dl-");
     let home = root.join("home");
+    // Fixture stand-ins cannot run the real Node/Python/LibreOffice executable checks.
+    let _probe = skip_runtime_executable_probe(&home);
     let asset = resolve_host_asset().unwrap();
     let file_name = format!("cowork-runtime-{asset}.zip");
     let (key_id, signing_key, trusted_keys) = test_keypair();

@@ -87,11 +87,19 @@ pub struct SofficeConvertResult {
     pub observed_pool_in_flight: usize,
 }
 
+/// Longest edge, in pixels, that managed `pdftoppm` may rasterize any page to (TS preview
+/// `-scale-to 1600`). The bitmap a fixed `-r` resolution produces grows with the page's physical
+/// size, so an oversized page could exhaust memory or temp space before any PNG byte limit runs.
+pub const PDFTOPPM_MAX_LONG_EDGE_PX: u32 = 1600;
+
 /// Request parameters for rendering PDF pages to PNG via managed `pdftoppm`.
 #[derive(Debug, Clone)]
 pub struct PdftoppmJobRequest {
     pub pdf_path: PathBuf,
     pub output_dir: PathBuf,
+    /// Requested resolution. Retained for API compatibility only: every page is rendered with
+    /// `-scale-to` [`PDFTOPPM_MAX_LONG_EDGE_PX`], which supersedes `-r` in `pdftoppm`, so the
+    /// output bitmap is bounded regardless of the page's physical size.
     pub dpi: u32,
     pub first_page: Option<u32>,
     pub last_page: Option<u32>,
@@ -246,14 +254,72 @@ pub fn validate_soffice_args(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Validates `pdftoppm` arguments before spawn.
+/// Builds the `pdftoppm` argv for `req`: PNG output with every page's long edge scaled to
+/// [`PDFTOPPM_MAX_LONG_EDGE_PX`] (TS `presentationPreview.ts` parity), the optional page range,
+/// then the input PDF and output prefix.
+pub fn build_pdftoppm_args(
+    req: &PdftoppmJobRequest,
+    pdf_path: &Path,
+    output_prefix: &Path,
+) -> Vec<String> {
+    let mut args = vec![
+        "-png".to_owned(),
+        "-scale-to".to_owned(),
+        PDFTOPPM_MAX_LONG_EDGE_PX.to_string(),
+    ];
+    if let Some(f) = req.first_page {
+        args.push("-f".to_owned());
+        args.push(f.to_string());
+    }
+    if let Some(l) = req.last_page {
+        args.push("-l".to_owned());
+        args.push(l.to_string());
+    }
+    args.push(pdf_path.to_string_lossy().into_owned());
+    args.push(output_prefix.to_string_lossy().into_owned());
+    args
+}
+
+/// Validates `pdftoppm` arguments before spawn: no empty/NUL arguments, no resolution flags that
+/// would size the bitmap from the page's physical dimensions, and exactly one `-scale-to` no
+/// larger than [`PDFTOPPM_MAX_LONG_EDGE_PX`].
 pub fn validate_pdftoppm_args(args: &[String]) -> Result<()> {
-    for arg in args {
+    let mut scale_to: Option<u32> = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        let arg = &args[idx];
         if arg.is_empty() || arg.contains('\0') {
             return Err(EnvError::SofficeForbiddenFlag(
                 "Invalid empty/NUL pdftoppm argument".to_owned(),
             ));
         }
+        match arg.as_str() {
+            "-r" | "-rx" | "-ry" | "-scale-to-x" | "-scale-to-y" => {
+                return Err(EnvError::SofficeForbiddenFlag(format!(
+                    "pdftoppm {arg} is not allowed; output is bounded by -scale-to"
+                )));
+            }
+            "-scale-to" => {
+                let value = args
+                    .get(idx + 1)
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .filter(|v| (1..=PDFTOPPM_MAX_LONG_EDGE_PX).contains(v));
+                if value.is_none() || scale_to.is_some() {
+                    return Err(EnvError::SofficeForbiddenFlag(format!(
+                        "pdftoppm requires a single -scale-to between 1 and {PDFTOPPM_MAX_LONG_EDGE_PX}"
+                    )));
+                }
+                scale_to = value;
+                idx += 1;
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    if scale_to.is_none() {
+        return Err(EnvError::SofficeForbiddenFlag(format!(
+            "pdftoppm requires -scale-to (at most {PDFTOPPM_MAX_LONG_EDGE_PX}) to bound the output bitmap"
+        )));
     }
     Ok(())
 }
@@ -618,21 +684,7 @@ impl SofficeRunner {
         let canonical_outdir = canonicalize_sync(&req.output_dir);
 
         let prefix = canonical_outdir.join("page");
-        let mut args = vec![
-            "-png".to_owned(),
-            "-r".to_owned(),
-            req.dpi.max(36).to_string(),
-        ];
-        if let Some(f) = req.first_page {
-            args.push("-f".to_owned());
-            args.push(f.to_string());
-        }
-        if let Some(l) = req.last_page {
-            args.push("-l".to_owned());
-            args.push(l.to_string());
-        }
-        args.push(canonical_pdf.to_string_lossy().into_owned());
-        args.push(prefix.to_string_lossy().into_owned());
+        let args = build_pdftoppm_args(&req, &canonical_pdf, &prefix);
         validate_pdftoppm_args(&args)?;
 
         let _permit = self

@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use cowork_config::canonicalize_sync;
@@ -30,6 +33,7 @@ use crate::manifest::{
     is_asset_compatible_with_host, resolve_host_asset, runtime_asset_file_name,
     runtime_release_tag, validate_runtime_version,
 };
+use crate::shell::{ShellEnvOptions, build_canonical_shell_env, redact_secrets};
 
 pub const DEFAULT_BOOTSTRAP_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_COWORK_RUNTIME_VERSION: &str = "2026-06-22";
@@ -49,7 +53,17 @@ pub fn runtime_root_dir(homedir: &Path) -> PathBuf {
     homedir.join(".cowork").join("runtime")
 }
 
+/// The `fs4` advisory lock file serializing runtime lifecycle work. It is deliberately not
+/// [`legacy_bootstrap_lock_path`]: earlier installers own that path as a directory barrier.
 pub fn bootstrap_lock_path(homedir: &Path) -> PathBuf {
+    runtime_root_dir(homedir).join(".bootstrap-v2.lock")
+}
+
+/// The previous installer's bootstrap barrier: a `.bootstrap.lock` *directory* holding
+/// `owner.json` (TS `bootstrapLock.ts`). It is honored, and published as a directory, while the
+/// [`bootstrap_lock_path`] lock is held, so older and newer installers exclude each other across
+/// an upgrade or rollback.
+pub fn legacy_bootstrap_lock_path(homedir: &Path) -> PathBuf {
     runtime_root_dir(homedir).join(".bootstrap.lock")
 }
 
@@ -76,7 +90,322 @@ fn open_lock_file(path: &Path) -> Result<File> {
     })
 }
 
-/// Synchronous `fs4` single-writer bootstrap lock helper.
+const LEGACY_BARRIER_MARKER: &str = "owner.json";
+/// Owner protocol this installer publishes. The previous TS installer refuses any marker whose
+/// protocol is not its own (`cowork-runtime-sqlite-v1`), so it never adopts a live Rust barrier.
+const LEGACY_BARRIER_PROTOCOL: &str = "cowork-runtime-flock-v1";
+const LEGACY_BARRIER_UPDATED_AT: &str = "flock-owned";
+const MAX_LEGACY_MARKER_BYTES: u64 = 64 * 1024;
+/// A barrier without a readable owner is treated as mid-publication for this long.
+const LEGACY_BARRIER_PUBLICATION_GRACE: Duration = Duration::from_secs(30);
+/// No install holds the barrier this long; an older owner record names a reused pid.
+const LEGACY_BARRIER_MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
+const LEGACY_BARRIER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+enum LegacyBarrierState {
+    Absent,
+    Live(String),
+    StaleDirectory,
+    StaleLockFile,
+}
+
+fn unrecognized_legacy_lock(path: &Path, what: &str) -> EnvError {
+    EnvError::Lock(format!(
+        "Unrecognized Cowork runtime bootstrap lock at {} ({what}). Stop older Cowork processes and remove the obsolete lock before retrying.",
+        path.display()
+    ))
+}
+
+fn io_at(path: &Path) -> impl FnOnce(std::io::Error) -> EnvError + '_ {
+    move |source| EnvError::IoPath {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+fn elapsed_since(time: std::io::Result<std::time::SystemTime>) -> Duration {
+    time.ok()
+        .and_then(|t| t.elapsed().ok())
+        .unwrap_or(Duration::ZERO)
+}
+
+/// Whether `pid` names a running process other than this one.
+fn other_process_is_alive(pid: u32) -> bool {
+    pid != std::process::id() && process_is_alive(pid)
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    type Handle = *mut std::ffi::c_void;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> Handle;
+        fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
+        fn CloseHandle(object: Handle) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+
+    // SAFETY: plain Win32 calls; the handle is closed before returning.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        // A process we may not query still exists; anything else (invalid pid) is gone.
+        return std::io::Error::last_os_error().raw_os_error() == Some(ERROR_ACCESS_DENIED);
+    }
+    let mut exit_code = 0_u32;
+    // SAFETY: `handle` is a valid process handle and `exit_code` is writable.
+    let ok = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+    // SAFETY: `handle` was returned by `OpenProcess` above and is closed exactly once.
+    let _ = unsafe { CloseHandle(handle) };
+    ok == 0 || exit_code == STILL_ACTIVE
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_is_alive(_pid: u32) -> bool {
+    true
+}
+
+/// Most recent `startedAt`/`updatedAt` RFC 3339 timestamp in a barrier owner record. TS's SQLite
+/// owners write a non-date `updatedAt`, so only `startedAt` parses for them.
+fn owner_record_age(owner: &serde_json::Value) -> Option<Duration> {
+    ["startedAt", "updatedAt"]
+        .iter()
+        .filter_map(|key| owner.get(*key)?.as_str())
+        .filter_map(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .max()
+        .map(|newest| {
+            (chrono::Utc::now() - newest)
+                .to_std()
+                .unwrap_or(Duration::ZERO)
+        })
+}
+
+fn read_owner_record(marker: &Path) -> Option<serde_json::Value> {
+    use std::io::Read;
+    let file = File::open(marker).ok()?;
+    let mut raw = String::new();
+    file.take(MAX_LEGACY_MARKER_BYTES)
+        .read_to_string(&mut raw)
+        .ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .filter(serde_json::Value::is_object)
+}
+
+/// Classifies whatever occupies the legacy `.bootstrap.lock` path. Only called while holding the
+/// [`bootstrap_lock_path`] lock, which serializes every installer that understands this protocol.
+fn classify_legacy_barrier(path: &Path) -> Result<LegacyBarrierState> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LegacyBarrierState::Absent);
+        }
+        Err(err) => return Err(io_at(path)(err)),
+    };
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        return Err(unrecognized_legacy_lock(path, "symlink"));
+    }
+    if ft.is_file() {
+        // Pre-release builds of this installer `flock`ed a regular file at this path.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(io_at(path))?;
+        return match <File as fs4::FileExt>::try_lock(&file) {
+            Ok(()) => {
+                let _ = <File as fs4::FileExt>::unlock(&file);
+                Ok(LegacyBarrierState::StaleLockFile)
+            }
+            Err(fs4::TryLockError::WouldBlock) => Ok(LegacyBarrierState::Live(
+                "a pre-release installer holds the lock file".to_owned(),
+            )),
+            Err(fs4::TryLockError::Error(err)) => Err(io_at(path)(err)),
+        };
+    }
+    if !ft.is_dir() {
+        return Err(unrecognized_legacy_lock(path, "special file"));
+    }
+
+    let marker = path.join(LEGACY_BARRIER_MARKER);
+    let marker_meta = match std::fs::symlink_metadata(&marker) {
+        Ok(m) => Some(m),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(io_at(&marker)(err)),
+    };
+    let (owner, published_age) = match &marker_meta {
+        Some(m) if m.file_type().is_file() => {
+            (read_owner_record(&marker), elapsed_since(m.modified()))
+        }
+        Some(_) => {
+            return Err(unrecognized_legacy_lock(
+                path,
+                "owner.json is not a regular file",
+            ));
+        }
+        None => (None, elapsed_since(meta.modified())),
+    };
+    let pid = owner
+        .as_ref()
+        .and_then(|o| o.get("pid")?.as_u64())
+        .filter(|pid| *pid > 0)
+        .and_then(|pid| u32::try_from(pid).ok());
+    let Some(pid) = pid else {
+        // An owner that has not finished publishing its marker (TS writes it right after mkdir).
+        return Ok(if published_age < LEGACY_BARRIER_PUBLICATION_GRACE {
+            LegacyBarrierState::Live("its owner is still being published".to_owned())
+        } else {
+            LegacyBarrierState::StaleDirectory
+        });
+    };
+    if !other_process_is_alive(pid) {
+        return Ok(LegacyBarrierState::StaleDirectory);
+    }
+    if owner
+        .as_ref()
+        .and_then(owner_record_age)
+        .is_some_and(|age| age > LEGACY_BARRIER_MAX_AGE)
+    {
+        return Ok(LegacyBarrierState::StaleDirectory);
+    }
+    Ok(LegacyBarrierState::Live(format!(
+        "it is owned by running process {pid}"
+    )))
+}
+
+/// Removes an abandoned barrier without ever recursing: anything beyond `owner.json` is foreign.
+fn remove_legacy_barrier_dir(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path.join(LEGACY_BARRIER_MARKER)) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(io_at(path)(err)),
+    }
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(unrecognized_legacy_lock(path, "unexpected entries")),
+    }
+}
+
+/// The legacy directory barrier this process published; removed again on drop (including unwind).
+struct LegacyBarrierGuard {
+    path: PathBuf,
+    token: String,
+}
+
+impl Drop for LegacyBarrierGuard {
+    fn drop(&mut self) {
+        let marker = self.path.join(LEGACY_BARRIER_MARKER);
+        let ours = read_owner_record(&marker).is_some_and(|owner| {
+            owner.get("token").and_then(serde_json::Value::as_str) == Some(self.token.as_str())
+        });
+        if ours {
+            let _ = std::fs::remove_file(&marker);
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
+fn try_publish_legacy_barrier(path: &Path) -> Result<Option<LegacyBarrierGuard>> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
+        Err(err) => return Err(io_at(path)(err)),
+    }
+    let token = Uuid::new_v4().to_string();
+    let owner = serde_json::json!({
+        "protocol": LEGACY_BARRIER_PROTOCOL,
+        "pid": std::process::id(),
+        "token": &token,
+        "startedAt": chrono::Utc::now().to_rfc3339(),
+        "updatedAt": LEGACY_BARRIER_UPDATED_AT,
+    });
+    let marker = path.join(LEGACY_BARRIER_MARKER);
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let write = opts.open(&marker).and_then(|mut file| {
+        file.write_all(format!("{owner}\n").as_bytes())?;
+        file.sync_all()
+    });
+    if let Err(err) = write {
+        let _ = std::fs::remove_file(&marker);
+        let _ = std::fs::remove_dir(path);
+        return Err(io_at(&marker)(err));
+    }
+    Ok(Some(LegacyBarrierGuard {
+        path: path.to_path_buf(),
+        token,
+    }))
+}
+
+/// Waits (until `deadline`) for no live legacy barrier, reclaims abandoned ones, and publishes
+/// this process's own directory barrier so older installers stay out while it is held.
+fn acquire_legacy_barrier(
+    homedir: &Path,
+    deadline: Instant,
+    mut report_wait: impl FnMut(),
+) -> Result<LegacyBarrierGuard> {
+    let path = legacy_bootstrap_lock_path(homedir);
+    loop {
+        match classify_legacy_barrier(&path)? {
+            LegacyBarrierState::Absent => {
+                if let Some(guard) = try_publish_legacy_barrier(&path)? {
+                    return Ok(guard);
+                }
+                // Lost a race with an older installer creating its barrier; classify it.
+            }
+            LegacyBarrierState::StaleDirectory => remove_legacy_barrier_dir(&path)?,
+            LegacyBarrierState::StaleLockFile => match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(io_at(&path)(err)),
+            },
+            LegacyBarrierState::Live(reason) => {
+                if Instant::now() >= deadline {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "timed out waiting for a legacy Cowork runtime bootstrap lock: {reason}"
+                    );
+                    return Err(EnvError::LockTimeout { path });
+                }
+                report_wait();
+                std::thread::sleep(LEGACY_BARRIER_POLL_INTERVAL);
+            }
+        }
+    }
+}
+
+/// Synchronous single-writer bootstrap lock helper: an `fs4` lock on [`bootstrap_lock_path`],
+/// then the legacy `.bootstrap.lock` directory barrier (see [`legacy_bootstrap_lock_path`]).
 pub fn with_runtime_bootstrap_lock_sync<T, F>(
     homedir: &Path,
     version_hint: &str,
@@ -87,16 +416,24 @@ pub fn with_runtime_bootstrap_lock_sync<T, F>(
 where
     F: FnOnce() -> Result<T>,
 {
+    let deadline = Instant::now() + timeout;
+    let mut reported_wait = false;
+    let mut report_wait = || {
+        if !reported_wait {
+            reported_wait = true;
+            if let Some(cb) = on_progress {
+                cb(StartupProgressEvent::waiting(version_hint));
+            }
+        }
+    };
+
     let lock_path = bootstrap_lock_path(homedir);
     let file = open_lock_file(&lock_path)?;
 
     match <File as fs4::FileExt>::try_lock(&file) {
         Ok(()) => {}
         Err(fs4::TryLockError::WouldBlock) => {
-            if let Some(cb) = on_progress {
-                cb(StartupProgressEvent::waiting(version_hint));
-            }
-            let deadline = Instant::now() + timeout;
+            report_wait();
             loop {
                 std::thread::sleep(Duration::from_millis(15));
                 match <File as fs4::FileExt>::try_lock(&file) {
@@ -113,7 +450,14 @@ where
         Err(fs4::TryLockError::Error(err)) => return Err(EnvError::Io(err)),
     }
 
-    let result = work();
+    let result = match acquire_legacy_barrier(homedir, deadline, &mut report_wait) {
+        Ok(barrier) => {
+            let result = work();
+            drop(barrier);
+            result
+        }
+        Err(err) => Err(err),
+    };
     let _ = <File as fs4::FileExt>::unlock(&file);
     result
 }
@@ -814,6 +1158,11 @@ fn promote_staged_runtime(
         std::fs::rename(staged_dir, &final_dir)?;
         seal_tree_readonly(&final_dir)?;
         let verified = verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
+        // Signed bytes are not proof the entrypoints run (e.g. a release missing a shared
+        // library): execute them before `current.json` names this tree or the backup is dropped.
+        run_promotion_executable_probe(&opts.homedir, &verified)?;
+        // A probe must not have mutated the sealed tree it exercised (TS `payloadAfterExecute`).
+        let verified = verify_installed_runtime(&final_dir, &opts.trusted_keys, false)?;
         write_current_pointer(&rt_root, &verified)?;
         Ok(verified)
     })();
@@ -842,6 +1191,314 @@ fn promote_staged_runtime(
             Err(err)
         }
     }
+}
+
+/// Executable smoke check run against a freshly promoted runtime inside the rollback-protected
+/// promotion step, before `current.json` names it (TS `verifyRuntime({ execute: true })`). An
+/// error rolls the promotion back and keeps the previous installation current.
+pub type RuntimeExecutableProbe = Arc<dyn Fn(&PreparedRuntime) -> Result<()> + Send + Sync>;
+
+type ProbeOverrides = parking_lot::Mutex<HashMap<PathBuf, (u64, RuntimeExecutableProbe)>>;
+
+fn executable_probe_overrides() -> &'static ProbeOverrides {
+    static OVERRIDES: OnceLock<ProbeOverrides> = OnceLock::new();
+    OVERRIDES.get_or_init(Default::default)
+}
+
+/// Keeps a [`override_runtime_executable_probe`] replacement active until dropped.
+#[must_use = "the probe override ends when this guard is dropped"]
+pub struct RuntimeExecutableProbeOverride {
+    home: PathBuf,
+    id: u64,
+}
+
+impl Drop for RuntimeExecutableProbeOverride {
+    fn drop(&mut self) {
+        let mut overrides = executable_probe_overrides().lock();
+        if overrides
+            .get(&self.home)
+            .is_some_and(|(id, _)| *id == self.id)
+        {
+            overrides.remove(&self.home);
+        }
+    }
+}
+
+/// Replaces [`run_runtime_executable_checks`] for installs into `homedir` until the returned guard
+/// is dropped. Scoped per home so parallel tests stay isolated; intended for fixtures whose
+/// stand-in executables cannot run the real checks, or to inject a failing probe.
+pub fn override_runtime_executable_probe(
+    homedir: &Path,
+    probe: RuntimeExecutableProbe,
+) -> RuntimeExecutableProbeOverride {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let home = canonicalize_sync(homedir);
+    executable_probe_overrides()
+        .lock()
+        .insert(home.clone(), (id, probe));
+    RuntimeExecutableProbeOverride { home, id }
+}
+
+/// [`override_runtime_executable_probe`] with a probe that accepts every runtime.
+pub fn skip_runtime_executable_probe(homedir: &Path) -> RuntimeExecutableProbeOverride {
+    override_runtime_executable_probe(homedir, Arc::new(|_| Ok(())))
+}
+
+fn run_promotion_executable_probe(homedir: &Path, runtime: &PreparedRuntime) -> Result<()> {
+    let probe = executable_probe_overrides()
+        .lock()
+        .get(&canonicalize_sync(homedir))
+        .map(|(_, probe)| probe.clone());
+    match probe {
+        Some(probe) => probe(runtime),
+        None => run_runtime_executable_checks(runtime),
+    }
+}
+
+/// TS `commandVersion` timeout.
+const EXECUTABLE_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
+/// TS `verifySofficeConversion` timeout.
+const SOFFICE_CONVERSION_CHECK_TIMEOUT: Duration = Duration::from_secs(180);
+/// TS `execFileCompat` `maxBuffer`.
+const MAX_PROBE_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
+const PYTHON_LIBRARY_IMPORT_CHECK: &str =
+    "import docx,lxml,PIL,pandas,numpy,pypdf,pdfplumber,reportlab,pdf2image; print('ok')";
+const ARTIFACT_TOOL_IMPORT_PROBE: &str = "const m = await import('@oai/artifact-tool'); console.log(Object.keys(m).length > 0 ? 'ok' : 'empty');\n";
+const SOFFICE_SMOKE_HTML: &str =
+    "<!doctype html><title>Cowork Runtime</title><p>Managed headless LibreOffice smoke test.</p>\n";
+
+struct ProbeScratchDir(PathBuf);
+
+impl ProbeScratchDir {
+    fn create() -> Result<Self> {
+        let dir =
+            std::env::temp_dir().join(format!("cowork-runtime-verify-{}", Uuid::new_v4().simple()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&dir).map_err(io_at(&dir))?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for ProbeScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn executable_check_failure(executable: &Path, args: &[&OsStr], detail: &str) -> EnvError {
+    let argv = args
+        .iter()
+        .map(|a| a.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut detail = redact_secrets(detail.trim());
+    if detail.len() > 2_000 {
+        let mut cut = 2_000;
+        while !detail.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        detail.truncate(cut);
+    }
+    EnvError::Integrity(format!(
+        "Installed runtime failed executable verification: {} {argv} failed: {detail}",
+        executable.display()
+    ))
+}
+
+/// Drains a child pipe on its own thread (keeping at most `MAX_PROBE_OUTPUT_BYTES`) so a chatty
+/// child never blocks on a full pipe.
+fn capture_pipe<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Some(pipe) = pipe {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut limited = pipe.take(MAX_PROBE_OUTPUT_BYTES);
+            let mut buf = Vec::new();
+            let _ = limited.read_to_end(&mut buf);
+            let _ = std::io::copy(&mut limited.into_inner(), &mut std::io::sink());
+            let _ = tx.send(buf);
+        });
+    }
+    rx
+}
+
+fn kill_probe_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: the child leads its own process group (`process_group(0)`), so this signals
+        // only it and its descendants.
+        unsafe {
+            libc::kill(-pgid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Runs one check (TS `runVerificationCommand`): non-zero exit, spawn failure, or timeout fails.
+/// Returns the first line of output.
+fn run_executable_check(
+    executable: &Path,
+    args: &[&OsStr],
+    env: &HashMap<String, String>,
+    cwd: &Path,
+    timeout: Duration,
+) -> Result<String> {
+    let mut cmd = std::process::Command::new(executable);
+    cmd.args(args)
+        .env_clear()
+        .envs(env)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| executable_check_failure(executable, args, &format!("spawn error: {e}")))?;
+    let stdout = capture_pipe(child.stdout.take());
+    let stderr = capture_pipe(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                kill_probe_tree(&mut child);
+                return Err(executable_check_failure(
+                    executable,
+                    args,
+                    &format!("timed out after {}ms", timeout.as_millis()),
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => {
+                kill_probe_tree(&mut child);
+                return Err(executable_check_failure(executable, args, &e.to_string()));
+            }
+        }
+    };
+    // A daemonized grandchild may keep a pipe open; never wait on it indefinitely.
+    let collect = |rx: std::sync::mpsc::Receiver<Vec<u8>>| {
+        String::from_utf8_lossy(&rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default())
+            .into_owned()
+    };
+    let (stdout, stderr) = (collect(stdout), collect(stderr));
+    if !status.success() {
+        let output = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        let code = status
+            .code()
+            .map_or_else(|| "signal".to_owned(), |c| format!("exit {c}"));
+        return Err(executable_check_failure(
+            executable,
+            args,
+            &format!("({code}) {output}"),
+        ));
+    }
+    let output = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
+    Ok(output.trim().lines().next().unwrap_or("ok").to_owned())
+}
+
+/// The installer's default executable probe, matching TS `verifyRuntime({ execute: true })`
+/// commands and timeouts: `node --version`, `python --version`, the Python document-library
+/// imports, a Node `@oai/artifact-tool` import, `git --version` when bundled, and the managed
+/// `soffice --version` plus a headless HTML -> PDF conversion when LibreOffice is bundled.
+pub fn run_runtime_executable_checks(runtime: &PreparedRuntime) -> Result<()> {
+    let base_env: HashMap<String, String> = std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect();
+    // The tree is sealed; keep Python from even attempting `__pycache__` writes into it.
+    let extra_env = HashMap::from([("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned())]);
+    let env = build_canonical_shell_env(ShellEnvOptions {
+        base_env: &base_env,
+        runtime: Some(runtime),
+        uv_env: None,
+        extra_env: Some(&extra_env),
+        platform: host_platform(),
+        sandboxed: false,
+        cowork_home: None,
+    });
+    let scratch = ProbeScratchDir::create()?;
+    let cwd = scratch.0.as_path();
+    let check = |exe: &Path, args: &[&OsStr], cwd: &Path, timeout: Duration| {
+        run_executable_check(exe, args, &env, cwd, timeout)
+    };
+    let os = OsStr::new;
+
+    let node = runtime.paths.node.as_path();
+    let python = runtime.paths.python.as_path();
+    check(node, &[os("--version")], cwd, EXECUTABLE_CHECK_TIMEOUT)?;
+    check(python, &[os("--version")], cwd, EXECUTABLE_CHECK_TIMEOUT)?;
+    check(
+        python,
+        &[os("-c"), os(PYTHON_LIBRARY_IMPORT_CHECK)],
+        cwd,
+        EXECUTABLE_CHECK_TIMEOUT,
+    )?;
+    let node_probe = cwd.join("probe.mjs");
+    std::fs::write(&node_probe, ARTIFACT_TOOL_IMPORT_PROBE).map_err(io_at(&node_probe))?;
+    check(
+        node,
+        &[node_probe.as_os_str()],
+        cwd,
+        EXECUTABLE_CHECK_TIMEOUT,
+    )?;
+    if let Some(git) = &runtime.paths.git {
+        check(git, &[os("--version")], cwd, EXECUTABLE_CHECK_TIMEOUT)?;
+    }
+    if let Some(soffice) = &runtime.paths.soffice {
+        check(soffice, &[os("--version")], cwd, EXECUTABLE_CHECK_TIMEOUT)?;
+        let soffice_dir = cwd.join("soffice");
+        std::fs::create_dir(&soffice_dir).map_err(io_at(&soffice_dir))?;
+        let input = soffice_dir.join("cowork-soffice-smoke.html");
+        std::fs::write(&input, SOFFICE_SMOKE_HTML).map_err(io_at(&input))?;
+        check(
+            soffice,
+            &[
+                os("--convert-to"),
+                os("pdf"),
+                os("--outdir"),
+                soffice_dir.as_os_str(),
+                input.as_os_str(),
+            ],
+            &soffice_dir,
+            SOFFICE_CONVERSION_CHECK_TIMEOUT,
+        )?;
+        let output = soffice_dir.join("cowork-soffice-smoke.pdf");
+        let produced = std::fs::symlink_metadata(&output)
+            .is_ok_and(|m| m.file_type().is_file() && m.len() > 0);
+        if !produced {
+            return Err(EnvError::Integrity(
+                "Installed runtime failed executable verification: managed headless soffice did not produce a non-empty PDF.".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// macOS (unlike Linux) refuses to rename a directory the caller cannot write, so a sealed

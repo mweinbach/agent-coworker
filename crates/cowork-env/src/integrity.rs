@@ -197,16 +197,21 @@ pub fn verify_integrity_tree_parallel(
             disk_symlinks.insert(rel.clone(), target);
             disk_paths.insert(rel);
         } else if ft.is_file() {
+            // A second link would let a path outside the tree rewrite the signed bytes after
+            // verification (TS `verifyRuntimeIntegrity` rejects multiple links on every platform).
             #[cfg(unix)]
-            {
+            let link_count = {
                 use std::os::unix::fs::MetadataExt;
-                let meta = std::fs::symlink_metadata(dir_entry.path())?;
-                if meta.nlink() != 1 {
-                    return Err(EnvError::Integrity(format!(
-                        "Hardlinked runtime file is forbidden ({rel}, nlink={})",
-                        meta.nlink()
-                    )));
-                }
+                std::fs::symlink_metadata(dir_entry.path())?.nlink()
+            };
+            #[cfg(windows)]
+            let link_count = u64::from(windows_file_identity(dir_entry.path())?.links);
+            #[cfg(not(any(unix, windows)))]
+            let link_count = 1_u64;
+            if link_count != 1 {
+                return Err(EnvError::Integrity(format!(
+                    "Hardlinked runtime file is forbidden ({rel}, nlink={link_count})"
+                )));
             }
             disk_paths.insert(rel);
         } else {
@@ -337,6 +342,7 @@ pub fn verify_integrity_tree_parallel(
 }
 
 /// Computes a deterministic `blake3` fingerprint over `(path, kind, dev, ino, size, nlink, mtime, mode)`
+/// (Windows: `(path, kind, size, readonly, mtime, volume serial, file index, nlink)`)
 /// for every file, directory, and symlink in `root_dir` in parallel via `rayon`. Symlink records also
 /// carry the link target, so a relinked symlink (same metadata, new target) changes the digest
 /// (TS `collectRuntimeTreeState`).
@@ -398,6 +404,16 @@ pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
                     meta.len(),
                     meta.permissions().readonly()
                 );
+                // File identity and NTFS link count, so adding a hard link (or swapping the file
+                // for another with equal metadata) invalidates a cached attestation.
+                #[cfg(windows)]
+                let base = {
+                    let id = windows_file_identity(p)?;
+                    format!(
+                        "{base}|vol={}|idx={}|nl={}",
+                        id.volume_serial, id.file_index, id.links
+                    )
+                };
                 if ft.is_symlink() {
                     format!("{base}|target={}", symlink_target_fingerprint(p)?)
                 } else {
@@ -416,6 +432,80 @@ pub fn compute_tree_state_digest_parallel(root_dir: &Path) -> Result<String> {
         hasher.update(b"\n");
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Identity fields of `BY_HANDLE_FILE_INFORMATION` for one directory entry (never following a
+/// final symlink or junction).
+#[cfg(windows)]
+struct WindowsFileIdentity {
+    volume_serial: u32,
+    file_index: u64,
+    links: u32,
+}
+
+/// Reads the volume serial, file index, and `nNumberOfLinks` of `path` via
+/// `GetFileInformationByHandle`. `std` exposes these only behind the unstable `windows_by_handle`
+/// feature, so the one kernel32 call is declared here directly.
+#[cfg(windows)]
+fn windows_file_identity(path: &Path) -> Result<WindowsFileIdentity> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+
+    /// `BY_HANDLE_FILE_INFORMATION` (each `FILETIME` is two `DWORD`s).
+    #[repr(C)]
+    #[derive(Default)]
+    #[allow(dead_code)]
+    struct ByHandleFileInformation {
+        file_attributes: u32,
+        creation_time: [u32; 2],
+        last_access_time: [u32; 2],
+        last_write_time: [u32; 2],
+        volume_serial_number: u32,
+        file_size_high: u32,
+        file_size_low: u32,
+        number_of_links: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut std::ffi::c_void,
+            info: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0001 | 0x0002 | 0x0004;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+        // Backup semantics opens directories; reparse-point opens the link itself.
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|source| EnvError::IoPath {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut info = ByHandleFileInformation::default();
+    // SAFETY: `file` stays open for the call and `info` is a writable, correctly laid out
+    // `BY_HANDLE_FILE_INFORMATION`.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return Err(EnvError::IoPath {
+            path: path.to_path_buf(),
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    Ok(WindowsFileIdentity {
+        volume_serial: info.volume_serial_number,
+        file_index: (u64::from(info.file_index_high) << 32) | u64::from(info.file_index_low),
+        links: info.number_of_links,
+    })
 }
 
 /// Hex-encodes a symlink's raw target so arbitrary (even non-UTF-8) targets fingerprint unambiguously.

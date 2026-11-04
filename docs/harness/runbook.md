@@ -11,7 +11,7 @@ This runbook covers both harness layers:
 - Provider API key(s) (or local LM Studio server) for the providers exercised by the selected runs
 - Optional: Langfuse credentials if you want telemetry exports
 
-The runner validates required provider credentials before starting any runs and exits early if a selected scenario needs a missing API key.
+Each run talks to a fresh `cowork-server` with an isolated per-run Cowork home under `<runRoot>/.server-homes/<runId>`. Only credential and runtime directories (`auth/`, `skills/`, `codex-app-server/`, `runtime/`, `bin/`, `cache/`) are linked in from your real Cowork home; your user config, sessions, memories and logs are never read or written. MCP servers and advanced memory are disabled for runs. A run whose provider credentials are missing fails its attempts and is reported at the end; the other selected runs still execute.
 
 ## Configure Optional Langfuse Telemetry
 
@@ -97,13 +97,11 @@ Per-run artifacts:
 - `harness_context.json`
 - `tool-log.txt`
 - `final.txt`
-- `final_reasoning.txt`
-- `response_messages.json`
 - `run_meta.json`
 - `artifacts_index.json`
 - `prompt.txt`
-- `system.txt`
-- `input_messages.json`
+
+`trace_attempt-*.json` keeps each attempt's trace (including a failed attempt's partial trace), and `attempts.json` summarizes every attempt with its outcome. The system prompt and raw provider request/response messages are not captured per run; enable Langfuse payload capture (`recordInputs` and `recordOutputs`) to inspect them per model call.
 
 `harness_context.json` records the structured run intent injected into the raw-loop turn prompt path. `run_meta.json` includes:
 

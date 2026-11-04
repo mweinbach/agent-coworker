@@ -102,6 +102,9 @@ export async function startRustTestServer(opts?: {
     COWORK_REPO_ROOT: REPO_ROOT,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DISABLE_NETWORK_TELEMETRY: "1",
+    // Startup readiness (which `turn/start` waits on) includes the default marketplace plugin
+    // download from GitHub; tests skip it, as the TS `wsHarness` does.
+    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
     ...opts?.env,
   };
 

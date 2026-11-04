@@ -6,7 +6,7 @@ use std::time::Duration;
 use cowork_config::{
     ConnectionMode, FileLockOptions, ModelPreferenceUpdate, ProviderName, StoredConnection,
     ToolApiKeys, delete_custom_model, file_lock_root_for_cowork_home, get_ai_coworker_paths,
-    read_connection_store, read_connection_store_sync, remove_provider_connection,
+    read_connection_store, read_connection_store_for_update_sync, remove_provider_connection,
     reset_model_preferences, save_provider_connection, set_model_preferences, upsert_custom_model,
     with_file_lock, write_connection_store,
 };
@@ -836,7 +836,8 @@ impl ServerRuntimeState {
             with_file_lock(
                 &paths.connections_file,
                 || async move {
-                    let mut store = read_connection_store_sync(&paths_clone)?;
+                    // Never rewrite (and so wipe) a store we could not read.
+                    let mut store = read_connection_store_for_update_sync(&paths_clone)?;
                     let mut tool_keys = store.tool_api_keys.unwrap_or(ToolApiKeys {
                         exa: None,
                         parallel: None,

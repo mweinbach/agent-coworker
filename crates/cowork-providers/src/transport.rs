@@ -8,6 +8,18 @@ use cowork_inference::{
 };
 use serde_json::{Map, Value};
 
+/// Internal request-scoped `provider_options` flag stamped by the harness when a turn starts with
+/// `tools: "none"`, ensuring transports that manage native tools (e.g. Codex app-server) also
+/// disable them and compute a distinct continuation fingerprint.
+pub const COWORK_TOOLS_DISABLED_OPTION_KEY: &str = "__coworkToolsDisabled";
+
+pub fn request_disables_all_tools(provider_options: &Map<String, Value>) -> bool {
+    provider_options
+        .get(COWORK_TOOLS_DISABLED_OPTION_KEY)
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 /// Single model-step streaming request passed to a `ProviderTransport`.
 #[derive(Debug, Clone)]
 pub struct ProviderStepRequest {

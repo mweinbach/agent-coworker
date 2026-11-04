@@ -860,6 +860,7 @@ impl ServerRuntimeState {
                 client_message_id: None,
                 references: None,
                 retry: None,
+                tools: None,
             };
             if let Err(err) = self
                 .handle_turn_start(connection_id.unwrap_or("internal"), false, &start_params)
@@ -2104,6 +2105,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
                     client_message_id: None,
                     references: None,
                     retry: None,
+                    tools: None,
                 },
             )
             .await
@@ -2174,6 +2176,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
                     client_message_id: None,
                     references: None,
                     retry: None,
+                    tools: None,
                 },
             )
             .await;

@@ -452,3 +452,51 @@ fn schema_manifest_exports_all_21_namespaces_and_method_registries() {
     let on_disk = std::fs::read_to_string(&generated_path).expect("read generated ws schema");
     assert_eq!(on_disk, export_websocket_jsonrpc_schema_json());
 }
+
+#[test]
+fn turn_start_params_tools_mode_enforces_strict_contract() {
+    use cowork_protocol::{TurnStartParams, TurnToolsMode, export_websocket_jsonrpc_schema};
+
+    let omitted: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thr-1",
+        "input": [{ "type": "text", "text": "hello" }]
+    }))
+    .unwrap();
+    assert_eq!(omitted.tools, None);
+    let omitted_val = serde_json::to_value(&omitted).unwrap();
+    assert!(omitted_val.get("tools").is_none());
+
+    let none_mode: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thr-1",
+        "input": [{ "type": "text", "text": "repair" }],
+        "tools": "none"
+    }))
+    .unwrap();
+    assert_eq!(none_mode.tools, Some(TurnToolsMode::None));
+    let none_val = serde_json::to_value(&none_mode).unwrap();
+    assert_eq!(none_val["tools"], json!("none"));
+
+    for invalid in [json!("all"), json!("auto"), json!(true), json!([])] {
+        let res = serde_json::from_value::<TurnStartParams>(json!({
+            "threadId": "thr-1",
+            "input": "hi",
+            "tools": invalid,
+        }));
+        assert!(res.is_err(), "expected invalid tools value to fail");
+    }
+
+    let ws_schema = export_websocket_jsonrpc_schema();
+    assert_eq!(
+        ws_schema["properties"]["requests"]["properties"]["turn/start"]["properties"]["tools"],
+        json!({
+            "type": "string",
+            "enum": ["none"]
+        })
+    );
+
+    let manifest = export_protocol_schema_manifest();
+    assert!(
+        manifest["schemas"].get("TurnToolsMode").is_some(),
+        "TurnToolsMode must be exported in protocol schema manifest"
+    );
+}

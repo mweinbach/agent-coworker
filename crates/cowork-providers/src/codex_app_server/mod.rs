@@ -95,6 +95,8 @@ pub struct CodexAppServerTransport {
     /// Managed-runtime installer settings used when the runtime must be installed before the
     /// turn; `None` derives them from the environment ([`CodexRuntimeInstallOptions::from_env`]).
     pub install_options: Option<CodexRuntimeInstallOptions>,
+    /// Disables all Codex native and dynamic tools for turns executed on this transport.
+    pub disable_tools: bool,
 }
 
 /// Trusted tool-context grants for the native Codex sandbox. Only the server supplies writable
@@ -119,6 +121,7 @@ impl std::fmt::Debug for CodexAppServerTransport {
             .field("built_in_dir", &self.built_in_dir)
             .field("has_todos_handler", &self.todos_handler.is_some())
             .field("install_options", &self.install_options)
+            .field("disable_tools", &self.disable_tools)
             .finish()
     }
 }
@@ -149,6 +152,7 @@ impl CodexAppServerTransport {
             built_in_dir: None,
             todos_handler: None,
             install_options: None,
+            disable_tools: false,
         }
     }
 
@@ -167,6 +171,12 @@ impl CodexAppServerTransport {
     /// Bounds Codex's native sandbox by the caller's effective tool-context restrictions.
     pub fn with_sandbox_restrictions(mut self, restrictions: CodexSandboxRestrictions) -> Self {
         self.sandbox_restrictions = Some(restrictions);
+        self
+    }
+
+    /// Disables all Codex native and dynamic tools for turns executed on this transport.
+    pub fn with_tools_disabled(mut self, disable_tools: bool) -> Self {
+        self.disable_tools = disable_tools;
         self
     }
 
@@ -281,15 +291,28 @@ impl ProviderTransport for CodexAppServerTransport {
             }
         };
 
-        let restrictions = resolve_effective_codex_restrictions(
+        let mut restrictions = resolve_effective_codex_restrictions(
             self.sandbox_restrictions.as_ref(),
             &request.provider_options,
         );
+        let tools_disabled = self.disable_tools
+            || crate::transport::request_disables_all_tools(&request.provider_options);
+        if tools_disabled {
+            restrictions.mode = Some(SandboxMode::ReadOnly);
+            restrictions.network = Some(false);
+            restrictions.yolo = Some(false);
+            restrictions.read_only_role = true;
+        }
         // Scoped children keep Cowork's path-checked read/glob/grep (`runTurn.ts` parity).
-        let dynamic_tools =
-            filter_codex_dynamic_tools(&request.tools, !restrictions.target_paths.is_empty());
-        let native_ctx = self
-            .tool_handler
+        let dynamic_tools = if tools_disabled {
+            Vec::new()
+        } else {
+            filter_codex_dynamic_tools(&request.tools, !restrictions.target_paths.is_empty())
+        };
+        let effective_tool_handler = (!tools_disabled)
+            .then(|| self.tool_handler.clone())
+            .flatten();
+        let native_ctx = effective_tool_handler
             .as_ref()
             .map(|h| h.native_tool_context())
             .unwrap_or_default();
@@ -326,15 +349,18 @@ impl ProviderTransport for CodexAppServerTransport {
             &cwd,
             &resolved_cowork_home,
             &env,
-            self.tool_handler.clone(),
+            effective_tool_handler,
         )
         .await?;
 
         // Pre-arm notification subscription BEFORE `thread/start` and `turn/start` so fast turns never race!
         let mut notif_rx = client.subscribe_notifications();
 
-        let config_overrides =
-            codex_thread_config(&request.provider_options, !policy.force_disable_web_search);
+        let config_overrides = codex_thread_config(
+            &request.provider_options,
+            !policy.force_disable_web_search,
+            tools_disabled,
+        );
 
         let thread_payload = json!({
             "model": request.model_id,
@@ -345,6 +371,7 @@ impl ProviderTransport for CodexAppServerTransport {
                 &request.system_prompt,
                 &env,
                 &dynamic_tools,
+                tools_disabled,
             ),
             "dynamicTools": wire_dynamic_tools,
             "config": config_overrides,
@@ -640,8 +667,9 @@ impl ProviderTransport for CodexAppServerTransport {
                             if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
                                 continue;
                             }
-                            if let (Some(handler), Some(todos)) =
-                                (&self.todos_handler, normalize_codex_todo_list(params))
+                            if !tools_disabled
+                                && let (Some(handler), Some(todos)) =
+                                    (&self.todos_handler, normalize_codex_todo_list(params))
                             {
                                 handler(todos);
                             }
@@ -650,10 +678,12 @@ impl ProviderTransport for CodexAppServerTransport {
                             if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
                                 continue;
                             }
-                            if let (Some(handler), Some(todos)) = (
-                                &self.todos_handler,
-                                item.and_then(normalize_codex_todo_list),
-                            ) {
+                            if !tools_disabled
+                                && let (Some(handler), Some(todos)) = (
+                                    &self.todos_handler,
+                                    item.and_then(normalize_codex_todo_list),
+                                )
+                            {
                                 handler(todos);
                             }
                         }
@@ -1138,8 +1168,19 @@ fn codex_developer_instructions(
     system: &str,
     env: &HashMap<String, String>,
     dynamic_tools: &[crate::transport::ToolDefinition],
+    tools_disabled: bool,
 ) -> String {
     let system = strip_prompt_section(system, "Shell Execution Policy");
+    if tools_disabled {
+        let boundary = [
+            "## Codex App-Server Tool Boundary",
+            "",
+            "Tools are disabled for this turn.",
+            "Do not call any tools or attempt shell, file, web, or MCP actions; respond directly in plain text.",
+        ]
+        .join("\n");
+        return format!("{boundary}\n\n{system}");
+    }
     let runtime_instructions = if system.contains(COWORK_RUNTIME_INSTRUCTIONS_HEADING) {
         None
     } else {
@@ -1426,8 +1467,36 @@ fn codex_provider_option_str<'a>(
 fn codex_thread_config(
     provider_options: &serde_json::Map<String, Value>,
     web_search_allowed: bool,
+    tools_disabled: bool,
 ) -> serde_json::Map<String, Value> {
     let mut config = serde_json::Map::new();
+    if tools_disabled {
+        config.insert(
+            "features".into(),
+            json!({
+                "multi_agent": false,
+                "multi_agent_v2": false,
+                "shell_tool": false,
+                "unified_exec": false,
+                "view_image": false,
+                "sleep_tool": false,
+                "apps": false,
+                "enable_mcp_apps": false,
+                "plugins": false,
+                "code_mode": false,
+            }),
+        );
+        config.insert("web_search".into(), Value::String("disabled".into()));
+        config.insert("mcp_servers".into(), json!({}));
+        config.insert(
+            "tools".into(),
+            json!({ "experimental_request_user_input": { "enabled": false } }),
+        );
+        if let Some(verbosity) = codex_text_verbosity(provider_options) {
+            config.insert("model_verbosity".into(), Value::String(verbosity));
+        }
+        return config;
+    }
     // Child lifecycle, scopes, and budgets belong to Cowork's agent control.
     config.insert(
         "features".into(),

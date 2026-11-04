@@ -485,6 +485,8 @@ export type RawLoopTurnOptions = {
   providerOptions?: Record<string, unknown>;
   /** Session `maxSteps` override; the server falls back to its default when omitted. */
   maxSteps?: number;
+  /** Per-turn tool exposure mode (`"none"` disables all tools for this turn). */
+  tools?: "none";
 };
 
 export async function runRawLoopTurnViaServer(
@@ -536,7 +538,12 @@ export async function runRawLoopTurnViaServer(
     }
     if ("id" in msg && typeof msg.method === "string") {
       if (msg.method === "item/commandExecution/requestApproval") {
-        ws.send(JSON.stringify({ id: msg.id, result: { decision: "accept" } }));
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { decision: opts.tools === "none" ? "decline" : "accept" },
+          }),
+        );
       } else if (msg.method === "item/tool/requestUserInput") {
         const options = Array.isArray(msg.params?.options) ? msg.params.options : [];
         const answer =
@@ -708,6 +715,7 @@ export async function runRawLoopTurnViaServer(
       threadId,
       clientMessageId: crypto.randomUUID(),
       input: [{ type: "text", text: opts.prompt }],
+      ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
     });
     await turnDonePromise;
     return snapshot();
@@ -944,9 +952,9 @@ export async function executeRawLoopAttempt(args: {
       contract: run.finalContract,
       strictMode,
       repairFinalOutput: async () => {
-        // The old runner repaired with `maxSteps: 1` and an empty tool set. The server bounds
-        // the turn to one model step; it has no per-turn tool filter, so a repair that still
-        // calls a tool is rejected below instead.
+        // Bound the repair turn to a single step with `tools: "none"` so the server neither
+        // exposes tools to the model nor executes hallucinated tool calls; any attempted tool
+        // call is still traced as a refused error item and rejected below.
         let repaired: ServerTurnTraceResult;
         try {
           repaired = await runTurn({
@@ -958,6 +966,7 @@ export async function executeRawLoopAttempt(args: {
             prompt: buildRawLoopRepairPrompt(runDir),
             ...(providerOptions ? { providerOptions } : {}),
             maxSteps: RAW_LOOP_REPAIR_MAX_STEPS,
+            tools: "none",
           });
         } catch (error) {
           if (error instanceof RawLoopTurnError) absorb(error.partial, "repair-");

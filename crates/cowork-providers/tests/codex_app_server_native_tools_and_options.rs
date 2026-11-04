@@ -665,3 +665,133 @@ async fn codex_code_mode_scripts_surface_once_with_nested_citations() {
             .any(|b| matches!(b, ContentBlock::ToolCall { .. }))
     );
 }
+
+#[tokio::test]
+async fn codex_tools_disabled_locks_down_native_tools_mcp_and_skips_thread_resume() {
+    use cowork_config::SandboxMode as ConfigSandboxMode;
+    use cowork_inference::{ProviderContinuationState, ToolDefinition};
+    use cowork_providers::COWORK_TOOLS_DISABLED_OPTION_KEY;
+
+    let fx = Fixture::new();
+    let run = "tools-disabled";
+    let mut opts = Map::new();
+    opts.insert(
+        "cwd".into(),
+        json!(fx.base.join("workspace").to_string_lossy()),
+    );
+    opts.insert(
+        "coworkHome".into(),
+        json!(fx.base.join("home/.cowork").to_string_lossy()),
+    );
+    opts.insert("codex-cli".into(), json!({ "webSearchMode": "live" }));
+    opts.insert(COWORK_TOOLS_DISABLED_OPTION_KEY.into(), Value::Bool(true));
+
+    let updates: Arc<Mutex<Vec<Vec<Value>>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&updates);
+    let todos_cb: CodexTodosCallback = Arc::new(move |items| {
+        seen.lock().unwrap().push(items);
+    });
+
+    let mut env = HashMap::new();
+    env.insert(
+        "PATH".into(),
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+    );
+    env.insert("HOME".into(), fx.base.join("home").to_string_lossy().into());
+
+    let mut transport = CodexAppServerTransport::with_command_override(
+        "node".into(),
+        vec![
+            fx.script.to_string_lossy().into_owned(),
+            fx.log_path(run).to_string_lossy().into_owned(),
+            "todos".into(),
+        ],
+    )
+    .with_sandbox_restrictions(CodexSandboxRestrictions {
+        mode: Some(ConfigSandboxMode::DangerFullAccess),
+        network: Some(true),
+        yolo: Some(true),
+        read_only_role: false,
+        target_paths: Vec::new(),
+    })
+    .with_built_in_dir(Some(repo_root()))
+    .with_todos_handler(Some(todos_cb));
+    transport.env_override = Some(env);
+
+    // Seed a prior tool-enabled CodexCli continuation; because developerInstructions + config
+    // change when tools are disabled, stream_step must start a fresh thread rather than resuming
+    // the tool-enabled Codex session.
+    let prior_cont = ProviderContinuationState::CodexCli {
+        thread_id: "thr-prev-tools-on".into(),
+        model: "gpt-5.4".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+        request_fingerprint: Some("prev-fp".into()),
+    };
+
+    let mut events = Vec::new();
+    let result = transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gpt-5.4".into(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Instructions".into(),
+                messages: vec![
+                    user_message("first turn"),
+                    user_message("repair without tools"),
+                ],
+                tools: vec![ToolDefinition {
+                    name: "write".into(),
+                    description: "write file".into(),
+                    parameters: json!({ "type": "object" }),
+                }],
+                authorized_tool_names: Some(vec!["write".into()]),
+                provider_options: opts,
+                continuation: Some(prior_cont),
+                policy: RequestPolicy::default(),
+                turn_id: "turn-disabled".into(),
+            },
+            &StepBudget::new(60_000, None),
+            &mut |ev| events.push(ev),
+        )
+        .await
+        .expect("codex tools-disabled turn succeeds");
+
+    let raw_log = std::fs::read_to_string(fx.log_path(run)).unwrap_or_default();
+    assert!(
+        !raw_log.contains("\"thread/resume\""),
+        "must not resume prior tool-enabled codex thread: {raw_log}"
+    );
+    let started = fx.logged(run, "thread/start");
+    assert_eq!(started["sandbox"], json!("read-only"));
+    // `yolo: true` normally sets `approvalPolicy: "never"` (auto-approve); `tools_disabled` forces
+    // `yolo: false` -> `"on-request"` with `approval_handler = None` so any request is declined.
+    assert_eq!(started["approvalPolicy"], json!("on-request"));
+    assert_eq!(started["dynamicTools"], json!([]));
+    let dev_inst = started["developerInstructions"].as_str().unwrap_or("");
+    assert!(dev_inst.contains("Tools are disabled for this turn"));
+    assert!(!dev_inst.contains("Codex-native tools"));
+
+    let cfg = &started["config"];
+    assert_eq!(cfg["web_search"], json!("disabled"));
+    assert_eq!(cfg["mcp_servers"], json!({}));
+    assert_eq!(cfg["features"]["shell_tool"], json!(false));
+    assert_eq!(cfg["features"]["unified_exec"], json!(false));
+    assert_eq!(cfg["features"]["view_image"], json!(false));
+    assert_eq!(cfg["features"]["code_mode"], json!(false));
+    assert_eq!(cfg["features"]["apps"], json!(false));
+    assert_eq!(cfg["features"]["plugins"], json!(false));
+    assert_eq!(cfg["features"]["multi_agent"], json!(false));
+    assert!(
+        updates.lock().unwrap().is_empty(),
+        "todo updates must be suppressed when tools are disabled"
+    );
+    assert!(
+        result
+            .assistant
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text, .. } if text == "Done."))
+    );
+}

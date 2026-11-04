@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use cowork_protocol::{JsonRpcLiteError, TurnAttachmentInputPart, error_codes};
+use cowork_protocol::{JsonRpcLiteError, TurnAttachmentInputPart, TurnToolsMode, error_codes};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -69,11 +69,25 @@ impl TurnIdempotencyLedger {
     }
 
     pub fn fingerprint_input(text: &str, attachments: &[TurnAttachmentInputPart]) -> String {
+        Self::fingerprint_turn_input(text, attachments, None)
+    }
+
+    pub fn fingerprint_turn_input(
+        text: &str,
+        attachments: &[TurnAttachmentInputPart],
+        tools: Option<TurnToolsMode>,
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
         hasher.update([0u8]);
         if let Ok(att_bytes) = serde_json::to_vec(attachments) {
             hasher.update(&att_bytes);
+        }
+        if let Some(tools_mode) = tools {
+            hasher.update([0u8]);
+            match tools_mode {
+                TurnToolsMode::None => hasher.update(b"tools:none"),
+            }
         }
         hex::encode(hasher.finalize())
     }
@@ -164,7 +178,7 @@ impl TurnIdempotencyLedger {
         text: &str,
         attachments: &[TurnAttachmentInputPart],
     ) -> Result<Option<IdempotencyCheckOutcome>, JsonRpcLiteError> {
-        self.lookup_existing_with_journal(client_message_id, text, attachments, |_| None)
+        self.lookup_existing_turn_with_journal(client_message_id, text, attachments, None, |_| None)
     }
 
     /// Like [`Self::lookup_existing`], consulting `load_receipt` (the durable journal) when the
@@ -176,12 +190,31 @@ impl TurnIdempotencyLedger {
         attachments: &[TurnAttachmentInputPart],
         load_receipt: impl FnOnce(&str) -> Option<Value>,
     ) -> Result<Option<IdempotencyCheckOutcome>, JsonRpcLiteError> {
+        self.lookup_existing_turn_with_journal(
+            client_message_id,
+            text,
+            attachments,
+            None,
+            load_receipt,
+        )
+    }
+
+    /// Like [`Self::lookup_existing_with_journal`], also binding the per-turn `tools` mode into
+    /// the idempotency fingerprint.
+    pub fn lookup_existing_turn_with_journal(
+        &self,
+        client_message_id: &str,
+        text: &str,
+        attachments: &[TurnAttachmentInputPart],
+        tools: Option<TurnToolsMode>,
+        load_receipt: impl FnOnce(&str) -> Option<Value>,
+    ) -> Result<Option<IdempotencyCheckOutcome>, JsonRpcLiteError> {
         let cid = client_message_id.trim();
         if cid.is_empty() {
             return Ok(None);
         }
         self.ensure_cached(cid, load_receipt);
-        let fp = Self::fingerprint_input(text, attachments);
+        let fp = Self::fingerprint_turn_input(text, attachments, tools);
         let existing = self.cache.lock().find(cid);
         existing
             .map(|existing| Self::classify(existing, cid, fp))
@@ -195,11 +228,12 @@ impl TurnIdempotencyLedger {
         text: &str,
         attachments: &[TurnAttachmentInputPart],
     ) -> Result<IdempotencyCheckOutcome, JsonRpcLiteError> {
-        self.check_or_record_with_journal(
+        self.check_or_record_turn_with_journal(
             client_message_id,
             proposed_turn_id,
             text,
             attachments,
+            None,
             |_| None,
         )
     }
@@ -215,8 +249,29 @@ impl TurnIdempotencyLedger {
         attachments: &[TurnAttachmentInputPart],
         load_receipt: impl FnOnce(&str) -> Option<Value>,
     ) -> Result<IdempotencyCheckOutcome, JsonRpcLiteError> {
+        self.check_or_record_turn_with_journal(
+            client_message_id,
+            proposed_turn_id,
+            text,
+            attachments,
+            None,
+            load_receipt,
+        )
+    }
+
+    /// Like [`Self::check_or_record_with_journal`], also binding the per-turn `tools` mode into
+    /// the idempotency fingerprint.
+    pub fn check_or_record_turn_with_journal(
+        &self,
+        client_message_id: &str,
+        proposed_turn_id: &str,
+        text: &str,
+        attachments: &[TurnAttachmentInputPart],
+        tools: Option<TurnToolsMode>,
+        load_receipt: impl FnOnce(&str) -> Option<Value>,
+    ) -> Result<IdempotencyCheckOutcome, JsonRpcLiteError> {
         let cid = client_message_id.trim();
-        let fp = Self::fingerprint_input(text, attachments);
+        let fp = Self::fingerprint_turn_input(text, attachments, tools);
         if cid.is_empty() {
             return Ok(IdempotencyCheckOutcome {
                 turn_id: proposed_turn_id.to_owned(),
@@ -240,5 +295,23 @@ impl TurnIdempotencyLedger {
             payload_fingerprint: fp,
             was_duplicate: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_turn_input_preserves_legacy_hash_when_tools_none_and_binds_tools_mode() {
+        let legacy = TurnIdempotencyLedger::fingerprint_input("hello world", &[]);
+        let default_mode = TurnIdempotencyLedger::fingerprint_turn_input("hello world", &[], None);
+        let tools_disabled = TurnIdempotencyLedger::fingerprint_turn_input(
+            "hello world",
+            &[],
+            Some(TurnToolsMode::None),
+        );
+        assert_eq!(default_mode, legacy);
+        assert_ne!(tools_disabled, legacy);
     }
 }

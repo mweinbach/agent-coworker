@@ -64,9 +64,9 @@ pub use schemas::{
     ThreadListParams, ThreadPinnedSetParams, ThreadReadParams, ThreadResumeParams,
     ThreadStartParams, ThreadStatus, ThreadUnsubscribeParams, ToolRequestUserInputParams,
     TransportDescriptor, TurnAttachmentInputPart, TurnInput, TurnInterruptParams, TurnReference,
-    TurnRetrySpec, TurnStartParams, TurnSteerParams, WorkspaceBootstrapParams, WorkspaceListParams,
-    WorkspaceSwitchParams, WorktreeStartingState, export_protocol_schema_manifest,
-    parse_initialize_params, parse_initialized_params,
+    TurnRetrySpec, TurnStartParams, TurnSteerParams, TurnToolsMode, WorkspaceBootstrapParams,
+    WorkspaceListParams, WorkspaceSwitchParams, WorktreeStartingState,
+    export_protocol_schema_manifest, parse_initialize_params, parse_initialized_params,
 };
 
 /// Current Cowork WebSocket protocol version (`docs/websocket-protocol.md`).

@@ -1061,3 +1061,248 @@ async fn canonical_interactions_sequential_ask_budget_events_and_strict_steer_co
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }
+
+#[test]
+fn idempotency_ledger_binds_tools_mode_while_preserving_legacy_none_fingerprint() {
+    use cowork_protocol::TurnToolsMode;
+
+    let legacy_fp = TurnIdempotencyLedger::fingerprint_input("repair prompt", &[]);
+    let explicit_none_fp =
+        TurnIdempotencyLedger::fingerprint_turn_input("repair prompt", &[], None);
+    let tools_off_fp = TurnIdempotencyLedger::fingerprint_turn_input(
+        "repair prompt",
+        &[],
+        Some(TurnToolsMode::None),
+    );
+    assert_eq!(legacy_fp, explicit_none_fp);
+    assert_ne!(legacy_fp, tools_off_fp);
+
+    let ledger = TurnIdempotencyLedger::new();
+    let first = ledger
+        .check_or_record_turn_with_journal(
+            "cid-tools-off",
+            "turn-off-1",
+            "repair prompt",
+            &[],
+            Some(TurnToolsMode::None),
+            |_| None,
+        )
+        .unwrap();
+    assert!(!first.was_duplicate);
+    assert_eq!(first.turn_id, "turn-off-1");
+
+    let replay = ledger
+        .check_or_record_turn_with_journal(
+            "cid-tools-off",
+            "turn-off-2",
+            "repair prompt",
+            &[],
+            Some(TurnToolsMode::None),
+            |_| None,
+        )
+        .unwrap();
+    assert!(replay.was_duplicate);
+    assert_eq!(replay.turn_id, "turn-off-1");
+
+    let mismatch = ledger.check_or_record_turn_with_journal(
+        "cid-tools-off",
+        "turn-off-3",
+        "repair prompt",
+        &[],
+        None,
+        |_| None,
+    );
+    assert!(
+        mismatch.is_err(),
+        "reusing clientMessageId across tools: \"none\" and default tools must fail"
+    );
+}
+
+#[tokio::test]
+async fn turn_runner_with_tools_disabled_exposes_no_tools_and_refuses_hallucinated_calls() {
+    use cowork_providers::COWORK_TOOLS_DISABLED_OPTION_KEY;
+
+    let (home, ws) = isolated_dirs("tools-disabled");
+    let forbidden_file = ws.join("hallucinated-write.txt");
+    let forbidden_path_str = forbidden_file.to_string_lossy().into_owned();
+
+    let sink = Arc::new(RecordingSink::default());
+    let im = Arc::new(InteractionManager::new("thread-td", sink.clone()).with_yolo(true));
+    let steer = Arc::new(SteerCoordinator::new(
+        "thread-td",
+        "turn-td",
+        sink.clone(),
+        None,
+    ));
+
+    let transport = Arc::new(ScriptedTransport::new(vec![
+        Box::new(move |req, emit| {
+            assert!(
+                req.tools.is_empty(),
+                "deferred_tool_search must not leak toolSearch/toolCall when tools_disabled is true: {:?}",
+                req.tools
+            );
+            assert_eq!(req.authorized_tool_names, Some(Vec::new()));
+            assert_eq!(
+                req.provider_options.get(COWORK_TOOLS_DISABLED_OPTION_KEY),
+                Some(&json!(true))
+            );
+            let args: serde_json::Map<String, Value> = serde_json::from_value(json!({
+                "path": forbidden_path_str,
+                "content": "should never hit disk\n"
+            }))
+            .unwrap();
+            emit(StreamEvent::ToolCallStart {
+                turn_id: req.turn_id.clone(),
+                key: "call-hallucinated-1".to_owned(),
+                name: "write".to_owned(),
+                initial_args: None,
+            });
+            emit(StreamEvent::ToolCallEnd {
+                turn_id: req.turn_id.clone(),
+                key: "call-hallucinated-1".to_owned(),
+                name: "write".to_owned(),
+                arguments: Some(args.clone()),
+                input_digest: None,
+                retry_of: None,
+            });
+            Ok(ProviderStepResult {
+                assistant: assistant_msg(vec![ContentBlock::ToolCall {
+                    id: "call-hallucinated-1".to_owned(),
+                    name: "write".to_owned(),
+                    arguments: args,
+                    partial_json: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]),
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }),
+        Box::new(|req, emit| {
+            assert!(req.tools.is_empty());
+            let tool_msg = req
+                .messages
+                .last()
+                .expect("expected synthetic refusal tool result message");
+            assert_eq!(tool_msg.role, MessageRole::Tool);
+            match &tool_msg.content[0] {
+                ContentBlock::ToolResult {
+                    tool_call_id,
+                    is_error,
+                    structured_meta,
+                    ..
+                } => {
+                    assert_eq!(tool_call_id, "call-hallucinated-1");
+                    assert!(*is_error, "hallucinated tool call must be marked is_error");
+                    let err_msg = structured_meta
+                        .as_ref()
+                        .and_then(|v| v["error"].as_str())
+                        .unwrap_or("");
+                    assert!(
+                        err_msg.contains("disabled for this turn"),
+                        "unexpected refusal error: {err_msg}"
+                    );
+                }
+                other => panic!("expected ToolResult block, got {other:?}"),
+            }
+            emit(StreamEvent::TextDelta {
+                turn_id: req.turn_id.clone(),
+                block_index: 0,
+                delta: "Final plain-text answer.".to_owned(),
+                phase: None,
+            });
+            Ok(ProviderStepResult {
+                assistant: assistant_msg(vec![ContentBlock::Text {
+                    text: "Final plain-text answer.".to_owned(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]),
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }),
+    ]));
+
+    let mut tool_ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    tool_ctx.yolo = true;
+    // Even if workspace providerOptions tried to set __coworkToolsDisabled=false, tools_disabled=true wins;
+    // and on a subsequent normal runner, any spoofed __coworkToolsDisabled=true in cfg is stripped.
+    let mut initial_opts = serde_json::Map::new();
+    initial_opts.insert(
+        COWORK_TOOLS_DISABLED_OPTION_KEY.to_owned(),
+        Value::Bool(false),
+    );
+
+    let mut cost_tracker = SessionCostTracker::new("thread-td", None);
+    let runner = TurnStepRunner::new(TurnRunConfig {
+        thread_id: "thread-td".to_owned(),
+        turn_id: "turn-td".to_owned(),
+        provider: ProviderName::Openai,
+        model_id: "gpt-5.4".to_owned(),
+        base_url: None,
+        api_key: Some("k".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: "No tools".to_owned(),
+        provider_options: initial_opts,
+        deferred_tool_search: true,
+        max_steps: 2,
+        step_timeout_ms: 10_000,
+        overflow_threshold_chars: Some(10),
+        tool_retry_lineage: false,
+        initial_user_message: Some(("Answer directly".to_owned(), None)),
+        model_max_retries: None,
+    })
+    .with_tools_disabled(true);
+
+    let outcome = runner
+        .run_turn(
+            transport,
+            vec![],
+            &mut tool_ctx,
+            &im,
+            &steer,
+            &mut cost_tracker,
+            None,
+            sink.clone(),
+        )
+        .await;
+
+    assert_eq!(outcome.status, "completed");
+    assert_eq!(
+        outcome.last_assistant_text.as_deref(),
+        Some("Final plain-text answer.")
+    );
+    assert!(
+        !forbidden_file.exists(),
+        "hallucinated write tool call must never touch the filesystem"
+    );
+    assert!(
+        sink.server_requests.lock().is_empty(),
+        "must not emit any approval server requests when tools are disabled"
+    );
+    let notifs = sink.notifications.lock().clone();
+    assert!(
+        notifs.iter().any(|(m, p)| {
+            m == "item/completed"
+                && p["item"]["type"] == "toolCall"
+                && p["item"]["toolName"] == "write"
+                && p["item"]["state"] == "output-error"
+                && p["item"]["result"]["error"]
+                    .as_str()
+                    .is_some_and(|err| err.contains("disabled for this turn"))
+        }),
+        "expected output-error toolCall item/completed notification: {notifs:?}"
+    );
+
+    let _ = fs::remove_dir_all(ws.parent().unwrap());
+}

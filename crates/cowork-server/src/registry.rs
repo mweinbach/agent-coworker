@@ -3889,6 +3889,7 @@ impl ServerRuntimeState {
                 input: TurnInput::Text(expanded),
                 references: None,
                 retry: None,
+                tools: None,
             },
             Some(slash_text),
         )

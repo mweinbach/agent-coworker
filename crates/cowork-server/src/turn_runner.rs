@@ -26,7 +26,7 @@ use cowork_protocol::{
     JsonRpcLiteClientResponse, JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteNotification,
     JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcLiteResponse, PersistedJournalEventView,
     ThreadTurnProjector, TurnInterruptParams, TurnRetrySpec, TurnStartParams, TurnSteerParams,
-    error_codes,
+    TurnToolsMode, error_codes,
 };
 use cowork_providers::bedrock::{
     BedrockAuthConfig, extract_bedrock_region_override, resolve_bedrock_auth_config,
@@ -734,6 +734,26 @@ pub(crate) fn select_provider_transport(
     // Bundled install dir gating per-model Codex options when no tool context supplies one.
     built_in_dir: Option<&Path>,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
+    select_provider_transport_for_turn(
+        provider,
+        bedrock_auth,
+        homedir,
+        env,
+        codex_tool_ctx,
+        built_in_dir,
+        false,
+    )
+}
+
+pub(crate) fn select_provider_transport_for_turn(
+    provider: ProviderName,
+    bedrock_auth: Option<BedrockAuthConfig>,
+    homedir: &Path,
+    env: &HashMap<String, String>,
+    codex_tool_ctx: Option<CodexBridgeContext<'_>>,
+    built_in_dir: Option<&Path>,
+    tools_disabled: bool,
+) -> Result<Arc<dyn ProviderTransport>, String> {
     match provider {
         ProviderName::Openai => Ok(Arc::new(OpenAiResponsesTransport::new())),
         ProviderName::Anthropic => Ok(Arc::new(AnthropicMessagesTransport::new())),
@@ -747,6 +767,24 @@ pub(crate) fn select_provider_transport(
         },
         ProviderName::CodexCli => {
             if let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx {
+                let observer: Arc<dyn cowork_providers::codex_app_server::CodexTurnObserver> =
+                    Arc::clone(steer) as _;
+                let resolved_built_in_dir = tctx
+                    .built_in_dir
+                    .clone()
+                    .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone()))
+                    .or_else(|| built_in_dir.map(Path::to_path_buf));
+                if tools_disabled {
+                    return Ok(Arc::new(
+                        CodexAppServerTransport::with_env_and_bridges(
+                            env.clone(),
+                            None,
+                            Some(observer),
+                        )
+                        .with_tools_disabled(true)
+                        .with_built_in_dir(resolved_built_in_dir),
+                    ));
+                }
                 let tools_map = create_builtin_tools(tctx);
                 let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
                     tools_map,
@@ -755,8 +793,6 @@ pub(crate) fn select_provider_transport(
                     overflow,
                     catalog,
                 );
-                let observer: Arc<dyn cowork_providers::codex_app_server::CodexTurnObserver> =
-                    Arc::clone(steer) as _;
                 Ok(Arc::new(
                     CodexAppServerTransport::with_env_and_bridges(
                         env.clone(),
@@ -764,17 +800,13 @@ pub(crate) fn select_provider_transport(
                         Some(observer),
                     )
                     .with_sandbox_restrictions(codex_sandbox_restrictions(tctx))
-                    .with_built_in_dir(
-                        tctx.built_in_dir
-                            .clone()
-                            .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone()))
-                            .or_else(|| built_in_dir.map(Path::to_path_buf)),
-                    )
+                    .with_built_in_dir(resolved_built_in_dir)
                     .with_todos_handler(tctx.on_todos_updated.clone()),
                 ))
             } else {
                 Ok(Arc::new(
                     CodexAppServerTransport::with_env(env.clone())
+                        .with_tools_disabled(tools_disabled)
                         .with_built_in_dir(built_in_dir.map(Path::to_path_buf)),
                 ))
             }
@@ -1419,6 +1451,14 @@ impl ServerRuntimeState {
             .extract_payload()
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let references = parse_references_param(params.references.as_deref())?;
+        let tools_disabled = matches!(params.tools, Some(TurnToolsMode::None));
+
+        if tools_disabled && params.retry.is_some() {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_PARAMS,
+                "turn/start retry cannot be combined with tools: \"none\".",
+            ));
+        }
 
         if params.retry.is_some() && !tool_retry_lineage {
             return Err(JsonRpcLiteError::new(
@@ -1463,10 +1503,11 @@ impl ServerRuntimeState {
 
         let ledger = self.ensure_thread_idempotency_ledger(&params.thread_id);
         if let Some(cid) = params.client_message_id.as_deref()
-            && let Some(dup) = ledger.lookup_existing_with_journal(
+            && let Some(dup) = ledger.lookup_existing_turn_with_journal(
                 cid,
                 &extracted.text,
                 &extracted.attachments,
+                params.tools,
                 |cid| self.load_user_message_receipt(&params.thread_id, cid),
             )?
         {
@@ -1766,11 +1807,12 @@ impl ServerRuntimeState {
         self.ensure_journal_seed_marker(&live_arc).await;
 
         let proposed_turn_id = Uuid::new_v4().to_string();
-        let idem_outcome = match ledger.check_or_record_with_journal(
+        let idem_outcome = match ledger.check_or_record_turn_with_journal(
             params.client_message_id.as_deref().unwrap_or(""),
             &proposed_turn_id,
             &extracted.text,
             &extracted.attachments,
+            params.tools,
             |cid| self.load_user_message_receipt(&params.thread_id, cid),
         ) {
             Ok(o) => o,
@@ -2086,8 +2128,8 @@ impl ServerRuntimeState {
             harness_context: harness_context_val,
             task_context_section,
             referenced_plugins: mentions.referenced_plugins,
-            deferred_tool_search_enabled: deferred_tool_search,
-            code_mode_enabled,
+            deferred_tool_search_enabled: deferred_tool_search && !tools_disabled,
+            code_mode_enabled: code_mode_enabled && !tools_disabled,
             template_context: PromptTemplateContext {
                 model_display_name: session_model.map(|m| m.display_name.clone()),
                 knowledge_cutoff: session_model.map(|m| m.knowledge_cutoff.clone()),
@@ -2112,6 +2154,13 @@ impl ServerRuntimeState {
                     .unwrap_or_default()
             },
         });
+        let system_prompt = if tools_disabled {
+            format!(
+                "{system_prompt}\n\n## Tool Availability\nTools are disabled for this turn. Respond directly without calling any tools."
+            )
+        } else {
+            system_prompt
+        };
 
         let effective_display_text = display_text_override
             .filter(|s| !s.trim().is_empty())
@@ -2127,7 +2176,7 @@ impl ServerRuntimeState {
             extra_headers: HashMap::new(),
             system_prompt,
             provider_options: merged_provider_opts.clone(),
-            deferred_tool_search,
+            deferred_tool_search: deferred_tool_search && !tools_disabled,
             max_steps,
             step_timeout_ms: STEP_TIMEOUT_MS,
             overflow_threshold_chars: overflow_threshold,
@@ -2138,7 +2187,8 @@ impl ServerRuntimeState {
             )),
             model_max_retries,
         })
-        .with_tool_retry_targets(retry_targets);
+        .with_tool_retry_targets(retry_targets)
+        .with_tools_disabled(tools_disabled);
         let cancel_handle = runner.cancellation_handle();
 
         self.active_turns.insert(
@@ -2461,7 +2511,7 @@ impl ServerRuntimeState {
                 None => Ok(()),
             };
             let transport_res = lmstudio_prepared.and_then(|()| {
-                select_provider_transport(
+                select_provider_transport_for_turn(
                     provider,
                     bedrock_auth,
                     &runtime.homedir,
@@ -2474,6 +2524,7 @@ impl ServerRuntimeState {
                         Some(runner.codex_bridge_catalog()),
                     )),
                     Some(&runtime.built_in_dir),
+                    tools_disabled,
                 )
             });
 

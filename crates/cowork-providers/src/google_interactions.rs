@@ -875,34 +875,34 @@ fn build_google_interactions_payload(
     {
         gen_cfg.insert("max_output_tokens".to_string(), json!(max_out));
     }
-    if let Some(tc) = read_google_opt(provider_options, "toolChoice").and_then(Value::as_str)
-        && matches!(tc, "auto" | "any" | "none" | "validated")
-    {
-        gen_cfg.insert("tool_choice".to_string(), Value::String(tc.to_string()));
-    }
-
-    let mut wire_tools: Vec<Value> = tools
-        .iter()
-        .map(|t| {
-            json!({
-                "type": "function",
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters,
+    let tools_disabled = crate::transport::request_disables_all_tools(provider_options);
+    let mut wire_tools: Vec<Value> = if tools_disabled {
+        Vec::new()
+    } else {
+        tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
 
     // TS `buildGoogleStreamOptions`: `getGoogleNativeWebSearchFromProviderOptions` (default on).
-    let native_web_requested =
-        crate::web_search_options::google_native_web_search_enabled(Some(provider_options));
+    let native_web_requested = !tools_disabled
+        && crate::web_search_options::google_native_web_search_enabled(Some(provider_options));
 
-    let web_authorized = match authorized_tool_names {
-        Some(names) => names.iter().any(|n| n == "webSearch" || n == "webFetch"),
-        None => tools
-            .iter()
-            .any(|t| t.name == "webSearch" || t.name == "webFetch"),
-    };
+    let web_authorized = !tools_disabled
+        && match authorized_tool_names {
+            Some(names) => names.iter().any(|n| n == "webSearch" || n == "webFetch"),
+            None => tools
+                .iter()
+                .any(|t| t.name == "webSearch" || t.name == "webFetch"),
+        };
 
     if native_web_requested && web_authorized {
         wire_tools.push(json!({
@@ -910,6 +910,13 @@ fn build_google_interactions_payload(
             "search_types": ["web_search"],
         }));
         wire_tools.push(json!({ "type": "url_context" }));
+    }
+
+    if !wire_tools.is_empty()
+        && let Some(tc) = read_google_opt(provider_options, "toolChoice").and_then(Value::as_str)
+        && matches!(tc, "auto" | "any" | "none" | "validated")
+    {
+        gen_cfg.insert("tool_choice".to_string(), Value::String(tc.to_string()));
     }
 
     let mut body = Map::new();
@@ -2553,6 +2560,7 @@ mod native_web_search_tests {
     use serde_json::json;
 
     use super::*;
+    use crate::COWORK_TOOLS_DISABLED_OPTION_KEY;
 
     fn tool(name: &str) -> ToolDefinition {
         ToolDefinition {
@@ -2621,5 +2629,43 @@ mod native_web_search_tests {
         );
         // Without an authorized web tool nothing native is attached.
         assert!(built_in_tool_types(json!({}), &[tool("read")]).is_empty());
+    }
+
+    #[test]
+    fn tools_disabled_suppresses_function_and_native_web_tools_and_tool_choice() {
+        let tools = [tool("webSearch"), tool("read")];
+        let mut options = Map::new();
+        options.insert(
+            COWORK_TOOLS_DISABLED_OPTION_KEY.to_owned(),
+            Value::Bool(true),
+        );
+        options.insert(
+            "google".to_owned(),
+            json!({
+                "nativeWebSearch": true,
+                "toolChoice": "any"
+            }),
+        );
+        let payload = build_google_interactions_payload(
+            "gemini-3.1-pro-preview",
+            "system",
+            &[],
+            &tools,
+            None,
+            &options,
+            None,
+            false,
+        );
+        assert!(
+            payload.get("tools").is_none(),
+            "tools must be omitted when tools are disabled: {payload}"
+        );
+        assert!(
+            payload
+                .get("generation_config")
+                .and_then(|g| g.get("tool_choice"))
+                .is_none(),
+            "tool_choice must not be emitted when tools are disabled: {payload}"
+        );
     }
 }

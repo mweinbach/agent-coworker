@@ -939,12 +939,14 @@ describe("raw loop attempts and repair", () => {
     ]);
     expect(out.ok).toBe(true);
     expect(out.calls).toHaveLength(2);
-    const repair = out.calls[1]!;
+    const repair = out.calls[1];
+    expect(repair).toBeDefined();
     expect(RAW_LOOP_REPAIR_MAX_STEPS).toBe(1);
-    expect(repair.maxSteps).toBe(1);
-    expect(repair.threadId).toBe("thread-main");
-    expect(repair.prompt).toContain("Do NOT call any tools.");
-    expect(repair.harnessContext).toBeUndefined();
+    expect(repair?.maxSteps).toBe(1);
+    expect(repair?.tools).toBe("none");
+    expect(repair?.threadId).toBe("thread-main");
+    expect(repair?.prompt).toContain("Do NOT call any tools.");
+    expect(repair?.harnessContext).toBeUndefined();
     const meta = out.readJson("run_meta.json");
     expect(meta).toMatchObject({ repairAttempted: true, repairSucceeded: true, degraded: true });
     expect(meta.budgets.repairPassCount).toBe(1);
@@ -965,6 +967,191 @@ describe("raw loop attempts and repair", () => {
     expect(meta.error).toContain("Repair pass called tool(s) bash");
     expect(out.readJson("trace_attempt-01.json").toolLogLines).toEqual(["tool> bash {}"]);
   });
+
+  test("live server repair turn disables tools so a hallucinated write neither runs nor passes validation", async () => {
+    const wireRequests: Array<Record<string, unknown>> = [];
+    const mockOpenAi = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+        if (body.model !== "gpt-5.4") {
+          const bgEvents = [
+            { type: "response.created", response: { id: "resp_bg_title" } },
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: {
+                id: "msg_bg",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Live Repair Run" }],
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_bg_title",
+                status: "completed",
+                usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7 },
+              },
+            },
+          ];
+          for (const evt of bgEvents) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          res.end();
+          return;
+        }
+        const idx = wireRequests.push(body);
+
+        if (idx === 1) {
+          // Primary turn: malformed final answer without <<END_RUN>>.
+          const events = [
+            { type: "response.created", response: { id: "resp_primary_1" } },
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { id: "msg_p1", type: "message", role: "assistant", content: [] },
+            },
+            {
+              type: "response.output_text.delta",
+              output_index: 0,
+              content_index: 0,
+              delta: "malformed output without sentinel",
+            },
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: {
+                id: "msg_p1",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "malformed output without sentinel" }],
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_primary_1",
+                status: "completed",
+                usage: { input_tokens: 12, output_tokens: 6, total_tokens: 18 },
+              },
+            },
+          ];
+          for (const evt of events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          res.end();
+          return;
+        }
+
+        // Repair turn (`maxSteps: 1, tools: "none"`): model hallucinates a `write` tool call!
+        const callArgs = JSON.stringify({
+          path: "mutated-during-repair.txt",
+          content: "should never be written during repair\n",
+        });
+        const events = [
+          { type: "response.created", response: { id: "resp_repair_1" } },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "fc_rep_1",
+              type: "function_call",
+              call_id: "call_repair_write",
+              name: "write",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: "fc_rep_1",
+            delta: callArgs,
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              id: "fc_rep_1",
+              type: "function_call",
+              call_id: "call_repair_write",
+              name: "write",
+              arguments: callArgs,
+            },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_repair_1",
+              status: "completed",
+              usage: { input_tokens: 16, output_tokens: 12, total_tokens: 28 },
+            },
+          },
+        ];
+        for (const evt of events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+        res.end();
+      });
+    });
+
+    await new Promise<void>((r) => mockOpenAi.listen(0, "127.0.0.1", () => r()));
+    const port = (mockOpenAi.address() as { port: number }).port;
+    const rootOutDir = await makeTempDir("raw-loop-live-repair-");
+    const { homeDir } = await prepareRawLoopServerHome({
+      homeDir: path.join(rootOutDir, "server-home"),
+      sourceCoworkHome: path.join(rootOutDir, "empty-cowork"),
+    });
+
+    try {
+      const result = await executeRawLoopRun(
+        fakeRun({
+          id: "live-repair-run",
+          provider: "openai",
+          model: "gpt-5.4",
+          maxAttempts: 1,
+          maxSteps: 4,
+        }),
+        {
+          rootOutDir,
+          scenario: "mixed",
+          strictMode: false,
+          deps: {
+            startServer: async ({ runDir }) =>
+              startRawLoopServer({
+                serverBin: resolveRustBinaryPath("cowork-server"),
+                runDir,
+                homeDir,
+                baseEnv: {
+                  ...process.env,
+                  OPENAI_API_KEY: "sk-test-live-repair",
+                  OPENAI_BASE_URL: `http://127.0.0.1:${String(port)}/v1`,
+                  COWORK_DISABLE_NETWORK_TELEMETRY: "1",
+                  COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+                },
+              }),
+            log: () => {
+              // Keep test output quiet.
+            },
+          },
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(wireRequests).toHaveLength(2);
+      const primaryTools = wireRequests[0]?.tools;
+      expect(Array.isArray(primaryTools)).toBe(true);
+      expect(Array.isArray(primaryTools) ? primaryTools.length : 0).toBeGreaterThan(0);
+      expect(wireRequests[1]?.tools ?? []).toEqual([]);
+
+      // The hallucinated `write` tool call on the repair turn must NOT execute on disk!
+      expect(fs.existsSync(path.join(result.runDir, "mutated-during-repair.txt"))).toBe(false);
+
+      const meta = JSON.parse(fs.readFileSync(path.join(result.runDir, "run_meta.json"), "utf-8"));
+      expect(meta.repairAttempted).toBe(true);
+      expect(meta.repairSucceeded).toBe(false);
+      expect(meta.error).toContain("Repair pass called tool(s) write");
+    } finally {
+      await new Promise<void>((r) => mockOpenAi.close(() => r()));
+    }
+  }, 30_000);
 });
 
 function startMockLmStudio(): Promise<{ baseUrl: string; close: () => Promise<void> }> {

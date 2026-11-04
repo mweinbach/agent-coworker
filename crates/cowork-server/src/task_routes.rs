@@ -452,6 +452,7 @@ fn dispatch_task_continuation(
                     client_message_id: None,
                     references: None,
                     retry: None,
+                    tools: None,
                 },
                 Some(display_text),
             )
@@ -1028,6 +1029,7 @@ impl ServerRuntimeState {
                         client_message_id: None,
                         references: None,
                         retry: None,
+                        tools: None,
                     },
                     Some(display_text),
                 )
@@ -1716,6 +1718,7 @@ impl ServerRuntimeState {
                                 client_message_id: None,
                                 references: None,
                                 retry: None,
+                                tools: None,
                             },
                             Some(instruction),
                         )

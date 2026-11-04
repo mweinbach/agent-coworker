@@ -781,6 +781,12 @@ impl TurnInput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnToolsMode {
+    None,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TurnStartParams {
@@ -789,6 +795,8 @@ pub struct TurnStartParams {
     pub input: TurnInput,
     pub references: Option<Vec<Value>>,
     pub retry: Option<TurnRetrySpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<TurnToolsMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1139,6 +1147,7 @@ pub fn export_protocol_schema_manifest() -> Value {
     insert_schema!(ThreadPinnedSetParams);
     insert_schema!(ThreadArchivedSetParams);
     insert_schema!(TurnStartParams);
+    insert_schema!(TurnToolsMode);
     insert_schema!(TurnSteerParams);
     insert_schema!(TurnInterruptParams);
     insert_schema!(TurnReference);

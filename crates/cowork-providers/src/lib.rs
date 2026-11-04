@@ -47,8 +47,9 @@ pub use oauth::PkceOAuthManager;
 pub use openai_responses::OpenAiResponsesTransport;
 pub use sse::{BoxedSseStream, SseFrame, build_http_client, post_json_sse};
 pub use transport::{
-    ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
-    ToolDefinition, candidate_continuation_splits, split_after_last_assistant,
+    COWORK_TOOLS_DISABLED_OPTION_KEY, ProviderStepRequest, ProviderStepResult, ProviderTransport,
+    StreamEventCallback, ToolDefinition, candidate_continuation_splits, request_disables_all_tools,
+    split_after_last_assistant,
 };
 
 /// Every registered provider identifier, in canonical order (`config/providers.json`, matching

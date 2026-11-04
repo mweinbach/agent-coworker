@@ -14,7 +14,7 @@ use cowork_inference::{
     TurnUsage, compute_continuation_fingerprint, execute_step_with_sink,
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
-use cowork_providers::{ProviderStepRequest, ProviderTransport};
+use cowork_providers::{COWORK_TOOLS_DISABLED_OPTION_KEY, ProviderStepRequest, ProviderTransport};
 use cowork_sandbox::{SandboxPolicy, policy_allows_network};
 use cowork_tools::{
     ApprovalDecisionRequest, ApprovalHandler, CatalogToolSearchTool, CodeModeTool,
@@ -114,6 +114,7 @@ pub struct TurnStepRunner {
     cancel_tx: watch::Sender<bool>,
     cancel_rx: watch::Receiver<bool>,
     tool_retry_targets: Vec<ToolRetryTarget>,
+    tools_disabled: bool,
     codex_catalog: CodexBridgeCatalog,
 }
 
@@ -175,6 +176,7 @@ impl TurnStepRunner {
             cancel_tx,
             cancel_rx,
             tool_retry_targets: Vec::new(),
+            tools_disabled: false,
             codex_catalog: CodexBridgeCatalog::default(),
         }
     }
@@ -190,6 +192,12 @@ impl TurnStepRunner {
     /// target get `retryOf` lineage.
     pub fn with_tool_retry_targets(mut self, targets: Vec<ToolRetryTarget>) -> Self {
         self.tool_retry_targets = targets;
+        self
+    }
+
+    /// Disables all tool exposure and execution for this turn (`turn/start` with `tools: "none"`).
+    pub fn with_tools_disabled(mut self, tools_disabled: bool) -> Self {
+        self.tools_disabled = tools_disabled;
         self
     }
 
@@ -307,101 +315,123 @@ impl TurnStepRunner {
             false
         };
 
-        let code_mode_enabled = tool_ctx
-            .agent_config
-            .as_ref()
-            .is_some_and(|c| c.tool_calling.code_mode);
+        let shared_activated = Arc::new(Mutex::new(BTreeSet::<String>::new()));
+        let (tools_map, deferred_catalog) = if self.tools_disabled {
+            let empty_tools = ToolMap::new();
+            let empty_catalog = DeferredToolCatalog::new(ToolMap::new());
+            self.codex_catalog.publish(BridgeCatalogState {
+                tools: empty_tools.clone(),
+                deferred: None,
+                cost_tracker_bridge: tool_ctx.cost_tracker_bridge.clone(),
+            });
+            (empty_tools, empty_catalog)
+        } else {
+            let code_mode_enabled = tool_ctx
+                .agent_config
+                .as_ref()
+                .is_some_and(|c| c.tool_calling.code_mode);
 
-        let mut tools_map = create_builtin_tools(tool_ctx);
-        let mut catalog_tools = tools_map.clone();
-        catalog_tools.remove("toolSearch");
-        catalog_tools.remove("mcpCall");
-        catalog_tools.remove("toolCall");
-        catalog_tools.remove("codeMode");
+            let mut tools_map = create_builtin_tools(tool_ctx);
+            let mut catalog_tools = tools_map.clone();
+            catalog_tools.remove("toolSearch");
+            catalog_tools.remove("mcpCall");
+            catalog_tools.remove("toolCall");
+            catalog_tools.remove("codeMode");
 
-        if (self.cfg.deferred_tool_search || code_mode_enabled)
-            && let (Some(cache), Some(agent_cfg)) =
-                (&tool_ctx.mcp_tool_cache, &tool_ctx.agent_config)
-            && agent_cfg.enable_mcp
-        {
-            if self.cfg.deferred_tool_search {
-                tools_map.remove("toolSearch");
-                tools_map.remove("mcpCall");
-            }
-            if cowork_tools::mcp_access_enabled(tool_ctx) {
-                let agent_cfg_cloned = Arc::clone(agent_cfg);
-                let env_cloned = tool_ctx.env.clone();
-                let read_only_role = tool_ctx.read_only_role;
-                let allowed_servers = tool_ctx.allowed_mcp_servers.clone();
-                let existing_keys: BTreeSet<String> = catalog_tools.keys().cloned().collect();
-                if let Ok(mcp_adapters) = cache
-                    .with_tools(
-                        &agent_cfg_cloned,
-                        &env_cloned,
-                        &tool_ctx.session_id,
-                        move |loaded, _| {
-                            let mut out: Vec<Arc<dyn cowork_tools::BuiltinTool>> = Vec::new();
-                            for t in loaded {
-                                if !cowork_tools::mcp_server_allowed(
-                                    read_only_role,
-                                    allowed_servers.as_ref(),
-                                    &t.server_name,
-                                ) {
-                                    continue;
+            if (self.cfg.deferred_tool_search || code_mode_enabled)
+                && let (Some(cache), Some(agent_cfg)) =
+                    (&tool_ctx.mcp_tool_cache, &tool_ctx.agent_config)
+                && agent_cfg.enable_mcp
+            {
+                if self.cfg.deferred_tool_search {
+                    tools_map.remove("toolSearch");
+                    tools_map.remove("mcpCall");
+                }
+                if cowork_tools::mcp_access_enabled(tool_ctx) {
+                    let agent_cfg_cloned = Arc::clone(agent_cfg);
+                    let env_cloned = tool_ctx.env.clone();
+                    let read_only_role = tool_ctx.read_only_role;
+                    let allowed_servers = tool_ctx.allowed_mcp_servers.clone();
+                    let existing_keys: BTreeSet<String> = catalog_tools.keys().cloned().collect();
+                    if let Ok(mcp_adapters) = cache
+                        .with_tools(
+                            &agent_cfg_cloned,
+                            &env_cloned,
+                            &tool_ctx.session_id,
+                            move |loaded, _| {
+                                let mut out: Vec<Arc<dyn cowork_tools::BuiltinTool>> = Vec::new();
+                                for t in loaded {
+                                    if !cowork_tools::mcp_server_allowed(
+                                        read_only_role,
+                                        allowed_servers.as_ref(),
+                                        &t.server_name,
+                                    ) {
+                                        continue;
+                                    }
+                                    if !existing_keys.contains(&t.qualified_name) {
+                                        out.push(
+                                            cowork_tools::LoadedMcpBuiltinToolAdapter::into_builtin(
+                                                t.clone(),
+                                            ),
+                                        );
+                                    }
                                 }
-                                if !existing_keys.contains(&t.qualified_name) {
-                                    out.push(
-                                        cowork_tools::LoadedMcpBuiltinToolAdapter::into_builtin(
-                                            t.clone(),
-                                        ),
-                                    );
-                                }
+                                Box::pin(async move { out })
+                            },
+                        )
+                        .await
+                    {
+                        for adapter in mcp_adapters {
+                            let name = adapter.name().to_owned();
+                            catalog_tools.insert(name.clone(), Arc::clone(&adapter));
+                            if self.cfg.deferred_tool_search {
+                                tools_map.insert(name, adapter);
                             }
-                            Box::pin(async move { out })
-                        },
-                    )
-                    .await
-                {
-                    for adapter in mcp_adapters {
-                        let name = adapter.name().to_owned();
-                        catalog_tools.insert(name.clone(), Arc::clone(&adapter));
-                        if self.cfg.deferred_tool_search {
-                            tools_map.insert(name, adapter);
                         }
                     }
                 }
             }
-        }
-        let shared_activated = Arc::new(Mutex::new(BTreeSet::<String>::new()));
-        let deferred_catalog = DeferredToolCatalog::new(catalog_tools);
-        if code_mode_enabled {
-            let activated_for_cm = self
-                .cfg
-                .deferred_tool_search
-                .then(|| Arc::clone(&shared_activated));
-            tools_map.insert(
-                "codeMode".to_owned(),
-                Arc::new(CodeModeTool::new(
-                    deferred_catalog.clone(),
-                    activated_for_cm,
-                )),
-            );
-            if !self.cfg.deferred_tool_search {
+            let deferred_catalog = DeferredToolCatalog::new(catalog_tools);
+            if code_mode_enabled {
+                let activated_for_cm = self
+                    .cfg
+                    .deferred_tool_search
+                    .then(|| Arc::clone(&shared_activated));
                 tools_map.insert(
-                    "toolSearch".to_owned(),
-                    Arc::new(CatalogToolSearchTool::new(deferred_catalog.clone(), None)),
+                    "codeMode".to_owned(),
+                    Arc::new(CodeModeTool::new(
+                        deferred_catalog.clone(),
+                        activated_for_cm,
+                    )),
                 );
+                if !self.cfg.deferred_tool_search {
+                    tools_map.insert(
+                        "toolSearch".to_owned(),
+                        Arc::new(CatalogToolSearchTool::new(deferred_catalog.clone(), None)),
+                    );
+                }
             }
-        }
 
-        self.codex_catalog.publish(BridgeCatalogState {
-            tools: tools_map.clone(),
-            deferred: self
-                .cfg
-                .deferred_tool_search
-                .then(|| (deferred_catalog.clone(), Arc::clone(&shared_activated))),
-            cost_tracker_bridge: tool_ctx.cost_tracker_bridge.clone(),
-        });
+            self.codex_catalog.publish(BridgeCatalogState {
+                tools: tools_map.clone(),
+                deferred: self
+                    .cfg
+                    .deferred_tool_search
+                    .then(|| (deferred_catalog.clone(), Arc::clone(&shared_activated))),
+                cost_tracker_bridge: tool_ctx.cost_tracker_bridge.clone(),
+            });
+            (tools_map, deferred_catalog)
+        };
+
+        let mut step_provider_options = self.cfg.provider_options.clone();
+        if self.tools_disabled {
+            step_provider_options.insert(
+                COWORK_TOOLS_DISABLED_OPTION_KEY.to_owned(),
+                Value::Bool(true),
+            );
+        } else {
+            step_provider_options.remove(COWORK_TOOLS_DISABLED_OPTION_KEY);
+        }
 
         let mut projector = StreamEventProjector::new(
             &self.cfg.thread_id,
@@ -509,7 +539,9 @@ impl TurnStepRunner {
                 );
             }
 
-            let step_tool_defs: Vec<ToolDefinition> = if self.cfg.deferred_tool_search {
+            let step_tool_defs: Vec<ToolDefinition> = if self.tools_disabled {
+                Vec::new()
+            } else if self.cfg.deferred_tool_search {
                 deferred_catalog.active_tool_definitions_with_code_mode(
                     &shared_activated.lock(),
                     tools_map.contains_key("codeMode"),
@@ -573,7 +605,7 @@ impl TurnStepRunner {
                 messages: history.clone(),
                 tools: step_tool_defs,
                 authorized_tool_names: Some(auth_names.clone()),
-                provider_options: self.cfg.provider_options.clone(),
+                provider_options: step_provider_options.clone(),
                 continuation: valid_cont,
                 policy: RequestPolicy {
                     max_attempts: 1,
@@ -761,7 +793,7 @@ impl TurnStepRunner {
                     tools: &tool_values,
                     authorized_tool_names: Some(&auth_names),
                     canonical_prefix: &history,
-                    stream_options: &self.cfg.provider_options,
+                    stream_options: &step_provider_options,
                 });
                 match &mut next_cont {
                     ProviderContinuationState::OpenAi {
@@ -792,100 +824,132 @@ impl TurnStepRunner {
             }
 
             // Partition deferred meta-tools (`toolSearch` / `toolCall`) + normal tools,
-            // preserving exact call order and parallel-read batching.
+            // preserving exact call order and parallel-read batching. When `tools_disabled` is
+            // active for this turn, refuse any hallucinated tool call without side effects.
             let mut result_blocks = Vec::with_capacity(tool_calls.len());
             let mut interrupted_mid_batch = false;
-            let mut idx = 0usize;
-            while idx < tool_calls.len() {
-                if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
-                    interrupted_mid_batch = true;
-                    break;
-                }
-
-                let call = &tool_calls[idx];
-                if self.cfg.deferred_tool_search
-                    && matches!(call.tool_name.as_str(), "toolSearch" | "toolCall")
-                {
-                    let (inner_name, raw_res) = if call.tool_name == "toolSearch" {
-                        match tool_ctx.check_before_tool_invocation("toolSearch") {
-                            Err(e) => (None, Err(e)),
-                            Ok(()) => match deferred_catalog.execute_tool_search(&call.arguments) {
-                                Ok(found) => {
-                                    let mut act = shared_activated.lock();
-                                    for n in found.discovered_names {
-                                        act.insert(n);
-                                    }
-                                    (None, Ok(ToolOutput::Json(found.value)))
-                                }
-                                Err(e) => (None, Err(e)),
-                            },
-                        }
-                    } else {
-                        let inner = call
-                            .arguments
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned);
-                        if let Some(ref n) = inner {
-                            shared_activated.lock().insert(n.clone());
-                        }
-                        let r = deferred_catalog
-                            .execute_tool_call(&call.arguments, tool_ctx)
-                            .await;
-                        (inner, r)
-                    };
-
+            if self.tools_disabled {
+                for call in &tool_calls {
+                    if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
+                        interrupted_mid_batch = true;
+                        break;
+                    }
                     result_blocks.push(finalize_tool_call_result(
                         &self.cfg.turn_id,
                         ToolCallIdent {
                             call_id: &call.call_id,
                             tool_name: &call.tool_name,
-                            inner_tool_name: inner_name.as_deref(),
-                        },
-                        raw_res,
-                        tool_ctx,
-                        self.cfg.overflow_threshold_chars,
-                        &mut projector,
-                        &emit_stream_event,
-                    ));
-                    idx += 1;
-                    continue;
-                }
-
-                let batch_start = idx;
-                while idx < tool_calls.len()
-                    && !(self.cfg.deferred_tool_search
-                        && matches!(
-                            tool_calls[idx].tool_name.as_str(),
-                            "toolSearch" | "toolCall"
-                        ))
-                {
-                    idx += 1;
-                }
-
-                let batch_results =
-                    execute_tool_batch(&tools_map, &tool_calls[batch_start..idx], tool_ctx, None)
-                        .await;
-
-                for b_res in batch_results {
-                    result_blocks.push(finalize_tool_call_result(
-                        &self.cfg.turn_id,
-                        ToolCallIdent {
-                            call_id: &b_res.call_id,
-                            tool_name: &b_res.tool_name,
                             inner_tool_name: None,
                         },
-                        b_res.output,
+                        Err(cowork_tools::ToolError::Execution(format!(
+                            "Tool '{}' is unavailable because tools are disabled for this turn.",
+                            call.tool_name
+                        ))),
                         tool_ctx,
-                        self.cfg.overflow_threshold_chars,
+                        None,
                         &mut projector,
                         &emit_stream_event,
                     ));
                 }
+            } else {
+                let mut idx = 0usize;
+                while idx < tool_calls.len() {
+                    if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
+                        interrupted_mid_batch = true;
+                        break;
+                    }
 
-                if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
-                    interrupted_mid_batch = true;
-                    break;
+                    let call = &tool_calls[idx];
+                    if self.cfg.deferred_tool_search
+                        && matches!(call.tool_name.as_str(), "toolSearch" | "toolCall")
+                    {
+                        let (inner_name, raw_res) = if call.tool_name == "toolSearch" {
+                            match tool_ctx.check_before_tool_invocation("toolSearch") {
+                                Err(e) => (None, Err(e)),
+                                Ok(()) => {
+                                    match deferred_catalog.execute_tool_search(&call.arguments) {
+                                        Ok(found) => {
+                                            let mut act = shared_activated.lock();
+                                            for n in found.discovered_names {
+                                                act.insert(n);
+                                            }
+                                            (None, Ok(ToolOutput::Json(found.value)))
+                                        }
+                                        Err(e) => (None, Err(e)),
+                                    }
+                                }
+                            }
+                        } else {
+                            let inner = call
+                                .arguments
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned);
+                            if let Some(ref n) = inner {
+                                shared_activated.lock().insert(n.clone());
+                            }
+                            let r = deferred_catalog
+                                .execute_tool_call(&call.arguments, tool_ctx)
+                                .await;
+                            (inner, r)
+                        };
+
+                        result_blocks.push(finalize_tool_call_result(
+                            &self.cfg.turn_id,
+                            ToolCallIdent {
+                                call_id: &call.call_id,
+                                tool_name: &call.tool_name,
+                                inner_tool_name: inner_name.as_deref(),
+                            },
+                            raw_res,
+                            tool_ctx,
+                            self.cfg.overflow_threshold_chars,
+                            &mut projector,
+                            &emit_stream_event,
+                        ));
+                        idx += 1;
+                        continue;
+                    }
+
+                    let batch_start = idx;
+                    while idx < tool_calls.len()
+                        && !(self.cfg.deferred_tool_search
+                            && matches!(
+                                tool_calls[idx].tool_name.as_str(),
+                                "toolSearch" | "toolCall"
+                            ))
+                    {
+                        idx += 1;
+                    }
+
+                    let batch_results = execute_tool_batch(
+                        &tools_map,
+                        &tool_calls[batch_start..idx],
+                        tool_ctx,
+                        None,
+                    )
+                    .await;
+
+                    for b_res in batch_results {
+                        result_blocks.push(finalize_tool_call_result(
+                            &self.cfg.turn_id,
+                            ToolCallIdent {
+                                call_id: &b_res.call_id,
+                                tool_name: &b_res.tool_name,
+                                inner_tool_name: None,
+                            },
+                            b_res.output,
+                            tool_ctx,
+                            self.cfg.overflow_threshold_chars,
+                            &mut projector,
+                            &emit_stream_event,
+                        ));
+                    }
+
+                    if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
+                        interrupted_mid_batch = true;
+                        break;
+                    }
                 }
             }
 

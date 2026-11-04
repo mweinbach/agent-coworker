@@ -99,7 +99,7 @@ export async function startRustTestServer(opts?: {
     COWORK_HOME_OVERRIDE: coworkHomeDir,
     COWORK_REPO_ROOT: REPO_ROOT,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
-    COWORK_NETWORK_TELEMETRY_DISABLED: "1",
+    COWORK_DISABLE_NETWORK_TELEMETRY: "1",
     ...opts?.env,
   };
 

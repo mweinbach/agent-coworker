@@ -19,7 +19,7 @@ fn cli(home: &Path) -> Command {
         .env("COWORK_HOME_OVERRIDE", home)
         .env("COWORK_DISABLE_RUNTIME", "1")
         .env("COWORK_RUNTIME_ALLOW_NETWORK", "0")
-        .env("COWORK_NETWORK_TELEMETRY_DISABLED", "1")
+        .env("COWORK_DISABLE_NETWORK_TELEMETRY", "1")
         .env("LM_STUDIO_BASE_URL", "http://127.0.0.1:9")
         .env("OPENCODE_GO_BASE_URL", "http://127.0.0.1:9/v1")
         .env("OPENCODE_ZEN_BASE_URL", "http://127.0.0.1:9/v1")

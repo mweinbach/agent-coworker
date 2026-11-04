@@ -69,6 +69,8 @@ impl IsolatedCliEnv {
         );
         env.insert("COWORK_DISABLE_RUNTIME".into(), "1".into());
         env.insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "0".into());
+        // The kill switch the server's telemetry resolver reads: no test server may export.
+        env.insert("COWORK_DISABLE_NETWORK_TELEMETRY".into(), "1".into());
         env.insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
         env.insert(
             "OPENCODE_GO_BASE_URL".into(),

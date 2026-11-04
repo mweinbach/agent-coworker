@@ -627,6 +627,22 @@ async fn lmstudio_daemon_load_unload_hits_mock_server_only() {
         .unwrap();
     assert_eq!(prepared.key, "alpha-coder");
 
+    // TS `prepareLmStudioModelMetadataForInference` parity: a non-LLM is refused with a clear
+    // error, and an unloaded model is loaded with the explicit context length even when
+    // autoLoad is off.
+    let err = client
+        .prepare_model_for_inference("text-embedding-nomic")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("is not an LLM"),
+        "embedding model must be refused: {err}"
+    );
+    client
+        .prepare_model_for_inference("zeta-coder")
+        .await
+        .unwrap();
+
     server.abort();
 
     let recorded = state.lock().unwrap();
@@ -638,10 +654,12 @@ async fn lmstudio_daemon_load_unload_hits_mock_server_only() {
     );
     assert_eq!(recorded.unload_calls.len(), 1);
     assert_eq!(recorded.unload_calls[0]["instance_id"], "alpha-coder:1");
-    assert_eq!(recorded.load_calls.len(), 1);
+    assert_eq!(recorded.load_calls.len(), 2, "{:?}", recorded.load_calls);
     assert_eq!(recorded.load_calls[0]["model"], "alpha-coder");
     assert_eq!(recorded.load_calls[0]["context_length"], 16384);
     assert_eq!(recorded.load_calls[0]["echo_load_config"], true);
+    assert_eq!(recorded.load_calls[1]["model"], "zeta-coder");
+    assert_eq!(recorded.load_calls[1]["context_length"], 16384);
 }
 
 #[test]

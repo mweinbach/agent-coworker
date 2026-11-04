@@ -250,7 +250,23 @@ impl LmStudioControlClient {
         Ok(headers)
     }
 
+    /// The LLMs LM Studio knows about (embedding and other non-chat models dropped), sorted
+    /// by key.
     pub async fn list_native_models(
+        &self,
+    ) -> Result<Vec<LmStudioModelInfo>, ProviderTransportError> {
+        let mut llms: Vec<LmStudioModelInfo> = self
+            .list_all_native_models()
+            .await?
+            .into_iter()
+            .filter(|m| m.model_type == "llm")
+            .collect();
+        llms.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(llms)
+    }
+
+    /// Every model LM Studio reports, of any type.
+    async fn list_all_native_models(
         &self,
     ) -> Result<Vec<LmStudioModelInfo>, ProviderTransportError> {
         let url = format!("{}/models", self.options.api_base_url);
@@ -288,19 +304,16 @@ impl LmStudioControlClient {
             ))
         })?;
 
-        let mut llms: Vec<LmStudioModelInfo> = parsed
+        Ok(parsed
             .models
             .into_iter()
-            .filter(|m| m.model_type == "llm")
             .map(|mut m| {
                 if m.vision.is_none() {
                     m.vision = m.capabilities.as_ref().and_then(|c| c.vision);
                 }
                 m
             })
-            .collect();
-        llms.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(llms)
+            .collect())
     }
 
     pub async fn load_model(
@@ -388,7 +401,7 @@ impl LmStudioControlClient {
         model_key: &str,
     ) -> Result<LmStudioModelInfo, ProviderTransportError> {
         let trimmed = model_key.trim();
-        let models = self.list_native_models().await?;
+        let models = self.list_all_native_models().await?;
         let mut model = models
             .into_iter()
             .find(|m| m.key == trimmed)
@@ -399,8 +412,18 @@ impl LmStudioControlClient {
                 ))
             })?;
 
+        // TS `prepareLmStudioModelMetadataForInference`: embedding and other non-chat models
+        // cannot serve a turn.
+        if model.model_type != "llm" {
+            return Err(ProviderTransportError::protocol(format!(
+                "LM Studio model \"{trimmed}\" is not an LLM and cannot be used for chat inference."
+            )));
+        }
+
         if model.loaded_instances.is_empty() {
-            if self.options.auto_load {
+            // An explicit context length always loads the model with it; otherwise only when
+            // autoLoad is on (else LM Studio JIT-loads it on the first request).
+            if self.options.context_length.is_some() || self.options.auto_load {
                 let loaded = self
                     .load_model(trimmed, self.options.context_length)
                     .await?;

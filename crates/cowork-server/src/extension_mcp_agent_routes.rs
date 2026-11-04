@@ -9,6 +9,7 @@ use cowork_config::{
     AgentConfig, ChildModelRoutingMode, ProviderName, canonicalize_sync, get_ai_coworker_paths,
     normalize_child_routing_config, read_connection_store, reconcile_reasoning_provider_options,
 };
+use cowork_harness::agents::ChildTurnReservation;
 use cowork_harness::agents::profiles::AgentProfileUpsertInput;
 use cowork_harness::extensions::types::MarketplaceSourceInput;
 use cowork_harness::{
@@ -30,7 +31,9 @@ use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, error_codes,
 };
 use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
-use cowork_providers::chat_completions::lmstudio::resolve_lmstudio_options;
+use cowork_providers::chat_completions::lmstudio::{
+    LmStudioControlClient, LmStudioOptions, resolve_lmstudio_options,
+};
 use cowork_providers::resolve_provider_api_key;
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, resolve_sandbox_policy, scratch_roots,
@@ -47,6 +50,31 @@ use crate::turn_runner::{
     ActiveTurnControl, build_memory_prompt_section, new_canonical_message, new_text_block,
     parse_stored_canonical_messages, select_provider_transport,
 };
+
+/// Points a turn's tool env (`HOME`, `COWORK_HOME_OVERRIDE`) at the user home. Both name the
+/// home, not the Cowork dir: consumers such as Windows sandbox detection
+/// (`windows_sandbox_home`) and `resolve_home_dir` append `.cowork` themselves, so passing
+/// `~/.cowork` would make Bash look for sandbox setup under `~/.cowork/.cowork`.
+pub(crate) fn insert_tool_home_env(env: &mut HashMap<String, String>, homedir: &Path) {
+    let home = homedir.to_string_lossy().into_owned();
+    env.insert("HOME".to_owned(), home.clone());
+    env.insert(cowork_config::COWORK_HOME_OVERRIDE_ENV.to_owned(), home);
+}
+
+/// LM Studio model preparation before inference (TS `prepareLmStudioModelMetadataForInference`):
+/// a loaded model whose context length differs from the requested `contextLength` is reloaded
+/// when `reloadOnContextMismatch` is set, and an unloaded one is loaded when `autoLoad` is on.
+/// The error fails the turn, as it did in TS.
+pub(crate) async fn prepare_lmstudio_model_for_turn(
+    options: &LmStudioOptions,
+    model_id: &str,
+) -> Result<(), String> {
+    LmStudioControlClient::new(options.clone())
+        .prepare_model_for_inference(model_id)
+        .await
+        .map(|_| ())
+        .map_err(|err| err.message)
+}
 
 struct ChildActiveTurnGuard {
     runtime: Arc<ServerRuntimeState>,
@@ -112,8 +140,76 @@ struct ServerChildTurnExecutor {
     runtime: Weak<ServerRuntimeState>,
 }
 
+/// A parent-driven child run's hold on the child thread's `busy` reservation, the one a direct
+/// `turn/start` on the child checks and takes. Released on drop.
+struct ChildThreadReservation {
+    runtime: Weak<ServerRuntimeState>,
+    live: Arc<Mutex<LiveSession>>,
+}
+
+impl Drop for ChildThreadReservation {
+    fn drop(&mut self) {
+        {
+            let mut live = self.live.lock();
+            live.busy = false;
+            if live.subscribers.is_empty() {
+                live.idle_since = Some(std::time::Instant::now());
+            }
+        }
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.turn_settled_notify.notify_waiters();
+        }
+    }
+}
+
+impl ServerRuntimeState {
+    /// Takes a child thread's turn reservation for a parent-driven run: the live session's
+    /// `busy` flag, hydrated from `sessions.db` if needed, so a direct `turn/start` (which checks
+    /// and sets the same flag) and the parent's executor exclude each other. A child with no
+    /// stored row has nothing a direct turn could start on.
+    pub(crate) fn reserve_child_thread(
+        self: &Arc<Self>,
+        agent_id: &str,
+    ) -> Result<ChildTurnReservation, String> {
+        loop {
+            let Some(live_arc) = self.load_thread(agent_id) else {
+                return Ok(ChildTurnReservation::default());
+            };
+            {
+                let mut live = live_arc.lock();
+                if live.busy || self.active_turns.contains_key(agent_id) {
+                    return Err(format!(
+                        "Child agent '{agent_id}' is already running a turn; wait for it to finish."
+                    ));
+                }
+                live.busy = true;
+                live.idle_since = None;
+            }
+            let reservation = ChildThreadReservation {
+                runtime: Arc::downgrade(self),
+                live: Arc::clone(&live_arc),
+            };
+            // Idle eviction removes only non-busy sessions, atomically; if this instance was
+            // evicted before `busy` was set, a later hydration would not see it, so retry.
+            if self
+                .get_live_thread(agent_id)
+                .is_some_and(|current| Arc::ptr_eq(&current, &live_arc))
+            {
+                return Ok(ChildTurnReservation::new(reservation));
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl ChildTurnExecutor for ServerChildTurnExecutor {
+    fn reserve_child_turn(&self, agent_id: &str) -> Result<ChildTurnReservation, String> {
+        self.runtime
+            .upgrade()
+            .ok_or_else(|| "Server runtime has shut down.".to_owned())?
+            .reserve_child_thread(agent_id)
+    }
+
     async fn run_child_turn(
         &self,
         input: ChildTurnInput,
@@ -263,10 +359,13 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             None
         };
 
+        let mut lmstudio_prepare = None;
         let base_url = match input.provider {
             ProviderName::Lmstudio => {
                 let lms = resolve_lmstudio_options(&runtime.env, Some(&merged_provider_opts), None);
-                Some(lms.inference_base_url)
+                let url = lms.inference_base_url.clone();
+                lmstudio_prepare = Some(lms);
+                Some(url)
             }
             other => {
                 child_provider_base_url(other, parent_provider, &merged_provider_opts, &runtime.env)
@@ -402,16 +501,25 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             Arc::clone(&noop_sink),
             None,
         ));
-        runtime.active_turns.insert(
-            input.agent_id.clone(),
-            ActiveTurnControl {
-                turn_id: turn_id.clone(),
-                cancel: runner.cancellation_handle(),
-                steer: Arc::clone(&child_steer),
-                interactions: Arc::clone(&child_im),
-                mention_context,
-            },
-        );
+        // `AgentControl` holds the child's thread reservation (`reserve_child_turn`) for this
+        // run, so no direct turn can own the slot; never replace one that somehow does.
+        match runtime.active_turns.entry(input.agent_id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(_) => {
+                return Err(ChildTurnError::from(format!(
+                    "Child agent '{}' is already running a turn.",
+                    input.agent_id
+                )));
+            }
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(ActiveTurnControl {
+                    turn_id: turn_id.clone(),
+                    cancel: runner.cancellation_handle(),
+                    steer: Arc::clone(&child_steer),
+                    interactions: Arc::clone(&child_im),
+                    mention_context,
+                });
+            }
+        }
         let _active_turn_guard = ChildActiveTurnGuard {
             runtime: Arc::clone(&runtime),
             agent_id: input.agent_id.clone(),
@@ -428,14 +536,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         };
 
         let mut tool_env = runtime.effective_tool_env();
-        tool_env.insert(
-            "HOME".to_owned(),
-            runtime.homedir.to_string_lossy().into_owned(),
-        );
-        tool_env.insert(
-            "COWORK_HOME_OVERRIDE".to_owned(),
-            paths.root_dir.to_string_lossy().into_owned(),
-        );
+        insert_tool_home_env(&mut tool_env, &runtime.homedir);
 
         let rt_for_child_lock = Arc::clone(&runtime);
         let parent_sid_for_lock = input.parent_session_id.clone();
@@ -508,6 +609,9 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         // Install cancellation before the Codex bridge clones `tool_ctx`, so Stop reaches
         // nested tools run through the dynamic-tool bridge.
         runner.install_cancellation(&mut tool_ctx);
+        if let Some(lms) = &lmstudio_prepare {
+            prepare_lmstudio_model_for_turn(lms, &input.model_id).await?;
+        }
         let transport = select_provider_transport(
             input.provider,
             bedrock_auth,
@@ -2593,6 +2697,24 @@ pub(crate) fn apply_session_child_routing_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_home_env_resolves_windows_sandbox_home_to_the_cowork_dir_once() {
+        let home = PathBuf::from("/home/someone");
+        let mut env = HashMap::new();
+        insert_tool_home_env(&mut env, &home);
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/home/someone"));
+        assert_eq!(
+            env.get("COWORK_HOME_OVERRIDE").map(String::as_str),
+            Some("/home/someone")
+        );
+        // Without `COWORK_WIN_SANDBOX_HOME`, sandbox detection appends `.cowork` to the override:
+        // it must land on `~/.cowork`, never `~/.cowork/.cowork`.
+        let sandbox_home = cowork_sandbox::windows_sandbox_home_for_platform(&env, "linux");
+        assert_eq!(sandbox_home, home.join(".cowork"));
+        let paths = get_ai_coworker_paths(Some(&home), &HashMap::new());
+        assert_eq!(sandbox_home, paths.root_dir);
+    }
 
     #[test]
     fn child_base_url_ignores_parent_top_level_override_for_other_providers() {

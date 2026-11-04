@@ -381,14 +381,64 @@ impl TaskContinuationDispatcher for ServerTaskContinuationDispatcher {
             .runtime
             .upgrade()
             .ok_or_else(|| "Server runtime has shut down.".to_owned())?;
+        dispatch_task_continuation(
+            runtime,
+            session_id,
+            prompt,
+            display_text,
+            MAX_TASK_CONTINUATION_FOLLOW_UPS,
+        )
+        .await
+    }
+}
+
+/// How many times an undelivered steered task answer is re-dispatched after its turn settles.
+const MAX_TASK_CONTINUATION_FOLLOW_UPS: u8 = 3;
+
+/// Delivers a task answer to its thread: steers it into the active turn, else starts a turn.
+///
+/// An admitted steer is not yet delivered: the turn may settle without taking it (a blocking
+/// question stops the asking turn after its tool step and rejects queued steers). So a steered
+/// answer is watched until that turn settles, and re-dispatched (as a new turn) if the turn's
+/// history did not record it, instead of being acknowledged and then lost.
+fn dispatch_task_continuation(
+    runtime: Arc<ServerRuntimeState>,
+    session_id: String,
+    prompt: String,
+    display_text: String,
+    follow_ups_left: u8,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<TaskQuestionResumeStatus, String>> + Send>,
+> {
+    // Boxed (not `async fn`) because a steered answer's follow-up re-enters this function.
+    Box::pin(async move {
         if runtime.load_thread(&session_id).is_none() {
             return Err("Task continuation thread could not be loaded".to_owned());
         }
 
         if let Some(ctrl) = runtime.active_turns.get(&session_id) {
             let steer = Arc::clone(&ctrl.steer);
+            let turn_id = ctrl.turn_id.clone();
             drop(ctrl);
-            steer.enqueue_steer(prompt, None).map_err(|e| e.message)?;
+            let delivered_before = count_recorded_user_messages(&runtime, &session_id, &prompt);
+            steer
+                .enqueue_steer(prompt.clone(), None)
+                .map_err(|e| e.message)?;
+            if follow_ups_left > 0 {
+                let weak = Arc::downgrade(&runtime);
+                tokio::spawn(async move {
+                    follow_up_steered_task_answer(
+                        weak,
+                        session_id,
+                        turn_id,
+                        prompt,
+                        display_text,
+                        delivered_before,
+                        follow_ups_left - 1,
+                    )
+                    .await;
+                });
+            }
             return Ok(TaskQuestionResumeStatus::Steered);
         }
 
@@ -409,6 +459,85 @@ impl TaskContinuationDispatcher for ServerTaskContinuationDispatcher {
             .map_err(|e| e.message)?;
 
         Ok(TaskQuestionResumeStatus::Queued)
+    })
+}
+
+/// User messages in the thread's stored history whose text is exactly `text` (trimmed). The
+/// running turn's history lands in the live session before the turn leaves `active_turns`.
+fn count_recorded_user_messages(
+    runtime: &ServerRuntimeState,
+    session_id: &str,
+    text: &str,
+) -> usize {
+    let Some(live) = runtime.get_live_thread(session_id) else {
+        return 0;
+    };
+    let stored = live.lock().messages.clone();
+    let text = text.trim();
+    crate::turn_runner::parse_stored_canonical_messages(&stored)
+        .iter()
+        .filter(|m| {
+            m.role == cowork_inference::MessageRole::User
+                && cowork_harness::assistant_content_text(&m.content).as_deref() == Some(text)
+        })
+        .count()
+}
+
+/// Waits for the turn a task answer was steered into to settle; if its history did not record
+/// the answer (the steer was rejected at settlement), dispatches the answer again.
+async fn follow_up_steered_task_answer(
+    runtime: Weak<ServerRuntimeState>,
+    session_id: String,
+    turn_id: String,
+    prompt: String,
+    display_text: String,
+    delivered_before: usize,
+    follow_ups_left: u8,
+) {
+    loop {
+        let Some(rt) = runtime.upgrade() else {
+            return;
+        };
+        let settled = Arc::clone(&rt.turn_settled_notify);
+        let notified = settled.notified();
+        let running = rt
+            .active_turns
+            .get(&session_id)
+            .is_some_and(|ctrl| ctrl.turn_id == turn_id);
+        if !running {
+            break;
+        }
+        drop(rt);
+        let _ = tokio::time::timeout(Duration::from_millis(250), notified).await;
+    }
+    let Some(runtime) = runtime.upgrade() else {
+        return;
+    };
+    if count_recorded_user_messages(&runtime, &session_id, &prompt) > delivered_before {
+        return;
+    }
+    // The task may have ended meanwhile (a terminal task quiesces and interrupts its threads).
+    if runtime
+        .task_coordinator
+        .get_context_for_thread(&session_id)
+        .is_none()
+    {
+        return;
+    }
+    if let Err(err) = dispatch_task_continuation(
+        Arc::clone(&runtime),
+        session_id.clone(),
+        prompt,
+        display_text,
+        follow_ups_left,
+    )
+    .await
+    {
+        tracing::warn!(%session_id, error = %err, "task answer could not be delivered after its steer was rejected");
+        runtime.observability.record_session_log(
+            &session_id,
+            &format!("Task answer could not be delivered after its steer was rejected: {err}"),
+        );
     }
 }
 

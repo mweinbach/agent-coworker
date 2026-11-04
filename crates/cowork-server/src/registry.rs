@@ -683,6 +683,9 @@ pub struct ServerRuntimeState {
     pub(crate) skill_watcher_seq: std::sync::atomic::AtomicU64,
     pub(crate) agent_controls: DashMap<String, Arc<cowork_harness::AgentControl>>,
     runtime_env_overlay: RwLock<HashMap<String, String>>,
+    /// Managed runtime refused by [`Self::effective_tool_env`]'s integrity re-check; its
+    /// entries stay stripped from every later tool env.
+    runtime_refused_dir: RwLock<Option<PathBuf>>,
     pub(crate) runtime_trusted_keys: RwLock<cowork_env::TrustedKeyRing>,
     runtime_lease: Mutex<Option<cowork_env::RuntimeConsumerLease>>,
     startup_state: Mutex<RuntimeDiagnosticsStartup>,
@@ -703,6 +706,17 @@ pub struct ServerRuntimeState {
     /// removes it (see `MemoryGenerationGuard`).
     pub(crate) memory_generation_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(crate) interaction_managers: DashMap<String, Arc<cowork_harness::InteractionManager>>,
+    /// Interaction managers replaced by a later turn, kept (bounded by count and the receipt
+    /// window) so a retried answer to an already-resolved server request is still recognized as
+    /// a duplicate after the next turn starts (see `retire_interaction_manager`).
+    pub(crate) retired_interaction_managers: DashMap<
+        String,
+        std::collections::VecDeque<(Instant, Arc<cowork_harness::InteractionManager>)>,
+    >,
+    /// Setup-phase interrupt flags of reserved turns: `turn/start` reserves the thread before its
+    /// async setup and publishes `active_turns` only once the runner exists, so a
+    /// `turn/interrupt` in between sets this flag and the turn ends before its first step.
+    pub(crate) turn_setup_interrupts: DashMap<String, Arc<std::sync::atomic::AtomicBool>>,
     /// Serializes each session's `persist_live_session` writes.
     pub(crate) session_persist_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     /// Per-thread emission/resume cut (see [`ThreadEmitGate`]).
@@ -868,6 +882,7 @@ impl ServerRuntimeState {
             skill_watcher_seq: std::sync::atomic::AtomicU64::new(0),
             agent_controls: DashMap::new(),
             runtime_env_overlay: RwLock::new(HashMap::new()),
+            runtime_refused_dir: RwLock::new(None),
             runtime_trusted_keys: RwLock::new(cowork_env::TrustedKeyRing::with_official_defaults()),
             runtime_lease: Mutex::new(None),
             startup_state: Mutex::new(RuntimeDiagnosticsStartup {
@@ -885,6 +900,8 @@ impl ServerRuntimeState {
             deleted_sessions: DashMap::new(),
             memory_generation_locks: DashMap::new(),
             interaction_managers: DashMap::new(),
+            retired_interaction_managers: DashMap::new(),
+            turn_setup_interrupts: DashMap::new(),
             thread_emit_gates: DashMap::new(),
             session_persist_locks: DashMap::new(),
             idempotency_ledgers: DashMap::new(),
@@ -1846,26 +1863,7 @@ impl ServerRuntimeState {
             return Ok((thread, false));
         }
 
-        let candidate_id = Uuid::new_v4().to_string();
-        let winning_id = if let Some(key) = &creation_key {
-            let bound = self
-                .session_db
-                .bind_thread_creation_key(key, &candidate_id)
-                .await
-                .map_err(|e| format!("Failed to bind thread creation key: {e}"))?;
-            self.creation_keys.insert(key.clone(), bound.clone());
-            bound
-        } else {
-            candidate_id.clone()
-        };
-
-        if winning_id != candidate_id
-            && let Some(existing_live) = self.try_load_thread(&winning_id)?
-        {
-            self.subscribe(connection_id, &winning_id);
-            let thread = self.build_thread_from_live(&existing_live.lock());
-            return Ok((thread, false));
-        }
+        let winning_id = Uuid::new_v4().to_string();
 
         let cfg = self
             .load_workspace_config(cwd)
@@ -1950,26 +1948,59 @@ impl ServerRuntimeState {
             stored_seq: 0,
         };
 
-        // Concurrent `thread/start`s with the same `clientThreadId` all bind the same id; the
-        // first to install its session owns creation and the rest join it.
-        let created = match self.sessions.entry(winning_id.clone()) {
-            dashmap::mapref::entry::Entry::Occupied(_) => None,
-            dashmap::mapref::entry::Entry::Vacant(slot) => {
-                let live_arc = Arc::new(Mutex::new(live));
-                slot.insert(live_arc.clone());
-                Some(live_arc)
+        // With a `clientThreadId`, the key binding and the initial session row commit in one
+        // SQLite transaction. A creator that loses the race (in this process or another one
+        // sharing `sessions.db`) loads the committed thread instead of installing a second empty
+        // one whose later persists would overwrite the winner's saved work.
+        let initial_seq = match &creation_key {
+            Some(key) => {
+                let initial = PersistedSessionMutation {
+                    session_id: winning_id.clone(),
+                    event_type: "thread/started".to_owned(),
+                    event_ts: Some(now.clone()),
+                    direction: Some("server".to_owned()),
+                    payload: None,
+                    snapshot: live.to_snapshot_data(),
+                };
+                let (bound, created_seq) = self
+                    .session_db
+                    .bind_thread_creation_key_with_session(key, initial)
+                    .await
+                    .map_err(|e| format!("Failed to bind thread creation key: {e}"))?;
+                self.creation_keys.insert(key.clone(), bound.clone());
+                let Some(seq) = created_seq else {
+                    let existing = self
+                        .subscribe(connection_id, &bound)
+                        .ok_or_else(|| format!("Unknown thread: {bound}"))?;
+                    let thread = self.build_thread_from_live(&existing.lock());
+                    return Ok((thread, false));
+                };
+                Some(seq)
             }
+            None => None,
         };
-        let Some(live_arc) = created else {
-            let existing = self
-                .subscribe(connection_id, &winning_id)
-                .ok_or_else(|| format!("Unknown thread: {winning_id}"))?;
-            let thread = self.build_thread_from_live(&existing.lock());
-            return Ok((thread, false));
+
+        // Once the keyed row is committed, a concurrent joiner may hydrate it before this
+        // creator installs its instance; keep whichever was installed first so every caller
+        // shares one subscriber set and one `busy` reservation.
+        let created = Arc::new(Mutex::new(live));
+        let installed = self
+            .sessions
+            .entry(winning_id.clone())
+            .or_insert_with(|| Arc::clone(&created))
+            .value()
+            .clone();
+        let live_arc = if Arc::ptr_eq(&installed, &created) {
+            installed
+        } else {
+            self.subscribe(connection_id, &winning_id)
+                .ok_or_else(|| format!("Unknown thread: {winning_id}"))?
         };
-        self.persist_live_session(&live_arc, "thread/started")
-            .await
-            .map_err(|e| format!("Failed to persist thread: {e}"))?;
+        match initial_seq {
+            None => self.persist_live_session(&live_arc, "thread/started").await,
+            Some(seq) => self.persist_created_session_snapshot(&live_arc, seq).await,
+        }
+        .map_err(|e| format!("Failed to persist thread: {e}"))?;
 
         let thread = self.build_thread_from_live(&live_arc.lock());
         let _ = self
@@ -1986,6 +2017,42 @@ impl ServerRuntimeState {
             .await;
 
         Ok((thread, true))
+    }
+
+    /// Finishes persisting a session whose initial row `start_or_get_thread` committed together
+    /// with its creation key (at event sequence `seq`): records that sequence on the live
+    /// session and writes its snapshot, serialized with other persists of the session.
+    async fn persist_created_session_snapshot(
+        &self,
+        live_arc: &Arc<Mutex<LiveSession>>,
+        seq: u64,
+    ) -> anyhow::Result<()> {
+        let session_id = live_arc.lock().id.clone();
+        let persist_lock = Arc::clone(
+            self.session_persist_locks
+                .entry(session_id.clone())
+                .or_default()
+                .value(),
+        );
+        let _persisting = persist_lock.lock().await;
+        if self.is_session_deleted(&session_id) {
+            return Ok(());
+        }
+        let effective_seq = seq.max(self.journal_tail_seq(&session_id));
+        let snapshot_json = {
+            let mut live = live_arc.lock();
+            live.last_event_seq = live.last_event_seq.max(effective_seq);
+            live.stored_seq = live.stored_seq.max(seq);
+            self.build_session_snapshot_for_live(&live)
+        };
+        self.session_db
+            .persist_session_snapshot(&session_id, &snapshot_json)
+            .await?;
+        // A delete may have committed meanwhile; undo the write so it cannot reappear.
+        if self.is_session_deleted(&session_id) {
+            self.session_db.delete_session(&session_id).await?;
+        }
+        Ok(())
     }
 
     /// `(outputDirectory, uploadsDirectory)` to record on a session created in `cwd`: the
@@ -3550,6 +3617,8 @@ impl ServerRuntimeState {
             self.sessions.remove(id);
             self.thread_emit_gates.remove(id);
             self.session_persist_locks.remove(id);
+            self.retired_interaction_managers.remove(id);
+            self.turn_setup_interrupts.remove(id);
         }
         self.creation_keys
             .retain(|_, bound_id| !tree_ids.contains(bound_id));
@@ -4002,11 +4071,41 @@ impl ServerRuntimeState {
         Ok(CreationPreflightResult { ready, checks })
     }
 
+    /// The environment handed to tools: the host env plus the managed runtime's PATH/env
+    /// overlay. The runtime tree is re-verified first (`prepareTurnToolEnv` parity), through
+    /// the attestation fast path keyed on its tree-state digest, so an untouched runtime costs
+    /// a stat walk rather than a re-hash. A runtime that no longer verifies is refused: its
+    /// overlay is dropped for good and its entries are stripped from the returned env.
     pub fn effective_tool_env(&self) -> HashMap<String, String> {
         let mut merged = self.env.clone();
-        for (k, v) in self.runtime_env_overlay.read().iter() {
-            merged.insert(k.clone(), v.clone());
+        let overlay = self.runtime_env_overlay.read().clone();
+        if let Some(runtime_dir) = overlay.get("COWORK_RUNTIME_DIR").cloned() {
+            let trusted_keys = self.runtime_trusted_keys.read().clone();
+            if let Err(err) =
+                cowork_env::verify_installed_runtime(Path::new(&runtime_dir), &trusted_keys, false)
+            {
+                tracing::warn!(
+                    runtime_dir = runtime_dir.as_str(),
+                    error = %cowork_env::redact_secrets(&err.to_string()),
+                    "managed runtime failed its integrity re-check; removing it from the tool environment"
+                );
+                {
+                    // Sticky, so later calls neither re-hash a tampered tree nor wire it in; a
+                    // concurrent re-bootstrap that installed a different runtime is kept.
+                    let mut current = self.runtime_env_overlay.write();
+                    if current.get("COWORK_RUNTIME_DIR") == Some(&runtime_dir) {
+                        current.clear();
+                        *self.runtime_refused_dir.write() = Some(PathBuf::from(&runtime_dir));
+                    }
+                }
+                strip_runtime_tool_env(&mut merged, Path::new(&runtime_dir));
+                return merged;
+            }
+        } else if let Some(refused) = self.runtime_refused_dir.read().as_deref() {
+            strip_runtime_tool_env(&mut merged, refused);
+            return merged;
         }
+        merged.extend(overlay);
         merged
     }
 
@@ -4051,6 +4150,14 @@ impl ServerRuntimeState {
             st.ready || st.error.is_some()
         };
         if already_settled {
+            // A disabled runtime starts ready; the default plugin bootstrap still runs, just
+            // without gating readiness (TS awaited it alongside runtime setup).
+            if crate::default_global_skills::should_bootstrap_default_global_skills(&self.env) {
+                let this = Arc::clone(self);
+                *self.bootstrap_task.lock() = Some(tokio::spawn(async move {
+                    this.ensure_default_global_skills_ready().await;
+                }));
+            }
             self.startup_notify.notify_waiters();
             return;
         }
@@ -4079,14 +4186,17 @@ impl ServerRuntimeState {
                 }
             });
 
-            let outcome =
+            // Startup becomes ready once both the runtime and the default user plugins settle
+            // (TS `runStartupReadinessWork`); a default plugin failure never blocks readiness.
+            let (outcome, ()) = tokio::join!(
                 cowork_env::ensure_leased_cowork_runtime_ready(cowork_env::EnsureRuntimeOptions {
                     homedir: this.homedir.clone(),
                     env: this.env.clone(),
                     trusted_keys,
                     on_progress: Some(on_progress),
-                })
-                .await;
+                }),
+                this.ensure_default_global_skills_ready(),
+            );
 
             match outcome {
                 Ok((prepared, lease)) => {
@@ -4123,6 +4233,33 @@ impl ServerRuntimeState {
         });
 
         *self.bootstrap_task.lock() = Some(handle);
+    }
+
+    /// Installs the default user-scope marketplace plugins on a clean home
+    /// ([`crate::default_global_skills`]); failures are logged and recorded, never propagated.
+    async fn ensure_default_global_skills_ready(&self) {
+        if !crate::default_global_skills::should_bootstrap_default_global_skills(&self.env) {
+            return;
+        }
+        match self.load_workspace_config(&self.working_directory) {
+            Ok(cfg) => {
+                if let Some(outcome) =
+                    crate::default_global_skills::ensure_default_global_skills_ready(
+                        &cfg, &self.env,
+                    )
+                    .await
+                    && !outcome.installed.is_empty()
+                {
+                    tracing::info!(
+                        installed = ?outcome.installed,
+                        "[default-skills] Installed default marketplace plugins"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "[default-skills] Default skill bootstrap skipped: config failed to load");
+            }
+        }
     }
 
     pub async fn handle_runtime_libreoffice_check(
@@ -4246,6 +4383,37 @@ impl ServerRuntimeState {
             .record_server_event("info", "server.stopped", None, None);
         self.observability.flush().await;
     }
+}
+
+/// Removes a refused managed runtime from a tool env (TS `removeRuntimeEnv`): every
+/// `COWORK_RUNTIME_*` variable, `PATH`/`NODE_PATH` entries inside `runtime_dir`, and
+/// `NODE_OPTIONS` imports that load files from it.
+fn strip_runtime_tool_env(env: &mut HashMap<String, String>, runtime_dir: &Path) {
+    let platform = cowork_sandbox::host_platform();
+    let runtime_dir_str = runtime_dir.to_string_lossy().into_owned();
+    env.retain(|key, _| !key.to_ascii_uppercase().starts_with("COWORK_RUNTIME_"));
+    for (key, value) in env.iter_mut() {
+        match key.to_ascii_uppercase().as_str() {
+            "PATH" | "NODE_PATH" => {
+                let kept: Vec<String> = cowork_env::split_path_value(value, platform)
+                    .into_iter()
+                    .filter(|entry| !Path::new(entry).starts_with(runtime_dir))
+                    .collect();
+                *value = cowork_env::join_path_value(&kept, platform);
+            }
+            "NODE_OPTIONS" => {
+                *value = value
+                    .split_whitespace()
+                    .filter(|opt| {
+                        !(opt.starts_with("--import=") && opt.contains(runtime_dir_str.as_str()))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            }
+            _ => {}
+        }
+    }
+    env.retain(|key, value| !(key.eq_ignore_ascii_case("NODE_OPTIONS") && value.is_empty()));
 }
 
 /// Reduce a client-supplied upload filename to one safe path component.

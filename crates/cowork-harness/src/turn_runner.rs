@@ -28,7 +28,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::interactions::{HarnessEventSink, InteractionManager};
+use crate::interactions::{
+    HarnessEventSink, InteractionManager, ModelCallOutcome, ModelCallRecord,
+};
 use crate::steer::{
     STEER_REJECTED_INTERRUPTED, STEER_REJECTED_MAX_STEPS, STEER_REJECTED_TURN_ENDED,
     SteerCoordinator,
@@ -446,7 +448,7 @@ impl TurnStepRunner {
         // used up its step budget.
         let mut steps_exhausted = false;
 
-        'step_loop: for _step in 0..max_steps {
+        'step_loop: for step_index in 0..max_steps {
             steps_exhausted = false;
             if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
                 status = "interrupted".to_owned();
@@ -591,6 +593,7 @@ impl TurnStepRunner {
                 emit_stream_event(&mut projector, &ev);
             };
             let transport_step = Arc::clone(&transport);
+            let step_started = std::time::Instant::now();
             let step_result = execute_step_with_sink(
                 &policy,
                 &budget,
@@ -606,9 +609,31 @@ impl TurnStepRunner {
             )
             .await;
 
+            let model_call = |outcome: ModelCallOutcome<'_>| {
+                sink.record_model_call(&ModelCallRecord {
+                    step_number: step_index + 1,
+                    provider: self.cfg.provider,
+                    model_id: &self.cfg.model_id,
+                    duration_ms: step_started.elapsed().as_millis() as u64,
+                    system_prompt: &req_template.system_prompt,
+                    messages: &req_template.messages,
+                    outcome,
+                });
+            };
             let step_ok = match step_result {
-                Ok(res) => res,
+                Ok(res) => {
+                    model_call(ModelCallOutcome::Completed {
+                        assistant: &res.assistant,
+                        usage: &res.usage,
+                    });
+                    res
+                }
                 Err(err) => {
+                    model_call(ModelCallOutcome::Failed {
+                        message: &err.message,
+                        code: err.code.as_deref(),
+                        aborted: err.is_abort || self.cancel_token.is_cancelled(),
+                    });
                     if err.is_abort || self.cancel_token.is_cancelled() {
                         status = "interrupted".to_owned();
                     } else {

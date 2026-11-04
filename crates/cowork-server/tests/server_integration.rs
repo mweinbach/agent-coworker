@@ -961,6 +961,9 @@ async fn sidecar_reports_real_download_progress_without_delaying_server_listenin
     iso.env.remove("COWORK_DISABLE_RUNTIME");
     iso.env
         .insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "1".into());
+    // Keep the default plugin bootstrap off the real GitHub marketplace.
+    iso.env
+        .insert("COWORK_BOOTSTRAP_DEFAULT_SKILLS".into(), "0".into());
     iso.env.insert(
         "COWORK_RUNTIME_BASE_URL".into(),
         format!("http://{}", release.local_addr().unwrap()),

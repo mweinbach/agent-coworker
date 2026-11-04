@@ -278,6 +278,9 @@ printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/
         &zip_path,
     )
     .unwrap();
+    // The fixture's python wraps the host interpreter, which lacks the managed runtime's
+    // libraries; skip the pre-publish executable probe for this home.
+    let _probe = cowork_env::installer::skip_runtime_executable_probe(home);
     let installed = install_v1_zip_runtime(
         &zip_path,
         &RuntimeInstallOptions {
@@ -591,6 +594,8 @@ async fn background_runtime_bootstrap_distinguishes_offline_skip_from_online_dow
         home_fail.to_string_lossy().into_owned(),
     );
     fail_env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "1".to_owned());
+    // Keep the default plugin bootstrap off the real GitHub marketplace.
+    fail_env.insert("COWORK_BOOTSTRAP_DEFAULT_SKILLS".to_owned(), "0".to_owned());
     fail_env.insert(
         "COWORK_RUNTIME_BASE_URL".to_owned(),
         format!("http://{addr}"),

@@ -40,7 +40,7 @@ pub use agents::{
 pub use attachments::{MaterializedTurnInput, materialize_turn_attachments};
 pub use extensions::{ExtensionManager, SkillMutationBus, SkillMutationSignal};
 pub use idempotency::{AcceptedTurnRecord, IdempotencyCheckOutcome, TurnIdempotencyLedger};
-pub use interactions::{HarnessEventSink, InteractionManager};
+pub use interactions::{HarnessEventSink, InteractionManager, ModelCallOutcome, ModelCallRecord};
 pub use memory_generator::{
     GeneratedNoteTarget, MemoryGenerator, RemoteMemoryModel, generated_note_target,
 };

@@ -2491,11 +2491,15 @@ printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w
-                .as_str()
-                .unwrap_or("")
-                .contains("Native rendering failed:")),
-        "expected Native rendering failed warning after runtime tamper, got: {prev_tampered}"
+            .any(|w| {
+                let w = w.as_str().unwrap_or("");
+                // The turn-entry integrity recheck now refuses the tampered runtime before the
+                // renderer resolves it ("unavailable"); a renderer-side verification failure
+                // still reports "Native rendering failed:". Either way soffice never runs.
+                w.contains("Native rendering failed:")
+                    || w.contains("verified native presentation renderer is unavailable")
+            }),
+        "expected a native-renderer refusal warning after runtime tamper, got: {prev_tampered}"
     );
 
     server.shutdown().await;
@@ -2779,6 +2783,405 @@ async fn server_telemetry_gates_langfuse_on_observability_enabled_and_honors_pac
         langfuse_hits.load(Ordering::SeqCst),
         0,
         "default observabilityEnabled=false must make zero Langfuse OTLP connections even when keys exist"
+    );
+}
+
+fn chat_sse_tool_call(call_id: &str, tool_name: &str, args: &Value) -> String {
+    let args_str = serde_json::to_string(args).unwrap();
+    format!(
+        concat!(
+            "data: {{\"id\":\"cmpl-tc\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"tool_calls\":[{{\"index\":0,\"id\":{call_id:?},\"type\":\"function\",\"function\":{{\"name\":{tool_name:?},\"arguments\":{args_str:?}}}}}]}}}}]}}\n\n",
+            "data: {{\"id\":\"cmpl-tc\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}],\"usage\":{{\"prompt_tokens\":20,\"completion_tokens\":10,\"total_tokens\":30}}}}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        call_id = call_id,
+        tool_name = tool_name,
+        args_str = args_str,
+    )
+}
+
+/// The exported OTLP spans, flattened out of every Langfuse trace POST.
+fn exported_spans(bodies: &[Value]) -> Vec<Value> {
+    bodies
+        .iter()
+        .flat_map(|b| b["resourceSpans"].as_array().cloned().unwrap_or_default())
+        .flat_map(|rs| rs["scopeSpans"].as_array().cloned().unwrap_or_default())
+        .flat_map(|ss| ss["spans"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+fn span_attr<'a>(span: &'a Value, key: &str) -> Option<&'a Value> {
+    span["attributes"]
+        .as_array()?
+        .iter()
+        .find(|a| a["key"] == key)
+        .map(|a| &a["value"])
+}
+
+fn span_attr_str<'a>(span: &'a Value, key: &str) -> Option<&'a str> {
+    span_attr(span, key)?["stringValue"].as_str()
+}
+
+fn span_attr_int(span: &Value, key: &str) -> Option<i64> {
+    span_attr(span, key)?["intValue"].as_str()?.parse().ok()
+}
+
+/// Runs one turn (a `todoWrite` tool call, then a final answer) against a Langfuse mock and
+/// returns every span exported for it.
+async fn run_tool_then_answer_turn_spans(record_payloads: bool) -> Vec<Value> {
+    let mut iso = IsolatedServerEnv::new("cowork-srv-model-call-spans-");
+    let otlp_bodies: Arc<parking_lot::Mutex<Vec<Value>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let otlp_ref = Arc::clone(&otlp_bodies);
+
+    let mock_app = Router::new()
+        .route(
+            "/api/public/otel/v1/traces",
+            post(move |body: Bytes| {
+                let otlp = Arc::clone(&otlp_ref);
+                async move {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                        otlp.lock().push(v);
+                    }
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|body: Bytes| async move {
+                let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let has_tool_result = parsed["messages"]
+                    .as_array()
+                    .is_some_and(|ms| ms.iter().any(|m| m["role"] == "tool"));
+                let offers_tools = parsed["tools"].as_array().is_some_and(|t| !t.is_empty());
+                if offers_tools && !has_tool_result {
+                    sse_resp(chat_sse_tool_call(
+                        "call_todo_span",
+                        "todoWrite",
+                        &json!({
+                            "todos": [
+                                { "id": "t1", "content": "Trace each model call", "status": "completed", "priority": "high" }
+                            ]
+                        }),
+                    ))
+                } else {
+                    sse_resp(chat_sse_text("FINAL_ANSWER_MARKER"))
+                }
+            }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = listener.local_addr().unwrap().port();
+    let _mock_task = tokio::spawn(async move {
+        axum::serve(listener, mock_app).await.unwrap();
+    });
+
+    iso.env.remove("COWORK_DISABLE_NETWORK_TELEMETRY");
+    iso.env
+        .insert("COWORK_TELEMETRY_MODE".into(), "local-dev".into());
+    iso.env
+        .insert("AGENT_OBSERVABILITY_ENABLED".into(), "1".into());
+    if record_payloads {
+        iso.env
+            .insert("AGENT_OBSERVABILITY_RECORD_INPUTS".into(), "1".into());
+        iso.env
+            .insert("AGENT_OBSERVABILITY_RECORD_OUTPUTS".into(), "1".into());
+    }
+    iso.env
+        .insert("LANGFUSE_PUBLIC_KEY".into(), "pk-lf-spans".into());
+    iso.env
+        .insert("LANGFUSE_SECRET_KEY".into(), "sk-lf-spans".into());
+    iso.env.insert(
+        "LANGFUSE_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}"),
+    );
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-test-key".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}/v1"),
+    );
+
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    let mut notifs = Vec::new();
+    let cwd_str = iso.workspace.to_string_lossy().into_owned();
+    let th = ws_call_collecting(
+        &mut ws,
+        "th-spans",
+        "thread/start",
+        json!({
+            "cwd": cwd_str,
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5"
+        }),
+        &mut notifs,
+    )
+    .await;
+    let tid = th["result"]["thread"]["id"].as_str().unwrap().to_owned();
+    notifs.clear();
+    let _ = ws_call_collecting(
+        &mut ws,
+        "turn-spans",
+        "turn/start",
+        json!({
+            "threadId": tid,
+            "input": [{ "type": "text", "text": "USER_PROMPT_MARKER please plan" }]
+        }),
+        &mut notifs,
+    )
+    .await;
+    collect_until(&mut ws, &mut notifs, 10_000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+    // Shutdown flushes the non-blocking telemetry queue.
+    server.shutdown().await;
+
+    exported_spans(&otlp_bodies.lock())
+}
+
+/// Review regression: a turn that calls a tool and then answers exports the `cowork.turn` span
+/// plus one `cowork.model_call` generation span per model call, linked into one trace, each with
+/// model, step and usage. Request and response payloads appear only when the user opted into
+/// recording both inputs and outputs (TS `recordInputs` / `recordOutputs`).
+#[tokio::test]
+async fn langfuse_exports_one_generation_span_per_model_call_with_payloads_opt_in() {
+    for record_payloads in [false, true] {
+        let spans = run_tool_then_answer_turn_spans(record_payloads).await;
+        let turn_spans: Vec<&Value> = spans
+            .iter()
+            .filter(|s| s["name"] == "cowork.turn")
+            .collect();
+        assert_eq!(turn_spans.len(), 1, "one turn span, got {spans:#?}");
+        let turn_span = turn_spans[0];
+        assert_eq!(
+            span_attr_str(turn_span, "cowork.turn.status"),
+            Some("completed")
+        );
+
+        let mut calls: Vec<&Value> = spans
+            .iter()
+            .filter(|s| s["name"] == "cowork.model_call")
+            .collect();
+        calls.sort_by_key(|s| span_attr_int(s, "llm.step_number"));
+        assert_eq!(
+            calls.len(),
+            2,
+            "a tool call then a final answer is two model calls, got {spans:#?}"
+        );
+
+        let expected = [(1, "toolUse", 20, 10, 30), (2, "stop", 100, 20, 120)];
+        for (span, (step, finish, input, output, total)) in calls.iter().zip(expected) {
+            assert_eq!(
+                span["traceId"], turn_span["traceId"],
+                "same trace as the turn"
+            );
+            assert_eq!(
+                span["parentSpanId"], turn_span["spanId"],
+                "child of the turn span"
+            );
+            assert_eq!(span_attr_int(span, "llm.step_number"), Some(step));
+            assert_eq!(span_attr_str(span, "llm.provider"), Some("together"));
+            assert_eq!(
+                span_attr_str(span, "llm.model"),
+                Some("moonshotai/Kimi-K2.5")
+            );
+            assert_eq!(
+                span_attr_str(span, "langfuse.observation.type"),
+                Some("generation")
+            );
+            assert_eq!(span_attr_str(span, "llm.finish_reason"), Some(finish));
+            assert_eq!(span_attr_int(span, "llm.usage.input_tokens"), Some(input));
+            assert_eq!(span_attr_int(span, "llm.usage.output_tokens"), Some(output));
+            assert_eq!(span_attr_int(span, "llm.usage.total_tokens"), Some(total));
+            assert_eq!(
+                span_attr_int(span, "gen_ai.usage.input_tokens"),
+                Some(input)
+            );
+
+            let payload_keys: Vec<&str> = span["attributes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|a| a["key"].as_str())
+                .filter(|k| k.starts_with("llm.input.") || k.starts_with("llm.output."))
+                .collect();
+            if record_payloads {
+                assert!(
+                    span_attr_str(span, "llm.input.messages")
+                        .is_some_and(|m| m.contains("USER_PROMPT_MARKER")),
+                    "opted-in request payload: {span:#?}"
+                );
+                assert!(span_attr_str(span, "llm.input.system").is_some());
+                let response = span_attr_str(span, "llm.output.response").unwrap_or_default();
+                let marker = if step == 1 {
+                    "todoWrite"
+                } else {
+                    "FINAL_ANSWER_MARKER"
+                };
+                assert!(
+                    response.contains(marker),
+                    "opted-in response payload for step {step}: {response}"
+                );
+            } else {
+                assert!(
+                    payload_keys.is_empty(),
+                    "payload attributes must be absent by default, got {payload_keys:?}"
+                );
+                let raw = span.to_string();
+                assert!(
+                    !raw.contains("USER_PROMPT_MARKER")
+                        && !raw.contains("FINAL_ANSWER_MARKER")
+                        && !raw.contains("[REDACTED]"),
+                    "no request/response content by default: {raw}"
+                );
+            }
+        }
+    }
+}
+
+async fn start_thread_and_run_turn(ws: &mut WsStream, cwd: &str, label: &str) {
+    let mut notifs = Vec::new();
+    let th = ws_call_collecting(
+        ws,
+        &format!("th-{label}"),
+        "thread/start",
+        json!({
+            "cwd": cwd,
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5"
+        }),
+        &mut notifs,
+    )
+    .await;
+    let tid = th["result"]["thread"]["id"].as_str().unwrap().to_owned();
+    notifs.clear();
+    let _ = ws_call_collecting(
+        ws,
+        &format!("turn-{label}"),
+        "turn/start",
+        json!({
+            "threadId": tid,
+            "input": [{ "type": "text", "text": format!("consent turn {label}") }]
+        }),
+        &mut notifs,
+    )
+    .await;
+    collect_until(ws, &mut notifs, 10_000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+}
+
+async fn apply_observability_consent(ws: &mut WsStream, cwd: &str, enabled: bool) {
+    let mut ignored = Vec::new();
+    let applied = ws_call_collecting(
+        ws,
+        &format!("apply-obs-{enabled}"),
+        "cowork/session/defaults/apply",
+        json!({ "cwd": cwd, "config": { "observabilityEnabled": enabled } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(applied.get("error").is_none(), "apply failed: {applied}");
+}
+
+/// Review regression (comment 4468417427): Langfuse consent is re-read for every span, so
+/// turning `observabilityEnabled` off through `cowork/session/defaults/apply` stops exports on
+/// the running server, and turning it back on resumes them, both without a restart.
+#[tokio::test]
+async fn langfuse_export_follows_live_observability_consent_changes() {
+    let mut iso = IsolatedServerEnv::new("cowork-srv-langfuse-consent-");
+    let otlp_hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&otlp_hits);
+    let mock_app = Router::new()
+        .route(
+            "/api/public/otel/v1/traces",
+            post(move || {
+                let hits = Arc::clone(&hits_ref);
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|| async { sse_resp(chat_sse_text("Consent turn ok.")) }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = listener.local_addr().unwrap().port();
+    let _mock_task = tokio::spawn(async move {
+        axum::serve(listener, mock_app).await.unwrap();
+    });
+
+    // Consent comes from the user config only (no `AGENT_OBSERVABILITY_ENABLED` override).
+    let user_cfg = iso.cowork_home.join("config/config.json");
+    fs::create_dir_all(user_cfg.parent().unwrap()).unwrap();
+    fs::write(
+        &user_cfg,
+        json!({ "observabilityEnabled": true }).to_string(),
+    )
+    .unwrap();
+    iso.env.remove("COWORK_DISABLE_NETWORK_TELEMETRY");
+    iso.env
+        .insert("COWORK_TELEMETRY_MODE".into(), "local-dev".into());
+    iso.env
+        .insert("LANGFUSE_PUBLIC_KEY".into(), "pk-lf-consent".into());
+    iso.env
+        .insert("LANGFUSE_SECRET_KEY".into(), "sk-lf-consent".into());
+    iso.env.insert(
+        "LANGFUSE_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}"),
+    );
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-test-key".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}/v1"),
+    );
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+
+    // 1. With consent, a one-step turn exports its model-call span and its turn span.
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    start_thread_and_run_turn(&mut ws, &cwd, "consented").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while otlp_hits.load(Ordering::SeqCst) < 2 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let consented_hits = otlp_hits.load(Ordering::SeqCst);
+    assert_eq!(
+        consented_hits, 2,
+        "model-call span + turn span with consent"
+    );
+
+    // 2. Opting out on the running server stops every new export.
+    apply_observability_consent(&mut ws, &cwd, false).await;
+    let on_disk: Value = serde_json::from_str(&fs::read_to_string(&user_cfg).unwrap()).unwrap();
+    assert_eq!(on_disk["observabilityEnabled"], false, "{on_disk}");
+    start_thread_and_run_turn(&mut ws, &cwd, "revoked").await;
+    // The turn span is emitted just after `turn/completed`; shutdown drains the export queue.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    server.shutdown().await;
+    assert_eq!(
+        otlp_hits.load(Ordering::SeqCst),
+        consented_hits,
+        "no Langfuse trace POST may follow observabilityEnabled=false"
+    );
+
+    // 3. A server started without consent exports once the user opts back in.
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    apply_observability_consent(&mut ws, &cwd, true).await;
+    start_thread_and_run_turn(&mut ws, &cwd, "reconsented").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    server.shutdown().await;
+    assert_eq!(
+        otlp_hits.load(Ordering::SeqCst),
+        consented_hits + 2,
+        "opting back in resumes exports without a restart"
     );
 }
 

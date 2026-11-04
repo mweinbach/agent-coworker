@@ -1098,6 +1098,30 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_mock_tool_call_t
                     .unwrap()
             }),
         )
+        // LM Studio's native model list: turns prepare the model before inference
+        // (`prepareLmStudioModelMetadataForInference`); it is already loaded, so nothing reloads.
+        .route(
+            "/api/v1/models",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "models": [{
+                                "key": "ornith-1.5-122b-uncensored@q4_k_m",
+                                "type": "llm",
+                                "loaded_instances": [{
+                                    "id": "ornith-1.5-122b-uncensored@q4_k_m:1",
+                                    "config": { "context_length": 8192 }
+                                }]
+                            }]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap()
+            }),
+        )
         .route(
             "/v1/chat/completions",
             post(move |body: String| {

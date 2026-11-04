@@ -1037,6 +1037,24 @@ async fn thread_read_and_hydrate_match_strict_typescript_session_snapshot_schema
                     .unwrap()
             }),
         )
+        // Native model list for the pre-inference model preparation (already loaded).
+        .route(
+            "/api/v1/models",
+            axum::routing::get(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "models": [{
+                            "key": "mock-local-model",
+                            "type": "llm",
+                            "loaded_instances": [{ "id": "mock-local-model:1", "config": {} }]
+                        }] })
+                        .to_string(),
+                    ))
+                    .unwrap()
+            }),
+        )
         .route(
             "/v1/chat/completions",
             post(move || {

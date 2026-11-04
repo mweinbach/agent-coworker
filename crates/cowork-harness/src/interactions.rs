@@ -28,6 +28,39 @@ const ASK_TIMEOUT_MESSAGE: &str = "Ask prompt timed out without a response.";
 pub trait HarnessEventSink: Send + Sync {
     fn send_notification(&self, method: &str, params: Value);
     fn send_server_request(&self, request_id: &str, method: &str, params: Value);
+
+    /// Called once per model call (one harness step, after all of its retry attempts settle),
+    /// so the owner can trace it. Everything is borrowed: a sink that does not trace pays
+    /// nothing. The default ignores it.
+    fn record_model_call(&self, _call: &ModelCallRecord<'_>) {}
+}
+
+/// One settled model call, as reported to [`HarnessEventSink::record_model_call`].
+#[derive(Debug, Clone, Copy)]
+pub struct ModelCallRecord<'a> {
+    /// 1-based step number within the turn (TS `llm.step_number`).
+    pub step_number: usize,
+    pub provider: cowork_config::ProviderName,
+    pub model_id: &'a str,
+    /// Wall clock for the whole step, including harness-owned retries.
+    pub duration_ms: u64,
+    /// The request: system prompt and the messages sent to the provider.
+    pub system_prompt: &'a str,
+    pub messages: &'a [cowork_inference::CanonicalMessage],
+    pub outcome: ModelCallOutcome<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ModelCallOutcome<'a> {
+    Completed {
+        assistant: &'a cowork_inference::CanonicalMessage,
+        usage: &'a cowork_inference::TurnUsage,
+    },
+    Failed {
+        message: &'a str,
+        code: Option<&'a str>,
+        aborted: bool,
+    },
 }
 
 enum PendingPrompt {

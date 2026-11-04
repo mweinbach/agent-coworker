@@ -230,12 +230,36 @@ impl std::fmt::Display for ChildTurnError {
     }
 }
 
+/// A child thread's turn reservation, held for one parent-driven run (see
+/// [`ChildTurnExecutor::reserve_child_turn`]). Dropping it releases the thread.
+#[derive(Default)]
+pub struct ChildTurnReservation {
+    _guard: Option<Box<dyn std::any::Any + Send + Sync>>,
+}
+
+impl ChildTurnReservation {
+    pub fn new(guard: impl std::any::Any + Send + Sync) -> Self {
+        Self {
+            _guard: Some(Box::new(guard)),
+        }
+    }
+}
+
 #[async_trait]
 pub trait ChildTurnExecutor: Send + Sync {
     async fn run_child_turn(
         &self,
         input: ChildTurnInput,
     ) -> Result<ChildTurnResult, ChildTurnError>;
+
+    /// Reserves the child's thread for one parent-driven run. The reservation is the same one a
+    /// direct `turn/start` on the child takes, so the two can never run (and persist histories)
+    /// concurrently: whichever comes second is rejected. It is taken before the run reads the
+    /// child's history and held until the run's result is persisted. The default shares
+    /// nothing (executors without direct turns).
+    fn reserve_child_turn(&self, _agent_id: &str) -> Result<ChildTurnReservation, String> {
+        Ok(ChildTurnReservation::default())
+    }
 }
 
 /// Stores a child turn's resulting history and folds its usage into the child's cost tracker.
@@ -874,16 +898,20 @@ impl AgentControl {
         );
         self.emit_agent_list();
 
-        self.launch_turn_loop(agent_id, req.message, cancel_token, loop_finished);
+        self.launch_turn_loop(agent_id, req.message, cancel_token, loop_finished, None);
         Ok(summary)
     }
 
+    /// Runs the child's turns (`initial_prompt`, then any queued inputs). Each run holds the
+    /// child's thread reservation from before it reads the stored history until its result is
+    /// persisted; `initial_reservation` is one the caller already took for the first run.
     fn launch_turn_loop(
         &self,
         agent_id: String,
         initial_prompt: String,
         initial_cancel: CancellationToken,
         loop_finished: CancellationToken,
+        initial_reservation: Option<ChildTurnReservation>,
     ) {
         let state = Arc::clone(&self.state);
         let status_bus = Arc::clone(&self.status_bus);
@@ -896,7 +924,14 @@ impl AgentControl {
         let finished = loop_finished.drop_guard();
         tokio::spawn(async move {
             let mut next_prompt = Some((initial_prompt, initial_cancel));
+            let mut held_reservation = initial_reservation;
             while let Some((prompt, cancel_token)) = next_prompt.take() {
+                // A direct `turn/start` on the child holds the same reservation: a run that
+                // cannot take it is rejected rather than racing that turn.
+                let reservation = match held_reservation.take() {
+                    Some(held) => Ok(held),
+                    None => executor.reserve_child_turn(&agent_id),
+                };
                 let stored = session_db.get_session_record(&agent_id).ok().flatten();
                 let turn_input = {
                     let mut guard = state.lock();
@@ -931,7 +966,12 @@ impl AgentControl {
                     }
                 };
 
-                let outcome = executor.run_child_turn(turn_input).await;
+                let (outcome, reservation) = match reservation {
+                    Ok(reservation) => {
+                        (executor.run_child_turn(turn_input).await, Some(reservation))
+                    }
+                    Err(message) => (Err(ChildTurnError::from(message)), None),
+                };
                 let was_cancelled = cancel_token.is_cancelled();
 
                 let (updated_summary, role_prompt, msgs, todos, hctx, sandbox) = {
@@ -1030,6 +1070,13 @@ impl AgentControl {
                     entry.summary.title = written.title.clone();
                     updated_summary.title = written.title;
                 }
+                // Keep the thread reserved straight into a queued follow-up; otherwise release it
+                // now that the run's history is persisted.
+                held_reservation = if next_prompt.is_some() {
+                    reservation
+                } else {
+                    None
+                };
 
                 (event_sink)(
                     "cowork/session/agentStatus",
@@ -1067,7 +1114,10 @@ impl AgentControl {
             return Err("Message must not be empty.".to_owned());
         }
 
-        let (summary, tok, finished) = loop {
+        // The child's thread reservation (shared with direct `turn/start`s on the child), taken
+        // outside the state lock once the child looks idle and re-validated under it.
+        let mut reservation: Option<ChildTurnReservation> = None;
+        let (summary, tok, finished, held_reservation) = loop {
             self.ensure_not_task_locked()?;
             let previous = {
                 let mut guard = self.state.lock();
@@ -1103,6 +1153,12 @@ impl AgentControl {
                             "Maximum active child agents per parent ({MAX_ACTIVE_CHILDREN_PER_PARENT}) reached."
                         ));
                     }
+                    let Some(held) = reservation.take() else {
+                        // A direct turn on the child holds it: reject instead of racing it.
+                        drop(guard);
+                        reservation = Some(self.executor.reserve_child_turn(agent_id)?);
+                        continue;
+                    };
                     let tok = CancellationToken::new();
                     let finished = CancellationToken::new();
                     entry.cancel_token = Some(tok.clone());
@@ -1110,9 +1166,10 @@ impl AgentControl {
                     entry.summary.execution_state = "running".to_owned();
                     entry.summary.busy = true;
                     entry.summary.updated_at = Utc::now().to_rfc3339();
-                    break (entry.summary.clone(), tok, finished);
+                    break (entry.summary.clone(), tok, finished, held);
                 }
             };
+            reservation = None;
             previous.cancelled().await;
         };
 
@@ -1124,7 +1181,13 @@ impl AgentControl {
                 "agent": summary,
             }),
         );
-        self.launch_turn_loop(agent_id.to_owned(), trimmed.to_owned(), tok, finished);
+        self.launch_turn_loop(
+            agent_id.to_owned(),
+            trimmed.to_owned(),
+            tok,
+            finished,
+            Some(held_reservation),
+        );
         Ok(summary)
     }
 
@@ -1169,10 +1232,7 @@ impl AgentControl {
                         .iter()
                         .filter(|id| {
                             guard.children.get(*id).is_some_and(|c| {
-                                !matches!(
-                                    c.summary.execution_state.as_str(),
-                                    "pending_init" | "running"
-                                )
+                                is_terminal_execution_state(&c.summary.execution_state)
                             })
                         })
                         .count();
@@ -1206,10 +1266,14 @@ impl AgentControl {
             for id in &target_ids {
                 if let Some(entry) = guard.children.get(id) {
                     agents.push(entry.summary.clone());
-                    match entry.summary.execution_state.as_str() {
-                        "completed" => ready_ids.push(id.clone()),
-                        "errored" => errored_ids.push(id.clone()),
-                        _ => {}
+                    // Same predicate that woke the waiter: `readyAgentIds` means "stopped
+                    // running" (completed, errored, or closed), not "succeeded". Failures are
+                    // additionally flagged in `erroredAgentIds` (legacy StatusBus parity).
+                    if is_terminal_execution_state(&entry.summary.execution_state) {
+                        ready_ids.push(id.clone());
+                    }
+                    if entry.summary.execution_state == "errored" {
+                        errored_ids.push(id.clone());
                     }
                     if let Some(ref mut insp_vec) = inspections {
                         let report_insp = if include_report {
@@ -2032,6 +2096,12 @@ fn serialize_child_messages(entry: &ChildRuntimeEntry) -> Vec<Value> {
         .iter()
         .filter_map(|m| serde_json::to_value(m).ok())
         .collect()
+}
+
+/// A child that is no longer running (completed, errored, or closed). Shared by the
+/// `waitForAgent` wake predicate and its `readyAgentIds` so the two can never disagree.
+fn is_terminal_execution_state(state: &str) -> bool {
+    !matches!(state, "pending_init" | "running")
 }
 
 fn execution_state_to_wire(state: AgentExecutionState) -> &'static str {

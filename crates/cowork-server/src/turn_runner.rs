@@ -11,7 +11,7 @@ use cowork_harness::attachments::{
 };
 use cowork_harness::{
     CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
-    MemoryGenerator, PromptTemplateContext, RemoteMemoryModel, RemoteTitleOptions,
+    MemoryGenerator, ModelCallRecord, PromptTemplateContext, RemoteMemoryModel, RemoteTitleOptions,
     SharedTurnCostTracker, SteerCoordinator, SystemPromptBuildOptions, ToolRetryTarget,
     TurnCancellationHandle, TurnIdempotencyLedger, TurnReference, TurnRunConfig, TurnStepRunner,
     build_layered_system_prompt, generate_heuristic_session_title, generate_remote_session_title,
@@ -109,6 +109,12 @@ struct ServerHarnessEventSink {
     deferred_turn_completed: Mutex<Option<Value>>,
     /// Orders this thread's journaled broadcasts against the `thread/resume` replay cut.
     emit_gate: Arc<ThreadEmitGate>,
+    /// OTLP trace of this turn: the `cowork.turn` span and one `cowork.model_call` child span
+    /// per model call share it.
+    span_trace_id: String,
+    turn_span_id: String,
+    /// Workspace whose current config decides Langfuse consent for each span of this turn.
+    config_cwd: PathBuf,
 }
 
 /// Pending server requests collected by [`capture_pending_server_requests`] on this thread.
@@ -161,6 +167,49 @@ impl ServerHarnessEventSink {
         *self.journal_tx.lock() = None;
     }
 
+    /// The Langfuse exporter the current on-disk config consents to. Re-resolved for every span
+    /// so a consent change (e.g. `observabilityEnabled` turned off through
+    /// `cowork/session/defaults/apply`) applies to the next span without a restart.
+    fn current_langfuse(&self) -> Option<crate::observability::LangfuseExporterConfig> {
+        let telemetry = self.runtime.observability.telemetry();
+        if telemetry.langfuse_disabled_for_process() {
+            return None;
+        }
+        let cfg = self.runtime.load_workspace_config(&self.config_cwd).ok();
+        telemetry.resolve_langfuse(cfg.as_ref())
+    }
+
+    /// Exports the turn's own `cowork.turn` span when the current config consents.
+    fn emit_turn_span(
+        &self,
+        status_error: bool,
+        duration_ms: u64,
+        attributes: std::collections::BTreeMap<String, Value>,
+    ) {
+        let Some(langfuse) = self.current_langfuse() else {
+            return;
+        };
+        self.runtime.observability.emit_span(
+            &langfuse,
+            &crate::observability::ObservabilitySpanInput {
+                name: "cowork.turn".to_owned(),
+                status_error,
+                duration_ms,
+                attributes,
+                trace: Some(self.turn_span_trace()),
+            },
+        );
+    }
+
+    /// Trace ids for the turn's own `cowork.turn` span.
+    fn turn_span_trace(&self) -> crate::observability::ObservabilitySpanTrace {
+        crate::observability::ObservabilitySpanTrace {
+            trace_id: self.span_trace_id.clone(),
+            span_id: self.turn_span_id.clone(),
+            parent_span_id: None,
+        }
+    }
+
     fn flush_deferred_turn_completed(&self) {
         if let Some(params) = self.deferred_turn_completed.lock().take() {
             let fallback = self.fallback_conn_id.lock().clone();
@@ -192,6 +241,29 @@ impl ServerHarnessEventSink {
 }
 
 impl HarnessEventSink for ServerHarnessEventSink {
+    fn record_model_call(&self, call: &ModelCallRecord<'_>) {
+        // Nothing is built (and no payload serialized) unless the current config consents.
+        let Some(langfuse) = self.current_langfuse() else {
+            return;
+        };
+        let observability = &self.runtime.observability;
+        let trace = crate::observability::ObservabilitySpanTrace {
+            trace_id: self.span_trace_id.clone(),
+            span_id: crate::observability::ObservabilitySpanTrace::new_span_id(),
+            parent_span_id: Some(self.turn_span_id.clone()),
+        };
+        let turn_id = self.turn_id.lock().clone();
+        let span = crate::observability::build_model_call_span(
+            call,
+            &self.thread_id,
+            turn_id.as_deref(),
+            trace,
+            langfuse.allow_payload_attributes,
+            observability.redaction_context(),
+        );
+        observability.emit_span(&langfuse, &span);
+    }
+
     fn send_notification(&self, method: &str, params: Value) {
         if method == "serverRequest/resolved"
             && let Some(im) = self.runtime.interaction_managers.get(&self.thread_id)
@@ -438,18 +510,42 @@ pub(crate) fn parse_stored_history(
     StoredHistory { messages, slots }
 }
 
+/// How long a replaced interaction manager is kept for duplicate-response recognition; matches
+/// the interaction receipt window (5 minutes).
+const RETIRED_INTERACTION_MANAGER_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+/// Replaced interaction managers kept per thread (oldest dropped first).
+const MAX_RETIRED_INTERACTION_MANAGERS_PER_THREAD: usize = 8;
+
 /// Releases a thread's `busy` reservation (taken atomically with the busy check in
 /// `turn/start`) unless the turn was committed to `active_turns`.
 struct TurnReservation {
     runtime: Arc<ServerRuntimeState>,
     live: Arc<Mutex<LiveSession>>,
+    thread_id: String,
+    /// Set by a `turn/interrupt` that arrives while the turn is still being set up (see
+    /// `ServerRuntimeState::turn_setup_interrupts`).
+    setup_interrupt: Arc<std::sync::atomic::AtomicBool>,
     prev_idle_since: Option<std::time::Instant>,
     armed: bool,
 }
 
 impl TurnReservation {
-    fn commit(mut self) {
+    /// Hands the reservation over to the turn's `active_turns` entry (which must already be
+    /// installed, so a later `turn/interrupt` finds it). Returns whether a `turn/interrupt`
+    /// arrived during setup; the caller then cancels the turn before its first step.
+    fn commit(mut self) -> bool {
         self.armed = false;
+        self.release_setup_interrupt()
+    }
+
+    fn release_setup_interrupt(&self) -> bool {
+        self.runtime
+            .turn_setup_interrupts
+            .remove_if(&self.thread_id, |_, flag| {
+                Arc::ptr_eq(flag, &self.setup_interrupt)
+            });
+        self.setup_interrupt
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -458,6 +554,7 @@ impl Drop for TurnReservation {
         if !self.armed {
             return;
         }
+        self.release_setup_interrupt();
         {
             let mut live = self.live.lock();
             live.busy = false;
@@ -1183,6 +1280,34 @@ impl ServerRuntimeState {
         }
     }
 
+    /// Keeps a thread's replaced interaction manager for the receipt window, so its resolved
+    /// server-request receipts survive the turn boundary (bounded by count and age per thread).
+    fn retire_interaction_manager(&self, thread_id: &str, manager: Arc<InteractionManager>) {
+        let now = std::time::Instant::now();
+        let mut retired = self
+            .retired_interaction_managers
+            .entry(thread_id.to_owned())
+            .or_default();
+        retired.retain(|(at, _)| now.duration_since(*at) <= RETIRED_INTERACTION_MANAGER_TTL);
+        while retired.len() >= MAX_RETIRED_INTERACTION_MANAGERS_PER_THREAD {
+            retired.pop_front();
+        }
+        retired.push_back((now, manager));
+    }
+
+    fn retired_interaction_owner(&self, request_id: &str) -> Option<Arc<InteractionManager>> {
+        let now = std::time::Instant::now();
+        self.retired_interaction_managers.iter().find_map(|entry| {
+            entry
+                .value()
+                .iter()
+                .rev()
+                .filter(|(at, _)| now.duration_since(*at) <= RETIRED_INTERACTION_MANAGER_TTL)
+                .find(|(_, mgr)| mgr.owns_request_id(request_id))
+                .map(|(_, mgr)| Arc::clone(mgr))
+        })
+    }
+
     pub(crate) fn resolve_client_interaction_response(
         &self,
         connection_id: &str,
@@ -1199,6 +1324,11 @@ impl ServerRuntimeState {
                 owner = Some(Arc::clone(entry.value()));
                 break;
             }
+        }
+        // A request resolved in an earlier turn: its receipt lives on that turn's (retired)
+        // manager, which answers a retry as `already_applied` or a conflict.
+        if owner.is_none() {
+            owner = self.retired_interaction_owner(&req_id_str);
         }
 
         let Some(mgr) = owner.filter(|mgr| {
@@ -1367,6 +1497,7 @@ impl ServerRuntimeState {
             })
             .flatten();
 
+        let setup_interrupt = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (
             provider,
             model_id,
@@ -1393,6 +1524,9 @@ impl ServerRuntimeState {
             // Reserve the thread in the same critical section as the check so concurrent
             // `turn/start` requests cannot both pass it while this one awaits setup.
             live.busy = true;
+            // Published with the reservation so a `turn/interrupt` during setup is not lost.
+            self.turn_setup_interrupts
+                .insert(params.thread_id.clone(), Arc::clone(&setup_interrupt));
             // The parent's `AgentControl` may have run a follow-up on this child since this
             // cache last saw its row; start from the stored transcript then.
             if let Some(stored) = &stored_child_row {
@@ -1437,6 +1571,8 @@ impl ServerRuntimeState {
         let reservation = TurnReservation {
             runtime: Arc::clone(self),
             live: Arc::clone(&live_arc),
+            thread_id: params.thread_id.clone(),
+            setup_interrupt,
             prev_idle_since,
             armed: true,
         };
@@ -1453,7 +1589,16 @@ impl ServerRuntimeState {
                 live.sandbox.clone(),
             )
         };
-        let mut workspace_cfg = self.load_workspace_config(&cwd_path).ok().map(|mut cfg| {
+        // Fail closed: without the merged config a root thread with no saved sandbox would fall
+        // back to `SandboxConfig::default()` (workspace writes + network), widening a stricter
+        // user/workspace policy. The reservation is released when this returns.
+        let loaded_cfg = self.load_workspace_config(&cwd_path).map_err(|e| {
+            JsonRpcLiteError::new(
+                error_codes::INVALID_REQUEST,
+                format!("Cannot start a turn: the workspace config could not be loaded: {e:#}"),
+            )
+        })?;
+        let mut workspace_cfg = Some(loaded_cfg).map(|mut cfg| {
             apply_session_config_overrides(&mut cfg, &session_config_overrides);
             apply_session_io_dirs(
                 &mut cfg,
@@ -1553,6 +1698,10 @@ impl ServerRuntimeState {
 
         // Pre-turn LM Studio reachability gate BEFORE idempotency commit (`routes/turn.ts` parity).
         let mut lmstudio_inference_url: Option<String> = None;
+        // Applied in the turn task before inference (`prepareLmStudioModelMetadataForInference`).
+        let mut lmstudio_prepare: Option<
+            cowork_providers::chat_completions::lmstudio::LmStudioOptions,
+        > = None;
         if provider == ProviderName::Lmstudio {
             let svc = LmStudioLocalService::new();
             let status = svc
@@ -1575,7 +1724,8 @@ impl ServerRuntimeState {
                 ));
             }
             let lms_opts = resolve_lmstudio_options(&self.env, Some(&merged_provider_opts), None);
-            lmstudio_inference_url = Some(lms_opts.inference_base_url);
+            lmstudio_inference_url = Some(lms_opts.inference_base_url.clone());
+            lmstudio_prepare = Some(lms_opts);
             let lms_obj = merged_provider_opts
                 .entry("lmstudio".to_owned())
                 .or_insert_with(|| json!({}));
@@ -1749,6 +1899,9 @@ impl ServerRuntimeState {
             journal_tx: Mutex::new(None),
             deferred_turn_completed: Mutex::new(None),
             emit_gate: self.thread_emit_gate(&params.thread_id),
+            span_trace_id: crate::observability::ObservabilitySpanTrace::new_trace_id(),
+            turn_span_id: crate::observability::ObservabilitySpanTrace::new_span_id(),
+            config_cwd: cwd_path.clone(),
         });
         let sink: Arc<dyn HarnessEventSink> = sink_impl.clone();
 
@@ -1758,8 +1911,12 @@ impl ServerRuntimeState {
                 .with_yolo(effective_yolo)
                 .with_file_change_approval(require_file_approval),
         );
-        self.interaction_managers
-            .insert(params.thread_id.clone(), Arc::clone(&interactions));
+        if let Some(previous) = self
+            .interaction_managers
+            .insert(params.thread_id.clone(), Arc::clone(&interactions))
+        {
+            self.retire_interaction_manager(&params.thread_id, previous);
+        }
 
         let steer = Arc::new(SteerCoordinator::new(
             &params.thread_id,
@@ -1994,7 +2151,13 @@ impl ServerRuntimeState {
                 mention_context,
             },
         );
-        reservation.commit();
+        if reservation.commit() {
+            // Interrupted during setup: the runner sees the cancellation before its first step,
+            // so the turn ends `interrupted` without dispatching to the provider.
+            runner
+                .cancellation_handle()
+                .interrupt("Turn interrupted by user");
+        }
 
         // Phase 1 session title generation: synchronous heuristic title when still at default!
         if title_source_initial == SessionTitleSource::Default && !extracted.text.trim().is_empty()
@@ -2149,13 +2312,9 @@ impl ServerRuntimeState {
             });
 
             let mut tool_env = runtime.effective_tool_env();
-            tool_env.insert(
-                "HOME".to_owned(),
-                runtime.homedir.to_string_lossy().into_owned(),
-            );
-            tool_env.insert(
-                "COWORK_HOME_OVERRIDE".to_owned(),
-                paths.root_dir.to_string_lossy().into_owned(),
+            crate::extension_mcp_agent_routes::insert_tool_home_env(
+                &mut tool_env,
+                &runtime.homedir,
             );
 
             let approval_bridge: Option<Arc<dyn ApprovalHandler>> =
@@ -2290,20 +2449,33 @@ impl ServerRuntimeState {
             // Install cancellation before the Codex bridge clones `tool_ctx`, so Stop reaches
             // nested tools run through the dynamic-tool bridge.
             runner.install_cancellation(&mut tool_ctx);
-            let transport_res = select_provider_transport(
-                provider,
-                bedrock_auth,
-                &runtime.homedir,
-                &runtime.env,
-                Some((
-                    &tool_ctx,
-                    &interactions,
-                    &steer,
-                    overflow_threshold,
-                    Some(runner.codex_bridge_catalog()),
-                )),
-                Some(&runtime.built_in_dir),
-            );
+            // A failed LM Studio preparation fails the turn like a transport error (TS threw it
+            // from model resolution).
+            let lmstudio_prepared = match &lmstudio_prepare {
+                Some(opts) => {
+                    crate::extension_mcp_agent_routes::prepare_lmstudio_model_for_turn(
+                        opts, &model_id,
+                    )
+                    .await
+                }
+                None => Ok(()),
+            };
+            let transport_res = lmstudio_prepared.and_then(|()| {
+                select_provider_transport(
+                    provider,
+                    bedrock_auth,
+                    &runtime.homedir,
+                    &runtime.env,
+                    Some((
+                        &tool_ctx,
+                        &interactions,
+                        &steer,
+                        overflow_threshold,
+                        Some(runner.codex_bridge_catalog()),
+                    )),
+                    Some(&runtime.built_in_dir),
+                )
+            });
 
             match transport_res {
                 Ok(transport) => {
@@ -2393,13 +2565,16 @@ impl ServerRuntimeState {
                         live.last_message_preview = Some(preview);
                         live.provider_state = next_provider_state;
                     }
-                    runtime.active_turns.remove(&thread_id);
-                    runtime.turn_settled_notify.notify_waiters();
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     let _ = runtime
                         .persist_live_session_after_turn(&live_for_task, "turn/completed")
                         .await;
+                    // Release the turn only once its history is persisted: a parent-driven
+                    // child run (`reserve_child_thread`) and settle waiters key off
+                    // `active_turns`, so none of them can read the stored row before it lands.
+                    runtime.active_turns.remove(&thread_id);
+                    runtime.turn_settled_notify.notify_waiters();
                     sink_impl.flush_deferred_turn_completed();
 
                     let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;
@@ -2437,13 +2612,10 @@ impl ServerRuntimeState {
                             "cowork.turn.status".to_owned(),
                             Value::String(outcome.status.clone()),
                         );
-                        runtime.observability.emit_span(
-                            &crate::observability::ObservabilitySpanInput {
-                                name: "cowork.turn".to_owned(),
-                                status_error: outcome.status != "completed",
-                                duration_ms: turn_duration_ms,
-                                attributes: span_attrs,
-                            },
+                        sink_impl.emit_turn_span(
+                            outcome.status != "completed",
+                            turn_duration_ms,
+                            span_attrs,
                         );
 
                         let mut analytics_props = std::collections::BTreeMap::new();
@@ -2741,13 +2913,16 @@ impl ServerRuntimeState {
                         live.updated_at =
                             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                     }
-                    runtime.active_turns.remove(&thread_id);
-                    runtime.turn_settled_notify.notify_waiters();
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     let _ = runtime
                         .persist_live_session_after_turn(&live_for_task, "turn/completed")
                         .await;
+                    // Release the turn only once its history is persisted: a parent-driven
+                    // child run (`reserve_child_thread`) and settle waiters key off
+                    // `active_turns`, so none of them can read the stored row before it lands.
+                    runtime.active_turns.remove(&thread_id);
+                    runtime.turn_settled_notify.notify_waiters();
                     sink_impl.flush_deferred_turn_completed();
                     let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;
                     runtime.observability.record_server_event(
@@ -2780,14 +2955,7 @@ impl ServerRuntimeState {
                             "cowork.turn.status".to_owned(),
                             Value::String("failed".to_owned()),
                         );
-                        runtime.observability.emit_span(
-                            &crate::observability::ObservabilitySpanInput {
-                                name: "cowork.turn".to_owned(),
-                                status_error: true,
-                                duration_ms: turn_duration_ms,
-                                attributes: span_attrs,
-                            },
-                        );
+                        sink_impl.emit_turn_span(true, turn_duration_ms, span_attrs);
 
                         let mut analytics_props = std::collections::BTreeMap::new();
                         analytics_props.insert(
@@ -2995,6 +3163,14 @@ impl ServerRuntimeState {
         {
             interrupted_children = agent_ctrl.interrupt_running_children();
         }
+        // A reserved turn still in setup has no `active_turns` entry yet: flag it so it ends
+        // before its first step. Flag first, then check `active_turns`: `turn/start` installs
+        // `active_turns` before it reads the flag, so one of the two always sees this interrupt.
+        let interrupted_in_setup = self
+            .turn_setup_interrupts
+            .get(&params.thread_id)
+            .map(|flag| flag.store(true, std::sync::atomic::Ordering::SeqCst))
+            .is_some();
         if let Some(ctrl) = self.active_turns.get(&params.thread_id) {
             ctrl.cancel.interrupt("Turn interrupted by user");
             ctrl.steer.interrupt_codex_if_bound();
@@ -3011,7 +3187,7 @@ impl ServerRuntimeState {
                 "interrupted": true,
             }));
         }
-        Ok(json!({ "interrupted": interrupted_children > 0 }))
+        Ok(json!({ "interrupted": interrupted_in_setup || interrupted_children > 0 }))
     }
 }
 

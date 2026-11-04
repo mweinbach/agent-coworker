@@ -7,8 +7,8 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use chrono::{NaiveDate, Utc};
@@ -906,6 +906,163 @@ pub struct ObservabilitySpanInput {
     pub status_error: bool,
     pub duration_ms: u64,
     pub attributes: BTreeMap<String, Value>,
+    /// Places the span in a trace; `None` exports it as the root of a fresh trace.
+    pub trace: Option<ObservabilitySpanTrace>,
+}
+
+/// OTLP ids that tie spans into one trace: a turn span and the model-call spans under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservabilitySpanTrace {
+    /// 32 lowercase hex characters.
+    pub trace_id: String,
+    /// 16 lowercase hex characters.
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+}
+
+impl ObservabilitySpanTrace {
+    pub fn new_trace_id() -> String {
+        Uuid::new_v4().simple().to_string()
+    }
+
+    pub fn new_span_id() -> String {
+        Uuid::new_v4().simple().to_string()[..16].to_owned()
+    }
+}
+
+/// Span name for one model call (one harness step) under a `cowork.turn` span.
+pub const MODEL_CALL_SPAN_NAME: &str = "cowork.model_call";
+
+/// Builds the Langfuse generation span for one model call (TS `observability/modelCallSpan.ts`
+/// parity for the `llm.*` keys). Model, provider, step, usage and finish reason are always
+/// recorded. The request (`llm.input.*`), the response (`llm.output.*`) and error details are
+/// added only when `allow_payloads` (the user opted into recording both inputs and outputs);
+/// otherwise those keys are absent, not just redacted.
+pub fn build_model_call_span(
+    call: &cowork_harness::ModelCallRecord<'_>,
+    session_id: &str,
+    turn_id: Option<&str>,
+    trace: ObservabilitySpanTrace,
+    allow_payloads: bool,
+    ctx: &DiagnosticsRedactionContext,
+) -> ObservabilitySpanInput {
+    use cowork_harness::ModelCallOutcome;
+
+    let mut attrs = BTreeMap::new();
+    let mut put = |key: &str, value: Value| {
+        attrs.insert(key.to_owned(), value);
+    };
+    put("cowork.session.id", Value::from(session_id));
+    if let Some(turn_id) = turn_id {
+        put("cowork.turn.id", Value::from(turn_id));
+    }
+    put("langfuse.observation.type", Value::from("generation"));
+    put("llm.provider", Value::from(call.provider.as_str()));
+    put("llm.model", Value::from(call.model_id));
+    put("gen_ai.request.model", Value::from(call.model_id));
+    put("llm.step_number", Value::from(call.step_number as u64));
+
+    let status_error = match call.outcome {
+        ModelCallOutcome::Completed { assistant, usage } => {
+            put("llm.status", Value::from("completed"));
+            put("llm.usage.input_tokens", Value::from(usage.prompt_tokens));
+            put(
+                "llm.usage.output_tokens",
+                Value::from(usage.completion_tokens),
+            );
+            put("llm.usage.total_tokens", Value::from(usage.total_tokens));
+            put(
+                "gen_ai.usage.input_tokens",
+                Value::from(usage.prompt_tokens),
+            );
+            put(
+                "gen_ai.usage.output_tokens",
+                Value::from(usage.completion_tokens),
+            );
+            for (key, value) in [
+                ("llm.usage.cached_input_tokens", usage.cached_prompt_tokens),
+                (
+                    "llm.usage.cache_write_input_tokens",
+                    usage.cache_write_prompt_tokens,
+                ),
+                (
+                    "llm.usage.reasoning_output_tokens",
+                    usage.reasoning_output_tokens,
+                ),
+            ] {
+                if let Some(value) = value {
+                    put(key, Value::from(value));
+                }
+            }
+            let stop_reason = assistant
+                .stop_reason
+                .and_then(|r| serde_json::to_value(r).ok());
+            if let Some(reason) = &stop_reason {
+                put("llm.finish_reason", reason.clone());
+            }
+            if allow_payloads {
+                if let Some(reason) = stop_reason {
+                    put("llm.output.stop_reason", reason);
+                }
+                let tool_calls: Vec<Value> = assistant
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        cowork_inference::ContentBlock::ToolCall {
+                            id,
+                            name,
+                            arguments,
+                            ..
+                        } => Some(json!({ "id": id, "name": name, "arguments": arguments })),
+                        _ => None,
+                    })
+                    .collect();
+                let response = json!({
+                    "text": cowork_harness::assistant_content_text(&assistant.content),
+                    "toolCalls": tool_calls,
+                });
+                put("llm.output.response", Value::from(response.to_string()));
+            }
+            false
+        }
+        ModelCallOutcome::Failed {
+            message,
+            code,
+            aborted,
+        } => {
+            put(
+                "llm.status",
+                Value::from(if aborted { "interrupted" } else { "failed" }),
+            );
+            // Provider errors can echo the request and response, so they are payload.
+            if allow_payloads {
+                put(
+                    "error.message",
+                    Value::from(redact_diagnostic_text(message, ctx)),
+                );
+                if let Some(code) = code {
+                    put("error.code", Value::from(redact_credential_text(code)));
+                }
+            }
+            true
+        }
+    };
+
+    if allow_payloads {
+        put("llm.input.system", Value::from(call.system_prompt));
+        put(
+            "llm.input.messages",
+            Value::from(serde_json::to_string(call.messages).unwrap_or_default()),
+        );
+    }
+
+    ObservabilitySpanInput {
+        name: MODEL_CALL_SPAN_NAME.to_owned(),
+        status_error,
+        duration_ms: call.duration_ms,
+        attributes: attrs,
+        trace: Some(trace),
+    }
 }
 
 fn is_secret_otel_key(key: &str) -> bool {
@@ -984,8 +1141,18 @@ fn build_otlp_trace_payload(
 ) -> Value {
     let end_ns = Utc::now().timestamp_nanos_opt().unwrap_or(0).max(0) as u64;
     let start_ns = end_ns.saturating_sub(span.duration_ms.saturating_mul(1_000_000));
-    let trace_id = Uuid::new_v4().simple().to_string();
-    let span_id = Uuid::new_v4().simple().to_string()[..16].to_owned();
+    let (trace_id, span_id, parent_span_id) = match &span.trace {
+        Some(t) => (
+            t.trace_id.clone(),
+            t.span_id.clone(),
+            t.parent_span_id.clone(),
+        ),
+        None => (
+            ObservabilitySpanTrace::new_trace_id(),
+            ObservabilitySpanTrace::new_span_id(),
+            None,
+        ),
+    };
 
     let mut attrs = Vec::new();
     for (k, v) in &span.attributes {
@@ -1037,23 +1204,28 @@ fn build_otlp_trace_payload(
         }));
     }
 
+    let mut otlp_span = json!({
+        "traceId": trace_id,
+        "spanId": span_id,
+        "name": span.name,
+        "kind": 1,
+        "startTimeUnixNano": start_ns.to_string(),
+        "endTimeUnixNano": end_ns.to_string(),
+        "attributes": attrs,
+        "status": {
+            "code": if span.status_error { 2 } else { 1 }
+        }
+    });
+    if let Some(parent) = parent_span_id {
+        otlp_span["parentSpanId"] = Value::String(parent);
+    }
+
     json!({
         "resourceSpans": [{
             "resource": { "attributes": resource_attrs },
             "scopeSpans": [{
                 "scope": { "name": "cowork.observability" },
-                "spans": [{
-                    "traceId": trace_id,
-                    "spanId": span_id,
-                    "name": span.name,
-                    "kind": 1,
-                    "startTimeUnixNano": start_ns.to_string(),
-                    "endTimeUnixNano": end_ns.to_string(),
-                    "attributes": attrs,
-                    "status": {
-                        "code": if span.status_error { 2 } else { 1 }
-                    }
-                }]
+                "spans": [otlp_span]
             }]
         }]
     })
@@ -1384,101 +1556,139 @@ enum TelemetryCommand {
     Flush(oneshot::Sender<()>),
 }
 
+/// Starts the non-blocking export worker and returns its queue.
+fn spawn_telemetry_worker() -> mpsc::Sender<TelemetryCommand> {
+    let (tx, mut rx) = mpsc::channel::<TelemetryCommand>(TELEMETRY_QUEUE_CAPACITY);
+    let client = reqwest::Client::builder()
+        .timeout(TELEMETRY_HTTP_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let worker_fut = async move {
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                TelemetryCommand::Langfuse {
+                    endpoint,
+                    auth,
+                    body,
+                } => {
+                    let _ = client
+                        .post(&endpoint)
+                        .header("authorization", auth)
+                        .header("content-type", "application/json")
+                        .json(&body)
+                        .send()
+                        .await;
+                }
+                TelemetryCommand::Sentry {
+                    endpoint,
+                    auth,
+                    envelope,
+                } => {
+                    let _ = client
+                        .post(&endpoint)
+                        .header("x-sentry-auth", auth)
+                        .header("content-type", "application/x-sentry-envelope")
+                        .body(envelope)
+                        .send()
+                        .await;
+                }
+                TelemetryCommand::PostHog { endpoint, body } => {
+                    let _ = client
+                        .post(&endpoint)
+                        .header("content-type", "application/json")
+                        .json(&body)
+                        .send()
+                        .await;
+                }
+                TelemetryCommand::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
+        }
+    };
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(worker_fut);
+    } else {
+        let _ = std::thread::Builder::new()
+            .name("cowork-telemetry".to_owned())
+            .spawn(move || {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    rt.block_on(worker_fut);
+                }
+            });
+    }
+
+    tx
+}
+
 #[derive(Clone)]
 pub struct ServerTelemetry {
     resolved: ResolvedServerTelemetryExporters,
-    tx: Option<mpsc::Sender<TelemetryCommand>>,
+    /// Server env, kept so Langfuse consent can be re-resolved against the current config
+    /// for every span instead of the startup snapshot in `resolved`.
+    env: Arc<HashMap<String, String>>,
+    /// The export worker. Started at construction when an exporter is configured, otherwise on
+    /// the first span the user consents to after startup.
+    tx: Arc<OnceLock<mpsc::Sender<TelemetryCommand>>>,
 }
 
 impl ServerTelemetry {
-    pub fn new(resolved: ResolvedServerTelemetryExporters) -> Self {
-        if resolved.is_inert() {
-            return Self { resolved, tx: None };
+    pub fn new(resolved: ResolvedServerTelemetryExporters, env: &HashMap<String, String>) -> Self {
+        let tx = Arc::new(OnceLock::new());
+        if !resolved.is_inert() {
+            let _ = tx.set(spawn_telemetry_worker());
         }
-
-        let (tx, mut rx) = mpsc::channel::<TelemetryCommand>(TELEMETRY_QUEUE_CAPACITY);
-        let client = reqwest::Client::builder()
-            .timeout(TELEMETRY_HTTP_TIMEOUT)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
-        let worker_fut = async move {
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    TelemetryCommand::Langfuse {
-                        endpoint,
-                        auth,
-                        body,
-                    } => {
-                        let _ = client
-                            .post(&endpoint)
-                            .header("authorization", auth)
-                            .header("content-type", "application/json")
-                            .json(&body)
-                            .send()
-                            .await;
-                    }
-                    TelemetryCommand::Sentry {
-                        endpoint,
-                        auth,
-                        envelope,
-                    } => {
-                        let _ = client
-                            .post(&endpoint)
-                            .header("x-sentry-auth", auth)
-                            .header("content-type", "application/x-sentry-envelope")
-                            .body(envelope)
-                            .send()
-                            .await;
-                    }
-                    TelemetryCommand::PostHog { endpoint, body } => {
-                        let _ = client
-                            .post(&endpoint)
-                            .header("content-type", "application/json")
-                            .json(&body)
-                            .send()
-                            .await;
-                    }
-                    TelemetryCommand::Flush(done) => {
-                        let _ = done.send(());
-                    }
-                }
-            }
-        };
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(worker_fut);
-        } else {
-            let _ = std::thread::Builder::new()
-                .name("cowork-telemetry".to_owned())
-                .spawn(move || {
-                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        rt.block_on(worker_fut);
-                    }
-                });
-        }
-
         Self {
             resolved,
-            tx: Some(tx),
+            env: Arc::new(env.clone()),
+            tx,
         }
     }
 
+    fn sender(&self) -> Option<&mpsc::Sender<TelemetryCommand>> {
+        self.tx.get()
+    }
+
     pub fn is_inert(&self) -> bool {
-        self.tx.is_none()
+        self.tx.get().is_none()
+    }
+
+    /// The Langfuse exporter `cfg` (the current effective config) consents to, re-resolved with
+    /// the server env so a consent change applies without a restart. `None` when AI tracing is
+    /// off, unconfigured, or network telemetry is disabled.
+    pub fn resolve_langfuse(&self, cfg: Option<&AgentConfig>) -> Option<LangfuseExporterConfig> {
+        if self.resolved.network_telemetry_disabled {
+            return None;
+        }
+        resolve_server_telemetry_exporters(&self.env, cfg).langfuse
+    }
+
+    /// True when no config change can enable Langfuse (network telemetry is disabled).
+    pub fn langfuse_disabled_for_process(&self) -> bool {
+        self.resolved.network_telemetry_disabled
     }
 
     pub fn resolved(&self) -> &ResolvedServerTelemetryExporters {
         &self.resolved
     }
 
-    pub fn emit_span(&self, span: &ObservabilitySpanInput, ctx: &DiagnosticsRedactionContext) {
-        let (Some(tx), Some(cfg)) = (&self.tx, &self.resolved.langfuse) else {
+    /// Exports `span` to `cfg`, which the caller resolved from the current config with
+    /// [`Self::resolve_langfuse`]; the startup snapshot never authorizes a span.
+    pub fn emit_span(
+        &self,
+        cfg: &LangfuseExporterConfig,
+        span: &ObservabilitySpanInput,
+        ctx: &DiagnosticsRedactionContext,
+    ) {
+        if self.resolved.network_telemetry_disabled {
             return;
-        };
+        }
+        let tx = self.tx.get_or_init(spawn_telemetry_worker);
         let body = build_otlp_trace_payload(cfg, span, ctx);
         let _ = tx.try_send(TelemetryCommand::Langfuse {
             endpoint: cfg.traces_endpoint.clone(),
@@ -1494,7 +1704,7 @@ impl ServerTelemetry {
         tags: &BTreeMap<String, String>,
         ctx: &DiagnosticsRedactionContext,
     ) {
-        let (Some(tx), Some(cfg)) = (&self.tx, &self.resolved.sentry) else {
+        let (Some(tx), Some(cfg)) = (self.sender(), &self.resolved.sentry) else {
             return;
         };
         let envelope = build_sentry_envelope(cfg, error_type, message, tags, ctx);
@@ -1506,7 +1716,7 @@ impl ServerTelemetry {
     }
 
     pub fn capture_product_event(&self, event_name: &str, properties: &BTreeMap<String, Value>) {
-        let (Some(tx), Some(cfg)) = (&self.tx, &self.resolved.posthog) else {
+        let (Some(tx), Some(cfg)) = (self.sender(), &self.resolved.posthog) else {
             return;
         };
         let mut merged = BTreeMap::new();
@@ -1550,7 +1760,7 @@ impl ServerTelemetry {
     }
 
     pub async fn flush(&self) {
-        let Some(ref tx) = self.tx else {
+        let Some(tx) = self.sender() else {
             return;
         };
         let (done_tx, done_rx) = oneshot::channel();
@@ -1582,7 +1792,7 @@ impl ServerObservability {
         let file_log = should_enable_server_file_log(env)
             .then(|| ServerFileLog::new(cowork_home.join("logs"), None));
         let resolved = resolve_server_telemetry_exporters(env, cfg);
-        let telemetry = ServerTelemetry::new(resolved);
+        let telemetry = ServerTelemetry::new(resolved, env);
         let redaction_ctx = DiagnosticsRedactionContext {
             home_dir: Some(homedir.to_path_buf()),
             workspace_paths: vec![working_directory.to_path_buf()],
@@ -1646,8 +1856,10 @@ impl ServerObservability {
         }
     }
 
-    pub fn emit_span(&self, span: &ObservabilitySpanInput) {
-        self.telemetry.emit_span(span, &self.redaction_ctx);
+    /// See [`ServerTelemetry::emit_span`]: `langfuse` must come from the current config.
+    pub fn emit_span(&self, langfuse: &LangfuseExporterConfig, span: &ObservabilitySpanInput) {
+        self.telemetry
+            .emit_span(langfuse, span, &self.redaction_ctx);
     }
 
     pub fn capture_product_event(&self, event_name: &str, properties: &BTreeMap<String, Value>) {
@@ -2114,6 +2326,66 @@ mod tests {
     }
 
     #[test]
+    fn failed_model_call_span_keeps_error_details_behind_payload_consent() {
+        let messages = vec![];
+        let call = |outcome| cowork_harness::ModelCallRecord {
+            step_number: 3,
+            provider: cowork_config::ProviderName::Openai,
+            model_id: "gpt-test",
+            duration_ms: 5,
+            system_prompt: "SYSTEM_MARKER",
+            messages: &messages,
+            outcome,
+        };
+        let failed = cowork_harness::ModelCallOutcome::Failed {
+            message: "upstream echoed sk-proj-supersecret1234567890abcdef",
+            code: Some("rate_limited"),
+            aborted: false,
+        };
+        let trace = ObservabilitySpanTrace {
+            trace_id: "0".repeat(32),
+            span_id: "1".repeat(16),
+            parent_span_id: Some("2".repeat(16)),
+        };
+        let ctx = DiagnosticsRedactionContext::default();
+
+        let off =
+            build_model_call_span(&call(failed), "s1", Some("t1"), trace.clone(), false, &ctx);
+        assert!(off.status_error);
+        assert_eq!(off.name, MODEL_CALL_SPAN_NAME);
+        assert_eq!(off.attributes["llm.status"], "failed");
+        assert_eq!(off.attributes["llm.step_number"], 3);
+        for key in [
+            "error.message",
+            "error.code",
+            "llm.input.system",
+            "llm.input.messages",
+        ] {
+            assert!(!off.attributes.contains_key(key), "{key} must be opt-in");
+        }
+
+        let on = build_model_call_span(&call(failed), "s1", Some("t1"), trace.clone(), true, &ctx);
+        assert_eq!(on.attributes["error.code"], "rate_limited");
+        assert_eq!(on.attributes["llm.input.system"], "SYSTEM_MARKER");
+        let message = on.attributes["error.message"].as_str().unwrap();
+        assert!(!message.contains("supersecret"), "redacted: {message}");
+
+        let cfg = LangfuseExporterConfig {
+            traces_endpoint: "https://example.invalid/v1/traces".to_owned(),
+            basic_auth_header: "Basic x".to_owned(),
+            environment: "test".to_owned(),
+            release: None,
+            allow_payload_attributes: false,
+        };
+        let payload = build_otlp_trace_payload(&cfg, &off, &ctx);
+        let span = &payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+        assert_eq!(span["traceId"], trace.trace_id);
+        assert_eq!(span["spanId"], trace.span_id);
+        assert_eq!(span["parentSpanId"], "2".repeat(16));
+        assert_eq!(span["status"]["code"], 2);
+    }
+
+    #[test]
     fn otel_string_attributes_truncate_on_char_boundaries() {
         let cfg = LangfuseExporterConfig {
             traces_endpoint: "https://example.invalid/v1/traces".to_owned(),
@@ -2129,6 +2401,7 @@ mod tests {
                 status_error: false,
                 duration_ms: 1,
                 attributes: BTreeMap::from([("label".to_owned(), Value::String(value))]),
+                trace: None,
             };
             let payload = build_otlp_trace_payload(&cfg, &span, &ctx);
             payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"][0]["value"]

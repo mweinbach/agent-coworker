@@ -93,6 +93,18 @@ impl Env {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 axum::Json(json!({ "object": "list", "data": [{ "id": "local-model", "object": "model" }] }))
             }),
+        )
+        // LM Studio's native model list, read by the pre-inference model preparation; the model
+        // is already loaded, so nothing reloads.
+        .route(
+            "/api/v1/models",
+            get(|| async {
+                axum::Json(json!({ "models": [{
+                    "key": "local-model",
+                    "type": "llm",
+                    "loaded_instances": [{ "id": "local-model:1", "config": { "context_length": 8192 } }]
+                }] }))
+            }),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();

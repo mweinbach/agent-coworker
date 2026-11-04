@@ -1111,6 +1111,68 @@ impl SessionDb {
             .await
     }
 
+    /// Binds `creation_key` to `initial.session_id` and inserts that initial session row in one
+    /// SQLite transaction, so no process sharing this database can observe the key bound to a
+    /// thread whose session row does not exist yet.
+    ///
+    /// Returns the thread the key is bound to, plus the event sequence of the initial row when
+    /// this call created it. When another creator (in this or another process) already
+    /// committed the key together with its session, nothing is written and `None` is returned:
+    /// the caller must load that committed thread rather than create a new one. A key left
+    /// bound to a missing session (bound before key and row were committed together) is
+    /// re-bound to `initial.session_id`.
+    pub async fn bind_thread_creation_key_with_session(
+        &self,
+        creation_key: &str,
+        initial: PersistedSessionMutation,
+    ) -> Result<(String, Option<u64>)> {
+        let key = creation_key.to_string();
+        self.write_coordinator
+            .run_exclusive("bind_thread_creation_key_with_session", || async move {
+                self.with_rw_conn_mut(|conn| {
+                    // IMMEDIATE takes SQLite's write lock up front, so a concurrent creator in
+                    // another process waits on `busy_timeout` instead of reading a stale binding.
+                    let tx =
+                        conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    let now = now_iso_millis();
+                    tx.execute(
+                        "INSERT OR IGNORE INTO thread_creation_keys (
+                           creation_key, thread_id, created_at, updated_at
+                         ) VALUES (?1, ?2, ?3, ?4)",
+                        params![key, initial.session_id, now, now],
+                    )?;
+                    let bound: String = tx.query_row(
+                        "SELECT thread_id FROM thread_creation_keys WHERE creation_key = ?1",
+                        params![key],
+                        |r| r.get(0),
+                    )?;
+                    if bound != initial.session_id {
+                        let bound_session_exists = tx
+                            .query_row(
+                                "SELECT 1 FROM sessions WHERE session_id = ?1",
+                                params![bound],
+                                |_| Ok(()),
+                            )
+                            .optional()?
+                            .is_some();
+                        if bound_session_exists {
+                            tx.commit()?;
+                            return Ok((bound, None));
+                        }
+                        tx.execute(
+                            "UPDATE thread_creation_keys SET thread_id = ?2, updated_at = ?3
+                             WHERE creation_key = ?1",
+                            params![key, initial.session_id, now],
+                        )?;
+                    }
+                    let seq = persist_session_mutation_in_tx(&tx, &initial, None)?;
+                    tx.commit()?;
+                    Ok((initial.session_id.clone(), Some(seq)))
+                })
+            })
+            .await
+    }
+
     pub fn get_external_conversation_import(
         &self,
         source: &str,

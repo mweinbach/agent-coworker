@@ -117,6 +117,7 @@ Per-run artifacts:
 
 - Raw-loop runs set `AGENT_WORKING_DIR` to the repo root for config loading, then set each individual run's `workingDirectory` to its run directory.
 - Built-in skills are disabled by default for raw-loop runs unless `COWORK_DISABLE_BUILTIN_SKILLS` is explicitly overridden in the environment.
+- The default marketplace plugin download at server startup is skipped for raw-loop runs unless `COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP` is explicitly overridden in the environment.
 - The runner replaces the machine's `providerOptions` with the harness defaults so a run measures the harness, not the local config.
 - Per-run failures are retried with backoff. If all attempts fail, the runner exits non-zero after writing the attempt traces and final metadata.
 - In **strict mode**, an invalid final contract fails the current attempt without a repair pass. The run still retries failed attempts with backoff, up to the scenario's `maxAttempts` limit (default: 5).

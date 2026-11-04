@@ -56,6 +56,9 @@ const proc = spawn(bin, ["--host", "127.0.0.1", "--port", "0", "--json"], {
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DISABLE_RUNTIME: "0",
     COWORK_RUNTIME_ALLOW_NETWORK: "1",
+    // Runtime setup only (TS ran `ensureCoworkRuntimeReady` alone): startup readiness must not
+    // also wait on the default marketplace plugin download.
+    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
     ...(forceReinstall ? { COWORK_RUNTIME_FORCE: "1" } : {}),
   },
   stdio: ["pipe", "pipe", "inherit"],

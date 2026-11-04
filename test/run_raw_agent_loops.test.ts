@@ -497,6 +497,7 @@ describe("raw loop tool surface and Rust server execution", () => {
     ).toBe("/run/home");
     expect(env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
     expect(env.COWORK_DISABLE_BUILTIN_SKILLS).toBe("1");
+    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe("1");
     expect(buildRawLoopServerEnv({ COWORK_REPO_ROOT: " /custom/root " }).COWORK_REPO_ROOT).toBe(
       "/custom/root",
     );

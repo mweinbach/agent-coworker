@@ -327,6 +327,9 @@ export function buildRawLoopServerEnv(
     COWORK_REPO_ROOT: baseEnv.COWORK_REPO_ROOT?.trim() || REPO_ROOT,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DISABLE_BUILTIN_SKILLS: baseEnv.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
+    // No default marketplace plugin download at startup: it would add skills to the run and
+    // hold turns behind a GitHub fetch.
+    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: baseEnv.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
     COWORK_ENABLE_TASKS: "0",
     COWORK_ENABLE_WORKFLOWS: "0",
     AGENT_ENABLE_MCP: "0",

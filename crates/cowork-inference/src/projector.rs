@@ -241,20 +241,28 @@ impl StreamEventProjector {
                 if delta.is_empty() {
                     return out;
                 }
-                let (item_id, started, buffered) = {
+                // The accumulated text is copied only for the first visible flush; once the
+                // item has started, each update carries just its own delta.
+                let (item_id, buffered) = {
                     let state = self.ensure_active_assistant(turn_id);
                     state.text.push_str(delta);
-                    (state.item_id.clone(), state.started, state.text.clone())
+                    let buffered = if state.started {
+                        None
+                    } else if state.text.trim().is_empty() {
+                        // Whitespace-only so far: buffer until visible text arrives.
+                        return out;
+                    } else {
+                        Some(state.text.clone())
+                    };
+                    (state.item_id.clone(), buffered)
                 };
-                let delta = if started {
-                    delta.clone()
-                } else if buffered.trim().is_empty() {
-                    // Whitespace-only so far: buffer until visible text arrives.
-                    return out;
-                } else {
-                    // First visible text: start the item and flush the buffered prefix with it.
-                    self.start_active_assistant_if_needed(&mut out, turn_id, &item_id);
-                    buffered
+                let delta = match buffered {
+                    None => delta.clone(),
+                    Some(buffered) => {
+                        // First visible text: start the item and flush the buffered prefix.
+                        self.start_active_assistant_if_needed(&mut out, turn_id, &item_id);
+                        buffered
+                    }
                 };
                 self.push_notification(
                     &mut out,

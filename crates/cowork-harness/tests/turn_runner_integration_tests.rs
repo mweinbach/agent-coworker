@@ -54,6 +54,26 @@ fn process_running(pid: i32) -> bool {
     true
 }
 
+/// Host PIDs of live (non-zombie) processes whose argv is exactly `argv`. When `bwrap` is
+/// usable the Bash tool runs in its own PID namespace, so the `$!` the sandboxed shell reports
+/// is a namespace PID that means nothing on the host; Linux finds the process by its command
+/// line instead.
+#[cfg(target_os = "linux")]
+fn live_pids_with_argv(argv: &[&str]) -> Vec<i32> {
+    let mut expected = argv.join("\0");
+    expected.push('\0');
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| {
+            fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|cmd| cmd == expected.as_bytes())
+                && process_running(*pid)
+        })
+        .collect()
+}
+
 /// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
 /// platform temp dir (`/tmp` on Linux) elsewhere.
 fn test_temp_base() -> PathBuf {
@@ -593,6 +613,15 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
     // 2. Test cascading `turn/interrupt` killing child `sleep` process tree & clearing continuation state
     let pid_file = ws.join("sleep_tree.pid");
     let pid_file_str = pid_file.to_string_lossy().into_owned();
+    // A duration unique to this run, so the `sleep` can be found by its command line.
+    let sleep_secs = format!(
+        "120.{:06}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_micros()
+    );
+    let sleep_for_turn = sleep_secs.clone();
     let steer = Arc::new(SteerCoordinator::new(
         "thread-int",
         "turn-int",
@@ -606,7 +635,7 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
                     id: "call_bash_sleep".to_owned(),
                     name: "bash".to_owned(),
                     arguments: serde_json::from_value(json!({
-                        "command": format!("sleep 120 & echo $! > '{pid_file_str}'; wait")
+                        "command": format!("sleep {sleep_for_turn} & echo $! > '{pid_file_str}'; wait")
                     }))
                     .unwrap(),
                     partial_json: None,
@@ -683,11 +712,23 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let child_pid: i32 = fs::read_to_string(&pid_file)
+    let reported_pid: i32 = fs::read_to_string(&pid_file)
         .unwrap()
         .trim()
         .parse()
         .unwrap();
+    #[cfg(target_os = "linux")]
+    let child_pids = {
+        let pids = live_pids_with_argv(&["sleep", &sleep_secs]);
+        assert!(
+            !pids.is_empty(),
+            "sleep {sleep_secs} must be running before the interrupt"
+        );
+        pids
+    };
+    #[cfg(not(target_os = "linux"))]
+    let child_pids = vec![reported_pid];
+    let _ = reported_pid;
 
     cancel_handle.interrupt("user_interrupted");
     let outcome = turn_task.await.unwrap();
@@ -699,20 +740,22 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
 
     let mut alive = true;
     for _ in 0..30 {
-        if !process_running(child_pid) {
+        if !child_pids.iter().any(|pid| process_running(*pid)) {
             alive = false;
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     if alive {
-        unsafe {
-            let _ = libc::kill(child_pid, libc::SIGKILL);
+        for pid in &child_pids {
+            unsafe {
+                let _ = libc::kill(*pid, libc::SIGKILL);
+            }
         }
     }
     assert!(
         !alive,
-        "child sleep process {child_pid} must be killed on turn/interrupt"
+        "child sleep process {child_pids:?} must be killed on turn/interrupt"
     );
 
     // 3. Title generator & MemoryGenerator

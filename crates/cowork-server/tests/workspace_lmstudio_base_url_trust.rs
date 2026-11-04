@@ -150,6 +150,21 @@ async fn mock_handler(
             ))
             .unwrap();
     }
+    // Native listing, read when the server prepares the model before inference.
+    if path == "/api/v1/models" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "models": [{
+                    "key": MODEL,
+                    "type": "llm",
+                    "loaded_instances": [{ "id": MODEL, "config": { "context_length": 8192 } }]
+                }] })
+                .to_string(),
+            ))
+            .unwrap();
+    }
     if path == "/v1/chat/completions" {
         let sse = concat!(
             "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}\n\n",

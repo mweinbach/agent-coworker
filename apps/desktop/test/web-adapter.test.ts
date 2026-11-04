@@ -157,6 +157,40 @@ describe("webAdapter connection isolation", () => {
     expect(withBrowserAccessToken(explicitUrl)).toBe(explicitUrl);
   });
 
+  test("uses the managed workspace status and falls back to the direct server on 404", async () => {
+    const primaryUrl = "ws://127.0.0.1:7337/ws";
+    const workspaceId = "project";
+    const running = {
+      workspaceId,
+      running: true,
+      url: "ws://127.0.0.1:7444/ws",
+      reason: "running",
+    };
+    const stopped = { workspaceId, running: false, url: null, reason: "not_found" };
+    const replies = [
+      Response.json(running),
+      Response.json(stopped),
+      new Response(null, { status: 404 }),
+    ];
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      expect(new URL(String(input)).pathname).toBe("/cowork/desktop/workspace/status");
+      expect(JSON.parse(String(init?.body))).toEqual({ workspaceId });
+      return replies.shift()!;
+    });
+    try {
+      configureWebAdapter(primaryUrl, "");
+      const adapter = createWebAdapter();
+      expect(await adapter.getWorkspaceServerStatus({ workspaceId })).toEqual(running);
+      expect(await adapter.getWorkspaceServerStatus({ workspaceId })).toEqual(stopped);
+      expect(await adapter.getWorkspaceServerStatus({ workspaceId })).toEqual({
+        ...running,
+        url: primaryUrl,
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test("keeps each adapter's requests and fallback state scoped when another tab reconnects", async () => {
     const requests: string[] = [];
     const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async (input) => {

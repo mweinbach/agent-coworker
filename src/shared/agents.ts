@@ -11,14 +11,14 @@ import {
 const SESSION_KIND_VALUES = ["root", "agent"] as const;
 export type SessionKind = (typeof SESSION_KIND_VALUES)[number];
 
-export const AGENT_ROLE_VALUES = ["default", "explorer", "research", "worker", "reviewer"] as const;
+const AGENT_ROLE_VALUES = ["default", "explorer", "research", "worker", "reviewer"] as const;
 export type AgentRole = (typeof AGENT_ROLE_VALUES)[number];
 
 const AGENT_MODE_VALUES = ["collaborative", "delegate"] as const;
 export type AgentMode = (typeof AGENT_MODE_VALUES)[number];
 
 const AGENT_CONTEXT_MODE_VALUES = ["none", "brief", "full"] as const;
-export type AgentContextMode = (typeof AGENT_CONTEXT_MODE_VALUES)[number];
+type AgentContextMode = (typeof AGENT_CONTEXT_MODE_VALUES)[number];
 
 const AGENT_LIFECYCLE_STATE_VALUES = ["active", "closed"] as const;
 type AgentLifecycleState = (typeof AGENT_LIFECYCLE_STATE_VALUES)[number];
@@ -226,7 +226,7 @@ export const childAgentReportSchema: z.ZodType<ChildAgentReport> = z
   })
   .strict();
 
-export type AgentReportStatus = {
+type AgentReportStatus = {
   reportRequired: boolean;
   reportFound: boolean;
   reportValid: boolean;
@@ -234,7 +234,7 @@ export type AgentReportStatus = {
   reportDiagnostic: string | null;
 };
 
-export type AgentInspectResult = {
+type AgentInspectResult = {
   agent: PersistentAgentSummary;
   latestAssistantText: string | null;
   parsedReport: ChildAgentReport | null;
@@ -247,7 +247,7 @@ export type AgentInspectResult = {
   lastTurnUsage: TurnUsage | null;
 };
 
-export const agentInspectResultSchema: z.ZodType<AgentInspectResult> = z
+const agentInspectResultSchema: z.ZodType<AgentInspectResult> = z
   .object({
     agent: persistentAgentSummarySchema,
     latestAssistantText: z.string().nullable(),

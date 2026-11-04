@@ -1,28 +1,76 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import fs from "node:fs/promises";
-import os from "node:os";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 
 import { z } from "zod";
+import type { RunSpec } from "../packages/harness/src/rawLoopScenarios";
 import {
   buildCodexHarnessSmokeRuns,
   buildMixedRuns,
   selectRawLoopRuns,
 } from "../packages/harness/src/rawLoopScenarios";
 import {
+  assertRawLoopToolOrder,
   assertRawLoopToolRequirements,
   buildRawLoopBudgetSummary,
   countObservedLoopSteps,
-  createRawLoopAgentControl,
-  createToolsWithTracing,
+  wrapToolsWithTracing,
 } from "../packages/harness/src/rawLoopTools";
 import { serializeRawLoopTrace } from "../packages/harness/src/rawLoopUtils";
 import { validateWithOptionalRepair } from "../packages/harness/src/rawLoopValidation";
 import {
   applyRawLoopToolSurfaceConfig,
   buildRawLoopHarnessContext,
+  buildRawLoopServerEnv,
+  executeRawLoopRun,
+  loadRawLoopHarnessSettings,
+  prepareRawLoopServerHome,
+  RAW_LOOP_REPAIR_MAX_STEPS,
+  RawLoopTurnError,
+  type RawLoopTurnOptions,
+  releaseRawLoopServerHome,
+  resolveRawLoopHarnessConfig,
+  runRawLoopTurnViaServer,
+  type ServerTurnTraceResult,
+  startRawLoopServer,
 } from "../packages/harness/src/run_raw_agent_loops";
-import type { AgentConfig, ModelMessage, TodoItem } from "../src/types";
+import { scratchRoots } from "../src/platform/sandbox/policy";
+import type { AgentConfig } from "../src/types";
+import {
+  connectRustJsonRpc,
+  resolveRustBinaryPath,
+  startRustTestServer,
+} from "./helpers/rustServerHarness";
+
+/**
+ * Answers the LM Studio model-listing endpoints the server may probe before inference: the
+ * OpenAI-compatible `/v1/models` and the native `/api/v1/models` used to prepare the model.
+ */
+function serveMockLmStudioModels(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  if (req.method !== "GET") return false;
+  if (req.url?.startsWith("/api/v1/models")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        models: [{ key: "mock-local", type: "llm", loaded_instances: [{ id: "mock-local" }] }],
+      }),
+    );
+    return true;
+  }
+  if (req.url?.startsWith("/v1/models")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        object: "list",
+        data: [{ id: "mock-local", object: "model", owned_by: "local" }],
+      }),
+    );
+    return true;
+  }
+  return false;
+}
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/raw-loop-agent-control";
@@ -43,13 +91,6 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     memoryDirs: [],
     configDirs: [],
     ...overrides,
-  };
-}
-
-function makeDelegateRunResult(text: string) {
-  return {
-    text,
-    responseMessages: [{ role: "assistant", content: text }] as ModelMessage[],
   };
 }
 
@@ -104,342 +145,6 @@ describe("raw loop trace serialization", () => {
     expect(parsed.config.observability.recordInputs).toBe(true);
     expect(config.observability?.secretKey).toBe("dummy-langfuse-secret");
     expect(config.providerOptions?.vendor.apiKey).toBe("dummy-provider-secret");
-  });
-});
-
-describe("raw loop child-agent control", () => {
-  test("uses connected providers for cross-provider child routing", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig({
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          preferredChildModel: "gpt-5.4",
-          childModelRoutingMode: "cross-provider-allowlist",
-          preferredChildModelRef: "codex-cli:gpt-5.4",
-          allowedChildModelRefs: ["opencode-zen:glm-5"],
-        }),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        getConnectedProviders: async () => ["codex-cli", "opencode-zen"],
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      model: "opencode-zen:glm-5",
-      message: "Use the child model",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    expect(spawned).toEqual(
-      expect.objectContaining({
-        provider: "opencode-zen",
-        effectiveModel: "glm-5",
-      }),
-    );
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "worker",
-        message: "Use the child model",
-        connectedProviders: ["codex-cli", "opencode-zen"],
-        config: expect.objectContaining({
-          provider: "opencode-zen",
-          model: "glm-5",
-        }),
-      }),
-    );
-  });
-
-  test("rejects disconnected cross-provider child targets without running a delegate", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig({
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          preferredChildModel: "gpt-5.4",
-          childModelRoutingMode: "cross-provider-allowlist",
-          preferredChildModelRef: "codex-cli:gpt-5.4",
-          allowedChildModelRefs: ["opencode-zen:glm-5"],
-        }),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        getConnectedProviders: async () => ["codex-cli"],
-      },
-    );
-
-    await expect(
-      control.spawn({
-        role: "worker",
-        model: "opencode-zen:glm-5",
-        message: "Use the requested child target",
-      }),
-    ).rejects.toThrow(/requested provider is not connected.*No child was started/);
-
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  test("supports spawnAgent handles plus waitForAgent completion", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        makeId: () => "child-1",
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      message: "Reply with exactly SUBAGENT_OK",
-    });
-    const waited = await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    expect(spawned.agentId).toBe("child-1");
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "worker",
-        message: "Reply with exactly SUBAGENT_OK",
-      }),
-    );
-    expect(waited).toEqual({
-      timedOut: false,
-      mode: "any",
-      agents: [
-        expect.objectContaining({
-          agentId: "child-1",
-          executionState: "completed",
-          busy: false,
-          lastMessagePreview: "SUBAGENT_OK",
-        }),
-      ],
-      readyAgentIds: ["child-1"],
-      erroredAgentIds: [],
-    });
-  });
-
-  test("passes parent messages into delegate runs when contextMode is full", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const parentMessages: ModelMessage[] = [
-      { role: "user", content: "Root context" },
-      { role: "assistant", content: "Current findings" },
-    ];
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-        parentMessages,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-      },
-    );
-
-    await control.spawn({
-      role: "worker",
-      message: "Use the parent context",
-      contextMode: "full",
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Use the parent context",
-        seedMessages: parentMessages,
-      }),
-    );
-  });
-
-  test("builds a briefing seed and passes harness context when requested", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const harnessContext = {
-      runId: "run-ctx",
-      objective: "Preserve raw-loop context",
-      acceptanceCriteria: ["Child delegate sees harness context"],
-      constraints: ["Do not duplicate it into chat history"],
-      updatedAt: "2026-03-20T12:00:00.000Z",
-    };
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-        harnessContext,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-      },
-    );
-
-    await control.spawn({
-      role: "worker",
-      message: "Use the parent context",
-      contextMode: "brief",
-      briefing: "Focus on the parent objective only.",
-      includeHarnessContext: true,
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        seedMessages: [
-          { role: "user", content: "Parent briefing:\nFocus on the parent objective only." },
-        ],
-        harnessContext,
-      }),
-    );
-  });
-
-  test("seeds parent todos into raw-loop child runs when requested", async () => {
-    const seededTodos: TodoItem[] = [
-      {
-        content: "Reuse the parent checklist",
-        status: "in_progress",
-        activeForm: "Reusing the parent checklist",
-      },
-    ];
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-        getParentTodos: () => seededTodos,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-      },
-    );
-
-    await control.spawn({
-      role: "worker",
-      message: "Use the parent todo state",
-      includeParentTodos: true,
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialTodos: seededTodos,
-        updateTodos: expect.any(Function),
-      }),
-    );
-  });
-
-  test("carries child history into subsequent sendInput runs", async () => {
-    const run = mock()
-      .mockResolvedValueOnce(makeDelegateRunResult("First reply"))
-      .mockResolvedValueOnce(makeDelegateRunResult("Second reply"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        makeId: () => "child-1",
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      message: "First task",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    await control.sendInput({
-      agentId: spawned.agentId,
-      message: "Second task",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    expect(run).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        message: "Second task",
-        seedMessages: [
-          { role: "user", content: "First task" },
-          { role: "assistant", content: "First reply" },
-        ],
-      }),
-    );
-  });
-
-  test("reopens a closed child summary on resume", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        makeId: () => "child-1",
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      message: "Reply with exactly SUBAGENT_OK",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    const closed = await control.close({
-      agentId: spawned.agentId,
-    });
-    expect(closed).toEqual(
-      expect.objectContaining({
-        agentId: "child-1",
-        lifecycleState: "closed",
-        executionState: "closed",
-      }),
-    );
-
-    const resumed = await control.resume({
-      agentId: spawned.agentId,
-    });
-    expect(resumed).toEqual(
-      expect.objectContaining({
-        agentId: "child-1",
-        lifecycleState: "active",
-        executionState: "completed",
-      }),
-    );
   });
 });
 
@@ -669,8 +374,8 @@ describe("raw loop scripted spawnAgent prompts", () => {
   });
 });
 
-describe("raw loop tool surface", () => {
-  test("forces the local web-search and memory tools for Google runs", () => {
+describe("raw loop tool surface and Rust server execution", () => {
+  test("forces the local web-search and memory configuration flags for Google runs", () => {
     const config = makeConfig({
       provider: "google",
       providerOptions: { google: { nativeWebSearch: true } },
@@ -681,26 +386,14 @@ describe("raw loop tool surface", () => {
     });
 
     applyRawLoopToolSurfaceConfig(config, "google");
-    const tools = createToolsWithTracing(
-      {
-        config,
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      } as any,
-      [],
-    );
 
-    expect(tools.webSearch).toBeDefined();
-    expect(tools.memory).toBeDefined();
-    expect(tools.todoWrite).toBeDefined();
-    expect(tools.recallMemory).toBeUndefined();
+    expect(config.providerOptions).toMatchObject({ google: { nativeWebSearch: false } });
+    expect(config.enableMemory).toBe(true);
+    expect(config.advancedMemory).toBe(false);
     expect(config.tasksEnabled).toBe(false);
     expect(config.workflowsEnabled).toBe(false);
   });
-});
 
-describe("raw loop harness context", () => {
   test("buildRawLoopHarnessContext returns a stable default contract", () => {
     const harnessContext = buildRawLoopHarnessContext(
       {
@@ -739,7 +432,7 @@ describe("raw loop harness context", () => {
     });
   });
 
-  test("countObservedLoopSteps derives loop turns from prepareStep step numbers", () => {
+  test("countObservedLoopSteps derives loop turns from step numbers", () => {
     expect(countObservedLoopSteps([])).toBe(0);
     expect(countObservedLoopSteps([1])).toBe(1);
     expect(countObservedLoopSteps([1, 2, 3])).toBe(3);
@@ -756,40 +449,836 @@ describe("raw loop harness context", () => {
     });
   });
 
-  test("traces guarded tools and enforces the prerequisite order", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-prerequisite-"));
-    await fs.writeFile(path.join(tmp, "note.txt"), "hello", "utf-8");
-
+  test("traces guarded tools and enforces prerequisite order", async () => {
     const steps: Array<{ scope: string; step: unknown }> = [];
-    const tools = createToolsWithTracing(
+    const tools = wrapToolsWithTracing(
       {
-        config: makeConfig({
-          workingDirectory: tmp,
-          outputDirectory: path.join(tmp, "output"),
-          uploadsDirectory: path.join(tmp, "uploads"),
-        }),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      } as any,
-      steps as any,
+        todoWrite: { execute: async (input) => ({ ok: true, input }) },
+        glob: { execute: async (input) => ({ files: ["note.txt"], input }) },
+      },
+      steps,
       { requiredToolName: "todoWrite", guardedToolNames: ["glob"] },
     );
 
-    await expect(tools.glob.execute({ pattern: "*.txt", cwd: tmp })).rejects.toThrow(
+    await expect(tools.glob!.execute!({ pattern: "*.txt" })).rejects.toThrow(
       'Tool "todoWrite" must be called before "glob".',
     );
     expect(steps).toHaveLength(0);
 
-    await tools.todoWrite.execute({
-      todos: [{ content: "Trace the run", status: "in_progress", activeForm: "Tracing the run" }],
-    });
-    await tools.glob.execute({ pattern: "*.txt", cwd: tmp });
+    await tools.todoWrite!.execute!({ todos: [] });
+    await tools.glob!.execute!({ pattern: "*.txt" });
 
     expect(
       steps
         .filter((entry) => entry.scope === "tool-call")
         .map((entry) => (entry.step as { toolName: string }).toolName),
     ).toEqual(["todoWrite", "glob"]);
+  });
+
+  test("pins the spawned server repo root and disables tasks, workflows, MCP and advanced memory via env", () => {
+    const env = buildRawLoopServerEnv({
+      PATH: "/usr/bin",
+      COWORK_ENABLE_TASKS: "1",
+      COWORK_ENABLE_WORKFLOWS: "true",
+      AGENT_ENABLE_MCP: "1",
+      AGENT_ADVANCED_MEMORY: "true",
+      COWORK_HOME_OVERRIDE: "/developer/home",
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.COWORK_REPO_ROOT).toBe(path.resolve(import.meta.dir, ".."));
+    expect(env.COWORK_ENABLE_TASKS).toBe("0");
+    expect(env.COWORK_ENABLE_WORKFLOWS).toBe("0");
+    expect(env.AGENT_ENABLE_MCP).toBe("0");
+    expect(env.AGENT_ADVANCED_MEMORY).toBe("0");
+    expect(env.COWORK_HOME_OVERRIDE).toBe("/developer/home");
+    expect(
+      buildRawLoopServerEnv({ COWORK_HOME_OVERRIDE: "/developer/home" }, { homeDir: "/run/home" })
+        .COWORK_HOME_OVERRIDE,
+    ).toBe("/run/home");
+    expect(env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
+    expect(env.COWORK_DISABLE_BUILTIN_SKILLS).toBe("1");
+    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe("1");
+    expect(buildRawLoopServerEnv({ COWORK_REPO_ROOT: " /custom/root " }).COWORK_REPO_ROOT).toBe(
+      "/custom/root",
+    );
+  });
+
+  test("forwards maxSteps and rejects the turn when the server socket closes mid-turn", async () => {
+    const configSets: unknown[] = [];
+    const fakeServer = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req, srv) {
+        return srv.upgrade(req) ? undefined : new Response("upgrade required", { status: 426 });
+      },
+      websocket: {
+        message(ws, raw) {
+          const msg = JSON.parse(String(raw)) as { id?: number; method: string; params?: any };
+          if (msg.id === undefined) return;
+          if (msg.method === "cowork/session/config/set") configSets.push(msg.params.config);
+          if (msg.method === "turn/start") {
+            ws.send(JSON.stringify({ id: msg.id, result: {} }));
+            // Simulate cowork-server exiting before `turn/completed`.
+            ws.close(1011, "server exited");
+            return;
+          }
+          const result = msg.method === "thread/start" ? { thread: { id: "thread-1" } } : {};
+          ws.send(JSON.stringify({ id: msg.id, result }));
+        },
+      },
+    });
+    try {
+      const turn = runRawLoopTurnViaServer({
+        wsUrl: `ws://127.0.0.1:${String(fakeServer.port)}`,
+        cwd: "/tmp/raw-loop",
+        provider: "openai",
+        model: "gpt-test",
+        prompt: "hi",
+        maxSteps: 42,
+      });
+      await expect(turn).rejects.toThrow("cowork-server WebSocket closed unexpectedly");
+      // `advancedMemory` is pinned through the server env; the session config never carries
+      // it, because root-session config writes persist it to the user tier.
+      expect(configSets).toEqual([{ enableMemory: true, maxSteps: 42 }]);
+    } finally {
+      fakeServer.stop(true);
+    }
+  });
+
+  test("executes a raw-loop turn end-to-end against Rust cowork-server", async () => {
+    const mockModel = http.createServer((req, res) => {
+      if (serveMockLmStudioModels(req, res)) return;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const sse = [
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\\"end\\":\\"<<END_RUN>>\\"}"}}]}',
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+        "data: [DONE]",
+      ].join("\n\n");
+      res.end(`${sse}\n\n`);
+    });
+    await new Promise<void>((resolve) => mockModel.listen(0, "127.0.0.1", () => resolve()));
+    const modelPort = (mockModel.address() as { port: number }).port;
+
+    const server = await startRustTestServer({
+      env: {
+        COWORK_LMSTUDIO_BASE_URL: `http://127.0.0.1:${modelPort}/v1`,
+      },
+    });
+    try {
+      const harnessContext = buildRawLoopHarnessContext(
+        { id: "smoke-1", provider: "lmstudio", model: "mock-local" },
+        "mixed",
+        { runId: "smoke-1", runDir: server.workspaceDir, repoDir: server.workspaceDir },
+      );
+      const out = await runRawLoopTurnViaServer({
+        wsUrl: server.wsUrl,
+        cwd: server.workspaceDir,
+        provider: "lmstudio",
+        model: "mock-local",
+        prompt: "Reply with the sentinel JSON.",
+        harnessContext,
+        providerOptions: {
+          lmstudio: { baseUrl: `http://127.0.0.1:${modelPort}/v1` },
+        },
+      });
+      expect(out.text).toBe('{"end":"<<END_RUN>>"}');
+      expect(out.totalSteps).toBeGreaterThanOrEqual(1);
+    } finally {
+      await server.stop();
+      await new Promise<void>((resolve) => mockModel.close(() => resolve()));
+    }
+  });
+
+  test("captures projected Rust toolCall names and arguments across multi-step turns", async () => {
+    let completionCallIndex = 0;
+    const mockModel = http.createServer((req, res) => {
+      if (serveMockLmStudioModels(req, res)) return;
+      completionCallIndex += 1;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      if (completionCallIndex === 1) {
+        const sse = [
+          'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_write_1","type":"function","function":{"name":"write","arguments":"{\\"filePath\\":\\"hello.txt\\",\\"content\\":\\"ok\\"}"}}]}}]}',
+          'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}',
+          "data: [DONE]",
+        ].join("\n\n");
+        res.end(`${sse}\n\n`);
+        return;
+      }
+      const sse = [
+        'data: {"id":"chatcmpl-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\\"end\\":\\"<<END_RUN>>\\"}"}}]}',
+        'data: {"id":"chatcmpl-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":6,"total_tokens":21}}',
+        "data: [DONE]",
+      ].join("\n\n");
+      res.end(`${sse}\n\n`);
+    });
+    await new Promise<void>((resolve) => mockModel.listen(0, "127.0.0.1", () => resolve()));
+    const modelPort = (mockModel.address() as { port: number }).port;
+
+    const server = await startRustTestServer({
+      env: {
+        LM_STUDIO_BASE_URL: `http://127.0.0.1:${modelPort}`,
+      },
+    });
+    try {
+      const out = await runRawLoopTurnViaServer({
+        wsUrl: server.wsUrl,
+        cwd: server.workspaceDir,
+        provider: "lmstudio",
+        model: "mock-local",
+        prompt: "Write hello.txt then finish.",
+        providerOptions: {
+          lmstudio: { baseUrl: `http://127.0.0.1:${modelPort}` },
+        },
+      });
+      assertRawLoopToolRequirements({ requiredToolCalls: ["write"] }, out.steps, out.toolLogLines);
+      expect(out.toolLogLines.some((line) => line.startsWith("tool> write "))).toBe(true);
+      expect(out.text).toBe('{"end":"<<END_RUN>>"}');
+    } finally {
+      await server.stop();
+      await new Promise<void>((resolve) => mockModel.close(() => resolve()));
+    }
+  });
+});
+
+async function makeTempDir(prefix: string): Promise<string> {
+  const scratch = scratchRoots()[0] ?? "/tmp";
+  const base = fs.existsSync(scratch) ? fs.realpathSync(scratch) : scratch;
+  return fs.realpathSync(await fsp.mkdtemp(path.join(base, prefix)));
+}
+
+function tracedCall(toolName: string, output: unknown = { ok: true }, state?: string) {
+  return [
+    { scope: "tool-call", step: { type: "tool-call", toolName, input: {} } },
+    {
+      scope: "tool-result",
+      step: { type: "tool-result", toolName, output, ...(state ? { state } : {}) },
+    },
+  ];
+}
+
+function fakeTurnResult(
+  toolNames: string[],
+  text: string,
+  threadId = "thread-1",
+): ServerTurnTraceResult {
+  return {
+    threadId,
+    text,
+    steps: toolNames.flatMap((name) => tracedCall(name)),
+    toolLogLines: toolNames.map((name) => `tool> ${name} {}`),
+    todos: [],
+    totalSteps: toolNames.length + 1,
+  };
+}
+
+function fakeRun(overrides: Partial<RunSpec> = {}): RunSpec {
+  // No `finalContract`: the final text must contain the `<<END_RUN>>` sentinel.
+  return {
+    id: "fake-run",
+    provider: "openai",
+    model: "gpt-test",
+    maxSteps: 40,
+    prompt: ({ runDir }) => `Work in ${runDir}`,
+    ...overrides,
+  };
+}
+
+/** Executes a run against scripted turns instead of a live server and model. */
+async function executeFakeRun(
+  run: RunSpec,
+  turns: Array<
+    (opts: RawLoopTurnOptions) => ServerTurnTraceResult | Promise<ServerTurnTraceResult>
+  >,
+  opts: { strictMode?: boolean } = {},
+) {
+  const rootOutDir = await makeTempDir("raw-loop-run-");
+  const calls: RawLoopTurnOptions[] = [];
+  const sleeps: number[] = [];
+  let serverStarts = 0;
+  let serverStops = 0;
+  const result = await executeRawLoopRun(run, {
+    rootOutDir,
+    scenario: "mixed",
+    strictMode: opts.strictMode ?? false,
+    deps: {
+      startServer: async () => {
+        serverStarts += 1;
+        return {
+          wsUrl: "ws://fake",
+          stop: async () => {
+            serverStops += 1;
+          },
+        };
+      },
+      runTurn: async (turnOpts) => {
+        calls.push(turnOpts);
+        const next = turns[calls.length - 1];
+        if (!next) throw new Error(`unexpected turn ${String(calls.length)}`);
+        return await next(turnOpts);
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      retryDelayMs: (_error, attempt) => attempt * 10,
+      log: () => {
+        // Keep test output quiet.
+      },
+    },
+  });
+  const readJson = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(result.runDir, name), "utf-8"));
+  return {
+    ...result,
+    calls,
+    sleeps,
+    rootOutDir,
+    readJson,
+    get serverStarts() {
+      return serverStarts;
+    },
+    get serverStops() {
+      return serverStops;
+    },
+  };
+}
+
+describe("raw loop tool order", () => {
+  const run11 = buildMixedRuns().find((run) => run.id === "run-11")!;
+
+  test("run-11 keeps its webSearch-before-write/read requirement", () => {
+    expect(run11.requiredToolBeforeTools).toBe("webSearch");
+    expect(run11.guardedToolsBeforeRequiredTool).toEqual(["write", "read"]);
+  });
+
+  test("rejects a trace that writes and reads before the search", () => {
+    const steps = ["todoWrite", "write", "read", "webSearch"].flatMap((name) => tracedCall(name));
+    expect(() => assertRawLoopToolOrder(run11, steps)).toThrow(
+      'Tool order violation: "webSearch" must succeed before "write", but "write" ran first.',
+    );
+  });
+
+  test("accepts guarded tools once the required tool succeeded", () => {
+    const steps = ["todoWrite", "webSearch", "write", "read", "todoWrite"].flatMap((name) =>
+      tracedCall(name),
+    );
+    expect(() => assertRawLoopToolOrder(run11, steps)).not.toThrow();
+  });
+
+  test("a failed search does not unlock guarded tools, and failed guarded calls are not violations", () => {
+    const failedSearchThenWrite = [
+      ...tracedCall("webSearch", { error: "rate limited" }),
+      ...tracedCall("write"),
+      ...tracedCall("webSearch"),
+    ];
+    expect(() => assertRawLoopToolOrder(run11, failedSearchThenWrite)).toThrow(
+      "Tool order violation",
+    );
+
+    const failedWriteThenSearch = [
+      ...tracedCall("write", null, "output-error"),
+      ...tracedCall("webSearch"),
+      ...tracedCall("write"),
+      ...tracedCall("read"),
+    ];
+    expect(() => assertRawLoopToolOrder(run11, failedWriteThenSearch)).not.toThrow();
+  });
+
+  test("a mock run that writes before the search fails every attempt", async () => {
+    const outOfOrder = () =>
+      fakeTurnResult(["todoWrite", "write", "read", "webSearch"], "<<END_RUN>>");
+    const out = await executeFakeRun(
+      fakeRun({
+        id: "order-run",
+        maxAttempts: 2,
+        requiredToolCalls: ["todoWrite", "webSearch", "write", "read"],
+        requiredToolBeforeTools: "webSearch",
+        guardedToolsBeforeRequiredTool: ["write", "read"],
+      }),
+      [outOfOrder, outOfOrder],
+    );
+    expect(out.ok).toBe(false);
+    expect(out.attempts.map((attempt) => attempt.ok)).toEqual([false, false]);
+    expect(out.attempts[0]!.error).toContain("Tool order violation");
+    expect(out.readJson("run_meta.json").error).toContain("Tool order violation");
+  });
+});
+
+describe("raw loop strict mode resolution", () => {
+  async function seedConfigs(opts: { project?: unknown; user?: unknown; builtIn?: unknown }) {
+    const root = await makeTempDir("raw-loop-strict-");
+    const repoRoot = path.join(root, "repo");
+    const userCoworkHome = path.join(root, "home", ".cowork");
+    const write = async (file: string, value: unknown) => {
+      if (value === undefined) return;
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(value));
+    };
+    await write(path.join(repoRoot, ".cowork", "config.json"), opts.project);
+    await write(path.join(userCoworkHome, "config", "config.json"), opts.user);
+    await write(
+      path.join(repoRoot, "config", "defaults.json"),
+      opts.builtIn ?? {
+        harness: { reportOnly: true, strictMode: false },
+      },
+    );
+    return { repoRoot, userCoworkHome };
+  }
+
+  const strictModeFor = (
+    settings: ReturnType<typeof loadRawLoopHarnessSettings>,
+    strictModeOverride: boolean | null,
+  ) => resolveRawLoopHarnessConfig(settings, { strictModeOverride }).strictMode;
+
+  test("falls back to the user config's harness.strictMode without a CLI flag", async () => {
+    const paths = await seedConfigs({ user: { harness: { strictMode: true } } });
+    const settings = loadRawLoopHarnessSettings({ ...paths, env: {} });
+    expect(settings.strictMode).toBe(true);
+    expect(strictModeFor(settings, null)).toBe(true);
+    expect(strictModeFor(settings, false)).toBe(false);
+  });
+
+  test("AGENT_HARNESS_STRICT_MODE outranks config, and project config outranks user config", async () => {
+    const paths = await seedConfigs({
+      project: { harness: { strictMode: false } },
+      user: { harness: { strictMode: true } },
+    });
+    expect(loadRawLoopHarnessSettings({ ...paths, env: {} }).strictMode).toBe(false);
+    const fromEnv = loadRawLoopHarnessSettings({
+      ...paths,
+      env: { AGENT_HARNESS_STRICT_MODE: "yes" },
+    });
+    expect(fromEnv.strictMode).toBe(true);
+    expect(strictModeFor(fromEnv, false)).toBe(false);
+  });
+
+  test("defaults to non-strict when nothing configures it", async () => {
+    const paths = await seedConfigs({});
+    expect(strictModeFor(loadRawLoopHarnessSettings({ ...paths, env: {} }), null)).toBe(false);
+  });
+});
+
+describe("raw loop attempts and repair", () => {
+  test("retries a transient turn error and keeps the failed attempt's diagnostics", async () => {
+    const out = await executeFakeRun(fakeRun({ maxAttempts: 3, requiredToolCalls: ["write"] }), [
+      () => {
+        throw new RawLoopTurnError(
+          "provider overloaded; retry in 2s",
+          fakeTurnResult(["write"], "", "thread-a"),
+        );
+      },
+      () => fakeTurnResult(["write"], '{"end":"<<END_RUN>>"}', "thread-b"),
+    ]);
+
+    expect(out.ok).toBe(true);
+    expect(out.serverStarts).toBe(2);
+    expect(out.serverStops).toBe(2);
+    expect(out.sleeps).toEqual([10]);
+    expect(out.readJson("attempts.json")).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        ok: false,
+        error: "provider overloaded; retry in 2s",
+        retryDelayMs: 10,
+      }),
+      expect.objectContaining({ attempt: 2, ok: true }),
+    ]);
+    const firstAttempt = out.readJson("trace_attempt-01.json");
+    expect(firstAttempt.ok).toBe(false);
+    expect(firstAttempt.threadId).toBe("thread-a");
+    expect(firstAttempt.toolLogLines).toEqual(["tool> write {}"]);
+    expect(out.readJson("trace_attempt-02.json").ok).toBe(true);
+    const meta = out.readJson("run_meta.json");
+    expect(meta).toMatchObject({ ok: true, attempts: 2, maxAttempts: 3, strictMode: false });
+    expect(meta.error).toBeUndefined();
+    expect(fs.readFileSync(path.join(out.runDir, "final.txt"), "utf-8")).toBe(
+      '{"end":"<<END_RUN>>"}',
+    );
+    expect(
+      out.readJson("artifacts_index.json").map((entry: { path: string }) => entry.path),
+    ).toContain("trace_attempt-01.json");
+  });
+
+  test("returns a failed result with metadata once attempts are exhausted instead of throwing", async () => {
+    const out = await executeFakeRun(fakeRun({ maxAttempts: 2, requiredToolCalls: ["bash"] }), [
+      () => fakeTurnResult(["write"], '{"end":"<<END_RUN>>"}'),
+      () => fakeTurnResult(["read"], '{"end":"<<END_RUN>>"}'),
+    ]);
+    expect(out.ok).toBe(false);
+    expect(out.sleeps).toEqual([10]);
+    const attempts = out.readJson("attempts.json");
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1].retryDelayMs).toBeUndefined();
+    const meta = out.readJson("run_meta.json");
+    expect(meta.ok).toBe(false);
+    expect(meta.error).toBe(
+      "Run fake-run failed after 2 attempt(s): Missing required tool call(s): bash",
+    );
+    expect(meta.validation.issues[0].code).toBe("run_failed");
+    expect(out.readJson("trace_attempt-01.json").toolLogLines).toEqual(["tool> write {}"]);
+    expect(out.readJson("trace_attempt-02.json").toolLogLines).toEqual(["tool> read {}"]);
+  });
+
+  test("gives a contract failure a second attempt in strict mode", async () => {
+    const out = await executeFakeRun(
+      fakeRun({ maxAttempts: 2 }),
+      [() => fakeTurnResult([], "not json"), () => fakeTurnResult([], "done <<END_RUN>>")],
+      { strictMode: true },
+    );
+    expect(out.ok).toBe(true);
+    expect(out.calls).toHaveLength(2);
+    expect(out.calls.every((call) => call.maxSteps === 40 && call.threadId === undefined)).toBe(
+      true,
+    );
+    expect(out.readJson("attempts.json")[0].error).toContain("Final contract validation failed");
+  });
+
+  test("repairs a malformed final answer with a single tool-free model step", async () => {
+    const out = await executeFakeRun(fakeRun({ maxAttempts: 1 }), [
+      () => fakeTurnResult(["write"], "not json", "thread-main"),
+      () => fakeTurnResult([], "<<END_RUN>>", "thread-main"),
+    ]);
+    expect(out.ok).toBe(true);
+    expect(out.calls).toHaveLength(2);
+    const repair = out.calls[1];
+    expect(repair).toBeDefined();
+    expect(RAW_LOOP_REPAIR_MAX_STEPS).toBe(1);
+    expect(repair?.maxSteps).toBe(1);
+    expect(repair?.tools).toBe("none");
+    expect(repair?.threadId).toBe("thread-main");
+    expect(repair?.prompt).toContain("Do NOT call any tools.");
+    expect(repair?.harnessContext).toBeUndefined();
+    const meta = out.readJson("run_meta.json");
+    expect(meta).toMatchObject({ repairAttempted: true, repairSucceeded: true, degraded: true });
+    expect(meta.budgets.repairPassCount).toBe(1);
+  });
+
+  test("rejects a repair pass that calls tools", async () => {
+    const out = await executeFakeRun(fakeRun({ maxAttempts: 1 }), [
+      () => fakeTurnResult([], "not json", "thread-main"),
+      () => fakeTurnResult(["bash"], "<<END_RUN>>", "thread-main"),
+    ]);
+    expect(out.ok).toBe(false);
+    const meta = out.readJson("run_meta.json");
+    expect(meta.repairAttempted).toBe(true);
+    expect(meta.repairSucceeded).toBe(false);
+    expect(meta.validation.issues.map((issue: { code: string }) => issue.code)).toContain(
+      "repair_failed",
+    );
+    expect(meta.error).toContain("Repair pass called tool(s) bash");
+    expect(out.readJson("trace_attempt-01.json").toolLogLines).toEqual(["tool> bash {}"]);
+  });
+
+  test("live server repair turn disables tools so a hallucinated write neither runs nor passes validation", async () => {
+    const wireRequests: Array<Record<string, unknown>> = [];
+    const mockOpenAi = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+        if (body.model !== "gpt-5.4") {
+          const bgEvents = [
+            { type: "response.created", response: { id: "resp_bg_title" } },
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: {
+                id: "msg_bg",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Live Repair Run" }],
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_bg_title",
+                status: "completed",
+                usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7 },
+              },
+            },
+          ];
+          for (const evt of bgEvents) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          res.end();
+          return;
+        }
+        const idx = wireRequests.push(body);
+
+        if (idx === 1) {
+          // Primary turn: malformed final answer without <<END_RUN>>.
+          const events = [
+            { type: "response.created", response: { id: "resp_primary_1" } },
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { id: "msg_p1", type: "message", role: "assistant", content: [] },
+            },
+            {
+              type: "response.output_text.delta",
+              output_index: 0,
+              content_index: 0,
+              delta: "malformed output without sentinel",
+            },
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: {
+                id: "msg_p1",
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "malformed output without sentinel" }],
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_primary_1",
+                status: "completed",
+                usage: { input_tokens: 12, output_tokens: 6, total_tokens: 18 },
+              },
+            },
+          ];
+          for (const evt of events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          res.end();
+          return;
+        }
+
+        // Repair turn (`maxSteps: 1, tools: "none"`): model hallucinates a `write` tool call!
+        const callArgs = JSON.stringify({
+          path: "mutated-during-repair.txt",
+          content: "should never be written during repair\n",
+        });
+        const events = [
+          { type: "response.created", response: { id: "resp_repair_1" } },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "fc_rep_1",
+              type: "function_call",
+              call_id: "call_repair_write",
+              name: "write",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: "fc_rep_1",
+            delta: callArgs,
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              id: "fc_rep_1",
+              type: "function_call",
+              call_id: "call_repair_write",
+              name: "write",
+              arguments: callArgs,
+            },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_repair_1",
+              status: "completed",
+              usage: { input_tokens: 16, output_tokens: 12, total_tokens: 28 },
+            },
+          },
+        ];
+        for (const evt of events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+        res.end();
+      });
+    });
+
+    await new Promise<void>((r) => mockOpenAi.listen(0, "127.0.0.1", () => r()));
+    const port = (mockOpenAi.address() as { port: number }).port;
+    const rootOutDir = await makeTempDir("raw-loop-live-repair-");
+    const { homeDir } = await prepareRawLoopServerHome({
+      homeDir: path.join(rootOutDir, "server-home"),
+      sourceCoworkHome: path.join(rootOutDir, "empty-cowork"),
+    });
+
+    try {
+      const result = await executeRawLoopRun(
+        fakeRun({
+          id: "live-repair-run",
+          provider: "openai",
+          model: "gpt-5.4",
+          maxAttempts: 1,
+          maxSteps: 4,
+        }),
+        {
+          rootOutDir,
+          scenario: "mixed",
+          strictMode: false,
+          deps: {
+            startServer: async ({ runDir }) =>
+              startRawLoopServer({
+                serverBin: resolveRustBinaryPath("cowork-server"),
+                runDir,
+                homeDir,
+                baseEnv: {
+                  ...process.env,
+                  OPENAI_API_KEY: "sk-test-live-repair",
+                  OPENAI_BASE_URL: `http://127.0.0.1:${String(port)}/v1`,
+                  COWORK_DISABLE_NETWORK_TELEMETRY: "1",
+                  COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+                },
+              }),
+            log: () => {
+              // Keep test output quiet.
+            },
+          },
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(wireRequests).toHaveLength(2);
+      const primaryTools = wireRequests[0]?.tools;
+      expect(Array.isArray(primaryTools)).toBe(true);
+      expect(Array.isArray(primaryTools) ? primaryTools.length : 0).toBeGreaterThan(0);
+      expect(wireRequests[1]?.tools ?? []).toEqual([]);
+
+      // The hallucinated `write` tool call on the repair turn must NOT execute on disk!
+      expect(fs.existsSync(path.join(result.runDir, "mutated-during-repair.txt"))).toBe(false);
+
+      const meta = JSON.parse(fs.readFileSync(path.join(result.runDir, "run_meta.json"), "utf-8"));
+      expect(meta.repairAttempted).toBe(true);
+      expect(meta.repairSucceeded).toBe(false);
+      expect(meta.error).toContain("Repair pass called tool(s) write");
+    } finally {
+      await new Promise<void>((r) => mockOpenAi.close(() => r()));
+    }
+  }, 30_000);
+});
+
+function startMockLmStudio(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = http.createServer((req, res) => {
+    if (serveMockLmStudioModels(req, res)) return;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    const sse = [
+      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\\"end\\":\\"<<END_RUN>>\\"}"}}]}',
+      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+      "data: [DONE]",
+    ].join("\n\n");
+    res.end(`${sse}\n\n`);
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        baseUrl: `http://127.0.0.1:${String(port)}`,
+        close: () => new Promise<void>((done) => server.close(() => done())),
+      });
+    });
+  });
+}
+
+describe("raw loop isolated server home", () => {
+  test("links credentials and skills but never the user config, and unlinks them on release", async () => {
+    const root = await makeTempDir("raw-loop-home-");
+    const devCowork = path.join(root, "dev-home", ".cowork");
+    await fsp.mkdir(path.join(devCowork, "auth", "codex-cli"), { recursive: true });
+    await fsp.writeFile(path.join(devCowork, "auth", "codex-cli", "auth.json"), "{}");
+    await fsp.mkdir(path.join(devCowork, "skills", "doc"), { recursive: true });
+    await fsp.mkdir(path.join(devCowork, "config"), { recursive: true });
+    await fsp.writeFile(path.join(devCowork, "config", "config.json"), "{}");
+
+    const homeDir = path.join(root, "server-home");
+    const prepared = await prepareRawLoopServerHome({ homeDir, sourceCoworkHome: devCowork });
+    expect(prepared.linked).toEqual(["auth", "skills"]);
+    // Idempotent across attempts.
+    expect(
+      (await prepareRawLoopServerHome({ homeDir, sourceCoworkHome: devCowork })).linked,
+    ).toEqual(["auth", "skills"]);
+    expect(fs.existsSync(path.join(prepared.coworkDir, "auth", "codex-cli", "auth.json"))).toBe(
+      true,
+    );
+    expect(fs.existsSync(path.join(prepared.coworkDir, "config"))).toBe(false);
+
+    await releaseRawLoopServerHome(homeDir);
+    expect(fs.existsSync(path.join(prepared.coworkDir, "auth"))).toBe(false);
+    expect(fs.existsSync(path.join(devCowork, "auth", "codex-cli", "auth.json"))).toBe(true);
+  });
+
+  test("the developer home's user config is untouched by persisting session-config writes", async () => {
+    const root = await makeTempDir("raw-loop-devhome-");
+    const devHome = path.join(root, "dev-home");
+    const devConfigFile = path.join(devHome, ".cowork", "config", "config.json");
+    await fsp.mkdir(path.dirname(devConfigFile), { recursive: true });
+    await fsp.mkdir(path.join(devHome, ".cowork", "skills"), { recursive: true });
+    // Compact JSON: any rewrite by the server's patch store would reformat it.
+    const devConfig = '{"harness":{"strictMode":true},"advancedMemory":true}';
+    await fsp.writeFile(devConfigFile, devConfig);
+    const runDir = path.join(root, "run");
+    await fsp.mkdir(runDir, { recursive: true });
+
+    const { homeDir, coworkDir } = await prepareRawLoopServerHome({
+      homeDir: path.join(root, "server-home"),
+      sourceCoworkHome: path.join(devHome, ".cowork"),
+    });
+    const model = await startMockLmStudio();
+    const server = await startRawLoopServer({
+      serverBin: resolveRustBinaryPath("cowork-server"),
+      runDir,
+      homeDir,
+      baseEnv: {
+        ...process.env,
+        HOME: devHome,
+        USERPROFILE: devHome,
+        COWORK_HOME_OVERRIDE: devHome,
+        COWORK_DISABLE_NETWORK_TELEMETRY: "1",
+        LM_STUDIO_BASE_URL: model.baseUrl,
+      },
+    });
+    try {
+      const out = await runRawLoopTurnViaServer({
+        wsUrl: server.wsUrl,
+        cwd: runDir,
+        provider: "lmstudio",
+        model: "mock-local",
+        prompt: "Reply with the sentinel JSON.",
+        providerOptions: { lmstudio: { baseUrl: model.baseUrl } },
+        maxSteps: 3,
+      });
+      expect(out.text).toBe('{"end":"<<END_RUN>>"}');
+
+      // `advancedMemory` is a user-tier key: the server persists it to the global config.
+      const client = await connectRustJsonRpc(server.wsUrl);
+      try {
+        await client.request("cowork/session/defaults/apply", {
+          cwd: runDir,
+          config: { advancedMemory: false },
+        });
+      } finally {
+        client.close();
+      }
+    } finally {
+      await server.stop();
+      await model.close();
+    }
+
+    expect(fs.readFileSync(devConfigFile, "utf-8")).toBe(devConfig);
+    expect(fs.existsSync(path.join(devHome, ".cowork", "sessions.db"))).toBe(false);
+    expect(fs.existsSync(path.join(coworkDir, "sessions.db"))).toBe(true);
+    const isolatedConfig = JSON.parse(
+      fs.readFileSync(path.join(coworkDir, "config", "config.json"), "utf-8"),
+    );
+    expect(isolatedConfig.advancedMemory).toBe(false);
+  });
+});
+
+describe("rust test server helper", () => {
+  test("serves from the reported coworkHomeDir", async () => {
+    const server = await startRustTestServer();
+    try {
+      expect(server.coworkHomeDir).toBe(path.join(server.homeDir, ".cowork"));
+      expect(fs.existsSync(path.join(server.coworkHomeDir, "sessions.db"))).toBe(true);
+      expect(fs.existsSync(path.join(server.coworkHomeDir, ".cowork"))).toBe(false);
+    } finally {
+      await server.stop();
+    }
   });
 });

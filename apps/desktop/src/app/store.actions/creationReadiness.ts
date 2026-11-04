@@ -1,8 +1,8 @@
-import { jsonRpcCreationResultSchemas } from "../../../../../src/server/jsonrpc/schema.creation";
-import type {
-  CreationPreflightParams,
-  CreationPreflightResult,
-  CreationRepairAction,
+import {
+  type CreationPreflightParams,
+  type CreationPreflightResult,
+  type CreationRepairAction,
+  jsonRpcCreationResultSchemas,
 } from "../../../../../src/shared/creationReadiness";
 import * as desktopCommands from "../../lib/desktopCommands";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";

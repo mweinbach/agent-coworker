@@ -1,18 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { writeFileAtomic } from "../src/platform/fs";
+import { hostArch, hostPlatform } from "../src/platform/host";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
+import { SIDECAR_MANIFEST_NAME } from "../src/shared/runtimeProgress";
 import {
   copyDir,
   pathExists,
   resolveBuildTarget,
-  resolveBunCompileTarget,
+  resolveRustCompileTarget,
   rmrf,
-  runCommand,
+  type runCommand,
 } from "./releaseBuildUtils";
-import { syncWindowsSandboxHelper } from "./windowsSandboxBundle";
+import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 import { computeSourceFingerprint } from "./winSandboxPrebuilt";
+import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
 const defaultRoot = path.resolve(import.meta.dirname, "..");
 const resourceDirs = ["prompts", "config", "docs", "skills", "workflows"] as const;
@@ -41,10 +45,14 @@ async function validateOutputDirectory(root: string, outfile: string): Promise<v
   for (const sourceName of [
     ...resourceDirs,
     "src",
+    "crates",
     "scripts",
+    "target",
     ".git",
     "package.json",
     "bun.lock",
+    "Cargo.toml",
+    "Cargo.lock",
   ]) {
     const source = await resolveOutputPath(path.join(root, sourceName));
     if (
@@ -94,47 +102,105 @@ function parseOutfile(
   return path.isAbsolute(value) ? value : path.join(root, value);
 }
 
+async function stageCompiledBinary(opts: {
+  src: string;
+  dest: string;
+  platform: NodeJS.Platform;
+  arch: string;
+  root: string;
+  runner: typeof runCommand;
+  isMockedRunner: boolean;
+  label: string;
+}): Promise<void> {
+  await fs.rm(opts.dest, { force: true });
+  await fs.copyFile(opts.src, opts.dest);
+  if (opts.platform !== "win32") {
+    await fs.chmod(opts.dest, 0o755);
+  }
+  if (!opts.isMockedRunner && opts.platform === "darwin" && hostPlatform() === "darwin") {
+    await opts.runner(["codesign", "--force", "--sign", "-", opts.dest], {
+      cwd: opts.root,
+      env: process.env,
+    });
+  }
+  if (
+    !opts.isMockedRunner &&
+    opts.platform === "win32" &&
+    !isNativeWindowsBinary(opts.dest, opts.arch)
+  ) {
+    throw new Error(
+      `Compiled ${opts.label} is not a native Windows ${opts.arch} executable: ${opts.dest}`,
+    );
+  }
+}
+
 export async function buildServerBinary(
   options: { root?: string; argv?: string[]; commandRunner?: typeof runCommand } = {},
 ) {
   const root = options.root ?? defaultRoot;
   const argv = options.argv ?? process.argv.slice(2);
   const target = resolveBuildTarget(argv);
-  const compileTarget = resolveBunCompileTarget(target.platform, target.arch);
+  const rustTarget = resolveRustCompileTarget(target.platform, target.arch);
   const outfile = parseOutfile(root, argv, target);
   const outDir = path.dirname(outfile);
   await validateOutputDirectory(root, outfile);
   await fs.mkdir(outDir, { recursive: true });
 
-  const entry = path.join(root, "src", "server", "index.ts");
-
-  await (options.commandRunner ?? runCommand)(
-    [
-      process.execPath,
-      "build",
-      entry,
-      "--compile",
-      "--target",
-      compileTarget,
-      "--outfile",
-      outfile,
-      "--minify",
-      "--sourcemap=none",
-    ],
-    {
+  const isMockedRunner = Boolean(options.commandRunner);
+  const runner = options.commandRunner ?? buildWindowsRustCommandRunner(rustTarget);
+  if (target.platform !== hostPlatform() || target.arch !== hostArch()) {
+    await runner(["rustup", "target", "add", rustTarget], {
       cwd: root,
       env: process.env,
-    },
-  );
-  if (
-    !options.commandRunner &&
-    target.platform === "win32" &&
-    !isNativeWindowsBinary(outfile, target.arch)
-  ) {
-    throw new Error(
-      `Compiled cowork-server is not a native Windows ${target.arch} executable: ${outfile}`,
-    );
+    });
   }
+
+  const [builtServerPath, builtCliPath] = await buildWorkspaceReleaseBinaries(
+    root,
+    rustTarget,
+    ["cowork-server", "cowork"],
+    runner,
+  );
+  const cliExeName = target.platform === "win32" ? "cowork.exe" : "cowork";
+
+  await stageCompiledBinary({
+    src: builtServerPath,
+    dest: outfile,
+    platform: target.platform,
+    arch: target.arch,
+    root,
+    runner,
+    isMockedRunner,
+    label: "cowork-server",
+  });
+
+  const cliOutfile = path.join(outDir, cliExeName);
+  if (path.resolve(cliOutfile) !== path.resolve(outfile)) {
+    await stageCompiledBinary({
+      src: builtCliPath,
+      dest: cliOutfile,
+      platform: target.platform,
+      arch: target.arch,
+      root,
+      runner,
+      isMockedRunner,
+      label: "cowork",
+    });
+  }
+
+  const manifest = {
+    targetTriple: rustTarget,
+    platform: target.platform,
+    arch: target.arch,
+    launch: {
+      kind: "executable" as const,
+      path: path.basename(outfile),
+    },
+  };
+  await writeFileAtomic(
+    path.join(outDir, SIDECAR_MANIFEST_NAME),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
 
   const bundledDirs = await copyBundledResourceDirs(root, outDir);
   if (target.platform === "win32") {

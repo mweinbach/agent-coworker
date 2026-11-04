@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ArtifactDiff, ArtifactPreview } from "../../../../../src/server/artifacts/types";
+import type { ArtifactDiff, ArtifactPreview } from "../../../../../src/shared/artifactTypes";
 import type {
   TaskArtifact,
   TaskArtifactDetail,

@@ -1,6 +1,6 @@
 import { AlertTriangleIcon } from "lucide-react";
 
-import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
+import type { PresentationPreviewResult } from "../../../../src/shared/presentationPreview";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 
 export type PresentationPreviewNoticeProps = Pick<

@@ -32,7 +32,7 @@ export function supportsOpenAiContinuation(
   );
 }
 
-export function continuationMatchesTarget(
+function continuationMatchesTarget(
   state: { provider?: unknown; model?: unknown; accountId?: unknown } | null | undefined,
   target: { provider: OpenAiContinuationProvider; model: string; accountId?: string },
 ): state is OpenAiContinuationState {

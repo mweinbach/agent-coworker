@@ -1,0 +1,13 @@
+[package]
+name = "cowork-protocol"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "JSON-RPC-lite wire protocol envelopes, 21 schema namespaces, item/* projectors, and schema codegen."
+
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

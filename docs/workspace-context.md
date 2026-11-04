@@ -60,7 +60,6 @@ When exact path semantics matter, trust `## Active Workspace Context` plus norma
 
 ## Related Sources
 
-- [`src/workspace/context.ts`](../src/workspace/context.ts)
-- [`src/prompt.ts`](../src/prompt.ts)
-- [`src/projectInstructions.ts`](../src/projectInstructions.ts)
+- [`crates/cowork-harness/src/system_prompt.rs`](../crates/cowork-harness/src/system_prompt.rs)
+- [`crates/cowork-config/src/paths.rs`](../crates/cowork-config/src/paths.rs)
 - [`docs/harness/config.md`](./harness/config.md)

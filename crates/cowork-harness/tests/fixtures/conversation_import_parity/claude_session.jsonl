@@ -1,0 +1,14 @@
+{"type":"summary","sessionId":"claude-sess-1","summary":"Session summary","leafUuid":"leaf-0"}
+{"sessionId":"claude-sess-1","type":"user","uuid":"u-1","timestamp":"2026-02-01T10:00:00.000Z","cwd":"/work/app","message":{"role":"user","content":"Fix the parser please é中 😀  \r\n  "}}
+{"type":"assistant","uuid":"a-1","timestamp":"2026-02-01T10:00:01.500Z","message":{"model":"claude-sonnet-4-5","role":"assistant","content":[{"type":"thinking","thinking":"hidden","signature":"sig","summary":"Plan the fix"},{"type":"text","text":"Looking now.","citations":null},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"src/a.ts","2":"two","10":"ten","1":"one","01":"leading zero","4294967295":"not an index","4294967294":"max index","limit":1.0,"offset":1e21,"almost":123456789012345680000,"tiny":1.5e-7,"small":0.000001,"big":12345678901234567890,"neg":-0,"negf":-2.50,"exp":1E+2,"ctrl":"tab\tnl\nq\"bs\\ \u0001 \u001f \u007f   /","path":"src/b.ts"}},"bare string block"]}}
+{"type":"user","uuid":"u-2","timestamp":"2026-02-01T10:00:02Z","toolUseResult":{"zeta":1,"alpha":[3,2,1],"5":null,"nested":{"b":true,"a":false,"0":[]}},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file contents"}]}}
+
+{"type":"assistant","uuid":"a-2","timestamp":"2026-02-01T10:00:03.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"  Grep  "}]}}
+{not json
+[1,2]
+{"type":"user","uuid":"u-3","timestamp":"2026-02-01T10:00:04.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":[{"type":"image","source":{"data":"abc"}}]}]}}
+{"type":"user","uuid":"u-4","timestamp":"2026-02-01T10:00:05.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing","content":[{"type":"text","text":"orphan output"}]},{"type":"text","text":"and a follow-up"}]}}
+{"type":"user","timestamp":"2026-02-01T10:00:06.000Z","message":{"content":[{"type":"tool_result","id":7,"tool_use_id":"toolu_1","is_error":true,"content":"  "}]}}
+{"type":"user","uuid":null,"timestamp":"2026-02-01T09:59:59.000Z","message":{"content":[{"text":"","content":"skipped because text wins"},{"content":"Earlier note"},"",{"inputText":"camel input"}]}}
+{"type":"ai-title","aiTitle":"Parser fix","sessionId":"other"}
+{"type":"assistant","timestamp":1769940010.5,"message":{"content":[{"type":"tool_use","id":"toolu_3","name":"Bash","input":{"cmd":"ls","nums":[0.1,100,1e-7,123456789012345680000,-1.5e300],"z":{"y":null,"x":"é"}}}]}}

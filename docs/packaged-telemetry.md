@@ -45,7 +45,7 @@ The workflow fails the public desktop package build if those variables are missi
 | PostHog product analytics | Disabled unless Anonymous product analytics is on, `COWORK_POSTHOG_KEY` exists, and an anonymous installation id exists. |
 | Langfuse AI traces | Settings status is disabled unless AI trace diagnostics is on and public Langfuse config exists, then metadata-only unless full payload toggle is on. Runtime export still requires the server/runtime-only `LANGFUSE_SECRET_KEY`. |
 
-SDKs must not initialize when disabled or not configured. Disabled/no-config paths must not throw. Langfuse runtime imports `@langfuse/otel` and `@opentelemetry/sdk-node` only after consent, credentials, and kill-switch checks pass.
+SDKs and exporters must not initialize when disabled or not configured. Disabled/no-config paths must not throw. On the Rust server (`crates/cowork-server/src/observability.rs`), the native OTLP HTTP Langfuse trace exporter activates only after consent (`observabilityEnabled` / `AGENT_OBSERVABILITY_ENABLED`), credentials (`LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`), and kill-switch (`COWORK_DISABLE_NETWORK_TELEMETRY`) checks pass.
 
 ## Release Notes
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import JSZip from "jszip";
 
+import { buildStoredZipBuffer } from "../../../test/helpers/zipFixture";
 import { decorateDocxPreviewHtml, loadDocxPreviewLayout } from "../src/lib/docxPreview";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -55,24 +55,23 @@ describe("loadDocxPreviewLayout", () => {
   test("uses declared document styles instead of guessing roles from paragraph positions", async () => {
     const harness = setupDocxDom();
     try {
-      const zip = new JSZip();
       const namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-      zip.file(
-        "word/styles.xml",
-        `<w:styles xmlns:w="${namespace}">
+      const zipBuffer = buildStoredZipBuffer({
+        "word/styles.xml": `<w:styles xmlns:w="${namespace}">
           <w:style w:styleId="Normal"><w:rPr><w:color w:val="123456"/><w:rFonts w:ascii="Body Font"/></w:rPr></w:style>
           <w:style w:styleId="Title"><w:rPr><w:color w:val="654321"/></w:rPr></w:style>
           <w:style w:styleId="Heading1"><w:rPr><w:color w:val="334455"/><w:rFonts w:ascii="Heading Font"/></w:rPr></w:style>
         </w:styles>`,
-      );
-      zip.file(
-        "word/document.xml",
-        `<w:document xmlns:w="${namespace}"><w:body>
+        "word/document.xml": `<w:document xmlns:w="${namespace}"><w:body>
           <w:p><w:r><w:rPr><w:color w:val="FF0000"/><w:rFonts w:ascii="First Paragraph Font"/></w:rPr><w:t>Ordinary text</w:t></w:r></w:p>
         </w:body></w:document>`,
-      );
+      });
+      const arrayBuffer = zipBuffer.buffer.slice(
+        zipBuffer.byteOffset,
+        zipBuffer.byteOffset + zipBuffer.byteLength,
+      ) as ArrayBuffer;
 
-      const layout = await loadDocxPreviewLayout(await zip.generateAsync({ type: "arraybuffer" }));
+      const layout = await loadDocxPreviewLayout(arrayBuffer);
       expect(layout).toMatchObject({
         bodyColor: "#123456",
         titleColor: "#654321",

@@ -1,0 +1,272 @@
+{
+  "providers": [
+    {
+      "id": "google",
+      "displayName": "Google",
+      "transport": "gemini-interactions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      "inferenceBaseUrl": "https://generativelanguage.googleapis.com",
+      "discoveryBaseUrl": "https://generativelanguage.googleapis.com/v1beta/models",
+      "defaultModel": "gemini-3.1-pro-preview",
+      "titleModel": "gemini-3-flash-preview",
+      "authMethods": [
+        { "id": "api_key", "type": "api", "label": "API key" },
+        { "id": "exa_api_key", "type": "api", "label": "Exa API key (web search)" },
+        { "id": "parallel_api_key", "type": "api", "label": "Parallel API key (web search)" }
+      ]
+    },
+    {
+      "id": "openai",
+      "displayName": "OpenAI",
+      "transport": "openai-responses",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["OPENAI_API_KEY"],
+      "inferenceBaseUrl": "https://api.openai.com/v1",
+      "discoveryBaseUrl": "https://api.openai.com/v1",
+      "defaultModel": "gpt-5.4",
+      "titleModel": "gpt-5-mini",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "anthropic",
+      "displayName": "Anthropic",
+      "transport": "anthropic-messages",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+      "inferenceBaseUrl": "https://api.anthropic.com",
+      "discoveryBaseUrl": "https://api.anthropic.com/v1/models",
+      "defaultModel": "claude-opus-4-8",
+      "titleModel": "claude-haiku-4-5",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "bedrock",
+      "displayName": "Amazon Bedrock",
+      "transport": "bedrock-converse",
+      "userFacing": true,
+      "discovery": "static",
+      "apiKeyEnvVars": [],
+      "inferenceBaseUrl": null,
+      "discoveryBaseUrl": null,
+      "defaultModel": "amazon.nova-lite-v1:0",
+      "titleModel": null,
+      "authMethods": [
+        {
+          "id": "aws_default",
+          "type": "api",
+          "label": "AWS default credentials",
+          "fields": [
+            { "id": "region", "label": "AWS region", "kind": "text", "placeholder": "us-east-1" }
+          ]
+        },
+        {
+          "id": "aws_profile",
+          "type": "api",
+          "label": "AWS profile",
+          "fields": [
+            {
+              "id": "profile",
+              "label": "AWS profile",
+              "kind": "text",
+              "required": true,
+              "placeholder": "default"
+            },
+            { "id": "region", "label": "AWS region", "kind": "text", "placeholder": "us-east-1" }
+          ]
+        },
+        {
+          "id": "aws_keys",
+          "type": "api",
+          "label": "AWS access keys",
+          "fields": [
+            {
+              "id": "accessKeyId",
+              "label": "Access key ID",
+              "kind": "text",
+              "required": true,
+              "placeholder": "AKIA..."
+            },
+            {
+              "id": "secretAccessKey",
+              "label": "Secret access key",
+              "kind": "password",
+              "required": true,
+              "secret": true
+            },
+            { "id": "sessionToken", "label": "Session token", "kind": "password", "secret": true },
+            {
+              "id": "region",
+              "label": "AWS region",
+              "kind": "text",
+              "required": true,
+              "placeholder": "us-east-1"
+            }
+          ]
+        },
+        {
+          "id": "api_key",
+          "type": "api",
+          "label": "Bedrock API key",
+          "fields": [
+            {
+              "id": "apiKey",
+              "label": "Bedrock API key",
+              "kind": "password",
+              "required": true,
+              "secret": true
+            },
+            {
+              "id": "region",
+              "label": "AWS region",
+              "kind": "text",
+              "required": true,
+              "placeholder": "us-east-1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "baseten",
+      "displayName": "Baseten",
+      "transport": "chat-completions",
+      "userFacing": false,
+      "discovery": "api",
+      "apiKeyEnvVars": ["BASETEN_API_KEY"],
+      "inferenceBaseUrl": "https://inference.baseten.co/v1",
+      "discoveryBaseUrl": "https://inference.baseten.co/v1",
+      "defaultModel": "moonshotai/Kimi-K2.5",
+      "titleModel": "moonshotai/Kimi-K2.5",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "together",
+      "displayName": "Together AI",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["TOGETHER_API_KEY"],
+      "inferenceBaseUrl": "https://api.together.xyz/v1",
+      "discoveryBaseUrl": "https://api.together.xyz/v1",
+      "defaultModel": "moonshotai/Kimi-K2.5",
+      "titleModel": "moonshotai/Kimi-K2.5",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "fireworks",
+      "displayName": "Fireworks AI",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["FIREWORKS_API_KEY"],
+      "inferenceBaseUrl": "https://api.fireworks.ai/inference/v1",
+      "discoveryBaseUrl": "https://api.fireworks.ai/inference/v1",
+      "defaultModel": "accounts/fireworks/models/kimi-k2p6",
+      "titleModel": "accounts/fireworks/models/kimi-k2p6",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "firepass",
+      "displayName": "Fire Pass",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["FIREPASS_API_KEY"],
+      "inferenceBaseUrl": "https://api.fireworks.ai/inference/v1",
+      "discoveryBaseUrl": "https://api.fireworks.ai/inference/v1",
+      "defaultModel": "accounts/fireworks/routers/kimi-k2p6-turbo",
+      "titleModel": "accounts/fireworks/routers/kimi-k2p6-turbo",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "Fire Pass API key" }]
+    },
+    {
+      "id": "nvidia",
+      "displayName": "NVIDIA",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["NVIDIA_API_KEY"],
+      "inferenceBaseUrl": "https://integrate.api.nvidia.com/v1",
+      "discoveryBaseUrl": "https://integrate.api.nvidia.com/v1",
+      "defaultModel": "nvidia/nemotron-3-super-120b-a12b",
+      "titleModel": "nvidia/nemotron-3-super-120b-a12b",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "lmstudio",
+      "displayName": "LM Studio",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "local",
+      "apiKeyEnvVars": ["LM_STUDIO_API_KEY", "LM_STUDIO_API_TOKEN"],
+      "inferenceBaseUrl": "http://localhost:1234/v1",
+      "discoveryBaseUrl": "http://localhost:1234",
+      "defaultModel": "local-model",
+      "titleModel": null,
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API token (optional)" }]
+    },
+    {
+      "id": "minimax",
+      "displayName": "MiniMax",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["MINIMAX_API_KEY"],
+      "inferenceBaseUrl": "https://api.minimax.io/v1",
+      "discoveryBaseUrl": "https://api.minimax.io/v1",
+      "defaultModel": "MiniMax-M3",
+      "titleModel": null,
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "opencode-go",
+      "displayName": "OpenCode Go",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"],
+      "inferenceBaseUrl": "https://opencode.ai/zen/go/v1",
+      "discoveryBaseUrl": "https://opencode.ai/zen/go/v1",
+      "defaultModel": "glm-5",
+      "titleModel": "glm-5",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "opencode-zen",
+      "displayName": "OpenCode Zen",
+      "transport": "chat-completions",
+      "userFacing": true,
+      "discovery": "api",
+      "apiKeyEnvVars": ["OPENCODE_ZEN_API_KEY"],
+      "inferenceBaseUrl": "https://opencode.ai/zen/v1",
+      "discoveryBaseUrl": "https://opencode.ai/zen/v1",
+      "defaultModel": "glm-5",
+      "titleModel": "glm-5",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
+    },
+    {
+      "id": "codex-cli",
+      "displayName": "Codex",
+      "promptDisplayName": "Codex CLI",
+      "transport": "codex-app-server",
+      "userFacing": true,
+      "discovery": "static",
+      "apiKeyEnvVars": [],
+      "inferenceBaseUrl": null,
+      "discoveryBaseUrl": null,
+      "defaultModel": "gpt-5.6-sol",
+      "titleModel": "gpt-5.4-mini",
+      "authMethods": [
+        {
+          "id": "oauth_cli",
+          "type": "oauth",
+          "label": "Sign in with ChatGPT (browser)",
+          "oauthMode": "auto"
+        }
+      ]
+    }
+  ]
+}

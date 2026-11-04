@@ -9,13 +9,7 @@
   },
   "workspaces": {
     ".": {
-      "entry": [
-        "src/index.ts",
-        "src/server/index.ts",
-        "src/cli/repl.ts",
-        "scripts/*.ts",
-        "test/**/*.{ts,tsx}"
-      ],
+      "entry": ["scripts/*.ts", "test/**/*.{ts,tsx}"],
       "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"]
     },
     "packages/harness": {

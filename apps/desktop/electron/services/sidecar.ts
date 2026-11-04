@@ -1,13 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { SIDECAR_MANIFEST_NAME } from "../../../../src/shared/runtimeProgress";
+
 const SIDECAR_BASE_NAME = "cowork-server";
-export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
-export const SIDECAR_BUN_EXECUTABLE_NAME = "bun.exe";
-export const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
-export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
-export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
-export const WINDOWS_AI_ELECTRON_DIR_NAME = "windows-ai-electron";
+
+export { SIDECAR_MANIFEST_NAME };
 
 type ExecutableSidecarLaunchSpec = {
   kind: "executable";
@@ -15,14 +13,7 @@ type ExecutableSidecarLaunchSpec = {
   args?: string[];
 };
 
-type BunSidecarLaunchSpec = {
-  kind: "bun";
-  runtime: string;
-  entrypoint: string;
-  args?: string[];
-};
-
-type SidecarLaunchSpec = ExecutableSidecarLaunchSpec | BunSidecarLaunchSpec;
+type SidecarLaunchSpec = ExecutableSidecarLaunchSpec;
 
 export type SidecarManifest = {
   targetTriple: string;
@@ -77,71 +68,6 @@ export function resolvePackagedSidecarFilename(
   return `${SIDECAR_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
 }
 
-export function shouldBundleFoundationModelsSdk(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): boolean {
-  return platform === "darwin" && arch === "arm64";
-}
-
-export function hasPackagedFoundationModelsSdk(
-  candidateDir: string,
-  existsSync: typeof fs.existsSync = fs.existsSync,
-): boolean {
-  return (
-    existsSync(path.join(candidateDir, "dist", "index.js")) &&
-    existsSync(path.join(candidateDir, "native", "libFoundationModels.dylib")) &&
-    existsSync(path.join(candidateDir, "node_modules", "koffi", "index.js")) &&
-    existsSync(path.join(candidateDir, "node_modules", "koffi", "package.json")) &&
-    existsSync(
-      path.join(
-        candidateDir,
-        "node_modules",
-        "koffi",
-        "build",
-        "koffi",
-        FOUNDATION_MODELS_KOFFI_TRIPLET,
-        "koffi.node",
-      ),
-    )
-  );
-}
-
-export function shouldBundleWindowsAiElectronPackage(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): boolean {
-  return platform === "win32" && (arch === "x64" || arch === "arm64");
-}
-
-export function resolveWindowsAiElectronPrebuildTriplet(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): string {
-  if (platform === "win32") {
-    if (arch === "x64") return "win32-x64";
-    if (arch === "arm64") return "win32-arm64";
-  }
-  throw new Error(`Unsupported Windows AI Electron platform/arch: ${platform}/${arch}`);
-}
-
-export function hasPackagedWindowsAiElectronPackage(
-  candidateDir: string,
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-  existsSync: typeof fs.existsSync = fs.existsSync,
-): boolean {
-  if (!shouldBundleWindowsAiElectronPackage(platform, arch)) {
-    return false;
-  }
-
-  const triplet = resolveWindowsAiElectronPrebuildTriplet(platform, arch);
-  return (
-    existsSync(path.join(candidateDir, "index.js")) &&
-    existsSync(path.join(candidateDir, "windows-ai-electron", "prebuilds", triplet, "node.node"))
-  );
-}
-
 export function buildSidecarManifest(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
@@ -176,24 +102,8 @@ function isExecutableLaunchSpec(value: unknown): value is ExecutableSidecarLaunc
   );
 }
 
-function isBunLaunchSpec(value: unknown): value is BunSidecarLaunchSpec {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    candidate.kind === "bun" &&
-    typeof candidate.runtime === "string" &&
-    candidate.runtime.length > 0 &&
-    typeof candidate.entrypoint === "string" &&
-    candidate.entrypoint.length > 0 &&
-    (candidate.args === undefined || isStringArray(candidate.args))
-  );
-}
-
 function isSidecarLaunchSpec(value: unknown): value is SidecarLaunchSpec {
-  return isExecutableLaunchSpec(value) || isBunLaunchSpec(value);
+  return isExecutableLaunchSpec(value);
 }
 
 function isSidecarManifest(value: unknown): value is SidecarManifest {
@@ -268,40 +178,15 @@ function buildSidecarLaunchCommand(
     };
   }
 
-  if (manifest.launch.kind === "executable") {
-    const command = resolveRelativeManifestPath(dir, manifest.launch.path);
-    if (!existsSync(command)) {
-      throw new Error(
-        `Bundled sidecar manifest points to a missing executable: ${manifestPath ?? dir} -> ${manifest.launch.path}`,
-      );
-    }
-    return {
-      command,
-      args: manifest.launch.args ?? [],
-      targetTriple: manifest.targetTriple,
-      platform: manifest.platform,
-      arch: manifest.arch,
-      manifestPath,
-    };
-  }
-
-  const runtime = resolveRelativeManifestPath(dir, manifest.launch.runtime);
-  if (!existsSync(runtime)) {
+  const command = resolveRelativeManifestPath(dir, manifest.launch.path);
+  if (!existsSync(command)) {
     throw new Error(
-      `Bundled sidecar manifest points to a missing Bun runtime: ${manifestPath ?? dir} -> ${manifest.launch.runtime}`,
+      `Bundled sidecar manifest points to a missing executable: ${manifestPath ?? dir} -> ${manifest.launch.path}`,
     );
   }
-
-  const entrypoint = resolveRelativeManifestPath(dir, manifest.launch.entrypoint);
-  if (!existsSync(entrypoint)) {
-    throw new Error(
-      `Bundled sidecar manifest points to a missing Bun entrypoint: ${manifestPath ?? dir} -> ${manifest.launch.entrypoint}`,
-    );
-  }
-
   return {
-    command: runtime,
-    args: [entrypoint, ...(manifest.launch.args ?? [])],
+    command,
+    args: manifest.launch.args ?? [],
     targetTriple: manifest.targetTriple,
     platform: manifest.platform,
     arch: manifest.arch,

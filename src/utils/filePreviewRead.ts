@@ -28,7 +28,7 @@ export function fileChangeVersionFromStat(
   };
 }
 
-export async function readFileChangeVersion(
+async function readFileChangeVersion(
   absPath: string,
   options?: { allowDirectory?: boolean },
 ): Promise<FileChangeVersion> {

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import type { PresentationPreviewResult } from "../../../src/server/presentationPreview";
+import type { PresentationPreviewResult } from "../../../src/shared/presentationPreview";
 import { useAppStore } from "../src/app/store";
 import {
   __internalFilePreviewResources,

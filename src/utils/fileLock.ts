@@ -31,7 +31,7 @@ import { canonicalizeSync, coworkHome } from "../platform/paths";
  * including an in-process queue. Exported so bounded request handlers can use
  * the same end-to-end budget.
  */
-export const FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
+const FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_DELAY_MS = 25;
 const LOCK_CACHE_DIR_SEGMENTS = ["locks", "files"] as const;
 
@@ -87,7 +87,7 @@ function isSqliteContention(error: unknown): boolean {
   return primaryCode === 5 || primaryCode === 6; // SQLITE_BUSY / SQLITE_LOCKED
 }
 
-export function fileLockRootForCoworkHome(coworkRoot: string): string {
+function fileLockRootForCoworkHome(coworkRoot: string): string {
   return path.join(canonicalizeSync(coworkRoot), ...LOCK_CACHE_DIR_SEGMENTS);
 }
 

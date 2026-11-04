@@ -4,10 +4,10 @@ Electron + React + TypeScript GUI for the agent-coworker server. This is a UI la
 
 ## Layout
 
-- `src/` — renderer React app: `src/app/store.ts` (Zustand store, WebSocket management), `src/ui/` (components), `src/lib/` (`desktopApi.ts` IPC contract, `desktopCommands.ts` preload wrappers, `agentSocket.ts` reconnecting WS client)
-- `electron/` — main/preload: `main.ts` (window lifecycle), `preload.ts` (context-isolated `window.cowork` bridge), `ipc.ts` (handlers), `services/` (server process manager, persistence)
-- `src/components/ui/` — shadcn/ui component set
-- `test/` — Bun tests (`*.test.ts`)
+- `apps/desktop/src/` — renderer React app: `apps/desktop/src/app/store.ts` (Zustand store, WebSocket management), `apps/desktop/src/ui/` (components), `apps/desktop/src/lib/` (`desktopApi.ts` IPC contract, `desktopCommands.ts` preload wrappers, `agentSocket.ts` reconnecting WS client)
+- `apps/desktop/electron/` — main/preload: `main.ts` (window lifecycle), `preload.ts` (context-isolated `window.cowork` bridge), `ipc.ts` (handlers), `services/` (server process manager, persistence)
+- `apps/desktop/src/components/ui/` — shadcn/ui component set
+- `apps/desktop/test/` — Bun tests (`*.test.ts`)
 
 ## Commands
 
@@ -30,8 +30,8 @@ and CSS remain under Biome. See `docs/ui-foundation-plan.md` for rollout boundar
 - Each workspace runs its own `cowork-server` process; the renderer opens a per-workspace control socket plus per-thread chat sockets against it.
 - `BrowserWindow` runs with `contextIsolation: true`, `nodeIntegration: false`. All privileged actions go through explicit preload methods; validate sender and inputs in the main process. Never expose unrestricted Node APIs to the renderer.
 - API keys are handled by the core server, never the desktop UI. Never log sensitive workspace paths, keys, or session data.
-- New desktop command: channel in `src/lib/desktopApi.ts` → expose in `electron/preload.ts` → handler in `electron/ipc.ts` → renderer wrapper in `src/lib/desktopCommands.ts`. Keep all four in sync.
-- New WebSocket message: schema/route in `src/server/jsonrpc/` first, then renderer handling in `src/app/store.ts`; update `docs/websocket-protocol.md`.
+- New desktop command: channel in `apps/desktop/src/lib/desktopApi.ts` → expose in `apps/desktop/electron/preload.ts` → handler in `apps/desktop/electron/ipc.ts` → renderer wrapper in `apps/desktop/src/lib/desktopCommands.ts`. Keep all four in sync.
+- New WebSocket message: schema/route in `crates/cowork-protocol/` and `crates/cowork-server/` first, then renderer handling in `apps/desktop/src/app/store.ts`; update `docs/websocket-protocol.md` and run `bun run docs:generate-jsonrpc`.
 - Verify affected UI behavior in the live running app using the tool preference and evidence requirements in `../../agent_docs/desktop-ui.md` — tests alone are not proof.
 
 ## Read when relevant

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import type { CoworkRuntimeBootstrapProgress } from "../../../src/coworkRuntime/types";
+import type { CoworkRuntimeBootstrapProgress } from "../../../src/shared/runtimeProgress";
 import { WorkspaceRuntimeProgress } from "../src/ui/WorkspaceRuntimeProgress";
 import { setupJsdom } from "./jsdomHarness";
 

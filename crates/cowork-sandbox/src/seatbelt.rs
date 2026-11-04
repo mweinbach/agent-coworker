@@ -1,0 +1,302 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use cowork_config::canonicalize_sync;
+
+use crate::policy::{
+    SandboxPolicy, WritableRootKind, policy_allows_network, scratch_roots, tmp_scratch_roots,
+    with_tmp_scratch,
+};
+use crate::protected_paths::{
+    PROTECTED_SUBDIRS, ProtectedMetadataOptions, WorkspaceProtectedPathsCache,
+    protected_metadata_paths,
+};
+use crate::{SandboxCommand, SandboxType, TransformedCommand};
+
+/// Canonical path to Apple's Seatbelt launcher; never resolved via `PATH`.
+pub const MACOS_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
+
+const SEATBELT_BASE_POLICY: &str = r#"(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow file-write-data
+  (require-all
+    (path "/dev/null")
+    (vnode-type CHARACTER-DEVICE)))
+(allow sysctl-read)
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)
+(allow ipc-posix-sem)
+(allow ipc-posix-shm-read* ipc-posix-shm-write-create ipc-posix-shm-write-data
+  (ipc-posix-name-prefix "KMP_REGISTERED_LIB_"))
+(allow pseudo-tty)
+(allow file-read-data file-read-metadata file-write-data file-ioctl
+  (literal "/dev/ptmx"))
+(allow file-read-data file-read-metadata file-write-data file-ioctl
+  (regex #"^/dev/ttys[0-9]+$"))"#;
+
+const SEATBELT_NETWORK_POLICY: &str = r#"(allow network-outbound)
+(allow network-inbound)
+(allow system-socket)
+(allow mach-lookup
+  (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.securityd")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.ocspd")
+  (global-name "com.apple.dnssd.service")
+  (global-name "com.apple.networkd")
+  (global-name "com.apple.nsurlsessiond")
+  (global-name "com.apple.symptom_diagnostics"))"#;
+
+/// Builds a macOS `/usr/bin/sandbox-exec` invocation enforcing `policy` without touching `PATH`.
+pub fn build_seatbelt_command(
+    inner: &SandboxCommand,
+    policy: &SandboxPolicy,
+) -> TransformedCommand {
+    build_seatbelt_command_with_cache(inner, policy, None)
+}
+
+/// Builds a macOS `/usr/bin/sandbox-exec` invocation using an optional `WorkspaceProtectedPathsCache`
+/// to avoid per-command workspace walks.
+pub fn build_seatbelt_command_with_cache(
+    inner: &SandboxCommand,
+    policy: &SandboxPolicy,
+    cache: Option<&WorkspaceProtectedPathsCache>,
+) -> TransformedCommand {
+    build_seatbelt_command_with_read_denies(inner, policy, cache, &[])
+}
+
+/// Builds a macOS `/usr/bin/sandbox-exec` invocation that additionally denies reads AND writes
+/// under each of `read_denied_roots` (credential directories such as `~/.ssh` or
+/// `~/.cowork/auth`), for every policy including danger-full-access.
+///
+/// SBPL evaluates rules in order with the last matching rule winning, so the `deny` rules are
+/// emitted after the broad `(allow file-read*)` / `(allow file-write* ...)` rules. Both the
+/// literal and canonical (symlink-resolved, e.g. `/var` -> `/private/var`) spellings are denied.
+pub fn build_seatbelt_command_with_read_denies(
+    inner: &SandboxCommand,
+    policy: &SandboxPolicy,
+    cache: Option<&WorkspaceProtectedPathsCache>,
+    read_denied_roots: &[PathBuf],
+) -> TransformedCommand {
+    let mut dir_params: Vec<String> = Vec::new();
+    let file_read_policy = "; allow read-only file operations\n(allow file-read*)";
+
+    let file_write_policy = if matches!(policy, SandboxPolicy::DangerFullAccess { .. }) {
+        "(allow file-write* (subpath \"/\"))".to_owned()
+    } else {
+        let darwin_scratch = scratch_roots(Some("darwin"));
+        let empty_kinds: HashMap<PathBuf, WritableRootKind> = HashMap::new();
+        let (roots, root_kinds, explicit_scan_set): (
+            Vec<PathBuf>,
+            &HashMap<PathBuf, WritableRootKind>,
+            HashSet<PathBuf>,
+        ) = match policy {
+            SandboxPolicy::ReadOnly { .. } => (Vec::new(), &empty_kinds, HashSet::new()),
+            SandboxPolicy::NoProjectWrite { project_roots, .. } => (
+                tmp_scratch_roots(project_roots, &darwin_scratch),
+                &empty_kinds,
+                HashSet::new(),
+            ),
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                writable_root_kinds,
+                ..
+            } => {
+                let explicit: HashSet<PathBuf> = writable_roots
+                    .iter()
+                    .map(|r| canonicalize_sync(r))
+                    .collect();
+                (
+                    with_tmp_scratch(writable_roots, &darwin_scratch),
+                    writable_root_kinds,
+                    explicit,
+                )
+            }
+            SandboxPolicy::DangerFullAccess { .. } => unreachable!(),
+        };
+
+        let mut seen_writable: HashSet<PathBuf> = HashSet::new();
+        let mut writable_entries: Vec<(PathBuf, bool)> = Vec::new();
+        let mut metadata_scan_roots: Vec<PathBuf> = Vec::new();
+        let mut seen_excluded: HashSet<PathBuf> = HashSet::new();
+        let mut excluded_roots: Vec<PathBuf> = Vec::new();
+
+        for r in &roots {
+            let resolved = canonicalize_sync(r);
+            if !seen_writable.insert(resolved.clone()) {
+                continue;
+            }
+            let explicit_kind = root_kinds
+                .get(r)
+                .or_else(|| root_kinds.get(&resolved))
+                .copied();
+            let is_file = match explicit_kind {
+                Some(WritableRootKind::File) => true,
+                Some(WritableRootKind::Directory) => false,
+                None => std::fs::metadata(&resolved).is_ok_and(|m| m.is_file()),
+            };
+            writable_entries.push((resolved.clone(), is_file));
+            if !is_file {
+                // Scan/watch nested protected metadata strictly on explicit policy writable roots,
+                // never on `/tmp` or `/private/tmp` scratch roots appended by `with_tmp_scratch`.
+                if explicit_scan_set.contains(&resolved) {
+                    metadata_scan_roots.push(resolved.clone());
+                }
+                for sub in PROTECTED_SUBDIRS {
+                    push_lexical_and_canonical(
+                        &resolved.join(sub),
+                        &mut seen_excluded,
+                        &mut excluded_roots,
+                    );
+                }
+            }
+        }
+
+        if !metadata_scan_roots.is_empty() {
+            let nested_protected = protected_metadata_paths(
+                &metadata_scan_roots,
+                ProtectedMetadataOptions {
+                    platform: Some("darwin"),
+                    exists: None,
+                    is_directory: None,
+                    cache,
+                },
+            );
+            for nested in nested_protected {
+                push_lexical_and_canonical(&nested, &mut seen_excluded, &mut excluded_roots);
+            }
+        }
+
+        if writable_entries.is_empty() {
+            String::new()
+        } else {
+            let mut root_clauses = Vec::with_capacity(writable_entries.len());
+            for (idx, (root, is_file)) in writable_entries.iter().enumerate() {
+                let param = format!("WRITABLE_ROOT_{idx}");
+                dir_params.push(format!("-D{param}={}", root.to_string_lossy()));
+                let matcher = if *is_file { "literal" } else { "subpath" };
+                root_clauses.push(format!("({matcher} (param \"{param}\"))"));
+            }
+
+            let allow_clause = if root_clauses.len() == 1 {
+                root_clauses.remove(0)
+            } else {
+                format!("(require-any {})", root_clauses.join(" "))
+            };
+
+            let mut exclude_clauses = Vec::with_capacity(excluded_roots.len());
+            for (idx, excluded) in excluded_roots.iter().enumerate() {
+                let param = format!("WRITABLE_EXCLUDED_{idx}");
+                dir_params.push(format!("-D{param}={}", excluded.to_string_lossy()));
+                exclude_clauses.push(format!("(require-not (subpath (param \"{param}\")))"));
+            }
+
+            if exclude_clauses.is_empty() {
+                format!("(allow file-write*\n  {allow_clause}\n)")
+            } else {
+                format!(
+                    "(allow file-write*\n  (require-all\n    {allow_clause}\n    {}\n  )\n)",
+                    exclude_clauses.join("\n    ")
+                )
+            }
+        }
+    };
+
+    let read_deny_policy = read_deny_section(read_denied_roots, &mut dir_params);
+
+    let network_allowed = policy_allows_network(policy);
+    let mut sections: Vec<&str> = vec![SEATBELT_BASE_POLICY, file_read_policy];
+    if !file_write_policy.is_empty() {
+        sections.push(&file_write_policy);
+    }
+    // Must follow every file allow rule: the last matching SBPL rule wins.
+    if !read_deny_policy.is_empty() {
+        sections.push(&read_deny_policy);
+    }
+    if network_allowed {
+        sections.push(SEATBELT_NETWORK_POLICY);
+    }
+    let full_policy = sections.join("\n");
+
+    let mut args = Vec::with_capacity(3 + dir_params.len() + inner.args.len());
+    args.push("-p".to_owned());
+    args.push(full_policy);
+    args.extend(dir_params);
+    args.push("--".to_owned());
+    args.push(inner.file.clone());
+    args.extend(inner.args.iter().cloned());
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COWORK_SANDBOX".to_owned(),
+        SandboxType::Seatbelt.as_str().to_owned(),
+    );
+    if !network_allowed {
+        env.insert("COWORK_SANDBOX_NETWORK_DISABLED".to_owned(), "1".to_owned());
+    }
+
+    TransformedCommand {
+        file: MACOS_SEATBELT_EXECUTABLE.to_owned(),
+        args,
+        env,
+        sandbox: SandboxType::Seatbelt,
+        unsandboxed: false,
+    }
+}
+
+/// Excludes both the lexical protected entry (`<root>/.git`, which may itself be a symlink or a
+/// dangling symlink whose directory entry `unlink`/`rename` would act on) and its canonical,
+/// symlink-resolved target (which writes through the link resolve to).
+fn push_lexical_and_canonical(
+    entry: &Path,
+    seen: &mut HashSet<PathBuf>,
+    excluded: &mut Vec<PathBuf>,
+) {
+    for candidate in [entry.to_path_buf(), canonicalize_sync(entry)] {
+        if seen.insert(candidate.clone()) {
+            excluded.push(candidate);
+        }
+    }
+}
+
+/// Renders `(deny file-read* file-write* (subpath ...))` for each read-denied root, binding the
+/// paths as `-DREAD_DENIED_<n>=<path>` parameters (never interpolated into the profile text).
+fn read_deny_section(read_denied_roots: &[PathBuf], dir_params: &mut Vec<String>) -> String {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for root in read_denied_roots {
+        if root.as_os_str().is_empty() || !root.is_absolute() {
+            continue;
+        }
+        for candidate in [root.clone(), canonicalize_sync(root)] {
+            if seen.insert(candidate.clone()) {
+                paths.push(candidate);
+            }
+        }
+    }
+    if paths.is_empty() {
+        return String::new();
+    }
+    let mut clauses = Vec::with_capacity(paths.len());
+    for (idx, path) in paths.iter().enumerate() {
+        let param = format!("READ_DENIED_{idx}");
+        dir_params.push(format!("-D{param}={}", path.to_string_lossy()));
+        clauses.push(format!("(subpath (param \"{param}\"))"));
+    }
+    format!(
+        "; deny credential paths (reads and writes)\n(deny file-read* file-write*\n  {}\n)",
+        clauses.join("\n  ")
+    )
+}

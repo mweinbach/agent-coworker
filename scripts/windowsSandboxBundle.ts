@@ -28,7 +28,7 @@ function firstSubdir(dir: string): string | null {
   }
 }
 
-function buildWindowsRustCommandRunner(rustTarget: string): typeof runCommand {
+export function buildWindowsRustCommandRunner(rustTarget: string): typeof runCommand {
   return async (command, options) => {
     const baseEnv = options.env ?? process.env;
     if (hostPlatform() !== "win32") {

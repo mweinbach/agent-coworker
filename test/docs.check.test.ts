@@ -4,19 +4,27 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  CURATED_DOCS_WITH_PATH_CHECKS,
   checkJsonRpcMethodDrift,
   extractDocumentedJsonRpcMethods,
   extractInlineRepoPaths,
   extractMarkdownLinks,
+  registeredJsonRpcMethods as loadRegisteredJsonRpcMethods,
   protocolVersionNeedle,
   resolveDocReferencePath,
+  validateReferencedPaths,
 } from "../packages/harness/src/check_docs";
 import {
-  jsonRpcNotificationSchemas,
-  jsonRpcRequestSchemas,
-  jsonRpcServerRequestSchemas,
-} from "../src/server/jsonrpc/schema";
-import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
+  loadRustProtocolSchemaManifest,
+  loadRustWebSocketJsonRpcSchemaJson,
+} from "../packages/harness/src/protocolManifest";
+import { WEBSOCKET_PROTOCOL_VERSION } from "../src/shared/protocol";
+
+// Export the Rust protocol manifest at suite load, outside per-test timeouts:
+// on a cold target dir `cargo run` compiles cowork-protocol first. Later calls
+// read the loader's in-process cache.
+loadRustProtocolSchemaManifest();
+loadRustWebSocketJsonRpcSchemaJson();
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -24,13 +32,7 @@ function repoRoot(): string {
 }
 
 function registeredJsonRpcMethods(): string[] {
-  return [
-    ...new Set([
-      ...Object.keys(jsonRpcRequestSchemas),
-      ...Object.keys(jsonRpcNotificationSchemas),
-      ...Object.keys(jsonRpcServerRequestSchemas),
-    ]),
-  ].sort();
+  return [...loadRegisteredJsonRpcMethods()].sort();
 }
 
 function protocolDocForMethods(methods: string[]): string {
@@ -207,5 +209,156 @@ describe("docs checker parity", () => {
     ]) {
       expect(combined).toContain(envVar);
     }
+  });
+
+  test("Rust protocol schema manifest matches generated websocket-jsonrpc.schema.json", async () => {
+    const manifest = loadRustProtocolSchemaManifest();
+    const schemaJson = loadRustWebSocketJsonRpcSchemaJson();
+    const onDisk = await fs.readFile(
+      path.join(repoRoot(), "docs", "generated", "websocket-jsonrpc.schema.json"),
+      "utf-8",
+    );
+
+    expect(manifest.websocketProtocolVersion).toBe(WEBSOCKET_PROTOCOL_VERSION);
+    expect(manifest.namespaces).toHaveLength(21);
+    expect(manifest.methods.requests.length).toBeGreaterThanOrEqual(162);
+    expect(manifest.methods.notifications.length).toBeGreaterThanOrEqual(36);
+    expect(manifest.methods.serverRequests).toEqual([
+      "item/tool/requestUserInput",
+      "item/commandExecution/requestApproval",
+    ]);
+    expect(onDisk).toBe(schemaJson);
+  });
+
+  test("extracts and resolves agent_docs/ repo paths in markdown and inline spans", () => {
+    const cwd = repoRoot();
+
+    expect(
+      extractInlineRepoPaths(
+        "Read `agent_docs/adding-models.md` and `../../agent_docs/desktop-ui.md` before editing.",
+      ),
+    ).toEqual(["agent_docs/adding-models.md", "../../agent_docs/desktop-ui.md"]);
+
+    expect(
+      extractMarkdownLinks(
+        "See [Adding Models](agent_docs/adding-models.md) and [Desktop UI](../../agent_docs/desktop-ui.md).",
+      ),
+    ).toEqual(["agent_docs/adding-models.md", "../../agent_docs/desktop-ui.md"]);
+
+    expect(resolveDocReferencePath(cwd, "AGENTS.md", "agent_docs/adding-models.md", "inline")).toBe(
+      path.join(cwd, "agent_docs", "adding-models.md"),
+    );
+    expect(
+      resolveDocReferencePath(
+        cwd,
+        "apps/desktop/AGENTS.md",
+        "../../agent_docs/desktop-ui.md",
+        "inline",
+      ),
+    ).toBe(path.join(cwd, "agent_docs", "desktop-ui.md"));
+  });
+
+  test("curated path checks cover all active agent_docs, harness docs, docs guides, and desktop README", async () => {
+    const cwd = repoRoot();
+    const curatedSet = new Set<string>(CURATED_DOCS_WITH_PATH_CHECKS);
+    const historicalDocs = new Set<string>([
+      "docs/audit-code-bloat.md",
+      "docs/bun-native-migration.md",
+      "docs/desktop-settings-ui-ux-audit-2026-03-13.md",
+      "docs/engineering-overhaul.md",
+      "docs/platform-abstraction-plan.md",
+      "docs/simplification-plan.md",
+      "docs/ui-foundation-plan.md",
+      "docs/ui-quality-audit-2026-07.md",
+    ]);
+
+    const listMarkdownFiles = async (relDir: string): Promise<string[]> => {
+      const entries = await fs.readdir(path.join(cwd, relDir), { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => `${relDir}/${entry.name}`)
+        .sort();
+    };
+
+    const agentDocFiles = await listMarkdownFiles("agent_docs");
+    const harnessDocFiles = await listMarkdownFiles("docs/harness");
+    const topDocsDirFiles = await listMarkdownFiles("docs");
+    const activeDocsDirFiles = topDocsDirFiles.filter((file) => !historicalDocs.has(file));
+
+    expect(agentDocFiles).toHaveLength(9);
+    expect(harnessDocFiles).toHaveLength(10);
+    // 18 active reference guides + docs/websocket-protocol.md
+    expect(activeDocsDirFiles).toHaveLength(19);
+
+    for (const file of [
+      "README.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "GEMINI.md",
+      "CONTRIBUTING.md",
+      "apps/desktop/AGENTS.md",
+      "apps/desktop/README.md",
+      ...agentDocFiles,
+      ...harnessDocFiles,
+      ...activeDocsDirFiles,
+    ]) {
+      expect(curatedSet.has(file)).toBe(true);
+    }
+
+    for (const historicalFile of historicalDocs) {
+      expect(curatedSet.has(historicalFile)).toBe(false);
+    }
+
+    const bunMigrationDoc = await fs.readFile(
+      path.join(cwd, "docs", "bun-native-migration.md"),
+      "utf-8",
+    );
+    expect(bunMigrationDoc).toContain("Historical");
+  });
+
+  test("validateReferencedPaths passes on every curated doc and catches missing paths", async () => {
+    const cwd = repoRoot();
+
+    for (const docPath of CURATED_DOCS_WITH_PATH_CHECKS) {
+      const text = await fs.readFile(path.join(cwd, docPath), "utf-8");
+      const failures = await validateReferencedPaths(cwd, docPath, text);
+      expect(failures).toEqual([]);
+    }
+
+    const brokenChecks = await validateReferencedPaths(
+      cwd,
+      "docs/workspace-context.md",
+      [
+        "- [`src/workspace/context.ts`](../src/workspace/context.ts)",
+        "- See `agent_docs/nonexistent-guide.md` and `test/h3.*.test.ts`.",
+        "```bash",
+        "bun run test -- test/h3.mobile-server-pairing.test.ts",
+        "```",
+      ].join("\n"),
+    );
+    expect(brokenChecks).toEqual([
+      {
+        ok: false,
+        message: "docs/workspace-context.md references missing path: ../src/workspace/context.ts",
+      },
+      {
+        ok: false,
+        message: "docs/workspace-context.md references missing path: src/workspace/context.ts",
+      },
+      {
+        ok: false,
+        message:
+          "docs/workspace-context.md references missing path: agent_docs/nonexistent-guide.md",
+      },
+      {
+        ok: false,
+        message: "docs/workspace-context.md references missing path: test/h3.*.test.ts",
+      },
+      {
+        ok: false,
+        message:
+          "docs/workspace-context.md references missing path: test/h3.mobile-server-pairing.test.ts",
+      },
+    ]);
   });
 });

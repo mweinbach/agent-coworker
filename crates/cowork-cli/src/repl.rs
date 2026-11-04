@@ -1,0 +1,1970 @@
+mod provider_auth;
+
+use std::collections::{HashMap, VecDeque};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+
+use cowork_config::{
+    ProviderName, canonicalize_sync, ensure_private_dir_sync, fallback_default_model_id,
+    resolve_home_dir,
+};
+use cowork_protocol::JsonRpcLiteRequest;
+use cowork_server::{ServerHandle, ServerOptions, start_server};
+use cowork_tools::{ASK_SKIP_TOKEN, CANONICAL_BUILTIN_TOOL_IDS};
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
+use serde_json::{Map, Value, json};
+use tokio::sync::Notify;
+use uuid::Uuid;
+
+use crate::client::{InboundRpcEvent, ReplRpcClient, RpcRequestError};
+use crate::parser::{ParsedReplCommand, parse_repl_input};
+use crate::sanitize_terminal::{
+    TerminalSanitizer, sanitize_prompt_field, sanitize_terminal_output as sanitize,
+};
+use crate::state_store::{
+    get_stored_session_for_cwd, repl_history_file_path, set_stored_session_for_cwd,
+};
+
+/// The canonical reasoning-effort ladder accepted by `/reasoning` (and its `/effort` /
+/// `/reasoning-effort` aliases), in ladder order: TS `OPENAI_REASONING_EFFORT_VALUES`
+/// (`src/shared/openaiCompatibleOptions.ts`), mirrored by the private
+/// `cowork_config::models::OPENAI_REASONING_EFFORT_VALUES`. `none` disables reasoning, while
+/// `light`/`max` are only honored where a model advertises them; each runtime downgrades an
+/// unsupported value to the nearest level it can send, so the CLI must not narrow the ladder.
+const REASONING_EFFORTS: [&str; 8] = [
+    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+];
+const TEXT_VERBOSITIES: [&str; 3] = ["low", "medium", "high"];
+/// TS `OPENAI_REASONING_SUMMARY_VALUES`.
+const REASONING_SUMMARIES: [&str; 3] = ["auto", "concise", "detailed"];
+
+/// Providers whose options take `reasoningEffort` / `textVerbosity` / `reasoningSummary`
+/// (TS `isOpenAiCompatibleProviderName`).
+fn is_openai_compatible_provider(provider: &str) -> bool {
+    matches!(provider, "openai" | "codex-cli")
+}
+
+const OPENAI_COMPATIBLE_PROVIDER_REQUIRED: &str = "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first";
+
+/// Indent for continuation lines of multi-line prompt fields (question text).
+const PROMPT_CONTINUATION_INDENT: &str = "    ";
+
+/// Options for running an interactive or scripted `cowork` CLI REPL session.
+#[derive(Debug, Clone)]
+pub struct ReplOptions {
+    pub working_directory: PathBuf,
+    pub port: u16,
+    pub yolo: bool,
+    pub homedir: Option<PathBuf>,
+    pub built_in_dir: Option<PathBuf>,
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptReply {
+    Line(String),
+    Interrupted,
+    Eof,
+}
+
+/// What the REPL loop does after one input line has been handled.
+#[derive(Debug)]
+enum LineOutcome {
+    Continue,
+    Exit,
+    /// Stop the embedded server and start a fresh one (and thread) in `cwd` (TS `restartServer`),
+    /// then print `announce` if present.
+    RestartServer {
+        cwd: PathBuf,
+        announce: Option<String>,
+    },
+    /// A model turn ran (or was attempted) for this line; the REPL keeps going as for
+    /// `Continue`, while one-shot mode turns anything but `Completed` into a failing exit.
+    Turn(TurnOutcome),
+}
+
+/// How a message or command turn ended (TS has no counterpart: its CLI had no one-shot mode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TurnOutcome {
+    Completed,
+    /// `turn/completed` reported `failed` (or another non-success status), with the turn error.
+    Failed(Option<String>),
+    Interrupted,
+    /// The `turn/start` / `command/execute` request was rejected, so no turn ran.
+    StartFailed(String),
+}
+
+impl TurnOutcome {
+    /// The one-shot run's error for an unsuccessful turn, `None` when it completed.
+    fn one_shot_error(&self) -> Option<anyhow::Error> {
+        match self {
+            Self::Completed => None,
+            Self::Failed(Some(message)) => Some(anyhow::anyhow!("Turn failed: {message}")),
+            Self::Failed(None) => Some(anyhow::anyhow!("Turn failed")),
+            Self::Interrupted => Some(anyhow::anyhow!("Turn interrupted")),
+            Self::StartFailed(message) => Some(anyhow::anyhow!("Failed to start turn: {message}")),
+        }
+    }
+}
+
+enum PromptInputSource {
+    Scripted(VecDeque<String>),
+    Interactive(Option<Box<DefaultEditor>>),
+}
+
+impl PromptInputSource {
+    async fn read_turn_prompt(
+        &mut self,
+        prompt: &str,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<PromptReply> {
+        match self {
+            Self::Scripted(lines) => {
+                write!(out, "{prompt}")?;
+                out.flush()?;
+                match lines.pop_front() {
+                    Some(line) => {
+                        writeln!(out, "{line}")?;
+                        out.flush()?;
+                        if line == "__INTERRUPT__" {
+                            Ok(PromptReply::Interrupted)
+                        } else {
+                            Ok(PromptReply::Line(line))
+                        }
+                    }
+                    None => Ok(PromptReply::Eof),
+                }
+            }
+            Self::Interactive(rl_slot) => {
+                out.flush()?;
+                let prompt_owned = prompt.to_owned();
+                let mut rl = rl_slot
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("Interactive editor unavailable"))?;
+                let (returned_rl, res) = tokio::task::spawn_blocking(move || {
+                    let r = rl.readline(&prompt_owned);
+                    (rl, r)
+                })
+                .await?;
+                *rl_slot = Some(returned_rl);
+                match res {
+                    Ok(line) => Ok(PromptReply::Line(line)),
+                    Err(ReadlineError::Interrupted) => Ok(PromptReply::Interrupted),
+                    Err(ReadlineError::Eof) => Ok(PromptReply::Eof),
+                    Err(err) => Err(err.into()),
+                }
+            }
+        }
+    }
+}
+
+struct ActiveReplSession {
+    cwd: PathBuf,
+    homedir: PathBuf,
+    env: HashMap<String, String>,
+    yolo: bool,
+    port: u16,
+    built_in_dir: Option<PathBuf>,
+    server: ServerHandle,
+    /// The working directory the embedded server was started in (`cwd` may later move to a
+    /// resumed thread's workspace).
+    server_cwd: PathBuf,
+    rpc: ReplRpcClient,
+    thread_id: String,
+    provider: String,
+    model: String,
+    catalog: Value,
+    listen_os_ctrl_c: bool,
+    interrupt_notify: Option<Arc<Notify>>,
+}
+
+impl ActiveReplSession {
+    async fn bootstrap(opts: ReplOptions, out: &mut dyn Write) -> anyhow::Result<Self> {
+        let cwd = canonicalize_sync(&opts.working_directory);
+        let homedir = opts
+            .homedir
+            .clone()
+            .map(|h| canonicalize_sync(&h))
+            .unwrap_or_else(|| {
+                canonicalize_sync(&resolve_home_dir(&opts.env, cowork_config::host_platform()))
+            });
+
+        let server = start_server(ServerOptions {
+            working_directory: cwd.clone(),
+            host: "127.0.0.1".to_owned(),
+            port: opts.port,
+            yolo: opts.yolo,
+            mobile_h3: false,
+            mobile_h3_host: "127.0.0.1".to_owned(),
+            mobile_h3_port: 0,
+            homedir: Some(homedir.clone()),
+            built_in_dir: opts.built_in_dir.clone(),
+            env: opts.env.clone(),
+        })
+        .await?;
+
+        let rpc = ReplRpcClient::connect_and_handshake(server.ws_url(), env!("CARGO_PKG_VERSION"))
+            .await?;
+
+        let mut session = Self {
+            cwd: cwd.clone(),
+            homedir,
+            env: opts.env,
+            yolo: opts.yolo,
+            port: opts.port,
+            built_in_dir: opts.built_in_dir,
+            server,
+            server_cwd: cwd,
+            rpc,
+            thread_id: String::new(),
+            provider: "openai".to_owned(),
+            model: "gpt-5.4".to_owned(),
+            catalog: json!({}),
+            listen_os_ctrl_c: false,
+            interrupt_notify: None,
+        };
+
+        // TS `connectToServer`: resume the workspace's stored thread (or start one), adopt its
+        // descriptor (which may move `cwd` to the thread's own workspace), then load the
+        // workspace metadata for the adopted `cwd`.
+        let cwd_str = session.cwd.to_string_lossy().into_owned();
+        let stored_tid = get_stored_session_for_cwd(&session.homedir, &session.env, &session.cwd);
+        let (thread_val, was_resumed) = if let Some(tid) = stored_tid {
+            match session
+                .rpc
+                .request("thread/resume", Some(json!({ "threadId": tid })))
+                .await
+            {
+                Ok(res) => (res["thread"].clone(), true),
+                Err(_) => {
+                    let started = session
+                        .rpc
+                        .request("thread/start", Some(json!({ "cwd": cwd_str })))
+                        .await?;
+                    (started["thread"].clone(), false)
+                }
+            }
+        } else {
+            let started = session
+                .rpc
+                .request("thread/start", Some(json!({ "cwd": cwd_str })))
+                .await?;
+            (started["thread"].clone(), false)
+        };
+        session.apply_thread_descriptor(&thread_val);
+        session.load_workspace_metadata().await;
+
+        writeln!(
+            out,
+            "Cowork CLI v{} — connected ({} / {})",
+            env!("CARGO_PKG_VERSION"),
+            sanitize(&session.provider),
+            sanitize(&session.model)
+        )?;
+        writeln!(out, "Workspace: {}", session.cwd.display())?;
+        writeln!(
+            out,
+            "Thread: {} (type /help for commands, /exit to quit)",
+            sanitize(&session.thread_id)
+        )?;
+        if was_resumed
+            && let Ok(read_res) = session
+                .rpc
+                .request(
+                    "thread/read",
+                    Some(json!({
+                        "threadId": session.thread_id,
+                        "includeTurns": true,
+                    })),
+                )
+                .await
+        {
+            render_thread_history_if_any(&read_res, out)?;
+        }
+        session.rpc.drain_brief_notifications(20).await;
+        session.rpc.pending_notifications.clear();
+        out.flush()?;
+
+        Ok(session)
+    }
+
+    /// TS `loadWorkspaceMetadata`: re-reads the session state and provider catalog for the
+    /// active `cwd` (best effort, like TS `Promise.allSettled`). The catalog is the only
+    /// workspace metadata the REPL caches; auth methods are read on demand by `/connect`.
+    async fn load_workspace_metadata(&mut self) {
+        let cwd_str = self.cwd.to_string_lossy().into_owned();
+        let _ = self
+            .rpc
+            .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
+            .await;
+        if let Ok(res) = self
+            .rpc
+            .request(
+                "cowork/provider/catalog/read",
+                Some(json!({ "cwd": cwd_str })),
+            )
+            .await
+        {
+            self.catalog = res.get("event").cloned().unwrap_or_else(|| json!({}));
+        }
+    }
+
+    /// TS `applyThreadDescriptor`: adopt a `thread/start` / `thread/resume` result as the active
+    /// thread, syncing the provider/model selection and working directory to the thread's own
+    /// (a resumed thread may belong to another workspace) and persisting it as that workspace's
+    /// last session. Returns the adopted thread id.
+    fn apply_thread_descriptor(&mut self, thread: &Value) -> Option<String> {
+        let tid = thread["id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?
+            .to_owned();
+        if let Some(cwd) = thread["cwd"].as_str().filter(|s| !s.trim().is_empty()) {
+            self.cwd = canonicalize_sync(Path::new(cwd));
+        }
+        if let Some(p) = thread["modelProvider"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
+            self.provider = p.to_owned();
+        }
+        if let Some(m) = thread["model"].as_str().filter(|s| !s.trim().is_empty()) {
+            self.model = m.to_owned();
+        }
+        self.thread_id = tid.clone();
+        let _ = set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, &tid);
+        Some(tid)
+    }
+
+    /// Handles one input line at the REPL loop boundary. Commands whose request the server
+    /// rejected (or that timed out) are reported and the REPL keeps accepting input (TS
+    /// `tryRequest` prints `Error: ...` and re-prompts); connection loss, terminal I/O and prompt
+    /// failures stay fatal and propagate.
+    async fn handle_input_line(
+        &mut self,
+        line: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<LineOutcome> {
+        match self.handle_line(line, prompt_source, out).await {
+            Err(err) if is_recoverable_command_error(&err) => {
+                writeln!(out, "Error: {}", sanitize(&err.to_string()))?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+            other => other,
+        }
+    }
+
+    fn default_model_for_provider(&self, provider_id: &str) -> String {
+        if let Some(m) = self
+            .catalog
+            .get("default")
+            .and_then(|d| d.get(provider_id))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            return m.to_owned();
+        }
+        ProviderName::parse(provider_id)
+            .map(|p| fallback_default_model_id(p).to_owned())
+            .unwrap_or_default()
+    }
+
+    /// Handles one line of user input. Returns `Ok(LineOutcome::Exit)` when REPL should exit (`/exit`).
+    async fn handle_line(
+        &mut self,
+        line: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<LineOutcome> {
+        match parse_repl_input(line) {
+            ParsedReplCommand::Message(msg) if msg.is_empty() => Ok(LineOutcome::Continue),
+
+            ParsedReplCommand::Help => {
+                writeln!(out, "Available commands:")?;
+                writeln!(out, "  /help                      Show this help message")?;
+                writeln!(out, "  /sessions                  List workspace threads")?;
+                writeln!(out, "  /new                       Start a new thread")?;
+                writeln!(
+                    out,
+                    "  /resume <threadId>         Resume an existing thread"
+                )?;
+                writeln!(
+                    out,
+                    "  /provider <name>           Switch active model provider"
+                )?;
+                writeln!(out, "  /model <id>                Switch active model")?;
+                writeln!(
+                    out,
+                    "  /reasoning <effort>        Set reasoning effort ({})",
+                    REASONING_EFFORTS.join("|")
+                )?;
+                writeln!(
+                    out,
+                    "  /tools                     List available session tools"
+                )?;
+                writeln!(
+                    out,
+                    "  /skills                    List discovered workspace skills"
+                )?;
+                writeln!(
+                    out,
+                    "  /mcp                       List configured MCP servers"
+                )?;
+                writeln!(
+                    out,
+                    "  /connect [provider] [key]  View or configure provider credentials"
+                )?;
+                writeln!(
+                    out,
+                    "  /cwd <path>                Set working directory for this session"
+                )?;
+                writeln!(
+                    out,
+                    "  /restart                   Restart server and auto-resume latest session"
+                )?;
+                writeln!(out, "  /clear                     Clear terminal view")?;
+                writeln!(out, "  /exit                      Exit Cowork CLI")?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Exit => {
+                writeln!(out, "Goodbye.")?;
+                out.flush()?;
+                Ok(LineOutcome::Exit)
+            }
+
+            ParsedReplCommand::New => {
+                let cwd_str = self.cwd.to_string_lossy().into_owned();
+                let res = self
+                    .rpc
+                    .request("thread/start", Some(json!({ "cwd": cwd_str })))
+                    .await?;
+                // `/new` sends no provider/model overrides, so the server starts the thread on the
+                // workspace defaults; follow its descriptor (TS `applyThreadDescriptor`).
+                if let Some(tid) = self.apply_thread_descriptor(&res["thread"]) {
+                    writeln!(
+                        out,
+                        "Started new thread: {} ({} / {})",
+                        sanitize(&tid),
+                        sanitize(&self.provider),
+                        sanitize(&self.model)
+                    )?;
+                }
+                self.rpc.drain_brief_notifications(15).await;
+                self.rpc.pending_notifications.clear();
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Sessions => {
+                let cwd_str = self.cwd.to_string_lossy().into_owned();
+                let list_res = self
+                    .rpc
+                    .request("thread/list", Some(json!({ "cwd": cwd_str })))
+                    .await?;
+                writeln!(out, "Current thread: {}", sanitize(&self.thread_id))?;
+                if let Some(threads) = list_res["threads"].as_array()
+                    && !threads.is_empty()
+                {
+                    writeln!(out, "Saved workspace threads ({}):", threads.len())?;
+                    for t in threads {
+                        let id = t["id"].as_str().unwrap_or("");
+                        let title = t["title"].as_str().unwrap_or("Untitled");
+                        let marker = if id == self.thread_id { "*" } else { " " };
+                        writeln!(out, " {marker} {} — {}", sanitize(id), sanitize(title))?;
+                    }
+                }
+                writeln!(
+                    out,
+                    "Use /new to start a new thread, /resume <threadId> to resume one."
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Resume(arg) => {
+                let target = arg.trim();
+                if target.is_empty() {
+                    writeln!(out, "usage: /resume <threadId>")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                match self
+                    .rpc
+                    .request("thread/resume", Some(json!({ "threadId": target })))
+                    .await
+                {
+                    Ok(res) => {
+                        // TS `resumeSession` -> `connectToServer`: adopt the descriptor, then
+                        // reload workspace metadata for the thread's (possibly new) workspace.
+                        let adopted = self.apply_thread_descriptor(&res["thread"]);
+                        if let Some(tid) = &adopted
+                            && self.cwd != self.server_cwd
+                        {
+                            // The thread lives in another workspace, but the embedded server
+                            // (tools, config, skills, sandbox) stays bound to the one it was
+                            // started in. `apply_thread_descriptor` stored the thread as the new
+                            // workspace's last session, so restarting there (like `/cwd`)
+                            // auto-resumes it and renders its history.
+                            writeln!(
+                                out,
+                                "Resumed thread: {} ({} / {})",
+                                sanitize(tid),
+                                sanitize(&self.provider),
+                                sanitize(&self.model)
+                            )?;
+                            writeln!(
+                                out,
+                                "Thread belongs to workspace {}; restarting server there...",
+                                sanitize(&self.cwd.display().to_string())
+                            )?;
+                            out.flush()?;
+                            return Ok(LineOutcome::RestartServer {
+                                cwd: self.cwd.clone(),
+                                announce: None,
+                            });
+                        }
+                        self.load_workspace_metadata().await;
+                        let tid = match adopted {
+                            Some(tid) => tid,
+                            None => {
+                                self.thread_id = target.to_owned();
+                                let _ = set_stored_session_for_cwd(
+                                    &self.homedir,
+                                    &self.env,
+                                    &self.cwd,
+                                    target,
+                                );
+                                target.to_owned()
+                            }
+                        };
+                        writeln!(
+                            out,
+                            "Resumed thread: {} ({} / {})",
+                            sanitize(&tid),
+                            sanitize(&self.provider),
+                            sanitize(&self.model)
+                        )?;
+                        if let Ok(read_res) = self
+                            .rpc
+                            .request(
+                                "thread/read",
+                                Some(json!({
+                                    "threadId": tid,
+                                    "includeTurns": true,
+                                })),
+                            )
+                            .await
+                        {
+                            render_thread_history_if_any(&read_res, out)?;
+                        }
+                        self.rpc.drain_brief_notifications(15).await;
+                        self.rpc.pending_notifications.clear();
+                    }
+                    Err(err) => {
+                        writeln!(
+                            out,
+                            "Failed to resume {target}: {}",
+                            sanitize(&err.to_string())
+                        )?;
+                    }
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Provider(arg) => {
+                let name = arg.split_whitespace().next().unwrap_or("").trim();
+                let valid_names: Vec<&str> = ProviderName::ALL.iter().map(|p| p.as_str()).collect();
+                let Some(parsed) = ProviderName::parse(name) else {
+                    writeln!(out, "usage: /provider <{}>", valid_names.join("|"))?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                };
+                let next_model = self.default_model_for_provider(parsed.as_str());
+                if parsed == ProviderName::Lmstudio
+                    && (next_model.is_empty() || next_model == "local-model")
+                {
+                    writeln!(
+                        out,
+                        "LM Studio has no default LLM right now. Set a model explicitly with /model <key>."
+                    )?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                let res = self
+                    .rpc
+                    .request(
+                        "cowork/session/model/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "provider": parsed.as_str(),
+                            "model": next_model,
+                        })),
+                    )
+                    .await?;
+                self.provider = parsed.as_str().to_owned();
+                self.model = res["event"]["config"]["model"]
+                    .as_str()
+                    .unwrap_or(&next_model)
+                    .to_owned();
+                writeln!(
+                    out,
+                    "Provider set to {} (model: {})",
+                    self.provider,
+                    sanitize(&self.model)
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Model(arg) => {
+                let model_id = arg.trim();
+                if model_id.is_empty() {
+                    writeln!(
+                        out,
+                        "Current model: {} ({}) — usage: /model <id>",
+                        sanitize(&self.model),
+                        sanitize(&self.provider)
+                    )?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                let res = self
+                    .rpc
+                    .request(
+                        "cowork/session/model/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "model": model_id,
+                        })),
+                    )
+                    .await?;
+                self.model = res["event"]["config"]["model"]
+                    .as_str()
+                    .unwrap_or(model_id)
+                    .to_owned();
+                writeln!(
+                    out,
+                    "Model set to {} ({})",
+                    sanitize(&self.model),
+                    sanitize(&self.provider)
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Reasoning(arg) => {
+                if !is_openai_compatible_provider(&self.provider) {
+                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                let val = arg
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !REASONING_EFFORTS.contains(&val.as_str()) {
+                    writeln!(out, "usage: /reasoning <{}>", REASONING_EFFORTS.join("|"))?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                self.rpc
+                    .request(
+                        "cowork/session/config/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "config": {
+                                "providerOptions": {
+                                    (&self.provider): { "reasoningEffort": val }
+                                }
+                            }
+                        })),
+                    )
+                    .await?;
+                writeln!(
+                    out,
+                    "{} reasoning effort set to {val}",
+                    sanitize(&self.provider)
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Verbosity(arg) => {
+                if !is_openai_compatible_provider(&self.provider) {
+                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                let val = arg
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !TEXT_VERBOSITIES.contains(&val.as_str()) {
+                    writeln!(out, "usage: /verbosity <{}>", TEXT_VERBOSITIES.join("|"))?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                self.rpc
+                    .request(
+                        "cowork/session/config/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "config": {
+                                "providerOptions": {
+                                    (&self.provider): { "textVerbosity": val }
+                                }
+                            }
+                        })),
+                    )
+                    .await?;
+                writeln!(out, "{} verbosity set to {val}", sanitize(&self.provider))?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::ReasoningSummary(arg) => {
+                if !is_openai_compatible_provider(&self.provider) {
+                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                let val = arg
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !REASONING_SUMMARIES.contains(&val.as_str()) {
+                    writeln!(
+                        out,
+                        "usage: /reasoning-summary <{}>",
+                        REASONING_SUMMARIES.join("|")
+                    )?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                self.rpc
+                    .request(
+                        "cowork/session/config/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "config": {
+                                "providerOptions": {
+                                    (&self.provider): { "reasoningSummary": val }
+                                }
+                            }
+                        })),
+                    )
+                    .await?;
+                writeln!(
+                    out,
+                    "{} reasoning summary set to {val}",
+                    sanitize(&self.provider)
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Tools => {
+                let cwd_str = self.cwd.to_string_lossy().into_owned();
+                let _ = self
+                    .rpc
+                    .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
+                    .await?;
+                writeln!(out, "Tools:")?;
+                for name in CANONICAL_BUILTIN_TOOL_IDS {
+                    writeln!(out, "  - {name}")?;
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Skills => {
+                let cwd_str = self.cwd.to_string_lossy().into_owned();
+                let res = self
+                    .rpc
+                    .request("cowork/skills/list", Some(json!({ "cwd": cwd_str })))
+                    .await?;
+                let skills = res["event"]["skills"]
+                    .as_array()
+                    .or_else(|| res["skills"].as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if skills.is_empty() {
+                    writeln!(out, "No custom skills discovered in workspace.")?;
+                } else {
+                    writeln!(out, "Skills:")?;
+                    for s in skills {
+                        writeln!(out, "  - {}", sanitize(s["name"].as_str().unwrap_or("")))?;
+                    }
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Mcp => {
+                let cwd_str = self.cwd.to_string_lossy().into_owned();
+                let res = self
+                    .rpc
+                    .request("cowork/mcp/servers/read", Some(json!({ "cwd": cwd_str })))
+                    .await?;
+                let servers = res["event"]["servers"]
+                    .as_array()
+                    .or_else(|| res["servers"].as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if servers.is_empty() {
+                    writeln!(out, "No MCP servers configured.")?;
+                } else {
+                    writeln!(out, "MCP servers:")?;
+                    for s in servers {
+                        writeln!(out, "  - {}", sanitize(s["name"].as_str().unwrap_or("")))?;
+                    }
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Connect(arg) => {
+                let cwd_str = self.cwd.to_string_lossy().into_owned();
+                let mut parts = arg.splitn(2, char::is_whitespace);
+                let provider = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+                let rest = parts.next().unwrap_or("").trim();
+                if matches!(provider.as_str(), "" | "list" | "help") {
+                    let cat = self
+                        .rpc
+                        .request(
+                            "cowork/provider/catalog/read",
+                            Some(json!({ "cwd": cwd_str })),
+                        )
+                        .await?;
+                    self.catalog = cat["event"].clone();
+                    let connected: Vec<&str> = self.catalog["connected"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(Value::as_str).collect())
+                        .unwrap_or_default();
+                    if connected.is_empty() {
+                        writeln!(out, "Connected providers: (none)")?;
+                    } else {
+                        writeln!(
+                            out,
+                            "Connected providers: {}",
+                            sanitize(&connected.join(", "))
+                        )?;
+                    }
+                    writeln!(out, "Usage: /connect <provider> [api_key]")?;
+                } else if rest.is_empty() {
+                    self.connect_provider(&provider, prompt_source, out).await?;
+                } else {
+                    let result = self
+                        .rpc
+                        .request(
+                            "cowork/provider/auth/setApiKey",
+                            Some(json!({ "cwd": cwd_str, "provider": provider, "apiKey": rest })),
+                        )
+                        .await?;
+                    writeln!(
+                        out,
+                        "{}",
+                        sanitize(
+                            result["event"]["message"]
+                                .as_str()
+                                .unwrap_or("Saved credentials.")
+                        )
+                    )?;
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::ClearHardCap => {
+                self.rpc
+                    .request(
+                        "cowork/session/usageBudget/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "stopAtUsd": Value::Null,
+                        })),
+                    )
+                    .await?;
+                writeln!(out, "session hard-stop threshold cleared")?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Clear => {
+                writeln!(out, "Cleared screen.")?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Restart => {
+                writeln!(out, "restarting server...")?;
+                out.flush()?;
+                Ok(LineOutcome::RestartServer {
+                    cwd: self.cwd.clone(),
+                    announce: None,
+                })
+            }
+
+            ParsedReplCommand::Cwd(arg) => {
+                if arg.is_empty() {
+                    writeln!(out, "usage: /cwd <path>")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                match resolve_and_validate_dir(&self.cwd, &arg) {
+                    Ok(next) => Ok(LineOutcome::RestartServer {
+                        announce: Some(format!("cwd set to {}", next.display())),
+                        cwd: next,
+                    }),
+                    Err(message) => {
+                        writeln!(out, "Error: {message}")?;
+                        out.flush()?;
+                        Ok(LineOutcome::Continue)
+                    }
+                }
+            }
+
+            ParsedReplCommand::Unknown { name, arg } => {
+                let cmds = self
+                    .rpc
+                    .request("command/list", Some(json!({ "threadId": self.thread_id })))
+                    .await
+                    .ok()
+                    .and_then(|v| v["commands"].as_array().cloned())
+                    .unwrap_or_default();
+                if cmds
+                    .iter()
+                    .any(|c| c["name"].as_str() == Some(name.as_str()))
+                {
+                    self.rpc.pending_notifications.clear();
+                    let res = match self
+                        .rpc
+                        .request(
+                            "command/execute",
+                            Some(json!({
+                                "threadId": self.thread_id,
+                                "name": name,
+                                "arguments": arg,
+                                "clientMessageId": Uuid::new_v4().to_string(),
+                            })),
+                        )
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(err) => {
+                            let message = sanitize(&err.to_string());
+                            writeln!(out, "[error] Failed to run /{name}: {message}")?;
+                            out.flush()?;
+                            return Ok(LineOutcome::Turn(TurnOutcome::StartFailed(message)));
+                        }
+                    };
+                    // `command/execute` starts a normal turn (server `execute_command_turn`);
+                    // consume it through the same render + approval loop as a message turn.
+                    match res.get("turn") {
+                        Some(turn) => {
+                            let turn_id = turn
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_owned();
+                            let outcome = self.consume_turn(&turn_id, prompt_source, out).await?;
+                            out.flush()?;
+                            return Ok(LineOutcome::Turn(outcome));
+                        }
+                        None => writeln!(out, "Executed /{name}.")?,
+                    }
+                } else {
+                    writeln!(out, "Unknown command: /{name} (type /help for commands)")?;
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::Message(msg) => Ok(LineOutcome::Turn(
+                self.execute_turn(&msg, prompt_source, out).await?,
+            )),
+        }
+    }
+
+    async fn execute_turn(
+        &mut self,
+        msg: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<TurnOutcome> {
+        self.rpc.pending_notifications.clear();
+
+        let client_message_id = Uuid::new_v4().to_string();
+        let start_res = match self
+            .rpc
+            .request(
+                "turn/start",
+                Some(json!({
+                    "threadId": self.thread_id,
+                    "clientMessageId": client_message_id,
+                    "input": msg,
+                })),
+            )
+            .await
+        {
+            Ok(res) => res,
+            Err(err) => {
+                let message = sanitize(&err.to_string());
+                writeln!(out, "[error] Failed to start turn: {message}")?;
+                out.flush()?;
+                return Ok(TurnOutcome::StartFailed(message));
+            }
+        };
+
+        let turn_id = start_res
+            .get("turn")
+            .and_then(|t| t.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+
+        self.consume_turn(&turn_id, prompt_source, out).await
+    }
+
+    /// Renders a started turn's notifications and answers its approval/ask server requests until
+    /// `turn/completed` for `turn_id` arrives (shared by message turns and command turns), and
+    /// returns how the turn ended.
+    async fn consume_turn(
+        &mut self,
+        turn_id: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<TurnOutcome> {
+        let mut in_reasoning = false;
+        let mut in_agent_text = false;
+        let mut interrupt_sent = false;
+        // Streamed deltas are sanitized statefully, so an escape sequence split across deltas
+        // is still stripped; reasoning and assistant text are separate streams.
+        let mut reasoning_sanitizer = TerminalSanitizer::new();
+        let mut agent_text_sanitizer = TerminalSanitizer::new();
+        // The thread this turn runs on. A `task/created` takeover moves `self.thread_id` to the
+        // task thread mid-turn, but this turn's own notifications (and its interrupt) still
+        // belong to the source thread.
+        let turn_thread_id = self.thread_id.clone();
+
+        loop {
+            let listen_ctrl_c = self.listen_os_ctrl_c && !interrupt_sent;
+            let custom_notify = if !interrupt_sent {
+                self.interrupt_notify.clone()
+            } else {
+                None
+            };
+
+            enum StepWake {
+                Inbound(anyhow::Result<InboundRpcEvent>),
+                Interrupted,
+            }
+
+            let wake = tokio::select! {
+                ev = self.rpc.next_inbound_event() => StepWake::Inbound(ev),
+                _ = async {
+                    if listen_ctrl_c {
+                        let _ = tokio::signal::ctrl_c().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => StepWake::Interrupted,
+                _ = async {
+                    if let Some(n) = custom_notify {
+                        n.notified().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => StepWake::Interrupted,
+            };
+
+            match wake {
+                StepWake::Interrupted => {
+                    interrupt_sent = true;
+                    if in_reasoning || in_agent_text {
+                        writeln!(out)?;
+                        in_reasoning = false;
+                        in_agent_text = false;
+                    }
+                    writeln!(out, "^C Interrupting turn...")?;
+                    out.flush()?;
+                    let _ = self
+                        .rpc
+                        .request(
+                            "turn/interrupt",
+                            Some(json!({ "threadId": turn_thread_id })),
+                        )
+                        .await;
+                }
+                StepWake::Inbound(Err(err)) => {
+                    if in_reasoning || in_agent_text {
+                        writeln!(out)?;
+                    }
+                    return Err(err);
+                }
+                StepWake::Inbound(Ok(InboundRpcEvent::ServerRequest(req))) => {
+                    if in_reasoning || in_agent_text {
+                        writeln!(out)?;
+                        in_reasoning = false;
+                        in_agent_text = false;
+                    }
+                    let should_interrupt = self
+                        .handle_server_request(req, prompt_source, out, interrupt_sent)
+                        .await?;
+                    if should_interrupt && !interrupt_sent {
+                        interrupt_sent = true;
+                        writeln!(out, "^C Interrupting turn...")?;
+                        out.flush()?;
+                        let _ = self
+                            .rpc
+                            .request(
+                                "turn/interrupt",
+                                Some(json!({ "threadId": turn_thread_id })),
+                            )
+                            .await;
+                    }
+                }
+                StepWake::Inbound(Ok(InboundRpcEvent::Notification(notif))) => {
+                    let params = notif.params.unwrap_or(Value::Null);
+                    if let Some(ev_tid) = params.get("threadId").and_then(Value::as_str)
+                        && ev_tid != self.thread_id
+                        && ev_tid != turn_thread_id
+                    {
+                        continue;
+                    }
+
+                    match notif.method.as_str() {
+                        "item/reasoning/delta" => {
+                            let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
+                            if !delta.is_empty() {
+                                if in_agent_text {
+                                    writeln!(out)?;
+                                    in_agent_text = false;
+                                }
+                                if !in_reasoning {
+                                    write!(out, "[thinking] ")?;
+                                    in_reasoning = true;
+                                }
+                                write!(out, "{}", reasoning_sanitizer.push(delta))?;
+                                out.flush()?;
+                            }
+                        }
+                        "item/agentMessage/delta" => {
+                            let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
+                            if !delta.is_empty() {
+                                if in_reasoning {
+                                    writeln!(out)?;
+                                    in_reasoning = false;
+                                }
+                                in_agent_text = true;
+                                write!(out, "{}", agent_text_sanitizer.push(delta))?;
+                                out.flush()?;
+                            }
+                        }
+                        "item/started" => {
+                            if let Some(item) = params.get("item")
+                                && item.get("type").and_then(Value::as_str) == Some("toolCall")
+                            {
+                                if in_reasoning || in_agent_text {
+                                    writeln!(out)?;
+                                    in_reasoning = false;
+                                    in_agent_text = false;
+                                }
+                                let name = item
+                                    .get("toolName")
+                                    .or_else(|| item.get("name"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("tool");
+                                writeln!(out, "[tool] {} (running)", sanitize(name))?;
+                                out.flush()?;
+                            }
+                        }
+                        "item/completed" => {
+                            if let Some(item) = params.get("item") {
+                                match item.get("type").and_then(Value::as_str) {
+                                    Some("toolCall") => {
+                                        let state = item
+                                            .get("state")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("completed");
+                                        if !matches!(
+                                            state,
+                                            "output-available" | "output-error" | "output-denied"
+                                        ) {
+                                            continue;
+                                        }
+                                        if in_reasoning || in_agent_text {
+                                            writeln!(out)?;
+                                            in_reasoning = false;
+                                            in_agent_text = false;
+                                        }
+                                        let name = item
+                                            .get("toolName")
+                                            .or_else(|| item.get("name"))
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("tool");
+                                        if state == "output-error" {
+                                            let err_text = item
+                                                .get("errorText")
+                                                .and_then(Value::as_str)
+                                                .or_else(|| {
+                                                    item.get("result")
+                                                        .and_then(|r| r.get("error"))
+                                                        .and_then(Value::as_str)
+                                                })
+                                                .unwrap_or("");
+                                            writeln!(
+                                                out,
+                                                "[tool] {} -> {}: {}",
+                                                sanitize(name),
+                                                sanitize(state),
+                                                sanitize(err_text)
+                                            )?;
+                                        } else {
+                                            writeln!(
+                                                out,
+                                                "[tool] {} -> {}",
+                                                sanitize(name),
+                                                sanitize(state)
+                                            )?;
+                                        }
+                                        out.flush()?;
+                                    }
+                                    Some("error") => {
+                                        if in_reasoning || in_agent_text {
+                                            writeln!(out)?;
+                                            in_reasoning = false;
+                                            in_agent_text = false;
+                                        }
+                                        let msg = item
+                                            .get("message")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("Turn error");
+                                        writeln!(out, "[error] {}", sanitize(msg))?;
+                                        out.flush()?;
+                                    }
+                                    Some("reasoning") => reasoning_sanitizer.reset(),
+                                    Some("agentMessage") => {
+                                        agent_text_sanitizer.reset();
+                                        if !in_agent_text {
+                                            let text = item
+                                                .get("text")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or("");
+                                            if !text.is_empty() {
+                                                if in_reasoning {
+                                                    writeln!(out)?;
+                                                    in_reasoning = false;
+                                                }
+                                                writeln!(out, "{}", sanitize(text))?;
+                                                out.flush()?;
+                                            }
+                                        } else {
+                                            writeln!(out)?;
+                                            in_agent_text = false;
+                                            out.flush()?;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        "error" => {
+                            if in_reasoning || in_agent_text {
+                                writeln!(out)?;
+                                in_reasoning = false;
+                                in_agent_text = false;
+                            }
+                            let message = params
+                                .get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("Turn error");
+                            writeln!(out, "[error] {}", sanitize(message))?;
+                            out.flush()?;
+                        }
+                        "task/created" => {
+                            let Some((task_thread_id, title)) =
+                                task_takeover_thread(&params, &self.thread_id)
+                            else {
+                                continue;
+                            };
+                            if in_reasoning || in_agent_text {
+                                writeln!(out)?;
+                                in_reasoning = false;
+                                in_agent_text = false;
+                            }
+                            self.open_task_thread(&task_thread_id, &title, out).await?;
+                        }
+                        "turn/completed" => {
+                            let completed_tid = params
+                                .get("turn")
+                                .and_then(|t| t.get("id"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if !turn_id.is_empty()
+                                && !completed_tid.is_empty()
+                                && completed_tid != turn_id
+                            {
+                                continue;
+                            }
+                            if in_reasoning || in_agent_text {
+                                writeln!(out)?;
+                            }
+                            let status = params
+                                .get("turn")
+                                .and_then(|t| t.get("status"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("completed");
+                            let error_message = params
+                                .get("turn")
+                                .and_then(|t| t.get("error"))
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                                .map(sanitize);
+                            let outcome = match status {
+                                "completed" => TurnOutcome::Completed,
+                                "interrupted" => {
+                                    writeln!(out, "[Turn interrupted]")?;
+                                    TurnOutcome::Interrupted
+                                }
+                                _ => {
+                                    if status == "failed"
+                                        && let Some(em) = &error_message
+                                    {
+                                        writeln!(out, "[Turn failed: {em}]")?;
+                                    }
+                                    TurnOutcome::Failed(error_message)
+                                }
+                            };
+                            out.flush()?;
+                            return Ok(outcome);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// TS `task/created` notification handler + `openTaskThread`: the source chat was promoted
+    /// to a task (and is now locked), so switch the REPL to the task's primary thread and adopt
+    /// its descriptor.
+    async fn open_task_thread(
+        &mut self,
+        task_thread_id: &str,
+        title: &str,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        self.thread_id = task_thread_id.to_owned();
+        writeln!(out, "Task mode: {}", sanitize(title))?;
+        match self
+            .rpc
+            .request("thread/resume", Some(json!({ "threadId": task_thread_id })))
+            .await
+        {
+            Ok(res) => {
+                self.apply_thread_descriptor(&res["thread"]);
+            }
+            Err(err) => {
+                writeln!(
+                    out,
+                    "Unable to open task thread: {}",
+                    sanitize(&err.to_string())
+                )?;
+            }
+        }
+        out.flush()?;
+        Ok(())
+    }
+
+    async fn handle_server_request(
+        &mut self,
+        req: JsonRpcLiteRequest,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+        already_interrupted: bool,
+    ) -> anyhow::Result<bool> {
+        let params = req.params.unwrap_or(Value::Null);
+        match req.method.as_str() {
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                if already_interrupted || self.yolo {
+                    let decision = if self.yolo && !already_interrupted {
+                        "accept"
+                    } else {
+                        "decline"
+                    };
+                    self.rpc
+                        .respond_to_server_request(req.id, json!({ "decision": decision }))
+                        .await?;
+                    return Ok(false);
+                }
+
+                let command = params.get("command").and_then(Value::as_str).unwrap_or("");
+                let reason = params.get("reason").and_then(Value::as_str).unwrap_or("");
+                if !command.is_empty() {
+                    writeln!(
+                        out,
+                        "[approval] Command requires approval: {}",
+                        sanitize_prompt_field(command, None)
+                    )?;
+                } else {
+                    writeln!(out, "[approval] File modification requires approval")?;
+                }
+                if !reason.is_empty() {
+                    writeln!(out, "  Reason: {}", sanitize_prompt_field(reason, None))?;
+                }
+                out.flush()?;
+
+                match prompt_source
+                    .read_turn_prompt("Approve? [y/N]: ", out)
+                    .await?
+                {
+                    PromptReply::Line(ans) => {
+                        let trimmed = ans.trim();
+                        let decision = if matches!(
+                            trimmed.to_ascii_lowercase().as_str(),
+                            "y" | "yes" | "accept" | "approve"
+                        ) {
+                            "accept"
+                        } else {
+                            "decline"
+                        };
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "decision": decision }))
+                            .await?;
+                        Ok(false)
+                    }
+                    PromptReply::Interrupted => {
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "decision": "decline" }))
+                            .await?;
+                        Ok(true)
+                    }
+                    PromptReply::Eof => {
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "decision": "decline" }))
+                            .await?;
+                        Ok(false)
+                    }
+                }
+            }
+            "item/tool/requestUserInput" => {
+                if let Some(question_text) = params.get("question").and_then(Value::as_str) {
+                    if already_interrupted {
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "answer": ASK_SKIP_TOKEN }))
+                            .await?;
+                        return Ok(false);
+                    }
+
+                    let option_labels: Vec<String> = params
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    writeln!(
+                        out,
+                        "[question] {}",
+                        sanitize_prompt_field(question_text, Some(PROMPT_CONTINUATION_INDENT))
+                    )?;
+                    for (idx, label) in option_labels.iter().enumerate() {
+                        writeln!(out, "  {}. {}", idx + 1, sanitize_prompt_field(label, None))?;
+                    }
+                    out.flush()?;
+
+                    let mut interrupted = false;
+                    let chosen = loop {
+                        match prompt_source
+                            .read_turn_prompt("Answer (or 'skip'): ", out)
+                            .await?
+                        {
+                            PromptReply::Line(raw) => {
+                                let trimmed = raw.trim();
+                                if trimmed.is_empty() {
+                                    writeln!(
+                                        out,
+                                        "Please enter a non-empty answer or type 'skip'."
+                                    )?;
+                                    out.flush()?;
+                                    continue;
+                                }
+                                if matches!(
+                                    trimmed.to_ascii_lowercase().as_str(),
+                                    "skip" | "/skip" | "[skipped]"
+                                ) {
+                                    break ASK_SKIP_TOKEN.to_owned();
+                                }
+                                if !option_labels.is_empty()
+                                    && let Ok(num) = trimmed.parse::<usize>()
+                                    && (1..=option_labels.len()).contains(&num)
+                                {
+                                    break option_labels[num - 1].clone();
+                                }
+                                break trimmed.to_owned();
+                            }
+                            PromptReply::Interrupted => {
+                                interrupted = true;
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                            PromptReply::Eof => {
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                        }
+                    };
+
+                    self.rpc
+                        .respond_to_server_request(req.id, json!({ "answer": chosen }))
+                        .await?;
+                    return Ok(interrupted);
+                }
+
+                let questions = params
+                    .get("questions")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut answers = Map::new();
+                let mut interrupted = already_interrupted;
+
+                for q in &questions {
+                    let qid = q.get("id").and_then(Value::as_str).unwrap_or("q");
+                    if interrupted {
+                        answers.insert(qid.to_owned(), json!({ "answers": [ASK_SKIP_TOKEN] }));
+                        continue;
+                    }
+
+                    let header = q
+                        .get("header")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Question");
+                    let question_text = q.get("question").and_then(Value::as_str).unwrap_or("");
+                    let options = q
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    writeln!(
+                        out,
+                        "[question] {}: {}",
+                        sanitize_prompt_field(header, None),
+                        sanitize_prompt_field(question_text, Some(PROMPT_CONTINUATION_INDENT))
+                    )?;
+                    for (idx, opt) in options.iter().enumerate() {
+                        let label = opt.get("label").and_then(Value::as_str).unwrap_or("");
+                        let desc = opt.get("description").and_then(Value::as_str).unwrap_or("");
+                        if desc.is_empty() {
+                            writeln!(out, "  {}. {}", idx + 1, sanitize_prompt_field(label, None))?;
+                        } else {
+                            writeln!(
+                                out,
+                                "  {}. {} - {}",
+                                idx + 1,
+                                sanitize_prompt_field(label, None),
+                                sanitize_prompt_field(desc, None)
+                            )?;
+                        }
+                    }
+                    out.flush()?;
+
+                    let chosen = loop {
+                        match prompt_source
+                            .read_turn_prompt("Answer (or 'skip'): ", out)
+                            .await?
+                        {
+                            PromptReply::Line(raw) => {
+                                let trimmed = raw.trim();
+                                if trimmed.is_empty() {
+                                    writeln!(
+                                        out,
+                                        "Please enter a non-empty answer or type 'skip'."
+                                    )?;
+                                    out.flush()?;
+                                    continue;
+                                }
+                                if matches!(
+                                    trimmed.to_ascii_lowercase().as_str(),
+                                    "skip" | "/skip" | "[skipped]"
+                                ) {
+                                    break ASK_SKIP_TOKEN.to_owned();
+                                }
+                                if !options.is_empty()
+                                    && let Ok(num) = trimmed.parse::<usize>()
+                                    && (1..=options.len()).contains(&num)
+                                    && let Some(lbl) =
+                                        options[num - 1].get("label").and_then(Value::as_str)
+                                {
+                                    break lbl.to_owned();
+                                }
+                                break trimmed.to_owned();
+                            }
+                            PromptReply::Interrupted => {
+                                interrupted = true;
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                            PromptReply::Eof => {
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                        }
+                    };
+
+                    answers.insert(qid.to_owned(), json!({ "answers": [chosen] }));
+                }
+
+                self.rpc
+                    .respond_to_server_request(req.id, json!({ "answers": answers }))
+                    .await?;
+                Ok(interrupted && !already_interrupted)
+            }
+            _ => {
+                self.rpc
+                    .respond_to_server_request(req.id, json!({}))
+                    .await?;
+                Ok(false)
+            }
+        }
+    }
+
+    async fn shutdown(self) {
+        self.rpc.close().await;
+        self.server.shutdown().await;
+    }
+
+    /// TS `restartServer`: stops the current embedded server (first, so a fixed `--port` can be
+    /// rebound), then starts a fresh one in `cwd` and reconnects. The new session resumes the
+    /// thread stored for `cwd` (the current thread when `cwd` is unchanged) or starts a new one.
+    async fn restart_server(self, cwd: PathBuf, out: &mut dyn Write) -> anyhow::Result<Self> {
+        let opts = ReplOptions {
+            working_directory: cwd,
+            port: self.port,
+            yolo: self.yolo,
+            homedir: Some(self.homedir.clone()),
+            built_in_dir: self.built_in_dir.clone(),
+            env: self.env.clone(),
+        };
+        let listen_os_ctrl_c = self.listen_os_ctrl_c;
+        let interrupt_notify = self.interrupt_notify.clone();
+        self.shutdown().await;
+        let mut next = Self::bootstrap(opts, out).await?;
+        next.listen_os_ctrl_c = listen_os_ctrl_c;
+        next.interrupt_notify = interrupt_notify;
+        Ok(next)
+    }
+
+    /// Applies a handled line's outcome. Returns `None` when the REPL should exit.
+    async fn apply_outcome(
+        self,
+        outcome: LineOutcome,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<Option<Self>> {
+        match outcome {
+            LineOutcome::Continue | LineOutcome::Turn(_) => Ok(Some(self)),
+            LineOutcome::Exit => {
+                self.shutdown().await;
+                Ok(None)
+            }
+            LineOutcome::RestartServer { cwd, announce } => {
+                let next = self.restart_server(cwd, out).await?;
+                if let Some(message) = announce {
+                    writeln!(out, "{message}")?;
+                    out.flush()?;
+                }
+                Ok(Some(next))
+            }
+        }
+    }
+}
+
+/// TS `task/created` handling: the task's first thread (`task.threads[0].sessionId`) and title
+/// (default `Task`). A notification for a task promoted from another chat (`sourceSessionId`
+/// naming a different thread) is ignored.
+fn task_takeover_thread(params: &Value, current_thread_id: &str) -> Option<(String, String)> {
+    if let Some(source) = params.get("sourceSessionId").and_then(Value::as_str)
+        && !source.is_empty()
+        && source != current_thread_id
+    {
+        return None;
+    }
+    let task = params.get("task").filter(|t| t.is_object())?;
+    let thread_id = task
+        .get("threads")
+        .and_then(Value::as_array)
+        .and_then(|threads| threads.first())
+        .and_then(|t| t.get("sessionId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_owned();
+    let title = task
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("Task")
+        .to_owned();
+    Some((thread_id, title))
+}
+
+/// Whether a command failure leaves the REPL usable: the server answered the request with a
+/// JSON-RPC error, or the request timed out with the connection still open. Everything else
+/// (closed/broken WebSocket, terminal I/O, prompt or server-restart failures) is fatal.
+fn is_recoverable_command_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<RpcRequestError>().is_some()
+}
+
+/// TS `resolveAndValidateDir`: resolves `dir_arg` against `base` (the current workspace, which is
+/// the TS process cwd) with `path.resolve`-style lexical normalization, and requires an existing
+/// directory.
+fn resolve_and_validate_dir(base: &Path, dir_arg: &str) -> Result<PathBuf, String> {
+    let mut resolved = PathBuf::new();
+    for component in base.join(dir_arg).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other.as_os_str()),
+        }
+    }
+    match std::fs::metadata(&resolved) {
+        Ok(meta) if meta.is_dir() => Ok(resolved),
+        _ => Err(format!("--dir is not a directory: {}", resolved.display())),
+    }
+}
+
+fn render_thread_history_if_any(read_res: &Value, out: &mut dyn Write) -> anyhow::Result<()> {
+    let Some(turns) = read_res
+        .get("thread")
+        .and_then(|t| t.get("turns"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    if turns.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(
+        out,
+        "--- Conversation History ({} turn(s)) ---",
+        turns.len()
+    )?;
+    for turn in turns {
+        let Some(items) = turn.get("items").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("userMessage") => {
+                    let mut parts = Vec::new();
+                    if let Some(content) = item.get("content").and_then(Value::as_array) {
+                        for c in content {
+                            if let Some(txt) = c.get("text").and_then(Value::as_str)
+                                && !txt.is_empty()
+                            {
+                                parts.push(txt);
+                            }
+                        }
+                    }
+                    if !parts.is_empty() {
+                        writeln!(out, "you> {}", sanitize(&parts.join("\n")))?;
+                    }
+                }
+                Some("reasoning") => {
+                    let txt = item.get("text").and_then(Value::as_str).unwrap_or("");
+                    if !txt.is_empty() {
+                        writeln!(out, "[thinking] {}", sanitize(txt))?;
+                    }
+                }
+                Some("toolCall") => {
+                    let name = item
+                        .get("toolName")
+                        .or_else(|| item.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool");
+                    let state = item
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed");
+                    writeln!(out, "[tool] {} -> {}", sanitize(name), sanitize(state))?;
+                }
+                Some("agentMessage") => {
+                    let txt = item.get("text").and_then(Value::as_str).unwrap_or("");
+                    if !txt.is_empty() {
+                        writeln!(out, "{}", sanitize(txt))?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    writeln!(out, "--- End History ---")?;
+    out.flush()?;
+    Ok(())
+}
+
+/// Runs a deterministic scripted REPL session over an array of input lines and returns rendered output.
+pub async fn run_repl_scripted(opts: ReplOptions, lines: &[&str]) -> anyhow::Result<String> {
+    run_repl_scripted_with_interrupt(opts, lines, None).await
+}
+
+/// Runs a deterministic scripted REPL session with an optional mid-turn interrupt notifier.
+pub async fn run_repl_scripted_with_interrupt(
+    opts: ReplOptions,
+    lines: &[&str],
+    interrupt_notify: Option<Arc<Notify>>,
+) -> anyhow::Result<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut session = ActiveReplSession::bootstrap(opts, &mut buf).await?;
+    session.interrupt_notify = interrupt_notify;
+
+    let mut prompt_source =
+        PromptInputSource::Scripted(lines.iter().map(|s| (*s).to_owned()).collect());
+    loop {
+        let next_line = match &mut prompt_source {
+            PromptInputSource::Scripted(q) => q.pop_front(),
+            PromptInputSource::Interactive(_) => None,
+        };
+        let Some(line) = next_line else {
+            session.shutdown().await;
+            break;
+        };
+        let outcome = session
+            .handle_input_line(&line, &mut prompt_source, &mut buf)
+            .await?;
+        match session.apply_outcome(outcome, &mut buf).await? {
+            Some(next) => session = next,
+            None => break,
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Runs the interactive `rustyline` terminal REPL (`you> ` prompt) until `/exit` or EOF.
+pub async fn run_repl_interactive(
+    opts: ReplOptions,
+    one_shot_prompt: Option<String>,
+) -> anyhow::Result<()> {
+    let mut stdout = std::io::stdout();
+    let mut session = ActiveReplSession::bootstrap(opts, &mut stdout).await?;
+    session.listen_os_ctrl_c = true;
+
+    let history_path = repl_history_file_path(&session.homedir, &session.env);
+    if let Some(parent) = history_path.parent() {
+        let _ = ensure_private_dir_sync(parent);
+    }
+
+    let mut rl = DefaultEditor::new()?;
+    let _ = rl.load_history(&history_path);
+    let mut prompt_source = PromptInputSource::Interactive(Some(Box::new(rl)));
+
+    if let Some(prompt) = one_shot_prompt {
+        // No TS counterpart (the TS CLI had no one-shot mode). A failing command or an
+        // unsuccessful turn (rejected start, provider failure, interruption) is the run's result
+        // here, so shut the embedded server down cleanly and exit non-zero with the sanitized
+        // error instead of re-prompting.
+        let outcome = match session
+            .handle_line(&prompt, &mut prompt_source, &mut stdout)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                session.shutdown().await;
+                if is_recoverable_command_error(&err) {
+                    anyhow::bail!("{}", sanitize(&err.to_string()));
+                }
+                return Err(err);
+            }
+        };
+        let turn_error = match &outcome {
+            LineOutcome::Turn(turn) => turn.one_shot_error(),
+            _ => None,
+        };
+        if let Some(session) = session.apply_outcome(outcome, &mut stdout).await? {
+            session.shutdown().await;
+        }
+        return match turn_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        };
+    }
+
+    loop {
+        let history_clone = history_path.clone();
+        let mut editor = match &mut prompt_source {
+            PromptInputSource::Interactive(slot) => slot
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("Interactive editor unavailable"))?,
+            PromptInputSource::Scripted(_) => unreachable!(),
+        };
+
+        // Run blocking rustyline readline inside spawn_blocking so Tokio background server tasks keep ticking smoothly!
+        let (next_rl, read_res) = tokio::task::spawn_blocking(move || {
+            let res = editor.readline("you> ");
+            // /connect accepts credentials inline, including when validation later fails.
+            if let Ok(ref line) = res
+                && let Some(cmd) = line.split_whitespace().next()
+                && !cmd.eq_ignore_ascii_case("/connect")
+            {
+                let _ = editor.add_history_entry(line.as_str());
+                let _ = editor.save_history(&history_clone);
+            }
+            (editor, res)
+        })
+        .await?;
+
+        if let PromptInputSource::Interactive(slot) = &mut prompt_source {
+            *slot = Some(next_rl);
+        }
+
+        match read_res {
+            Ok(line) => {
+                let outcome = match session
+                    .handle_input_line(&line, &mut prompt_source, &mut stdout)
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        session.shutdown().await;
+                        return Err(err);
+                    }
+                };
+                match session.apply_outcome(outcome, &mut stdout).await? {
+                    Some(next) => session = next,
+                    None => return Ok(()),
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                writeln!(stdout, "(Use /exit or Ctrl+D to quit)")?;
+                stdout.flush()?;
+            }
+            Err(ReadlineError::Eof) => {
+                writeln!(stdout, "Goodbye.")?;
+                stdout.flush()?;
+                break;
+            }
+            Err(err) => {
+                return Err(err.into());
+            }
+        }
+    }
+
+    session.shutdown().await;
+    Ok(())
+}

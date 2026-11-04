@@ -1,3 +1,4 @@
+import { PROVIDER_SPECS } from "../../../../src/generated/providerSpecs";
 import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAuthMethods";
 import type { ProviderName, SessionEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
@@ -9,24 +10,15 @@ type ProviderAuthMethod = Extract<
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 
-const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
-  google: "Google",
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  bedrock: "Amazon Bedrock",
-  baseten: "Baseten",
-  together: "Together AI",
-  fireworks: "Fireworks AI",
-  firepass: "Fire Pass",
-  nvidia: "NVIDIA",
-  lmstudio: "LM Studio",
-  "opencode-go": "OpenCode Go",
-  "opencode-zen": "OpenCode Zen",
+// Desktop branding overrides on top of `displayName` from config/providers.json.
+const DESKTOP_DISPLAY_NAME_OVERRIDES: Partial<Record<ProviderName, string>> = {
   "codex-cli": "ChatGPT Subscription",
 };
 
 export function displayProviderName(provider: ProviderName): string {
-  return DISPLAY_NAMES[provider] ?? provider;
+  return (
+    DESKTOP_DISPLAY_NAME_OVERRIDES[provider] ?? PROVIDER_SPECS[provider]?.displayName ?? provider
+  );
 }
 
 export function isProviderNameString(value: string): value is ProviderName {

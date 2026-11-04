@@ -145,6 +145,16 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
   const normalizedQuery = query.trim().toLowerCase();
   const searchActive = normalizedQuery.length > 0;
 
+  const handleQueryChange = useCallback(
+    (nextQuery: string) => {
+      setQuery(nextQuery);
+      if (nextQuery.trim().toLowerCase() !== normalizedQuery) {
+        setActiveIndex(0);
+      }
+    },
+    [normalizedQuery],
+  );
+
   const matchesSearch = useCallback(
     (value: string | undefined) => {
       if (!normalizedQuery) return true;
@@ -268,12 +278,6 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
 
   const flatEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
 
-  // Reset or clamp active index when results change.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new query is an intentional re-trigger
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [normalizedQuery]);
-
   const clampedActiveIndex =
     flatEntries.length === 0 ? -1 : Math.min(activeIndex, flatEntries.length - 1);
   const activeOptionId =
@@ -380,7 +384,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
             data-slot="command-input"
             type="text"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => handleQueryChange(event.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
               tasksEnabled ? "Search chats, projects, and tasks…" : "Search chats and projects…"
@@ -403,7 +407,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
               aria-label="Clear search"
               className="size-6 shrink-0 rounded-full app-text-muted hover:app-hover-wash hover:text-foreground"
               onClick={() => {
-                setQuery("");
+                handleQueryChange("");
                 inputRef.current?.focus();
               }}
             >

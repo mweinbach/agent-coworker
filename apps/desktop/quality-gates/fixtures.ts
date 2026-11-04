@@ -431,10 +431,36 @@ async function launchQualityHarness(
   if (!options.holdBootstrap && !options.startupFailureCount) {
     await page.waitForFunction(() => window.__coworkQualityGate?.isReady() === true);
   }
-  const viewport = await page.evaluate(() => ({
-    height: window.innerHeight,
-    width: window.innerWidth,
-  }));
+  const expectedViewport = { height: options.height, width: options.width };
+  const readViewport = () =>
+    page.evaluate(() => ({
+      height: window.innerHeight,
+      width: window.innerWidth,
+    }));
+  let viewport = await readViewport();
+  if (viewport.width !== options.width || viewport.height !== options.height) {
+    // macOS can re-layout a frameless window's content bounds again after the main process has
+    // applied the quality-gate size (seen as a few pixels of height on the first launch of a
+    // run). Re-apply the deterministic size once to this page's window and wait for the
+    // renderer to observe it; a size that never settles still fails below.
+    await electronApp.evaluate(
+      ({ BrowserWindow }, target) => {
+        const win =
+          BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === target.url) ??
+          BrowserWindow.getAllWindows()[0];
+        win?.setContentSize(target.width, target.height);
+      },
+      { ...expectedViewport, url: page.url() },
+    );
+    await page
+      .waitForFunction(
+        (target) => window.innerWidth === target.width && window.innerHeight === target.height,
+        expectedViewport,
+        { timeout: 5_000 },
+      )
+      .catch(() => undefined);
+    viewport = await readViewport();
+  }
   if (viewport.width !== options.width || viewport.height !== options.height) {
     const contentSize = await electronApp.evaluate(({ BrowserWindow }) => {
       const [width, height] = BrowserWindow.getAllWindows()[0]?.getContentSize() ?? [0, 0];

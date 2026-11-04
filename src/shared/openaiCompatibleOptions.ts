@@ -8,7 +8,7 @@ export { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 
 export const OPENAI_COMPATIBLE_PROVIDER_NAMES = ["openai", "codex-cli"] as const;
 export type OpenAiCompatibleProviderName = (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number];
-export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
+const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "openai",
   "codex-cli",
   "google",
@@ -136,9 +136,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function isOpenAiCompatibleProviderName(
-  value: unknown,
-): value is OpenAiCompatibleProviderName {
+function isOpenAiCompatibleProviderName(value: unknown): value is OpenAiCompatibleProviderName {
   return (
     typeof value === "string" &&
     (OPENAI_COMPATIBLE_PROVIDER_NAMES as readonly string[]).includes(value)
@@ -152,21 +150,21 @@ export function isOpenAiReasoningEffort(value: unknown): value is OpenAiReasonin
   );
 }
 
-export function isCatalogReasoningEffort(value: unknown): value is CatalogReasoningEffort {
+function isCatalogReasoningEffort(value: unknown): value is CatalogReasoningEffort {
   return (
     typeof value === "string" &&
     (CATALOG_REASONING_EFFORT_VALUES as readonly string[]).includes(value)
   );
 }
 
-export function isOpenAiReasoningSummary(value: unknown): value is OpenAiReasoningSummary {
+function isOpenAiReasoningSummary(value: unknown): value is OpenAiReasoningSummary {
   return (
     typeof value === "string" &&
     (OPENAI_REASONING_SUMMARY_VALUES as readonly string[]).includes(value)
   );
 }
 
-export function isOpenAiTextVerbosity(value: unknown): value is OpenAiTextVerbosity {
+function isOpenAiTextVerbosity(value: unknown): value is OpenAiTextVerbosity {
   return (
     typeof value === "string" && (OPENAI_TEXT_VERBOSITY_VALUES as readonly string[]).includes(value)
   );

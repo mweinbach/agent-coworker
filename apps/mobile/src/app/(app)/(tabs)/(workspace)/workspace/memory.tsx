@@ -72,7 +72,9 @@ export default function MemoryScreen() {
   const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const [editorOpen, setEditorOpen] = useState(false);
   const [draftMode, setDraftMode] = useState<"create" | "upsert">("create");
-  const [draftScope, setDraftScope] = useState<"workspace" | "user">("workspace");
+  // Paired devices may only change workspace memory; user memory loads into every workspace, so
+  // the server refuses user-scoped writes from a phone (`userMemoryReadOnly`).
+  const draftScope = "workspace";
   const [draftId, setDraftId] = useState("");
   const [draftContent, setDraftContent] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -103,7 +105,6 @@ export default function MemoryScreen() {
       if (!saved || revision !== draftRevision.current) return;
       setDraftId("");
       setDraftContent("");
-      setDraftScope("workspace");
       setDraftMode("create");
       setEditorOpen(false);
     } finally {
@@ -127,11 +128,9 @@ export default function MemoryScreen() {
     draftRevision.current += 1;
     setDraftMode(entry ? "upsert" : "create");
     if (entry) {
-      setDraftScope(entry.scope);
       setDraftId(entry.id);
       setDraftContent(entry.content);
     } else {
-      setDraftScope("workspace");
       setDraftId("");
       setDraftContent("");
     }
@@ -228,45 +227,9 @@ export default function MemoryScreen() {
       {editorOpen ? (
         <SectionCard
           title={draftMode === "create" ? "Add memory" : "Edit memory"}
-          description="Blank IDs use hot. Add will not replace an existing entry; use Edit to update it."
+          description="Saved to this workspace; edit user memory in Cowork Desktop. Blank IDs use hot. Add will not replace an existing entry; use Edit to update it."
         >
           <View style={{ gap: 10 }}>
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              {(["workspace", "user"] as const).map((scope) => (
-                <Pressable
-                  key={scope}
-                  accessibilityLabel={`Save memory for ${scope}`}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: scope === draftScope }}
-                  onPress={() => {
-                    draftRevision.current += 1;
-                    setDraftScope(scope);
-                  }}
-                  style={{
-                    minHeight: minimumTouchTarget(),
-                    justifyContent: "center",
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: scope === draftScope ? theme.primary : theme.border,
-                    backgroundColor: scope === draftScope ? theme.primary : "transparent",
-                    paddingHorizontal: 14,
-                    paddingVertical: 7,
-                  }}
-                >
-                  <Text
-                    maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-                    style={{
-                      color: scope === draftScope ? theme.primaryText : theme.text,
-                      fontSize: 13,
-                      fontWeight: "600",
-                      textTransform: "capitalize",
-                    }}
-                  >
-                    {scope}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
             <TextInput
               accessibilityLabel="Memory entry ID"
               value={draftId}
@@ -377,44 +340,48 @@ export default function MemoryScreen() {
                 >
                   {entry.content}
                 </Text>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  <Pressable
-                    accessibilityLabel={`Edit ${entry.id}`}
-                    accessibilityRole="button"
-                    onPress={() => openEditor(entry)}
-                    style={({ pressed }) => ({
-                      minHeight: minimumTouchTarget(),
-                      justifyContent: "center",
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: theme.border,
-                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                    })}
-                  >
-                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Edit</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityLabel={`Delete ${entry.id}`}
-                    accessibilityRole="button"
-                    onPress={() => handleDelete(entry)}
-                    style={({ pressed }) => ({
-                      minHeight: minimumTouchTarget(),
-                      justifyContent: "center",
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: theme.danger,
-                      backgroundColor: pressed ? theme.dangerMuted : "transparent",
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                    })}
-                  >
-                    <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
-                      Delete
-                    </Text>
-                  </Pressable>
-                </View>
+                {entry.scope === "workspace" ? (
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    <Pressable
+                      accessibilityLabel={`Edit ${entry.id}`}
+                      accessibilityRole="button"
+                      onPress={() => openEditor(entry)}
+                      style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: theme.border,
+                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                      })}
+                    >
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Edit
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel={`Delete ${entry.id}`}
+                      accessibilityRole="button"
+                      onPress={() => handleDelete(entry)}
+                      style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: theme.danger,
+                        backgroundColor: pressed ? theme.dangerMuted : "transparent",
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                      })}
+                    >
+                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                        Delete
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
             ))}
           </View>

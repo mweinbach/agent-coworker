@@ -1,7 +1,7 @@
 import type { SessionFeedItem } from "./sessionSnapshot";
 import type { ToolInputDigest } from "./toolInputDigest";
 
-export const MAX_TOOL_RETRY_TARGETS = 16;
+const MAX_TOOL_RETRY_TARGETS = 16;
 export const TOOL_RETRY_TURN_ANNOTATION_TYPE = "cowork.toolRetryTurn";
 
 export type ToolRetryRequest = {

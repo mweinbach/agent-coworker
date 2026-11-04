@@ -7,11 +7,11 @@ This runbook covers both harness layers:
 
 ## Prerequisites
 
-- Bun installed
-- Provider API key(s) for the providers exercised by the selected runs
+- Bun and Rust (`cargo`) installed
+- Provider API key(s) (or local LM Studio server) for the providers exercised by the selected runs
 - Optional: Langfuse credentials if you want telemetry exports
 
-The runner validates required provider credentials before starting any runs and exits early if a selected scenario needs a missing API key.
+Each run talks to a fresh `cowork-server` with an isolated per-run Cowork home under `<runRoot>/.server-homes/<runId>`. Only credential and runtime directories (`auth/`, `skills/`, `codex-app-server/`, `runtime/`, `bin/`, `cache/`) are linked in from your real Cowork home; your user config, sessions, memories and logs are never read or written. MCP servers and advanced memory are disabled for runs. A run whose provider credentials are missing fails its attempts and is reported at the end; the other selected runs still execute.
 
 ## Configure Optional Langfuse Telemetry
 
@@ -49,6 +49,7 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
 
 - `mixed`
 - `codex-gpt-5.4-smoke`
+- `lmstudio-local-smoke`
 
 Examples:
 
@@ -56,16 +57,17 @@ Examples:
 bun run harness:run
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed
 bun packages/harness/src/run_raw_agent_loops.ts --scenario codex-gpt-5.4-smoke
+bun packages/harness/src/run_raw_agent_loops.ts --scenario lmstudio-local-smoke
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-run run-01 --only-run run-08
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-model gpt-5-mini
 ```
 
 ## Source Layout
 
-- `run_raw_agent_loops.ts` — CLI, run config, attempt/retry loop, trace and artifact output
-- `rawLoopScenarios.ts` — scenario definitions, scripted prompts, and final-response contracts
-- `rawLoopTools.ts` — tool tracing/guards, tool-evidence assertions, and the raw-loop child-agent control
-- `rawLoopValidation.ts` — final-contract schema/artifact validation and the optional repair policy
+- `packages/harness/src/run_raw_agent_loops.ts` — CLI, `cowork-server` lifecycle, attempt/retry loop, trace and artifact output
+- `packages/harness/src/rawLoopScenarios.ts` — scenario definitions, scripted prompts, and final-response contracts
+- `packages/harness/src/rawLoopTools.ts` — tool tracing/guards, tool-evidence assertions, and budget accounting
+- `packages/harness/src/rawLoopValidation.ts` — final-contract schema/artifact validation and the optional repair policy
 
 Model ids in scenarios are registry ids from `config/models/<provider>/`. The runner passes them straight to the provider, so an id that is not in the registry still runs but silently loses that model's prompt template and provider-option defaults.
 
@@ -80,6 +82,7 @@ The prefix is scenario-specific:
 
 - `raw-agent-loop_mixed`
 - `raw-agent-loop_codex-gpt-5.4-smoke`
+- `raw-agent-loop_lmstudio-local-smoke`
 
 Run-root artifacts:
 
@@ -94,13 +97,11 @@ Per-run artifacts:
 - `harness_context.json`
 - `tool-log.txt`
 - `final.txt`
-- `final_reasoning.txt`
-- `response_messages.json`
 - `run_meta.json`
 - `artifacts_index.json`
 - `prompt.txt`
-- `system.txt`
-- `input_messages.json`
+
+`trace_attempt-*.json` keeps each attempt's trace (including a failed attempt's partial trace), and `attempts.json` summarizes every attempt with its outcome. The system prompt and raw provider request/response messages are not captured per run; enable Langfuse payload capture (`recordInputs` and `recordOutputs`) to inspect them per model call.
 
 `harness_context.json` records the structured run intent injected into the raw-loop turn prompt path. `run_meta.json` includes:
 
@@ -116,6 +117,7 @@ Per-run artifacts:
 
 - Raw-loop runs set `AGENT_WORKING_DIR` to the repo root for config loading, then set each individual run's `workingDirectory` to its run directory.
 - Built-in skills are disabled by default for raw-loop runs unless `COWORK_DISABLE_BUILTIN_SKILLS` is explicitly overridden in the environment.
+- The default marketplace plugin download at server startup is skipped for raw-loop runs unless `COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP` is explicitly overridden in the environment.
 - The runner replaces the machine's `providerOptions` with the harness defaults so a run measures the harness, not the local config.
 - Per-run failures are retried with backoff. If all attempts fail, the runner exits non-zero after writing the attempt traces and final metadata.
 - In **strict mode**, an invalid final contract fails the current attempt without a repair pass. The run still retries failed attempts with backoff, up to the scenario's `maxAttempts` limit (default: 5).
@@ -132,7 +134,8 @@ bun run docs:check
 For harness or protocol behavior changes, run:
 
 ```bash
-bun test
+cargo test --workspace
+bun run test
 bun run docs:check
 ```
 
@@ -140,28 +143,28 @@ bun run docs:check
 
 ### Raw-loop harness
 
-Use the raw-loop harness when you want the fastest repeatable inner loop for:
+Use the raw-loop harness when you want a repeatable scenario runner for:
 
 - scenario contract validation
 - artifact generation and deterministic file checks
 - tool-budget measurement
 - strict/non-strict repair behavior
 
-It bypasses the live WebSocket protocol on purpose so the inner loop stays fast.
+It spawns an isolated Rust `cowork-server` instance per scenario run and drives turns over the real `cowork.jsonrpc.v1` WebSocket boundary while recording per-attempt traces and artifacts.
 
 ### WebSocket/session harness
 
-Use the WebSocket/session harness when you need to validate the real product boundary:
+Use the WebSocket/session harness when you need to validate deterministic wire and fault-injection contracts:
 
 - session creation and handshake
 - delayed handshakes and desktop reconnect timeout budgets
 - sidecar death after startup or during a turn
-- `harness_context_set` / `harness_context_get`
+- `cowork/session/harnessContext/set` / `cowork/session/harnessContext/get`
 - ask / approval flows
 - reconnect during ask / approval prompts
 - persistence + resume
 - send queue overflow, journal write failure, replay gap, and snapshot-refresh recovery
 - session DB write-lock contention diagnostics
-- child-agent protocol controls (`agent_spawn`, `agent_list_get`, `agent_wait`, and related follow-up flows)
+- child-agent protocol controls (`cowork/session/agent/spawn`, `cowork/session/agent/list`, `cowork/session/agent/wait`, and related follow-up flows)
 
-This layer should use deterministic `startAgentServer({ runTurnImpl })` tests instead of live provider APIs whenever possible.
+This layer uses deterministic mock HTTP/SSE/stdio provider servers in `crates/cowork-server/tests/` and `test/helpers/rustServerHarness.ts` (for example, `test/rust-server.http-and-rpc.integration.test.ts` and `test/rust-server.jsonrpc-turns-and-tools.integration.test.ts`) instead of live provider APIs.

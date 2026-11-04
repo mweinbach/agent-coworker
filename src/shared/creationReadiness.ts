@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { PROVIDER_NAMES } from "../types";
 
-export const COWORK_RUNTIME_STARTING_MESSAGE = "Cowork is finishing setup in the background.";
+const COWORK_RUNTIME_STARTING_MESSAGE = "Cowork is finishing setup in the background.";
 
 // `task` runs the same dependency checks as `chat` — a task turn executes through
 // the same provider, model, and runtime — plus the one precondition that is
@@ -70,6 +70,10 @@ export const creationPreflightResultSchema = z
   .strict();
 
 export type CreationRepairAction = z.infer<typeof creationRepairActionSchema>;
-export type CreationReadinessCheck = z.infer<typeof creationReadinessCheckSchema>;
+type CreationReadinessCheck = z.infer<typeof creationReadinessCheckSchema>;
 export type CreationPreflightParams = z.infer<typeof creationPreflightParamsSchema>;
 export type CreationPreflightResult = z.infer<typeof creationPreflightResultSchema>;
+
+export const jsonRpcCreationResultSchemas = {
+  "cowork/creation/preflight": creationPreflightResultSchema,
+} as const;

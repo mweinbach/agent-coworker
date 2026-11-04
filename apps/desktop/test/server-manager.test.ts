@@ -6,9 +6,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 
-import { hostPlatform } from "../../../src/platform/host";
+import { buildWorkspaceBinary } from "../../../scripts/workspaceRustBinary";
+import { hostArch, hostPlatform } from "../../../src/platform/host";
 import { isAlive, killTree } from "../../../src/platform/proc";
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import {
@@ -20,8 +20,9 @@ import {
 import { raceWithAbort } from "../../../src/utils/abortSignal";
 
 import {
+  buildSidecarManifest,
   resolvePackagedSidecarFilename,
-  resolveWindowsAiElectronPrebuildTriplet,
+  SIDECAR_MANIFEST_NAME,
 } from "../electron/services/sidecar";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -104,24 +105,24 @@ function createFakeChild(): FakeChild {
   return child;
 }
 
-function shutdownFixtureProgram(directory: string): string {
-  const marker = path.join(directory, "saved.txt");
-  const moduleUrl = pathToFileURL(
-    path.resolve(import.meta.dir, "../../../src/server/runtime/gracefulShutdown.ts"),
-  ).href;
-  return `
-    import { writeFile } from "node:fs/promises";
-    const { createGracefulShutdown, registerParentManagedShutdown } = await import(${JSON.stringify(moduleUrl)});
-    const shutdown = createGracefulShutdown({
-      stopServer: async () => { await writeFile(${JSON.stringify(marker)}, "saved"); },
-      shutdownAnalytics: async () => {},
-      exit: (code) => process.exit(code),
-    });
-    registerParentManagedShutdown({ env: process.env, stdin: process.stdin, onParentExit: () => { void shutdown(); } });
-    console.log(JSON.stringify({ type: "server_listening", url: "ws://127.0.0.1:1234/ws", port: 1234, cwd: ${JSON.stringify(directory)} }));
-    setTimeout(() => console.log("still-running"), 100);
-    setInterval(() => {}, 1000);
-  `;
+// Compile at suite load, outside individual test timeouts. The full runner
+// reaches apps/desktop tests before the black-box suites that also build the
+// server, so a fresh checkout has no binary yet; let Cargo build it (or confirm
+// freshness) instead of depending on a prebuilt or stale artifact.
+const compiledRustSidecar = buildWorkspaceBinary(
+  path.resolve(import.meta.dir, "../../.."),
+  "cowork-server",
+);
+
+function buildIsolatedRustSidecarEnv(homeDir: string): NodeJS.ProcessEnv {
+  return {
+    ...__internal.buildServerEnv(),
+    HOME: homeDir,
+    COWORK_HOME_OVERRIDE: homeDir,
+    COWORK_DISABLE_RUNTIME: "1",
+    COWORK_RUNTIME_ALLOW_NETWORK: "0",
+    COWORK_BOOTSTRAP_DEFAULT_SKILLS: "0",
+  };
 }
 
 async function waitForFixtureFile(filePath: string): Promise<string> {
@@ -477,32 +478,165 @@ describe("desktop server manager startup mode", () => {
     setElectronMockOverrides(electronMockOverrides);
   });
 
-  test("resolveSourceStartup does not resolve repo root when source mode is disabled", () => {
-    const startup = __internal.resolveSourceStartup(false, () => {
-      throw new Error("resolveRepoRoot should not be called");
-    });
-
-    expect(startup).toEqual({
-      repoRoot: null,
-      sourceEntry: null,
-    });
+  test("removes legacy Bun source-mode helpers from ServerManager internals", () => {
+    expect("resolveSourceStartup" in __internal).toBe(false);
+    expect("getSourceStartupAttemptCount" in __internal).toBe(false);
+    expect("buildSourceEnvForAttempt" in __internal).toBe(false);
+    expect("isLikelyBunSegfault" in __internal).toBe(false);
+    const env = __internal.buildServerEnv();
+    expect(env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
+    expect(env.COWORK_DESKTOP_STARTUP_EVENTS).toBe("1");
   });
 
-  test("resolveSourceStartup resolves source entry when source mode is enabled", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-repo-"));
-    const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
+  test("spawns compiled Rust cowork-server sidecar in dev and packaged modes and reaps on stdin EOF", async () => {
+    const repoRoot = path.resolve(import.meta.dir, "../../..");
+    const platform = hostPlatform();
+    const arch = hostArch();
+    const rustSidecar = compiledRustSidecar;
+
+    const tempRoot = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-rust-sidecar-mgr-"));
+    const homeDir = path.join(tempRoot, "home");
+    const devUserData = path.join(tempRoot, "userdata-dev");
+    const pkgUserData = path.join(tempRoot, "userdata-pkg");
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const resourcesRoot = path.join(tempRoot, "Resources");
+    const binariesDir = path.join(resourcesRoot, "binaries");
+    const distDir = path.join(resourcesRoot, "dist");
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string })
+      .resourcesPath;
+    await Promise.all([
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(devUserData, { recursive: true }),
+      fs.mkdir(pkgUserData, { recursive: true }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+      fs.mkdir(binariesDir, { recursive: true }),
+      fs.mkdir(path.join(distDir, "config"), { recursive: true }),
+      fs.mkdir(path.join(distDir, "prompts"), { recursive: true }),
+      fs.mkdir(path.join(distDir, "skills"), { recursive: true }),
+      fs.mkdir(path.join(distDir, "workflows"), { recursive: true }),
+    ]);
+    await fs.copyFile(
+      path.join(repoRoot, "config", "defaults.json"),
+      path.join(distDir, "config", "defaults.json"),
+    );
+    const packagedSidecarPath = path.join(
+      binariesDir,
+      resolvePackagedSidecarFilename(platform, arch),
+    );
+    await fs.copyFile(rustSidecar, packagedSidecarPath);
+    if (platform !== "win32") {
+      await fs.chmod(packagedSidecarPath, 0o755);
+    }
+    await fs.writeFile(
+      path.join(binariesDir, SIDECAR_MANIFEST_NAME),
+      `${JSON.stringify(buildSidecarManifest(platform, arch), null, 2)}\n`,
+      "utf8",
+    );
 
     try {
-      await fs.mkdir(path.dirname(sourceEntry), { recursive: true });
-      await fs.writeFile(sourceEntry, 'console.log("ok");\n', "utf-8");
+      // 1. Unpackaged dev mode
+      userDataDir = devUserData;
+      await withProcessEnv(
+        {
+          HOME: homeDir,
+          COWORK_HOME_OVERRIDE: homeDir,
+          COWORK_DESKTOP_SIDECAR_PATH: rustSidecar,
+          COWORK_DISABLE_RUNTIME: "1",
+          COWORK_RUNTIME_ALLOW_NETWORK: "0",
+          COWORK_BOOTSTRAP_DEFAULT_SKILLS: "0",
+        },
+        async () => {
+          const progressEvents: unknown[] = [];
+          const devManager = new ServerManager();
+          let devPid: number | undefined;
+          try {
+            const started = await devManager.startWorkspaceServer({
+              workspaceId: "ws-rust-dev",
+              workspacePath: workspaceDir,
+              yolo: false,
+              onCoworkRuntimeBootstrapProgress: (p) => progressEvents.push(p),
+            });
+            expect(started.url).toContain("ws://127.0.0.1:");
+            expect(started.url).toContain("coworkBrowserToken=");
+            expect(progressEvents).toEqual([]); // A disabled runtime has no bootstrap progress.
+            const handle = getServerManagerTestInternals(devManager).servers.get("ws-rust-dev");
+            devPid = (handle?.child as unknown as { pid?: number } | undefined)?.pid;
+            expect(devPid).toBeGreaterThan(0);
 
-      const startup = __internal.resolveSourceStartup(true, () => repoRoot);
-      expect(startup.repoRoot).toBe(repoRoot);
-      expect(startup.sourceEntry).toBe(sourceEntry);
+            const status = await devManager.getWorkspaceServerStatus("ws-rust-dev");
+            expect(status.running).toBe(true);
+            expect(status.reason).toBe("running");
+
+            const stopStartedAt = Date.now();
+            await devManager.stopWorkspaceServer("ws-rust-dev");
+            expect(Date.now() - stopStartedAt).toBeLessThan(10_000);
+            expect(await waitForProcessExit(devPid!)).toBe(true);
+          } finally {
+            await devManager.stopAll();
+            if (devPid && isAlive(devPid)) await killTree(devPid);
+          }
+        },
+      );
+
+      // 2. Packaged mode with Resources/binaries manifest + Resources/dist
+      userDataDir = pkgUserData;
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = resourcesRoot;
+      setElectronMockOverrides({
+        ...electronMockOverrides,
+        app: {
+          ...electronMockOverrides.app,
+          isPackaged: true,
+        },
+      });
+      await withProcessEnv(
+        {
+          HOME: homeDir,
+          COWORK_HOME_OVERRIDE: homeDir,
+          COWORK_DESKTOP_SIDECAR_PATH: undefined,
+          COWORK_BUILTIN_DIR: undefined,
+          COWORK_DISABLE_RUNTIME: "1",
+          COWORK_RUNTIME_ALLOW_NETWORK: "0",
+          COWORK_BOOTSTRAP_DEFAULT_SKILLS: "0",
+        },
+        async () => {
+          const pkgManager = new ServerManager();
+          let pkgPid: number | undefined;
+          try {
+            const started = await pkgManager.startWorkspaceServer({
+              workspaceId: "ws-rust-pkg",
+              workspacePath: workspaceDir,
+              yolo: true,
+            });
+            expect(started.url).toContain("ws://127.0.0.1:");
+            const handle = getServerManagerTestInternals(pkgManager).servers.get("ws-rust-pkg");
+            pkgPid = (handle?.child as unknown as { pid?: number } | undefined)?.pid;
+            expect(pkgPid).toBeGreaterThan(0);
+
+            const status = await pkgManager.getWorkspaceServerStatus("ws-rust-pkg");
+            expect(status.running).toBe(true);
+
+            const stopStartedAt = Date.now();
+            await pkgManager.stopAll();
+            expect(Date.now() - stopStartedAt).toBeLessThan(10_000);
+            expect(await waitForProcessExit(pkgPid!)).toBe(true);
+          } finally {
+            await pkgManager.stopAll();
+            if (pkgPid && isAlive(pkgPid)) await killTree(pkgPid);
+          }
+        },
+      );
     } finally {
-      await fs.rm(repoRoot, { recursive: true, force: true });
+      userDataDir = process.cwd();
+      if (previousResourcesPath === undefined) {
+        delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+      } else {
+        (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath =
+          previousResourcesPath;
+      }
+      setElectronMockOverrides(electronMockOverrides);
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("buildServerEnv enables independent marketplace and runtime downloads by default", () => {
     const env = __internal.buildServerEnv();
@@ -758,98 +892,6 @@ describe("desktop server manager startup mode", () => {
         delete process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH;
       } else {
         process.env.COWORK_DESKTOP_CODEX_APP_SERVER_PATH = previousDesktopOverride;
-      }
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("buildServerEnv points packaged server at bundled Foundation Models SDK when present", async () => {
-    const previousSdkDir = process.env.COWORK_TSFMSDK_DIR;
-    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-tsfm-sdk-bundle-"));
-    const sidecar = path.join(dir, "cowork-server-aarch64-apple-darwin");
-    const sdkDir = path.join(dir, "tsfm-sdk");
-
-    try {
-      delete process.env.COWORK_TSFMSDK_DIR;
-      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
-      await fs.writeFile(sidecar, "");
-      await fs.mkdir(path.join(sdkDir, "dist"), { recursive: true });
-      await fs.mkdir(path.join(sdkDir, "native"), { recursive: true });
-      await fs.mkdir(path.join(sdkDir, "node_modules", "koffi", "build", "koffi", "darwin_arm64"), {
-        recursive: true,
-      });
-      await fs.writeFile(path.join(sdkDir, "dist", "index.js"), "");
-      await fs.writeFile(path.join(sdkDir, "native", "libFoundationModels.dylib"), "");
-      await fs.writeFile(path.join(sdkDir, "node_modules", "koffi", "index.js"), "");
-      await fs.writeFile(path.join(sdkDir, "node_modules", "koffi", "package.json"), "{}");
-      await fs.writeFile(
-        path.join(sdkDir, "node_modules", "koffi", "build", "koffi", "darwin_arm64", "koffi.node"),
-        "",
-      );
-
-      expect(__internal.buildServerEnv().COWORK_TSFMSDK_DIR).toBeUndefined();
-
-      const env = __internal.buildServerEnv(undefined, {
-        includeBundledFoundationModelsSdk: true,
-      });
-      expect(env.COWORK_TSFMSDK_DIR).toBe(sdkDir);
-    } finally {
-      if (previousSdkDir === undefined) delete process.env.COWORK_TSFMSDK_DIR;
-      else process.env.COWORK_TSFMSDK_DIR = previousSdkDir;
-      if (previousSidecarPath === undefined) {
-        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
-      } else {
-        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
-      }
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("buildServerEnv points packaged server at bundled Windows AI Electron when present", async () => {
-    if (process.platform !== "win32") {
-      const env = __internal.buildServerEnv(undefined, {
-        includeBundledWindowsAiElectron: true,
-      });
-      expect(env.COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
-      return;
-    }
-
-    const previousAddonDir = process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
-    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-ai-electron-bundle-"));
-    const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
-    const addonDir = path.join(dir, "windows-ai-electron");
-    const prebuildTriplet = resolveWindowsAiElectronPrebuildTriplet(process.platform, process.arch);
-    const nativeAddonPath = path.join(
-      addonDir,
-      "windows-ai-electron",
-      "prebuilds",
-      prebuildTriplet,
-      "node.node",
-    );
-
-    try {
-      delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
-      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
-      await fs.writeFile(sidecar, "");
-      await fs.mkdir(path.dirname(nativeAddonPath), { recursive: true });
-      await fs.writeFile(path.join(addonDir, "index.js"), "");
-      await fs.writeFile(nativeAddonPath, "");
-
-      expect(__internal.buildServerEnv().COWORK_WINDOWS_AI_ELECTRON_DIR).toBeUndefined();
-
-      const env = __internal.buildServerEnv(undefined, {
-        includeBundledWindowsAiElectron: true,
-      });
-      expect(env.COWORK_WINDOWS_AI_ELECTRON_DIR).toBe(addonDir);
-    } finally {
-      if (previousAddonDir === undefined) delete process.env.COWORK_WINDOWS_AI_ELECTRON_DIR;
-      else process.env.COWORK_WINDOWS_AI_ELECTRON_DIR = previousAddonDir;
-      if (previousSidecarPath === undefined) {
-        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
-      } else {
-        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
       }
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -1131,16 +1173,7 @@ describe("desktop server manager startup mode", () => {
     });
   });
 
-  test("only retries source startup automatically on Windows", () => {
-    expect(__internal.getSourceStartupAttemptCount(true)).toBe(
-      process.platform === "win32" ? 2 : 1,
-    );
-    expect(__internal.getSourceStartupAttemptCount(true, "win32")).toBe(2);
-    expect(__internal.getSourceStartupAttemptCount(true, "darwin")).toBe(1);
-    expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
-  });
-
-  test("server startup leaves room for cold source startup and first-run runtime bootstrap", () => {
+  test("server startup leaves room for cold startup and first-run runtime bootstrap", () => {
     expect(__internal.getServerStartupTimeoutMs({}, false)).toBe(120_000);
     expect(__internal.getServerStartupTimeoutMs({}, true)).toBe(300_000);
     expect(
@@ -1158,28 +1191,6 @@ describe("desktop server manager startup mode", () => {
         COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "600000",
       }),
     ).toBe(300_000);
-  });
-
-  test("only injects Bun transpiler cache env for Windows source attempts", () => {
-    const windowsAttempt = __internal.buildSourceEnvForAttempt(
-      { PATH: process.env.PATH },
-      2,
-      "win32",
-    );
-    const linuxAttempt = __internal.buildSourceEnvForAttempt(
-      { PATH: process.env.PATH },
-      2,
-      "linux",
-    );
-
-    try {
-      expect(typeof windowsAttempt.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe("string");
-      expect(windowsAttempt.env.BUN_FEATURE_FLAG_DISABLE_ASYNC_TRANSPILER).toBe("1");
-      expect(linuxAttempt.env).toEqual({ PATH: process.env.PATH });
-    } finally {
-      windowsAttempt.cleanup();
-      linuxAttempt.cleanup();
-    }
   });
 
   test("preserves existing H3 state when mobileH3 is omitted", () => {
@@ -1218,17 +1229,9 @@ describe("desktop server manager startup mode", () => {
   });
 });
 
-describe("desktop server manager bun crash detection", () => {
+describe("desktop server manager lifecycle and shutdown", () => {
   beforeEach(() => {
     setElectronMockOverrides(electronMockOverrides);
-  });
-
-  test("detects bun panic output", () => {
-    expect(
-      __internal.isLikelyBunSegfault("panic(main thread): Segmentation fault at address 0x1"),
-    ).toBe(true);
-    expect(__internal.isLikelyBunSegfault("oh no: Bun has crashed.")).toBe(true);
-    expect(__internal.isLikelyBunSegfault("normal stderr line")).toBe(false);
   });
 
   test("writes persistent server-manager diagnostics under userData logs", async () => {
@@ -1310,21 +1313,31 @@ describe("desktop server manager bun crash detection", () => {
   test.each(["before readiness", "after readiness"] as const)(
     "a real managed child drains durable cleanup on EOF %s",
     async (phase) => {
+      const rustSidecar = compiledRustSidecar;
       const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-shutdown-"));
-      const marker = path.join(directory, "saved.txt");
-      const child = spawnChild(process.execPath, ["-e", shutdownFixtureProgram(directory)], {
-        stdio: ["pipe", "pipe", "pipe"],
-        detached: hostPlatform() !== "win32",
-        windowsHide: true,
-        env: __internal.buildServerEnv(),
-      });
+      const homeDir = path.join(directory, "home");
+      const workspaceDir = path.join(directory, "workspace");
+      await Promise.all([
+        fs.mkdir(homeDir, { recursive: true }),
+        fs.mkdir(workspaceDir, { recursive: true }),
+      ]);
+      const child = spawnChild(
+        rustSidecar,
+        ["--host", "127.0.0.1", "--port", "0", "--dir", workspaceDir, "--json"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: hostPlatform() !== "win32",
+          windowsHide: true,
+          env: buildIsolatedRustSidecarEnv(homeDir),
+        },
+      );
       try {
-        if (phase === "after readiness")
-          await __internal.waitForServerListening(child, { timeoutMs: 2000 });
+        if (phase === "after readiness") {
+          await __internal.waitForServerListening(child, { timeoutMs: 5000 });
+        }
         const directKill = spyOn(child, "kill");
-        await __internal.gracefulKill(child, { gracefulTimeoutMs: 2000, forceKillTimeoutMs: 1000 });
+        await __internal.gracefulKill(child, { gracefulTimeoutMs: 5000, forceKillTimeoutMs: 1000 });
         expect(child.exitCode).toBe(0);
-        expect(await fs.readFile(marker, "utf8")).toBe("saved");
         expect(directKill).not.toHaveBeenCalled();
       } finally {
         if (child.pid && isAlive(child.pid)) await killTree(child.pid);
@@ -1334,33 +1347,42 @@ describe("desktop server manager bun crash detection", () => {
   );
 
   test("a standalone child ignores stdin EOF without the private ownership flag", async () => {
+    const rustSidecar = compiledRustSidecar;
     const directory = await fs.mkdtemp(
       path.join(scratchRoots()[0]!, "desktop-standalone-shutdown-"),
     );
-    const env = __internal.buildServerEnv();
+    const homeDir = path.join(directory, "home");
+    const workspaceDir = path.join(directory, "workspace");
+    await Promise.all([
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+    ]);
+    const env = buildIsolatedRustSidecarEnv(homeDir);
     delete env.COWORK_DESKTOP_PARENT_MANAGED;
-    const child = spawnChild(process.execPath, ["-e", shutdownFixtureProgram(directory)], {
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: hostPlatform() !== "win32",
-      windowsHide: true,
-      env,
-    });
-    const stillRunning = Promise.withResolvers<void>();
+    const child = spawnChild(
+      rustSidecar,
+      ["--host", "127.0.0.1", "--port", "0", "--dir", workspaceDir, "--json"],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: hostPlatform() !== "win32",
+        windowsHide: true,
+        env,
+      },
+    );
     try {
-      await __internal.waitForServerListening(child, {
-        timeoutMs: 2000,
-        onStdoutLine: (line) => {
-          if (line === "still-running") stillRunning.resolve();
-        },
+      const listening = await __internal.waitForServerListening(child, {
+        timeoutMs: 5000,
       });
       child.stdin.end();
-      await raceWithAbort(
-        stillRunning.promise,
-        AbortSignal.timeout(2000),
-        "Standalone child exited unexpectedly.",
-      );
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const healthUrl = listening.url.replace(/^ws:/, "http:").replace(/\/ws$/, "/cowork/health");
+      const healthRes = await fetch(healthUrl, {
+        headers: env.COWORK_BROWSER_ACCESS_TOKEN
+          ? { "X-Cowork-Browser-Token": env.COWORK_BROWSER_ACCESS_TOKEN }
+          : undefined,
+      });
+      expect(healthRes.status).toBe(200);
       expect(child.exitCode).toBeNull();
-      expect(await fs.readdir(directory)).toEqual([]);
     } finally {
       if (child.pid && isAlive(child.pid)) await killTree(child.pid);
       await fs.rm(directory, { recursive: true, force: true });
@@ -1368,22 +1390,29 @@ describe("desktop server manager bun crash detection", () => {
   });
 
   test("unexpected real parent exit closes the pipe and drains its managed child", async () => {
+    const rustSidecar = compiledRustSidecar;
     const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-exit-"));
+    const homeDir = path.join(directory, "home");
+    const workspaceDir = path.join(directory, "workspace");
+    await Promise.all([
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+    ]);
     const program = `
       const { spawn } = await import("node:child_process");
-      const child = spawn(process.execPath, ["-e", ${JSON.stringify(shutdownFixtureProgram(directory))}], {
+      const child = spawn(${JSON.stringify(rustSidecar)}, ["--host", "127.0.0.1", "--port", "0", "--dir", ${JSON.stringify(workspaceDir)}, "--json"], {
         stdio: ["pipe", "pipe", "inherit"], env: process.env,
       });
       child.stdout.once("data", () => {
         process.stdout.write(JSON.stringify({ childPid: child.pid }), () => process.exit(0));
       });
-      setTimeout(() => process.exit(2), 2000);
+      setTimeout(() => process.exit(2), 5000);
     `;
     const parent = spawnChild(process.execPath, ["-e", program], {
       stdio: ["ignore", "pipe", "pipe"],
       detached: hostPlatform() !== "win32",
       windowsHide: true,
-      env: __internal.buildServerEnv(),
+      env: buildIsolatedRustSidecarEnv(homeDir),
     });
     let childPid: number | undefined;
     let output = "";
@@ -1401,18 +1430,12 @@ describe("desktop server manager bun crash detection", () => {
           parent.once("close", resolve);
           parent.once("error", reject);
         }),
-        AbortSignal.timeout(2500),
+        AbortSignal.timeout(5000),
         "Parent-death fixture did not close.",
       );
       expect(code).toBe(0);
       expect(childPid).toBeGreaterThan(0);
-      if (hostPlatform() === "win32") {
-        // libuv places non-detached Windows children in a kill-on-close job object, so the
-        // managed child dies with its parent instead of draining on EOF. Assert no orphan.
-        expect(await waitForProcessExit(childPid!)).toBe(true);
-      } else {
-        expect(await waitForFixtureFile(path.join(directory, "saved.txt"))).toBe("saved");
-      }
+      expect(await waitForProcessExit(childPid!)).toBe(true);
     } finally {
       if (parent.pid && isAlive(parent.pid)) await killTree(parent.pid);
       if (childPid && isAlive(childPid)) await killTree(childPid);

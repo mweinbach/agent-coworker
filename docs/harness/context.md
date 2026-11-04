@@ -30,21 +30,21 @@ Normalization rules:
 
 ## WebSocket Messages
 
-- Client `harness_context_get` requests the current context for the session.
-- Client `harness_context_set` sets/replaces the current context payload.
-- Server emits `harness_context` with the updated/current value (or `null`).
+- Client `cowork/session/harnessContext/get` requests the current context for the session.
+- Client `cowork/session/harnessContext/set` sets/replaces the current context payload.
+- Server emits `cowork/session/harnessContext` with the updated/current value (or `null`).
 
 ## Storage Behavior
 
-- Live context is held in the session-scoped in-memory store [`src/sessionContext/HarnessContextStore.ts`](../../src/sessionContext/HarnessContextStore.ts).
-- `harness_context_set` updates the live store, emits the new `harness_context` event, and queues a persisted session snapshot.
+- Live context is held in the session-scoped in-memory store in [`crates/cowork-harness/src/lib.rs`](../../crates/cowork-harness/src/lib.rs) and [`crates/cowork-server/src/memory_and_fork_routes.rs`](../../crates/cowork-server/src/memory_and_fork_routes.rs).
+- `cowork/session/harnessContext/set` updates the live store, emits the new `cowork/session/harnessContext` notification, and queues a persisted session snapshot.
 - Session snapshots include `context.harnessContext`, and the SQLite materialized state stores the same payload in `harness_context_json`.
-- When a session is resumed from storage, [`AgentSession.ts`](../../src/server/session/AgentSession.ts) seeds the live context store from the persisted snapshot before normal event handling resumes.
+- When a session is resumed from storage, [`crates/cowork-server/src/registry.rs`](../../crates/cowork-server/src/registry.rs) seeds the live context store from the persisted snapshot before normal event handling resumes.
 - The live in-memory entry is cleared when the session is disposed or closed.
 
 ## Runtime Injection Behavior
 
-- The turn runtime reads the current live harness context at turn/pass invocation time from the session-owned store.
+- The turn runtime reads the current live harness context at turn/pass invocation time from the session-owned store (`crates/cowork-harness/src/system_prompt.rs`).
 - The current context is rendered into the runtime system prompt as a compact **Active Harness Context** section.
 - Because the context is read at invocation time, multi-pass turns continue to see the latest contract instead of only a one-time startup snapshot.
 - The rendered section explicitly frames the data as a task contract and reminds the model that it does **not** override safety/tool policy.
@@ -52,7 +52,7 @@ Normalization rules:
 ## Child-Agent Behavior
 
 - Child sessions inherit parent context through explicit spawn context modes instead of a single coarse fork flag.
-- `contextMode: "full"` keeps the existing `AgentSession.buildForkContextSeed()` behavior and carries transcript, todos, and harness context together.
+- `contextMode: "full"` clones parent transcript, todos, and harness context together in `AgentControl` (`crates/cowork-harness/src/agents/`).
 - `contextMode: "brief"` injects a synthetic `Parent briefing:` user seed message and can optionally carry harness context and todos; this is the preferred low-cost handoff for most delegated work.
 - `contextMode: "none"` skips transcript cloning and only carries structured context when explicitly requested. The child receives no parent conversation, files, history, or assumptions, so the spawn message must be fully self-contained.
 - Deprecated `forkContext` still maps to `contextMode: "full"` / `"none"` for compatibility.

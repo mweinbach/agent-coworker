@@ -135,4 +135,11 @@ describe("Electron builder native distribution selection", () => {
       resolveWindowsSigningConfig(["--mac", "--win"], {}, { platform: "darwin", arch: "arm64" }),
     ).toEqual(["--config.win.verifyUpdateCodeSignature=false"]);
   });
+
+  test("electron main sources avoid top-level __filename/__dirname declarations that collide with Rolldown CJS shims", () => {
+    for (const relPath of ["electron/main.ts", "electron/ipc/trustedSender.ts"]) {
+      const source = readFileSync(path.join(desktopRoot, relPath), "utf8");
+      expect(source).not.toMatch(/\b(?:const|let|var)\s+__(?:filename|dirname)\b/);
+    }
+  });
 });

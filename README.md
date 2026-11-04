@@ -10,7 +10,7 @@ It is built for everyday computer work, not just chat. Open a workspace, pick yo
 
 - **Work inside real folders.** Add a project or start a one-off chat, then let Cowork read, search, edit, and run commands in that workspace.
 - **Keep conversations connected to work.** Threads are saved locally and can be resumed after restarts, so a project can keep its history instead of becoming a pile of throwaway chats.
-- **Use the model you already prefer.** Cowork supports Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, Fire Pass, NVIDIA, LM Studio, Baseten, OpenCode, and Codex CLI.
+- **Use the model you already prefer.** Cowork supports Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, Fire Pass, MiniMax, NVIDIA, LM Studio, Baseten, OpenCode, and Codex CLI.
 - **Bring in tools and apps.** Skills, plugins, MCP servers, web search, file tools, shell tools, and subagents are part of the product surface.
 - **Delegate bigger jobs.** Ask Cowork to spawn focused helper agents for independent research, review, or implementation tasks.
 - **Stay in control.** Risky tool actions go through approval flows and shell commands run in an OS sandbox — unless you explicitly opt into YOLO mode (`--yolo` or the workspace toggle), which skips every prompt and runs commands unsandboxed.
@@ -93,7 +93,7 @@ External services are contacted only through the providers, tools, MCP servers, 
 
 ### 1. Install
 
-Prerequisite: [Bun](https://bun.sh)
+Prerequisites: [Bun](https://bun.sh) and [Rust](https://rustup.rs) (`rustc` / `cargo`, edition 2024)
 
 ```bash
 git clone https://github.com/mweinbach/agent-coworker
@@ -129,6 +129,7 @@ Supported provider auth:
 | Together | `TOGETHER_API_KEY` |
 | Fireworks | `FIREWORKS_API_KEY` |
 | Fire Pass | `FIREPASS_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
 | NVIDIA | `NVIDIA_API_KEY` |
 | Baseten | `BASETEN_API_KEY` |
 | LM Studio | local server, optional `LM_STUDIO_API_KEY`, optional `LM_STUDIO_BASE_URL` |
@@ -145,6 +146,14 @@ Desktop:
 ```bash
 bun run start
 ```
+
+Browser development:
+
+```bash
+bun run web:dev
+```
+
+`web:dev` (also `desktop:web`) and `bun run setup:runtime` build only `cowork-server` with Cargo (a no-op when it is already fresh), so they never launch a binary older than your checkout. Without a Rust toolchain they fall back to a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
 
 CLI:
 
@@ -236,7 +245,7 @@ Desktop / CLI / Mobile / Custom Client
 
 The JSON-RPC WebSocket protocol is documented in [docs/websocket-protocol.md](./docs/websocket-protocol.md). It covers provider auth, MCP management, session and thread control, file uploads, backup flows, subagents, streaming events, and observability.
 
-Build a standalone Bun server binary:
+Build a standalone native Rust server binary:
 
 ```bash
 bun run build:server-binary
@@ -250,13 +259,16 @@ When listening on non-loopback hosts, the server requires an access token for `/
 Common commands:
 
 ```bash
-bun run test                # run all tests through the cross-platform project runner
+cargo test --workspace      # run all Rust crate unit and integration tests
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+bun run test                # run all TS/client/black-box tests through the project runner
 bun run typecheck           # typecheck root, harness, and desktop
-bun run docs:check          # verify docs/protocol consistency
+bun run docs:check          # verify docs/protocol consistency against Rust's exported manifest
 bun run desktop:dev         # run Electron desktop app in dev mode
 bun run desktop:demo        # run desktop app with onboarding demo mode
-bun run dev                 # watch the CLI entry point
-bun run harness:run         # run harness scenarios in report-only mode
+bun run dev                 # run the Rust CLI REPL via cargo
+bun run harness:run         # run harness scenarios against cowork-server in report-only mode
 ```
 
 Mobile commands:
@@ -272,13 +284,14 @@ Repository map:
 
 | Path | Purpose |
 | --- | --- |
-| `src/server/` | WebSocket server, JSON-RPC routes, session orchestration, persistence |
-| `src/cli/` | CLI REPL and command parsing |
-| `src/providers/` | Provider catalog, auth, and model adapters |
-| `src/tools/` | Built-in server-side tools |
-| `src/runtime/` | Runtime adapters |
-| `src/mcp/` | MCP config, auth, and client lifecycle |
-| `src/skills/` | Skill discovery and trigger extraction |
+| `crates/cowork-server/` | WebSocket server, JSON-RPC routes, session orchestration, mobile TLS |
+| `crates/cowork-cli/` | CLI REPL and command parsing |
+| `crates/cowork-providers/` | Provider catalog, auth, and model wire adapters |
+| `crates/cowork-tools/` | Built-in server-side tools |
+| `crates/cowork-harness/` | Agent turn loop, subagents, workflows, and session runtime |
+| `crates/cowork-mcp/` | MCP config, auth, and client lifecycle |
+| `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery |
+| `src/` | Shared TypeScript client contracts, models/pricing catalogs, and desktop platform helpers |
 | `apps/desktop/` | Electron desktop app |
 | `apps/mobile/` | Optional Expo mobile app |
 | `packages/harness/` | Developer harness scripts and validation |

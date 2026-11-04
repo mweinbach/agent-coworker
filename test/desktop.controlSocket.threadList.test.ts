@@ -1,133 +1,114 @@
 import { describe, expect, test } from "bun:test";
+import http from "node:http";
 
 import { createControlSocketHelpers } from "../apps/desktop/src/app/store.helpers/controlSocket";
 import {
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
 } from "../apps/desktop/src/app/store.helpers/runtimeState";
-import { startAgentServer } from "../src/server/startServer";
-import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
+import { connectRustJsonRpc, startRustTestServer } from "./helpers/rustServerHarness";
 
-async function connectJsonRpc(url: string): Promise<{
-  close: () => void;
-  request: (method: string, params?: unknown) => Promise<any>;
-  waitFor: (predicate: (message: any) => boolean) => Promise<any>;
+async function startMockOpenAiResponsesServer(replyText: string): Promise<{
+  baseUrl: string;
+  close: () => Promise<void>;
 }> {
-  const ws = new WebSocket(url, "cowork.jsonrpc.v1");
-  const queue: any[] = [];
-  const waiters = new Set<{
-    predicate: (message: any) => boolean;
-    resolve: (message: any) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-
-  const resolveWaiters = (message: any) => {
-    for (const waiter of [...waiters]) {
-      if (!waiter.predicate(message)) continue;
-      clearTimeout(waiter.timer);
-      waiters.delete(waiter);
-      waiter.resolve(message);
-      return true;
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+    const events = [
+      { type: "response.created", response: { id: "resp_1" } },
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "msg_1", type: "message", role: "assistant", content: [] },
+      },
+      {
+        type: "response.output_text.delta",
+        output_index: 0,
+        content_index: 0,
+        delta: replyText,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: replyText }],
+        },
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_1",
+          status: "completed",
+          usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+        },
+      },
+    ];
+    for (const evt of events) {
+      res.write(`data: ${JSON.stringify(evt)}\n\n`);
     }
-    return false;
-  };
-
-  ws.onmessage = (event) => {
-    const message = JSON.parse(typeof event.data === "string" ? event.data : "");
-    if (!resolveWaiters(message)) {
-      queue.push(message);
-    }
-  };
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("Timed out waiting for websocket open")),
-      5_000,
-    );
-    ws.onopen = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    ws.onerror = (event) => {
-      clearTimeout(timer);
-      reject(new Error(`WebSocket error: ${event}`));
-    };
+    res.end();
   });
-
-  const waitFor = async (predicate: (message: any) => boolean) => {
-    const existingIndex = queue.findIndex(predicate);
-    if (existingIndex >= 0) {
-      return queue.splice(existingIndex, 1)[0];
-    }
-
-    return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        waiters.delete(waiter);
-        reject(new Error("Timed out waiting for JSON-RPC message"));
-      }, 5_000);
-      const waiter = { predicate, resolve, timer };
-      waiters.add(waiter);
-    });
-  };
-
-  let nextId = 0;
-  const request = async (method: string, params?: unknown) => {
-    const id = ++nextId;
-    ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-    return await waitFor((message) => message.id === id);
-  };
-
-  const initializeResponse = await request("initialize", {
-    clientInfo: {
-      name: "desktop-control-socket-test",
-      version: "1.0.0",
-    },
-  });
-  expect(initializeResponse.result.protocolVersion).toBe("0.1");
-  ws.send(JSON.stringify({ method: "initialized" }));
-
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
-    close: () => ws.close(),
-    request,
-    waitFor,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
 
 describe("desktop control socket thread list mapping", () => {
   test("uses thread/list wire counts instead of cached thread state", async () => {
-    const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(
-      serverOpts(tmpDir, {
-        runTurnImpl: (async () => ({
-          text: "streamed reply",
-          responseMessages: [],
-        })) as any,
-      }),
-    );
+    const mockOpenAi = await startMockOpenAiResponsesServer("streamed reply");
+    const srv = await startRustTestServer({
+      env: {
+        OPENAI_API_KEY: "sk-test-control-socket",
+        OPENAI_BASE_URL: mockOpenAi.baseUrl,
+        AGENT_PROVIDER: "openai",
+        AGENT_MODEL: "gpt-5.4",
+      },
+    });
+
+    const workspaceId = "workspace-1";
+    const helpers = createControlSocketHelpers({
+      nowIso: () => new Date().toISOString(),
+      makeId: () => crypto.randomUUID(),
+      persist: () => {},
+      pushNotification: (notifications) => notifications,
+      isProviderName: (value: unknown): value is string => typeof value === "string",
+    });
 
     try {
-      const rpc = await connectJsonRpc(url);
-      const started = await rpc.request("thread/start", { cwd: tmpDir });
-      const threadId = started.result.thread.id as string;
+      const rpc = await connectRustJsonRpc(srv.wsUrl);
+      const started = await rpc.request<{ thread: { id: string } }>("thread/start", {
+        cwd: srv.workspaceDir,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+      const threadId = started.thread.id;
 
       await rpc.request("turn/start", {
         threadId,
         clientMessageId: "msg-1",
         input: [{ type: "text", text: "hello there" }],
       });
-      await rpc.waitFor(
-        (message) => message.method === "turn/completed" && message.params.threadId === threadId,
+      await rpc.waitForNotification(
+        (msg) =>
+          msg.method === "turn/completed" &&
+          (msg.params as { threadId?: string } | undefined)?.threadId === threadId,
       );
       rpc.close();
 
-      const workspaceId = "workspace-1";
       const staleMessageCount = 999;
       const staleLastEventSeq = 777;
       let state: any = {
         workspaces: [
           {
             id: workspaceId,
-            path: tmpDir,
+            path: srv.workspaceDir,
           },
         ],
         threads: [
@@ -150,7 +131,7 @@ describe("desktop control socket thread list mapping", () => {
         workspaceRuntimeById: {
           [workspaceId]: {
             ...defaultWorkspaceRuntime(),
-            serverUrl: url,
+            serverUrl: srv.wsUrl,
           },
         },
         threadRuntimeById: {
@@ -166,14 +147,6 @@ describe("desktop control socket thread list mapping", () => {
         };
       };
 
-      const helpers = createControlSocketHelpers({
-        nowIso: () => new Date().toISOString(),
-        makeId: () => crypto.randomUUID(),
-        persist: () => {},
-        pushNotification: (notifications) => notifications,
-        isProviderName: (value: unknown): value is string => typeof value === "string",
-      });
-
       const sessions = await helpers.requestWorkspaceSessions(get as any, set as any, workspaceId);
       expect(sessions).not.toBeNull();
       expect(sessions?.[0]?.messageCount).toBeGreaterThan(0);
@@ -183,7 +156,9 @@ describe("desktop control socket thread list mapping", () => {
       expect(state.threads[0].messageCount).toBe(sessions?.[0]?.messageCount);
       expect(state.threads[0].lastEventSeq).toBe(sessions?.[0]?.lastEventSeq);
     } finally {
-      await stopTestServer(server);
+      helpers.disposeAllControlState();
+      await srv.stop();
+      await mockOpenAi.close();
     }
   });
 });

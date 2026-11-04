@@ -1,0 +1,18 @@
+name: Setup Linux sandbox
+description: Install bubblewrap and allow unprivileged user namespaces so Rust sandbox, shell, and LibreOffice tests run under real OS enforcement on Linux runners.
+
+runs:
+  using: composite
+  steps:
+    - name: Install bubblewrap and permit user namespaces
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends bubblewrap python3
+        # Permit namespace creation on this disposable CI host. Workloads
+        # still run unprivileged with filesystem, network, and seccomp checks.
+        if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true

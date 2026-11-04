@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { SessionEvent as CoreSessionEvent } from "../../../../src/server/protocol";
+import type { SessionEvent as CoreSessionEvent } from "../../../../src/shared/protocol";
 
 export { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
 export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolOutputOverflow";
@@ -10,24 +10,24 @@ import { sessionSnapshotSchema } from "../../../../src/shared/sessionSnapshot";
 import { workflowProgressPayloadSchema } from "../../../../src/shared/workflows";
 
 export type {
-  ImportableItem,
-  ImportableKind,
-  ImportSource,
-} from "../../../../src/import";
-export type {
   ConversationImportSource,
   ConversationPreviewItem,
   ConversationSourceCandidate,
   ConversationSourceRequest,
   ConversationWorkspaceMappingInput,
   ConversationWorkspaceMappingsValidateResult,
-} from "../../../../src/import/conversations";
-export type { SessionEvent } from "../../../../src/server/protocol";
+} from "../../../../src/shared/conversationImportTypes";
+export type {
+  ImportableItem,
+  ImportableKind,
+  ImportSource,
+} from "../../../../src/shared/importTypes";
 export type {
   CodexAppServerInstallStatus,
   LibreOfficeRuntimeDiagnostic,
 } from "../../../../src/shared/jsonrpcControlSchemas";
 export type { OpenAiNativeConnector } from "../../../../src/shared/openaiNativeConnectors";
+export type { SessionEvent } from "../../../../src/shared/protocol";
 export type {
   ApprovalRiskCode,
   ChildModelRoutingMode,

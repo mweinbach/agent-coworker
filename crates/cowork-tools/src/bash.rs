@@ -1,0 +1,378 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use cowork_env::{
+    ShellEnvOptions, build_canonical_shell_env, build_non_login_shell_plan,
+    materialize_temp_script, select_shell_candidate,
+};
+use cowork_sandbox::{
+    CommandRiskLevel, SandboxCommand, SandboxDenialCategory, SandboxErrorCode,
+    SandboxExecutionRequest, SandboxPolicy, SandboxRunner, SandboxType, classify_command_detailed,
+    host_platform,
+};
+use parking_lot::Mutex;
+use regex::Regex;
+use serde_json::{Map, Value, json};
+
+use crate::context::{
+    ApprovalDecisionRequest, BuiltinTool, ToolError, ToolExecutionContext, ToolOutput, ToolResult,
+    normalize_and_validate_args, protected_credential_roots,
+};
+
+const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
+const MAX_TIMEOUT_SECONDS: u64 = 600;
+const MAX_BUFFER_BYTES: usize = 10 * 1024 * 1024;
+
+pub struct BashTool;
+
+impl BashTool {
+    /// TS `bash.ts`: `const policy = ctx.sandboxPolicy ?? resolveSandboxPolicy(...)`. The Rust
+    /// context always carries the policy the server resolved for this turn (mode, network,
+    /// read-only role / `no-project-write` floor, `targetPaths`, managed scratch roots and the
+    /// project root), so it is used as-is. Re-resolving here from `sandbox_config` would widen it
+    /// (e.g. `no-project-write` -> `workspace-write`, a lost `network: false`, or a `read-only`
+    /// turn demoted to the `no-project-write` temp-scratch floor).
+    fn resolve_effective_policy(ctx: &ToolExecutionContext) -> SandboxPolicy {
+        ctx.sandbox_policy.clone()
+    }
+}
+
+#[async_trait]
+impl BuiltinTool for BashTool {
+    fn name(&self) -> &str {
+        "bash"
+    }
+
+    fn description(&self) -> &str {
+        "Execute a shell command inside the native OS sandbox. Prefer dedicated read/write/edit/glob/grep tools for file operations."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute."
+                },
+                "timeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_TIMEOUT_SECONDS,
+                    "description": "Maximum runtime in seconds before the command process group is terminated (default: 300, max: 600)."
+                }
+            },
+            "required": ["command"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        mut raw_args: Map<String, Value>,
+        ctx: &ToolExecutionContext,
+    ) -> ToolResult<ToolOutput> {
+        if !raw_args.contains_key("timeoutSeconds")
+            && let Some(ms) = raw_args.remove("timeout").and_then(|v| v.as_u64())
+        {
+            raw_args.insert(
+                "timeoutSeconds".to_owned(),
+                json!((ms.div_ceil(1000)).clamp(1, MAX_TIMEOUT_SECONDS)),
+            );
+        }
+
+        let args = normalize_and_validate_args(&self.input_schema(), &raw_args)?;
+        let command = args
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("command is required".to_owned()))?
+            .to_owned();
+        let timeout_secs = args
+            .get("timeoutSeconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
+            .min(MAX_TIMEOUT_SECONDS);
+
+        if ctx.is_cancelled() {
+            return Ok(ToolOutput::Json(json!({
+                "stdout": "",
+                "stderr": "Command aborted.",
+                "exitCode": 130
+            })));
+        }
+
+        let policy = Self::resolve_effective_policy(ctx);
+        let pre_exec = classify_command_detailed(&command, None, None);
+        let matches_explicit_review = matches_ts_approval_patterns(&command, host_platform());
+        let needs_pre_approval =
+            pre_exec.risk_level == CommandRiskLevel::Dangerous || matches_explicit_review;
+
+        if needs_pre_approval && !ctx.yolo {
+            let reason_str = if pre_exec.risk_level == CommandRiskLevel::Dangerous {
+                "matches_dangerous_pattern"
+            } else {
+                "requires_manual_review"
+            };
+            let approved = match &ctx.approval_handler {
+                Some(handler) => handler
+                    .approve_command(ApprovalDecisionRequest {
+                        command: command.clone(),
+                        reason: reason_str.to_owned(),
+                        category: None,
+                        detail: pre_exec.matched_pattern.clone(),
+                        cwd: ctx.working_directory.clone(),
+                    })
+                    .await
+                    .map_err(ToolError::Execution)?,
+                None => false,
+            };
+            if !approved {
+                return Ok(ToolOutput::Json(json!({
+                    "stdout": "",
+                    "stderr": "Command was not approved.",
+                    "exitCode": 1
+                })));
+            }
+        }
+
+        // TS `await ctx.assertCanMutate?.("bash")` before the first run: the task-mutation lock
+        // (e.g. a concurrent `createTask` locking this chat) may have been taken while the
+        // manual-approval prompt above was pending, so the dispatch-time check is stale.
+        ctx.check_before_tool_invocation("bash")?;
+
+        let platform = host_platform();
+        let is_sandboxed = !matches!(policy, SandboxPolicy::DangerFullAccess { .. })
+            || !cowork_sandbox::policy_allows_network(&policy);
+        let shell_env = build_canonical_shell_env(ShellEnvOptions {
+            base_env: &ctx.env,
+            runtime: None,
+            uv_env: None,
+            extra_env: None,
+            platform,
+            sandboxed: is_sandboxed,
+            cowork_home: Some(&ctx.cowork_home),
+        });
+        let plan = build_non_login_shell_plan(&command, &shell_env, platform);
+        // TS bash.ts: resolve every candidate against the child PATH and run the first one that
+        // exists (`pwsh` falls back to `powershell.exe`; batch shims are skipped).
+        let Some(shell) = select_shell_candidate(&plan, &shell_env, platform) else {
+            return Ok(ToolOutput::Json(json!({
+                "stdout": "",
+                "stderr": format!("No compatible shell executable was found for platform {platform}."),
+                "exitCode": 1
+            })));
+        };
+        // Oversized Windows commands ship as a `-File` temp script shared by every attempt
+        // (including an approved escalation retry); the guard deletes it when this call returns.
+        let _temp_script = materialize_temp_script(&plan).map_err(|err| {
+            ToolError::Execution(format!("Failed to write the shell temp script: {err}"))
+        })?;
+        let is_scoped_child = ctx.target_paths.as_ref().is_some_and(|t| !t.is_empty());
+
+        let runner = SandboxRunner::default();
+        let credential_roots = protected_credential_roots(ctx);
+        let build_req = |pol: SandboxPolicy| SandboxExecutionRequest {
+            command: SandboxCommand::new(shell.program.clone(), shell.args.clone()),
+            policy: pol,
+            cwd: ctx.working_directory.clone(),
+            yolo: ctx.yolo,
+            require_backend: ctx.sandbox_config.require_backend,
+            has_scoped_target_paths: is_scoped_child,
+            timeout: Some(Duration::from_secs(timeout_secs)),
+            max_buffer: MAX_BUFFER_BYTES,
+            env_source: Some(ctx.env.clone()),
+            child_env_source: Some(shell_env.clone()),
+            extra_env: std::collections::HashMap::new(),
+            capabilities_override: None,
+            sandbox_exec_path: None,
+            // Same credential set the read/grep/glob tools deny, enforced by the OS sandbox so a
+            // sandboxed `cat ~/.ssh/id_rsa` cannot bypass the file-tool deny.
+            read_denied_roots: credential_roots.clone(),
+        };
+
+        // A task-mutation lock taken while the unsandboxed-fallback prompt was pending. The
+        // runner callback can only report "declined" (so the command never runs); the lock's own
+        // error is stashed here and returned instead, matching TS where `assertCanMutate` threw.
+        let unsandboxed_lock_error: Mutex<Option<ToolError>> = Mutex::new(None);
+        let make_unsandboxed_cb = || {
+            ctx.approval_handler.as_ref().map(|handler| {
+                let handler = Arc::clone(handler);
+                let cmd = command.clone();
+                let cwd = ctx.working_directory.clone();
+                let lock_error = &unsandboxed_lock_error;
+                move |detail_opt: Option<&str>| {
+                    let detail = detail_opt
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            "No enforcing OS sandbox is available on this machine, so this command can only run with full filesystem and network access.".to_owned()
+                        });
+                    async move {
+                        let approved = handler
+                            .approve_command(ApprovalDecisionRequest {
+                                command: cmd,
+                                reason: "sandbox_denied".to_owned(),
+                                category: None,
+                                detail: Some(detail),
+                                cwd,
+                            })
+                            .await
+                            .unwrap_or(false);
+                        if !approved {
+                            return false;
+                        }
+                        // TS `runShellCommand`: `assertCanMutate` after the unsandboxed approval.
+                        match ctx.check_before_tool_invocation("bash") {
+                            Ok(()) => true,
+                            Err(err) => {
+                                *lock_error.lock() = Some(err);
+                                false
+                            }
+                        }
+                    }
+                }
+            })
+        };
+
+        let mut run_res = runner
+            .run_with_approval(
+                build_req(policy.clone()),
+                ctx.cancel_rx.clone(),
+                make_unsandboxed_cb(),
+            )
+            .await;
+        if let Some(err) = take_lock_error(&unsandboxed_lock_error) {
+            return Err(err);
+        }
+
+        if let Some(esc) = &run_res.escalation
+            && !ctx.yolo
+            && let Some(handler) = &ctx.approval_handler
+        {
+            let category_str = match esc.category {
+                SandboxDenialCategory::Network => "network",
+                SandboxDenialCategory::Filesystem => "filesystem",
+            };
+            let approved = handler
+                .approve_command(ApprovalDecisionRequest {
+                    command: command.clone(),
+                    reason: esc.reason.to_owned(),
+                    category: Some(category_str.to_owned()),
+                    detail: Some(esc.detail.clone()),
+                    cwd: ctx.working_directory.clone(),
+                })
+                .await
+                .map_err(ToolError::Execution)?;
+            if approved {
+                // TS rechecks `assertCanMutate("bash")` after the escalation approval wait.
+                ctx.check_before_tool_invocation("bash")?;
+                run_res = runner
+                    .run_with_approval(
+                        build_req(esc.retry_policy.clone()),
+                        ctx.cancel_rx.clone(),
+                        make_unsandboxed_cb(),
+                    )
+                    .await;
+                if let Some(err) = take_lock_error(&unsandboxed_lock_error) {
+                    return Err(err);
+                }
+            }
+        }
+
+        let (exit_code, mut stderr) = match run_res.error_code {
+            Some(SandboxErrorCode::Timeout) => (
+                124,
+                format!(
+                    "Command timed out after {timeout_secs}s. The child process was terminated."
+                ),
+            ),
+            Some(SandboxErrorCode::AbortErr) => (
+                130,
+                if run_res.stderr.is_empty() {
+                    "Command aborted.".to_owned()
+                } else {
+                    run_res.stderr.clone()
+                },
+            ),
+            _ => (run_res.exit_code, run_res.stderr.clone()),
+        };
+
+        if let Some(warn) = &run_res.sandbox_warning
+            && run_res.error_code != Some(SandboxErrorCode::SandboxRequired)
+        {
+            let notice = if run_res.sandbox == SandboxType::None {
+                format!("[sandbox] {warn}; command ran without an OS sandbox.\n")
+            } else {
+                format!("[sandbox] {warn}\n")
+            };
+            stderr = format!("{notice}{stderr}");
+        }
+
+        Ok(ToolOutput::Json(json!({
+            "stdout": run_res.stdout,
+            "stderr": stderr,
+            "exitCode": exit_code,
+        })))
+    }
+}
+
+fn take_lock_error(slot: &Mutex<Option<ToolError>>) -> Option<ToolError> {
+    slot.lock().take()
+}
+
+/// Commands the legacy TS server (`src/platform/approval.ts` `classifyCommand`) did NOT
+/// auto-approve: its shared `dangerous` + `review` tables, plus the PowerShell tables on win32.
+/// Everything else was auto-approved (the OS sandbox is the confinement boundary), so this
+/// keeps prompt parity without prompting for routine commands like `ls` or `cargo test`.
+/// Lookahead-based TS patterns are widened to lookahead-free forms (a false prompt is cheap).
+fn matches_ts_approval_patterns(command: &str, platform: &str) -> bool {
+    static SHARED_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static POWERSHELL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let shared = SHARED_RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i)",
+            // dangerous
+            r"\bgit\s+reset\s+--hard\b",
+            r"|\bgit\s+clean\b",
+            r"|\bgit\s+push\b",
+            r"|\b(?:curl|wget|iwr|invoke-webrequest|invoke-restmethod|irm)\b[\s\S]*\|\s*(?:sudo\s+)?(?:(?:ba|z|c|k|tc|da)?sh|fish|python\d?|perl|ruby|node|iex|invoke-expression|pwsh|powershell)\b",
+            r"|\b(?:iex|invoke-expression)\s*\(\s*(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b",
+            r"|\bdd\b[\s\S]*\bof=",
+            r"|\bfind\b[\s\S]*\s-delete\b",
+            r"|\bshred\b",
+            r"|\bmkfs(?:\.\w+)?\b",
+            r"|>\s*/dev/(?:sd|nvme|disk|hd|mapper)",
+            // review
+            r"|\bnpm\s+publish\b",
+            r"|\brm\b",
+            r"|\b(?:cat|less|more|tail|head)\s+(?:/etc/shadow|[^;&|]*\.ssh/)",
+            r"|\bch(?:mod|own)\s+-[^\s]*R",
+            r"|\btruncate\b",
+        ))
+        .expect("valid shared approval regex")
+    });
+    if shared.is_match(trimmed) {
+        return true;
+    }
+    if platform != "win32" {
+        return false;
+    }
+    let powershell = POWERSHELL_RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i)",
+            r"\b(?:remove-item|rm|ri|del|erase|rd|rmdir)\b",
+            r"|\bformat-volume\b",
+            r"|\bclear-disk\b",
+            r"|\bremove-partition\b",
+            r"|\b(?:stop-computer|restart-computer)\b",
+            r"|\bclear-content\b",
+            r"|\bset-executionpolicy\b",
+            r"|\b(?:get-content|gc|type|cat)\b[^\n|;&]*[\\/]\.ssh[\\/]",
+        ))
+        .expect("valid powershell approval regex")
+    });
+    powershell.is_match(trimmed)
+}

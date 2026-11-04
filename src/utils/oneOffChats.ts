@@ -10,7 +10,7 @@ const ONE_OFF_CHAT_WORKSPACE_KIND = "oneOffChat";
 const PROJECT_WORKSPACE_KIND = "project";
 
 export type WorkspaceKind = typeof PROJECT_WORKSPACE_KIND | typeof ONE_OFF_CHAT_WORKSPACE_KIND;
-export type WorkspaceKindSource = "explicit" | "path" | "default";
+type WorkspaceKindSource = "explicit" | "path" | "default";
 
 const WORKSPACE_KIND_SOURCE: unique symbol = Symbol("workspaceKindSource");
 
@@ -18,15 +18,12 @@ type WorkspaceKindSourceCarrier = {
   [WORKSPACE_KIND_SOURCE]?: WorkspaceKindSource;
 };
 
-export function getWorkspaceKindSource(record: unknown): WorkspaceKindSource | null {
+function getWorkspaceKindSource(record: unknown): WorkspaceKindSource | null {
   const source = (record as WorkspaceKindSourceCarrier | null)?.[WORKSPACE_KIND_SOURCE];
   return source === "explicit" || source === "path" || source === "default" ? source : null;
 }
 
-export function withWorkspaceKindSource<T extends object>(
-  record: T,
-  source: WorkspaceKindSource,
-): T {
+function withWorkspaceKindSource<T extends object>(record: T, source: WorkspaceKindSource): T {
   Object.defineProperty(record, WORKSPACE_KIND_SOURCE, {
     value: source,
     enumerable: false,

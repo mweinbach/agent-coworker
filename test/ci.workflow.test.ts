@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { scratchRoots } from "../src/platform/sandbox/policy";
@@ -196,6 +196,7 @@ describe("main CI workflow", () => {
     expect(harnessPackage.scripts).toEqual({
       "check-docs": "bun src/check_docs.ts",
       "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
+      "generate-provider-specs": "bun src/generate_provider_specs.ts",
       run: "bun src/run_raw_agent_loops.ts",
     });
     expect(harnessPackage.devDependencies?.typescript).toBeUndefined();
@@ -232,10 +233,10 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("- name: Windows path and desktop smoke tests");
     expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
     expect(workflow).toContain("apps/desktop/test/file-preview-modal.test.tsx");
-    expect(workflow).toContain("test/tools/tools.bash.test.ts");
-    expect(workflow).toContain("test/session-backup.test.ts");
-    expect(workflow).toContain("test/workspace-backups.test.ts");
-    expect(workflow).toContain("test/h3.pairing-store.test.ts");
+    expect(workflow).toContain("test/rust-server.http-and-rpc.integration.test.ts");
+    expect(workflow).toContain("test/rust-server.mobile-h3.integration.test.ts");
+    expect(workflow).toContain("test/rust-server.jsonrpc-turns-and-tools.integration.test.ts");
+    expect(workflow).toContain("test/rust-server.extensions-and-office.integration.test.ts");
   });
 
   test("runs native macOS sandbox and runtime coverage on Apple Silicon", () => {
@@ -243,8 +244,9 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("name: macOS ARM64 smoke");
     expect(workflow).toContain("runs-on: macos-15");
     expect(workflow).toContain("- name: macOS sandbox and runtime enforcement");
+    expect(workflow).toContain("cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm");
     expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
-    expect(workflow).toContain("test/coworkRuntime.test.ts");
+    expect(workflow).toContain("test/cli-entrypoint.test.ts");
     expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
   });
 
@@ -301,12 +303,156 @@ describe("main CI workflow", () => {
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {
     expect(workflow).toContain('RUN_REMOTE_MCP_TESTS: "1"');
     expect(workflow).toContain("OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}");
-    expect(workflow).toContain("run: bun run test -- test/mcp.remote.grep.test.ts");
+    expect(workflow).toContain("run: cargo test -p cowork-mcp --test remote_grep_smoke");
+    // The job must exercise a live remote server, not re-run the offline unit suite.
+    const remoteSmoke = readFileSync(
+      new URL("../crates/cowork-mcp/tests/remote_grep_smoke.rs", import.meta.url),
+      "utf8",
+    );
+    expect(remoteSmoke).toContain("RUN_REMOTE_MCP_TESTS");
+    expect(remoteSmoke).toContain("https://mcp.grep.app");
   });
 
   test("skips remote MCP smoke on fork pull requests", () => {
     expect(workflow).toContain(
       "if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork",
     );
+  });
+
+  test("runs Rust fmt, clippy, and workspace tests in dedicated jobs", () => {
+    const stepRuns = (job: string) => jobs[job]?.steps.map((step) => step.run ?? "") ?? [];
+    expect(stepRuns("rust-lint")).toContain("cargo fmt --all -- --check");
+    expect(stepRuns("rust-lint")).toContain(
+      "cargo clippy --workspace --all-targets -- -D warnings",
+    );
+    // Clippy already type-checks every target.
+    expect(workflow).not.toContain("cargo check --workspace --all-targets");
+    expect(stepRuns("rust-test")).toContain("cargo test --workspace --no-fail-fast");
+    // A Rust failure must not hide JavaScript lint or test results (and vice versa).
+    for (const job of ["lint", "test"]) {
+      expect(stepRuns(job).some((run) => run.startsWith("cargo "))).toBe(false);
+    }
+    expect(jobs["rust-lint"]?.steps.find((step) => step.run?.startsWith("cargo clippy"))?.if).toBe(
+      "${{ !cancelled() }}",
+    );
+  });
+
+  test("runs Linux Rust and black-box server suites under real bubblewrap enforcement", () => {
+    for (const job of ["rust-test", "test", "linux-sandbox"]) {
+      expect(
+        jobs[job]?.steps.some((step) => step.uses === "./.github/actions/setup-linux-sandbox"),
+        job,
+      ).toBe(true);
+    }
+    const sandboxAction = readFileSync(
+      new URL("../.github/actions/setup-linux-sandbox/action.yml", import.meta.url),
+      "utf8",
+    );
+    expect(sandboxAction).toContain("bubblewrap");
+    expect(sandboxAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+  });
+
+  test("release validate jobs mirror CI sandbox setup, Cargo debuginfo bounds, and disk cleanup", () => {
+    // Release workflows only run on tags, so a drift from ci.yml stays hidden
+    // until a release fails in `validate`.
+    const ciWorkflow = Bun.YAML.parse(workflow) as {
+      env: Record<string, string>;
+      jobs: Record<
+        string,
+        { env?: Record<string, string>; steps: Array<{ name?: string; run?: string }> }
+      >;
+    };
+    const ciDiskCleanup = ciWorkflow.jobs["rust-test"]?.steps.find(
+      (step) => step.name === "Free runner disk space",
+    )?.run;
+    expect(ciDiskCleanup).toBeDefined();
+    const expectedEnv = { ...ciWorkflow.env, ...ciWorkflow.jobs["rust-test"]?.env };
+    expect(expectedEnv).toMatchObject({
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only",
+      CARGO_PROFILE_DEV_PACKAGE____DEBUG: "false",
+      CARGO_INCREMENTAL: "0",
+    });
+
+    for (const relWorkflow of [
+      ".github/workflows/cowork-server-release.yml",
+      ".github/workflows/desktop-release.yml",
+    ]) {
+      const release = Bun.YAML.parse(
+        readFileSync(new URL(`../${relWorkflow}`, import.meta.url), "utf8"),
+      ) as {
+        env?: Record<string, string>;
+        jobs: Record<
+          string,
+          {
+            env?: Record<string, string>;
+            steps: Array<{ name?: string; uses?: string; run?: string }>;
+          }
+        >;
+      };
+      const validate = release.jobs.validate;
+      expect(validate, relWorkflow).toBeDefined();
+      expect({ ...release.env, ...validate?.env }, relWorkflow).toMatchObject(expectedEnv);
+      const steps = validate?.steps ?? [];
+      const indexOf = (predicate: (step: (typeof steps)[number]) => boolean) =>
+        steps.findIndex(predicate);
+      const cleanup = indexOf((step) => step.name === "Free runner disk space");
+      const sandbox = indexOf((step) => step.uses === "./.github/actions/setup-linux-sandbox");
+      const cargoTest = indexOf((step) => step.run?.startsWith("cargo test") ?? false);
+      const bunTest = indexOf((step) => step.run === "bun run test");
+      expect(steps[cleanup]?.run, relWorkflow).toBe(ciDiskCleanup);
+      expect(cleanup, relWorkflow).toBeGreaterThanOrEqual(0);
+      expect(sandbox, relWorkflow).toBeGreaterThanOrEqual(0);
+      expect(cargoTest, relWorkflow).toBeGreaterThan(Math.max(cleanup, sandbox));
+      expect(bunTest, relWorkflow).toBeGreaterThan(sandbox);
+    }
+  });
+
+  test("installs mobile dependencies before the dead-export check", () => {
+    const steps = jobs.lint.steps;
+    const installIndex = steps.findIndex(
+      (step) => step.run === "bun install --cwd apps/mobile --frozen-lockfile",
+    );
+    const knipIndex = steps.findIndex((step) => step.run === "bun run knip");
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(knipIndex).toBeGreaterThan(installIndex);
+  });
+
+  test("pins the Rust toolchain and uses a portable, pruning Cargo cache", () => {
+    const setupRustAction = readFileSync(
+      new URL("../.github/actions/setup-rust-cache/action.yml", import.meta.url),
+      "utf8",
+    );
+    const toolchain = readFileSync(new URL("../rust-toolchain.toml", import.meta.url), "utf8");
+    expect(toolchain).toMatch(/channel = "\d+\.\d+\.\d+"/);
+    expect(toolchain).toContain('"clippy"');
+    expect(toolchain).toContain('"rustfmt"');
+    // Third-party actions stay pinned to immutable commit SHAs.
+    expect(setupRustAction).toMatch(/uses: Swatinem\/rust-cache@[0-9a-f]{40}\b/);
+    expect(setupRustAction).toContain("rustup toolchain install");
+    expect(setupRustAction).toContain("crates/cowork-win-sandbox -> target");
+    // macOS runners ship bash 3.2, which has no globstar.
+    expect(setupRustAction).not.toContain("globstar");
+  });
+
+  test("references only existing test files across CI and release workflows", () => {
+    const repoRoot = path.resolve(import.meta.dir, "..");
+    const workflowFiles = [
+      ".github/workflows/ci.yml",
+      ".github/workflows/cowork-server-release.yml",
+      ".github/workflows/desktop-release.yml",
+    ];
+    for (const relWorkflow of workflowFiles) {
+      const content = readFileSync(path.join(repoRoot, relWorkflow), "utf8");
+      const matches = content.matchAll(
+        /\b((?:test|apps\/desktop\/test)\/[A-Za-z0-9._/-]+\.test\.tsx?)\b/g,
+      );
+      for (const match of matches) {
+        const testRel = match[1]!;
+        expect(
+          existsSync(path.join(repoRoot, testRel)),
+          `${relWorkflow} references missing test file ${testRel}`,
+        ).toBe(true);
+      }
+    }
   });
 });

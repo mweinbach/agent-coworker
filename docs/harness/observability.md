@@ -1,21 +1,20 @@
 # Harness Observability (Langfuse-Only)
 
-Harness observability uses Langfuse's OpenTelemetry processor/runtime and exports traces to Langfuse.
+Harness observability exports OpenTelemetry JSON trace spans directly from the Rust server (`crates/cowork-server/src/observability.rs`) to Langfuse over HTTP, with zero JavaScript OpenTelemetry or Langfuse SDKs.
 
 ## Local Server File Logs
 
 Independent of Langfuse telemetry, the server writes session `log` and `error` events to
 `~/.cowork/logs/server-YYYY-MM-DD.log` (JSONL, one file per UTC day). This is on by default in every
 build — packaged desktop builds have no terminal, so this file is the durable record of harness tool
-traces and turn failures. Entries pass through the shared diagnostics redaction
-(`src/diagnostics/redaction.ts`) before hitting disk, files are `0600`, and files older than 14 days
+traces and turn failures. Entries pass through credential and sensitive-text redaction
+(`crates/cowork-server/src/observability.rs`, mirrored on the client in `src/diagnostics/redaction.ts`) before hitting disk, files are `0600` inside a `0700` directory, and files older than 14 days
 are swept automatically. Set `COWORK_SERVER_FILE_LOGS=0` to disable. Terminal mirroring via
 `COWORK_HARNESS_TERMINAL_LOGS=1` is unchanged and independent.
 
-The server also runs best-effort startup maintenance (`src/server/runtime/startupMaintenance.ts`):
-stale `running`/`pending_init` execution states are reconciled to `errored` before any turn can
-start, model stream chunks for sessions untouched for 30 days are pruned, leaked session snapshot
-temp files are swept, and session-backup roots are pruned (closed-session retention plus aging out
+The server also runs best-effort startup maintenance (`crates/cowork-storage/src/session_db.rs` and `crates/cowork-server/src/lib.rs`):
+stale `running`/`pending_init` execution states are reconciled to `interrupted` before any turn can
+start, leaked session snapshot temp files are swept, and session-backup roots are pruned (closed-session retention plus aging out
 orphaned, corrupt, abandoned-active, and leaked staging directories).
 
 ## Config Resolution
@@ -37,7 +36,7 @@ Public/default packaged builds keep `observabilityEnabled` off unless the deskto
 ## Runtime Behavior
 
 - Telemetry is controlled by `AGENT_OBSERVABILITY_ENABLED`.
-- When enabled with valid Langfuse credentials, the runtime initializes `LangfuseSpanProcessor` and exports spans to:
+- When enabled with valid Langfuse credentials, `crates/cowork-server/src/observability.rs` activates the native Rust OTLP HTTP exporter and posts JSON trace spans asynchronously to:
   - `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces`
 - `otelEndpoint` is derived from the resolved base URL; it is not configured independently.
 - Runtime model calls are metadata-only by default: spans include model/provider/usage/timing metadata, but `recordInputs=false` and `recordOutputs=false`.

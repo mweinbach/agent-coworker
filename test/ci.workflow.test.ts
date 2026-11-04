@@ -112,7 +112,9 @@ describe("main CI workflow", () => {
     expect(setupBunAction).toMatch(/uses: oven-sh\/setup-bun@[0-9a-f]{40}\b/);
     expect(setupBunAction).not.toMatch(/uses: oven-sh\/setup-bun@v\d/);
     expect(setupBunAction).toContain('bun-version-file: ".bun-version"');
-    expect(bunVersion).toBe("canary");
+    // An exact release, not the rolling canary channel: canary builds change
+    // daily and have regressed the suite on main.
+    expect(bunVersion).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   test("caches dependencies", () => {

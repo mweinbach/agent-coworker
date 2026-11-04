@@ -2276,10 +2276,13 @@ impl ServerRuntimeState {
             tokio::pin!(persisted);
             persisted.as_mut().enable();
             // Every event emitted before this point is either still being written (wait for it)
-            // or durable; nothing can be emitted while the gate is held.
+            // or durable; nothing can be emitted while the gate is held. The check runs under the
+            // lock: an emitter counts its write and broadcasts under it, so a check made before
+            // locking could miss an event broadcast in between, absent from both the journal slice
+            // and the live stream.
+            let emitted = gate.lock();
             let settled = gate.all_persisted() || tokio::time::Instant::now() >= settle_deadline;
             if settled {
-                let emitted = gate.lock();
                 let replay_health = self.build_replay_health(thread_id, after_seq);
                 let mut replayed_request_ids = HashSet::new();
                 if after_seq > 0
@@ -2324,6 +2327,7 @@ impl ServerRuntimeState {
                 drop(replay);
                 return Ok((thread, replay_health));
             }
+            drop(emitted);
             let _ = tokio::time::timeout_at(settle_deadline, persisted).await;
         }
     }

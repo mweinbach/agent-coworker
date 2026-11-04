@@ -2380,6 +2380,10 @@ printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x0
         &zip_path,
     )
     .unwrap();
+    // The fixture executables are fakes that only serve the preview path (the soffice stub
+    // writes its PDF next to `--outdir` and ignores `--version`); skip the pre-publish
+    // executable probe for this home.
+    let _probe = cowork_env::installer::skip_runtime_executable_probe(&iso.home);
     let installed = install_v1_zip_runtime(
         &zip_path,
         &RuntimeInstallOptions {

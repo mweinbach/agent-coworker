@@ -705,10 +705,13 @@ async fn soffice_version_probe_falls_back_unsandboxed_without_a_backend() {
         "COWORK_RUNTIME_SOFFICE".to_owned(),
         soffice_bin.to_string_lossy().into_owned(),
     );
-    // An explicit-but-missing bwrap override disables the only Linux backend for this env.
+    // An existing override that fails the namespace probe disables the only Linux backend (a
+    // missing override now falls back to a trusted system bwrap).
+    let failing_bwrap = root.join("failing-bwrap");
+    write_executable(&failing_bwrap, "#!/bin/sh\nexit 1\n");
     env.insert(
         "COWORK_BWRAP_PATH".to_owned(),
-        root.join("missing/bwrap").to_string_lossy().into_owned(),
+        failing_bwrap.to_string_lossy().into_owned(),
     );
 
     let runner = SofficeRunner::new(SofficeRunnerConfig {

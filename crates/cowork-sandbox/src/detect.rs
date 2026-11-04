@@ -169,25 +169,27 @@ fn verify_host_seatbelt_binary() -> bool {
 
 /// Locates a trusted `bwrap` binary (`COWORK_BWRAP_PATH` override or fixed root-owned system dirs;
 /// never workspace-controlled `PATH`).
+///
+/// An override that is relative, missing, or not executable is ignored and the fixed system
+/// directories are still searched (TS `findBwrap` parity), so a stale override never hides a
+/// working `/usr/bin/bwrap`. An override that exists but cannot create namespaces is still
+/// returned and then rejected by `is_bwrap_usable`.
 pub fn find_bwrap(env: &HashMap<String, String>) -> Option<PathBuf> {
+    let trusted: Vec<&Path> = TRUSTED_BWRAP_DIRS.iter().map(Path::new).collect();
+    find_bwrap_in(env, &trusted)
+}
+
+fn find_bwrap_in(env: &HashMap<String, String>, trusted_dirs: &[&Path]) -> Option<PathBuf> {
     if let Some(override_raw) = env.get("COWORK_BWRAP_PATH") {
-        let trimmed = override_raw.trim();
-        if !trimmed.is_empty() {
-            let p = PathBuf::from(trimmed);
-            return if p.is_absolute() && is_executable_file(&p) {
-                Some(p)
-            } else {
-                None
-            };
+        let p = PathBuf::from(override_raw.trim());
+        if p.is_absolute() && is_executable_file(&p) {
+            return Some(p);
         }
     }
-    for dir in TRUSTED_BWRAP_DIRS {
-        let candidate = Path::new(dir).join("bwrap");
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
+    trusted_dirs
+        .iter()
+        .map(|dir| dir.join("bwrap"))
+        .find(|candidate| is_executable_file(candidate))
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -768,6 +770,64 @@ mod tests {
         // Unparseable output after a failing exit stays a failed probe that requires setup.
         let garbage = interpret_windows_probe_output(&probe_output(Some(3), false, "boom"));
         assert!(!garbage.ready && garbage.setup_required && garbage.integrity);
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unusable_bwrap_override_falls_back_to_trusted_system_dirs_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = cowork_config::canonicalize_sync(tmp.path());
+        let system_dir = root.join("usr-bin");
+        let system_bwrap = system_dir.join("bwrap");
+        write_executable(&system_bwrap);
+        // A workspace-controlled `PATH` entry with its own `bwrap` must never be picked.
+        let evil_dir = root.join("workspace/node_modules/.bin");
+        write_executable(&evil_dir.join("bwrap"));
+        let not_executable = root.join("plain/bwrap");
+        std::fs::create_dir_all(not_executable.parent().unwrap()).unwrap();
+        std::fs::write(&not_executable, b"x").unwrap();
+
+        let trusted = [root.join("empty-dir"), system_dir.clone()];
+        let trusted: Vec<&Path> = trusted.iter().map(PathBuf::as_path).collect();
+        for stale in [
+            root.join("removed/bwrap").to_string_lossy().into_owned(),
+            not_executable.to_string_lossy().into_owned(),
+            root.join("plain").to_string_lossy().into_owned(),
+            "relative/bwrap".to_owned(),
+            "   ".to_owned(),
+        ] {
+            let env = HashMap::from([
+                ("COWORK_BWRAP_PATH".to_owned(), stale.clone()),
+                ("PATH".to_owned(), evil_dir.to_string_lossy().into_owned()),
+            ]);
+            assert_eq!(
+                find_bwrap_in(&env, &trusted),
+                Some(system_bwrap.clone()),
+                "{stale:?}"
+            );
+            // No trusted system bwrap either: nothing is found, `PATH` is still not consulted.
+            assert_eq!(
+                find_bwrap_in(&env, &[root.join("empty-dir").as_path()]),
+                None
+            );
+        }
+
+        // A usable (existing, executable, absolute) override still wins over the system dirs.
+        let override_bwrap = root.join("custom/bwrap");
+        write_executable(&override_bwrap);
+        let env = HashMap::from([(
+            "COWORK_BWRAP_PATH".to_owned(),
+            format!(" {} ", override_bwrap.display()),
+        )]);
+        assert_eq!(find_bwrap_in(&env, &trusted), Some(override_bwrap));
     }
 
     #[test]

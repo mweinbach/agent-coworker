@@ -311,12 +311,29 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     reset_seatbelt_cache_for_tests();
 
-    // 2. `find_bwrap` rejects relative `COWORK_BWRAP_PATH` and ignores untrusted `PATH`;
+    // 2. `find_bwrap` ignores a relative `COWORK_BWRAP_PATH` and untrusted `PATH`, falling back
+    //    to the fixed system dirs only (the same answer as with no override at all);
     //    `is_bwrap_usable_with_options` honors 60s cooldown per binary path.
     let mut bad_env = HashMap::new();
     bad_env.insert("COWORK_BWRAP_PATH".to_owned(), "relative/bwrap".to_owned());
     bad_env.insert("PATH".to_owned(), "/tmp/evil-bin".to_owned());
-    assert_eq!(find_bwrap(&bad_env), None);
+    let found = find_bwrap(&bad_env);
+    assert_eq!(found, find_bwrap(&HashMap::new()));
+    if let Some(found) = found {
+        assert!(
+            [
+                "/usr/bin",
+                "/bin",
+                "/usr/local/bin",
+                "/usr/sbin",
+                "/sbin",
+                "/run/current-system/sw/bin"
+            ]
+            .iter()
+            .any(|dir| found == Path::new(dir).join("bwrap")),
+            "{found:?}"
+        );
+    }
 
     let bwrap_probes = AtomicUsize::new(0);
     let bwrap_ok = std::sync::atomic::AtomicBool::new(false);
@@ -888,4 +905,35 @@ fn denial_classifier_and_escalation_avoid_false_positives_and_preserve_hard_floo
         escalated_review.reason_code,
         CommandApprovalReasonCode::SandboxDeniedEscalation
     );
+}
+
+/// With the stale-override fallback, a missing `COWORK_BWRAP_PATH` no longer disables the Linux
+/// backend when a trusted system `bwrap` exists. Tests that need "no backend" point the override
+/// at an existing executable that fails the namespace probe instead.
+#[cfg(target_os = "linux")]
+#[test]
+fn stale_bwrap_override_falls_back_but_a_failing_override_disables_the_backend() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = canonicalize_sync(tmp.path());
+    let manager = cowork_sandbox::SandboxManager::new();
+
+    let stale = HashMap::from([(
+        "COWORK_BWRAP_PATH".to_owned(),
+        root.join("missing/bwrap").to_string_lossy().into_owned(),
+    )]);
+    assert_eq!(find_bwrap(&stale), find_bwrap(&HashMap::new()));
+
+    let failing = root.join("failing-bwrap");
+    std::fs::write(&failing, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = HashMap::from([(
+        "COWORK_BWRAP_PATH".to_owned(),
+        failing.to_string_lossy().into_owned(),
+    )]);
+    assert_eq!(find_bwrap(&env), Some(failing));
+    let caps = manager.detect_capabilities(Some("linux"), Some(&env));
+    assert_eq!(caps.backend, SandboxType::None, "{caps:?}");
+    assert!(!caps.enforcement.integrity, "{caps:?}");
 }

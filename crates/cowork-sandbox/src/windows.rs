@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use chrono::DateTime;
-use cowork_config::{canonicalize_sync, resolve_home_dir};
+use cowork_config::{canonicalize_sync, resolve_home_dir, windows_path_compare_key};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -153,50 +153,107 @@ fn windows_mode_and_writable_roots(
     policy: &SandboxPolicy,
     cwd: &Path,
 ) -> (&'static str, Vec<PathBuf>) {
-    let win_scratch = scratch_roots(Some("win32"));
-    match policy {
-        SandboxPolicy::DangerFullAccess { .. } => (
-            "network-only",
-            dedupe_win_roots(&with_tmp_scratch(&[cwd.to_path_buf()], &win_scratch)),
-        ),
-        SandboxPolicy::NoProjectWrite { project_roots, .. } => {
-            let scratch = tmp_scratch_roots(project_roots, &win_scratch);
-            if scratch.is_empty() {
-                ("read-only", Vec::new())
-            } else {
-                ("workspace-write", dedupe_win_roots(&scratch))
+    windows_mode_and_writable_roots_with(
+        policy,
+        cwd,
+        &scratch_roots(Some("win32")),
+        &canonical_win_root,
+    )
+}
+
+/// Resolves a writable-root candidate the way the helper will see it: on a Windows host through
+/// `canonicalize_sync` (8.3 short names such as `RUNNER~1`, junctions, trailing separators, and
+/// the `\\?\` prefix stripped) and absolutized; elsewhere unchanged, so cross-platform unit tests
+/// never touch the host filesystem for Windows-shaped paths.
+fn canonical_win_root(path: &Path) -> PathBuf {
+    if host_platform() == "win32" {
+        absolutize_host_path(&canonicalize_sync(path))
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Pure core of `windows_mode_and_writable_roots` with the temp scratch candidates and the
+/// canonicalizer injected.
+///
+/// Scratch candidates, project roots, and writable roots are all canonicalized BEFORE the
+/// ancestor filtering (TS `scratchRoots("win32").map(canonicalizeRoot)`). Filtering lexical
+/// spellings first would let an 8.3 `%TEMP%` alias survive next to a project that lives under its
+/// long-name equivalent, and the final canonicalization would then grant the project's ancestor.
+fn windows_mode_and_writable_roots_with(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+    raw_scratch: &[PathBuf],
+    canon: &dyn Fn(&Path) -> PathBuf,
+) -> (&'static str, Vec<PathBuf>) {
+    let win_scratch = dedupe_win_roots(raw_scratch, canon);
+    // Keep the lexical spelling next to the canonical one: an extra blocked alias can only
+    // filter more scratch, never grant more.
+    let blocked = |roots: &[PathBuf]| -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        for root in roots {
+            for candidate in [root.clone(), canon(root)] {
+                if !out.contains(&candidate) {
+                    out.push(candidate);
+                }
             }
         }
-        SandboxPolicy::ReadOnly { .. } => ("read-only", Vec::new()),
+        out
+    };
+    let canonical =
+        |roots: &[PathBuf]| -> Vec<PathBuf> { roots.iter().map(|r| canon(r)).collect() };
+
+    let (mode, roots) = match policy {
+        SandboxPolicy::DangerFullAccess { .. } => (
+            "network-only",
+            with_tmp_scratch(&canonical(&[cwd.to_path_buf()]), &win_scratch),
+        ),
+        SandboxPolicy::NoProjectWrite { project_roots, .. } => {
+            let scratch = tmp_scratch_roots(&blocked(project_roots), &win_scratch);
+            if scratch.is_empty() {
+                return ("read-only", Vec::new());
+            }
+            ("workspace-write", scratch)
+        }
+        SandboxPolicy::ReadOnly { .. } => return ("read-only", Vec::new()),
         SandboxPolicy::WorkspaceWrite {
             writable_roots: raw,
             ..
         } => {
             let roots = if !raw.is_empty() {
-                with_tmp_scratch(raw, &win_scratch)
+                with_tmp_scratch(&canonical(raw), &win_scratch)
             } else {
-                tmp_scratch_roots(&[cwd.to_path_buf()], &win_scratch)
+                tmp_scratch_roots(&blocked(&[cwd.to_path_buf()]), &win_scratch)
             };
-            ("workspace-write", dedupe_win_roots(&roots))
+            ("workspace-write", roots)
         }
-    }
+    };
+    (mode, dedupe_win_roots(&roots, canon))
 }
 
-fn dedupe_win_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+/// Canonicalizes every root and drops later duplicates by their Windows comparison key
+/// (case-insensitive, `\\?\`-agnostic, separator- and trailing-separator-insensitive).
+fn dedupe_win_roots(roots: &[PathBuf], canon: &dyn Fn(&Path) -> PathBuf) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for r in roots {
-        let resolved = if host_platform() == "win32" {
-            absolutize_host_path(&canonicalize_sync(r))
-        } else {
-            r.clone()
-        };
-        let key = resolved.to_string_lossy().to_ascii_lowercase();
+        let resolved = canon(r);
+        let key = win_root_key(&resolved);
         if seen.insert(key) {
             out.push(resolved);
         }
     }
     out
+}
+
+fn win_root_key(path: &Path) -> String {
+    let key = windows_path_compare_key(path).replace('/', "\\");
+    let trimmed = key.trim_end_matches('\\');
+    if trimmed.is_empty() {
+        key
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 /// Reads the 16-bit COFF `Machine` identifier from a Windows PE executable header.
@@ -664,6 +721,115 @@ mod tests {
             cmd.args
         );
         assert!(writable.len() > 1, "temp scratch missing: {:?}", cmd.args);
+    }
+
+    /// Simulates a `%TEMP%` spelled with an 8.3 short name (`RUNNER~1`) whose long-name
+    /// equivalent hosts the project. Uses a nonexistent drive so the Windows-host filesystem
+    /// canonicalization inside `tmp_scratch_roots` cannot resolve anything either.
+    const SHORT_TEMP: &str = r"Q:\Users\RUNNER~1\AppData\Local\Temp";
+    const LONG_TEMP: &str = r"Q:\Users\runneradmin\AppData\Local\Temp";
+
+    fn fake_8dot3_canon(path: &Path) -> PathBuf {
+        let raw = path.to_string_lossy().replace('/', "\\");
+        let raw = raw.trim_end_matches('\\');
+        let short = SHORT_TEMP.to_ascii_lowercase();
+        let lower = raw.to_ascii_lowercase();
+        if lower == short || lower.starts_with(&format!("{short}\\")) {
+            PathBuf::from(format!("{LONG_TEMP}{}", &raw[SHORT_TEMP.len()..]))
+        } else {
+            PathBuf::from(raw)
+        }
+    }
+
+    fn aliased_scratch() -> Vec<PathBuf> {
+        // What `scratch_roots("win32")` returns on such a host: the raw alias (with the trailing
+        // separator `GetTempPathW` reports), then its canonical long-name spelling.
+        vec![
+            PathBuf::from(format!(r"{SHORT_TEMP}\")),
+            PathBuf::from(LONG_TEMP),
+        ]
+    }
+
+    #[test]
+    fn aliased_temp_ancestor_of_a_project_is_never_granted_as_scratch() {
+        let scratch = aliased_scratch();
+        for project in [
+            format!(r"{LONG_TEMP}\proj"),
+            format!(r"{SHORT_TEMP}\proj"),
+            format!(r"{}\proj\", LONG_TEMP.to_ascii_uppercase()),
+        ] {
+            let project = PathBuf::from(project);
+            let (mode, roots) = windows_mode_and_writable_roots_with(
+                &SandboxPolicy::NoProjectWrite {
+                    project_roots: vec![project.clone()],
+                    network: false,
+                },
+                &project,
+                &scratch,
+                &fake_8dot3_canon,
+            );
+            assert_eq!((mode, roots), ("read-only", Vec::new()), "{project:?}");
+
+            // Empty-workspace fallback blocks `cwd` the same way.
+            let (mode, roots) = windows_mode_and_writable_roots_with(
+                &SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Vec::new(),
+                    writable_root_kinds: HashMap::new(),
+                    network: false,
+                },
+                &project,
+                &scratch,
+                &fake_8dot3_canon,
+            );
+            assert_eq!(mode, "workspace-write");
+            assert!(roots.is_empty(), "{project:?}: {roots:?}");
+        }
+    }
+
+    #[test]
+    fn aliased_temp_collapses_to_one_canonical_scratch_root() {
+        let scratch = aliased_scratch();
+        let outside = PathBuf::from(r"Q:\work\proj");
+        let (mode, roots) = windows_mode_and_writable_roots_with(
+            &SandboxPolicy::NoProjectWrite {
+                project_roots: vec![outside.clone()],
+                network: false,
+            },
+            &outside,
+            &scratch,
+            &fake_8dot3_canon,
+        );
+        assert_eq!(mode, "workspace-write");
+        assert_eq!(roots, [PathBuf::from(LONG_TEMP)]);
+
+        // Writable roots spelled through the alias are granted in canonical form, once, and the
+        // (aliased) temp ancestor is not added on top as scratch that would widen them.
+        let (mode, roots) = windows_mode_and_writable_roots_with(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![
+                    PathBuf::from(format!(r"{SHORT_TEMP}\proj")),
+                    PathBuf::from(format!(r"{LONG_TEMP}\proj\")),
+                ],
+                writable_root_kinds: HashMap::new(),
+                network: false,
+            },
+            &outside,
+            &scratch,
+            &fake_8dot3_canon,
+        );
+        assert_eq!(mode, "workspace-write");
+        assert_eq!(roots, [PathBuf::from(format!(r"{LONG_TEMP}\proj"))]);
+
+        let (mode, roots) = windows_mode_and_writable_roots_with(
+            &SandboxPolicy::DangerFullAccess {
+                network: Some(false),
+            },
+            &outside,
+            &scratch,
+            &fake_8dot3_canon,
+        );
+        assert_eq!(mode, "network-only");
+        assert_eq!(roots, [outside, PathBuf::from(LONG_TEMP)]);
     }
 
     #[test]

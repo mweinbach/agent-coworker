@@ -336,11 +336,16 @@ async fn task_lock_taken_during_sandbox_escalation_approval_blocks_the_retry() {
 #[tokio::test]
 async fn task_lock_taken_during_unsandboxed_fallback_approval_blocks_the_command() {
     let (ws, mut ctx) = setup();
-    // No usable backend: the runner asks before falling back to an unsandboxed run.
-    let missing = ws.join("no-such-bwrap");
+    // No usable backend: the runner asks before falling back to an unsandboxed run. An existing
+    // override that fails the namespace probe disables bwrap (a missing override would fall back
+    // to a trusted system bwrap).
+    use std::os::unix::fs::PermissionsExt;
+    let failing = ws.join("failing-bwrap");
+    fs::write(&failing, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&failing, fs::Permissions::from_mode(0o755)).unwrap();
     ctx.env.insert(
         "COWORK_BWRAP_PATH".to_owned(),
-        missing.to_string_lossy().into_owned(),
+        failing.to_string_lossy().into_owned(),
     );
     let approver = install_task_lock(&mut ctx, |req| {
         req.reason == "sandbox_denied" && req.category.is_none()

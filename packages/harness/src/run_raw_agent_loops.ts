@@ -9,7 +9,7 @@ import readline from "node:readline";
 import { parseArgs as parseNodeArgs } from "node:util";
 
 import { binaryName, resolveSpawn, which } from "../../../src/platform/exec";
-import { home } from "../../../src/platform/paths";
+import { coworkHome, home } from "../../../src/platform/paths";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -27,6 +27,7 @@ import {
   selectRawLoopRuns,
 } from "./rawLoopScenarios";
 import {
+  assertRawLoopToolOrder,
   assertRawLoopToolRequirements,
   buildRawLoopBudgetSummary,
   type TracedStep,
@@ -38,9 +39,17 @@ import {
   safeStamp,
   serializeRawLoopTrace,
 } from "./rawLoopUtils";
-import { validateWithOptionalRepair } from "./rawLoopValidation";
+import {
+  type FinalContractValidationResult,
+  validateWithOptionalRepair,
+} from "./rawLoopValidation";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+
+/** Old in-process runner defaults, kept so a scenario that omits them behaves the same. */
+const DEFAULT_MAX_ATTEMPTS = 5;
+const SERVER_STARTUP_TIMEOUT_MS = 30_000;
+const SERVER_STOP_GRACE_MS = 5_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -110,6 +119,54 @@ export function resolveRawLoopHarnessConfig(
   return {
     reportOnly: baseHarness?.reportOnly ?? true,
     strictMode: cliArgs.strictModeOverride ?? baseHarness?.strictMode ?? false,
+  };
+}
+
+/** `as_bool_like_str` parity (cowork-config `merge.rs`). */
+function parseBoolLike(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+function readJsonObjectSync(filePath: string): JsonRecord {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(filePath, "utf-8")) as unknown;
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolves the configured `harness` settings the way the server config loader does
+ * (`AGENT_HARNESS_*` env, then the project > user > built-in `harness` object), reading the
+ * developer's real config rather than the isolated per-run server home.
+ */
+export function loadRawLoopHarnessSettings(opts: {
+  env?: NodeJS.ProcessEnv;
+  repoRoot?: string;
+  userCoworkHome?: string;
+}): NonNullable<AgentConfig["harness"]> {
+  const env = opts.env ?? process.env;
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  const userCoworkHome = opts.userCoworkHome ?? coworkHome(env);
+  const tiers = [
+    readJsonObjectSync(path.join(repoRoot, ".cowork", "config.json")),
+    readJsonObjectSync(path.join(userCoworkHome, "config", "config.json")),
+    readJsonObjectSync(path.join(repoRoot, "config", "defaults.json")),
+  ].map((tier) => (isPlainObject(tier.harness) ? tier.harness : {}));
+  const fromConfig = (key: string): boolean | undefined => {
+    // Deep-merge semantics: the highest tier that sets the key decides, even if unparseable.
+    const tier = tiers.find((candidate) => Object.hasOwn(candidate, key));
+    return tier === undefined ? undefined : parseBoolLike(tier[key]);
+  };
+  return {
+    reportOnly: parseBoolLike(env.AGENT_HARNESS_REPORT_ONLY) ?? fromConfig("reportOnly") ?? true,
+    strictMode: parseBoolLike(env.AGENT_HARNESS_STRICT_MODE) ?? fromConfig("strictMode") ?? false,
   };
 }
 
@@ -242,12 +299,29 @@ export type ServerTurnTraceResult = {
   totalSteps: number;
 };
 
+/** A failed server turn, carrying everything the turn recorded before it failed. */
+export class RawLoopTurnError extends Error {
+  readonly partial: ServerTurnTraceResult;
+
+  constructor(message: string, partial: ServerTurnTraceResult, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "RawLoopTurnError";
+    this.partial = partial;
+  }
+}
+
 /**
  * Environment for the spawned `cowork-server`. Tasks and workflows resolve only from
  * `COWORK_ENABLE_TASKS` / `COWORK_ENABLE_WORKFLOWS` (session `featureFlags` never reach the
- * turn), so they are pinned off here instead of inheriting the developer's shell.
+ * turn), so they are pinned off here instead of inheriting the developer's shell. User MCP
+ * servers and advanced memory are pinned off through their env levers, which outrank the user
+ * and project config. `homeDir` points the server at an isolated per-run HOME (the server
+ * appends `.cowork`), so session-config writes never reach the developer's user config.
  */
-export function buildRawLoopServerEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildRawLoopServerEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  opts: { homeDir?: string } = {},
+): NodeJS.ProcessEnv {
   return {
     ...baseEnv,
     COWORK_REPO_ROOT: baseEnv.COWORK_REPO_ROOT?.trim() || REPO_ROOT,
@@ -255,10 +329,149 @@ export function buildRawLoopServerEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.Proces
     COWORK_DISABLE_BUILTIN_SKILLS: baseEnv.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
     COWORK_ENABLE_TASKS: "0",
     COWORK_ENABLE_WORKFLOWS: "0",
+    AGENT_ENABLE_MCP: "0",
+    AGENT_ADVANCED_MEMORY: "0",
+    ...(opts.homeDir ? { COWORK_HOME_OVERRIDE: opts.homeDir } : {}),
   };
 }
 
-export async function runRawLoopTurnViaServer(opts: {
+/**
+ * `~/.cowork` entries the isolated server home links back to the developer's home: provider
+ * credentials (`auth/`, incl. the Codex CLI home whose OAuth refresh tokens rotate, so a copy
+ * would strand the real one), user skills, and the managed runtimes/binaries/caches. The user
+ * `config/`, `sessions.db`, memories, chats and logs stay per-run.
+ */
+export const RAW_LOOP_SHARED_COWORK_HOME_ENTRIES = [
+  "auth",
+  "skills",
+  "codex-app-server",
+  "runtime",
+  "bin",
+  "cache",
+] as const;
+
+/** Creates (idempotently) the isolated per-run HOME the raw-loop server runs against. */
+export async function prepareRawLoopServerHome(opts: {
+  homeDir: string;
+  sourceCoworkHome?: string;
+}): Promise<{ homeDir: string; coworkDir: string; linked: string[] }> {
+  const sourceCoworkHome = path.resolve(opts.sourceCoworkHome ?? coworkHome());
+  const coworkDir = path.join(opts.homeDir, ".cowork");
+  await fs.mkdir(coworkDir, { recursive: true });
+  const linked: string[] = [];
+  for (const name of RAW_LOOP_SHARED_COWORK_HOME_ENTRIES) {
+    const source = path.join(sourceCoworkHome, name);
+    const target = path.join(coworkDir, name);
+    const sourceStat = await fs.stat(source).catch(() => null);
+    if (!sourceStat?.isDirectory()) continue;
+    if ((await fs.lstat(target).catch(() => null)) === null) {
+      // `junction` lets Windows link directories without symlink privileges; POSIX ignores it.
+      await fs.symlink(source, target, "junction");
+    }
+    linked.push(name);
+  }
+  return { homeDir: opts.homeDir, coworkDir, linked };
+}
+
+/**
+ * Removes the links {@link prepareRawLoopServerHome} created, so the kept run output never
+ * points back into the developer's credentials. Real directories are left alone.
+ */
+export async function releaseRawLoopServerHome(homeDir: string): Promise<void> {
+  const coworkDir = path.join(homeDir, ".cowork");
+  for (const name of RAW_LOOP_SHARED_COWORK_HOME_ENTRIES) {
+    const target = path.join(coworkDir, name);
+    const stat = await fs.lstat(target).catch(() => null);
+    if (stat?.isSymbolicLink()) await fs.unlink(target);
+  }
+}
+
+export type RawLoopServerHandle = {
+  wsUrl: string;
+  stop: () => Promise<void>;
+};
+
+/** Spawns a `cowork-server` for one raw-loop attempt and waits until it is listening. */
+export async function startRawLoopServer(opts: {
+  serverBin: string;
+  runDir: string;
+  homeDir: string;
+  baseEnv?: NodeJS.ProcessEnv;
+  startupTimeoutMs?: number;
+}): Promise<RawLoopServerHandle> {
+  const serverProc = spawn(
+    opts.serverBin,
+    ["--dir", opts.runDir, "--host", "127.0.0.1", "--port", "0", "--yolo", "--json"],
+    {
+      cwd: opts.runDir,
+      env: buildRawLoopServerEnv(opts.baseEnv ?? process.env, { homeDir: opts.homeDir }),
+      stdio: ["pipe", "pipe", "inherit"],
+    },
+  );
+  let exited = false;
+  const serverExitPromise = new Promise<void>((resolve) => {
+    serverProc.once("exit", () => {
+      exited = true;
+      resolve();
+    });
+  });
+  // Keep draining stdout for the server's lifetime so a full pipe never blocks it.
+  const rl = readline.createInterface({ input: serverProc.stdout });
+
+  const stop = async () => {
+    if (!exited) {
+      serverProc.stdin.end();
+      await Promise.race([
+        serverExitPromise,
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            if (!exited) serverProc.kill("SIGTERM");
+            resolve();
+          }, SERVER_STOP_GRACE_MS),
+        ),
+      ]);
+    }
+    // Closed only after shutdown: a paused stdout could block the exiting server.
+    rl.close();
+  };
+
+  try {
+    const wsUrl = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Timed out waiting for cowork-server to start listening")),
+        opts.startupTimeoutMs ?? SERVER_STARTUP_TIMEOUT_MS,
+      );
+      rl.on("line", (line) => {
+        if (!line.trim().startsWith("{")) return;
+        let evt: { type?: string; url?: string; wsUrl?: string };
+        try {
+          evt = JSON.parse(line) as typeof evt;
+        } catch {
+          return;
+        }
+        const resolvedUrl = evt.wsUrl ?? evt.url;
+        if (evt.type === "server_listening" && resolvedUrl) {
+          clearTimeout(timer);
+          resolve(resolvedUrl);
+        }
+      });
+      serverProc.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      serverProc.once("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`cowork-server exited early (${String(code)})`));
+      });
+    });
+    return { wsUrl, stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
+export type RawLoopTurnOptions = {
   wsUrl: string;
   cwd: string;
   provider: ProviderName;
@@ -269,10 +482,15 @@ export async function runRawLoopTurnViaServer(opts: {
   providerOptions?: Record<string, unknown>;
   /** Session `maxSteps` override; the server falls back to its default when omitted. */
   maxSteps?: number;
-}): Promise<ServerTurnTraceResult> {
+};
+
+export async function runRawLoopTurnViaServer(
+  opts: RawLoopTurnOptions,
+): Promise<ServerTurnTraceResult> {
+  // `advancedMemory` is pinned off through the server env (`AGENT_ADVANCED_MEMORY`); sending it
+  // here would persist it into the user config tier.
   const sessionConfig = {
     enableMemory: opts.provider !== "lmstudio",
-    advancedMemory: false,
     ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
   };
   const ws = new WebSocket(opts.wsUrl, "cowork.jsonrpc.v1");
@@ -283,6 +501,7 @@ export async function runRawLoopTurnViaServer(opts: {
   let todos: TodoItem[] = [];
   let finalText = "";
   let totalSteps = 0;
+  let threadId = opts.threadId;
 
   let nextId = 0;
   const pending = new Map<
@@ -365,7 +584,10 @@ export async function runRawLoopTurnViaServer(opts: {
       const output = msg.params.item.result ?? null;
       if (itemId) completedToolIds.add(itemId);
       steps.push({ scope: "tool-call", step: { type: "tool-call", toolName, input } });
-      steps.push({ scope: "tool-result", step: { type: "tool-result", toolName, output } });
+      steps.push({
+        scope: "tool-result",
+        step: { type: "tool-result", toolName, output, ...(state ? { state } : {}) },
+      });
       toolLogLines.push(`tool> ${toolName} ${JSON.stringify(input)}`);
       if (!started) totalSteps += 1;
     } else if (msg.method === "item/completed" && msg.params?.item?.type === "agentMessage") {
@@ -391,14 +613,31 @@ export async function runRawLoopTurnViaServer(opts: {
     }
   };
 
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = () => reject(new Error("Failed to connect to cowork-server WebSocket"));
-    ws.onclose = (event) =>
-      reject(
-        new Error(`cowork-server WebSocket closed before opening (code ${String(event.code)})`),
-      );
+  const snapshot = (): ServerTurnTraceResult => ({
+    threadId: threadId ?? "",
+    text: finalText,
+    steps,
+    toolLogLines,
+    todos,
+    totalSteps,
   });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("Failed to connect to cowork-server WebSocket"));
+      ws.onclose = (event) =>
+        reject(
+          new Error(`cowork-server WebSocket closed before opening (code ${String(event.code)})`),
+        );
+    });
+  } catch (error) {
+    throw new RawLoopTurnError(
+      error instanceof Error ? error.message : String(error),
+      snapshot(),
+      error,
+    );
+  }
 
   // An unexpected server exit mid-turn must fail the run instead of hanging it.
   ws.onclose = (event) => {
@@ -437,7 +676,6 @@ export async function runRawLoopTurnViaServer(opts: {
       model: opts.model,
       config: sessionConfig,
     });
-    let threadId = opts.threadId;
     if (threadId) {
       await rpc("thread/resume", { threadId });
     } else {
@@ -469,11 +707,507 @@ export async function runRawLoopTurnViaServer(opts: {
       input: [{ type: "text", text: opts.prompt }],
     });
     await turnDonePromise;
-    return { threadId, text: finalText, steps, toolLogLines, todos, totalSteps };
+    return snapshot();
+  } catch (error) {
+    throw new RawLoopTurnError(
+      error instanceof Error ? error.message : String(error),
+      snapshot(),
+      error,
+    );
   } finally {
     closingByClient = true;
     ws.close();
   }
+}
+
+// --- Retry backoff (ported from the in-process runner) ------------------------------------
+
+function positiveRetryNumber(value: unknown): number | null {
+  if (typeof value !== "number" || Number.isFinite(value) === false || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
+const RETRY_DELAY_PATTERNS: RegExp[] = [
+  /retry in\s+([0-9.]+)s/i,
+  /retryDelay"\s*:\s*"(\d+)s"/i,
+  /retry-after:\s*(\d+)/i,
+];
+
+function extractRetryDelayMs(err: unknown): number | null {
+  const errorRecord = isPlainObject(err) ? err : {};
+  const directMs = positiveRetryNumber(
+    errorRecord.retryAfterMs ?? errorRecord.retryDelayMs ?? errorRecord.retry_ms,
+  );
+  if (directMs !== null) return Math.ceil(directMs);
+  const directSeconds = positiveRetryNumber(
+    errorRecord.retryAfterSeconds ?? errorRecord.retryDelaySeconds ?? errorRecord.retry_after,
+  );
+  if (directSeconds !== null) return Math.ceil(directSeconds * 1000);
+  const raw = String(err ?? "");
+  for (const pattern of RETRY_DELAY_PATTERNS) {
+    const match = raw.match(pattern);
+    const seconds = positiveRetryNumber(match === null ? null : Number(match[1]));
+    if (seconds !== null) return Math.ceil(seconds * 1000);
+  }
+  return null;
+}
+
+export function computeRawLoopRetryDelayMs(
+  err: unknown,
+  attempt: number,
+  random: () => number = Math.random,
+): number {
+  const extracted = extractRetryDelayMs(err);
+  const backoffMs = Math.min(180_000, 12_000 * 2 ** Math.max(0, attempt - 1));
+  const target = extracted ? Math.max(extracted, backoffMs) : backoffMs;
+  return target + Math.floor(random() * 1500);
+}
+
+// --- Attempt / run execution ---------------------------------------------------------------
+
+type RawLoopBudgets = ReturnType<typeof buildRawLoopBudgetSummary>;
+
+export type RawLoopAttemptMeta = {
+  attempt: number;
+  startedAt: string;
+  finishedAt: string;
+  ok: boolean;
+  error?: string;
+  retryDelayMs?: number;
+};
+
+export type RawLoopAttemptOutcome = {
+  ok: boolean;
+  error?: string;
+  threadId?: string;
+  text: string;
+  steps: TracedStep[];
+  toolLogLines: string[];
+  todos: TodoItem[];
+  validation: FinalContractValidationResult | null;
+  repairAttempted: boolean;
+  repairSucceeded: boolean;
+  degraded: boolean;
+  budgets: RawLoopBudgets;
+};
+
+export type RawLoopRunDeps = {
+  /** Starts a fresh server for one attempt. */
+  startServer: (ctx: {
+    run: RunSpec;
+    runDir: string;
+    attempt: number;
+  }) => Promise<RawLoopServerHandle>;
+  runTurn?: (opts: RawLoopTurnOptions) => Promise<ServerTurnTraceResult>;
+  sleep?: (ms: number) => Promise<void>;
+  retryDelayMs?: (error: unknown, attempt: number) => number;
+  /** Progress lines; defaults to stdout. */
+  log?: (line: string) => void;
+};
+
+export const RAW_LOOP_REPAIR_MAX_STEPS = 1;
+
+export function buildRawLoopRepairPrompt(runDir: string): string {
+  return [
+    "Your previous final response failed contract validation.",
+    `Every file path field must be a complete, unabbreviated absolute path inside "${runDir}" (never shorten paths with "...").`,
+    'Do NOT call any tools. Reply with ONLY the raw JSON object matching the requested final response contract, including "end": "<<END_RUN>>".',
+  ].join("\n");
+}
+
+function rawLoopProviderOptions(run: RunSpec): Record<string, unknown> | undefined {
+  if (run.provider === "google") return { google: { nativeWebSearch: false } };
+  if (run.provider === "lmstudio") {
+    return {
+      deferredToolSearch: true,
+      lmstudio: {
+        baseUrl:
+          process.env.LM_STUDIO_BASE_URL ??
+          process.env.COWORK_LMSTUDIO_BASE_URL ??
+          "http://127.0.0.1:1234",
+        temperature: 0,
+      },
+    };
+  }
+  return undefined;
+}
+
+function tracedToolNames(steps: TracedStep[]): string[] {
+  return steps.flatMap((entry) => {
+    const step = entry.step;
+    return isPlainObject(step) && step.type === "tool-call" && typeof step.toolName === "string"
+      ? [step.toolName]
+      : [];
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Runs one attempt end to end. Never throws: failures come back as `ok: false`. */
+export async function executeRawLoopAttempt(args: {
+  run: RunSpec;
+  runDir: string;
+  prompt: string;
+  harnessContext: HarnessContextState;
+  strictMode: boolean;
+  attempt: number;
+  deps: RawLoopRunDeps;
+}): Promise<RawLoopAttemptOutcome> {
+  const { run, runDir, prompt, harnessContext, strictMode, attempt, deps } = args;
+  const runTurn = deps.runTurn ?? runRawLoopTurnViaServer;
+  const providerOptions = rawLoopProviderOptions(run);
+  const trace: Pick<
+    RawLoopAttemptOutcome,
+    "threadId" | "text" | "steps" | "toolLogLines" | "todos"
+  > & { totalSteps: number } = {
+    text: "",
+    steps: [],
+    toolLogLines: [],
+    todos: [],
+    totalSteps: 0,
+  };
+  const absorb = (turn: ServerTurnTraceResult, scopePrefix = "") => {
+    if (turn.threadId) trace.threadId = turn.threadId;
+    trace.steps.push(
+      ...turn.steps.map((entry) =>
+        scopePrefix ? { ...entry, scope: `${scopePrefix}${entry.scope}` } : entry,
+      ),
+    );
+    trace.toolLogLines.push(...turn.toolLogLines);
+    if (turn.todos.length > 0) trace.todos = turn.todos;
+    trace.totalSteps += turn.totalSteps;
+  };
+
+  let validation: FinalContractValidationResult | null = null;
+  let repairAttempted = false;
+  let repairSucceeded = false;
+  let degraded = false;
+  const finish = (result: { ok: boolean; error?: string }): RawLoopAttemptOutcome => ({
+    ok: result.ok,
+    ...(result.error === undefined ? {} : { error: result.error }),
+    ...(trace.threadId ? { threadId: trace.threadId } : {}),
+    text: trace.text,
+    steps: trace.steps,
+    toolLogLines: trace.toolLogLines,
+    todos: trace.todos,
+    validation,
+    repairAttempted,
+    repairSucceeded,
+    degraded,
+    budgets: buildRawLoopBudgetSummary(
+      trace.toolLogLines,
+      trace.totalSteps,
+      repairAttempted ? 1 : 0,
+    ),
+  });
+
+  let server: RawLoopServerHandle | null = null;
+  try {
+    server = await deps.startServer({ run, runDir, attempt });
+    const wsUrl = server.wsUrl;
+    let turn: ServerTurnTraceResult;
+    try {
+      turn = await runTurn({
+        wsUrl,
+        cwd: runDir,
+        provider: run.provider,
+        model: run.model,
+        prompt,
+        harnessContext,
+        ...(providerOptions ? { providerOptions } : {}),
+        ...(run.maxSteps !== undefined ? { maxSteps: run.maxSteps } : {}),
+      });
+    } catch (error) {
+      if (error instanceof RawLoopTurnError) {
+        absorb(error.partial);
+        trace.text = error.partial.text;
+      }
+      throw error;
+    }
+    absorb(turn);
+    trace.text = turn.text;
+
+    assertRawLoopToolRequirements(run, trace.steps, trace.toolLogLines);
+    assertRawLoopToolOrder(run, trace.steps);
+
+    const contractOut = await validateWithOptionalRepair({
+      finalText: turn.text,
+      runDir,
+      trace,
+      contract: run.finalContract,
+      strictMode,
+      repairFinalOutput: async () => {
+        // The old runner repaired with `maxSteps: 1` and an empty tool set. The server bounds
+        // the turn to one model step; it has no per-turn tool filter, so a repair that still
+        // calls a tool is rejected below instead.
+        let repaired: ServerTurnTraceResult;
+        try {
+          repaired = await runTurn({
+            wsUrl,
+            cwd: runDir,
+            provider: run.provider,
+            model: run.model,
+            threadId: turn.threadId,
+            prompt: buildRawLoopRepairPrompt(runDir),
+            ...(providerOptions ? { providerOptions } : {}),
+            maxSteps: RAW_LOOP_REPAIR_MAX_STEPS,
+          });
+        } catch (error) {
+          if (error instanceof RawLoopTurnError) absorb(error.partial, "repair-");
+          throw error;
+        }
+        absorb(repaired, "repair-");
+        const repairTools = tracedToolNames(repaired.steps);
+        if (repairTools.length > 0) {
+          throw new Error(
+            `Repair pass called tool(s) ${repairTools.join(", ")}; it must answer without tools.`,
+          );
+        }
+        return { finalText: repaired.text.trim() || turn.text };
+      },
+    });
+    validation = contractOut.validationResult;
+    repairAttempted = contractOut.repairAttempted;
+    repairSucceeded = contractOut.repairSucceeded;
+    degraded = contractOut.degraded;
+    trace.text = contractOut.finalText;
+
+    if (!validation.ok) {
+      return finish({
+        ok: false,
+        error: `Final contract validation failed: ${validation.issues
+          .map((entry) => entry.message)
+          .join("; ")}`,
+      });
+    }
+    return finish({ ok: true });
+  } catch (error) {
+    return finish({ ok: false, error: errorMessage(error) });
+  } finally {
+    await server?.stop().catch((error: unknown) => {
+      console.warn(`[raw-loop] failed to stop cowork-server: ${errorMessage(error)}`);
+    });
+  }
+}
+
+type ArtifactEntry = { path: string; bytes: number; sha256: string; mtimeMs: number };
+
+async function listFilesRecursive(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...(await listFilesRecursive(entryPath)));
+      continue;
+    }
+    if (entry.isFile()) out.push(entryPath);
+  }
+  return out;
+}
+
+async function collectArtifacts(runDir: string): Promise<ArtifactEntry[]> {
+  const entries: ArtifactEntry[] = [];
+  for (const absPath of (await listFilesRecursive(runDir)).sort()) {
+    const stat = await fs.stat(absPath);
+    if (!stat.isFile()) continue;
+    const buffer = await fs.readFile(absPath);
+    entries.push({
+      path: path.relative(runDir, absPath),
+      bytes: stat.size,
+      sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+      mtimeMs: stat.mtimeMs,
+    });
+  }
+  return entries;
+}
+
+function attemptTraceFileName(attempt: number): string {
+  return `trace_attempt-${String(attempt).padStart(2, "0")}.json`;
+}
+
+function buildAttemptTrace(base: JsonRecord, outcome: RawLoopAttemptOutcome, finishedAt: string) {
+  return {
+    ...base,
+    finishedAt,
+    ok: outcome.ok,
+    ...(outcome.error === undefined ? {} : { error: outcome.error }),
+    ...(outcome.threadId ? { threadId: outcome.threadId } : {}),
+    steps: outcome.steps,
+    toolLogLines: outcome.toolLogLines,
+    todos: outcome.todos,
+    validation: outcome.validation,
+    repairAttempted: outcome.repairAttempted,
+    repairSucceeded: outcome.repairSucceeded,
+    degraded: outcome.degraded,
+    budgets: outcome.budgets,
+    result: {
+      text: outcome.text,
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+    },
+  };
+}
+
+/**
+ * Runs every attempt of one scenario run, writing per-attempt traces plus the final run
+ * artifacts. Never throws for an attempt failure, so the caller continues with other runs.
+ */
+export async function executeRawLoopRun(
+  run: RunSpec,
+  opts: {
+    rootOutDir: string;
+    scenario: Scenario;
+    strictMode: boolean;
+    deps: RawLoopRunDeps;
+    repoDir?: string;
+  },
+): Promise<{ ok: boolean; runDir: string; attempts: RawLoopAttemptMeta[] }> {
+  const { deps, strictMode } = opts;
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const retryDelayMs = deps.retryDelayMs ?? computeRawLoopRetryDelayMs;
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const rawRunDir = path.join(opts.rootOutDir, safePathComponent(run.id));
+  await fs.mkdir(rawRunDir, { recursive: true });
+  const runDir = fsSync.realpathSync(rawRunDir);
+  const promptContext: PromptContext = {
+    runId: run.id,
+    runDir,
+    repoDir: opts.repoDir ?? REPO_ROOT,
+  };
+  const startedAt = nowIso();
+  const harnessContext = buildRawLoopHarnessContext(run, opts.scenario, promptContext, startedAt);
+  const prompt = run.prompt(promptContext);
+  const maxAttempts = Math.max(1, run.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+  await fs.writeFile(
+    path.join(runDir, "harness_context.json"),
+    safeJsonStringify(harnessContext),
+    "utf-8",
+  );
+  await fs.writeFile(path.join(runDir, "prompt.txt"), prompt, "utf-8");
+
+  const traceBase = {
+    runId: run.id,
+    provider: run.provider,
+    model: run.model,
+    scenario: opts.scenario,
+    startedAt,
+    strictMode,
+    userPrompt: prompt,
+    harnessContext,
+  };
+  const attempts: RawLoopAttemptMeta[] = [];
+  let last: RawLoopAttemptOutcome | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStartedAt = nowIso();
+    const outcome = await executeRawLoopAttempt({
+      run,
+      runDir,
+      prompt,
+      harnessContext,
+      strictMode,
+      attempt,
+      deps,
+    });
+    const finishedAt = nowIso();
+    const delay =
+      outcome.ok || attempt >= maxAttempts
+        ? undefined
+        : retryDelayMs(outcome.error ?? "Raw-loop attempt failed", attempt);
+    attempts.push({
+      attempt,
+      startedAt: attemptStartedAt,
+      finishedAt,
+      ok: outcome.ok,
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+      ...(delay === undefined ? {} : { retryDelayMs: delay }),
+    });
+    last = outcome;
+    await fs.writeFile(
+      path.join(runDir, attemptTraceFileName(attempt)),
+      serializeRawLoopTrace(
+        buildAttemptTrace(
+          { ...traceBase, attempt, startedAt: attemptStartedAt },
+          outcome,
+          finishedAt,
+        ),
+      ),
+      "utf-8",
+    );
+    log(
+      safeJsonStringify({
+        runId: run.id,
+        attempt,
+        ok: outcome.ok,
+        ...(outcome.error === undefined ? {} : { error: outcome.error }),
+      }),
+    );
+    if (outcome.ok) break;
+    if (delay !== undefined) await sleep(delay);
+  }
+
+  if (last === null) throw new Error(`Run ${run.id} executed no attempts`);
+  const final = last;
+  const finishedAt = nowIso();
+  const runError = final.ok
+    ? undefined
+    : `Run ${run.id} failed after ${String(attempts.length)} attempt(s): ${final.error ?? "unknown error"}`;
+  await fs.writeFile(
+    path.join(runDir, "trace.json"),
+    serializeRawLoopTrace(buildAttemptTrace(traceBase, final, finishedAt)),
+    "utf-8",
+  );
+  await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
+  await fs.writeFile(
+    path.join(runDir, "tool-log.txt"),
+    `${final.toolLogLines.join("\n")}\n`,
+    "utf-8",
+  );
+  await fs.writeFile(path.join(runDir, "final.txt"), final.text, "utf-8");
+  await fs.writeFile(
+    path.join(runDir, "run_meta.json"),
+    safeJsonStringify({
+      runId: run.id,
+      provider: run.provider,
+      model: run.model,
+      maxSteps: run.maxSteps ?? null,
+      maxAttempts,
+      attempts: attempts.length,
+      runDir,
+      startedAt,
+      finishedAt,
+      harnessContext,
+      strictMode,
+      ok: final.ok,
+      repairAttempted: final.repairAttempted,
+      repairSucceeded: final.repairSucceeded,
+      degraded: final.degraded,
+      validation: final.validation ?? {
+        ok: false,
+        schemaOk: false,
+        artifactOk: false,
+        semanticOk: false,
+        issues: [
+          { code: "run_failed", message: runError ?? "Run did not produce a final contract" },
+        ],
+        warnings: [],
+      },
+      budgets: final.budgets,
+      ...(runError ? { error: runError } : {}),
+    }),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(runDir, "artifacts_index.json"),
+    safeJsonStringify(await collectArtifacts(runDir)),
+    "utf-8",
+  );
+  log(safeJsonStringify({ runId: run.id, ok: final.ok, budgets: final.budgets }));
+  return { ok: final.ok, runDir, attempts };
 }
 
 async function main() {
@@ -483,6 +1217,9 @@ async function main() {
     onlyRunIds: cliArgs.onlyRunIds,
     onlyModels: cliArgs.onlyModels,
   });
+  const harness = resolveRawLoopHarnessConfig(loadRawLoopHarnessSettings({}), cliArgs);
+  const strictMode = harness.strictMode ?? false;
+  const developerCoworkHome = coworkHome();
 
   const sessionStamp = safeStamp();
   const rootPrefix = SCENARIO_DEFINITIONS[cliArgs.scenario].runRootPrefix;
@@ -497,176 +1234,54 @@ async function main() {
     safeJsonStringify({
       scenario: cliArgs.scenario,
       startedAt: nowIso(),
+      harness: {
+        strictModeOverride: cliArgs.strictModeOverride,
+        strictMode,
+        onlyRunIds: cliArgs.onlyRunIds,
+        onlyModels: cliArgs.onlyModels,
+      },
       runs: selectedRuns.map((run) => ({ id: run.id, provider: run.provider, model: run.model })),
     }),
     "utf-8",
   );
 
   const serverBin = resolveCoworkServerBinary();
+  // Each run's server gets its own HOME outside the run's working directory, so session
+  // config writes stay out of the developer's `~/.cowork/config` and out of the workspace.
+  const serverHomesDir = path.join(rootOutDir, ".server-homes");
+  const serverHomeFor = (run: RunSpec) => path.join(serverHomesDir, safePathComponent(run.id));
+  const deps: RawLoopRunDeps = {
+    startServer: async ({ run, runDir }) => {
+      const { homeDir } = await prepareRawLoopServerHome({
+        homeDir: serverHomeFor(run),
+        sourceCoworkHome: developerCoworkHome,
+      });
+      return await startRawLoopServer({ serverBin, runDir, homeDir });
+    },
+  };
+
   let anyRunFailed = false;
-
   for (const run of selectedRuns) {
-    const rawRunDir = path.join(rootOutDir, safePathComponent(run.id));
-    await fs.mkdir(rawRunDir, { recursive: true });
-    const runDir = fsSync.realpathSync(rawRunDir);
-    const promptContext: PromptContext = { runId: run.id, runDir, repoDir: REPO_ROOT };
-    const harnessContext = buildRawLoopHarnessContext(run, cliArgs.scenario, promptContext);
-    const prompt = run.prompt(promptContext);
-    const startedAt = nowIso();
-    const providerOptions: Record<string, unknown> | undefined =
-      run.provider === "google"
-        ? { google: { nativeWebSearch: false } }
-        : run.provider === "lmstudio"
-          ? {
-              deferredToolSearch: true,
-              lmstudio: {
-                baseUrl:
-                  process.env.LM_STUDIO_BASE_URL ??
-                  process.env.COWORK_LMSTUDIO_BASE_URL ??
-                  "http://127.0.0.1:1234",
-                temperature: 0,
-              },
-            }
-          : undefined;
-
-    await fs.writeFile(
-      path.join(runDir, "harness_context.json"),
-      safeJsonStringify(harnessContext),
-      "utf-8",
-    );
-    await fs.writeFile(path.join(runDir, "prompt.txt"), prompt, "utf-8");
-
-    const serverProc = spawn(
-      serverBin,
-      ["--dir", runDir, "--host", "127.0.0.1", "--port", "0", "--yolo", "--json"],
-      {
-        cwd: runDir,
-        env: buildRawLoopServerEnv(process.env),
-        stdio: ["pipe", "pipe", "inherit"],
-      },
-    );
-    const serverExitPromise = new Promise<void>((resolve) => {
-      serverProc.once("exit", () => resolve());
-    });
-
     try {
-      const wsUrl = await new Promise<string>((resolve, reject) => {
-        const rl = readline.createInterface({ input: serverProc.stdout });
-        rl.on("line", (line) => {
-          if (!line.trim().startsWith("{")) return;
-          const evt = JSON.parse(line) as { type?: string; url?: string; wsUrl?: string };
-          const resolvedUrl = evt.wsUrl ?? evt.url;
-          if (evt.type === "server_listening" && resolvedUrl) {
-            rl.close();
-            resolve(resolvedUrl);
-          }
-        });
-        serverProc.once("exit", (code) =>
-          reject(new Error(`cowork-server exited early (${String(code)})`)),
-        );
-      });
-
-      const turnResult = await runRawLoopTurnViaServer({
-        wsUrl,
-        cwd: runDir,
-        provider: run.provider,
-        model: run.model,
-        prompt,
-        harnessContext,
-        ...(providerOptions ? { providerOptions } : {}),
-        ...(run.maxSteps !== undefined ? { maxSteps: run.maxSteps } : {}),
-      });
-
-      assertRawLoopToolRequirements(run, turnResult.steps, turnResult.toolLogLines);
-      const strictMode = cliArgs.strictModeOverride ?? false;
-      const contractOut = await validateWithOptionalRepair({
-        finalText: turnResult.text,
-        runDir,
-        trace: turnResult,
-        contract: run.finalContract,
+      const result = await executeRawLoopRun(run, {
+        rootOutDir,
+        scenario: cliArgs.scenario,
         strictMode,
-        repairFinalOutput: async () => {
-          const repairPrompt = [
-            "Your previous final response failed contract validation.",
-            `Every file path field must be a complete, unabbreviated absolute path inside "${runDir}" (never shorten paths with "...").`,
-            "Without calling any more tools unless strictly required, emit ONLY the valid JSON object matching the requested final response contract.",
-          ].join("\n");
-          const repaired = await runRawLoopTurnViaServer({
-            wsUrl,
-            cwd: runDir,
-            provider: run.provider,
-            model: run.model,
-            threadId: turnResult.threadId,
-            prompt: repairPrompt,
-            ...(providerOptions ? { providerOptions } : {}),
-            ...(run.maxSteps !== undefined ? { maxSteps: run.maxSteps } : {}),
-          });
-          turnResult.toolLogLines.push(...repaired.toolLogLines);
-          turnResult.totalSteps += repaired.totalSteps;
-          return { finalText: repaired.text };
-        },
+        deps,
       });
-      const budgets = buildRawLoopBudgetSummary(
-        turnResult.toolLogLines,
-        turnResult.totalSteps,
-        contractOut.repairAttempted ? 1 : 0,
-      );
-      const finishedAt = nowIso();
-      await fs.writeFile(
-        path.join(runDir, "tool-log.txt"),
-        `${turnResult.toolLogLines.join("\n")}\n`,
-        "utf-8",
-      );
-      await fs.writeFile(path.join(runDir, "final.txt"), contractOut.finalText, "utf-8");
-      await fs.writeFile(
-        path.join(runDir, "run_meta.json"),
-        safeJsonStringify({
-          runId: run.id,
-          provider: run.provider,
-          model: run.model,
-          strictMode,
-          repairAttempted: contractOut.repairAttempted,
-          repairSucceeded: contractOut.repairSucceeded,
-          validation: contractOut.validationResult,
-          budgets,
-          startedAt,
-          finishedAt,
-        }),
-        "utf-8",
-      );
-      await fs.writeFile(
-        path.join(runDir, "trace.json"),
-        serializeRawLoopTrace({
-          runId: run.id,
-          startedAt,
-          finishedAt,
-          harnessContext,
-          budgets,
-          validation: contractOut.validationResult,
-          result: { text: contractOut.finalText },
-        }),
-        "utf-8",
-      );
-      if (!contractOut.validationResult.ok) {
-        anyRunFailed = true;
-      }
-      console.log(
-        safeJsonStringify({ runId: run.id, ok: contractOut.validationResult.ok, budgets }),
-      );
+      if (!result.ok) anyRunFailed = true;
+    } catch (error) {
+      // Artifact I/O failures for one run must not skip the remaining runs.
+      anyRunFailed = true;
+      console.error(`[raw-loop] run ${run.id} aborted: ${errorMessage(error)}`);
     } finally {
-      serverProc.stdin.end();
-      await Promise.race([
-        serverExitPromise,
-        new Promise<void>((resolve) =>
-          setTimeout(() => {
-            serverProc.kill("SIGTERM");
-            resolve();
-          }, 5_000),
-        ),
-      ]);
+      await releaseRawLoopServerHome(serverHomeFor(run)).catch((error: unknown) => {
+        console.warn(`[raw-loop] failed to unlink ${run.id} server home: ${errorMessage(error)}`);
+      });
     }
   }
 
+  console.log(`[raw-loop] wrote traces to: ${rootOutDir}`);
   if (anyRunFailed) {
     process.exitCode = 1;
   }

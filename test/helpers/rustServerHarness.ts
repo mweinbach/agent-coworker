@@ -96,7 +96,9 @@ export async function startRustTestServer(opts?: {
     ...process.env,
     HOME: homeDir,
     USERPROFILE: homeDir,
-    COWORK_HOME_OVERRIDE: coworkHomeDir,
+    // `COWORK_HOME_OVERRIDE` names the user HOME; the server appends `.cowork` itself, so
+    // seeded files under `coworkHomeDir` are the ones the server reads.
+    COWORK_HOME_OVERRIDE: homeDir,
     COWORK_REPO_ROOT: REPO_ROOT,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DISABLE_NETWORK_TELEMETRY: "1",

@@ -114,6 +114,86 @@ export function assertRawLoopToolRequirements(
   }
 }
 
+/**
+ * Mirrors the Rust `is_failed_tool_outcome` classification: an errored or denied item, or a
+ * result that reports `denied`, `ok: false` or an `error`, did not take effect.
+ */
+export function isFailedRawLoopToolOutcome(
+  toolName: string,
+  state: string | undefined,
+  output: unknown,
+): boolean {
+  if (state === "output-error" || state === "output-denied") return true;
+  if (output !== null && typeof output === "object" && !Array.isArray(output)) {
+    const record = output as Record<string, unknown>;
+    return record.denied === true || record.ok === false || Object.hasOwn(record, "error");
+  }
+  if (typeof output === "string") {
+    return toolName.toLowerCase() === "skill" && output.toLowerCase().includes("not found");
+  }
+  return false;
+}
+
+type ObservedToolCall = { toolName: string; failed: boolean };
+
+function toolStepRecord(value: unknown, type: string): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return record.type === type && typeof record.toolName === "string" ? record : null;
+}
+
+/** Top-level tool calls in trace order, each paired with the result step that follows it. */
+function collectObservedToolCalls(steps: TracedStep[]): ObservedToolCall[] {
+  const calls: ObservedToolCall[] = [];
+  for (const [index, entry] of steps.entries()) {
+    const call = toolStepRecord(entry.step, "tool-call");
+    if (call === null) continue;
+    const toolName = call.toolName as string;
+    const result = toolStepRecord(steps[index + 1]?.step, "tool-result");
+    const failed =
+      result !== null && result.toolName === toolName
+        ? isFailedRawLoopToolOutcome(
+            toolName,
+            typeof result.state === "string" ? result.state : undefined,
+            result.output,
+          )
+        : false;
+    calls.push({ toolName, failed });
+  }
+  return calls;
+}
+
+/**
+ * Enforces `requiredToolBeforeTools` / `guardedToolsBeforeRequiredTool` on a finished trace:
+ * no guarded tool may take effect before the required tool has succeeded. The in-process
+ * runner blocked such calls at dispatch; the server-driven runner rejects the trace instead.
+ * A guarded call that itself failed had no effect and is not a violation, matching the old
+ * dispatch gate (whose blocked calls surfaced as failed tool calls).
+ */
+export function assertRawLoopToolOrder(
+  run: Pick<RunSpec, "requiredToolBeforeTools" | "guardedToolsBeforeRequiredTool">,
+  steps: TracedStep[],
+): void {
+  const requiredTool = run.requiredToolBeforeTools;
+  const guardedToolNames = (run.guardedToolsBeforeRequiredTool ?? []).filter(
+    (name) => name !== requiredTool,
+  );
+  if (!requiredTool || guardedToolNames.length === 0) return;
+
+  let requiredSucceeded = false;
+  for (const call of collectObservedToolCalls(steps)) {
+    if (call.toolName === requiredTool) {
+      if (!call.failed) requiredSucceeded = true;
+      continue;
+    }
+    if (!requiredSucceeded && !call.failed && guardedToolNames.includes(call.toolName)) {
+      throw new Error(
+        `Tool order violation: "${requiredTool}" must succeed before "${call.toolName}", but "${call.toolName}" ran first.`,
+      );
+    }
+  }
+}
+
 export function summarizeRawLoopBudgets(toolCallNames: string[]) {
   return {
     toolCalls: toolCallNames.length,

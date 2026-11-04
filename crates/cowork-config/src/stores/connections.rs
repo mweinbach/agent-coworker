@@ -158,8 +158,15 @@ pub fn parse_connection_store_json(raw: &str, file_path: &Path) -> Result<Connec
                 "Connection service mismatch for key {service_key}"
             )));
         }
-        let parsed_conn: StoredConnection =
-            serde_json::from_value(conn_val.clone()).map_err(|e| {
+        // Decode the normalized entry: the TS schema trimmed `service` (`z.string().trim()`), so
+        // a legacy `" openai "` must decode as `"openai"` instead of failing the whole store.
+        let mut normalized_conn = conn_obj.clone();
+        normalized_conn.insert(
+            "service".to_string(),
+            Value::String(provider.as_str().to_string()),
+        );
+        let parsed_conn: StoredConnection = serde_json::from_value(Value::Object(normalized_conn))
+            .map_err(|e| {
                 ConfigError::Validation(format!("Invalid connection entry for {service_key}: {e}"))
             })?;
         if !validate_iso_timestamp(&parsed_conn.updated_at) {
@@ -186,7 +193,23 @@ pub fn parse_connection_store_json(raw: &str, file_path: &Path) -> Result<Connec
     })
 }
 
+/// Reads `connections.json` for display/lookup. Like `readConnectionStore` in
+/// `src/store/connections.ts`, an unparseable store reads as empty; mutations must use
+/// [`read_connection_store_for_update_sync`] instead so they never overwrite it.
 pub fn read_connection_store_sync(paths: &AiCoworkerPaths) -> Result<ConnectionStore> {
+    match read_connection_store_for_update_sync(paths) {
+        Ok(store) => Ok(store),
+        Err(ConfigError::InvalidJson { .. } | ConfigError::Validation(_)) => {
+            Ok(ConnectionStore::empty())
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Reads `connections.json` as the base for a read-modify-write. A missing file is an empty
+/// store, but an unreadable one is an error: writing an empty store back would silently discard
+/// every credential it still holds.
+pub fn read_connection_store_for_update_sync(paths: &AiCoworkerPaths) -> Result<ConnectionStore> {
     ensure_ai_coworker_home(paths)?;
     let raw = match fs::read_to_string(&paths.connections_file) {
         Ok(r) => r,
@@ -198,14 +221,15 @@ pub fn read_connection_store_sync(paths: &AiCoworkerPaths) -> Result<ConnectionS
             });
         }
     };
-
-    match parse_connection_store_json(&raw, &paths.connections_file) {
-        Ok(store) => Ok(store),
-        Err(ConfigError::InvalidJson { .. } | ConfigError::Validation(_)) => {
-            Ok(ConnectionStore::empty())
+    parse_connection_store_json(&raw, &paths.connections_file).map_err(|err| match err {
+        ConfigError::InvalidJson { .. } | ConfigError::Validation(_) => {
+            ConfigError::Validation(format!(
+                "Refusing to update unreadable connection store at {}: {err}",
+                paths.connections_file.display()
+            ))
         }
-        Err(other) => Err(other),
-    }
+        other => other,
+    })
 }
 
 pub async fn read_connection_store(paths: &AiCoworkerPaths) -> Result<ConnectionStore> {
@@ -232,7 +256,7 @@ pub async fn save_provider_connection(
     with_file_lock(
         &paths.connections_file,
         || async {
-            let mut store = read_connection_store_sync(paths)?;
+            let mut store = read_connection_store_for_update_sync(paths)?;
             store.updated_at = connection.updated_at.clone();
             store.services.insert(connection.service, connection);
             write_connection_store(paths, &store).await?;
@@ -254,7 +278,7 @@ pub async fn remove_provider_connection(
     with_file_lock(
         &paths.connections_file,
         || async {
-            let mut store = read_connection_store_sync(paths)?;
+            let mut store = read_connection_store_for_update_sync(paths)?;
             store.services.remove(&provider);
             store.updated_at = Utc::now().to_rfc3339();
             write_connection_store(paths, &store).await?;
@@ -293,4 +317,128 @@ pub fn get_saved_provider_api_key(
         return Ok(Some(key.clone()));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_paths() -> (tempfile::TempDir, AiCoworkerPaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = get_ai_coworker_paths(Some(tmp.path()), &HashMap::new());
+        ensure_ai_coworker_home(&paths).unwrap();
+        (tmp, paths)
+    }
+
+    fn anthropic_connection() -> StoredConnection {
+        StoredConnection {
+            service: ProviderName::Anthropic,
+            mode: ConnectionMode::ApiKey,
+            method_id: None,
+            api_key: Some("sk-ant-new".to_string()),
+            values: None,
+            updated_at: "2026-01-02T00:00:00.000Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_untrimmed_service_is_normalized_and_kept_on_save() {
+        let (_tmp, paths) = temp_paths();
+        let legacy = r#"{
+  "version": 1,
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "services": {
+    "openai": {
+      "service": " openai ",
+      "mode": "api_key",
+      "apiKey": "sk-openai-legacy",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  }
+}"#;
+        fs::write(&paths.connections_file, legacy).unwrap();
+
+        let parsed = parse_connection_store_json(legacy, &paths.connections_file).unwrap();
+        let openai = parsed.services.get(&ProviderName::Openai).unwrap();
+        assert_eq!(openai.service, ProviderName::Openai);
+        assert_eq!(openai.api_key.as_deref(), Some("sk-openai-legacy"));
+
+        let saved = save_provider_connection(&paths, anthropic_connection())
+            .await
+            .unwrap();
+        assert_eq!(saved.services.len(), 2);
+
+        let raw = fs::read_to_string(&paths.connections_file).unwrap();
+        let reread = parse_connection_store_json(&raw, &paths.connections_file).unwrap();
+        assert_eq!(
+            reread.provider_api_key(ProviderName::Openai).as_deref(),
+            Some("sk-openai-legacy")
+        );
+        assert_eq!(
+            reread.provider_api_key(ProviderName::Anthropic).as_deref(),
+            Some("sk-ant-new")
+        );
+        let on_disk: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(on_disk["services"]["openai"]["service"], "openai");
+    }
+
+    #[tokio::test]
+    async fn mutations_refuse_to_clobber_an_unreadable_store() {
+        let (_tmp, paths) = temp_paths();
+        let unreadable = r#"{
+  "version": 1,
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "services": {
+    "openai": { "service": "openai", "mode": "not-a-mode", "apiKey": "sk-keep", "updatedAt": "2026-01-01T00:00:00.000Z" }
+  }
+}"#;
+        fs::write(&paths.connections_file, unreadable).unwrap();
+
+        // Display reads stay lenient, matching `readConnectionStore`.
+        assert!(
+            read_connection_store_sync(&paths)
+                .unwrap()
+                .services
+                .is_empty()
+        );
+
+        let save_err = save_provider_connection(&paths, anthropic_connection())
+            .await
+            .unwrap_err();
+        assert!(
+            save_err.to_string().contains("Refusing to update"),
+            "{save_err}"
+        );
+        assert!(
+            remove_provider_connection(&paths, ProviderName::Openai)
+                .await
+                .is_err()
+        );
+        assert!(read_connection_store_for_update_sync(&paths).is_err());
+        assert_eq!(
+            fs::read_to_string(&paths.connections_file).unwrap(),
+            unreadable
+        );
+
+        fs::write(&paths.connections_file, "{ not json").unwrap();
+        assert!(
+            save_provider_connection(&paths, anthropic_connection())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(&paths.connections_file).unwrap(),
+            "{ not json"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_into_missing_store_creates_it() {
+        let (_tmp, paths) = temp_paths();
+        let saved = save_provider_connection(&paths, anthropic_connection())
+            .await
+            .unwrap();
+        assert_eq!(saved.services.len(), 1);
+        assert!(paths.connections_file.exists());
+    }
 }

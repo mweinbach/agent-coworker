@@ -331,8 +331,149 @@ impl SessionDb {
                 obj.entry("targetPaths").or_insert(Value::Null);
                 obj.entry("profile").or_insert(Value::Null);
             }
+            Self::hydrate_tool_retry_snapshot_metadata(&mut parsed);
             Ok(Some(parsed))
         })
+    }
+
+    /// Ports `hydrateToolRetrySnapshotMetadata` (`src/shared/toolRetrySnapshot.ts`). The TS
+    /// snapshot writer moved tool rows' `inputDigest` / `retryOf` into a versioned
+    /// `cowork.toolRetryMetadata` annotation on the last feed message (so older readers would not
+    /// choke on them); expand those entries back onto their tool rows by item id and drop the
+    /// annotation. Entries are scanned newest-first and the newest entry per item id wins, within
+    /// the same `SESSION_FEED_ITEM_LIMIT` budget the TS reader used.
+    ///
+    /// Unlike the TS reader this keeps hidden `cowork.toolRetryTurn` user messages: Rust-written
+    /// snapshots store them on purpose and `project_tool_retry_compatibility` hides them from
+    /// clients without `toolRetryLineage` (TS-written snapshots never contain them).
+    fn hydrate_tool_retry_snapshot_metadata(snapshot: &mut Value) {
+        const TOOL_RETRY_METADATA_ANNOTATION_TYPE: &str = "cowork.toolRetryMetadata";
+        const TOOL_RETRY_METADATA_VERSION: u64 = 1;
+        const SESSION_FEED_ITEM_LIMIT: usize = 2_000;
+
+        fn is_metadata_annotation(value: &Value) -> bool {
+            value.get("type").and_then(Value::as_str) == Some(TOOL_RETRY_METADATA_ANNOTATION_TYPE)
+                && value.get("version").and_then(Value::as_u64) == Some(TOOL_RETRY_METADATA_VERSION)
+        }
+
+        /// `toolInputDigestSchema`: a strict `{ algorithm: "sha256", value: <64 hex>,
+        /// canonicalBytes: <safe non-negative integer> }`.
+        fn is_tool_input_digest(value: &Value) -> bool {
+            let Some(obj) = value.as_object() else {
+                return false;
+            };
+            obj.len() == 3
+                && obj.get("algorithm").and_then(Value::as_str) == Some("sha256")
+                && obj.get("value").and_then(Value::as_str).is_some_and(|v| {
+                    v.len() == 64 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                })
+                && obj.get("canonicalBytes").is_some_and(|n| {
+                    // JSON numbers are untyped: `12` and `12.0` are the same integer to zod.
+                    n.as_u64()
+                        .map(|n| n as f64)
+                        .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0 && *f >= 0.0))
+                        .is_some_and(|n| n <= 9_007_199_254_740_991.0)
+                })
+        }
+
+        /// `(inputDigest, retryOf)` for a valid entry, or `None` (`parseEntry`).
+        fn parse_entry(value: &Value) -> Option<(String, Option<Value>, Option<String>)> {
+            let item_id = value
+                .get("itemId")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())?;
+            let input_digest = value
+                .get("inputDigest")
+                .filter(|d| is_tool_input_digest(d))
+                .cloned();
+            let retry_of = value
+                .get("retryOf")
+                .and_then(Value::as_str)
+                .filter(|r| !r.trim().is_empty())
+                .map(ToOwned::to_owned);
+            if input_digest.is_none() && retry_of.is_none() {
+                return None;
+            }
+            Some((item_id.to_owned(), input_digest, retry_of))
+        }
+
+        fn is_message(item: &Value) -> bool {
+            item.get("kind").and_then(Value::as_str) == Some("message")
+        }
+
+        let Some(feed) = snapshot.get_mut("feed").and_then(Value::as_array_mut) else {
+            return;
+        };
+
+        let mut metadata_by_item_id: HashMap<String, (Option<Value>, Option<String>)> =
+            HashMap::new();
+        let mut remaining = SESSION_FEED_ITEM_LIMIT;
+        for item in feed.iter().rev() {
+            if !is_message(item) {
+                continue;
+            }
+            let Some(annotations) = item.get("annotations").and_then(Value::as_array) else {
+                continue;
+            };
+            for annotation in annotations.iter().rev() {
+                if remaining == 0 {
+                    break;
+                }
+                if !is_metadata_annotation(annotation) {
+                    continue;
+                }
+                let Some(entries) = annotation.get("entries").and_then(Value::as_array) else {
+                    continue;
+                };
+                for entry in entries.iter().rev() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    remaining -= 1;
+                    if let Some((item_id, digest, retry_of)) = parse_entry(entry) {
+                        metadata_by_item_id
+                            .entry(item_id)
+                            .or_insert((digest, retry_of));
+                    }
+                }
+            }
+        }
+
+        for item in feed.iter_mut() {
+            if is_message(item) {
+                let Some(obj) = item.as_object_mut() else {
+                    continue;
+                };
+                let Some(annotations) = obj.get_mut("annotations").and_then(Value::as_array_mut)
+                else {
+                    continue;
+                };
+                annotations.retain(|annotation| !is_metadata_annotation(annotation));
+                if annotations.is_empty() {
+                    obj.remove("annotations");
+                }
+                continue;
+            }
+            if item.get("kind").and_then(Value::as_str) != Some("tool") {
+                continue;
+            }
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            let Some((digest, retry_of)) = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| metadata_by_item_id.get(id))
+            else {
+                continue;
+            };
+            if let Some(digest) = digest {
+                obj.insert("inputDigest".to_owned(), digest.clone());
+            }
+            if let Some(retry_of) = retry_of {
+                obj.insert("retryOf".to_owned(), Value::String(retry_of.clone()));
+            }
+        }
     }
 
     pub fn project_legacy_snapshot(&self, session_id: &str) -> Result<Option<Value>> {

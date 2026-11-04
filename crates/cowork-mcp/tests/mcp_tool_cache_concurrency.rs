@@ -26,6 +26,9 @@ use tokio::net::TcpListener;
 use tokio::sync::{Notify, Semaphore};
 use uuid::Uuid;
 
+#[path = "support/node_bin.rs"]
+mod node_bin;
+
 /// Bound for operations that must not wait on a hanging connect.
 const PROMPT: Duration = Duration::from_secs(5);
 
@@ -535,7 +538,7 @@ rl.on("line", (line) => {
         McpServerConfig {
             name: "mock".to_owned(),
             transport: McpServerTransport::Stdio {
-                command: "node".to_owned(),
+                command: node_bin::node_bin(),
                 args: Some(vec![script.to_string_lossy().into_owned()]),
                 env: None,
                 cwd: None,

@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use parking_lot::Mutex;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::oneshot;
 use url::Url;
@@ -26,7 +26,11 @@ use crate::types::{
     McpToolInvoker, McpValidatedToolSummary, McpValidationResult,
 };
 
+/// Largest stdout frame accepted from a stdio server. Enforced while reading, so a server that
+/// streams one unterminated message cannot grow the line buffer without bound.
 const MAX_STDIO_LINE_BYTES: usize = 10 * 1024 * 1024;
+/// Chunk size used to discard stdio stderr without buffering whole lines.
+const STDERR_DRAIN_CHUNK_BYTES: usize = 8 * 1024;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const SSE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -227,6 +231,28 @@ impl StdioTransport {
         explicit_env: Option<&HashMap<String, String>>,
         timeouts: TransportTimeouts,
     ) -> Result<Arc<Self>, String> {
+        Self::connect_with_line_limit(
+            command_bin,
+            args,
+            cwd,
+            base_env,
+            explicit_env,
+            timeouts,
+            MAX_STDIO_LINE_BYTES,
+        )
+        .await
+    }
+
+    /// [`Self::connect`] with an explicit stdout frame cap (tests use a small one).
+    async fn connect_with_line_limit(
+        command_bin: &str,
+        args: &[String],
+        cwd: Option<&str>,
+        base_env: &HashMap<String, String>,
+        explicit_env: Option<&HashMap<String, String>>,
+        timeouts: TransportTimeouts,
+        max_line_bytes: usize,
+    ) -> Result<Arc<Self>, String> {
         let mut cmd = Command::new(command_bin);
         cmd.args(args)
             .env_clear()
@@ -270,66 +296,60 @@ impl StdioTransport {
         let reader_task = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut buf = Vec::with_capacity(4096);
-            loop {
+            let exit_reason = loop {
                 buf.clear();
-                match reader.read_until(b'\n', &mut buf).await {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if buf.len() > MAX_STDIO_LINE_BYTES {
-                            for entry in pending_reader.iter() {
-                                // Handled below after clearing
-                                let _ = entry.key();
-                            }
-                            let keys: Vec<u64> = pending_reader.iter().map(|e| *e.key()).collect();
-                            for k in keys {
-                                if let Some((_, tx)) = pending_reader.remove(&k) {
-                                    let _ = tx.send(Err(
-                                        "MCP stdio message exceeded 10 MiB limit".to_owned()
-                                    ));
-                                }
-                            }
-                            break;
-                        }
-                        let Ok(line) = std::str::from_utf8(&buf) else {
-                            continue;
-                        };
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-                        if let Ok(msg) = serde_json::from_str::<Value>(trimmed) {
-                            for reply in dispatch_jsonrpc_response(&pending_reader, msg) {
-                                // Off the reader task so a full stdin pipe can never stall
-                                // response dispatch.
-                                let stdin = Arc::clone(&reply_stdin);
-                                tokio::spawn(async move {
-                                    let _ = write_stdio_frame(&stdin, &reply).await;
-                                });
-                            }
-                        }
+                match read_bounded_line(&mut reader, &mut buf, max_line_bytes).await {
+                    Ok(BoundedLine::Eof) | Err(_) => {
+                        break "MCP stdio server closed stdout".to_owned();
                     }
-                    Err(_) => break,
+                    Ok(BoundedLine::Overflow) => {
+                        // Stop reading: the frame can never be parsed, and resynchronising on
+                        // the next newline would mean consuming an unbounded message.
+                        break format!(
+                            "MCP stdio message exceeded {} limit; connection closed",
+                            describe_byte_limit(max_line_bytes)
+                        );
+                    }
+                    Ok(BoundedLine::Line) => {}
                 }
-            }
-            // Flag first, then drain: a request that registers after the drain sees the flag.
+                let Ok(line) = std::str::from_utf8(&buf) else {
+                    continue;
+                };
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(msg) = serde_json::from_str::<Value>(trimmed) {
+                    for reply in dispatch_jsonrpc_response(&pending_reader, msg) {
+                        // Off the reader task so a full stdin pipe can never stall response
+                        // dispatch.
+                        let stdin = Arc::clone(&reply_stdin);
+                        tokio::spawn(async move {
+                            let _ = write_stdio_frame(&stdin, &reply).await;
+                        });
+                    }
+                }
+            };
+            // Flag first (marks the connection unhealthy), then drain: a request that registers
+            // after the drain sees the flag.
             reader_done_flag.store(true, Ordering::SeqCst);
             let keys: Vec<u64> = pending_reader.iter().map(|e| *e.key()).collect();
             for k in keys {
                 if let Some((_, tx)) = pending_reader.remove(&k) {
-                    let _ = tx.send(Err("MCP stdio server closed stdout".to_owned()));
+                    let _ = tx.send(Err(exit_reason.clone()));
                 }
             }
         });
 
-        let stderr_task = stderr.map(|err_pipe| {
+        let stderr_task = stderr.map(|mut err_pipe| {
             tokio::spawn(async move {
-                let mut rdr = BufReader::new(err_pipe);
-                let mut sink = Vec::with_capacity(1024);
-                while let Ok(n) = rdr.read_until(b'\n', &mut sink).await {
+                // Discard in fixed-size chunks: a newline-delimited read would buffer an
+                // unterminated stderr stream without bound.
+                let mut chunk = vec![0u8; STDERR_DRAIN_CHUNK_BYTES];
+                while let Ok(n) = err_pipe.read(&mut chunk).await {
                     if n == 0 {
                         break;
                     }
-                    sink.clear();
                 }
             })
         });
@@ -355,6 +375,56 @@ impl StdioTransport {
         tokio::spawn(async move { write_stdio_frame(&stdin, &frame).await })
             .await
             .unwrap_or_else(|e| Err(format!("MCP stdio write task failed: {e}")))
+    }
+}
+
+/// Outcome of [`read_bounded_line`].
+#[derive(Debug, PartialEq, Eq)]
+enum BoundedLine {
+    /// A newline-terminated line, or the unterminated tail before EOF, is in the buffer.
+    Line,
+    /// EOF with nothing buffered.
+    Eof,
+    /// The line exceeded the cap before its newline; the buffer holds at most the cap.
+    Overflow,
+}
+
+/// Like `read_until(b'\n')`, but checks `max_len` (excluding the newline) chunk by chunk, so
+/// `buf` never grows past `max_len` however long the line is.
+async fn read_bounded_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max_len: usize,
+) -> std::io::Result<BoundedLine> {
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(if buf.is_empty() {
+                BoundedLine::Eof
+            } else {
+                BoundedLine::Line
+            });
+        }
+        let newline = available.iter().position(|&b| b == b'\n');
+        let content_len = newline.unwrap_or(available.len());
+        if buf.len() + content_len > max_len {
+            return Ok(BoundedLine::Overflow);
+        }
+        let take = newline.map_or(available.len(), |i| i + 1);
+        buf.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            return Ok(BoundedLine::Line);
+        }
+    }
+}
+
+fn describe_byte_limit(bytes: usize) -> String {
+    const MIB: usize = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} byte")
     }
 }
 

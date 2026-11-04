@@ -19,9 +19,12 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    RpcTransport, SseTransport, StdioTransport, StreamableHttpTransport, TransportTimeouts,
-    dispatch_jsonrpc_response, extract_matching_rpc_result,
+    BoundedLine, RpcTransport, SseTransport, StdioTransport, StreamableHttpTransport,
+    TransportTimeouts, dispatch_jsonrpc_response, extract_matching_rpc_result, read_bounded_line,
 };
+
+#[path = "../tests/support/node_bin.rs"]
+mod node_bin;
 
 #[test]
 fn server_request_with_pending_id_is_answered_not_dispatched() {
@@ -106,7 +109,7 @@ rl.on("line", (line) => {
 
     let env = std::env::vars().collect();
     let transport = StdioTransport::connect(
-        "node",
+        &node_bin::node_bin(),
         &[script.to_string_lossy().into_owned()],
         None,
         &env,
@@ -429,7 +432,7 @@ async fn stdio_request_times_out_when_server_stops_reading_stdin() {
 
     let env = std::env::vars().collect();
     let transport = StdioTransport::connect(
-        "node",
+        &node_bin::node_bin(),
         &[script.to_string_lossy().into_owned()],
         None,
         &env,
@@ -725,4 +728,116 @@ async fn dropping_sse_transport_closes_its_event_stream() {
     .await
     .expect("dropping the transport must close the SSE event stream");
     server.abort();
+}
+
+// ----------------------------------------------------------------------------
+// Bounded stdio frames
+// ----------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bounded_line_reader_splits_lines_across_chunks_and_keeps_eof_tail() {
+    // A 4-byte buffer forces every line to span several `fill_buf` chunks.
+    let data: &[u8] = b"alpha\nbe\n\ntail";
+    let mut reader = tokio::io::BufReader::with_capacity(4, data);
+    let mut buf = Vec::new();
+    let mut lines = Vec::new();
+    loop {
+        buf.clear();
+        match read_bounded_line(&mut reader, &mut buf, 5).await.unwrap() {
+            BoundedLine::Line => lines.push(String::from_utf8(buf.clone()).unwrap()),
+            BoundedLine::Eof => break,
+            BoundedLine::Overflow => panic!("no line exceeds the cap: {lines:?}"),
+        }
+    }
+    assert_eq!(lines, ["alpha\n", "be\n", "\n", "tail"]);
+}
+
+#[tokio::test]
+async fn bounded_line_reader_stops_an_endless_line_at_the_cap() {
+    // `read_until` would never return on this stream; the bounded reader must stop at the cap
+    // without buffering more than the cap.
+    const CAP: usize = 1024 * 1024;
+    let mut reader = tokio::io::BufReader::new(tokio::io::repeat(b'x'));
+    let mut buf = Vec::new();
+    let outcome = tokio::time::timeout(SAFETY_BOUND, read_bounded_line(&mut reader, &mut buf, CAP))
+        .await
+        .expect("an unterminated stream must hit the cap, not read forever")
+        .unwrap();
+    assert_eq!(outcome, BoundedLine::Overflow);
+    assert!(
+        buf.len() <= CAP,
+        "buffered {} bytes past the cap",
+        buf.len()
+    );
+}
+
+#[tokio::test]
+async fn bounded_line_reader_accepts_a_line_exactly_at_the_cap() {
+    let mut reader = tokio::io::BufReader::with_capacity(3, &b"abcd\nabcde\n"[..]);
+    let mut buf = Vec::new();
+    assert_eq!(
+        read_bounded_line(&mut reader, &mut buf, 4).await.unwrap(),
+        BoundedLine::Line
+    );
+    assert_eq!(buf, b"abcd\n");
+    buf.clear();
+    assert_eq!(
+        read_bounded_line(&mut reader, &mut buf, 4).await.unwrap(),
+        BoundedLine::Overflow
+    );
+}
+
+/// A server that answers the first request with an unterminated frame larger than the cap: the
+/// pending request fails fast with the overflow error, the connection turns unhealthy, and later
+/// requests fail fast too.
+#[cfg(unix)]
+#[tokio::test]
+async fn stdio_oversized_unterminated_frame_fails_pending_requests_and_marks_unhealthy() {
+    const CAP: usize = 64 * 1024;
+    let env = std::env::vars().collect();
+    // Wait for the request line, then stream 4 MiB with no newline and keep running.
+    let transport = StdioTransport::connect_with_line_limit(
+        "sh",
+        &[
+            "-c".to_owned(),
+            "read _req; head -c 4194304 /dev/zero | tr '\\0' x; sleep 300".to_owned(),
+        ],
+        None,
+        &env,
+        None,
+        TransportTimeouts::default(),
+        CAP,
+    )
+    .await
+    .unwrap();
+
+    let started = Instant::now();
+    let err = tokio::time::timeout(SAFETY_BOUND, transport.request("tools/list", None))
+        .await
+        .expect("oversized frame must fail the request before the 60s request timeout")
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "MCP stdio message exceeded 65536 byte limit; connection closed"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(!transport.is_healthy());
+    assert!(transport.pending.is_empty());
+
+    let err = tokio::time::timeout(SAFETY_BOUND, transport.request("tools/list", None))
+        .await
+        .expect("requests after the overflow must fail fast")
+        .unwrap_err();
+    assert_eq!(err, "MCP stdio server closed stdout");
+    tokio::time::timeout(SAFETY_BOUND, transport.close())
+        .await
+        .expect("close completes");
+}
+
+#[test]
+fn stdio_overflow_error_names_the_default_cap_in_mib() {
+    assert_eq!(
+        super::describe_byte_limit(super::MAX_STDIO_LINE_BYTES),
+        "10 MiB"
+    );
 }

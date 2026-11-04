@@ -25,6 +25,9 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+#[path = "support/node_bin.rs"]
+mod node_bin;
+
 /// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
 /// platform temp dir (`/tmp` on Linux) elsewhere.
 fn test_temp_base() -> PathBuf {
@@ -605,7 +608,7 @@ rl.on("line", (line) => {
         McpServerConfig {
             name: "stdio-srv".to_owned(),
             transport: McpServerTransport::Stdio {
-                command: "node".to_owned(),
+                command: node_bin::node_bin(),
                 args: Some(vec![stdio_script.to_string_lossy().into_owned()]),
                 env: Some(HashMap::from([
                     (

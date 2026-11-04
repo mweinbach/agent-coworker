@@ -1184,18 +1184,32 @@ pub fn set_mcp_server_api_key(
         return Err("API key must not be empty.".to_owned());
     }
     let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
+    // TS `McpAuthFlow.setApiKey` refuses (ok:false, mode "missing") before touching the
+    // credential store when the server is not configured for API key auth (`none`, `oauth`, or
+    // no auth block at all).
+    let key_id = match resolved.config.auth.as_ref() {
+        Some(McpServerAuthConfig::ApiKey { key_id, .. }) => key_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|key_id| !key_id.is_empty())
+            .map(str::to_owned),
+        _ => {
+            let message = format!(
+                "MCP server \"{}\" is not configured for API key auth.",
+                resolved.config.name
+            );
+            return Ok(McpAuthMutationResult {
+                name: resolved.config.name,
+                source: resolved.source,
+                mode: McpAuthMode::Missing,
+                ok: false,
+                message,
+            });
+        }
+    };
     // Keyed by server name like TS `setMCPServerApiKeyCredential`; `auth.keyId` is kept only as
     // record metadata.
     let cred_key = credential_key_for_server(&resolved.config.name);
-    let key_id = match resolved.config.auth.as_ref() {
-        Some(McpServerAuthConfig::ApiKey {
-            key_id: Some(key_id),
-            ..
-        }) => Some(key_id.trim())
-            .filter(|key_id| !key_id.is_empty())
-            .map(str::to_owned),
-        _ => None,
-    };
 
     mutate_credentials_for_scope(config, resolved.auth_scope, |store| {
         let entry = store.servers.entry(cred_key).or_default();

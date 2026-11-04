@@ -380,3 +380,58 @@ fn set_api_key_without_key_id_omits_metadata() {
     let api_key = doc["servers"]["plain"]["apiKey"].as_object().unwrap();
     assert!(!api_key.contains_key("keyId"), "{doc}");
 }
+
+/// TS `McpAuthFlow.setApiKey` refuses before touching the credential store when the target is not
+/// configured for API key auth: `ok:false`, mode `missing`, and no credential record.
+#[test]
+fn set_api_key_rejects_servers_not_configured_for_api_key_auth() {
+    let fx = fixture(json!([
+        {
+            "name": "no-auth",
+            "transport": { "type": "http", "url": "https://mcp.example.test/none" },
+            "auth": { "type": "none" },
+        },
+        {
+            "name": "oauth-srv",
+            "transport": { "type": "http", "url": "https://mcp.example.test/oauth" },
+            "auth": { "type": "oauth" },
+        },
+        {
+            "name": "implicit",
+            "transport": { "type": "stdio", "command": "node", "args": ["server.js"] },
+        },
+    ]));
+
+    for name in ["no-auth", "oauth-srv", "implicit"] {
+        let res = set_mcp_server_api_key(
+            &fx.cfg,
+            name,
+            Some(McpConfigSource::User),
+            None,
+            None,
+            "sk-should-not-be-stored",
+        )
+        .unwrap();
+        assert!(!res.ok, "{name}: {res:?}");
+        assert_eq!(res.mode, McpAuthMode::Missing, "{name}");
+        assert_eq!(res.name, name);
+        assert_eq!(res.source, McpConfigSource::User);
+        assert_eq!(
+            res.message,
+            format!("MCP server \"{name}\" is not configured for API key auth.")
+        );
+    }
+
+    assert!(
+        !user_credentials_path(&fx).exists(),
+        "no credential file may be created for non-API-key servers"
+    );
+    let snapshot = read_mcp_servers_snapshot(&fx.cfg).unwrap();
+    for server in &snapshot.servers {
+        assert!(
+            !server.auth_state.has_stored_secret,
+            "{} unexpectedly has a stored secret",
+            server.config.name
+        );
+    }
+}

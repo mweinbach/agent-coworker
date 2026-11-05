@@ -19,9 +19,10 @@ use cowork_protocol::{
     MemoryAdvancedUpsertParams, MemoryDeleteParams, MemoryListParams, MemoryUpsertParams,
     ThreadEnvironment, ThreadForkParams, TurnInput, TurnStartParams, error_codes,
 };
-use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
-use cowork_providers::chat_completions::lmstudio::resolve_lmstudio_options;
-use cowork_providers::{ProviderTransport, resolve_provider_api_key};
+use cowork_providers::{
+    CodexAppServerTransport, ProviderTransport, ResolvedProviderConnection,
+    resolve_provider_connection,
+};
 use cowork_storage::{
     MemoryScope, MemoryStore, MemoryWriteMode, SessionKind, SessionTitleSource,
     ThreadJournalEventInput,
@@ -32,10 +33,8 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::http_desktop::{build_workspace_summaries, fnv1a32_hex};
+use crate::jsonrpc_turn::CurrentModelConnection;
 use crate::registry::{LiveSession, ServerRuntimeState};
-use crate::turn_runner::{
-    CurrentModelConnection, provider_base_url_override, select_provider_transport,
-};
 
 /// Holds a thread's advanced-memory generation slot (TS `memoryGenerationQueue`). Generations
 /// on one thread run one at a time in FIFO order (tokio's mutex is fair), so each reads the
@@ -436,7 +435,7 @@ impl ServerRuntimeState {
 
         // The thread's effective config: session overrides layered over the workspace config.
         let session_cfg = self.load_workspace_config(&cwd).ok().map(|mut cfg| {
-            crate::turn_runner::apply_session_config_overrides(&mut cfg, &session_overrides);
+            crate::jsonrpc_turn::apply_session_config_overrides(&mut cfg, &session_overrides);
             cfg
         });
         let advanced_memory = session_cfg.as_ref().map_or_else(
@@ -946,10 +945,8 @@ fn merge_session_provider_options(
     merged
 }
 
-/// `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`), in catalog order.
-const OPENAI_REASONING_EFFORT_VALUES: [&str; 8] = [
-    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
-];
+// `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`), in catalog order.
+use cowork_config::models::OPENAI_REASONING_EFFORT_VALUES;
 
 /// `DEFAULT_OPENAI_REASONING_EFFORT_VALUES`: assumed for a model that declares no efforts
 /// ("light" and "max" are opt-in).
@@ -1186,34 +1183,22 @@ impl ServerRuntimeState {
     ) -> Result<(Arc<dyn ProviderTransport>, Option<String>, Option<String>), String> {
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let conn_store = read_connection_store(&paths).await.ok();
-        let api_key = resolve_provider_api_key(provider, conn_store.as_ref(), &self.env);
-        let bedrock_auth = if provider == ProviderName::Bedrock {
-            let mut auth =
-                resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref());
-            if let (Some(region), Some(cfg)) = (
-                extract_bedrock_region_override(provider_opts),
-                auth.as_mut(),
-            ) {
-                cfg.region = region;
-                cfg.has_configured_region = true;
-            }
-            auth
-        } else {
-            None
-        };
-        let base_url = match provider {
-            ProviderName::Lmstudio => Some(
-                resolve_lmstudio_options(&self.env, Some(provider_opts), None).inference_base_url,
-            ),
-            other => provider_base_url_override(other, provider_opts, &self.env, true),
-        };
-        let transport = select_provider_transport(
+        let ResolvedProviderConnection {
+            transport,
+            base_url,
+            api_key,
+        } = resolve_provider_connection(
             provider,
-            bedrock_auth,
             &self.homedir,
             &self.env,
-            None,
-            Some(&self.built_in_dir),
+            conn_store.as_ref(),
+            provider_opts,
+            true,
+            || {
+                CodexAppServerTransport::with_env(self.env.clone())
+                    .with_tools_disabled(false)
+                    .with_built_in_dir(Some(self.built_in_dir.clone()))
+            },
         )?;
         Ok((transport, base_url, api_key))
     }
@@ -1600,7 +1585,7 @@ impl ServerRuntimeState {
             "yolo": false,
         }));
         state["workspaces"] = Value::Array(workspaces);
-        if let Err(err) = svc.save_state_json(state, &self.working_directory) {
+        if let Err(err) = svc.save_state_json(state) {
             tracing::warn!(
                 path = %canon_str,
                 error = %err,

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::error::{Result, StorageError};
 use crate::hardening::{ensure_private_directory, harden_sqlite_family};
-use crate::write_coordinator::now_iso_millis;
+use crate::write_coordinator::now_iso;
 
 pub const HOT_MEMORY_ID: &str = "hot";
 pub const HOT_CACHE_PROMPT_LIMIT: usize = 16_000;
@@ -162,7 +162,7 @@ impl MemoryStore {
             None => Uuid::new_v4().to_string(),
         };
         let trimmed_content = content.trim().to_string();
-        let timestamp = now_iso_millis();
+        let timestamp = now_iso();
 
         self.with_db(scope, |conn| {
             let existing_created_at: Option<String> = conn
@@ -362,7 +362,7 @@ fn ensure_legacy_imported(
     }
 
     if !to_import.is_empty() {
-        let timestamp = now_iso_millis();
+        let timestamp = now_iso();
         let mut existing_ids = HashSet::new();
         {
             let mut stmt = conn.prepare("SELECT id FROM memories")?;
@@ -446,7 +446,7 @@ fn read_confined_text(path: &Path, root: &Path) -> Result<Option<String>> {
     let Some(canonical) = resolve_confined(path, root)? else {
         return Ok(None);
     };
-    let mut file = match open_no_follow(&canonical) {
+    let mut file = match crate::safe_open::open_no_follow(&canonical) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
@@ -458,34 +458,10 @@ fn read_confined_text(path: &Path, root: &Path) -> Result<Option<String>> {
         ))
         .into());
     }
+    crate::safe_open::restore_blocking_mode(&file);
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
-}
-
-#[cfg(unix)]
-fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-}
-
-#[cfg(windows)]
-fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    // FILE_FLAG_OPEN_REPARSE_POINT: open a symlink/junction itself instead of its target.
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
-    fs::File::open(path)
 }
 
 /// TS `walkMarkdownFiles`, confined to `root`: follows symlinked files and directories

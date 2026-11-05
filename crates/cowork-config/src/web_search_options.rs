@@ -1,6 +1,6 @@
-//! Web-search provider-option resolution shared by the runtime transports and the system prompt
-//! (legacy `src/shared/openaiCompatibleOptions.ts`), so the prompt's web guidance and the tools a
-//! request attaches are derived from one decision.
+//! Web-search provider-option resolution shared by the runtime transports, the tool catalog and
+//! the system prompt (legacy `src/shared/openaiCompatibleOptions.ts`), so the prompt's web
+//! guidance and the tools a request attaches are derived from one decision.
 
 use serde_json::{Map, Value};
 

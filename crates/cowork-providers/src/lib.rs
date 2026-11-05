@@ -17,12 +17,12 @@ pub mod bedrock;
 pub mod catalog;
 pub mod chat_completions;
 pub mod codex_app_server;
+pub mod connection;
 pub mod google_interactions;
 pub mod oauth;
 pub mod openai_responses;
 pub mod sse;
 pub mod transport;
-pub mod web_search_options;
 
 use cowork_config::{ProviderName, ProviderWireProtocol};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,11 @@ pub use catalog::{
 };
 pub use chat_completions::{ChatCompletionsTransport, ProviderQuirks};
 pub use codex_app_server::CodexAppServerTransport;
+pub use connection::{
+    ResolvedProviderConnection, provider_base_url_env_key, provider_base_url_override,
+    resolve_provider_base_url, resolve_provider_bedrock_auth, resolve_provider_connection,
+    select_provider_transport,
+};
 pub use google_interactions::{
     GoogleInteractionsTransport, GoogleSignatureRepairOutcome, repair_google_tool_call_signatures,
     sanitize_google_replay_messages,

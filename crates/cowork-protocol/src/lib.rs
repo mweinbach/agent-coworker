@@ -12,7 +12,7 @@
 //! - **Occurrence-stable `item/*` projectors**: Deterministic turn item lifecycle projection,
 //!   `clientMessageId` preservation, and `toolRetryLineage` capability filtering.
 //! - **Schema & manifest codegen**: Deterministic `schemars` JSON Schema bundle export for
-//!   `docs/generated/websocket-jsonrpc.schema.json`.
+//!   `cowork-server __export-jsonrpc-schema`.
 
 pub mod envelope;
 pub mod methods;

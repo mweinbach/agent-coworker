@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use cowork_config::{AgentConfig, ChildModelRoutingMode, ProviderName, UserProfile};
-use cowork_providers::{ProviderCatalogEntry, ProviderCatalogPayload, ProviderCatalogSnapshot};
+use cowork_providers::{ProviderCatalogEntry, ProviderCatalogSnapshot};
 use cowork_tools::{DiscoveredSkill, render_skill_body_for_model};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -115,19 +115,6 @@ impl PromptProviderCatalog {
             all: snapshot.all,
             available: snapshot.configured,
             cache_only_snapshot: true,
-        }
-    }
-
-    /// A live catalog payload (`connected` providers, no snapshot note).
-    pub fn from_live_payload(payload: &ProviderCatalogPayload) -> Self {
-        Self {
-            all: payload.all.clone(),
-            available: payload
-                .connected
-                .iter()
-                .filter_map(|p| ProviderName::parse(p))
-                .collect(),
-            cache_only_snapshot: false,
         }
     }
 }
@@ -353,27 +340,12 @@ impl<F: FnOnce() -> Vec<CatalogPlugin>> MentionResolver<'_, F> {
     }
 }
 
-/// Resolves `@skill-name` (user-turn skill injection) and `@plugin-name` (system prompt section)
-/// mentions in a user prompt. Without a config, plugins resolve only through the discovered
-/// plugin-owned skills; prefer [`resolve_turn_references_with_plugin_catalog`].
-pub fn resolve_turn_mentions(
-    user_text: &str,
-    skills: &BTreeMap<String, DiscoveredSkill>,
-    cowork_home: &Path,
-    working_directory: &Path,
-) -> ResolvedTurnMentions {
-    resolve_turn_references(user_text, &[], skills, cowork_home, working_directory)
-}
-
 /// [`resolve_turn_references_with_plugin_catalog`] without an installed plugin catalog: plugin
 /// references resolve only to enabled plugins that own a discovered skill in `skills`.
-/// `cowork_home` / `working_directory` are kept for call-site compatibility.
 pub fn resolve_turn_references(
     user_text: &str,
     references: &[TurnReference],
     skills: &BTreeMap<String, DiscoveredSkill>,
-    _cowork_home: &Path,
-    _working_directory: &Path,
 ) -> ResolvedTurnMentions {
     resolve_references(user_text, references, skills, || {
         catalog_from_plugin_skills(skills)

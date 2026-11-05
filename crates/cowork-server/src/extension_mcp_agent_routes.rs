@@ -30,11 +30,11 @@ use cowork_mcp::{
 use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, error_codes,
 };
-use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
+use cowork_providers::bedrock::resolve_bedrock_auth_config;
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioControlClient, LmStudioOptions, resolve_lmstudio_options,
 };
-use cowork_providers::resolve_provider_api_key;
+use cowork_providers::{resolve_provider_api_key, resolve_provider_bedrock_auth};
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, resolve_sandbox_policy, scratch_roots,
 };
@@ -45,11 +45,11 @@ use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::registry::{LiveSession, ServerRuntimeState};
-use crate::turn_runner::{
+use crate::jsonrpc_turn::{
     ActiveTurnControl, build_memory_prompt_section, new_canonical_message, new_text_block,
     parse_stored_canonical_messages, select_provider_transport,
 };
+use crate::registry::{LiveSession, ServerRuntimeState, overlay_session_provider_options};
 
 /// Points a turn's tool env (`HOME`, `COWORK_HOME_OVERRIDE`) at the user home. Both name the
 /// home, not the Cowork dir: consumers such as Windows sandbox detection
@@ -91,23 +91,6 @@ impl Drop for ChildActiveTurnGuard {
     }
 }
 
-/// Layers a session's `providerOptions` override onto workspace provider options one provider
-/// section deep, as the root turn path does (`turn_runner.rs`).
-fn overlay_session_provider_options(base: &mut Map<String, Value>, over: Map<String, Value>) {
-    for (k, v) in over {
-        match (base.get_mut(&k), v) {
-            (Some(Value::Object(existing_sub)), Value::Object(over_sub)) => {
-                for (sk, sv) in over_sub {
-                    existing_sub.insert(sk, sv);
-                }
-            }
-            (_, other) => {
-                base.insert(k, other);
-            }
-        }
-    }
-}
-
 /// A child's endpoint override. The parent's top-level `baseUrl` belongs to the parent's provider,
 /// so a child routed to another provider only honors its own provider section (or env), as the
 /// root turn path does (`provider_base_url_override`); otherwise the child provider's API key
@@ -118,7 +101,7 @@ fn child_provider_base_url(
     provider_opts: &Map<String, Value>,
     env: &HashMap<String, String>,
 ) -> Option<String> {
-    crate::turn_runner::provider_base_url_override(
+    cowork_providers::provider_base_url_override(
         provider,
         provider_opts,
         env,
@@ -264,13 +247,13 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         // Children inherit the parent's stored dirs (`modelRouter.ts` `...parentConfig`).
         let (parent_output_dir, parent_uploads_dir) =
             runtime.session_io_dirs(&input.parent_session_id);
-        crate::turn_runner::apply_session_io_dirs(
+        crate::jsonrpc_turn::apply_session_io_dirs(
             &mut agent_cfg,
             parent_output_dir.as_deref(),
             parent_uploads_dir.as_deref(),
         );
         let (output_dir, uploads_dir) =
-            crate::turn_runner::workspace_io_dirs(Some(&agent_cfg), &canonical_cwd);
+            crate::jsonrpc_turn::workspace_io_dirs(Some(&agent_cfg), &canonical_cwd);
         // The provider the parent's options were written for: the parent session's, or the
         // workspace default when the parent is unknown.
         let parent_provider = live_parent_provider
@@ -344,20 +327,13 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
 
         let conn_store = read_connection_store(&paths).await.ok();
         let api_key = resolve_provider_api_key(input.provider, conn_store.as_ref(), &runtime.env);
-        let bedrock_auth = if input.provider == ProviderName::Bedrock {
-            let mut auth =
-                resolve_bedrock_auth_config(&runtime.homedir, &runtime.env, conn_store.as_ref());
-            if let (Some(reg), Some(cfg)) = (
-                extract_bedrock_region_override(&merged_provider_opts),
-                auth.as_mut(),
-            ) {
-                cfg.region = reg;
-                cfg.has_configured_region = true;
-            }
-            auth
-        } else {
-            None
-        };
+        let bedrock_auth = resolve_provider_bedrock_auth(
+            input.provider,
+            &runtime.homedir,
+            &runtime.env,
+            conn_store.as_ref(),
+            Some(&merged_provider_opts),
+        );
 
         let mut lmstudio_prepare = None;
         let base_url = match input.provider {
@@ -427,10 +403,8 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         agent_cfg.tool_calling.code_mode = code_mode_enabled;
         let overflow_threshold = agent_cfg.tool_output_overflow_chars.map(|n| n as usize);
 
-        let mention_context = Arc::new(crate::turn_runner::TurnMentionContext {
+        let mention_context = Arc::new(crate::jsonrpc_turn::TurnMentionContext {
             skills: available_skills.clone(),
-            cowork_home: paths.root_dir.clone(),
-            working_directory: canonical_cwd.clone(),
         });
         let prompts_dir = runtime.built_in_dir.join("prompts");
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
@@ -555,7 +529,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             });
 
         let bundled_skills_dir = runtime.built_in_dir.join("skills");
-        let read_roots = crate::turn_runner::tool_read_roots(
+        let read_roots = crate::jsonrpc_turn::tool_read_roots(
             &runtime.built_in_dir,
             &paths.root_dir,
             &runtime.homedir,
@@ -963,8 +937,8 @@ impl ServerRuntimeState {
         cfg.provider = provider;
         cfg.model = model;
         cfg.enable_mcp = enable_mcp;
-        crate::turn_runner::apply_session_config_overrides(&mut cfg, &overrides);
-        crate::turn_runner::apply_session_sandbox(&mut cfg, sandbox.as_ref());
+        crate::jsonrpc_turn::apply_session_config_overrides(&mut cfg, &overrides);
+        crate::jsonrpc_turn::apply_session_sandbox(&mut cfg, sandbox.as_ref());
         apply_session_child_routing_overrides(&mut cfg, &overrides);
         // The parent's current provider options, merged exactly as its own turns merge them
         // (workspace + session `providerOptions` override, reconciled against the thread's

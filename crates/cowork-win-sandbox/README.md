@@ -2,9 +2,11 @@
 
 Windows sandbox helper for `agent-coworker`. It is the Windows counterpart to
 `/usr/bin/sandbox-exec` (macOS Seatbelt) and `bwrap` (Linux bubblewrap): the
-TypeScript `SandboxManager` (`src/platform/sandbox/windows.ts`) prepends this
-helper to a shell command so the command runs with reduced privilege inside a
-Job Object.
+Rust `cowork-sandbox` crate (`crates/cowork-sandbox/src/windows.rs`,
+`build_windows_sandbox_command`) prepends this helper to a shell command so the
+command runs with reduced privilege inside a Job Object. Helper discovery,
+signature checks, and the readiness probe live in
+`crates/cowork-sandbox/src/detect.rs`.
 
 ## CLI contract
 
@@ -31,14 +33,16 @@ the writable set.
 
 `setup` provisions the managed sandbox home. `probe` checks readiness and exercises
 allowed writes, denied outside/metadata/junction writes, child-process writes,
-temporary scratch access, and network denial. The TypeScript adapter requires
-the capability probe to succeed before advertising enforcement; with
+temporary scratch access, and network denial. `cowork-sandbox` requires the
+capability probe to succeed before advertising enforcement; with
 `sandbox.requireBackend: true`, an unavailable backend fails closed.
 
 Cowork manages setup state only in `~/.cowork` and its managed app-server home.
 Do not import setup state from a separate native Codex installation. See
-`src/platform/sandbox/windowsSetupSync.ts` and `docs/sandbox.md` for the shared
-account and policy contracts.
+`sync_codex_windows_sandbox_setup_state_between` in
+`crates/cowork-sandbox/src/windows.rs` (also used by `cowork-providers` when it
+launches the Codex app-server) and `docs/sandbox.md` for the shared account and
+policy contracts.
 
 ## Build
 

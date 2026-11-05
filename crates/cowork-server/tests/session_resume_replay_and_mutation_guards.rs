@@ -1062,19 +1062,16 @@ async fn workspace_rpcs_are_confined_to_authorized_workspaces() {
         .desktop_service
         .as_ref()
         .expect("desktop service")
-        .save_state_json(
-            json!({
-                "workspaces": [{
-                    "id": "ws-registered",
-                    "name": "Registered",
-                    "path": outside_cwd,
-                    "workspaceKind": "project",
-                    "createdAt": "2026-01-01T00:00:00.000Z",
-                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
-                }]
-            }),
-            &iso.workspace,
-        )
+        .save_state_json(json!({
+            "workspaces": [{
+                "id": "ws-registered",
+                "name": "Registered",
+                "path": outside_cwd,
+                "workspaceKind": "project",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+            }]
+        }))
         .unwrap();
     for method in [
         "thread/start",

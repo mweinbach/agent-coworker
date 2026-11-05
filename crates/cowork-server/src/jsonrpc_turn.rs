@@ -28,17 +28,14 @@ use cowork_protocol::{
     ThreadTurnProjector, TurnInterruptParams, TurnRetrySpec, TurnStartParams, TurnSteerParams,
     TurnToolsMode, error_codes,
 };
-use cowork_providers::bedrock::{
-    BedrockAuthConfig, extract_bedrock_region_override, resolve_bedrock_auth_config,
-};
+use cowork_providers::bedrock::BedrockAuthConfig;
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, resolve_lmstudio_options,
 };
 use cowork_providers::codex_app_server::CodexSandboxRestrictions;
 use cowork_providers::{
-    AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
-    CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
-    ProviderTransport, resolve_provider_api_key,
+    CodexAppServerTransport, ProviderTransport, provider_base_url_override,
+    resolve_provider_api_key, resolve_provider_base_url, resolve_provider_bedrock_auth,
 };
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, policy_allows_network, resolve_sandbox_policy,
@@ -75,8 +72,6 @@ pub(crate) struct ActiveTurnControl {
 
 pub(crate) struct TurnMentionContext {
     pub skills: std::collections::BTreeMap<String, cowork_tools::DiscoveredSkill>,
-    pub cowork_home: PathBuf,
-    pub working_directory: PathBuf,
 }
 
 impl TurnMentionContext {
@@ -85,13 +80,7 @@ impl TurnMentionContext {
         text: &str,
         references: &[TurnReference],
     ) -> cowork_harness::ResolvedTurnMentions {
-        resolve_turn_references(
-            text,
-            references,
-            &self.skills,
-            &self.cowork_home,
-            &self.working_directory,
-        )
+        resolve_turn_references(text, references, &self.skills)
     }
 }
 
@@ -754,110 +743,45 @@ pub(crate) fn select_provider_transport_for_turn(
     built_in_dir: Option<&Path>,
     tools_disabled: bool,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
-    match provider {
-        ProviderName::Openai => Ok(Arc::new(OpenAiResponsesTransport::new())),
-        ProviderName::Anthropic => Ok(Arc::new(AnthropicMessagesTransport::new())),
-        ProviderName::Google => Ok(Arc::new(GoogleInteractionsTransport::new())),
-        ProviderName::Bedrock => match bedrock_auth {
-            Some(auth) => Ok(Arc::new(BedrockConverseTransport::with_auth(auth))),
-            None => Ok(Arc::new(BedrockConverseTransport::with_isolated_env(
-                homedir.to_path_buf(),
+    cowork_providers::select_provider_transport(provider, bedrock_auth, homedir, env, || {
+        let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx else {
+            return CodexAppServerTransport::with_env(env.clone())
+                .with_tools_disabled(tools_disabled)
+                .with_built_in_dir(built_in_dir.map(Path::to_path_buf));
+        };
+        let observer: Arc<dyn cowork_providers::codex_app_server::CodexTurnObserver> =
+            Arc::clone(steer) as _;
+        let resolved_built_in_dir = tctx
+            .built_in_dir
+            .clone()
+            .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone()))
+            .or_else(|| built_in_dir.map(Path::to_path_buf));
+        if tools_disabled {
+            return CodexAppServerTransport::with_env_and_bridges(
                 env.clone(),
-            ))),
-        },
-        ProviderName::CodexCli => {
-            if let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx {
-                let observer: Arc<dyn cowork_providers::codex_app_server::CodexTurnObserver> =
-                    Arc::clone(steer) as _;
-                let resolved_built_in_dir = tctx
-                    .built_in_dir
-                    .clone()
-                    .or_else(|| tctx.agent_config.as_ref().map(|c| c.built_in_dir.clone()))
-                    .or_else(|| built_in_dir.map(Path::to_path_buf));
-                if tools_disabled {
-                    return Ok(Arc::new(
-                        CodexAppServerTransport::with_env_and_bridges(
-                            env.clone(),
-                            None,
-                            Some(observer),
-                        )
-                        .with_tools_disabled(true)
-                        .with_built_in_dir(resolved_built_in_dir),
-                    ));
-                }
-                let tools_map = create_builtin_tools(tctx);
-                let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
-                    tools_map,
-                    tctx.clone(),
-                    Arc::clone(im),
-                    overflow,
-                    catalog,
-                );
-                Ok(Arc::new(
-                    CodexAppServerTransport::with_env_and_bridges(
-                        env.clone(),
-                        Some(dyn_handler),
-                        Some(observer),
-                    )
-                    .with_sandbox_restrictions(codex_sandbox_restrictions(tctx))
-                    .with_built_in_dir(resolved_built_in_dir)
-                    .with_todos_handler(tctx.on_todos_updated.clone()),
-                ))
-            } else {
-                Ok(Arc::new(
-                    CodexAppServerTransport::with_env(env.clone())
-                        .with_tools_disabled(tools_disabled)
-                        .with_built_in_dir(built_in_dir.map(Path::to_path_buf)),
-                ))
-            }
+                None,
+                Some(observer),
+            )
+            .with_tools_disabled(true)
+            .with_built_in_dir(resolved_built_in_dir);
         }
-        other => ChatCompletionsTransport::new(other)
-            .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
-            .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str())),
-    }
-}
-
-/// Endpoint override for `provider`: its provider-options section (`{provider}.baseUrl`), the
-/// top-level `baseUrl` when `allow_top_level` (options of the chat's own provider), then the
-/// `<PROVIDER>_BASE_URL` environment variable.
-pub(crate) fn provider_base_url_override(
-    provider: ProviderName,
-    provider_opts: &Map<String, Value>,
-    env: &HashMap<String, String>,
-    allow_top_level: bool,
-) -> Option<String> {
-    let env_key = match provider {
-        ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
-        ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
-        other => format!(
-            "{}_BASE_URL",
-            other.as_str().to_ascii_uppercase().replace('-', "_")
-        ),
-    };
-    provider_opts
-        .get(provider.as_str())
-        .and_then(Value::as_object)
-        .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
-        .or_else(|| {
-            allow_top_level
-                .then(|| {
-                    provider_opts
-                        .get("baseUrl")
-                        .or_else(|| provider_opts.get("base_url"))
-                })
-                .flatten()
-        })
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            env.get(&env_key)
-                .map(String::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-        })
+        let tools_map = create_builtin_tools(tctx);
+        let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
+            tools_map,
+            tctx.clone(),
+            Arc::clone(im),
+            overflow,
+            catalog,
+        );
+        CodexAppServerTransport::with_env_and_bridges(
+            env.clone(),
+            Some(dyn_handler),
+            Some(observer),
+        )
+        .with_sandbox_restrictions(codex_sandbox_restrictions(tctx))
+        .with_built_in_dir(resolved_built_in_dir)
+        .with_todos_handler(tctx.on_todos_updated.clone())
+    })
 }
 
 /// The chat's own model connection, reused when the memory model is on the same provider.
@@ -893,15 +817,15 @@ impl ServerRuntimeState {
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let conn_store = read_connection_store(&paths).await.ok();
         let api_key = resolve_provider_api_key(target, conn_store.as_ref(), &self.env);
-        let bedrock_auth = (target == ProviderName::Bedrock)
-            .then(|| resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref()))
-            .flatten();
-        let base_url = match target {
-            ProviderName::Lmstudio => Some(
-                resolve_lmstudio_options(&self.env, Some(provider_opts), None).inference_base_url,
-            ),
-            other => provider_base_url_override(other, provider_opts, &self.env, false),
-        };
+        // The chat's provider options carry no region for a different memory provider.
+        let bedrock_auth = resolve_provider_bedrock_auth(
+            target,
+            &self.homedir,
+            &self.env,
+            conn_store.as_ref(),
+            None,
+        );
+        let base_url = resolve_provider_base_url(target, provider_opts, &self.env, false);
         let transport = select_provider_transport(
             target,
             bedrock_auth,
@@ -1863,20 +1787,13 @@ impl ServerRuntimeState {
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let conn_store = read_connection_store(&paths).await.ok();
         let api_key = resolve_provider_api_key(provider, conn_store.as_ref(), &self.env);
-        let bedrock_auth = if provider == ProviderName::Bedrock {
-            let mut auth =
-                resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref());
-            if let (Some(reg), Some(cfg)) = (
-                extract_bedrock_region_override(&merged_provider_opts),
-                auth.as_mut(),
-            ) {
-                cfg.region = reg;
-                cfg.has_configured_region = true;
-            }
-            auth
-        } else {
-            None
-        };
+        let bedrock_auth = resolve_provider_bedrock_auth(
+            provider,
+            &self.homedir,
+            &self.env,
+            conn_store.as_ref(),
+            Some(&merged_provider_opts),
+        );
 
         let base_url = match provider {
             ProviderName::Lmstudio => lmstudio_inference_url,
@@ -1999,8 +1916,6 @@ impl ServerRuntimeState {
         }
         let mention_context = Arc::new(TurnMentionContext {
             skills: available_skills.clone(),
-            cowork_home: paths.root_dir.clone(),
-            working_directory: canonical_cwd.clone(),
         });
         // Plugin references resolve through the installed plugin catalog (loaded lazily).
         let mentions = cowork_harness::resolve_turn_references_with_plugin_catalog(

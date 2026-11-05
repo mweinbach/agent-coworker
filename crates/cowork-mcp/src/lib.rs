@@ -37,7 +37,7 @@ pub use schema::{
 pub use transports::{load_mcp_tools, validate_mcp_server, validate_mcp_server_with_env};
 pub use types::{
     HydratedMcpServer, LoadedMcpTool, McpAuthMode, McpAuthMutationResult, McpAuthScope,
-    McpAuthStatus, McpConfigFileSummary, McpConfigLayer, McpConfigSource, McpOAuthChallengePayload,
+    McpAuthStatus, McpConfigFileSummary, McpConfigSource, McpOAuthChallengePayload,
     McpOAuthChallengeResult, McpOAuthRuntimeContext, McpServerAuthConfig, McpServerAuthState,
     McpServerCatalogEntry, McpServerConfig, McpServerTransport, McpServersSnapshot,
     McpToolErrorEntry, McpToolInvoker, McpTransportKind, McpValidatedToolSummary,
@@ -148,9 +148,9 @@ mod tests {
 
     #[test]
     fn mcp_config_layers_and_transports_match_contract() {
-        assert!(McpConfigLayer::Plugin < McpConfigLayer::System);
-        assert!(McpConfigLayer::System < McpConfigLayer::User);
-        assert!(McpConfigLayer::User < McpConfigLayer::Workspace);
+        assert!(McpConfigSource::Plugin < McpConfigSource::System);
+        assert!(McpConfigSource::System < McpConfigSource::User);
+        assert!(McpConfigSource::User < McpConfigSource::Workspace);
         assert_eq!(
             serde_json::to_string(&McpTransportKind::Http).unwrap(),
             "\"http\""

@@ -34,15 +34,6 @@ pub fn detect_bom(bytes: &[u8]) -> (TextEncoding, usize) {
     }
 }
 
-pub fn looks_binary_without_utf16_bom(bytes: &[u8]) -> bool {
-    let (enc, offset) = detect_bom(bytes);
-    if matches!(enc, TextEncoding::Utf16LeBom | TextEncoding::Utf16BeBom) {
-        return false;
-    }
-    let probe = &bytes[offset..bytes.len().min(offset + 8192)];
-    probe.contains(&0)
-}
-
 pub fn decode_raw_text_preserving_eol(bytes: &[u8]) -> ToolResult<(String, TextEncoding)> {
     let (encoding, offset) = detect_bom(bytes);
     let body = &bytes[offset..];

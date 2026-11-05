@@ -27,6 +27,7 @@ pub mod paths;
 pub mod provider_specs;
 pub mod providers;
 pub mod stores;
+pub mod web_search_options;
 
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +66,7 @@ pub use patch_store::{
 };
 pub use paths::{
     AiCoworkerPaths, CaseSensitivity, MEMORY_DB_FILE_NAME, PROTECTED_METADATA_DIR_NAMES,
-    assert_within_roots, canonical_key, canonicalize_sync, cowork_home, crosses_protected_metadata,
+    canonical_key, canonicalize_sync, cowork_home, crosses_protected_metadata,
     ensure_ai_coworker_home, ensure_private_dir_sync, env_map_from_process, fs_case_sensitivity,
     get_ai_coworker_paths, get_one_off_chats_root, harden_private_file_sync, host_platform,
     is_inside, is_inside_with_options, is_path_inside_one_off_chats_root, normalize_lexical_path,
@@ -86,12 +87,12 @@ pub use stores::{
     CachedModelDiscoveryModel, CachedModelReasoning, ConnectionMode, ConnectionStore,
     CustomModelEntry, CustomModelStore, DEFAULT_MODEL_DISCOVERY_CACHE_TTL_MS,
     ModelDiscoveryCacheFile, ModelDiscoveryResult, ModelDiscoverySource, ModelPreferenceEntry,
-    ModelPreferenceUpdate, ModelPreferencesStore, StoredConnection, TOOL_API_KEY_NAMES,
-    ToolApiKeyName, ToolApiKeys, delete_custom_model, get_saved_provider_api_key,
-    is_model_discovery_cache_fresh, model_discovery_cache_path, normalize_custom_model_id,
-    parse_connection_store_json, read_connection_store, read_connection_store_for_update_sync,
-    read_connection_store_sync, read_custom_model_store, read_custom_model_store_sync,
-    read_model_discovery_cache, read_model_discovery_cache_sync, read_model_preferences_store,
+    ModelPreferenceUpdate, ModelPreferencesStore, StoredConnection, ToolApiKeys,
+    delete_custom_model, get_saved_provider_api_key, is_model_discovery_cache_fresh,
+    model_discovery_cache_path, normalize_custom_model_id, parse_connection_store_json,
+    read_connection_store, read_connection_store_for_update_sync, read_connection_store_sync,
+    read_custom_model_store, read_custom_model_store_sync, read_model_discovery_cache,
+    read_model_discovery_cache_sync, read_model_preferences_store,
     read_model_preferences_store_sync, remove_provider_connection, reset_model_preferences,
     save_provider_connection, set_model_preferences, upsert_custom_model, write_connection_store,
     write_model_discovery_cache, write_model_preferences_store,
@@ -121,6 +122,12 @@ pub const FEATURE_FLAG_NAMES: [&str; 8] = [
     "tasks",
     "workflows",
 ];
+
+/// Current UTC time as an ISO-8601 string with millisecond precision and a `Z` suffix
+/// (JavaScript `new Date().toISOString()`).
+pub fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
 
 /// Re-exported protocol version verified across foundation crates.
 pub fn supported_protocol_version() -> &'static str {

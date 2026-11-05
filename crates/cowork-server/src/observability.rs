@@ -15,7 +15,6 @@ use chrono::{NaiveDate, Utc};
 use cowork_config::{AgentConfig, ensure_private_dir_sync};
 use data_encoding::BASE64;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
 use url::Url;
@@ -892,12 +891,6 @@ pub fn resolve_server_telemetry_exporters(
         sentry,
         posthog,
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObservabilitySpanAttribute {
-    pub key: String,
-    pub value: Value,
 }
 
 #[derive(Debug, Clone)]

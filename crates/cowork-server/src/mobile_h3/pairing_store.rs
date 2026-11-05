@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use chrono::{SecondsFormat, Utc};
+use cowork_config::now_iso;
 use cowork_config::{canonicalize_sync, ensure_private_dir_sync, write_text_file_atomic};
 use dashmap::DashMap;
 use data_encoding::BASE64URL_NOPAD;
@@ -85,10 +85,6 @@ pub fn sha256_base64url(value: &str) -> String {
     BASE64URL_NOPAD.encode(&Sha256::digest(value.as_bytes()))
 }
 
-fn now_iso_millis() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 fn trimmed_non_empty(val: Option<&Value>) -> Option<String> {
     val.and_then(Value::as_str)
         .map(str::trim)
@@ -123,7 +119,7 @@ fn normalize_device_record(raw: &Value) -> Option<H3TrustedDeviceRecord> {
     let fingerprint = trimmed_non_empty(obj.get("fingerprint"))?;
     let session_token_hash = trimmed_non_empty(obj.get("sessionTokenHash"))?;
     let display_name = trimmed_non_empty(obj.get("displayName"));
-    let last_paired_at = trimmed_non_empty(obj.get("lastPairedAt")).unwrap_or_else(now_iso_millis);
+    let last_paired_at = trimmed_non_empty(obj.get("lastPairedAt")).unwrap_or_else(now_iso);
     let last_connected_at = trimmed_non_empty(obj.get("lastConnectedAt"));
     let permissions = normalize_permissions(obj.get("permissions"));
 
@@ -197,7 +193,7 @@ pub async fn remember_h3_trusted_device(
     let mutex = lock_for_store(store_root);
     let _guard = mutex.lock().await;
 
-    let now = now_iso_millis();
+    let now = now_iso();
     let fp_full = sha256_base64url(identity_pub);
     let fingerprint = fp_full.chars().take(16).collect::<String>();
     let state = load_store_unlocked(store_root);
@@ -343,7 +339,7 @@ pub async fn verify_h3_session_token(
     }) else {
         return Ok(None);
     };
-    matched.last_connected_at = Some(now_iso_millis());
+    matched.last_connected_at = Some(now_iso());
     let updated = matched.clone();
     persist_store_unlocked(store_root, &state)?;
     Ok(Some(updated))

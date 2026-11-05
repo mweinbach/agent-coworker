@@ -42,7 +42,6 @@ struct HandshakeFlags {
     initialized_received: bool,
     client_info: Option<ClientInfo>,
     tool_retry_lineage: bool,
-    opt_out_methods: HashSet<String>,
     task_read_allowed: bool,
     task_mutation_allowed: bool,
 }
@@ -91,7 +90,6 @@ impl ConnectionRpcState {
                 initialized_received: false,
                 client_info: None,
                 tool_retry_lineage: false,
-                opt_out_methods: HashSet::new(),
                 task_read_allowed: true,
                 task_mutation_allowed: true,
             }),
@@ -297,7 +295,6 @@ async fn dispatch_request(
             flags.initialize_received = true;
             flags.client_info = Some(parsed.client_info);
             flags.tool_retry_lineage = tool_retry_lineage;
-            flags.opt_out_methods = opt_out.clone();
         }
         runtime.send_queue.set_connection_capabilities(
             &conn.connection_id,

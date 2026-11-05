@@ -373,7 +373,6 @@ printf '\x89PNG\r\n\x1a\n' > "${prefix}-1.png"
         .render_pdf_pages(PdftoppmJobRequest {
             pdf_path: sample_pdf,
             output_dir: png_out_dir,
-            dpi: 150,
             first_page: Some(1),
             last_page: Some(1),
             cwd: workspace.clone(),
@@ -659,7 +658,6 @@ prefix="${@: -1}"
         .render_pdf_pages(PdftoppmJobRequest {
             pdf_path: converted.output_path.clone(),
             output_dir: png_dir,
-            dpi: 72,
             first_page: None,
             last_page: None,
             cwd: workspace.clone(),

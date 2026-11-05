@@ -22,10 +22,10 @@ pub use locks::{
     register_pending_terminal_task_locks, register_settling_terminal_session_lock,
 };
 pub use policy::{
-    DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS, TaskCoordinatorError, TaskReviewMaterial,
-    build_artifact_revision_prompt, build_task_question_continuation_prompt,
-    build_task_retry_prompt, canonicalize_workspace_str, is_terminal_task,
-    is_valid_task_transition, media_type_for_artifact, same_workspace_path, validate_work_graph,
+    TaskCoordinatorError, TaskReviewMaterial, build_artifact_revision_prompt,
+    build_task_question_continuation_prompt, build_task_retry_prompt, canonicalize_workspace_str,
+    is_terminal_task, is_valid_task_transition, media_type_for_artifact, same_workspace_path,
+    validate_work_graph,
 };
 pub use preview_diff::{
     ArtifactBlobInput, ArtifactComparisonService, ArtifactDiffSummary, ArtifactKind,

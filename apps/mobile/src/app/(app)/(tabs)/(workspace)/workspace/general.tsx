@@ -4,6 +4,7 @@ import { Pressable, Switch, Text, TextInput, View } from "react-native";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import type { ProviderCapabilitiesCheckResult } from "@/cowork-shared/jsonrpcControlSchemas";
 import {
   MAX_DYNAMIC_TYPE_MULTIPLIER,
   minimumTouchTarget,
@@ -91,12 +92,18 @@ export default function WorkspaceGeneralScreen() {
   const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
   const applyWorkspaceDefaults = useWorkspaceStore((state) => state.applyWorkspaceDefaults);
+  const checkEndpointCapabilities = useWorkspaceStore((state) => state.checkEndpointCapabilities);
   const error = useWorkspaceStore((state) => state.error);
   const catalog = useProviderStore((state) => state.catalog);
   const refreshProviders = useProviderStore((state) => state.refresh);
 
   const [routingDraft, setRoutingDraft] = useState<RoutingDraft | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCheckingCapabilities, setIsCheckingCapabilities] = useState(false);
+  const [capabilitySnapshot, setCapabilitySnapshot] = useState<{
+    key: string;
+    result: ProviderCapabilitiesCheckResult;
+  } | null>(null);
   const savingRef: { current: boolean } = useRef<boolean>(false);
   const savedRouting: RoutingDraft = {
     desktopId,
@@ -140,6 +147,14 @@ export default function WorkspaceGeneralScreen() {
     controlSnapshot?.settings?.enableMcp === undefined
       ? true
       : controlSnapshot.settings.enableMcp === true;
+  const toolCalling = controlSnapshot?.sessionConfig?.toolCalling ?? {
+    codeMode: false,
+    deferredToolSearch: false,
+    strategy: "auto" as const,
+  };
+  const capabilityScopeKey = `${desktopId ?? ""}:${activeWorkspaceCwd ?? ""}:${selectedProvider ?? ""}:${selectedModel ?? ""}:${toolCalling.strategy}`;
+  const activeCapabilities =
+    capabilitySnapshot?.key === capabilityScopeKey ? capabilitySnapshot.result : null;
   const codexOptions = controlSnapshot?.sessionConfig?.providerOptions?.["codex-cli"];
   const googleOptions = controlSnapshot?.sessionConfig?.providerOptions?.google;
 
@@ -310,6 +325,187 @@ export default function WorkspaceGeneralScreen() {
               ios_backgroundColor={theme.surfaceMuted}
             />
           </View>
+        </View>
+      </SectionCard>
+
+      <SectionCard
+        title="Tool Calling"
+        description="Deferred tool discovery, programmatic multi-tool execution, and native provider endpoint checks."
+      >
+        <View style={{ gap: 14 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+            }}
+          >
+            <View style={{ flex: 1, gap: 3 }}>
+              <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+                Deferred Tool Search
+              </Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 13 }}>
+                Load non-core and MCP tool schemas on demand instead of upfront.
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="Enable deferred tool search"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: toolCalling.deferredToolSearch }}
+              value={toolCalling.deferredToolSearch}
+              onValueChange={(value) => {
+                void applyWorkspaceDefaults({
+                  config: {
+                    toolCalling: {
+                      ...toolCalling,
+                      deferredToolSearch: value,
+                    },
+                  },
+                });
+              }}
+              trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+              ios_backgroundColor={theme.surfaceMuted}
+            />
+          </View>
+
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+            }}
+          >
+            <View style={{ flex: 1, gap: 3 }}>
+              <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+                Programmatic Tool Calling
+              </Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 13 }}>
+                Orchestrate multi-step tool pipelines in code (Code Mode).
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="Enable programmatic tool calling"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: toolCalling.codeMode }}
+              value={toolCalling.codeMode}
+              onValueChange={(value) => {
+                void applyWorkspaceDefaults({
+                  config: {
+                    toolCalling: {
+                      ...toolCalling,
+                      codeMode: value,
+                    },
+                  },
+                });
+              }}
+              trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+              ios_backgroundColor={theme.surfaceMuted}
+            />
+          </View>
+
+          <View style={{ gap: 8 }}>
+            <SectionLabel>Strategy</SectionLabel>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {(
+                [
+                  ["auto", "Auto"],
+                  ["native", "Native"],
+                  ["harness", "Harness"],
+                ] as const
+              ).map(([strategyValue, label]) => (
+                <ChoicePill
+                  key={strategyValue}
+                  label={label}
+                  selected={toolCalling.strategy === strategyValue}
+                  onPress={() => {
+                    void applyWorkspaceDefaults({
+                      config: {
+                        toolCalling: {
+                          ...toolCalling,
+                          strategy: strategyValue,
+                        },
+                      },
+                    });
+                  }}
+                />
+              ))}
+            </View>
+          </View>
+
+          <Pressable
+            accessibilityLabel="Check endpoint capabilities"
+            accessibilityRole="button"
+            accessibilityState={{ busy: isCheckingCapabilities, disabled: isCheckingCapabilities }}
+            disabled={isCheckingCapabilities}
+            onPress={() => {
+              setIsCheckingCapabilities(true);
+              void checkEndpointCapabilities({
+                ...(providerEntry ? { provider: providerEntry.id } : {}),
+                ...(selectedModel ? { model: selectedModel } : {}),
+                strategy: toolCalling.strategy,
+                refresh: true,
+              })
+                .then((result) => {
+                  if (result) {
+                    setCapabilitySnapshot({ key: capabilityScopeKey, result });
+                  }
+                })
+                .finally(() => {
+                  setIsCheckingCapabilities(false);
+                });
+            }}
+            style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
+              alignSelf: "flex-start",
+              borderRadius: 999,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: theme.border,
+              backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+              paddingHorizontal: 16,
+              paddingVertical: 10,
+            })}
+          >
+            <Text style={{ color: theme.text, fontWeight: "700" }}>
+              {isCheckingCapabilities ? "Checking endpoint…" : "Check endpoint capabilities"}
+            </Text>
+          </Pressable>
+
+          {activeCapabilities ? (
+            <View style={{ gap: 8 }}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                <StatusPill
+                  label={
+                    activeCapabilities.capabilities.nativeToolSearch
+                      ? `Search: ${activeCapabilities.capabilities.nativeToolSearch}`
+                      : "Search: harness"
+                  }
+                  tone={activeCapabilities.capabilities.nativeToolSearch ? "success" : "neutral"}
+                />
+                <StatusPill
+                  label={
+                    activeCapabilities.capabilities.nativeProgrammaticToolCalling
+                      ? `PTC: ${activeCapabilities.capabilities.nativeProgrammaticToolCalling}`
+                      : "PTC: harness"
+                  }
+                  tone={
+                    activeCapabilities.capabilities.nativeProgrammaticToolCalling
+                      ? "success"
+                      : "neutral"
+                  }
+                />
+                <StatusPill label={activeCapabilities.capabilities.source} tone="primary" />
+              </View>
+              {activeCapabilities.capabilities.detail ? (
+                <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>
+                  {activeCapabilities.capabilities.detail}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </SectionCard>
 

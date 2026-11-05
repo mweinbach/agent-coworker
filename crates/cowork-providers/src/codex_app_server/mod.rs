@@ -253,6 +253,20 @@ impl CodexAppServerTransport {
 
 #[async_trait]
 impl ProviderTransport for CodexAppServerTransport {
+    fn native_tool_capabilities(
+        &self,
+        base_url: Option<&str>,
+        model_id: &str,
+        strategy: cowork_config::ToolCallingStrategy,
+    ) -> crate::endpoint_capabilities::EndpointToolCapabilities {
+        crate::endpoint_capabilities::resolve_endpoint_tool_capabilities(
+            ProviderName::CodexCli,
+            base_url,
+            model_id,
+            strategy,
+        )
+    }
+
     async fn stream_step(
         &self,
         request: ProviderStepRequest,
@@ -1498,10 +1512,22 @@ fn codex_thread_config(
         return config;
     }
     // Child lifecycle, scopes, and budgets belong to Cowork's agent control.
-    config.insert(
-        "features".into(),
-        json!({ "multi_agent": false, "multi_agent_v2": false }),
-    );
+    let mut features = serde_json::Map::new();
+    features.insert("multi_agent".into(), Value::Bool(false));
+    features.insert("multi_agent_v2".into(), Value::Bool(false));
+    let explicit_code_mode =
+        crate::endpoint_capabilities::read_native_tool_calling_plan(provider_options)
+            .and_then(|plan| plan.codex_code_mode)
+            .or_else(|| {
+                provider_options
+                    .get("codex-cli")
+                    .and_then(|o| o.get("codeMode"))
+                    .and_then(Value::as_bool)
+            });
+    if let Some(cm) = explicit_code_mode {
+        features.insert("code_mode".into(), Value::Bool(cm));
+    }
+    config.insert("features".into(), Value::Object(features));
     if !web_search_allowed {
         config.insert("web_search".into(), Value::String("disabled".into()));
     } else if let Some(mode) = codex_provider_option_str(provider_options, "webSearchMode")

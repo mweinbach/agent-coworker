@@ -72,6 +72,9 @@ export function buildWorkspaceRecordWithDefaults(
     defaultPreferredChildModelRef,
     defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
+    ...(source?.defaultToolCalling !== undefined
+      ? { defaultToolCalling: { ...source.defaultToolCalling } }
+      : {}),
     defaultWorkflowMaxConcurrentAgents: source?.defaultWorkflowMaxConcurrentAgents,
     defaultAdvancedMemory: source?.defaultAdvancedMemory,
     defaultMemoryGenerationModel: source?.defaultMemoryGenerationModel,

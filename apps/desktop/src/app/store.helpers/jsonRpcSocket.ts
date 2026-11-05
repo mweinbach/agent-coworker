@@ -601,6 +601,7 @@ function getJsonRpcRequestRetryOptions(
     method === "cowork/session/state/read" ||
     method === "cowork/provider/authMethods/read" ||
     method === "cowork/provider/status/refresh" ||
+    method === "cowork/provider/capabilities/check" ||
     method === "cowork/creation/preflight" ||
     method === "cowork/runtime/libreoffice/check" ||
     method === "cowork/workspace/document/open" ||

@@ -36,6 +36,7 @@ import type {
   SkillInstallationEntry,
   SkillInstallPreview,
   SkillUpdateCheckResult,
+  ToolCallingConfig,
   TurnReference,
 } from "../lib/wsProtocol";
 import type { ComposerDraftRevision, PersistedComposerDrafts } from "./composerDrafts";
@@ -59,6 +60,20 @@ export function normalizeWorkspaceUserProfile(
     instructions: typeof value?.instructions === "string" ? value.instructions : "",
     work: typeof value?.work === "string" ? value.work : "",
     details: typeof value?.details === "string" ? value.details : "",
+  };
+}
+
+export function normalizeWorkspaceToolCalling(
+  value?: Partial<ToolCallingConfig> | null,
+): ToolCallingConfig {
+  const strategy =
+    value?.strategy === "native" || value?.strategy === "harness" || value?.strategy === "auto"
+      ? value.strategy
+      : "auto";
+  return {
+    codeMode: value?.codeMode === true,
+    deferredToolSearch: value?.deferredToolSearch === true,
+    strategy,
   };
 }
 
@@ -104,6 +119,7 @@ export type WorkspaceRecord = {
   defaultPreferredChildModelRef?: string;
   defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
+  defaultToolCalling?: ToolCallingConfig;
   /** Max child agents a `workflow` run may have in flight. Unset = harness default. */
   defaultWorkflowMaxConcurrentAgents?: number;
   providerOptions?: WorkspaceProviderOptions;
@@ -120,8 +136,12 @@ export type WorkspaceRecord = {
   yolo: boolean;
 };
 
-export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile">> & {
+export type WorkspaceDefaultsPatch = Partial<
+  Omit<WorkspaceRecord, "userProfile" | "defaultToolCalling">
+> & {
   clearDefaultToolOutputOverflowChars?: boolean;
+  defaultToolCalling?: Partial<ToolCallingConfig>;
+  clearDefaultToolCalling?: boolean;
   userProfile?: Partial<WorkspaceUserProfile>;
 };
 

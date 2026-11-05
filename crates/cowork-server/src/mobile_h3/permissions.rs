@@ -63,6 +63,7 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS: &[&str] = &[
     "cowork/provider/catalog/read",
     "cowork/provider/authMethods/read",
     "cowork/provider/status/refresh",
+    "cowork/provider/capabilities/check",
     "cowork/provider/codexAppServer/status",
     "cowork/runtime/libreoffice/check",
     "cowork/agentProfiles/catalog/read",

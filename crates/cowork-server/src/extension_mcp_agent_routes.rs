@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cowork_config::{
-    AgentConfig, ChildModelRoutingMode, ProviderName, canonicalize_sync, get_ai_coworker_paths,
-    normalize_child_routing_config, read_connection_store, reconcile_reasoning_provider_options,
+    AgentConfig, ChildModelRoutingMode, ProviderName, ToolCallingConfig, ToolCallingStrategy,
+    canonicalize_sync, get_ai_coworker_paths, normalize_child_routing_config,
+    read_connection_store, reconcile_reasoning_provider_options,
 };
 use cowork_harness::agents::ChildTurnReservation;
 use cowork_harness::agents::profiles::AgentProfileUpsertInput;
@@ -423,9 +424,47 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             .get("codeMode")
             .and_then(Value::as_bool)
             .unwrap_or(agent_cfg.tool_calling.code_mode);
-        agent_cfg.tool_calling.deferred_tool_search = deferred_tool_search;
-        agent_cfg.tool_calling.code_mode = code_mode_enabled;
+        let tool_calling_strategy = merged_provider_opts
+            .get("toolCallingStrategy")
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+            .unwrap_or(agent_cfg.tool_calling.strategy);
+        let child_tool_calling = ToolCallingConfig {
+            code_mode: code_mode_enabled,
+            deferred_tool_search,
+            strategy: tool_calling_strategy,
+        };
+        agent_cfg.tool_calling = child_tool_calling.clone();
         let overflow_threshold = agent_cfg.tool_output_overflow_chars.map(|n| n as usize);
+
+        if tool_calling_strategy == ToolCallingStrategy::Auto
+            && (deferred_tool_search || code_mode_enabled)
+            && matches!(
+                input.provider,
+                ProviderName::Openai | ProviderName::Anthropic
+            )
+            && !cowork_providers::has_cached_endpoint_check(
+                input.provider,
+                base_url.as_deref(),
+                &input.model_id,
+            )
+        {
+            let _ = cowork_providers::check_endpoint_capabilities(
+                input.provider,
+                base_url.as_deref(),
+                &input.model_id,
+                api_key.as_deref(),
+                None,
+                false,
+            )
+            .await;
+        }
+        let endpoint_caps = cowork_providers::resolve_endpoint_tool_capabilities(
+            input.provider,
+            base_url.as_deref(),
+            &input.model_id,
+            tool_calling_strategy,
+        );
 
         let mention_context = Arc::new(crate::turn_runner::TurnMentionContext {
             skills: available_skills.clone(),
@@ -433,6 +472,11 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             working_directory: canonical_cwd.clone(),
         });
         let prompts_dir = runtime.built_in_dir.join("prompts");
+        let mut child_template_ctx = PromptTemplateContext::from_config(&agent_cfg);
+        child_template_ctx.native_tool_search_enabled =
+            deferred_tool_search && endpoint_caps.native_tool_search.is_some();
+        child_template_ctx.native_code_execution_enabled =
+            code_mode_enabled && endpoint_caps.native_programmatic_tool_calling.is_some();
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
             prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
             prompt_template: Some(input.role_prompt.clone()),
@@ -452,7 +496,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             referenced_plugins: Vec::new(),
             deferred_tool_search_enabled: deferred_tool_search,
             code_mode_enabled,
-            template_context: PromptTemplateContext::from_config(&agent_cfg),
+            template_context: child_template_ctx,
         });
 
         let turn_id = Uuid::new_v4().to_string();
@@ -476,7 +520,8 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                 .model_settings
                 .as_ref()
                 .and_then(|m| m.max_retries),
-        });
+        })
+        .with_tool_calling(child_tool_calling);
 
         let cancel_handle = runner.cancellation_handle();
         let (done_tx, done_rx) = oneshot::channel::<()>();

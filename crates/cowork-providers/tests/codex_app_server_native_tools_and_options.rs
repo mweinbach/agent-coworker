@@ -795,3 +795,75 @@ async fn codex_tools_disabled_locks_down_native_tools_mcp_and_skips_thread_resum
             .any(|b| matches!(b, ContentBlock::Text { text, .. } if text == "Done."))
     );
 }
+
+#[tokio::test]
+async fn codex_native_plan_forwards_explicit_code_mode_feature_flag() {
+    use cowork_providers::{
+        NativeProgrammaticToolCallingKind, NativeToolCallingPlan, write_native_tool_calling_plan,
+    };
+
+    let fx = Fixture::new();
+    let run = "native-code-mode";
+    let mut opts = Map::new();
+    opts.insert(
+        "cwd".into(),
+        json!(fx.base.join("workspace").to_string_lossy()),
+    );
+    opts.insert(
+        "coworkHome".into(),
+        json!(fx.base.join("home/.cowork").to_string_lossy()),
+    );
+    write_native_tool_calling_plan(
+        &mut opts,
+        &NativeToolCallingPlan {
+            tool_search: None,
+            programmatic_tool_calling: Some(NativeProgrammaticToolCallingKind::CodexCodeMode),
+            deferred_tool_names: Vec::new(),
+            programmatic_tool_names: Vec::new(),
+            codex_code_mode: Some(true),
+        },
+    );
+
+    let mut env = HashMap::new();
+    env.insert(
+        "PATH".into(),
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+    );
+    env.insert("HOME".into(), fx.base.join("home").to_string_lossy().into());
+
+    let mut transport = CodexAppServerTransport::with_command_override(
+        "node".into(),
+        vec![
+            fx.script.to_string_lossy().into_owned(),
+            fx.log_path(run).to_string_lossy().into_owned(),
+            "todos".into(),
+        ],
+    )
+    .with_built_in_dir(Some(repo_root()));
+    transport.env_override = Some(env);
+
+    transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gpt-5.4".into(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Instructions".into(),
+                messages: vec![user_message("run with code mode")],
+                tools: Vec::new(),
+                authorized_tool_names: None,
+                provider_options: opts,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-codex-cm".into(),
+            },
+            &StepBudget::new(60_000, None),
+            &mut |_ev| {},
+        )
+        .await
+        .expect("codex native code_mode turn succeeds");
+
+    let started = fx.logged(run, "thread/start");
+    assert_eq!(started["config"]["features"]["code_mode"], json!(true));
+}

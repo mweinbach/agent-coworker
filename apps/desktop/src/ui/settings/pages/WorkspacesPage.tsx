@@ -38,6 +38,7 @@ import { operationKey } from "../../../app/store.helpers/operations";
 import type { PersistedProviderStatus } from "../../../app/types";
 import {
   isOneOffChatWorkspace,
+  normalizeWorkspaceToolCalling,
   normalizeWorkspaceUserProfile,
   type WorkspaceRecord,
   type WorkspaceUserProfile,
@@ -76,7 +77,11 @@ import {
   sortProviderNamesForSettings,
 } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
-import type { ProviderName } from "../../../lib/wsProtocol";
+import type {
+  ProviderCapabilitiesCheckResult,
+  ProviderName,
+  ToolCallingStrategy,
+} from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { OperationFeedback } from "../../OperationFeedback";
 import { SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
@@ -870,6 +875,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const workspaces = useAppStore((s) => s.workspaces);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
@@ -886,8 +892,14 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useSharedUpdateWorkspaceDefaults();
+  const checkProviderCapabilities = useAppStore((s) => s.checkProviderCapabilities);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
   const [restartingWorkspaceId, setRestartingWorkspaceId] = useState<string | null>(null);
+  const [capabilityCheckState, setCapabilityCheckState] = useState<{
+    key: string;
+    result: ProviderCapabilitiesCheckResult;
+  } | null>(null);
+  const [checkingCapabilities, setCheckingCapabilities] = useState(false);
   const handleRestartWorkspaceServer = async (workspaceId: string) => {
     const { threads, threadRuntimeById } = useAppStore.getState();
     const hasRunningChat = threads.some(
@@ -1246,6 +1258,181 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                 </div>
               </div>
             </SettingsSection>
+
+            {(() => {
+              const runtimeToolCalling = ws
+                ? workspaceRuntimeById[ws.id]?.controlSessionConfig?.toolCalling
+                : undefined;
+              const effectiveToolCalling = normalizeWorkspaceToolCalling(
+                ws.defaultToolCalling ?? runtimeToolCalling,
+              );
+              const targetModel =
+                model ||
+                providerDefaultModelByProvider[effectiveProvider]?.trim() ||
+                defaultModelForProvider(effectiveProvider);
+              const capabilityKey = `${ws.id}:${effectiveProvider}:${targetModel}:${effectiveToolCalling.strategy}`;
+              const activeCapabilityCheck =
+                capabilityCheckState?.key === capabilityKey ? capabilityCheckState.result : null;
+              const nativeSearchLabel = activeCapabilityCheck?.capabilities.nativeToolSearch
+                ? `Native (${activeCapabilityCheck.capabilities.nativeToolSearch})`
+                : "Cowork harness";
+              const nativePtcLabel = activeCapabilityCheck?.capabilities
+                .nativeProgrammaticToolCalling
+                ? `Native (${activeCapabilityCheck.capabilities.nativeProgrammaticToolCalling})`
+                : "Cowork QuickJS harness";
+
+              return (
+                <SettingsSection
+                  title="Tool calling"
+                  description="Control deferred tool discovery, programmatic multi-tool execution, and native provider wire envelopes."
+                  action={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      disabled={checkingCapabilities}
+                      onClick={() => {
+                        setCheckingCapabilities(true);
+                        void checkProviderCapabilities({
+                          workspaceId: ws.id,
+                          provider: effectiveProvider,
+                          model: targetModel || undefined,
+                          strategy: effectiveToolCalling.strategy,
+                          refresh: true,
+                        })
+                          .then((result) => {
+                            if (result) {
+                              setCapabilityCheckState({ key: capabilityKey, result });
+                            }
+                          })
+                          .finally(() => {
+                            setCheckingCapabilities(false);
+                          });
+                      }}
+                    >
+                      {checkingCapabilities ? "Checking…" : "Check endpoint"}
+                    </Button>
+                  }
+                >
+                  <div className="flex flex-col gap-4 px-4 py-4">
+                    <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                      <div className="grid gap-1.5">
+                        <Label
+                          htmlFor="deferred-tool-search-toggle"
+                          className="text-sm font-medium leading-none cursor-pointer"
+                        >
+                          Deferred tool search
+                        </Label>
+                        <div className="text-xs text-muted-foreground">
+                          Keep non-core and MCP tool schemas out of the initial prompt and load them
+                          on demand when needed.
+                        </div>
+                      </div>
+                      <ToggleChip
+                        id="deferred-tool-search-toggle"
+                        pressed={effectiveToolCalling.deferredToolSearch}
+                        aria-label="Enable deferred tool search"
+                        onPressedChange={(next) => {
+                          void updateWorkspaceDefaults(ws.id, {
+                            defaultToolCalling: {
+                              ...effectiveToolCalling,
+                              deferredToolSearch: next,
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                      <div className="grid gap-1.5">
+                        <Label
+                          htmlFor="code-mode-toggle"
+                          className="text-sm font-medium leading-none cursor-pointer"
+                        >
+                          Programmatic tool calling (Code Mode)
+                        </Label>
+                        <div className="text-xs text-muted-foreground">
+                          Allow the model to orchestrate multi-step tool pipelines in code instead
+                          of sequential round-trips.
+                        </div>
+                      </div>
+                      <ToggleChip
+                        id="code-mode-toggle"
+                        pressed={effectiveToolCalling.codeMode}
+                        aria-label="Enable programmatic tool calling"
+                        onPressedChange={(next) => {
+                          void updateWorkspaceDefaults(ws.id, {
+                            defaultToolCalling: {
+                              ...effectiveToolCalling,
+                              codeMode: next,
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                      <div className="grid gap-1.5">
+                        <div className="text-sm font-medium leading-none">Execution strategy</div>
+                        <div className="text-xs text-muted-foreground">
+                          Auto probes the active provider endpoint and uses native OpenAI,
+                          Anthropic, or Codex envelopes when supported, falling back cleanly to the
+                          Cowork harness.
+                        </div>
+                      </div>
+                      <div className="w-56 max-[960px]:w-full">
+                        <Select
+                          value={effectiveToolCalling.strategy}
+                          onValueChange={(value) => {
+                            const strategy = value as ToolCallingStrategy;
+                            void updateWorkspaceDefaults(ws.id, {
+                              defaultToolCalling: {
+                                ...effectiveToolCalling,
+                                strategy,
+                              },
+                            });
+                          }}
+                        >
+                          <SelectTrigger aria-label="Tool calling strategy">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto (recommended)</SelectItem>
+                            <SelectItem value="native">Native provider wire format</SelectItem>
+                            <SelectItem value="harness">Cowork harness</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {activeCapabilityCheck ? (
+                      <div
+                        className="flex flex-col gap-2 rounded-lg border app-border-subtle bg-muted/30 px-3 py-2.5 text-xs"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary">
+                            {displayProviderName(activeCapabilityCheck.provider)}:{" "}
+                            {activeCapabilityCheck.model}
+                          </Badge>
+                          <Badge variant="outline">Tool search: {nativeSearchLabel}</Badge>
+                          <Badge variant="outline">Programmatic: {nativePtcLabel}</Badge>
+                          <Badge variant="outline">
+                            Source: {activeCapabilityCheck.capabilities.source}
+                          </Badge>
+                        </div>
+                        {activeCapabilityCheck.capabilities.detail ? (
+                          <div className="text-muted-foreground">
+                            {activeCapabilityCheck.capabilities.detail}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </SettingsSection>
+              );
+            })()}
 
             {surface === "defaults" ? (
               <Collapsible>

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CHILD_MODEL_ROUTING_MODES, PROVIDER_NAMES } from "../types";
+import { CHILD_MODEL_ROUTING_MODES, PROVIDER_NAMES, TOOL_CALLING_STRATEGIES } from "../types";
 import {
   agentProfileCopyInputSchema,
   agentProfileScopeSchema,
@@ -22,6 +22,21 @@ import { COWORK_RUNTIME_BOOTSTRAP_PHASES } from "./runtimeProgress";
 
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
+const toolCallingStrategySchema = z.enum(TOOL_CALLING_STRATEGIES);
+const toolCallingConfigSchema = z
+  .object({
+    codeMode: z.boolean(),
+    deferredToolSearch: z.boolean(),
+    strategy: toolCallingStrategySchema,
+  })
+  .strict();
+const toolCallingPatchSchema = z
+  .object({
+    codeMode: z.boolean().optional(),
+    deferredToolSearch: z.boolean().optional(),
+    strategy: toolCallingStrategySchema.optional(),
+  })
+  .strict();
 const skillImprovementScopeSchema = z.enum(["user", "all"]);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const optionalNonEmptyTrimmedStringSchema = nonEmptyTrimmedStringSchema.optional();
@@ -184,6 +199,7 @@ export const sessionConfigEventSchema = z
         workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         defaultToolOutputOverflowChars: z.number().int().nullable().optional(),
+        toolCalling: toolCallingConfigSchema.optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),
@@ -1488,6 +1504,59 @@ const providerStatusRefreshRequestSchema = z
   })
   .strict();
 
+const nativeToolSearchKindSchema = z.enum([
+  "openAiResponses",
+  "openRouterResponses",
+  "anthropicBm25",
+  "anthropicRegex",
+]);
+
+const nativeProgrammaticToolCallingKindSchema = z.enum([
+  "openAiResponses",
+  "anthropicCodeExecution20260120",
+  "codexCodeMode",
+]);
+
+const endpointCapabilitySourceSchema = z.enum([
+  "staticClassifier",
+  "endpointCheck",
+  "runtimeFallback",
+]);
+
+const endpointToolCapabilitiesSchema = z
+  .object({
+    provider: z.string(),
+    modelId: z.string(),
+    endpointHost: z.string().optional(),
+    nativeToolSearch: nativeToolSearchKindSchema.optional(),
+    nativeProgrammaticToolCalling: nativeProgrammaticToolCallingKindSchema.optional(),
+    source: endpointCapabilitySourceSchema,
+    checkedAtMs: z.number().int().nonnegative().optional(),
+    detail: z.string().optional(),
+  })
+  .passthrough();
+
+const providerCapabilitiesCheckRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    threadId: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema.optional(),
+    model: optionalNonEmptyTrimmedStringSchema,
+    baseUrl: optionalNonEmptyTrimmedStringSchema,
+    strategy: toolCallingStrategySchema.optional(),
+    refresh: z.boolean().optional(),
+  })
+  .strict();
+
+const providerCapabilitiesCheckResultSchema = z
+  .object({
+    provider: providerNameSchema,
+    model: z.string(),
+    strategy: toolCallingStrategySchema,
+    capabilities: endpointToolCapabilitiesSchema,
+  })
+  .passthrough();
+
 const providerCustomModelMutationRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -2040,6 +2109,8 @@ const sessionDefaultsApplyRequestSchema = z
         skillImprovementExcludedSkills: z.array(z.string()).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
+        toolCalling: toolCallingPatchSchema.optional(),
+        clearToolCalling: z.boolean().optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
@@ -2069,6 +2140,7 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/catalog/read": providerCatalogReadRequestSchema,
   "cowork/provider/authMethods/read": providerAuthMethodsReadRequestSchema,
   "cowork/provider/status/refresh": providerStatusRefreshRequestSchema,
+  "cowork/provider/capabilities/check": providerCapabilitiesCheckRequestSchema,
   "cowork/provider/codexAppServer/status": providerCodexAppServerStatusRequestSchema,
   "cowork/provider/codexAppServer/update": providerCodexAppServerUpdateRequestSchema,
   "cowork/provider/lmstudio/local/status": providerLmStudioLocalStatusRequestSchema,
@@ -2166,6 +2238,7 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/catalog/read": sessionEventEnvelope(providerCatalogEventSchema),
   "cowork/provider/authMethods/read": sessionEventEnvelope(providerAuthMethodsEventSchema),
   "cowork/provider/status/refresh": sessionEventEnvelope(providerStatusEventSchema),
+  "cowork/provider/capabilities/check": providerCapabilitiesCheckResultSchema,
   "cowork/provider/codexAppServer/status": codexAppServerInstallStatusEnvelopeSchema,
   "cowork/provider/codexAppServer/update": codexAppServerInstallStatusEnvelopeSchema,
   "cowork/provider/lmstudio/local/status": lmStudioLocalStatusEnvelopeSchema,
@@ -2307,3 +2380,4 @@ export const jsonRpcRuntimeResultSchemas = runtimeControlSchemas.results;
 
 export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
 export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;
+export type ProviderCapabilitiesCheckResult = z.infer<typeof providerCapabilitiesCheckResultSchema>;

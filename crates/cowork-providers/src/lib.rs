@@ -17,6 +17,7 @@ pub mod bedrock;
 pub mod catalog;
 pub mod chat_completions;
 pub mod codex_app_server;
+pub mod endpoint_capabilities;
 pub mod google_interactions;
 pub mod oauth;
 pub mod openai_responses;
@@ -39,6 +40,17 @@ pub use catalog::{
 };
 pub use chat_completions::{ChatCompletionsTransport, ProviderQuirks};
 pub use codex_app_server::CodexAppServerTransport;
+pub use endpoint_capabilities::{
+    COWORK_NATIVE_TOOL_CALLING_OPTION_KEY, EndpointCapabilitySource, EndpointToolCapabilities,
+    NATIVE_EAGER_CORE_TOOLS, NativeProgrammaticToolCallingKind, NativeToolCallingPlan,
+    NativeToolSearchKind, anthropic_model_supports_native_tool_features,
+    check_endpoint_capabilities, classify_static_endpoint_capabilities,
+    clear_endpoint_capability_cache_for_tests, has_cached_endpoint_check,
+    is_native_eager_core_tool, is_openrouter_host, is_programmatic_eligible_tool,
+    openai_model_supports_native_tool_features, parse_endpoint_host, read_native_tool_calling_plan,
+    record_rejected_native_capability, resolve_endpoint_tool_capabilities,
+    strip_native_tool_calling_plan, write_native_tool_calling_plan,
+};
 pub use google_interactions::{
     GoogleInteractionsTransport, GoogleSignatureRepairOutcome, repair_google_tool_call_signatures,
     sanitize_google_replay_messages,

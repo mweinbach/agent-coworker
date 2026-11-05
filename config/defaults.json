@@ -8,7 +8,8 @@
   "userName": "",
   "toolCalling": {
     "codeMode": false,
-    "deferredToolSearch": false
+    "deferredToolSearch": false,
+    "strategy": "auto"
   },
   "knowledgeCutoff": "End of May 2025",
   "toolOutputOverflowChars": 25000,

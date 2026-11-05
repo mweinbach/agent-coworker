@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use base64_helper::decode_base64_permissive;
 use cowork_config::{
     AgentConfig, ChildModelRoutingMode, LoadConfigOptions, ModelRegistry, ProjectConfigPatch,
-    ProviderName, canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside,
-    legacy_model_alias, load_config, normalize_child_routing_config, normalize_lexical_path,
-    persist_project_config_patch, reconcile_reasoning_provider_options, same_workspace_path,
+    ProviderName, ToolCallingPatch, ToolCallingStrategy, canonicalize_sync, get_ai_coworker_paths,
+    get_one_off_chats_root, is_inside, legacy_model_alias, load_config,
+    normalize_child_routing_config, normalize_lexical_path, persist_project_config_patch,
+    reconcile_reasoning_provider_options, same_workspace_path,
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
@@ -3048,6 +3049,50 @@ impl ServerRuntimeState {
         if let Some(po) = pick_editable_provider_options(&effective_po) {
             config_obj["providerOptions"] = Value::Object(po);
         }
+        let mut effective_tc = cfg.tool_calling.clone();
+        if let Some(po) = session_po {
+            if let Some(b) = po.get("codeMode").and_then(Value::as_bool) {
+                effective_tc.code_mode = b;
+            }
+            if let Some(b) = po.get("deferredToolSearch").and_then(Value::as_bool) {
+                effective_tc.deferred_tool_search = b;
+            }
+            if let Some(s) = po
+                .get("toolCallingStrategy")
+                .and_then(Value::as_str)
+                .and_then(ToolCallingStrategy::parse)
+            {
+                effective_tc.strategy = s;
+            }
+        }
+        if let Some(ovr) = overrides {
+            if let Some(b) = ovr.get("codeMode").and_then(Value::as_bool) {
+                effective_tc.code_mode = b;
+            }
+            if let Some(b) = ovr.get("deferredToolSearch").and_then(Value::as_bool) {
+                effective_tc.deferred_tool_search = b;
+            }
+            if let Some(tc_obj) = ovr.get("toolCalling").and_then(Value::as_object) {
+                if let Some(b) = tc_obj.get("codeMode").and_then(Value::as_bool) {
+                    effective_tc.code_mode = b;
+                }
+                if let Some(b) = tc_obj.get("deferredToolSearch").and_then(Value::as_bool) {
+                    effective_tc.deferred_tool_search = b;
+                }
+                if let Some(s) = tc_obj
+                    .get("strategy")
+                    .and_then(Value::as_str)
+                    .and_then(ToolCallingStrategy::parse)
+                {
+                    effective_tc.strategy = s;
+                }
+            }
+        }
+        config_obj["toolCalling"] = json!({
+            "codeMode": effective_tc.code_mode,
+            "deferredToolSearch": effective_tc.deferred_tool_search,
+            "strategy": effective_tc.strategy,
+        });
         // The effective profile: the session's stored `userProfile` fields layered over the
         // workspace profile one field at a time (TS `buildNextConfig` spread the patch over
         // `effectiveUserProfile`, and `getSessionConfigEvent` emitted all three fields). The
@@ -3064,11 +3109,18 @@ impl ServerRuntimeState {
             }
         }
         if let (Some(Value::Object(dst)), Some(ovr)) = (Some(&mut config_obj), overrides) {
-            // `providerOptions` and `userProfile` were merged over the workspace values above.
-            for (k, v) in ovr
-                .iter()
-                .filter(|(k, _)| *k != "providerOptions" && *k != "userProfile")
-            {
+            // `providerOptions`, `userProfile`, and `toolCalling` were merged over the workspace
+            // values above.
+            for (k, v) in ovr.iter().filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "providerOptions"
+                        | "userProfile"
+                        | "toolCalling"
+                        | "deferredToolSearch"
+                        | "codeMode"
+                )
+            }) {
                 if k == "toolOutputOverflowChars" {
                     // A session overflow patch is also the session's project override
                     // (`prepareConfigUpdate` set both).
@@ -5009,6 +5061,16 @@ fn merge_editable_provider_options(
             current.insert(key.to_owned(), Value::Bool(b));
         }
     }
+    if let Some(s) = patch
+        .get("toolCallingStrategy")
+        .and_then(Value::as_str)
+        .and_then(ToolCallingStrategy::parse)
+    {
+        current.insert(
+            "toolCallingStrategy".to_owned(),
+            Value::String(s.as_str().to_owned()),
+        );
+    }
     // SECURITY BOUNDARY: a stored override may predate client-side filtering; never carry an
     // endpoint, header or credential override forward through a merge.
     cowork_config::strip_provider_option_endpoints(&mut current);
@@ -5021,13 +5083,23 @@ const SESSION_TOOL_EXPOSURE_KEYS: [&str; 2] = ["deferredToolSearch", "codeMode"]
 
 /// Reduces a client-supplied `providerOptions` map to what a session may store: the editable
 /// allowlist (`pickEditableOpenAiCompatibleProviderOptions` parity) plus the boolean
-/// tool-exposure toggles.
+/// tool-exposure toggles and `toolCallingStrategy`.
 fn editable_session_provider_options(po: &Map<String, Value>) -> Option<Map<String, Value>> {
     let mut out = pick_editable_provider_options(po).unwrap_or_default();
     for key in SESSION_TOOL_EXPOSURE_KEYS {
         if let Some(b) = po.get(key).and_then(Value::as_bool) {
             out.insert(key.to_owned(), Value::Bool(b));
         }
+    }
+    if let Some(s) = po
+        .get("toolCallingStrategy")
+        .and_then(Value::as_str)
+        .and_then(ToolCallingStrategy::parse)
+    {
+        out.insert(
+            "toolCallingStrategy".to_owned(),
+            Value::String(s.as_str().to_owned()),
+        );
     }
     (!out.is_empty()).then_some(out)
 }
@@ -5056,6 +5128,74 @@ fn store_client_provider_options(overrides: &mut Map<String, Value>, value: &Val
         }
         None => {
             overrides.remove("providerOptions");
+        }
+    }
+    let mut tc_mirror = Map::new();
+    if let Some(b) = patch.get("codeMode").and_then(Value::as_bool) {
+        tc_mirror.insert("codeMode".to_owned(), Value::Bool(b));
+    }
+    if let Some(b) = patch.get("deferredToolSearch").and_then(Value::as_bool) {
+        tc_mirror.insert("deferredToolSearch".to_owned(), Value::Bool(b));
+    }
+    if let Some(s) = patch
+        .get("toolCallingStrategy")
+        .and_then(Value::as_str)
+        .and_then(ToolCallingStrategy::parse)
+    {
+        tc_mirror.insert("strategy".to_owned(), Value::String(s.as_str().to_owned()));
+    }
+    if !tc_mirror.is_empty() {
+        store_client_tool_calling(overrides, &Value::Object(tc_mirror));
+    }
+}
+
+/// Merges a `toolCalling` patch (`codeMode`, `deferredToolSearch`, `strategy`) into the session
+/// override field by field and mirrors the resolved fields into `providerOptions` so SQLite
+/// session rows preserve per-session tool-calling overrides across server restarts.
+fn store_client_tool_calling(overrides: &mut Map<String, Value>, value: &Value) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    let mut merged_tc = overrides
+        .get("toolCalling")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut merged_po = overrides
+        .get("providerOptions")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut changed = false;
+
+    if let Some(b) = obj.get("codeMode").and_then(Value::as_bool) {
+        merged_tc.insert("codeMode".to_owned(), Value::Bool(b));
+        merged_po.insert("codeMode".to_owned(), Value::Bool(b));
+        changed = true;
+    }
+    if let Some(b) = obj.get("deferredToolSearch").and_then(Value::as_bool) {
+        merged_tc.insert("deferredToolSearch".to_owned(), Value::Bool(b));
+        merged_po.insert("deferredToolSearch".to_owned(), Value::Bool(b));
+        changed = true;
+    }
+    if let Some(s) = obj
+        .get("strategy")
+        .and_then(Value::as_str)
+        .and_then(ToolCallingStrategy::parse)
+    {
+        merged_tc.insert("strategy".to_owned(), Value::String(s.as_str().to_owned()));
+        merged_po.insert(
+            "toolCallingStrategy".to_owned(),
+            Value::String(s.as_str().to_owned()),
+        );
+        changed = true;
+    }
+
+    if changed {
+        cowork_config::strip_provider_option_endpoints(&mut merged_po);
+        overrides.insert("toolCalling".to_owned(), Value::Object(merged_tc));
+        if !merged_po.is_empty() {
+            overrides.insert("providerOptions".to_owned(), Value::Object(merged_po));
         }
     }
 }
@@ -5091,6 +5231,7 @@ fn cleared_config_key(key: &str) -> Option<&'static str> {
         "clearMemoryGenerationModel" => Some("memoryGenerationModel"),
         "clearSkillImprovementModel" => Some("skillImprovementModel"),
         "clearToolOutputOverflowChars" => Some("toolOutputOverflowChars"),
+        "clearToolCalling" => Some("toolCalling"),
         _ => None,
     }
 }
@@ -5105,12 +5246,15 @@ const CHILD_ROUTING_CONFIG_KEYS: [&str; 4] = [
 
 /// Session config keys on which TS `prepareConfigUpdate` re-rendered the session's system
 /// prompt; for a child agent the saved prompt's user-profile section is re-rendered.
-const SYSTEM_PROMPT_REFRESH_CONFIG_KEYS: [&str; 5] = [
+const SYSTEM_PROMPT_REFRESH_CONFIG_KEYS: [&str; 8] = [
     "userName",
     "userProfile",
     "enableMemory",
     "advancedMemory",
     "providerOptions",
+    "toolCalling",
+    "deferredToolSearch",
+    "codeMode",
 ];
 
 /// Applies a session config patch to a thread's live overrides: `clear*` sentinels remove the
@@ -5125,11 +5269,35 @@ fn merge_session_config_overrides(overrides: &mut Map<String, Value>, patch: Map
         if let Some(cleared) = cleared_config_key(&k) {
             if v.as_bool() == Some(true) {
                 overrides.remove(cleared);
+                if cleared == "toolCalling" {
+                    overrides.remove("deferredToolSearch");
+                    overrides.remove("codeMode");
+                    if let Some(Value::Object(po)) = overrides.get_mut("providerOptions") {
+                        po.remove("deferredToolSearch");
+                        po.remove("codeMode");
+                        po.remove("toolCallingStrategy");
+                        if po.is_empty() {
+                            overrides.remove("providerOptions");
+                        }
+                    }
+                }
             }
             continue;
         }
         if k == "providerOptions" {
             store_client_provider_options(overrides, &v);
+            continue;
+        }
+        if k == "toolCalling" {
+            store_client_tool_calling(overrides, &v);
+            continue;
+        }
+        if (k == "deferredToolSearch" || k == "codeMode")
+            && let Some(b) = v.as_bool()
+        {
+            let mut single = Map::new();
+            single.insert(k, Value::Bool(b));
+            store_client_tool_calling(overrides, &Value::Object(single));
             continue;
         }
         if k == "userProfile" {
@@ -5245,6 +5413,7 @@ fn apply_session_config_to_project_patch(
         ("memoryGenerationModel", "clearMemoryGenerationModel"),
         ("skillImprovementModel", "clearSkillImprovementModel"),
         ("toolOutputOverflowChars", "clearToolOutputOverflowChars"),
+        ("toolCalling", "clearToolCalling"),
     ] {
         if cp.contains_key(value_key) && flag(clear_key) {
             return Err(format!("{value_key} cannot be combined with {clear_key}"));
@@ -5324,6 +5493,57 @@ fn apply_session_config_to_project_patch(
     if flag("clearToolOutputOverflowChars") {
         patch.clear_tool_output_overflow_chars = true;
     }
+    if flag("clearToolCalling") {
+        patch.clear_tool_calling = true;
+    }
+    let mut tc_patch = ToolCallingPatch::default();
+    if let Some(po) = cp.get("providerOptions").and_then(Value::as_object) {
+        if let Some(b) = po.get("codeMode").and_then(Value::as_bool) {
+            tc_patch.code_mode = Some(b);
+        }
+        if let Some(b) = po.get("deferredToolSearch").and_then(Value::as_bool) {
+            tc_patch.deferred_tool_search = Some(b);
+        }
+        if let Some(s) = po
+            .get("toolCallingStrategy")
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+        {
+            tc_patch.strategy = Some(s);
+        }
+    }
+    if let Some(b) = bool_field("codeMode") {
+        tc_patch.code_mode = Some(b);
+    }
+    if let Some(b) = bool_field("deferredToolSearch") {
+        tc_patch.deferred_tool_search = Some(b);
+    }
+    if let Some(raw_tc) = cp.get("toolCalling") {
+        let Some(tc_obj) = raw_tc.as_object() else {
+            return Err("toolCalling must be an object".to_owned());
+        };
+        if let Some(v) = tc_obj.get("codeMode") {
+            let Some(b) = v.as_bool() else {
+                return Err("toolCalling.codeMode must be a boolean".to_owned());
+            };
+            tc_patch.code_mode = Some(b);
+        }
+        if let Some(v) = tc_obj.get("deferredToolSearch") {
+            let Some(b) = v.as_bool() else {
+                return Err("toolCalling.deferredToolSearch must be a boolean".to_owned());
+            };
+            tc_patch.deferred_tool_search = Some(b);
+        }
+        if let Some(v) = tc_obj.get("strategy") {
+            let Some(s) = v.as_str().and_then(ToolCallingStrategy::parse) else {
+                return Err("toolCalling.strategy must be one of: auto, native, harness".to_owned());
+            };
+            tc_patch.strategy = Some(s);
+        }
+    }
+    if !tc_patch.is_empty() && !patch.clear_tool_calling {
+        patch.tool_calling = Some(tc_patch);
+    }
     if let Some(v) = cp.get("userName").and_then(Value::as_str) {
         patch.user_name = Some(v.to_owned());
     }
@@ -5340,7 +5560,13 @@ fn apply_session_config_to_project_patch(
         patch.feature_flags = Some(ff);
     }
     if let Some(v) = cp.get("providerOptions").and_then(Value::as_object) {
-        patch.provider_options = Some(v.clone());
+        let mut persisted_po = v.clone();
+        persisted_po.remove("codeMode");
+        persisted_po.remove("deferredToolSearch");
+        persisted_po.remove("toolCallingStrategy");
+        if !persisted_po.is_empty() {
+            patch.provider_options = Some(persisted_po);
+        }
     }
     Ok(())
 }

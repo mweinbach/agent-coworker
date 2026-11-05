@@ -25,6 +25,7 @@ export type {
 export type {
   CodexAppServerInstallStatus,
   LibreOfficeRuntimeDiagnostic,
+  ProviderCapabilitiesCheckResult,
 } from "../../../../src/shared/jsonrpcControlSchemas";
 export type { OpenAiNativeConnector } from "../../../../src/shared/openaiNativeConnectors";
 export type { SessionEvent } from "../../../../src/shared/protocol";
@@ -44,6 +45,8 @@ export type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
   TodoItem,
+  ToolCallingConfig,
+  ToolCallingStrategy,
   TurnReference,
 } from "../../../../src/types";
 export { isInstalledPluginCatalogEntry, PROVIDER_NAMES } from "../../../../src/types";

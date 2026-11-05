@@ -193,6 +193,9 @@ export function createControlSocketHelpers(
       const existing = serverBackedBySessionId.get(session.sessionId);
       const threadId = existing?.id ?? session.sessionId;
       const runtime = threadRuntimeById[threadId];
+      const legacyTranscriptId =
+        existing?.legacyTranscriptId ??
+        (existing && existing.id !== session.sessionId ? existing.id : null);
       return {
         id: threadId,
         workspaceId,
@@ -213,11 +216,20 @@ export function createControlSocketHelpers(
         draft: false,
         archived: existing?.archived ?? false,
         archivedAt: existing?.archivedAt,
+        legacyTranscriptId,
         ...(existing?.taskId ? { taskId: existing.taskId } : {}),
         ...(existing?.taskThreadId ? { taskThreadId: existing.taskThreadId } : {}),
         ...(existing?.reasoningEffort ? { reasoningEffort: existing.reasoningEffort } : {}),
       } satisfies ThreadRecord;
     });
+    const claimedLegacyThreadIds = new Set(
+      nextServerThreads
+        .map((thread) => thread.legacyTranscriptId)
+        .filter(
+          (threadId): threadId is string =>
+            typeof threadId === "string" && threadId.trim().length > 0,
+        ),
+    );
     const claimedServerThreadIds = new Set(nextServerThreads.map((thread) => thread.id));
     return [
       ...allThreads.filter((thread) => thread.workspaceId !== workspaceId),
@@ -225,7 +237,11 @@ export function createControlSocketHelpers(
         right.lastMessageAt.localeCompare(left.lastMessageAt),
       ),
       ...clientOwnedThreads
-        .filter((thread) => thread.draft === true || !claimedServerThreadIds.has(thread.id))
+        .filter(
+          (thread) =>
+            thread.draft === true ||
+            (!claimedServerThreadIds.has(thread.id) && !claimedLegacyThreadIds.has(thread.id)),
+        )
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
     ];
   }
@@ -302,6 +318,14 @@ export function createControlSocketHelpers(
     };
     if (nextThreads.some((thread) => thread.id === selectedThreadId && selectable(thread))) {
       return selectionFor(selectedThreadId);
+    }
+
+    const migratedThreadId =
+      nextThreads.find(
+        (thread) => thread.legacyTranscriptId === selectedThreadId && selectable(thread),
+      )?.id ?? null;
+    if (migratedThreadId) {
+      return selectionFor(migratedThreadId);
     }
 
     if (selectionIntent.context === "task") {

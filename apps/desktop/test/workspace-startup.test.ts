@@ -970,6 +970,7 @@ describe("workspace startup flow", () => {
           messageCount: 1,
           lastEventSeq: 1,
           draft: false,
+          legacyTranscriptId: null,
         },
       ],
       selectedWorkspaceId: workspaceId,

@@ -494,6 +494,7 @@ function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
         messageCount: 2,
         lastEventSeq: 4,
         draft: false,
+        legacyTranscriptId: null,
       },
     ],
     threadRuntimeById: {

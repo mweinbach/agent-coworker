@@ -409,6 +409,7 @@ describe("desktop JSON-RPC event mapping", () => {
             messageCount: 0,
             lastEventSeq: 0,
             draft: false,
+            legacyTranscriptId: null,
           },
         ],
         workspaceRuntimeById: {
@@ -1935,6 +1936,7 @@ describe("desktop JSON-RPC event mapping", () => {
             messageCount: 0,
             lastEventSeq: 0,
             draft: false,
+            legacyTranscriptId: null,
           },
         ],
         threadRuntimeById: {
@@ -2487,6 +2489,7 @@ describe("desktop JSON-RPC event mapping", () => {
             messageCount: 0,
             lastEventSeq: 0,
             draft: false,
+            legacyTranscriptId: null,
           },
           {
             id: latestThreadId,
@@ -2500,6 +2503,7 @@ describe("desktop JSON-RPC event mapping", () => {
             messageCount: 0,
             lastEventSeq: 0,
             draft: false,
+            legacyTranscriptId: null,
           },
         ],
         threadRuntimeById: {

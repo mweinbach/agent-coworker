@@ -104,6 +104,7 @@ const persistedState: PersistedState = {
       id: "thread-expired",
       workspaceId: "workspace-1",
       sessionId: "session-expired",
+      legacyTranscriptId: "legacy-expired",
       title: "Expired archived chat",
       titleSource: "manual",
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -118,6 +119,7 @@ const persistedState: PersistedState = {
       id: "thread-fresh",
       workspaceId: "workspace-1",
       sessionId: "session-fresh",
+      legacyTranscriptId: "legacy-fresh",
       title: "Fresh archived chat",
       titleSource: "manual",
       createdAt: "2026-01-20T00:00:00.000Z",
@@ -138,11 +140,13 @@ offlinePersistedState.threads[0] = {
   ...offlinePersistedState.threads[0]!,
   id: "thread-offline-expired",
   sessionId: "session-offline-expired",
+  legacyTranscriptId: "legacy-offline-expired",
 };
 offlinePersistedState.threads[1] = {
   ...offlinePersistedState.threads[1]!,
   id: "thread-offline-fresh",
   sessionId: "session-offline-fresh",
+  legacyTranscriptId: "legacy-offline-fresh",
 };
 let activePersistedState = persistedState;
 
@@ -233,7 +237,7 @@ afterEach(async () => {
 });
 
 describe("archived session auto-delete", () => {
-  test("deletes canonical server sessions before their local transcripts", async () => {
+  test("deletes canonical server sessions before legacy transcript projections", async () => {
     Date.now = () => Date.parse("2026-01-20T00:00:00.000Z");
 
     await useAppStore.getState().init();
@@ -248,9 +252,9 @@ describe("archived session auto-delete", () => {
     expect(
       jsonRpcRequests.some((request) => request.params?.targetSessionId === "session-fresh"),
     ).toBe(false);
-    expect(deleteTranscriptCalls).toEqual(["session-expired"]);
+    expect(deleteTranscriptCalls).toEqual(["legacy-expired", "session-expired"]);
     expect(callOrder.indexOf("rpc:session-expired")).toBeLessThan(
-      callOrder.indexOf("transcript:session-expired"),
+      callOrder.indexOf("transcript:legacy-expired"),
     );
     expect(rpcReadyStates).toEqual([true]);
     expect(startWorkspaceServerCalls).toEqual([]);
@@ -281,7 +285,7 @@ describe("archived session auto-delete", () => {
       false,
     );
     expect(startWorkspaceServerCalls).toEqual([]);
-    expect(deleteTranscriptCalls).toEqual(["session-offline-expired"]);
+    expect(deleteTranscriptCalls).toEqual(["legacy-offline-expired", "session-offline-expired"]);
     expect(useAppStore.getState().threads.map((thread) => thread.id)).toEqual([
       "session-offline-fresh",
     ]);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildContextPreamble,
   extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   mapTranscriptToFeed,
@@ -367,6 +368,92 @@ describe("desktop transcript feed mapping", () => {
           totalTokens: 15,
         },
       },
+    });
+  });
+
+  describe("legacy TypeScript-harness transcripts", () => {
+    const evt = (
+      second: number,
+      payload: Record<string, unknown>,
+      direction: TranscriptEvent["direction"] = "server",
+    ): TranscriptEvent => ({
+      ts: `2024-01-01T00:00:${String(second).padStart(2, "0")}.000Z`,
+      threadId: "thread-1",
+      direction,
+      payload,
+    });
+    const chunk = (
+      second: number,
+      index: number,
+      partType: string,
+      part: Record<string, unknown>,
+    ) =>
+      evt(second, {
+        type: "model_stream_chunk",
+        sessionId: "s",
+        turnId: "turn-1",
+        index,
+        partType,
+        part,
+      });
+
+    test("keeps assistant_message and reasoning replies and feeds them into the context preamble", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "What is 2+2?", clientMessageId: "c1" }, "client"),
+        evt(2, { type: "reasoning", kind: "summary", text: "Simple arithmetic." }),
+        evt(3, { type: "assistant_message", text: "4" }),
+        evt(4, { type: "observability_status", enabled: false, health: {} }),
+        evt(5, { type: "harness_context", context: null }),
+      ]);
+
+      expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
+      expect(feed[1]).toMatchObject({
+        kind: "reasoning",
+        mode: "summary",
+        text: "Simple arithmetic.",
+      });
+      expect(feed[2]).toMatchObject({ kind: "message", role: "assistant", text: "4" });
+      expect(buildContextPreamble(feed)).toContain("Assistant: 4");
+    });
+
+    test("rebuilds streamed turns without duplicating the final assistant_message", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "List files" }, "client"),
+        chunk(2, 0, "reasoning_delta", { id: "r1", mode: "reasoning", text: "Need to " }),
+        chunk(2, 1, "reasoning_delta", { id: "r1", mode: "reasoning", text: "call ls." }),
+        chunk(3, 2, "tool_call", {
+          toolCallId: "call-1",
+          toolName: "bash",
+          input: { command: "ls" },
+        }),
+        chunk(4, 3, "tool_result", { toolCallId: "call-1", toolName: "bash", output: "a.txt" }),
+        chunk(5, 4, "text_delta", { id: "t1", text: "Found " }),
+        chunk(5, 5, "text_delta", { id: "t1", text: "a.txt" }),
+        evt(6, { type: "model_stream_raw", turnId: "turn-1", event: {} }),
+        evt(7, { type: "reasoning", kind: "reasoning", text: "Need to call ls." }),
+        evt(7, { type: "assistant_message", text: "Found a.txt" }),
+        evt(8, { type: "session_busy", busy: false }),
+      ]);
+
+      expect(feed.map((item) => item.kind)).toEqual([
+        "message",
+        "reasoning",
+        "tool",
+        "message",
+        "system",
+      ]);
+      expect(feed[1]).toMatchObject({ kind: "reasoning", text: "Need to call ls." });
+      expect(feed[2]).toMatchObject({
+        kind: "tool",
+        name: "bash",
+        state: "output-available",
+        args: { command: "ls" },
+        result: "a.txt",
+      });
+      expect(feed[3]).toMatchObject({ kind: "message", role: "assistant", text: "Found a.txt" });
+      expect(feed.some((item) => item.kind === "system" && item.line.startsWith("Unhandled"))).toBe(
+        false,
+      );
     });
   });
 });

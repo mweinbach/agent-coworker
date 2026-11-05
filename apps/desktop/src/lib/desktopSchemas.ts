@@ -646,6 +646,12 @@ const persistedThreadSchema = z
         typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0,
       z.number().int().nonnegative(),
     ),
+    legacyTranscriptId: z
+      .preprocess(
+        (value) => (typeof value === "string" && value.trim() ? value : null),
+        z.string().nullable(),
+      )
+      .optional(),
     taskId: optionalSafeIdSchema,
     taskThreadId: optionalSafeIdSchema,
   })

@@ -673,11 +673,12 @@ describe("control socket helpers over JSON-RPC", () => {
       expect.objectContaining({
         id: localThreadId,
         sessionId: "session-keep",
+        legacyTranscriptId: localThreadId,
       }),
     ]);
   });
 
-  test("requestWorkspaceSessions does not duplicate runtime-backed local threads without a persisted session id", async () => {
+  test("requestWorkspaceSessions does not duplicate runtime-backed local threads that already carry a legacy transcript id", async () => {
     const workspaceId = "ws-existing-legacy-thread";
     const localThreadId = "local-thread-2";
     const { state, get, set } = createState(workspaceId, {
@@ -685,6 +686,7 @@ describe("control socket helpers over JSON-RPC", () => {
         {
           ...makeThread(localThreadId, workspaceId),
           sessionId: null,
+          legacyTranscriptId: "legacy-thread-2",
         },
       ],
       threadRuntimeById: {
@@ -708,6 +710,7 @@ describe("control socket helpers over JSON-RPC", () => {
       expect.objectContaining({
         id: localThreadId,
         sessionId: "session-keep-2",
+        legacyTranscriptId: "legacy-thread-2",
       }),
     ]);
   });

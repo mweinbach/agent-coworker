@@ -258,8 +258,10 @@ function findLatestVisibleSandboxInteraction(
   return latest;
 }
 
-export function transcriptIdsForThread(thread: Pick<ThreadRecord, "id" | "sessionId">): string[] {
-  const ids = [thread.sessionId ?? null, thread.id];
+export function transcriptIdsForThread(
+  thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+): string[] {
+  const ids = [thread.legacyTranscriptId ?? null, thread.sessionId ?? null, thread.id];
   return [
     ...new Set(
       ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0),
@@ -534,7 +536,9 @@ export async function hydrateThreadSelection(
   const shouldFetchHarnessSnapshot =
     Boolean(sessionId) &&
     !skipHarnessSnapshotFetch &&
-    (thread.messageCount > 0 || getEffectiveThreadLastEventSeq(get(), thread.id) > 0);
+    (thread.messageCount > 0 ||
+      getEffectiveThreadLastEventSeq(get(), thread.id) > 0 ||
+      Boolean(thread.legacyTranscriptId));
 
   if (!isOperationCurrent()) return;
   const requestId = beginThreadSelectionRequest(threadId);
@@ -878,7 +882,7 @@ export function createThreadActions(
   };
 
   const readTranscriptEvents = async (
-    thread: Pick<ThreadRecord, "id" | "sessionId">,
+    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
   ): Promise<TranscriptEvent[] | null> => {
     const transcriptIds = transcriptIdsForThread(thread);
     if (transcriptIds.length === 0) return null;

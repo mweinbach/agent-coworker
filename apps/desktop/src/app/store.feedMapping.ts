@@ -8,6 +8,18 @@ import {
   type ServerErrorSource,
 } from "../../../../src/types";
 import { safeParseSessionEvent } from "../lib/wsProtocol";
+import {
+  applyLegacyModelStreamChunk,
+  createLegacyStreamReplay,
+  LEGACY_TRANSCRIPT_SILENT_TYPES,
+  type LegacyStreamReplay,
+  type LegacyTranscriptPayload,
+  legacyAssistantMessageAlreadyStreamed,
+  legacyReasoningAlreadyStreamed,
+  legacyReasoningInsertIndex,
+  parseLegacyTranscriptPayload,
+  resetLegacyStreamReplay,
+} from "./store.legacyTranscript";
 import type {
   FeedItem,
   ThreadAgentSummary,
@@ -290,14 +302,21 @@ export function extractWorkflowRunsFromTranscript(events: TranscriptEvent[]): Th
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   const out: FeedItem[] = [];
   const seenUser = new Set<string>();
+  const legacyStream = createLegacyStreamReplay();
   const makeId = () => crypto.randomUUID();
 
   for (const evt of events) {
     const parsedPayload = transcriptFeedPayloadSchema.safeParse(evt.payload);
     if (!parsedPayload.success) {
+      const legacy = parseLegacyTranscriptPayload(evt.payload);
+      if (legacy) {
+        appendLegacyTranscriptEvent(out, legacyStream, evt.ts, legacy);
+        continue;
+      }
       const parsedTypeOnly = transcriptPayloadTypeSchema.safeParse(evt.payload);
       if (!parsedTypeOnly.success) continue;
       if (transcriptFeedSuppressedTypes.has(parsedTypeOnly.data.type)) continue;
+      if (LEGACY_TRANSCRIPT_SILENT_TYPES.has(parsedTypeOnly.data.type)) continue;
       out.push({
         id: makeId(),
         kind: "system",
@@ -310,6 +329,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     const payload = parsedPayload.data;
 
     if (payload.type === "user_message") {
+      resetLegacyStreamReplay(legacyStream);
       const cmid = payload.clientMessageId ?? "";
       if (cmid && seenUser.has(cmid)) continue;
       if (cmid) seenUser.add(cmid);
@@ -361,6 +381,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (payload.type === "session_busy") {
+      if (payload.busy === false) resetLegacyStreamReplay(legacyStream);
       out.push({
         id: makeId(),
         kind: "system",
@@ -371,6 +392,39 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   }
 
   return out;
+}
+
+function appendLegacyTranscriptEvent(
+  out: FeedItem[],
+  stream: LegacyStreamReplay,
+  ts: string,
+  payload: LegacyTranscriptPayload,
+): void {
+  if (payload.type === "model_stream_chunk") {
+    applyLegacyModelStreamChunk(out, stream, ts, payload);
+    return;
+  }
+
+  const text = String(payload.text ?? "");
+  if (payload.type === "assistant_message") {
+    if (legacyAssistantMessageAlreadyStreamed(stream, text)) return;
+    out.push({ id: crypto.randomUUID(), kind: "message", role: "assistant", ts, text });
+    return;
+  }
+
+  if (legacyReasoningAlreadyStreamed(stream, text)) return;
+  const mode =
+    payload.type === "reasoning_summary" ||
+    (payload.type === "reasoning" && payload.kind === "summary")
+      ? "summary"
+      : "reasoning";
+  out.splice(legacyReasoningInsertIndex(out, stream), 0, {
+    id: crypto.randomUUID(),
+    kind: "reasoning",
+    mode,
+    ts,
+    text,
+  });
 }
 
 export function buildContextPreamble(feed: FeedItem[], maxPairs = 10): string {

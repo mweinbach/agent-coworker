@@ -14,9 +14,9 @@ import {
   normalizeProcessExitCode,
   type WebDevDependencies,
 } from "../apps/desktop/scripts/start_web_dev";
-import { scratchRoots } from "../scripts/scratchRoots";
 import { buildWorkspaceBinary, resolveWorkspaceServerBinary } from "../scripts/workspaceRustBinary";
 import { hostArch, hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 const encoder = new TextEncoder();
 const fixtureRoots: string[] = [];

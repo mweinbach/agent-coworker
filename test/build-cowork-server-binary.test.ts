@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { buildServerBinary } from "../scripts/build_cowork_server_binary";
-import { scratchRoots } from "../scripts/scratchRoots";
+import { scratchRoots } from "../src/platform/scratchRoots";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,

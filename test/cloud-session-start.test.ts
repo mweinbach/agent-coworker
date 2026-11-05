@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import { scratchRoots } from "../scripts/scratchRoots";
 import { which } from "../src/platform/exec";
 import { hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 const scriptPath = path.resolve(import.meta.dir, "../scripts/cloud_session_start.sh");
 const fixtureRoots: string[] = [];

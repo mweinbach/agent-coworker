@@ -1,6 +1,6 @@
 import os from "node:os";
 
-import { hostPlatform } from "../src/platform/host";
+import { hostPlatform } from "./host";
 
 /**
  * Host scratch directories for test fixtures and tooling temp dirs:

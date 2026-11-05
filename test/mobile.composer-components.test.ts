@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { scratchRoots } from "../scripts/scratchRoots";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 test("renders Android and iOS composer policies in an isolated component harness", async () => {
   const repoRoot = path.resolve(import.meta.dir, "..");

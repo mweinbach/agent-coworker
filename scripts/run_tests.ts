@@ -2,7 +2,7 @@ import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import { hostPlatform } from "../src/platform/host";
-import { scratchRoots } from "./scratchRoots";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 export type TestInvocation = {
   command: string[];

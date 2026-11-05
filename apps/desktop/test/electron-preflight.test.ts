@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { scratchRoots } from "../../../scripts/scratchRoots";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { findInstalledElectronExecutable } from "../scripts/ensureElectronInstalled";
 import { planDesktopBuild } from "../scripts/runDesktopBuild";
 

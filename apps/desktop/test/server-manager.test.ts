@@ -6,10 +6,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-
-import { scratchRoots } from "../../../scripts/scratchRoots";
 import { buildWorkspaceBinary } from "../../../scripts/workspaceRustBinary";
 import { hostArch, hostPlatform } from "../../../src/platform/host";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,

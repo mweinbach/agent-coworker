@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { scratchRoots } from "../scripts/scratchRoots";
 import { which } from "../src/platform/exec";
 import { hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 const moduleRoot = fileURLToPath(
   new URL("../apps/mobile/modules/cowork-pinned-https/", import.meta.url),

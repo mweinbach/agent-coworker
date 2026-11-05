@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { scratchRoots } from "../../../scripts/scratchRoots";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { createFakeChild, type FakeChild } from "./helpers/fakeServerChild";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 

@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 
 import { __internal } from "../scripts/build_desktop_resources";
-import { scratchRoots } from "../scripts/scratchRoots";
 import {
   computeSourceFingerprint,
   WIN_SANDBOX_PREBUILT_LOCK_NAME,
   type WinSandboxPrebuiltLock,
 } from "../scripts/winSandboxPrebuilt";
+import { scratchRoots } from "../src/platform/scratchRoots";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,

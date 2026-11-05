@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { scratchRoots } from "../scripts/scratchRoots";
+import { scratchRoots } from "../src/platform/scratchRoots";
 import toolingConfig from "../vite.config";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);

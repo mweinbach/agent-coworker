@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { scratchRoots } from "../../../scripts/scratchRoots";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { jsonRpcControlResultSchemas } from "../../../src/shared/jsonrpcControlSchemas";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";

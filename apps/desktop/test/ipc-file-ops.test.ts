@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { scratchRoots } from "../../../scripts/scratchRoots";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { resolveAllowedEntryPath } from "../electron/services/ipcSecurity";
 
 describe("IPC file ops validation", () => {

@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { scratchRoots } from "../../../scripts/scratchRoots";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { createElectronMock } from "./helpers/mockElectron";
 
 const LOG_FILE_LIMIT = 5 * 1024 * 1024;

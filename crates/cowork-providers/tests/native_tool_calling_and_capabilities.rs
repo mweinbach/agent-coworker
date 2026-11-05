@@ -18,7 +18,9 @@ use cowork_providers::{
     AnthropicMessagesTransport, COWORK_TOOLS_DISABLED_OPTION_KEY, EndpointCapabilitySource,
     NativeProgrammaticToolCallingKind, NativeToolCallingPlan, NativeToolSearchKind,
     OpenAiResponsesTransport, ProviderStepRequest, ProviderTransport, ToolDefinition,
-    check_endpoint_capabilities, classify_static_endpoint_capabilities,
+    anthropic_model_supports_native_tool_features, check_endpoint_capabilities,
+    classify_static_endpoint_capabilities, is_native_eager_core_tool,
+    is_programmatic_eligible_tool, openai_model_supports_native_tool_features,
     record_rejected_native_capability, resolve_endpoint_tool_capabilities,
     write_native_tool_calling_plan,
 };
@@ -348,6 +350,268 @@ fn static_classifier_and_strategy_resolution_cover_openai_anthropic_openrouter_c
     );
     assert_eq!(after_reject.native_tool_search, None);
     assert_eq!(after_reject.native_programmatic_tool_calling, None);
+}
+
+#[test]
+fn native_feature_gates_follow_model_boundaries_and_official_hosts() {
+    for (model, supported) in [
+        ("gpt-5.4", true),
+        ("gpt-5.3", false),
+        ("gpt-5", false),
+        ("gpt-6", true),
+        ("gpt-4.9", false),
+        ("GPT-5.4-mini", true),
+        ("openai/gpt-5.4", true),
+        ("org/team/gpt-5.4", true),
+        ("gpt-5.4.1", true),
+        ("o3", false),
+        ("chatgpt-5.4", false),
+        ("gpt5.4", false),
+    ] {
+        assert_eq!(
+            openai_model_supports_native_tool_features(model),
+            supported,
+            "{model}"
+        );
+    }
+    for (model, supported) in [
+        ("claude-sonnet-4-6", true),
+        ("claude-opus-4.1", true),
+        ("claude-sonnet-5", true),
+        ("claude-4-sonnet", true),
+        ("anthropic/claude-opus-4-6", true),
+        ("claude-3-5-sonnet-20241022", false),
+        ("claude-3-opus-20240229", false),
+        ("claude-haiku-4-5", false),
+        ("claude-haiku-4.5", false),
+        ("claude-haiku-4-5-opus-4", false),
+        ("claude-haiku-4", false),
+    ] {
+        assert_eq!(
+            anthropic_model_supports_native_tool_features(model),
+            supported,
+            "{model}"
+        );
+    }
+
+    let default_openai =
+        classify_static_endpoint_capabilities(ProviderName::Openai, None, "gpt-5.4");
+    assert_eq!(
+        default_openai.endpoint_host.as_deref(),
+        Some("api.openai.com")
+    );
+    assert_eq!(
+        default_openai.native_tool_search,
+        Some(NativeToolSearchKind::OpenAiResponses)
+    );
+    assert_eq!(
+        default_openai.native_programmatic_tool_calling,
+        Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
+    );
+    let blank_base =
+        classify_static_endpoint_capabilities(ProviderName::Openai, Some("   "), "gpt-5.4");
+    assert_eq!(blank_base.endpoint_host.as_deref(), Some("api.openai.com"));
+
+    let regional = classify_static_endpoint_capabilities(
+        ProviderName::Openai,
+        Some("https://US.API.OPENAI.COM/v1/"),
+        "GPT-5.4",
+    );
+    assert_eq!(regional.endpoint_host.as_deref(), Some("us.api.openai.com"));
+    assert_eq!(
+        regional.native_tool_search,
+        Some(NativeToolSearchKind::OpenAiResponses)
+    );
+    assert_eq!(
+        regional.native_programmatic_tool_calling,
+        Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
+    );
+
+    for url in [
+        "https://api.openai.com.evil.com/v1",
+        "https://notapi.openai.com/v1",
+        "https://evilapi.openai.com/v1",
+    ] {
+        let caps =
+            classify_static_endpoint_capabilities(ProviderName::Openai, Some(url), "gpt-5.4");
+        assert_eq!(caps.native_tool_search, None, "{url}");
+        assert_eq!(caps.native_programmatic_tool_calling, None, "{url}");
+    }
+
+    let anthropic_subdomain = classify_static_endpoint_capabilities(
+        ProviderName::Anthropic,
+        Some("https://foo.anthropic.com"),
+        "claude-sonnet-4",
+    );
+    assert_eq!(
+        anthropic_subdomain.native_tool_search,
+        Some(NativeToolSearchKind::AnthropicBm25)
+    );
+    assert_eq!(
+        anthropic_subdomain.native_programmatic_tool_calling,
+        Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120)
+    );
+    for url in [
+        "https://api.anthropic.com.evil.com",
+        "https://anthropic.com.evil.com",
+        "https://notanthropic.com",
+    ] {
+        let caps = classify_static_endpoint_capabilities(
+            ProviderName::Anthropic,
+            Some(url),
+            "claude-opus-4",
+        );
+        assert_eq!(caps.native_tool_search, None, "{url}");
+        assert_eq!(caps.native_programmatic_tool_calling, None, "{url}");
+    }
+
+    for url in [
+        "https://openrouter.ai.evil.com/api/v1",
+        "https://notopenrouter.ai/api/v1",
+    ] {
+        let caps =
+            classify_static_endpoint_capabilities(ProviderName::Openai, Some(url), "gpt-5.4");
+        assert_eq!(caps.native_tool_search, None, "{url}");
+        assert_eq!(caps.native_programmatic_tool_calling, None, "{url}");
+    }
+
+    let openrouter_forced = resolve_endpoint_tool_capabilities(
+        ProviderName::Openai,
+        Some("https://openrouter.ai/api/v1"),
+        "gpt-4.1",
+        ToolCallingStrategy::Native,
+    );
+    assert_eq!(
+        openrouter_forced.native_tool_search,
+        Some(NativeToolSearchKind::OpenRouterResponses)
+    );
+    assert_eq!(openrouter_forced.native_programmatic_tool_calling, None);
+
+    let google_forced = resolve_endpoint_tool_capabilities(
+        ProviderName::Google,
+        None,
+        "gpt-5.4",
+        ToolCallingStrategy::Native,
+    );
+    assert_eq!(google_forced.native_tool_search, None);
+    assert_eq!(google_forced.native_programmatic_tool_calling, None);
+}
+
+#[test]
+fn programmatic_eligibility_blocks_interactive_tools_and_anthropic_schema_refs() {
+    fn tool(name: &str, parameters: Value) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: String::new(),
+            parameters,
+        }
+    }
+
+    for name in ["bash", "READ", "write", "edit", "Glob", "grep"] {
+        assert!(is_native_eager_core_tool(name), "{name}");
+    }
+    assert!(!is_native_eager_core_tool("askUserQuestion"));
+    assert!(!is_native_eager_core_tool("bash "));
+
+    let anthropic = NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120;
+    let openai = NativeProgrammaticToolCallingKind::OpenAiResponses;
+    for name in [
+        "AskUserQuestion",
+        "TOOLSEARCH",
+        "toolCall",
+        "mcpCall",
+        "codeMode",
+    ] {
+        let blocked = tool(name, json!({ "type": "object" }));
+        assert!(
+            !is_programmatic_eligible_tool(&blocked, anthropic),
+            "{name}"
+        );
+        assert!(!is_programmatic_eligible_tool(&blocked, openai), "{name}");
+        assert!(
+            !is_programmatic_eligible_tool(
+                &blocked,
+                NativeProgrammaticToolCallingKind::CodexCodeMode
+            ),
+            "{name}"
+        );
+    }
+
+    let with_ref = tool(
+        "bash",
+        json!({
+            "type": "object",
+            "properties": { "q": { "$ref": "#/$defs/Q" } }
+        }),
+    );
+    assert!(!is_programmatic_eligible_tool(&with_ref, anthropic));
+    assert!(is_programmatic_eligible_tool(&with_ref, openai));
+    assert!(is_programmatic_eligible_tool(
+        &with_ref,
+        NativeProgrammaticToolCallingKind::CodexCodeMode
+    ));
+
+    let nested_array_ref = tool(
+        "grep",
+        json!({
+            "anyOf": [{ "type": "array", "items": [{ "$ref": "#/A" }] }]
+        }),
+    );
+    assert!(!is_programmatic_eligible_tool(&nested_array_ref, anthropic));
+
+    let plain = tool(
+        "grep",
+        json!({
+            "type": "object",
+            "properties": { "q": { "type": "string", "description": "not a $ref" } }
+        }),
+    );
+    assert!(is_programmatic_eligible_tool(&plain, anthropic));
+}
+
+#[test]
+fn runtime_rejection_is_partial_and_ignores_url_and_model_spelling() {
+    let model = "gpt-5.4-partial-rejection";
+    record_rejected_native_capability(
+        ProviderName::Openai,
+        Some("https://API.OPENAI.COM/v1/"),
+        "GPT-5.4-Partial-Rejection",
+        true,
+        false,
+        "tool_search unsupported",
+    );
+    let search_only = resolve_endpoint_tool_capabilities(
+        ProviderName::Openai,
+        Some("https://api.openai.com/v1"),
+        "  gpt-5.4-partial-rejection  ",
+        ToolCallingStrategy::Auto,
+    );
+    assert_eq!(
+        search_only.source,
+        EndpointCapabilitySource::RuntimeFallback
+    );
+    assert_eq!(search_only.native_tool_search, None);
+    assert_eq!(
+        search_only.native_programmatic_tool_calling,
+        Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
+    );
+
+    record_rejected_native_capability(
+        ProviderName::Openai,
+        Some("https://api.openai.com/v1"),
+        model,
+        false,
+        true,
+        "programmatic_tool_calling unsupported",
+    );
+    let both = resolve_endpoint_tool_capabilities(
+        ProviderName::Openai,
+        Some("https://api.openai.com/v1"),
+        model,
+        ToolCallingStrategy::Auto,
+    );
+    assert_eq!(both.native_tool_search, None);
+    assert_eq!(both.native_programmatic_tool_calling, None);
 }
 
 #[tokio::test]

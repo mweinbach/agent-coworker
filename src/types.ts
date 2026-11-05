@@ -153,6 +153,15 @@ export interface SandboxConfig {
   requireBackend?: boolean;
 }
 
+export const TOOL_CALLING_STRATEGIES = ["auto", "native", "harness"] as const;
+export type ToolCallingStrategy = (typeof TOOL_CALLING_STRATEGIES)[number];
+
+export interface ToolCallingConfig {
+  codeMode: boolean;
+  deferredToolSearch: boolean;
+  strategy: ToolCallingStrategy;
+}
+
 export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
@@ -162,10 +171,11 @@ export interface AgentConfig {
    * `src/platform/sandbox`.
    */
   sandbox?: SandboxConfig;
-  /** Optional provider-neutral tool envelopes; both default to disabled. */
+  /** Optional provider-neutral or native tool-calling envelopes; both default to disabled. */
   toolCalling?: {
     codeMode?: boolean;
     deferredToolSearch?: boolean;
+    strategy?: ToolCallingStrategy;
   };
   model: string;
   preferredChildModel: string;

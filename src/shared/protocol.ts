@@ -21,6 +21,8 @@ import type {
   SkillInstallPreview,
   SkillUpdateCheckResult,
   TodoItem,
+  ToolCallingConfig,
+  ToolCallingStrategy,
   WorkspaceFeatureFlagOverrides,
   WorkspaceFeatureFlags,
 } from "../types";
@@ -85,6 +87,12 @@ export type SessionConfigPatch = {
   workflowMaxConcurrentAgents?: number;
   toolOutputOverflowChars?: number | null;
   clearToolOutputOverflowChars?: boolean;
+  toolCalling?: {
+    codeMode?: boolean;
+    deferredToolSearch?: boolean;
+    strategy?: ToolCallingStrategy;
+  };
+  clearToolCalling?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   userName?: string;
   userProfile?: {
@@ -118,6 +126,7 @@ type SessionConfigState = {
   workflowMaxConcurrentAgents: number;
   toolOutputOverflowChars: number | null;
   defaultToolOutputOverflowChars?: number | null;
+  toolCalling?: ToolCallingConfig;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   userName: string;
   userProfile: {

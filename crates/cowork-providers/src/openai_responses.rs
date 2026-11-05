@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cowork_inference::{
     CanonicalMessage, Citation, ContentBlock, ContinuationFingerprintInput, MediaKind, MediaSource,
-    MessageRole, ProviderContinuationState, ProviderOpaqueMeta, ProviderTransportError,
-    ReasoningStreamMode, StepBudget, StopReason, StreamEvent, TextPhase, ToolResultPart, TurnUsage,
-    compose_openai_tool_call_id, compute_continuation_fingerprint, execute_step_with_sink,
-    extract_nested_citations, filter_persisted_assistant_history,
+    MessageRole, ProviderContinuationState, ProviderNativeToolRole, ProviderOpaqueMeta,
+    ProviderTransportError, ReasoningStreamMode, StepBudget, StopReason, StreamEvent, TextPhase,
+    ToolResultPart, TurnUsage, compose_openai_tool_call_id, compute_continuation_fingerprint,
+    execute_step_with_sink, extract_nested_citations, filter_persisted_assistant_history,
     sanitize_openai_composite_tool_id, split_openai_tool_call_id, validate_continuation_state,
 };
 use futures_util::StreamExt;
@@ -18,10 +18,15 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::endpoint_capabilities::{
+    EndpointToolCapabilities, NativeProgrammaticToolCallingKind, NativeToolCallingPlan,
+    NativeToolSearchKind, read_native_tool_calling_plan, record_rejected_native_capability,
+    resolve_endpoint_tool_capabilities, write_native_tool_calling_plan,
+};
 use crate::sse::{build_http_client, post_json_sse};
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
-    ToolDefinition, candidate_continuation_splits,
+    ToolDefinition, candidate_continuation_splits, request_disables_all_tools,
 };
 
 const OPENAI_PROVIDER: &str = "openai";
@@ -82,6 +87,20 @@ struct OpenAiResponsesSseEnvelope {
 
 #[async_trait]
 impl ProviderTransport for OpenAiResponsesTransport {
+    fn native_tool_capabilities(
+        &self,
+        base_url: Option<&str>,
+        model_id: &str,
+        strategy: cowork_config::ToolCallingStrategy,
+    ) -> EndpointToolCapabilities {
+        resolve_endpoint_tool_capabilities(
+            cowork_config::ProviderName::Openai,
+            base_url,
+            model_id,
+            strategy,
+        )
+    }
+
     async fn stream_step(
         &self,
         request: ProviderStepRequest,
@@ -120,6 +139,8 @@ impl ProviderTransport for OpenAiResponsesTransport {
             .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
             .collect();
 
+        let mut effective_provider_options = request.provider_options.clone();
+
         // Check SHA-256 continuation fingerprint against candidate prefixes.
         let mut active_previous_response_id: Option<String> = None;
         let mut input_messages_slice: &[CanonicalMessage] = &request.messages;
@@ -133,7 +154,7 @@ impl ProviderTransport for OpenAiResponsesTransport {
                     tools: &tool_values,
                     authorized_tool_names: request.authorized_tool_names.as_deref(),
                     canonical_prefix: prefix,
-                    stream_options: &request.provider_options,
+                    stream_options: &effective_provider_options,
                 });
                 if let Some(ProviderContinuationState::OpenAi { response_id, .. }) =
                     validate_continuation_state(Some(stored), "openai", &request.model_id, &fp)
@@ -151,8 +172,9 @@ impl ProviderTransport for OpenAiResponsesTransport {
             &request.model_id,
             &request.system_prompt,
             input_messages_slice,
+            &request.messages,
             &request.tools,
-            &request.provider_options,
+            &effective_provider_options,
             active_previous_response_id.as_deref(),
         );
 
@@ -190,8 +212,9 @@ impl ProviderTransport for OpenAiResponsesTransport {
                     &request.model_id,
                     &request.system_prompt,
                     &request.messages,
+                    &request.messages,
                     &request.tools,
-                    &request.provider_options,
+                    &effective_provider_options,
                     None,
                 );
                 self.run_attempts(
@@ -205,7 +228,68 @@ impl ProviderTransport for OpenAiResponsesTransport {
                 )
                 .await?
             }
-            (Err(err), _) => return Err(err),
+            (Err(err), _) => {
+                if !emitted_visible.load(Ordering::SeqCst)
+                    && !budget.cancellation_token().is_cancelled()
+                    && let Some(active_plan) =
+                        read_native_tool_calling_plan(&effective_provider_options)
+                {
+                    let (rej_ts, rej_ptc) =
+                        classify_rejected_openai_native_tool_error(&err, &active_plan);
+                    if rej_ts || rej_ptc {
+                        record_rejected_native_capability(
+                            cowork_config::ProviderName::Openai,
+                            request.base_url.as_deref(),
+                            &request.model_id,
+                            rej_ts,
+                            rej_ptc,
+                            &err.message,
+                        );
+                        let mut downgraded_plan = active_plan;
+                        if rej_ts {
+                            downgraded_plan.tool_search = None;
+                            downgraded_plan.deferred_tool_names.clear();
+                        }
+                        if rej_ptc {
+                            downgraded_plan.programmatic_tool_calling = None;
+                            downgraded_plan.programmatic_tool_names.clear();
+                        }
+                        write_native_tool_calling_plan(
+                            &mut effective_provider_options,
+                            &downgraded_plan,
+                        );
+                        tracing::warn!(
+                            rejected_tool_search = rej_ts,
+                            rejected_ptc = rej_ptc,
+                            error = %err.message,
+                            "openai endpoint rejected native tool feature; retrying with plain tools"
+                        );
+                        let fallback_body = build_openai_responses_payload(
+                            &request.model_id,
+                            &request.system_prompt,
+                            &request.messages,
+                            &request.messages,
+                            &request.tools,
+                            &effective_provider_options,
+                            None,
+                        );
+                        self.run_attempts(
+                            &request,
+                            budget,
+                            on_event,
+                            &emitted_visible,
+                            &endpoint,
+                            &headers,
+                            fallback_body,
+                        )
+                        .await?
+                    } else {
+                        return Err(err);
+                    }
+                } else {
+                    return Err(err);
+                }
+            }
         };
 
         if let Some(ProviderContinuationState::OpenAi {
@@ -225,7 +309,7 @@ impl ProviderTransport for OpenAiResponsesTransport {
                     tools: &tool_values,
                     authorized_tool_names: request.authorized_tool_names.as_deref(),
                     canonical_prefix: &next_prefix,
-                    stream_options: &request.provider_options,
+                    stream_options: &effective_provider_options,
                 });
         }
 
@@ -397,6 +481,46 @@ fn normalize_openai_reasoning_effort(raw: Option<&str>, model_id: &str) -> Optio
     None
 }
 
+fn classify_rejected_openai_native_tool_error(
+    err: &ProviderTransportError,
+    plan: &NativeToolCallingPlan,
+) -> (bool, bool) {
+    if err.is_abort {
+        return (false, false);
+    }
+    let is_client_err = matches!(err.status, Some(400 | 404 | 422))
+        || (err.status.is_none() && !err.is_network_transient && !err.is_timeout);
+    if !is_client_err {
+        return (false, false);
+    }
+    let lower = err.message.to_ascii_lowercase();
+    let mentions_ts = lower.contains("tool_search")
+        || lower.contains("openrouter:tool_search")
+        || lower.contains("defer_loading");
+    let mentions_ptc =
+        lower.contains("programmatic_tool_calling") || lower.contains("allowed_callers");
+    if mentions_ts || mentions_ptc {
+        return (
+            mentions_ts && plan.tool_search.is_some(),
+            mentions_ptc && plan.programmatic_tool_calling.is_some(),
+        );
+    }
+    let generic_tool_schema_rejection = (lower.contains("tools[")
+        || lower.contains("param: tools"))
+        && (lower.contains("invalid")
+            || lower.contains("unknown")
+            || lower.contains("unsupported")
+            || lower.contains("not supported")
+            || lower.contains("unrecognized"));
+    if generic_tool_schema_rejection {
+        return (
+            plan.tool_search.is_some(),
+            plan.programmatic_tool_calling.is_some(),
+        );
+    }
+    (false, false)
+}
+
 fn read_provider_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     opts.get("openai")
         .and_then(Value::as_object)
@@ -408,12 +532,13 @@ fn build_openai_responses_payload(
     model_id: &str,
     system_prompt: &str,
     messages: &[CanonicalMessage],
+    full_messages: &[CanonicalMessage],
     tools: &[ToolDefinition],
     provider_options: &Map<String, Value>,
     previous_response_id: Option<&str>,
 ) -> Value {
     let is_astra = is_astra_model(model_id);
-    let mut input_items = convert_messages_to_responses_input(model_id, messages);
+    let mut input_items = convert_messages_to_responses_input(model_id, messages, full_messages);
 
     let effort_raw = read_provider_opt(provider_options, "reasoningEffort")
         .or_else(|| read_provider_opt(provider_options, "reasoning_effort"))
@@ -434,8 +559,12 @@ fn build_openai_responses_payload(
         None
     };
 
-    // Non-reasoning GPT-5 calls append `# Juice: 0 !important` developer instruction (`openaiNativeResponses.ts`).
-    if reasoning_obj.is_none() && model_id.trim().to_ascii_lowercase().starts_with("gpt-5") {
+    // Non-reasoning GPT-5 calls append `# Juice: 0 !important` developer instruction (`openaiNativeResponses.ts`),
+    // except on an empty `previous_response_id` continuation step (`program_output` -> final answer).
+    if reasoning_obj.is_none()
+        && model_id.trim().to_ascii_lowercase().starts_with("gpt-5")
+        && !(previous_response_id.is_some() && messages.is_empty())
+    {
         input_items.push(json!({
             "role": "developer",
             "content": [{"type": "input_text", "text": "# Juice: 0 !important"}]
@@ -564,19 +693,78 @@ fn build_openai_responses_payload(
         }
     }
 
-    if !tools.is_empty() {
-        let converted_tools: Vec<Value> = tools
+    let tools_disabled = request_disables_all_tools(provider_options);
+    if !tools_disabled && !tools.is_empty() {
+        let native_plan = read_native_tool_calling_plan(provider_options);
+        let deferred_set: HashSet<&str> = native_plan
+            .as_ref()
+            .filter(|p| {
+                matches!(
+                    p.tool_search,
+                    Some(
+                        NativeToolSearchKind::OpenAiResponses
+                            | NativeToolSearchKind::OpenRouterResponses
+                    )
+                )
+            })
+            .map(|p| p.deferred_tool_names.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        let programmatic_set: HashSet<&str> = native_plan
+            .as_ref()
+            .filter(|p| {
+                p.programmatic_tool_calling
+                    == Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
+            })
+            .map(|p| {
+                p.programmatic_tool_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut converted_tools: Vec<Value> = tools
             .iter()
             .map(|t| {
-                json!({
-                    "type": "function",
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                    "strict": false,
-                })
+                let mut fn_tool = Map::new();
+                fn_tool.insert("type".to_string(), Value::String("function".to_string()));
+                fn_tool.insert("name".to_string(), Value::String(t.name.clone()));
+                fn_tool.insert(
+                    "description".to_string(),
+                    Value::String(t.description.clone()),
+                );
+                fn_tool.insert("parameters".to_string(), t.parameters.clone());
+                fn_tool.insert("strict".to_string(), Value::Bool(false));
+                if deferred_set.contains(t.name.as_str()) {
+                    fn_tool.insert("defer_loading".to_string(), Value::Bool(true));
+                }
+                if programmatic_set.contains(t.name.as_str()) {
+                    fn_tool.insert(
+                        "allowed_callers".to_string(),
+                        json!(["direct", "programmatic"]),
+                    );
+                }
+                Value::Object(fn_tool)
             })
             .collect();
+
+        if let Some(plan) = &native_plan {
+            match plan.tool_search {
+                Some(NativeToolSearchKind::OpenAiResponses) => {
+                    converted_tools.push(json!({ "type": "tool_search" }));
+                }
+                Some(NativeToolSearchKind::OpenRouterResponses) => {
+                    converted_tools.push(json!({ "type": "openrouter:tool_search" }));
+                }
+                _ => {}
+            }
+            if plan.programmatic_tool_calling
+                == Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
+            {
+                converted_tools.push(json!({ "type": "programmatic_tool_calling" }));
+            }
+        }
+
         body.insert("tools".to_string(), Value::Array(converted_tools));
     }
 
@@ -586,6 +774,7 @@ fn build_openai_responses_payload(
 fn convert_messages_to_responses_input(
     target_model_id: &str,
     messages: &[CanonicalMessage],
+    full_messages: &[CanonicalMessage],
 ) -> Vec<Value> {
     let mut items = Vec::new();
     let mut pending_calls: Vec<(String, String)> = Vec::new(); // (call_id, tool_name)
@@ -593,6 +782,26 @@ fn convert_messages_to_responses_input(
     // `transformMessages` parity: original -> normalized composite tool-call ids for assistant
     // calls rewritten on cross-model replay, so matching tool results reference the same id.
     let mut tool_call_id_map: HashMap<String, String> = HashMap::new();
+
+    // Index `openaiCaller` across the full transcript so delta `previous_response_id` slices
+    // (`[MessageRole::Tool]`) can still echo `caller` on `function_call_output`.
+    let mut caller_by_call_id: HashMap<String, Value> = HashMap::new();
+    for msg in full_messages {
+        if msg.role != MessageRole::Assistant {
+            continue;
+        }
+        for block in &msg.content {
+            if let ContentBlock::ToolCall {
+                id, provider_meta, ..
+            } = block
+                && let Some(caller) = provider_meta.extra.get("openaiCaller")
+            {
+                caller_by_call_id.insert(id.clone(), caller.clone());
+                let (raw_call_id, _) = split_openai_tool_call_id(id);
+                caller_by_call_id.insert(raw_call_id.to_string(), caller.clone());
+            }
+        }
+    }
 
     let flush_orphaned_calls =
         |items: &mut Vec<Value>,
@@ -761,6 +970,7 @@ fn convert_messages_to_responses_input(
                             id,
                             name,
                             arguments,
+                            provider_meta,
                             ..
                         } => {
                             let normalized = if is_same_model {
@@ -794,8 +1004,20 @@ fn convert_messages_to_responses_input(
                                         .unwrap_or_else(|_| "{}".to_string()),
                                 ),
                             );
+                            if is_same_model
+                                && let Some(caller) = provider_meta.extra.get("openaiCaller")
+                            {
+                                fc_obj.insert("caller".to_string(), caller.clone());
+                            }
                             pending_calls.push((call_id.to_string(), name.clone()));
                             items.push(Value::Object(fc_obj));
+                        }
+                        ContentBlock::ProviderNativeTool { provider_meta, .. } => {
+                            if is_same_model
+                                && let Some(raw_item) = provider_meta.extra.get("openaiRawItem")
+                            {
+                                items.push(raw_item.clone());
+                            }
                         }
                         _ => {}
                     }
@@ -806,6 +1028,7 @@ fn convert_messages_to_responses_input(
                     if let ContentBlock::ToolResult {
                         tool_call_id,
                         content,
+                        provider_meta,
                         ..
                     } = block
                     {
@@ -838,13 +1061,26 @@ fn convert_messages_to_responses_input(
                         } else {
                             String::new()
                         };
-                        items.push(json!({
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": output_str,
-                        }));
 
-                        if !images.is_empty() {
+                        let caller = provider_meta
+                            .extra
+                            .get("openaiCaller")
+                            .or_else(|| caller_by_call_id.get(tool_call_id.as_str()))
+                            .or_else(|| caller_by_call_id.get(call_id));
+
+                        let mut fco_obj = Map::new();
+                        fco_obj.insert(
+                            "type".to_string(),
+                            Value::String("function_call_output".to_string()),
+                        );
+                        fco_obj.insert("call_id".to_string(), Value::String(call_id.to_string()));
+                        fco_obj.insert("output".to_string(), Value::String(output_str));
+                        if let Some(caller_val) = caller {
+                            fco_obj.insert("caller".to_string(), caller_val.clone());
+                        }
+                        items.push(Value::Object(fco_obj));
+
+                        if !images.is_empty() && caller.is_none() {
                             let mut user_parts = vec![json!({
                                 "type": "input_text",
                                 "text": "Attached image(s) from tool result:",
@@ -953,12 +1189,25 @@ fn media_source_to_openai_image_url(source: &MediaSource) -> Option<String> {
     }
 }
 
+fn parse_item_object_args(raw: Option<&Value>) -> Map<String, Value> {
+    match raw {
+        Some(Value::Object(map)) => map.clone(),
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default(),
+        _ => Map::new(),
+    }
+}
+
 struct OpenAiStreamState {
     turn_id: String,
     model_id: String,
     response_id: Option<String>,
     open_items: BTreeMap<usize, OpenAiActiveItem>,
     finished_blocks: BTreeMap<usize, ContentBlock>,
+    pending_server_tool_search_keys: VecDeque<String>,
+    pending_program_keys: VecDeque<String>,
     next_auto_slot: usize,
     last_slot: Option<usize>,
     usage: TurnUsage,
@@ -984,6 +1233,10 @@ enum OpenAiActiveItem {
         name: String,
         partial_json: String,
     },
+    ServerItem {
+        item_id: String,
+        code_buf: String,
+    },
 }
 
 impl OpenAiActiveItem {
@@ -991,7 +1244,8 @@ impl OpenAiActiveItem {
         match self {
             Self::Reasoning { item_id, .. }
             | Self::Message { item_id, .. }
-            | Self::FunctionCall { item_id, .. } => item_id,
+            | Self::FunctionCall { item_id, .. }
+            | Self::ServerItem { item_id, .. } => item_id,
         }
     }
 }
@@ -1004,6 +1258,8 @@ impl OpenAiStreamState {
             response_id: None,
             open_items: BTreeMap::new(),
             finished_blocks: BTreeMap::new(),
+            pending_server_tool_search_keys: VecDeque::new(),
+            pending_program_keys: VecDeque::new(),
             next_auto_slot: 0,
             last_slot: None,
             usage: TurnUsage::default(),
@@ -1134,7 +1390,79 @@ impl OpenAiStreamState {
                         );
                         self.last_slot = Some(slot);
                     }
+                    "tool_search_call" => {
+                        let key = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(&item_id)
+                            .to_string();
+                        let initial_args = parse_item_object_args(item.get("arguments"));
+                        emit(StreamEvent::ToolCallStart {
+                            turn_id: self.turn_id.clone(),
+                            key: key.clone(),
+                            name: "tool_search".to_string(),
+                            initial_args: (!initial_args.is_empty()).then_some(initial_args),
+                        });
+                        self.open_items.insert(
+                            slot,
+                            OpenAiActiveItem::ServerItem {
+                                item_id,
+                                code_buf: String::new(),
+                            },
+                        );
+                        self.last_slot = Some(slot);
+                    }
+                    "program" => {
+                        let key = item_id.clone();
+                        let initial_code = item
+                            .get("code")
+                            .or_else(|| item.get("program"))
+                            .or_else(|| item.get("source"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let mut initial_args = Map::new();
+                        if !initial_code.is_empty() {
+                            initial_args
+                                .insert("code".to_string(), Value::String(initial_code.clone()));
+                        }
+                        emit(StreamEvent::ToolCallStart {
+                            turn_id: self.turn_id.clone(),
+                            key,
+                            name: "programmatic_tool_calling".to_string(),
+                            initial_args: (!initial_args.is_empty()).then_some(initial_args),
+                        });
+                        self.open_items.insert(
+                            slot,
+                            OpenAiActiveItem::ServerItem {
+                                item_id,
+                                code_buf: initial_code,
+                            },
+                        );
+                        self.last_slot = Some(slot);
+                    }
+                    "tool_search_output" | "program_output" => {
+                        self.open_items.insert(
+                            slot,
+                            OpenAiActiveItem::ServerItem {
+                                item_id,
+                                code_buf: String::new(),
+                            },
+                        );
+                        self.last_slot = Some(slot);
+                    }
                     _ => {}
+                }
+            }
+            "response.program.delta" | "response.program_code.delta" => {
+                if let Some(delta) = env.delta.as_deref()
+                    && let Some(slot) =
+                        self.resolve_open_slot(env.output_index, env.item_id.as_deref())
+                    && let Some(OpenAiActiveItem::ServerItem { code_buf, .. }) =
+                        self.open_items.get_mut(&slot)
+                {
+                    code_buf.push_str(delta);
                 }
             }
             "response.reasoning_summary_part.added" => {
@@ -1427,6 +1755,13 @@ impl OpenAiStreamState {
                             input_digest: None,
                         });
 
+                        let mut extra = Map::new();
+                        if let Some(caller) = item.get("caller")
+                            && caller.is_object()
+                        {
+                            extra.insert("openaiCaller".to_string(), caller.clone());
+                        }
+
                         self.finished_blocks.insert(
                             slot,
                             ContentBlock::ToolCall {
@@ -1438,6 +1773,228 @@ impl OpenAiStreamState {
                                     openai_response_id: self.response_id.clone(),
                                     openai_item_id: Some(item_id),
                                     openai_call_id: Some(call_id),
+                                    extra,
+                                    ..Default::default()
+                                },
+                            },
+                        );
+                    }
+                    "tool_search_call" => {
+                        let fallback_id = match &removed_active {
+                            Some(OpenAiActiveItem::ServerItem { item_id, .. }) => item_id.as_str(),
+                            _ => "tsc_0",
+                        };
+                        let item_id = done_item_id.unwrap_or(fallback_id).to_string();
+                        let explicit_call_id = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty());
+                        let key = explicit_call_id.unwrap_or(&item_id).to_string();
+                        if explicit_call_id.is_none() {
+                            self.pending_server_tool_search_keys.push_back(key.clone());
+                        }
+                        let args_map = parse_item_object_args(item.get("arguments"));
+                        emit(StreamEvent::ToolCallEnd {
+                            turn_id: self.turn_id.clone(),
+                            key,
+                            name: "tool_search".to_string(),
+                            arguments: Some(args_map.clone()),
+                            retry_of: None,
+                            input_digest: None,
+                        });
+                        let mut extra = Map::new();
+                        extra.insert("openaiRawItem".to_string(), item_val);
+                        self.finished_blocks.insert(
+                            slot,
+                            ContentBlock::ProviderNativeTool {
+                                id: item_id.clone(),
+                                name: "tool_search".to_string(),
+                                role: ProviderNativeToolRole::Call,
+                                arguments: args_map,
+                                result: None,
+                                is_error: false,
+                                citations: Vec::new(),
+                                provider_meta: ProviderOpaqueMeta {
+                                    openai_response_id: self.response_id.clone(),
+                                    openai_item_id: Some(item_id),
+                                    extra,
+                                    ..Default::default()
+                                },
+                            },
+                        );
+                    }
+                    "tool_search_output" => {
+                        let fallback_id = match &removed_active {
+                            Some(OpenAiActiveItem::ServerItem { item_id, .. }) => item_id.as_str(),
+                            _ => "tso_0",
+                        };
+                        let item_id = done_item_id.unwrap_or(fallback_id).to_string();
+                        let key = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(ToOwned::to_owned)
+                            .or_else(|| self.pending_server_tool_search_keys.pop_front())
+                            .unwrap_or_else(|| item_id.clone());
+                        let status = item
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or("completed");
+                        let is_error = status == "failed" || status == "error";
+                        let matched_tools: Vec<String> = item
+                            .get("tools")
+                            .and_then(Value::as_array)
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|entry| {
+                                        entry.as_str().map(ToOwned::to_owned).or_else(|| {
+                                            entry
+                                                .get("name")
+                                                .and_then(Value::as_str)
+                                                .map(ToOwned::to_owned)
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let summary_result = json!({
+                            "status": status,
+                            "tools": matched_tools,
+                        });
+                        emit(StreamEvent::ToolResult {
+                            turn_id: self.turn_id.clone(),
+                            key,
+                            name: "tool_search".to_string(),
+                            result: summary_result.clone(),
+                            is_error,
+                            denied: false,
+                        });
+                        let mut extra = Map::new();
+                        extra.insert("openaiRawItem".to_string(), item_val);
+                        self.finished_blocks.insert(
+                            slot,
+                            ContentBlock::ProviderNativeTool {
+                                id: item_id.clone(),
+                                name: "tool_search".to_string(),
+                                role: ProviderNativeToolRole::Result,
+                                arguments: Map::new(),
+                                result: Some(summary_result),
+                                is_error,
+                                citations: Vec::new(),
+                                provider_meta: ProviderOpaqueMeta {
+                                    openai_response_id: self.response_id.clone(),
+                                    openai_item_id: Some(item_id),
+                                    extra,
+                                    ..Default::default()
+                                },
+                            },
+                        );
+                    }
+                    "program" => {
+                        let fallback_id = match &removed_active {
+                            Some(OpenAiActiveItem::ServerItem { item_id, .. }) => item_id.as_str(),
+                            _ => "prg_0",
+                        };
+                        let item_id = done_item_id.unwrap_or(fallback_id).to_string();
+                        let code = item
+                            .get("code")
+                            .or_else(|| item.get("program"))
+                            .or_else(|| item.get("source"))
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .or_else(|| match &removed_active {
+                                Some(OpenAiActiveItem::ServerItem { code_buf, .. })
+                                    if !code_buf.is_empty() =>
+                                {
+                                    Some(code_buf.clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        let mut args_map = Map::new();
+                        if !code.is_empty() {
+                            args_map.insert("code".to_string(), Value::String(code));
+                        }
+                        self.pending_program_keys.push_back(item_id.clone());
+                        emit(StreamEvent::ToolCallEnd {
+                            turn_id: self.turn_id.clone(),
+                            key: item_id.clone(),
+                            name: "programmatic_tool_calling".to_string(),
+                            arguments: Some(args_map.clone()),
+                            retry_of: None,
+                            input_digest: None,
+                        });
+                        let mut extra = Map::new();
+                        extra.insert("openaiRawItem".to_string(), item_val);
+                        self.finished_blocks.insert(
+                            slot,
+                            ContentBlock::ProviderNativeTool {
+                                id: item_id.clone(),
+                                name: "programmatic_tool_calling".to_string(),
+                                role: ProviderNativeToolRole::Call,
+                                arguments: args_map,
+                                result: None,
+                                is_error: false,
+                                citations: Vec::new(),
+                                provider_meta: ProviderOpaqueMeta {
+                                    openai_response_id: self.response_id.clone(),
+                                    openai_item_id: Some(item_id),
+                                    extra,
+                                    ..Default::default()
+                                },
+                            },
+                        );
+                    }
+                    "program_output" => {
+                        let fallback_id = match &removed_active {
+                            Some(OpenAiActiveItem::ServerItem { item_id, .. }) => item_id.as_str(),
+                            _ => "prgo_0",
+                        };
+                        let item_id = done_item_id.unwrap_or(fallback_id).to_string();
+                        let key = item
+                            .get("program_id")
+                            .or_else(|| item.get("caller_id"))
+                            .or_else(|| item.get("call_id"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(ToOwned::to_owned)
+                            .or_else(|| self.pending_program_keys.pop_front())
+                            .unwrap_or_else(|| item_id.clone());
+                        let status = item
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or("completed");
+                        let is_error = status == "failed"
+                            || status == "error"
+                            || item.get("error").is_some_and(|e| !e.is_null());
+                        let output_payload = item
+                            .get("output")
+                            .cloned()
+                            .unwrap_or_else(|| json!({ "status": status }));
+                        emit(StreamEvent::ToolResult {
+                            turn_id: self.turn_id.clone(),
+                            key,
+                            name: "programmatic_tool_calling".to_string(),
+                            result: output_payload.clone(),
+                            is_error,
+                            denied: false,
+                        });
+                        let mut extra = Map::new();
+                        extra.insert("openaiRawItem".to_string(), item_val);
+                        self.finished_blocks.insert(
+                            slot,
+                            ContentBlock::ProviderNativeTool {
+                                id: item_id.clone(),
+                                name: "programmatic_tool_calling".to_string(),
+                                role: ProviderNativeToolRole::Result,
+                                arguments: Map::new(),
+                                result: Some(output_payload),
+                                is_error,
+                                citations: Vec::new(),
+                                provider_meta: ProviderOpaqueMeta {
+                                    openai_response_id: self.response_id.clone(),
+                                    openai_item_id: Some(item_id),
+                                    extra,
                                     ..Default::default()
                                 },
                             },
@@ -1546,6 +2103,31 @@ impl OpenAiStreamState {
             _ => None,
         });
 
+        let has_tool_call = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolCall { .. }));
+        let has_visible_final_text = content.iter().any(|b| {
+            matches!(
+                b,
+                ContentBlock::Text { text, phase, .. }
+                    if *phase != Some(TextPhase::Commentary) && !text.trim().is_empty()
+            )
+        });
+        let has_program_output = content.iter().any(|b| {
+            matches!(
+                b,
+                ContentBlock::ProviderNativeTool {
+                    name,
+                    role: ProviderNativeToolRole::Result,
+                    ..
+                } if name == "programmatic_tool_calling"
+            )
+        });
+        let mut assistant_extra = Map::new();
+        if has_program_output && !has_tool_call && !has_visible_final_text {
+            assistant_extra.insert("requiresContinuationStep".to_string(), Value::Bool(true));
+        }
+
         let assistant = CanonicalMessage {
             id: self
                 .response_id
@@ -1560,6 +2142,7 @@ impl OpenAiStreamState {
             stop_reason: Some(self.stop_reason),
             provider_meta: ProviderOpaqueMeta {
                 openai_response_id: self.response_id.clone(),
+                extra: assistant_extra,
                 ..Default::default()
             },
             created_at: Utc::now().to_rfc3339(),

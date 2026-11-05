@@ -34,11 +34,43 @@ pub struct LoadConfigOptions {
     pub env: Option<HashMap<String, String>>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolCallingStrategy {
+    #[default]
+    Auto,
+    Native,
+    Harness,
+}
+
+impl ToolCallingStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Native => "native",
+            Self::Harness => "harness",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "native" => Some(Self::Native),
+            "harness" | "local" => Some(Self::Harness),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallingConfig {
+    #[serde(default)]
     pub code_mode: bool,
+    #[serde(default)]
     pub deferred_tool_search: bool,
+    #[serde(default)]
+    pub strategy: ToolCallingStrategy,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -611,16 +643,50 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
         inherited_merged.get("sandbox"),
     );
 
-    let tool_calling_obj = merged.get("toolCalling").and_then(Value::as_object);
+    let resolve_tier_tool_bool = |tier: &Map<String, Value>, key: &str| -> Option<bool> {
+        tier.get("toolCalling")
+            .and_then(Value::as_object)
+            .and_then(|o| as_bool_like_value(o.get(key)))
+            .or_else(|| {
+                tier.get("providerOptions")
+                    .and_then(Value::as_object)
+                    .and_then(|o| as_bool_like_value(o.get(key)))
+            })
+    };
+    let resolve_tier_strategy = |tier: &Map<String, Value>| -> Option<ToolCallingStrategy> {
+        tier.get("toolCalling")
+            .and_then(Value::as_object)
+            .and_then(|o| o.get("strategy"))
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+            .or_else(|| {
+                tier.get("providerOptions")
+                    .and_then(Value::as_object)
+                    .and_then(|o| o.get("toolCallingStrategy"))
+                    .and_then(Value::as_str)
+                    .and_then(ToolCallingStrategy::parse)
+            })
+    };
     let tool_calling = ToolCallingConfig {
-        code_mode: tool_calling_obj
-            .and_then(|o| o.get("codeMode"))
-            .and_then(Value::as_bool)
-            == Some(true),
-        deferred_tool_search: tool_calling_obj
-            .and_then(|o| o.get("deferredToolSearch"))
-            .and_then(Value::as_bool)
-            == Some(true),
+        code_mode: as_bool_like_str(env.get("COWORK_CODE_MODE").map(String::as_str))
+            .or_else(|| resolve_tier_tool_bool(&project_config, "codeMode"))
+            .or_else(|| resolve_tier_tool_bool(&user_config, "codeMode"))
+            .or_else(|| resolve_tier_tool_bool(&built_in_defaults, "codeMode"))
+            .unwrap_or(false),
+        deferred_tool_search: as_bool_like_str(
+            env.get("COWORK_DEFERRED_TOOL_SEARCH").map(String::as_str),
+        )
+        .or_else(|| resolve_tier_tool_bool(&project_config, "deferredToolSearch"))
+        .or_else(|| resolve_tier_tool_bool(&user_config, "deferredToolSearch"))
+        .or_else(|| resolve_tier_tool_bool(&built_in_defaults, "deferredToolSearch"))
+        .unwrap_or(false),
+        strategy: env
+            .get("COWORK_TOOL_CALLING_STRATEGY")
+            .and_then(|s| ToolCallingStrategy::parse(s))
+            .or_else(|| resolve_tier_strategy(&project_config))
+            .or_else(|| resolve_tier_strategy(&user_config))
+            .or_else(|| resolve_tier_strategy(&built_in_defaults))
+            .unwrap_or(ToolCallingStrategy::Auto),
     };
 
     let configured_model = as_non_empty_env(&env, "AGENT_MODEL")

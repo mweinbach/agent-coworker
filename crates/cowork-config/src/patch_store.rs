@@ -7,7 +7,8 @@ use crate::error::{ConfigError, Result};
 use crate::feature_flags::FeatureFlags;
 use crate::file_lock::{FileLockOptions, file_lock_root_for_cowork_home, with_file_lock};
 use crate::merge::{
-    AgentConfig, ProjectConfigOverrides, deep_merge_objects, load_json_object_safe,
+    AgentConfig, ProjectConfigOverrides, ToolCallingConfig, ToolCallingStrategy,
+    deep_merge_objects, load_json_object_safe,
 };
 use crate::paths::{is_confined_below, normalize_lexical_path, write_text_file_atomic};
 use crate::providers::{
@@ -15,6 +16,23 @@ use crate::providers::{
 };
 
 const EDITABLE_PROVIDER_OPTION_KEYS: [&str; 4] = ["openai", "codex-cli", "google", "lmstudio"];
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallingPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_mode: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_tool_search: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<ToolCallingStrategy>,
+}
+
+impl ToolCallingPatch {
+    pub fn is_empty(&self) -> bool {
+        self.code_mode.is_none() && self.deferred_tool_search.is_none() && self.strategy.is_none()
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,9 +72,11 @@ pub struct ProjectConfigPatch {
     pub user_name: Option<String>,
     pub feature_flags: Option<FeatureFlags>,
     pub user_profile: Option<UserProfilePatch>,
+    pub tool_calling: Option<ToolCallingPatch>,
     pub clear_memory_generation_model: bool,
     pub clear_skill_improvement_model: bool,
     pub clear_tool_output_overflow_chars: bool,
+    pub clear_tool_calling: bool,
     pub provider_options: Option<Map<String, Value>>,
 }
 
@@ -166,6 +186,12 @@ impl ProjectConfigPatch {
         {
             out.push(("userProfile".to_string(), val));
         }
+        if let Some(v) = &self.tool_calling
+            && !v.is_empty()
+            && let Ok(val) = serde_json::to_value(v)
+        {
+            out.push(("toolCalling".to_string(), val));
+        }
         if let Some(v) = &self.provider_options {
             out.push(("providerOptions".to_string(), Value::Object(v.clone())));
         }
@@ -219,6 +245,7 @@ async fn persist_config_patch_file(
         && !patch.clear_memory_generation_model
         && !patch.clear_skill_improvement_model
         && !patch.clear_tool_output_overflow_chars
+        && !patch.clear_tool_calling
         && !clear_observability_enabled
     {
         return Ok(());
@@ -271,14 +298,18 @@ async fn persist_config_patch_file(
                     }
                     continue;
                 }
-                if (key == "userProfile" || key == "featureFlags")
+                if (key == "userProfile" || key == "featureFlags" || key == "toolCalling")
                     && let Value::Object(incoming) = value
                 {
-                    let existing = current
-                        .get(&key)
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default();
+                    let existing = if key == "toolCalling" && patch.clear_tool_calling {
+                        Map::new()
+                    } else {
+                        current
+                            .get(&key)
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default()
+                    };
                     next.insert(key, Value::Object(deep_merge_objects(&existing, &incoming)));
                     continue;
                 }
@@ -287,6 +318,22 @@ async fn persist_config_patch_file(
 
             if patch.clear_tool_output_overflow_chars {
                 next.remove("toolOutputOverflowChars");
+            }
+            if patch.clear_tool_calling
+                && patch
+                    .tool_calling
+                    .as_ref()
+                    .is_none_or(ToolCallingPatch::is_empty)
+            {
+                next.remove("toolCalling");
+                if let Some(Value::Object(po)) = next.get_mut("providerOptions") {
+                    po.remove("codeMode");
+                    po.remove("deferredToolSearch");
+                    po.remove("toolCallingStrategy");
+                    if po.is_empty() {
+                        next.remove("providerOptions");
+                    }
+                }
             }
             if patch.clear_memory_generation_model {
                 next.remove("memoryGenerationModel");
@@ -508,6 +555,20 @@ pub fn merge_config_patch(config: &AgentConfig, patch: &ProjectConfigPatch) -> A
         }
         if let Some(d) = &up.details {
             next.user_profile.details = d.clone();
+        }
+    }
+    if patch.clear_tool_calling {
+        next.tool_calling = ToolCallingConfig::default();
+    }
+    if let Some(tc) = &patch.tool_calling {
+        if let Some(code_mode) = tc.code_mode {
+            next.tool_calling.code_mode = code_mode;
+        }
+        if let Some(deferred_tool_search) = tc.deferred_tool_search {
+            next.tool_calling.deferred_tool_search = deferred_tool_search;
+        }
+        if let Some(strategy) = tc.strategy {
+            next.tool_calling.strategy = strategy;
         }
     }
     if let Some(po_patch) = &patch.provider_options {

@@ -420,6 +420,18 @@ impl ActiveReplSession {
                 )?;
                 writeln!(
                     out,
+                    "  /code-mode <on|off>        Toggle programmatic tool calling / Code Mode"
+                )?;
+                writeln!(
+                    out,
+                    "  /tool-search <on|off>      Toggle deferred tool search"
+                )?;
+                writeln!(
+                    out,
+                    "  /tool-calling [...]        Inspect status, set strategy (auto|native|harness), or check endpoint"
+                )?;
+                writeln!(
+                    out,
                     "  /cwd <path>                Set working directory for this session"
                 )?;
                 writeln!(
@@ -773,12 +785,201 @@ impl ActiveReplSession {
                 Ok(LineOutcome::Continue)
             }
 
+            ParsedReplCommand::CodeMode(arg) => {
+                let val = arg
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let enabled = match val.as_str() {
+                    "on" | "true" | "1" | "enable" | "enabled" => Some(true),
+                    "off" | "false" | "0" | "disable" | "disabled" => Some(false),
+                    _ => None,
+                };
+                let Some(enabled) = enabled else {
+                    writeln!(out, "usage: /code-mode <on|off>")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                };
+                self.rpc
+                    .request(
+                        "cowork/session/config/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "config": {
+                                "toolCalling": { "codeMode": enabled }
+                            }
+                        })),
+                    )
+                    .await?;
+                writeln!(
+                    out,
+                    "Programmatic tool calling (Code Mode) {}",
+                    if enabled { "enabled" } else { "disabled" }
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::ToolSearch(arg) => {
+                let val = arg
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let enabled = match val.as_str() {
+                    "on" | "true" | "1" | "enable" | "enabled" => Some(true),
+                    "off" | "false" | "0" | "disable" | "disabled" => Some(false),
+                    _ => None,
+                };
+                let Some(enabled) = enabled else {
+                    writeln!(out, "usage: /tool-search <on|off>")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                };
+                self.rpc
+                    .request(
+                        "cowork/session/config/set",
+                        Some(json!({
+                            "threadId": self.thread_id,
+                            "config": {
+                                "toolCalling": { "deferredToolSearch": enabled }
+                            }
+                        })),
+                    )
+                    .await?;
+                writeln!(
+                    out,
+                    "Deferred tool search {}",
+                    if enabled { "enabled" } else { "disabled" }
+                )?;
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
+            ParsedReplCommand::ToolCalling(arg) => {
+                let mut parts = arg.split_whitespace();
+                let sub = parts.next().unwrap_or("status").to_ascii_lowercase();
+                match sub.as_str() {
+                    "" | "status" => {
+                        let cwd_str = self.cwd.to_string_lossy().into_owned();
+                        let state = self
+                            .rpc
+                            .request(
+                                "cowork/session/state/read",
+                                Some(json!({ "cwd": cwd_str, "threadId": self.thread_id })),
+                            )
+                            .await?;
+                        let tc = state["events"]
+                            .as_array()
+                            .and_then(|evts| {
+                                evts.iter()
+                                    .find(|e| e["type"] == "session_config")
+                                    .map(|e| &e["config"]["toolCalling"])
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| json!({}));
+                        let code_mode = tc["codeMode"].as_bool().unwrap_or(false);
+                        let deferred = tc["deferredToolSearch"].as_bool().unwrap_or(false);
+                        let strategy = tc["strategy"].as_str().unwrap_or("auto");
+                        writeln!(
+                            out,
+                            "Tool calling: deferredToolSearch={deferred}, codeMode={code_mode}, strategy={}",
+                            sanitize(strategy)
+                        )?;
+                    }
+                    "strategy" => {
+                        let next_strat = parts.next().unwrap_or("").to_ascii_lowercase();
+                        if !matches!(next_strat.as_str(), "auto" | "native" | "harness") {
+                            writeln!(out, "usage: /tool-calling strategy <auto|native|harness>")?;
+                            out.flush()?;
+                            return Ok(LineOutcome::Continue);
+                        }
+                        self.rpc
+                            .request(
+                                "cowork/session/config/set",
+                                Some(json!({
+                                    "threadId": self.thread_id,
+                                    "config": {
+                                        "toolCalling": { "strategy": next_strat }
+                                    }
+                                })),
+                            )
+                            .await?;
+                        writeln!(out, "Tool calling strategy set to {next_strat}")?;
+                    }
+                    "check" => {
+                        let refresh = parts
+                            .next()
+                            .is_some_and(|t| t.eq_ignore_ascii_case("refresh") || t == "--refresh");
+                        let cwd_str = self.cwd.to_string_lossy().into_owned();
+                        let res = self
+                            .rpc
+                            .request(
+                                "cowork/provider/capabilities/check",
+                                Some(json!({
+                                    "cwd": cwd_str,
+                                    "threadId": self.thread_id,
+                                    "refresh": refresh,
+                                })),
+                            )
+                            .await?;
+                        let caps = &res["capabilities"];
+                        let native_ts = caps["nativeToolSearch"].as_str().unwrap_or("harness");
+                        let native_ptc = caps["nativeProgrammaticToolCalling"]
+                            .as_str()
+                            .unwrap_or("harness");
+                        let source = caps["source"].as_str().unwrap_or("unknown");
+                        let detail = caps["detail"].as_str().unwrap_or("");
+                        writeln!(
+                            out,
+                            "Endpoint capabilities ({} / {}, strategy={}): toolSearch={}, codeExecution={}, source={}{}",
+                            sanitize(res["provider"].as_str().unwrap_or(&self.provider)),
+                            sanitize(res["model"].as_str().unwrap_or(&self.model)),
+                            sanitize(res["strategy"].as_str().unwrap_or("auto")),
+                            sanitize(native_ts),
+                            sanitize(native_ptc),
+                            sanitize(source),
+                            if detail.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" ({})", sanitize(detail))
+                            }
+                        )?;
+                    }
+                    _ => {
+                        writeln!(
+                            out,
+                            "usage: /tool-calling [status | strategy <auto|native|harness> | check [refresh]]"
+                        )?;
+                    }
+                }
+                out.flush()?;
+                Ok(LineOutcome::Continue)
+            }
+
             ParsedReplCommand::Tools => {
                 let cwd_str = self.cwd.to_string_lossy().into_owned();
-                let _ = self
+                let state = self
                     .rpc
-                    .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
+                    .request(
+                        "cowork/session/state/read",
+                        Some(json!({ "cwd": cwd_str, "threadId": self.thread_id })),
+                    )
                     .await?;
+                if let Some(tc) = state["events"].as_array().and_then(|evts| {
+                    evts.iter()
+                        .find(|e| e["type"] == "session_config")
+                        .and_then(|e| e["config"].get("toolCalling"))
+                }) {
+                    writeln!(
+                        out,
+                        "Tool calling: deferredToolSearch={}, codeMode={}, strategy={}",
+                        tc["deferredToolSearch"].as_bool().unwrap_or(false),
+                        tc["codeMode"].as_bool().unwrap_or(false),
+                        sanitize(tc["strategy"].as_str().unwrap_or("auto"))
+                    )?;
+                }
                 writeln!(out, "Tools:")?;
                 for name in CANONICAL_BUILTIN_TOOL_IDS {
                     writeln!(out, "  - {name}")?;

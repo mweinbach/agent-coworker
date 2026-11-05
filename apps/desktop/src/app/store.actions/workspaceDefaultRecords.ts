@@ -6,6 +6,7 @@ import {
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
 import {
+  normalizeWorkspaceToolCalling,
   normalizeWorkspaceUserProfile,
   type WorkspaceDefaultsPatch,
   type WorkspaceRecord,
@@ -19,6 +20,8 @@ export function applyWorkspacePatch(
 ): WorkspaceRecord {
   const {
     clearDefaultToolOutputOverflowChars,
+    clearDefaultToolCalling,
+    defaultToolCalling: toolCallingPatch,
     userProfile: userProfilePatch,
     ...workspacePatch
   } = patch;
@@ -26,6 +29,16 @@ export function applyWorkspacePatch(
     ...workspace,
     ...workspacePatch,
     ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
+    ...(clearDefaultToolCalling
+      ? { defaultToolCalling: undefined }
+      : toolCallingPatch !== undefined
+        ? {
+            defaultToolCalling: normalizeWorkspaceToolCalling({
+              ...workspace.defaultToolCalling,
+              ...toolCallingPatch,
+            }),
+          }
+        : {}),
     ...(workspacePatch.providerOptions !== undefined
       ? {
           providerOptions: mergeWorkspaceProviderOptions(
@@ -58,6 +71,9 @@ export function copyWorkspaceSettings(
     defaultPreferredChildModelRef: source.defaultPreferredChildModelRef,
     defaultAllowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
+    ...(source.defaultToolCalling !== undefined
+      ? { defaultToolCalling: normalizeWorkspaceToolCalling(source.defaultToolCalling) }
+      : { defaultToolCalling: undefined }),
     defaultWorkflowMaxConcurrentAgents: source.defaultWorkflowMaxConcurrentAgents,
     defaultAdvancedMemory: source.defaultAdvancedMemory,
     defaultMemoryGenerationModel: source.defaultMemoryGenerationModel,
@@ -124,6 +140,11 @@ export function resolveWorkspaceRecordWithControlRuntime(
     defaultToolOutputOverflowChars:
       controlSessionConfig?.defaultToolOutputOverflowChars ??
       workspace.defaultToolOutputOverflowChars,
+    ...(controlSessionConfig?.toolCalling !== undefined
+      ? { defaultToolCalling: normalizeWorkspaceToolCalling(controlSessionConfig.toolCalling) }
+      : workspace.defaultToolCalling !== undefined
+        ? { defaultToolCalling: normalizeWorkspaceToolCalling(workspace.defaultToolCalling) }
+        : {}),
     defaultWorkflowMaxConcurrentAgents:
       controlSessionConfig?.workflowMaxConcurrentAgents ??
       workspace.defaultWorkflowMaxConcurrentAgents,
@@ -199,6 +220,7 @@ export function syncWorkspaceControlRuntimeToRecord(
   const normalizedProviderOptions = normalizeWorkspaceProviderOptions(source.providerOptions);
   const {
     defaultToolOutputOverflowChars: _prevOverflow,
+    toolCalling: _prevToolCalling,
     memoryGenerationModel: _prevMemoryModel,
     skillImprovementModel: _prevSkillModel,
     ...restControlSessionConfig
@@ -213,6 +235,9 @@ export function syncWorkspaceControlRuntimeToRecord(
     allowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
     ...(source.defaultToolOutputOverflowChars !== undefined
       ? { defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars }
+      : {}),
+    ...(source.defaultToolCalling !== undefined
+      ? { toolCalling: normalizeWorkspaceToolCalling(source.defaultToolCalling) }
       : {}),
     workflowMaxConcurrentAgents:
       source.defaultWorkflowMaxConcurrentAgents ??

@@ -36,6 +36,7 @@ import {
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import {
   isOneOffChatWorkspace,
+  normalizeWorkspaceToolCalling,
   normalizeWorkspaceUserProfile,
   type WorkspaceDefaultsPatch,
   type WorkspaceRecord,
@@ -224,6 +225,21 @@ export function createWorkspaceDefaultsActions(
     );
   };
 
+  const toolCallingEqual = (
+    left: WorkspaceRecord["defaultToolCalling"] | undefined,
+    right: WorkspaceRecord["defaultToolCalling"] | undefined,
+  ): boolean => {
+    if (left === undefined && right === undefined) return true;
+    if (left === undefined || right === undefined) return false;
+    const normalizedLeft = normalizeWorkspaceToolCalling(left);
+    const normalizedRight = normalizeWorkspaceToolCalling(right);
+    return (
+      normalizedLeft.codeMode === normalizedRight.codeMode &&
+      normalizedLeft.deferredToolSearch === normalizedRight.deferredToolSearch &&
+      normalizedLeft.strategy === normalizedRight.strategy
+    );
+  };
+
   const buildApplySessionDefaultsMessage = (opts: {
     sessionId: string;
     current: DefaultsTargetState;
@@ -239,6 +255,8 @@ export function createWorkspaceDefaultsActions(
       skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
       skillImprovementExcludedSkills?: string[];
       toolOutputOverflowChars?: number | null;
+      toolCalling?: WorkspaceRecord["defaultToolCalling"];
+      clearToolCalling?: boolean;
       workflowMaxConcurrentAgents?: number;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -260,6 +278,7 @@ export function createWorkspaceDefaultsActions(
       skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
       skillImprovementExcludedSkills?: string[];
       defaultToolOutputOverflowChars?: number | null;
+      toolCalling?: WorkspaceRecord["defaultToolCalling"];
       workflowMaxConcurrentAgents?: number;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -368,6 +387,15 @@ export function createWorkspaceDefaultsActions(
       } else if (currentDefaultToolOutputOverflow !== undefined) {
         configPatch.clearToolOutputOverflowChars = true;
       }
+    }
+
+    if (opts.desired.clearToolCalling === true) {
+      configPatch.clearToolCalling = true;
+    } else if (
+      opts.desired.toolCalling !== undefined &&
+      !toolCallingEqual(opts.desired.toolCalling, currentSessionConfig.toolCalling)
+    ) {
+      configPatch.toolCalling = normalizeWorkspaceToolCalling(opts.desired.toolCalling);
     }
 
     if (
@@ -498,6 +526,11 @@ export function createWorkspaceDefaultsActions(
       defaultToolOutputOverflowChars:
         controlSessionConfig?.defaultToolOutputOverflowChars ??
         workspace.defaultToolOutputOverflowChars,
+      ...(controlSessionConfig?.toolCalling !== undefined
+        ? { defaultToolCalling: normalizeWorkspaceToolCalling(controlSessionConfig.toolCalling) }
+        : workspace.defaultToolCalling !== undefined
+          ? { defaultToolCalling: normalizeWorkspaceToolCalling(workspace.defaultToolCalling) }
+          : {}),
       defaultAdvancedMemory: memoryDefaults.defaultAdvancedMemory,
       defaultMemoryGenerationModel: memoryDefaults.defaultMemoryGenerationModel,
       defaultSkillImprovementEnabled: memoryDefaults.defaultSkillImprovementEnabled,
@@ -592,7 +625,7 @@ export function createWorkspaceDefaultsActions(
     workspaceId: string,
     // `userInitiated` marks the workspace the person actually acted on: only that
     // one reports apply failures upward and gets a background catch-up push.
-    opts: { ensureControl: boolean; userInitiated?: boolean },
+    opts: { ensureControl: boolean; userInitiated?: boolean; clearToolCalling?: boolean },
   ) => {
     const desiredWorkspace = get().workspaces.find((workspace) => workspace.id === workspaceId);
     if (!desiredWorkspace) return;
@@ -639,6 +672,15 @@ export function createWorkspaceDefaultsActions(
       ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
       : undefined;
     const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
+    const shouldClearToolCalling =
+      opts.clearToolCalling === true ||
+      (nextWorkspace.defaultToolCalling === undefined &&
+        currentWorkspaceRuntime?.controlSessionConfig?.toolCalling !== undefined &&
+        !toolCallingEqual(currentWorkspaceRuntime.controlSessionConfig.toolCalling, {
+          codeMode: false,
+          deferredToolSearch: false,
+          strategy: "auto",
+        }));
     const controlMessage =
       controlReady && currentWorkspaceRuntime?.controlSessionId
         ? buildApplySessionDefaultsMessage({
@@ -660,6 +702,11 @@ export function createWorkspaceDefaultsActions(
               skillImprovementScope: memoryDefaults.skillImprovementScope,
               skillImprovementExcludedSkills: memoryDefaults.skillImprovementExcludedSkills,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
+              ...(shouldClearToolCalling
+                ? { clearToolCalling: true }
+                : nextWorkspace.defaultToolCalling !== undefined
+                  ? { toolCalling: nextWorkspace.defaultToolCalling }
+                  : {}),
               workflowMaxConcurrentAgents: nextWorkspace.defaultWorkflowMaxConcurrentAgents,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
@@ -832,6 +879,7 @@ export function createWorkspaceDefaultsActions(
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
       const harnessToolOutputOverflowChars =
         workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
+      const harnessToolCalling = workspaceRuntime?.controlSessionConfig?.toolCalling;
 
       // Defer model / provider / other config changes when the session is
       // busy — changing the model mid-turn is not safe.
@@ -925,6 +973,8 @@ export function createWorkspaceDefaultsActions(
         mode === "explicit"
           ? ws.defaultEnableMcp
           : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp);
+      const desiredToolCalling =
+        ws.defaultToolCalling ?? (mode === "explicit" ? undefined : harnessToolCalling);
       const message = buildApplySessionDefaultsMessage({
         sessionId: rt.sessionId,
         current: {
@@ -954,6 +1004,7 @@ export function createWorkspaceDefaultsActions(
             : harnessToolOutputOverflowChars !== undefined
               ? { toolOutputOverflowChars: harnessToolOutputOverflowChars }
               : {}),
+          ...(desiredToolCalling !== undefined ? { toolCalling: desiredToolCalling } : {}),
           workflowMaxConcurrentAgents:
             ws.defaultWorkflowMaxConcurrentAgents ??
             workspaceRuntime?.controlSessionConfig?.workflowMaxConcurrentAgents,
@@ -1116,6 +1167,8 @@ export function createWorkspaceDefaultsActions(
 
             const {
               clearDefaultToolOutputOverflowChars,
+              clearDefaultToolCalling,
+              defaultToolCalling: toolCallingPatch,
               userProfile: userProfilePatch,
               ...workspacePatch
             } = patch;
@@ -1127,6 +1180,8 @@ export function createWorkspaceDefaultsActions(
               workspacePatch.defaultPreferredChildModelRef !== undefined ||
               workspacePatch.defaultAllowedChildModelRefs !== undefined ||
               workspacePatch.defaultToolOutputOverflowChars !== undefined ||
+              toolCallingPatch !== undefined ||
+              clearDefaultToolCalling === true ||
               workspacePatch.defaultWorkflowMaxConcurrentAgents !== undefined ||
               clearDefaultToolOutputOverflowChars === true ||
               workspacePatch.defaultAdvancedMemory !== undefined ||
@@ -1148,6 +1203,7 @@ export function createWorkspaceDefaultsActions(
             await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
               ensureControl: true,
               userInitiated: true,
+              clearToolCalling: clearDefaultToolCalling === true,
             });
             const secondaryWorkspaces =
               sharedSettings || hasGlobalMemoryPatch
@@ -1162,6 +1218,7 @@ export function createWorkspaceDefaultsActions(
                   syncWorkspaceDefaultsToRuntime(workspace.id, {
                     ensureControl: false,
                     userInitiated: false,
+                    clearToolCalling: clearDefaultToolCalling === true,
                   }),
                 ),
             );

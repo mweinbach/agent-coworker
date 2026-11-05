@@ -1,4 +1,7 @@
-import type { CodexAppServerInstallStatus } from "../../lib/wsProtocol";
+import type {
+  CodexAppServerInstallStatus,
+  ProviderCapabilitiesCheckResult,
+} from "../../lib/wsProtocol";
 import {
   type AppStoreActions,
   ensureControlSocket,
@@ -164,6 +167,7 @@ export function createProviderActions(
   | "setProviderModelsEnabled"
   | "resetProviderModelPreferences"
   | "refreshProviderStatus"
+  | "checkProviderCapabilities"
   | "checkCodexAppServerStatus"
   | "updateCodexAppServer"
   | "setLmStudioEnabled"
@@ -590,6 +594,49 @@ export function createProviderActions(
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       await refreshProviderStatusForWorkspace(get, set, workspaceId, path, opts);
+    },
+
+    checkProviderCapabilities: async (opts) => {
+      const workspaceId = resolveProviderWorkspaceId(opts?.workspaceId);
+      if (!workspaceId) return null;
+
+      await ensureServerRunning(get, set, workspaceId);
+      const socket = ensureControlSocket(get, set, workspaceId);
+      if (!socket) return null;
+
+      const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      try {
+        const result = await requestJsonRpcControl(
+          get,
+          set,
+          workspaceId,
+          "cowork/provider/capabilities/check",
+          {
+            cwd: path,
+            ...(opts?.provider ? { provider: opts.provider } : {}),
+            ...(opts?.model?.trim() ? { model: opts.model.trim() } : {}),
+            ...(opts?.strategy ? { strategy: opts.strategy } : {}),
+            ...(opts?.refresh !== undefined ? { refresh: opts.refresh } : {}),
+          },
+        );
+        if (result && typeof result === "object") {
+          return result as ProviderCapabilitiesCheckResult;
+        }
+      } catch (error) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Endpoint capabilities check failed",
+            detail:
+              error instanceof Error
+                ? error.message
+                : "Unable to check provider endpoint capabilities.",
+          }),
+        }));
+      }
+      return null;
     },
 
     checkCodexAppServerStatus: async (opts) => {

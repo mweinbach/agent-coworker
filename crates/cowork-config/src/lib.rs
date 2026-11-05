@@ -47,9 +47,9 @@ pub use lmstudio::{
 pub use merge::{
     AgentConfig, CommandTemplateConfig, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
     DEFAULT_WORKFLOW_MAX_CONCURRENT_AGENTS, ExperimentalFeatures, HarnessConfig, LoadConfigOptions,
-    ModelSettings, ObservabilityConfig, ProjectConfigOverrides, ToolCallingConfig, UserProfile,
-    is_network_telemetry_globally_disabled, load_config, resolve_builtin_dir,
-    strip_provider_option_endpoints,
+    ModelSettings, ObservabilityConfig, ProjectConfigOverrides, ToolCallingConfig,
+    ToolCallingStrategy, UserProfile, is_network_telemetry_globally_disabled, load_config,
+    resolve_builtin_dir, strip_provider_option_endpoints,
 };
 pub use migration::{
     AgentConfigMigrationResult, AgentConfigMigrationScopeResult, MigrateAgentConfigOptions,
@@ -61,7 +61,8 @@ pub use models::{
     reconcile_reasoning_provider_options,
 };
 pub use patch_store::{
-    ProjectConfigPatch, UserProfilePatch, merge_config_patch, persist_project_config_patch,
+    ProjectConfigPatch, ToolCallingPatch, UserProfilePatch, merge_config_patch,
+    persist_project_config_patch,
 };
 pub use paths::{
     AiCoworkerPaths, CaseSensitivity, MEMORY_DB_FILE_NAME, PROTECTED_METADATA_DIR_NAMES,

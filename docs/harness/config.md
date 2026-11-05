@@ -39,6 +39,9 @@ Notes:
 - `AGENT_BACKUPS_ENABLED` or `backupsEnabled` (defaults to `false`; enables advanced backup APIs)
 - `AGENT_MODEL_MAX_RETRIES` or `modelSettings.maxRetries`
 - `toolOutputOverflowChars`
+- `COWORK_CODE_MODE` or `toolCalling.codeMode` (defaults to `false`; enables programmatic tool calling)
+- `COWORK_DEFERRED_TOOL_SEARCH` or `toolCalling.deferredToolSearch` (defaults to `false`; enables deferred tool discovery)
+- `COWORK_TOOL_CALLING_STRATEGY` or `toolCalling.strategy` (`"auto"` | `"native"` | `"harness"`, defaults to `"auto"`; see [`tool-calling.md`](./tool-calling.md))
 - `providerOptions`
 - `command`
 

@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cowork_config::{
-    AgentConfig, ProviderName, SandboxMode as ConfigSandboxMode, canonicalize_sync,
-    get_ai_coworker_paths, read_connection_store, reconcile_reasoning_provider_options,
+    AgentConfig, ProviderName, SandboxMode as ConfigSandboxMode, ToolCallingConfig,
+    ToolCallingStrategy, canonicalize_sync, get_ai_coworker_paths, read_connection_store,
+    reconcile_reasoning_provider_options,
 };
 use cowork_harness::attachments::{
     AttachmentModelCapabilities, materialize_turn_attachments_for_model,
@@ -1143,6 +1144,42 @@ pub(crate) fn apply_session_config_overrides(
             cfg.user_profile.details = v;
         }
     }
+    if let Some(po) = overrides.get("providerOptions").and_then(Value::as_object) {
+        if let Some(b) = po.get("codeMode").and_then(Value::as_bool) {
+            cfg.tool_calling.code_mode = b;
+        }
+        if let Some(b) = po.get("deferredToolSearch").and_then(Value::as_bool) {
+            cfg.tool_calling.deferred_tool_search = b;
+        }
+        if let Some(s) = po
+            .get("toolCallingStrategy")
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+        {
+            cfg.tool_calling.strategy = s;
+        }
+    }
+    if let Some(b) = overrides.get("codeMode").and_then(Value::as_bool) {
+        cfg.tool_calling.code_mode = b;
+    }
+    if let Some(b) = overrides.get("deferredToolSearch").and_then(Value::as_bool) {
+        cfg.tool_calling.deferred_tool_search = b;
+    }
+    if let Some(tc) = overrides.get("toolCalling").and_then(Value::as_object) {
+        if let Some(b) = tc.get("codeMode").and_then(Value::as_bool) {
+            cfg.tool_calling.code_mode = b;
+        }
+        if let Some(b) = tc.get("deferredToolSearch").and_then(Value::as_bool) {
+            cfg.tool_calling.deferred_tool_search = b;
+        }
+        if let Some(s) = tc
+            .get("strategy")
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+        {
+            cfg.tool_calling.strategy = s;
+        }
+    }
 }
 
 pub(crate) fn build_memory_prompt_section(
@@ -1908,6 +1945,20 @@ impl ServerRuntimeState {
                     .as_ref()
                     .is_some_and(|c| c.tool_calling.code_mode)
             });
+        let tool_calling_strategy = merged_provider_opts
+            .get("toolCallingStrategy")
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+            .unwrap_or_else(|| {
+                workspace_cfg
+                    .as_ref()
+                    .map_or(ToolCallingStrategy::Auto, |c| c.tool_calling.strategy)
+            });
+        let effective_tool_calling = ToolCallingConfig {
+            code_mode: code_mode_enabled && !tools_disabled,
+            deferred_tool_search: deferred_tool_search && !tools_disabled,
+            strategy: tool_calling_strategy,
+        };
         // A loaded config already resolved absent -> default and null -> None (spilling off);
         // when the workspace config could not be loaded, keep the default threshold rather than
         // silently disabling spilling.
@@ -1975,8 +2026,7 @@ impl ServerRuntimeState {
             cfg.model = model_id.clone();
             cfg.enable_mcp = session_enable_mcp;
             cfg.provider_options = Some(merged_provider_opts.clone());
-            cfg.tool_calling.deferred_tool_search = deferred_tool_search;
-            cfg.tool_calling.code_mode = code_mode_enabled;
+            cfg.tool_calling = effective_tool_calling.clone();
         }
 
         let bundled_skills_dir = self.built_in_dir.join("skills");
@@ -2104,6 +2154,33 @@ impl ServerRuntimeState {
                 })
         });
 
+        if !tools_disabled
+            && tool_calling_strategy == ToolCallingStrategy::Auto
+            && (deferred_tool_search || code_mode_enabled)
+            && matches!(provider, ProviderName::Openai | ProviderName::Anthropic)
+            && !cowork_providers::has_cached_endpoint_check(
+                provider,
+                base_url.as_deref(),
+                &model_id,
+            )
+        {
+            let _ = cowork_providers::check_endpoint_capabilities(
+                provider,
+                base_url.as_deref(),
+                &model_id,
+                api_key.as_deref(),
+                None,
+                false,
+            )
+            .await;
+        }
+        let endpoint_caps = cowork_providers::resolve_endpoint_tool_capabilities(
+            provider,
+            base_url.as_deref(),
+            &model_id,
+            tool_calling_strategy,
+        );
+
         let available_skills_for_usage = available_skills.clone();
         let read_roots = tool_read_roots(
             &self.built_in_dir,
@@ -2148,6 +2225,12 @@ impl ServerRuntimeState {
                         .await,
                     ),
                 ),
+                native_tool_search_enabled: !tools_disabled
+                    && deferred_tool_search
+                    && endpoint_caps.native_tool_search.is_some(),
+                native_code_execution_enabled: !tools_disabled
+                    && code_mode_enabled
+                    && endpoint_caps.native_programmatic_tool_calling.is_some(),
                 ..effective_agent_cfg
                     .as_ref()
                     .map(PromptTemplateContext::from_config)
@@ -2188,7 +2271,8 @@ impl ServerRuntimeState {
             model_max_retries,
         })
         .with_tool_retry_targets(retry_targets)
-        .with_tools_disabled(tools_disabled);
+        .with_tools_disabled(tools_disabled)
+        .with_tool_calling(effective_tool_calling);
         let cancel_handle = runner.cancellation_handle();
 
         self.active_turns.insert(

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use cowork_config::ProviderName;
+use cowork_config::{ProviderName, ToolCallingConfig, ToolCallingStrategy};
 use cowork_inference::{
     CanonicalMessage, Citation, ClientCapabilities as ProjectorCapabilities, ContentBlock,
     ContinuationFingerprintInput, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
@@ -14,7 +14,11 @@ use cowork_inference::{
     TurnUsage, compute_continuation_fingerprint, execute_step_with_sink,
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
-use cowork_providers::{COWORK_TOOLS_DISABLED_OPTION_KEY, ProviderStepRequest, ProviderTransport};
+use cowork_providers::{
+    COWORK_TOOLS_DISABLED_OPTION_KEY, NATIVE_EAGER_CORE_TOOLS, NativeProgrammaticToolCallingKind,
+    NativeToolCallingPlan, ProviderStepRequest, ProviderTransport, is_programmatic_eligible_tool,
+    write_native_tool_calling_plan,
+};
 use cowork_sandbox::{SandboxPolicy, policy_allows_network};
 use cowork_tools::{
     ApprovalDecisionRequest, ApprovalHandler, CatalogToolSearchTool, CodeModeTool,
@@ -115,6 +119,7 @@ pub struct TurnStepRunner {
     cancel_rx: watch::Receiver<bool>,
     tool_retry_targets: Vec<ToolRetryTarget>,
     tools_disabled: bool,
+    tool_calling_override: Option<ToolCallingConfig>,
     codex_catalog: CodexBridgeCatalog,
 }
 
@@ -177,6 +182,7 @@ impl TurnStepRunner {
             cancel_rx,
             tool_retry_targets: Vec::new(),
             tools_disabled: false,
+            tool_calling_override: None,
             codex_catalog: CodexBridgeCatalog::default(),
         }
     }
@@ -198,6 +204,13 @@ impl TurnStepRunner {
     /// Disables all tool exposure and execution for this turn (`turn/start` with `tools: "none"`).
     pub fn with_tools_disabled(mut self, tools_disabled: bool) -> Self {
         self.tools_disabled = tools_disabled;
+        self
+    }
+
+    /// Overrides the resolved [`ToolCallingConfig`] (`codeMode`, `deferredToolSearch`, `strategy`)
+    /// for this turn.
+    pub fn with_tool_calling(mut self, tool_calling: ToolCallingConfig) -> Self {
+        self.tool_calling_override = Some(tool_calling);
         self
     }
 
@@ -315,8 +328,37 @@ impl TurnStepRunner {
             false
         };
 
+        let mut effective_tool_calling = self
+            .tool_calling_override
+            .clone()
+            .or_else(|| {
+                tool_ctx
+                    .agent_config
+                    .as_ref()
+                    .map(|c| c.tool_calling.clone())
+            })
+            .unwrap_or_default();
+        if self.cfg.deferred_tool_search {
+            effective_tool_calling.deferred_tool_search = true;
+        }
+        if let Some(raw_strategy) = self
+            .cfg
+            .provider_options
+            .get("toolCallingStrategy")
+            .and_then(Value::as_str)
+            && let Some(parsed) = ToolCallingStrategy::parse(raw_strategy)
+        {
+            effective_tool_calling.strategy = parsed;
+        }
+
         let shared_activated = Arc::new(Mutex::new(BTreeSet::<String>::new()));
-        let (tools_map, deferred_catalog) = if self.tools_disabled {
+        let (
+            tools_map,
+            deferred_catalog,
+            use_harness_tool_search,
+            use_native_tool_search,
+            native_plan,
+        ) = if self.tools_disabled {
             let empty_tools = ToolMap::new();
             let empty_catalog = DeferredToolCatalog::new(ToolMap::new());
             self.codex_catalog.publish(BridgeCatalogState {
@@ -324,12 +366,32 @@ impl TurnStepRunner {
                 deferred: None,
                 cost_tracker_bridge: tool_ctx.cost_tracker_bridge.clone(),
             });
-            (empty_tools, empty_catalog)
+            (
+                empty_tools,
+                empty_catalog,
+                false,
+                false,
+                NativeToolCallingPlan::default(),
+            )
         } else {
-            let code_mode_enabled = tool_ctx
-                .agent_config
-                .as_ref()
-                .is_some_and(|c| c.tool_calling.code_mode);
+            let endpoint_caps = transport.native_tool_capabilities(
+                self.cfg.base_url.as_deref(),
+                &self.cfg.model_id,
+                effective_tool_calling.strategy,
+            );
+            let native_ts_kind = effective_tool_calling
+                .deferred_tool_search
+                .then_some(endpoint_caps.native_tool_search)
+                .flatten();
+            let native_ptc_kind = effective_tool_calling
+                .code_mode
+                .then_some(endpoint_caps.native_programmatic_tool_calling)
+                .flatten();
+            let use_native_tool_search = native_ts_kind.is_some();
+            let use_native_ptc = native_ptc_kind.is_some();
+            let use_harness_tool_search =
+                effective_tool_calling.deferred_tool_search && !use_native_tool_search;
+            let use_harness_code_mode = effective_tool_calling.code_mode && !use_native_ptc;
 
             let mut tools_map = create_builtin_tools(tool_ctx);
             let mut catalog_tools = tools_map.clone();
@@ -338,13 +400,20 @@ impl TurnStepRunner {
             catalog_tools.remove("toolCall");
             catalog_tools.remove("codeMode");
 
-            if (self.cfg.deferred_tool_search || code_mode_enabled)
+            if !use_harness_code_mode {
+                tools_map.remove("codeMode");
+            }
+            if use_native_tool_search || use_harness_tool_search || use_native_ptc {
+                tools_map.remove("toolSearch");
+                tools_map.remove("toolCall");
+            }
+
+            if (effective_tool_calling.deferred_tool_search || effective_tool_calling.code_mode)
                 && let (Some(cache), Some(agent_cfg)) =
                     (&tool_ctx.mcp_tool_cache, &tool_ctx.agent_config)
                 && agent_cfg.enable_mcp
             {
-                if self.cfg.deferred_tool_search {
-                    tools_map.remove("toolSearch");
+                if use_native_tool_search || use_harness_tool_search || use_native_ptc {
                     tools_map.remove("mcpCall");
                 }
                 if cowork_tools::mcp_access_enabled(tool_ctx) {
@@ -384,7 +453,7 @@ impl TurnStepRunner {
                         for adapter in mcp_adapters {
                             let name = adapter.name().to_owned();
                             catalog_tools.insert(name.clone(), Arc::clone(&adapter));
-                            if self.cfg.deferred_tool_search {
+                            if use_native_tool_search || use_harness_tool_search || use_native_ptc {
                                 tools_map.insert(name, adapter);
                             }
                         }
@@ -392,11 +461,9 @@ impl TurnStepRunner {
                 }
             }
             let deferred_catalog = DeferredToolCatalog::new(catalog_tools);
-            if code_mode_enabled {
-                let activated_for_cm = self
-                    .cfg
-                    .deferred_tool_search
-                    .then(|| Arc::clone(&shared_activated));
+            if use_harness_code_mode {
+                let activated_for_cm =
+                    use_harness_tool_search.then(|| Arc::clone(&shared_activated));
                 tools_map.insert(
                     "codeMode".to_owned(),
                     Arc::new(CodeModeTool::new(
@@ -404,7 +471,7 @@ impl TurnStepRunner {
                         activated_for_cm,
                     )),
                 );
-                if !self.cfg.deferred_tool_search {
+                if !effective_tool_calling.deferred_tool_search {
                     tools_map.insert(
                         "toolSearch".to_owned(),
                         Arc::new(CatalogToolSearchTool::new(deferred_catalog.clone(), None)),
@@ -412,15 +479,70 @@ impl TurnStepRunner {
                 }
             }
 
+            let mut deferred_tool_names: Vec<String> = if use_native_tool_search {
+                tools_map
+                    .keys()
+                    .filter(|name| {
+                        name.as_str() != "codeMode"
+                            && !NATIVE_EAGER_CORE_TOOLS
+                                .iter()
+                                .any(|core| core.eq_ignore_ascii_case(name))
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            deferred_tool_names.sort();
+
+            let wire_ptc_kind = match native_ptc_kind {
+                Some(NativeProgrammaticToolCallingKind::CodexCodeMode) => None,
+                other => other,
+            };
+            let mut programmatic_tool_names: Vec<String> = if let Some(ptc_kind) = wire_ptc_kind {
+                tools_map
+                    .values()
+                    .map(|t| t.definition())
+                    .filter(|def| is_programmatic_eligible_tool(def, ptc_kind))
+                    .map(|def| def.name)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            programmatic_tool_names.sort();
+
+            let codex_code_mode = if self.cfg.provider == ProviderName::CodexCli
+                && effective_tool_calling.code_mode
+            {
+                Some(matches!(
+                    native_ptc_kind,
+                    Some(NativeProgrammaticToolCallingKind::CodexCodeMode)
+                ))
+            } else {
+                None
+            };
+
+            let native_plan = NativeToolCallingPlan {
+                tool_search: native_ts_kind,
+                deferred_tool_names,
+                programmatic_tool_calling: wire_ptc_kind,
+                programmatic_tool_names,
+                codex_code_mode,
+            };
+
             self.codex_catalog.publish(BridgeCatalogState {
                 tools: tools_map.clone(),
-                deferred: self
-                    .cfg
-                    .deferred_tool_search
+                deferred: use_harness_tool_search
                     .then(|| (deferred_catalog.clone(), Arc::clone(&shared_activated))),
                 cost_tracker_bridge: tool_ctx.cost_tracker_bridge.clone(),
             });
-            (tools_map, deferred_catalog)
+            (
+                tools_map,
+                deferred_catalog,
+                use_harness_tool_search,
+                use_native_tool_search,
+                native_plan,
+            )
         };
 
         let mut step_provider_options = self.cfg.provider_options.clone();
@@ -431,6 +553,9 @@ impl TurnStepRunner {
             );
         } else {
             step_provider_options.remove(COWORK_TOOLS_DISABLED_OPTION_KEY);
+            if !native_plan.is_empty() {
+                write_native_tool_calling_plan(&mut step_provider_options, &native_plan);
+            }
         }
 
         let mut projector = StreamEventProjector::new(
@@ -527,25 +652,43 @@ impl TurnStepRunner {
                 break 'step_loop;
             }
 
-            // Step-boundary injection of any queued `turn/steer` prompts
+            // Step-boundary injection of any queued `turn/steer` prompts. Deferred when the
+            // trailing step is an unmixed provider continuation (`requiresContinuationStep` or an
+            // Anthropic programmatic `code_execution` `tool_result` turn that rejects mixed text).
             steer.settle_native_deliveries().await;
-            for entry in steer.drain_pending() {
-                record_steer_message(
-                    &self.cfg.turn_id,
-                    entry,
-                    &mut history,
-                    &mut projector,
-                    &emit_stream_event,
-                );
+            if !history_requires_unmixed_continuation(&history) {
+                for entry in steer.drain_pending() {
+                    record_steer_message(
+                        &self.cfg.turn_id,
+                        entry,
+                        &mut history,
+                        &mut projector,
+                        &emit_stream_event,
+                    );
+                }
             }
 
             let step_tool_defs: Vec<ToolDefinition> = if self.tools_disabled {
                 Vec::new()
-            } else if self.cfg.deferred_tool_search {
+            } else if use_harness_tool_search {
                 deferred_catalog.active_tool_definitions_with_code_mode(
                     &shared_activated.lock(),
                     tools_map.contains_key("codeMode"),
                 )
+            } else if use_native_tool_search {
+                let deferred_set: HashSet<&str> = native_plan
+                    .deferred_tool_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                let mut defs: Vec<ToolDefinition> =
+                    tools_map.values().map(|t| t.definition()).collect();
+                defs.sort_by(|a, b| {
+                    let a_def = deferred_set.contains(a.name.as_str());
+                    let b_def = deferred_set.contains(b.name.as_str());
+                    a_def.cmp(&b_def).then_with(|| a.name.cmp(&b.name))
+                });
+                defs
             } else {
                 tools_map.values().map(|t| t.definition()).collect()
             };
@@ -750,14 +893,25 @@ impl TurnStepRunner {
                 last_assistant_text = Some(text);
             }
             let mut tool_calls = Vec::<ToolBatchCall>::new();
+            let mut caller_meta_by_id = HashMap::<String, Map<String, Value>>::new();
             for block in &step_ok.assistant.content {
                 if let ContentBlock::ToolCall {
                     id,
                     name,
                     arguments,
+                    provider_meta,
                     ..
                 } = block
                 {
+                    let mut caller_extra = Map::new();
+                    for key in ["openaiCaller", "anthropicCaller"] {
+                        if let Some(val) = provider_meta.extra.get(key) {
+                            caller_extra.insert(key.to_owned(), val.clone());
+                        }
+                    }
+                    if !caller_extra.is_empty() {
+                        caller_meta_by_id.insert(id.clone(), caller_extra);
+                    }
                     tool_calls.push(ToolBatchCall {
                         call_id: id.clone(),
                         tool_name: name.clone(),
@@ -778,6 +932,14 @@ impl TurnStepRunner {
                     &emit_stream_event,
                 );
             }
+
+            let requires_continuation_step = step_ok
+                .assistant
+                .provider_meta
+                .extra
+                .get("requiresContinuationStep")
+                .and_then(Value::as_bool)
+                == Some(true);
 
             let persisted_assistant = step_ok
                 .persisted_assistant
@@ -814,6 +976,10 @@ impl TurnStepRunner {
             }
 
             if tool_calls.is_empty() {
+                if requires_continuation_step && !self.cancel_token.is_cancelled() {
+                    steps_exhausted = true;
+                    continue 'step_loop;
+                }
                 // End-of-pass race check: if a `turn/steer` arrived while the final response
                 // streamed, continue inside the SAME `turnId` instead of closing the turn!
                 if steer.has_pending() && !self.cancel_token.is_cancelled() {
@@ -860,7 +1026,7 @@ impl TurnStepRunner {
                     }
 
                     let call = &tool_calls[idx];
-                    if self.cfg.deferred_tool_search
+                    if use_harness_tool_search
                         && matches!(call.tool_name.as_str(), "toolSearch" | "toolCall")
                     {
                         let (inner_name, raw_res) = if call.tool_name == "toolSearch" {
@@ -913,7 +1079,7 @@ impl TurnStepRunner {
 
                     let batch_start = idx;
                     while idx < tool_calls.len()
-                        && !(self.cfg.deferred_tool_search
+                        && !(use_harness_tool_search
                             && matches!(
                                 tool_calls[idx].tool_name.as_str(),
                                 "toolSearch" | "toolCall"
@@ -983,6 +1149,22 @@ impl TurnStepRunner {
                         &mut projector,
                         &emit_stream_event,
                     ));
+                }
+            }
+
+            if !caller_meta_by_id.is_empty() {
+                for rb in &mut result_blocks {
+                    if let ContentBlock::ToolResult {
+                        tool_call_id,
+                        provider_meta,
+                        ..
+                    } = rb
+                        && let Some(caller_extra) = caller_meta_by_id.get(tool_call_id)
+                    {
+                        for (k, v) in caller_extra {
+                            provider_meta.extra.insert(k.clone(), v.clone());
+                        }
+                    }
                 }
             }
 
@@ -1241,6 +1423,34 @@ fn step_request_policy(
         RequestPolicy::for_provider(cfg.provider, &cfg.provider_options, &fallback)
     };
     resolved.map_err(|err| err.to_string())
+}
+
+fn history_requires_unmixed_continuation(history: &[CanonicalMessage]) -> bool {
+    let Some(last) = history.last() else {
+        return false;
+    };
+    if last.role == MessageRole::Assistant
+        && last
+            .provider_meta
+            .extra
+            .get("requiresContinuationStep")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        return true;
+    }
+    if last.role == MessageRole::Tool {
+        return last.content.iter().any(|b| match b {
+            ContentBlock::ToolResult { provider_meta, .. } => provider_meta
+                .extra
+                .get("anthropicCaller")
+                .and_then(|c| c.get("type"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| t != "direct"),
+            _ => false,
+        });
+    }
+    false
 }
 
 #[allow(clippy::too_many_arguments)]

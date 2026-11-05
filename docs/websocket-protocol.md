@@ -479,6 +479,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
   - `cowork/provider/status/refresh`
+  - `cowork/provider/capabilities/check`
   - `cowork/provider/codexAppServer/status`
   - `cowork/provider/codexAppServer/update`
   - `cowork/provider/lmstudio/local/status`
@@ -716,7 +717,9 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/runtime/diagnostics/read` returns `{ diagnostics }` with `startup.ready`, optional `startup.error` and `startup.progress` (`phase`, `version`, `transferredBytes`, `totalBytes`, and `percent`), `sendQueue` counters (`queuedSends`, `droppedDeltas`, `droppedImportant`, serialization/send failures, max/current queue depth), `journal` counters (untrusted thread count, failed writes, dropped journal events, pending threads), and `dbLocks` counters (write-lock waits, timeouts, SQLite lock errors, stale lock recoveries). Clients should use these counters for support diagnostics and to decide whether a reconnect gap needs a full thread snapshot refresh. While `startup.ready` is false, thread list/read/hydrate traffic may continue, but new turn mutations are held until background startup finishes.
 
-`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive. Skill improvement defaults use `skillImprovementEnabled`, `skillImprovementModel`, `clearSkillImprovementModel`, `skillImprovementScope: "user" | "all"`, and `skillImprovementExcludedSkills: string[]`; `skillImprovementModel` and `clearSkillImprovementModel` are mutually exclusive.
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive. Skill improvement defaults use `skillImprovementEnabled`, `skillImprovementModel`, `clearSkillImprovementModel`, `skillImprovementScope: "user" | "all"`, and `skillImprovementExcludedSkills: string[]`; `skillImprovementModel` and `clearSkillImprovementModel` are mutually exclusive. Tool-calling defaults use `toolCalling: { codeMode?, deferredToolSearch?, strategy? }` (`strategy` ∈ `"auto" | "native" | "harness"`) and `clearToolCalling: true` (mutually exclusive) to persist or clear workspace tool-calling overrides.
+
+`cowork/provider/capabilities/check` resolves native tool-search and programmatic tool-calling capabilities for `{ cwd?, threadId?, provider?, model?, baseUrl?, strategy?, refresh? }`, performing a bounded live `/v1/models/{id}` or `/models/{id}` probe (cached for 15 minutes unless `refresh: true` is set) and returning `{ provider, model, strategy, capabilities: { provider, modelId, endpointHost?, nativeToolSearch?, nativeProgrammaticToolCalling?, source, checkedAtMs?, detail? } }`. When the caller supplies a `baseUrl` override that differs from the configured provider base URL, saved API keys are omitted from the probe request.
 
 The optional `provider` and `model` fields in `cowork/session/defaults/apply` must be supplied together. The response contains the final `session_config` after the composite operation finishes; validation or persistence errors are returned as errors rather than an earlier intermediate success. Workspace control mutations likewise wait for their awaited catalog and configuration refresh work before acknowledging success.
 
@@ -3831,6 +3834,11 @@ Current runtime config. Sent on connection and after `set_config`.
     "preferredChildModelRef": "opencode-zen:glm-5",
     "allowedChildModelRefs": ["opencode-zen:glm-5", "opencode-go:glm-5"],
     "maxSteps": 100,
+    "toolCalling": {
+      "codeMode": false,
+      "deferredToolSearch": false,
+      "strategy": "auto"
+    },
     "providerOptions": {
       "openai": {
         "reasoningEffort": "high",
@@ -3878,6 +3886,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.preferredChildModelRef` | `string` | Canonical preferred child target ref shown in workspace/UI suggestions |
 | `config.allowedChildModelRefs` | `string[]` | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | Maximum steps per turn |
+| `config.toolCalling` | `{ codeMode: boolean, deferredToolSearch: boolean, strategy: "auto" \| "native" \| "harness" }` | Effective deferred tool-search, programmatic tool-calling (`codeMode`), and execution strategy settings |
 | `config.providerOptions` | `object?` | Editable provider options when configured |
 | `config.userName` | `string` | Effective user name |
 | `config.userProfile` | `object` | Effective user profile metadata used for prompt injection |

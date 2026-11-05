@@ -1,6 +1,9 @@
 import { create } from "zustand";
 
-import type { JsonRpcControlRequest } from "@/cowork-shared/jsonrpcControlSchemas";
+import type {
+  JsonRpcControlRequest,
+  ProviderCapabilitiesCheckResult,
+} from "@/cowork-shared/jsonrpcControlSchemas";
 import {
   callParsedControlMethod,
   captureWorkspaceRequest,
@@ -32,6 +35,9 @@ type WorkspaceStoreState = {
   applyWorkspaceDefaults(
     patch: Omit<JsonRpcControlRequest<"cowork/session/defaults/apply">, "cwd">,
   ): Promise<boolean>;
+  checkEndpointCapabilities(
+    params?: Omit<JsonRpcControlRequest<"cowork/provider/capabilities/check">, "cwd">,
+  ): Promise<ProviderCapabilitiesCheckResult | null>;
   setActiveFromCwd(cwd: string): void;
   clear(): void;
 };
@@ -169,6 +175,23 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
       if (isStaleWorkspaceRequestError(error)) return false;
       set({ error: error instanceof Error ? error.message : String(error) });
       return false;
+    }
+  },
+
+  async checkEndpointCapabilities(params = {}) {
+    set({ error: null });
+    try {
+      const client = getClient();
+      const { activeWorkspaceCwd } = get();
+      if (!activeWorkspaceCwd) throw new Error("No active workspace.");
+      return await callParsedControlMethod(client, "cowork/provider/capabilities/check", {
+        cwd: activeWorkspaceCwd,
+        ...params,
+      });
+    } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return null;
+      set({ error: error instanceof Error ? error.message : String(error) });
+      return null;
     }
   },
 

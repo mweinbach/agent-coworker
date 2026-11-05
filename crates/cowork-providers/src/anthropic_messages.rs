@@ -1,12 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use cowork_inference::{
     CanonicalMessage, Citation, ContentBlock, MediaKind, MediaSource, MessageRole,
-    ProviderOpaqueMeta, ProviderTransportError, ReasoningStreamMode, StepBudget, StopReason,
-    StreamEvent, ToolResultPart, TurnUsage, execute_step_with_sink, extract_nested_citations,
-    filter_persisted_assistant_history, parse_partial_json_object,
+    ProviderNativeToolRole, ProviderOpaqueMeta, ProviderTransportError, ReasoningStreamMode,
+    StepBudget, StopReason, StreamEvent, ToolResultPart, TurnUsage, execute_step_with_sink,
+    extract_nested_citations, filter_persisted_assistant_history, parse_partial_json_object,
 };
 use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -14,9 +15,16 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::endpoint_capabilities::{
+    EndpointToolCapabilities, NativeProgrammaticToolCallingKind, NativeToolCallingPlan,
+    NativeToolSearchKind, is_programmatic_eligible_tool, read_native_tool_calling_plan,
+    record_rejected_native_capability, resolve_endpoint_tool_capabilities,
+    write_native_tool_calling_plan,
+};
 use crate::sse::{build_http_client, post_json_sse};
 use crate::transport::{
-    ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback, ToolDefinition,
+    ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
+    ToolDefinition, request_disables_all_tools,
 };
 
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
@@ -79,11 +87,27 @@ struct AnthropicSseEvent {
     #[serde(default)]
     usage: Option<Value>,
     #[serde(default)]
+    container: Option<Value>,
+    #[serde(default)]
     error: Option<Value>,
 }
 
 #[async_trait]
 impl ProviderTransport for AnthropicMessagesTransport {
+    fn native_tool_capabilities(
+        &self,
+        base_url: Option<&str>,
+        model_id: &str,
+        strategy: cowork_config::ToolCallingStrategy,
+    ) -> EndpointToolCapabilities {
+        resolve_endpoint_tool_capabilities(
+            cowork_config::ProviderName::Anthropic,
+            base_url,
+            model_id,
+            strategy,
+        )
+    }
+
     async fn stream_step(
         &self,
         request: ProviderStepRequest,
@@ -107,69 +131,146 @@ impl ProviderTransport for AnthropicMessagesTransport {
             format!("{raw_base}/v1/messages")
         };
 
+        let mut effective_provider_options = request.provider_options.clone();
         let (wire_body, beta_features, effort_meta) = build_anthropic_messages_payload(
             &request.model_id,
             &request.system_prompt,
             &request.messages,
             &request.tools,
-            &request.provider_options,
+            &effective_provider_options,
             is_oauth,
         );
+        let headers =
+            build_anthropic_headers(&api_key, is_oauth, &beta_features, &request.extra_headers)?;
 
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
-        headers.insert(
-            HeaderName::from_static("anthropic-version"),
-            HeaderValue::from_static(ANTHROPIC_API_VERSION),
-        );
+        let emitted_visible = AtomicBool::new(false);
+        let first_result = self
+            .run_attempts(
+                &request,
+                budget,
+                on_event,
+                &emitted_visible,
+                &endpoint,
+                &headers,
+                wire_body,
+                effort_meta,
+                is_oauth,
+            )
+            .await;
 
-        if is_oauth {
-            let bearer = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| {
-                ProviderTransportError::protocol(format!("Invalid Anthropic OAuth token: {e}"))
-            })?;
-            headers.insert(AUTHORIZATION, bearer);
-        } else {
-            let key_val = HeaderValue::from_str(&api_key).map_err(|e| {
-                ProviderTransportError::protocol(format!("Invalid Anthropic API key: {e}"))
-            })?;
-            headers.insert(HeaderName::from_static("x-api-key"), key_val);
-        }
-
-        if !beta_features.is_empty()
-            && let Ok(beta_val) = HeaderValue::from_str(&beta_features.join(","))
-        {
-            headers.insert(HeaderName::from_static("anthropic-beta"), beta_val);
-        }
-
-        for (k, v) in &request.extra_headers {
-            if let (Ok(name), Ok(val)) = (
-                HeaderName::from_bytes(k.as_bytes()),
-                HeaderValue::from_str(v),
-            ) {
-                headers.insert(name, val);
+        match first_result {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                if !emitted_visible.load(Ordering::SeqCst)
+                    && !budget.cancellation_token().is_cancelled()
+                    && let Some(active_plan) =
+                        read_native_tool_calling_plan(&effective_provider_options)
+                {
+                    let (rej_ts, rej_ptc) =
+                        classify_rejected_anthropic_native_tool_error(&err, &active_plan);
+                    if rej_ts || rej_ptc {
+                        record_rejected_native_capability(
+                            cowork_config::ProviderName::Anthropic,
+                            request.base_url.as_deref(),
+                            &request.model_id,
+                            rej_ts,
+                            rej_ptc,
+                            &err.message,
+                        );
+                        let mut downgraded_plan = active_plan;
+                        if rej_ts {
+                            downgraded_plan.tool_search = None;
+                            downgraded_plan.deferred_tool_names.clear();
+                        }
+                        if rej_ptc {
+                            downgraded_plan.programmatic_tool_calling = None;
+                            downgraded_plan.programmatic_tool_names.clear();
+                        }
+                        write_native_tool_calling_plan(
+                            &mut effective_provider_options,
+                            &downgraded_plan,
+                        );
+                        tracing::warn!(
+                            rejected_tool_search = rej_ts,
+                            rejected_ptc = rej_ptc,
+                            error = %err.message,
+                            "anthropic endpoint rejected native tool feature; retrying with plain tools"
+                        );
+                        let (fallback_body, fallback_betas, fallback_effort) =
+                            build_anthropic_messages_payload(
+                                &request.model_id,
+                                &request.system_prompt,
+                                &request.messages,
+                                &request.tools,
+                                &effective_provider_options,
+                                is_oauth,
+                            );
+                        let fallback_headers = build_anthropic_headers(
+                            &api_key,
+                            is_oauth,
+                            &fallback_betas,
+                            &request.extra_headers,
+                        )?;
+                        return self
+                            .run_attempts(
+                                &request,
+                                budget,
+                                on_event,
+                                &emitted_visible,
+                                &endpoint,
+                                &fallback_headers,
+                                fallback_body,
+                                fallback_effort,
+                                is_oauth,
+                            )
+                            .await;
+                    }
+                }
+                Err(err)
             }
         }
+    }
+}
 
+impl AnthropicMessagesTransport {
+    #[allow(clippy::too_many_arguments)]
+    async fn run_attempts(
+        &self,
+        request: &ProviderStepRequest,
+        budget: &StepBudget,
+        on_event: &mut StreamEventCallback<'_>,
+        emitted_visible: &AtomicBool,
+        endpoint: &str,
+        headers: &HeaderMap,
+        wire_body: Value,
+        effort_meta: Option<String>,
+        is_oauth: bool,
+    ) -> Result<ProviderStepResult, ProviderTransportError> {
+        let mut sink = |ev: StreamEvent| {
+            if ev.is_visible_output() {
+                emitted_visible.store(true, Ordering::SeqCst);
+            }
+            on_event(ev);
+        };
         let client = self.client.clone();
         let turn_id = request.turn_id.clone();
         let model_id = request.model_id.clone();
         let declared_tools = request.tools.clone();
+        let attempt_timeout_ms = request.policy.timeout_ms;
 
         execute_step_with_sink(
             &request.policy,
             budget,
-            on_event,
+            &mut sink,
             &mut |_attempt_no, mut emit| {
                 let client = client.clone();
-                let endpoint = endpoint.clone();
+                let endpoint = endpoint.to_owned();
                 let headers = headers.clone();
                 let wire_body = wire_body.clone();
                 let turn_id = turn_id.clone();
                 let model_id = model_id.clone();
                 let effort_meta = effort_meta.clone();
                 let declared_tools = declared_tools.clone();
-                let attempt_timeout_ms = request.policy.timeout_ms;
 
                 async move {
                     let timeout_dur = budget.attempt_timeout(attempt_timeout_ms)?;
@@ -205,6 +306,105 @@ impl ProviderTransport for AnthropicMessagesTransport {
         )
         .await
     }
+}
+
+fn build_anthropic_headers(
+    api_key: &str,
+    is_oauth: bool,
+    beta_features: &[String],
+    extra_headers: &HashMap<String, String>,
+) -> Result<HeaderMap, ProviderTransportError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+    headers.insert(
+        HeaderName::from_static("anthropic-version"),
+        HeaderValue::from_static(ANTHROPIC_API_VERSION),
+    );
+
+    if is_oauth {
+        let bearer = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| {
+            ProviderTransportError::protocol(format!("Invalid Anthropic OAuth token: {e}"))
+        })?;
+        headers.insert(AUTHORIZATION, bearer);
+    } else {
+        let key_val = HeaderValue::from_str(api_key).map_err(|e| {
+            ProviderTransportError::protocol(format!("Invalid Anthropic API key: {e}"))
+        })?;
+        headers.insert(HeaderName::from_static("x-api-key"), key_val);
+    }
+
+    let mut merged_betas: Vec<String> = Vec::new();
+    let push_beta = |list: &mut Vec<String>, token: &str| {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() && !list.iter().any(|b| b.eq_ignore_ascii_case(trimmed)) {
+            list.push(trimmed.to_string());
+        }
+    };
+    for beta in beta_features {
+        push_beta(&mut merged_betas, beta);
+    }
+
+    for (k, v) in extra_headers {
+        if k.eq_ignore_ascii_case("anthropic-beta") {
+            for part in v.split(',') {
+                push_beta(&mut merged_betas, part);
+            }
+            continue;
+        }
+        if let (Ok(name), Ok(val)) = (
+            HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(v),
+        ) {
+            headers.insert(name, val);
+        }
+    }
+
+    if !merged_betas.is_empty()
+        && let Ok(beta_val) = HeaderValue::from_str(&merged_betas.join(","))
+    {
+        headers.insert(HeaderName::from_static("anthropic-beta"), beta_val);
+    }
+
+    Ok(headers)
+}
+
+fn classify_rejected_anthropic_native_tool_error(
+    err: &ProviderTransportError,
+    plan: &NativeToolCallingPlan,
+) -> (bool, bool) {
+    if err.is_abort {
+        return (false, false);
+    }
+    let is_client_err = matches!(err.status, Some(400 | 404 | 422))
+        || (err.status.is_none() && !err.is_network_transient && !err.is_timeout);
+    if !is_client_err {
+        return (false, false);
+    }
+    let lower = err.message.to_ascii_lowercase();
+    let mentions_ts = lower.contains("tool_search_tool") || lower.contains("defer_loading");
+    let mentions_ptc = lower.contains("code_execution")
+        || lower.contains("allowed_callers")
+        || lower.contains("container");
+    if mentions_ts || mentions_ptc {
+        return (
+            mentions_ts && plan.tool_search.is_some(),
+            mentions_ptc && plan.programmatic_tool_calling.is_some(),
+        );
+    }
+    let generic_tools_err = (lower.contains("tools.") || lower.contains("tools["))
+        && (lower.contains("invalid")
+            || lower.contains("unknown")
+            || lower.contains("unsupported")
+            || lower.contains("not supported")
+            || lower.contains("extra inputs are not permitted"));
+    if generic_tools_err {
+        return (
+            plan.tool_search.is_some(),
+            plan.programmatic_tool_calling.is_some(),
+        );
+    }
+    (false, false)
 }
 
 fn resolve_anthropic_api_key(
@@ -345,13 +545,26 @@ fn build_anthropic_messages_payload(
     provider_options: &Map<String, Value>,
     is_oauth: bool,
 ) -> (Value, Vec<String>, Option<String>) {
+    let tools_disabled = request_disables_all_tools(provider_options);
+    let effective_tools: &[ToolDefinition] = if tools_disabled { &[] } else { tools };
+    let native_plan = if tools_disabled || effective_tools.is_empty() {
+        None
+    } else {
+        read_native_tool_calling_plan(provider_options)
+    };
+    let native_ts_kind = native_plan.as_ref().and_then(|p| p.tool_search);
+    let native_ptc_active = native_plan
+        .as_ref()
+        .and_then(|p| p.programmatic_tool_calling)
+        == Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120);
+
     let cache_control = resolve_cache_control(provider_options);
     let mut betas: Vec<String> = Vec::new();
     if is_oauth {
         betas.push("claude-code-20250219".to_string());
         betas.push("oauth-2025-04-20".to_string());
     }
-    if !tools.is_empty() {
+    if !effective_tools.is_empty() {
         betas.push("fine-grained-tool-streaming-2025-05-14".to_string());
     }
 
@@ -438,6 +651,21 @@ fn build_anthropic_messages_payload(
     body.insert("stream".to_string(), Value::Bool(true));
     body.insert("messages".to_string(), Value::Array(converted_messages));
 
+    if native_ptc_active {
+        if let Some(explicit_container) = read_anthropic_opt(provider_options, "container")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            body.insert(
+                "container".to_string(),
+                Value::String(explicit_container.to_string()),
+            );
+        } else if let Some(reused_container) = find_reusable_anthropic_container(messages) {
+            body.insert("container".to_string(), Value::String(reused_container));
+        }
+    }
+
     // System prompt blocks + trailing cache_control breakpoint.
     let mut system_blocks: Vec<Value> = Vec::new();
     if is_oauth {
@@ -476,9 +704,37 @@ fn build_anthropic_messages_payload(
         body.insert("output_config".to_string(), json!({ "effort": effort }));
     }
 
-    if !tools.is_empty() {
-        let last_idx = tools.len() - 1;
-        let wire_tools: Vec<Value> = tools
+    if !effective_tools.is_empty() {
+        let deferred_set: HashSet<&str> = if native_ts_kind.is_some() {
+            native_plan
+                .as_ref()
+                .map(|p| p.deferred_tool_names.iter().map(String::as_str).collect())
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
+        let programmatic_set: HashSet<&str> = if native_ptc_active {
+            native_plan
+                .as_ref()
+                .map(|p| {
+                    p.programmatic_tool_names
+                        .iter()
+                        .map(String::as_str)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
+
+        // Anthropic rejects `cache_control` on any tool marked `defer_loading: true`, so place
+        // the tool-list cache breakpoint on the last non-deferred custom tool (or fall back to
+        // the server tool below when every custom tool is deferred).
+        let last_non_deferred_idx = effective_tools
+            .iter()
+            .rposition(|t| !deferred_set.contains(t.name.as_str()));
+
+        let mut wire_tools: Vec<Value> = effective_tools
             .iter()
             .enumerate()
             .map(|(idx, t)| {
@@ -499,7 +755,22 @@ fn build_anthropic_messages_payload(
                     "input_schema".to_string(),
                     anthropic_tool_input_schema(&t.parameters),
                 );
-                if idx == last_idx
+                if deferred_set.contains(t.name.as_str()) {
+                    tool_obj.insert("defer_loading".to_string(), Value::Bool(true));
+                }
+                if native_ptc_active
+                    && programmatic_set.contains(t.name.as_str())
+                    && is_programmatic_eligible_tool(
+                        t,
+                        NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120,
+                    )
+                {
+                    tool_obj.insert(
+                        "allowed_callers".to_string(),
+                        json!(["direct", "code_execution_20260120"]),
+                    );
+                }
+                if last_non_deferred_idx == Some(idx)
                     && let Some(cc) = &cache_control
                 {
                     tool_obj.insert("cache_control".to_string(), cc.clone());
@@ -507,10 +778,52 @@ fn build_anthropic_messages_payload(
                 Value::Object(tool_obj)
             })
             .collect();
+
+        if let Some(ts_kind) = native_ts_kind {
+            let prefer_regex = matches!(ts_kind, NativeToolSearchKind::AnthropicRegex)
+                || read_anthropic_opt(provider_options, "toolSearchVariant")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v.eq_ignore_ascii_case("regex"));
+            let mut server_ts = if prefer_regex {
+                json!({
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex",
+                })
+            } else {
+                json!({
+                    "type": "tool_search_tool_bm25_20251119",
+                    "name": "tool_search_tool_bm25",
+                })
+            };
+            if last_non_deferred_idx.is_none()
+                && !native_ptc_active
+                && let (Some(cc), Some(obj)) = (&cache_control, server_ts.as_object_mut())
+            {
+                obj.insert("cache_control".to_string(), cc.clone());
+            }
+            wire_tools.push(server_ts);
+        }
+
+        if native_ptc_active {
+            let mut server_ce = json!({
+                "type": "code_execution_20260120",
+                "name": "code_execution",
+            });
+            if last_non_deferred_idx.is_none()
+                && let (Some(cc), Some(obj)) = (&cache_control, server_ce.as_object_mut())
+            {
+                obj.insert("cache_control".to_string(), cc.clone());
+            }
+            wire_tools.push(server_ce);
+        }
+
         body.insert("tools".to_string(), Value::Array(wire_tools));
 
-        if read_anthropic_opt(provider_options, "disableParallelToolUse").and_then(Value::as_bool)
-            == Some(true)
+        // Anthropic rejects `disable_parallel_tool_use: true` when programmatic tool calling is active.
+        if !native_ptc_active
+            && read_anthropic_opt(provider_options, "disableParallelToolUse")
+                .and_then(Value::as_bool)
+                == Some(true)
         {
             body.insert(
                 "tool_choice".to_string(),
@@ -523,6 +836,44 @@ fn build_anthropic_messages_payload(
     }
 
     (Value::Object(body), betas, active_effort)
+}
+
+fn find_reusable_anthropic_container(messages: &[CanonicalMessage]) -> Option<String> {
+    let now = Utc::now();
+    for msg in messages.iter().rev() {
+        if msg.role != MessageRole::Assistant {
+            continue;
+        }
+        let Some(container_val) = msg.provider_meta.extra.get("anthropicContainer") else {
+            continue;
+        };
+        if let Some(id) = container_val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(id.to_string());
+        }
+        let Some(obj) = container_val.as_object() else {
+            continue;
+        };
+        let Some(id) = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if let Some(expires_at) = obj.get("expires_at").and_then(Value::as_str)
+            && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(expires_at)
+            && parsed.with_timezone(&Utc) <= now
+        {
+            return None;
+        }
+        return Some(id.to_string());
+    }
+    None
 }
 
 /// Builds a tool's Anthropic `input_schema` from its (already normalized) parameter schema.
@@ -693,16 +1044,40 @@ fn convert_messages_to_anthropic(
                             id,
                             name,
                             arguments,
+                            provider_meta,
                             ..
                         } => {
                             let clean_id = sanitize_anthropic_tool_id(id);
                             pending_tool_ids.push(clean_id.clone());
-                            blocks.push(json!({
-                                "type": "tool_use",
-                                "id": clean_id,
-                                "name": if is_oauth { to_claude_code_name(name) } else { name.clone() },
-                                "input": arguments,
-                            }));
+                            let mut block_obj = Map::new();
+                            block_obj.insert("type".to_string(), Value::String("tool_use".into()));
+                            block_obj.insert("id".to_string(), Value::String(clean_id));
+                            block_obj.insert(
+                                "name".to_string(),
+                                Value::String(if is_oauth {
+                                    to_claude_code_name(name)
+                                } else {
+                                    name.clone()
+                                }),
+                            );
+                            block_obj.insert("input".to_string(), Value::Object(arguments.clone()));
+                            if msg.provider.as_deref().is_none_or(|p| p == "anthropic")
+                                && let Some(caller) = provider_meta
+                                    .extra
+                                    .get("anthropicCaller")
+                                    .filter(|v| !v.is_null())
+                            {
+                                block_obj.insert("caller".to_string(), caller.clone());
+                            }
+                            blocks.push(Value::Object(block_obj));
+                        }
+                        ContentBlock::ProviderNativeTool { provider_meta, .. } => {
+                            if msg.provider.as_deref().is_none_or(|p| p == "anthropic")
+                                && let Some(raw_block) =
+                                    provider_meta.extra.get("anthropicRawBlock")
+                            {
+                                blocks.push(raw_block.clone());
+                            }
                         }
                         _ => {}
                     }
@@ -719,11 +1094,18 @@ fn convert_messages_to_anthropic(
                             tool_call_id,
                             content,
                             is_error,
+                            provider_meta,
                             ..
                         } = b
                         {
                             let clean_id = sanitize_anthropic_tool_id(tool_call_id);
                             satisfied_tool_ids.insert(clean_id.clone());
+                            let is_programmatic_result = provider_meta
+                                .extra
+                                .get("anthropicCaller")
+                                .and_then(|c| c.get("type"))
+                                .and_then(Value::as_str)
+                                .is_some_and(|t| t != "direct");
                             let mut inner_parts = Vec::new();
                             for part in content {
                                 match part {
@@ -734,27 +1116,41 @@ fn convert_messages_to_anthropic(
                                         kind: MediaKind::Image,
                                         source: MediaSource::Base64 { mime_type, data },
                                     } => {
-                                        inner_parts.push(json!({
-                                            "type": "image",
-                                            "source": {
-                                                "type": "base64",
-                                                "media_type": mime_type,
-                                                "data": data,
-                                            }
-                                        }));
+                                        if is_programmatic_result {
+                                            inner_parts.push(json!({
+                                                "type": "text",
+                                                "text": format!("[image attachment ({mime_type}) omitted from programmatic tool result]"),
+                                            }));
+                                        } else {
+                                            inner_parts.push(json!({
+                                                "type": "image",
+                                                "source": {
+                                                    "type": "base64",
+                                                    "media_type": mime_type,
+                                                    "data": data,
+                                                }
+                                            }));
+                                        }
                                     }
                                     ToolResultPart::Media {
                                         kind: MediaKind::Document,
                                         source: MediaSource::Base64 { mime_type, data },
                                     } => {
-                                        inner_parts.push(json!({
-                                            "type": "document",
-                                            "source": {
-                                                "type": "base64",
-                                                "media_type": mime_type,
-                                                "data": data,
-                                            }
-                                        }));
+                                        if is_programmatic_result {
+                                            inner_parts.push(json!({
+                                                "type": "text",
+                                                "text": format!("[document attachment ({mime_type}) omitted from programmatic tool result]"),
+                                            }));
+                                        } else {
+                                            inner_parts.push(json!({
+                                                "type": "document",
+                                                "source": {
+                                                    "type": "base64",
+                                                    "media_type": mime_type,
+                                                    "data": data,
+                                                }
+                                            }));
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -853,8 +1249,21 @@ enum AnthropicOpenBlock {
     ToolUse {
         id: String,
         name: String,
+        caller: Option<Value>,
         initial_input: Map<String, Value>,
         partial_json: String,
+    },
+    ServerToolUse {
+        id: String,
+        name: String,
+        raw_block: Map<String, Value>,
+        initial_input: Map<String, Value>,
+        partial_json: String,
+    },
+    ServerToolResult {
+        tool_use_id: String,
+        block_type: String,
+        raw_block: Value,
     },
 }
 
@@ -864,8 +1273,11 @@ struct AnthropicStreamState {
     is_oauth: bool,
     declared_tools: Vec<ToolDefinition>,
     message_id: Option<String>,
+    container: Option<Value>,
+    pause_turn: bool,
     open_blocks: BTreeMap<usize, AnthropicOpenBlock>,
     finished_blocks: BTreeMap<usize, ContentBlock>,
+    server_tool_names_by_id: HashMap<String, String>,
     input_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
@@ -884,6 +1296,7 @@ struct AnthropicStreamState {
 struct DeferredToolCall {
     id: String,
     name: String,
+    caller: Option<Value>,
     raw_json: String,
 }
 
@@ -900,8 +1313,11 @@ impl AnthropicStreamState {
             is_oauth,
             declared_tools,
             message_id: None,
+            container: None,
+            pause_turn: false,
             open_blocks: BTreeMap::new(),
             finished_blocks: BTreeMap::new(),
+            server_tool_names_by_id: HashMap::new(),
             input_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
@@ -925,6 +1341,9 @@ impl AnthropicStreamState {
                 if let Some(msg) = ev.message.as_ref().and_then(Value::as_object) {
                     if let Some(id) = msg.get("id").and_then(Value::as_str) {
                         self.message_id = Some(id.to_string());
+                    }
+                    if let Some(c) = msg.get("container").filter(|v| !v.is_null()) {
+                        self.container = Some(c.clone());
                     }
                     if let Some(u) = msg.get("usage").and_then(Value::as_object) {
                         self.update_usage_counters(u);
@@ -1015,6 +1434,7 @@ impl AnthropicStreamState {
                         } else {
                             wire_name.to_string()
                         };
+                        let caller = cb.get("caller").filter(|v| !v.is_null()).cloned();
                         let initial_input = cb
                             .get("input")
                             .and_then(Value::as_object)
@@ -1032,8 +1452,65 @@ impl AnthropicStreamState {
                             AnthropicOpenBlock::ToolUse {
                                 id,
                                 name,
+                                caller,
                                 initial_input,
                                 partial_json: String::new(),
+                            },
+                        );
+                    }
+                    "server_tool_use" => {
+                        let id = cb
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("srvtoolu_0")
+                            .to_string();
+                        let name = cb
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("server_tool")
+                            .to_string();
+                        let initial_input = cb
+                            .get("input")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default();
+                        self.server_tool_names_by_id
+                            .insert(id.clone(), name.clone());
+                        emit(StreamEvent::ToolCallStart {
+                            turn_id: self.turn_id.clone(),
+                            key: id.clone(),
+                            name: name.clone(),
+                            initial_args: (!initial_input.is_empty())
+                                .then(|| initial_input.clone()),
+                        });
+                        self.open_blocks.insert(
+                            idx,
+                            AnthropicOpenBlock::ServerToolUse {
+                                id,
+                                name,
+                                raw_block: cb.clone(),
+                                initial_input,
+                                partial_json: String::new(),
+                            },
+                        );
+                    }
+                    "tool_search_tool_result"
+                    | "code_execution_tool_result"
+                    | "bash_code_execution_tool_result"
+                    | "text_editor_code_execution_tool_result"
+                    | "web_search_tool_result"
+                    | "web_fetch_tool_result" => {
+                        let tool_use_id = cb
+                            .get("tool_use_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("srvtoolu_0")
+                            .to_string();
+                        self.open_blocks.insert(
+                            idx,
+                            AnthropicOpenBlock::ServerToolResult {
+                                tool_use_id,
+                                block_type: cb_type.to_string(),
+                                raw_block: Value::Object(cb.clone()),
                             },
                         );
                     }
@@ -1085,12 +1562,20 @@ impl AnthropicStreamState {
                     }
                     (
                         "input_json_delta",
-                        Some(AnthropicOpenBlock::ToolUse {
-                            id,
-                            name,
-                            partial_json,
-                            ..
-                        }),
+                        Some(
+                            AnthropicOpenBlock::ToolUse {
+                                id,
+                                name,
+                                partial_json,
+                                ..
+                            }
+                            | AnthropicOpenBlock::ServerToolUse {
+                                id,
+                                name,
+                                partial_json,
+                                ..
+                            },
+                        ),
                     ) => {
                         if let Some(chunk) = delta_obj.get("partial_json").and_then(Value::as_str) {
                             partial_json.push_str(chunk);
@@ -1181,6 +1666,7 @@ impl AnthropicStreamState {
                         AnthropicOpenBlock::ToolUse {
                             id,
                             name,
+                            caller,
                             initial_input,
                             partial_json,
                         } => {
@@ -1195,13 +1681,16 @@ impl AnthropicStreamState {
                                 serde_json::from_str::<Map<String, Value>>(&partial_json).ok()
                             };
                             match strict_args {
-                                Some(args) => self.finish_tool_call(idx, id, name, args, emit),
+                                Some(args) => {
+                                    self.finish_tool_call(idx, id, name, caller, args, emit)
+                                }
                                 None => {
                                     self.deferred_tool_calls.insert(
                                         idx,
                                         DeferredToolCall {
                                             id,
                                             name,
+                                            caller,
                                             raw_json: partial_json,
                                         },
                                     );
@@ -1211,12 +1700,108 @@ impl AnthropicStreamState {
                                 }
                             }
                         }
+                        AnthropicOpenBlock::ServerToolUse {
+                            id,
+                            name,
+                            mut raw_block,
+                            initial_input,
+                            partial_json,
+                        } => {
+                            let args = if partial_json.trim().is_empty() {
+                                initial_input
+                            } else {
+                                serde_json::from_str::<Map<String, Value>>(&partial_json)
+                                    .unwrap_or_else(|_| parse_partial_json_object(&partial_json))
+                            };
+                            raw_block.insert("input".to_string(), Value::Object(args.clone()));
+                            emit(StreamEvent::ToolCallEnd {
+                                turn_id: self.turn_id.clone(),
+                                key: id.clone(),
+                                name: name.clone(),
+                                arguments: Some(args.clone()),
+                                retry_of: None,
+                                input_digest: None,
+                            });
+                            let mut extra = Map::new();
+                            extra.insert("anthropicRawBlock".to_string(), Value::Object(raw_block));
+                            self.finished_blocks.insert(
+                                idx,
+                                ContentBlock::ProviderNativeTool {
+                                    id,
+                                    name,
+                                    role: ProviderNativeToolRole::Call,
+                                    arguments: args,
+                                    result: None,
+                                    is_error: false,
+                                    citations: Vec::new(),
+                                    provider_meta: ProviderOpaqueMeta {
+                                        extra,
+                                        ..Default::default()
+                                    },
+                                },
+                            );
+                        }
+                        AnthropicOpenBlock::ServerToolResult {
+                            tool_use_id,
+                            block_type,
+                            raw_block,
+                        } => {
+                            let name = self
+                                .server_tool_names_by_id
+                                .get(&tool_use_id)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    default_server_tool_name_for_result_block(&block_type)
+                                        .to_string()
+                                });
+                            let content_val =
+                                raw_block.get("content").cloned().unwrap_or(Value::Null);
+                            let (output, is_error) =
+                                summarize_anthropic_server_tool_result(&block_type, &content_val);
+                            emit(StreamEvent::ToolResult {
+                                turn_id: self.turn_id.clone(),
+                                key: tool_use_id.clone(),
+                                name: name.clone(),
+                                result: json!({
+                                    "summary": output,
+                                    "content": content_val,
+                                }),
+                                is_error,
+                                denied: false,
+                            });
+                            let mut extra = Map::new();
+                            extra.insert("anthropicRawBlock".to_string(), raw_block);
+                            self.finished_blocks.insert(
+                                idx,
+                                ContentBlock::ProviderNativeTool {
+                                    id: tool_use_id,
+                                    name,
+                                    role: ProviderNativeToolRole::Result,
+                                    arguments: Map::new(),
+                                    result: Some(content_val),
+                                    is_error,
+                                    citations: Vec::new(),
+                                    provider_meta: ProviderOpaqueMeta {
+                                        extra,
+                                        ..Default::default()
+                                    },
+                                },
+                            );
+                        }
                     }
                 }
             }
             "message_delta" => {
                 if let Some(u) = ev.usage.as_ref().and_then(Value::as_object) {
                     self.update_usage_counters(u);
+                }
+                if let Some(c) = ev
+                    .container
+                    .as_ref()
+                    .or_else(|| ev.delta.as_ref().and_then(|d| d.get("container")))
+                    .filter(|v| !v.is_null())
+                {
+                    self.container = Some(c.clone());
                 }
                 if let Some(d) = ev.delta.as_ref().and_then(Value::as_object)
                     && let Some(sr) = d.get("stop_reason").and_then(Value::as_str)
@@ -1226,6 +1811,10 @@ impl AnthropicStreamState {
                     self.stop_reason = match sr {
                         "tool_use" => StopReason::ToolUse,
                         "max_tokens" => StopReason::Length,
+                        "pause_turn" => {
+                            self.pause_turn = true;
+                            StopReason::Stop
+                        }
                         "refusal" => {
                             self.stop_error = Some(
                                 d.get("stop_details")
@@ -1271,6 +1860,7 @@ impl AnthropicStreamState {
         idx: usize,
         id: String,
         name: String,
+        caller: Option<Value>,
         args: Map<String, Value>,
         emit: &mut dyn FnMut(StreamEvent),
     ) {
@@ -1282,6 +1872,10 @@ impl AnthropicStreamState {
             retry_of: None,
             input_digest: None,
         });
+        let mut extra = Map::new();
+        if let Some(caller_val) = caller {
+            extra.insert("anthropicCaller".to_string(), caller_val);
+        }
         self.finished_blocks.insert(
             idx,
             ContentBlock::ToolCall {
@@ -1289,7 +1883,10 @@ impl AnthropicStreamState {
                 name,
                 arguments: args,
                 partial_json: None,
-                provider_meta: ProviderOpaqueMeta::default(),
+                provider_meta: ProviderOpaqueMeta {
+                    extra,
+                    ..Default::default()
+                },
             },
         );
     }
@@ -1313,7 +1910,7 @@ impl AnthropicStreamState {
         }
         for (idx, call) in std::mem::take(&mut self.deferred_tool_calls) {
             let args = parse_partial_json_object(&call.raw_json);
-            self.finish_tool_call(idx, call.id, call.name, args, emit);
+            self.finish_tool_call(idx, call.id, call.name, call.caller, args, emit);
         }
         Ok(())
     }
@@ -1373,6 +1970,14 @@ impl AnthropicStreamState {
             estimated_cost_usd: None,
         };
 
+        let mut extra = Map::new();
+        if let Some(container) = self.container {
+            extra.insert("anthropicContainer".to_string(), container);
+        }
+        if self.pause_turn {
+            extra.insert("requiresContinuationStep".to_string(), Value::Bool(true));
+        }
+
         let assistant = CanonicalMessage {
             id: self
                 .message_id
@@ -1386,6 +1991,7 @@ impl AnthropicStreamState {
             stop_reason: Some(self.stop_reason),
             provider_meta: ProviderOpaqueMeta {
                 anthropic_effort: effort_meta,
+                extra,
                 ..Default::default()
             },
             created_at: Utc::now().to_rfc3339(),
@@ -1400,4 +2006,71 @@ impl AnthropicStreamState {
             raw_events: self.raw_events,
         })
     }
+}
+
+fn default_server_tool_name_for_result_block(block_type: &str) -> &'static str {
+    match block_type {
+        "tool_search_tool_result" => "tool_search_tool_bm25",
+        "code_execution_tool_result" => "code_execution",
+        "bash_code_execution_tool_result" => "bash_code_execution",
+        "text_editor_code_execution_tool_result" => "text_editor_code_execution",
+        "web_search_tool_result" => "web_search",
+        "web_fetch_tool_result" => "web_fetch",
+        _ => "server_tool",
+    }
+}
+
+fn summarize_anthropic_server_tool_result(block_type: &str, content: &Value) -> (String, bool) {
+    if let Some(obj) = content.as_object() {
+        let inner_type = obj.get("type").and_then(Value::as_str).unwrap_or_default();
+        if inner_type.ends_with("_error") {
+            let err_code = obj
+                .get("error_code")
+                .and_then(Value::as_str)
+                .unwrap_or("server_tool_error");
+            return (format!("{block_type} error: {err_code}"), true);
+        }
+        if inner_type == "tool_search_tool_search_result"
+            && let Some(refs) = obj.get("tool_references").and_then(Value::as_array)
+        {
+            let names: Vec<&str> = refs
+                .iter()
+                .filter_map(|r| r.get("tool_name").and_then(Value::as_str))
+                .collect();
+            if names.is_empty() {
+                return ("No matching tools found.".to_string(), false);
+            }
+            return (format!("Matched tools: {}", names.join(", ")), false);
+        }
+        if matches!(
+            inner_type,
+            "code_execution_result"
+                | "bash_code_execution_result"
+                | "encrypted_code_execution_result"
+        ) {
+            let return_code = obj.get("return_code").and_then(Value::as_i64).unwrap_or(0);
+            let stdout = obj
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let stderr = obj
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let mut parts = Vec::new();
+            if !stdout.is_empty() {
+                parts.push(stdout.to_string());
+            }
+            if !stderr.is_empty() {
+                parts.push(stderr.to_string());
+            }
+            let summary = if parts.is_empty() {
+                format!("exit code {return_code}")
+            } else {
+                parts.join("\n")
+            };
+            return (summary, return_code != 0);
+        }
+    }
+    (content.to_string(), false)
 }

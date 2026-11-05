@@ -73,6 +73,12 @@ pub struct PromptTemplateContext {
     /// `readProviderCatalogSnapshot`). `None` renders the legacy read-failure fallback: the
     /// static registry models with their `bestFor` guidance.
     pub provider_catalog: Option<PromptProviderCatalog>,
+    /// True when deferred tool search uses the provider's native wire protocol rather than
+    /// Cowork's harness `toolSearch` / `toolCall` meta-tools.
+    pub native_tool_search_enabled: bool,
+    /// True when programmatic tool calling uses the provider's native code execution wire
+    /// protocol rather than Cowork's QuickJS `codeMode` tool.
+    pub native_code_execution_enabled: bool,
 }
 
 impl PromptTemplateContext {
@@ -791,13 +797,21 @@ pub fn build_layered_system_prompt(opts: &SystemPromptBuildOptions) -> String {
         sections.push(referenced_plugins);
     }
 
-    if opts.deferred_tool_search_enabled {
+    if opts.template_context.native_tool_search_enabled {
+        sections.push(
+            "## Native Tool Search\nAdditional workspace and MCP tools are deferred on the wire (`defer_loading: true`) and loaded automatically through the provider's native tool search capability when needed. Once loaded, invoke discovered tools directly by name.".to_owned(),
+        );
+    } else if opts.deferred_tool_search_enabled {
         sections.push(
             "## Deferred Tool Search\nTools are exposed on demand via `toolSearch` and `toolCall`. Call `toolSearch` with keywords to inspect schemas and activate matching tools for direct invocation, or invoke any discovered tool immediately via `toolCall`.".to_owned(),
         );
     }
 
-    if opts.code_mode_enabled {
+    if opts.template_context.native_code_execution_enabled {
+        sections.push(
+            "## Programmatic Tool Calling\nWhen chaining multiple tool calls, filtering large results, or coordinating multi-step transformations, prefer native programmatic tool calling / code execution to invoke eligible workspace and MCP tools programmatically in a single pass.".to_owned(),
+        );
+    } else if opts.code_mode_enabled {
         sections.push(
             "## Code Mode\nWhen chaining multiple tool calls, filtering large results, or coordinating multi-step transformations, prefer `codeMode` to run a sandboxed TypeScript program calling `await tools.search(query)` and `await tools.call(name, args)` in a single pass.".to_owned(),
         );

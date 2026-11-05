@@ -60,23 +60,22 @@ pub trait ProviderTransport: Send + Sync {
         budget: &StepBudget,
         on_event: &mut StreamEventCallback<'_>,
     ) -> Result<ProviderStepResult, ProviderTransportError>;
+
+    /// Advertises native tool search and programmatic tool calling capabilities supported by this
+    /// wire transport for `(base_url, model_id, strategy)`. Mock/queue transports and non-native
+    /// transports inherit `EndpointToolCapabilities::none()`, ensuringCowork's Rust harness is used.
+    fn native_tool_capabilities(
+        &self,
+        _base_url: Option<&str>,
+        _model_id: &str,
+        _strategy: cowork_config::ToolCallingStrategy,
+    ) -> crate::endpoint_capabilities::EndpointToolCapabilities {
+        crate::endpoint_capabilities::EndpointToolCapabilities::none()
+    }
 }
 
 /// Splits `messages` into `(prefix_up_to_last_assistant_and_paired_tools, delta_after)` for
 /// server-managed continuation transports (`previous_response_id` / `previous_interaction_id`).
-///
-/// Note on stateful continuations:
-/// - If the conversation ends with `[..., Assistant(tool_call), Tool(tool_result)]`, the server's
-///   prior response ended at `Assistant(tool_call)`, so `prefix` is everything up through that
-///   `Assistant` (or prior turn) depending on what the server already holds:
-///   - Specifically, when `Assistant` was the server's last response, the server holds everything
-///     up to and including `Assistant`, and `delta` is everything *after* the last `Assistant`!
-///   - Wait: what if `Tool` results were already sent in an earlier step and now a new `User`
-///     message arrives after an `Assistant`? Still everything after the last `Assistant`!
-///   - What if `messages` has `[User1, Assistant1, Tool1, User2]` where `previous_interaction_id`
-///     was saved before `User2` (e.g., after `Tool1` or `Assistant1`)? Let's expose both helpers:
-///     `split_after_last_assistant` (for OpenAI Responses where every step ends on `Assistant`)
-///     and `split_trailing_user_or_after_assistant`!
 pub fn split_after_last_assistant(
     messages: &[CanonicalMessage],
 ) -> (&[CanonicalMessage], &[CanonicalMessage]) {
@@ -93,8 +92,9 @@ pub fn split_after_last_assistant(
 }
 
 /// Splits `messages` for continuation validation, trying first the prefix before trailing
-/// non-assistant messages (`split_after_last_assistant`), or before trailing user messages if
-/// tool results were part of the stored prefix.
+/// non-assistant messages (`split_after_last_assistant`), before trailing user messages if tool
+/// results were part of the stored prefix, or `(messages, &[])` when the trailing assistant
+/// message requires an immediate server-side continuation step (e.g. `program_output` / `pause_turn`).
 pub fn candidate_continuation_splits(
     messages: &[CanonicalMessage],
 ) -> Vec<(&[CanonicalMessage], &[CanonicalMessage])> {
@@ -110,6 +110,20 @@ pub fn candidate_continuation_splits(
         if split_idx < messages.len() && split_idx != prefix_a.len() {
             candidates.push((&messages[..split_idx], &messages[split_idx..]));
         }
+    }
+    // Server-side continuation step (`program_output` without final message, or `pause_turn`):
+    // the entire transcript up through the trailing Assistant message matches the stored prefix,
+    // and the new delta input is empty (`input: []`).
+    if let Some(last) = messages.last()
+        && last.role == MessageRole::Assistant
+        && last
+            .provider_meta
+            .extra
+            .get("requiresContinuationStep")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        candidates.push((messages, &[][..]));
     }
     candidates
 }

@@ -496,3 +496,52 @@ fn turn_start_params_tools_mode_enforces_strict_contract() {
         "TurnToolsMode must be exported in protocol schema manifest"
     );
 }
+
+#[test]
+fn provider_capabilities_check_params_contract() {
+    use cowork_protocol::{
+        ProviderCapabilitiesCheckParams, RESULT_METHODS, export_websocket_jsonrpc_schema,
+    };
+
+    let empty: ProviderCapabilitiesCheckParams = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(empty, ProviderCapabilitiesCheckParams::default());
+    assert_eq!(serde_json::to_value(&empty).unwrap(), json!({}));
+
+    let full: ProviderCapabilitiesCheckParams = serde_json::from_value(json!({
+        "cwd": "/tmp/ws",
+        "threadId": "thr-1",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "baseUrl": "https://api.anthropic.com",
+        "strategy": "native",
+        "refresh": true
+    }))
+    .unwrap();
+    assert_eq!(full.provider.as_deref(), Some("anthropic"));
+    assert_eq!(full.model.as_deref(), Some("claude-sonnet-4-6"));
+    assert_eq!(full.strategy.as_deref(), Some("native"));
+    assert_eq!(full.refresh, Some(true));
+
+    // Reject unknown fields (`deny_unknown_fields`).
+    assert!(
+        serde_json::from_value::<ProviderCapabilitiesCheckParams>(json!({
+            "provider": "openai",
+            "unexpectedField": true
+        }))
+        .is_err()
+    );
+
+    assert!(RESULT_METHODS.contains(&"cowork/provider/capabilities/check"));
+    let ws_schema = export_websocket_jsonrpc_schema();
+    assert!(
+        ws_schema["properties"]["requests"]["properties"]
+            .get("cowork/provider/capabilities/check")
+            .is_some()
+    );
+    let manifest = export_protocol_schema_manifest();
+    assert!(
+        manifest["schemas"]
+            .get("ProviderCapabilitiesCheckParams")
+            .is_some()
+    );
+}

@@ -14,7 +14,7 @@ use cowork_protocol::{
     MemoryUpsertParams, NegotiatedServerCapabilities, ProviderAuthAuthorizeParams,
     ProviderAuthCallbackParams, ProviderAuthCopyApiKeyParams, ProviderAuthLogoutParams,
     ProviderAuthMethodsReadParams, ProviderAuthSetApiKeyParams, ProviderAuthSetConfigParams,
-    ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
+    ProviderCapabilitiesCheckParams, ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
@@ -735,6 +735,12 @@ async fn route_ready_request(
             let p: ProviderStatusRefreshParams =
                 parse_params_optional(method, req.params.as_ref())?;
             runtime.handle_provider_status_refresh(&p).await
+        }
+
+        "cowork/provider/capabilities/check" => {
+            let p: ProviderCapabilitiesCheckParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_provider_capabilities_check(&p).await
         }
 
         "cowork/provider/codexAppServer/status" => {

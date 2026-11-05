@@ -5,20 +5,20 @@ use std::time::Duration;
 
 use cowork_config::{
     ConnectionMode, FileLockOptions, ModelPreferenceUpdate, ProviderName, StoredConnection,
-    ToolApiKeys, delete_custom_model, file_lock_root_for_cowork_home, get_ai_coworker_paths,
-    read_connection_store, read_connection_store_for_update_sync, remove_provider_connection,
-    reset_model_preferences, save_provider_connection, set_model_preferences, upsert_custom_model,
-    with_file_lock, write_connection_store,
+    ToolApiKeys, ToolCallingStrategy, delete_custom_model, file_lock_root_for_cowork_home,
+    get_ai_coworker_paths, read_connection_store, read_connection_store_for_update_sync,
+    remove_provider_connection, reset_model_preferences, save_provider_connection,
+    set_model_preferences, upsert_custom_model, with_file_lock, write_connection_store,
 };
 use cowork_protocol::{
     ConnectorsOpenAiNativeSetEnabledParams, JsonRpcLiteError, ProviderAuthAuthorizeParams,
     ProviderAuthCallbackParams, ProviderAuthCopyApiKeyParams, ProviderAuthLogoutParams,
-    ProviderAuthSetApiKeyParams, ProviderAuthSetConfigParams, ProviderCatalogReadParams,
-    ProviderCodexAppServerStatusParams, ProviderCodexAppServerUpdateParams,
-    ProviderCustomModelAddParams, ProviderCustomModelDeleteParams,
-    ProviderLmStudioLocalStartParams, ProviderLmStudioLocalStatusParams,
-    ProviderModelResetEnabledParams, ProviderModelSetEnabledParams, ProviderStatusRefreshParams,
-    error_codes,
+    ProviderAuthSetApiKeyParams, ProviderAuthSetConfigParams, ProviderCapabilitiesCheckParams,
+    ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
+    ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
+    ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
+    ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
+    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, error_codes,
 };
 use cowork_providers::CatalogBuildOptions;
 use cowork_providers::chat_completions::lmstudio::{
@@ -248,6 +248,166 @@ impl ServerRuntimeState {
                 "sessionId": session_id,
                 "providers": providers,
             }
+        }))
+    }
+
+    pub async fn handle_provider_capabilities_check(
+        &self,
+        params: &ProviderCapabilitiesCheckParams,
+    ) -> Result<Value, JsonRpcLiteError> {
+        let thread_snapshot = params
+            .thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|tid| self.load_thread(tid))
+            .map(|live_arc| {
+                let live = live_arc.lock();
+                (
+                    PathBuf::from(&live.cwd),
+                    live.provider,
+                    live.model.clone(),
+                    live.config_overrides.clone(),
+                    live.provider_options_override(),
+                )
+            });
+
+        let cwd = if params.cwd.as_deref().is_some_and(|c| !c.trim().is_empty())
+            || thread_snapshot.is_none()
+        {
+            self.resolve_workspace_path(params.cwd.as_deref(), "cowork/provider/capabilities/check")
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?
+        } else if let Some((ref thread_cwd, ..)) = thread_snapshot {
+            thread_cwd.clone()
+        } else {
+            self.resolve_workspace_path(None, "cowork/provider/capabilities/check")
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?
+        };
+
+        let mut workspace_cfg = self.load_workspace_config(&cwd).ok();
+        if let (Some(cfg), Some((_, _, _, overrides, _))) =
+            (workspace_cfg.as_mut(), thread_snapshot.as_ref())
+        {
+            crate::jsonrpc_turn::apply_session_config_overrides(cfg, overrides);
+        }
+
+        let mut merged_provider_opts = workspace_cfg
+            .as_ref()
+            .and_then(|cfg| cfg.provider_options.clone())
+            .unwrap_or_default();
+        if let Some((_, _, _, _, Some(ref session_po))) = thread_snapshot {
+            for (k, v) in session_po {
+                merged_provider_opts.insert(k.clone(), v.clone());
+            }
+        }
+
+        let provider = if let Some(raw) = params
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            parse_provider_param(raw)?
+        } else if let Some((_, thr_provider, ..)) = thread_snapshot {
+            thr_provider
+        } else if let Some(ref cfg) = workspace_cfg {
+            cfg.provider
+        } else {
+            ProviderName::Openai
+        };
+
+        let model_id = if let Some(raw) = params
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            raw.to_owned()
+        } else if let Some((_, _, ref thr_model, ..)) = thread_snapshot {
+            thr_model.clone()
+        } else if let Some(ref cfg) = workspace_cfg {
+            cfg.model.clone()
+        } else {
+            "gpt-5.4".to_owned()
+        };
+
+        let strategy = if let Some(raw) = params
+            .strategy
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            ToolCallingStrategy::parse(raw).ok_or_else(|| {
+                JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!("Invalid toolCalling strategy: {raw}"),
+                )
+            })?
+        } else if let Some(raw) = merged_provider_opts
+            .get("toolCallingStrategy")
+            .and_then(Value::as_str)
+            .and_then(ToolCallingStrategy::parse)
+        {
+            raw
+        } else {
+            workspace_cfg
+                .as_ref()
+                .map_or(ToolCallingStrategy::Auto, |c| c.tool_calling.strategy)
+        };
+
+        let configured_base_url = match provider {
+            ProviderName::Lmstudio => Some(
+                resolve_lmstudio_options(&self.env, Some(&merged_provider_opts), None)
+                    .inference_base_url,
+            ),
+            _ => cowork_providers::provider_base_url_override(
+                provider,
+                &merged_provider_opts,
+                &self.env,
+                true,
+            ),
+        };
+        let requested_base_url = params
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let client_overrode_base_url = match (&requested_base_url, &configured_base_url) {
+            (Some(req), Some(cfg_url)) => {
+                req.trim_end_matches('/') != cfg_url.trim_end_matches('/')
+            }
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        let effective_base_url = requested_base_url.or(configured_base_url);
+
+        // SECURITY BOUNDARY: never send saved cloud API keys to an unconfigured client-chosen
+        // `baseUrl` supplied on `cowork/provider/capabilities/check`.
+        let api_key = if client_overrode_base_url {
+            None
+        } else {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            let conn_store = read_connection_store(&paths).await.ok();
+            cowork_providers::resolve_provider_api_key(provider, conn_store.as_ref(), &self.env)
+        };
+
+        let probed = cowork_providers::check_endpoint_capabilities(
+            provider,
+            effective_base_url.as_deref(),
+            &model_id,
+            api_key.as_deref(),
+            None,
+            params.refresh.unwrap_or(false),
+        )
+        .await;
+        let capabilities = probed.apply_strategy(provider, strategy);
+
+        Ok(json!({
+            "provider": provider.as_str(),
+            "model": model_id,
+            "strategy": strategy.as_str(),
+            "capabilities": capabilities,
         }))
     }
 

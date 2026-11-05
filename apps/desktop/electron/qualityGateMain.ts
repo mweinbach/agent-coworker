@@ -1089,6 +1089,27 @@ export function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { thread: qualityThreadRecord() };
     case "cowork/creation/preflight":
       return { ready: true, checks: [] };
+    case "cowork/provider/capabilities/check": {
+      const provider =
+        typeof params.provider === "string" && params.provider.trim()
+          ? params.provider.trim()
+          : "openai";
+      const model =
+        typeof params.model === "string" && params.model.trim() ? params.model.trim() : "gpt-5.4";
+      const strategy =
+        params.strategy === "native" || params.strategy === "harness" ? params.strategy : "auto";
+      return {
+        provider,
+        model,
+        strategy,
+        capabilities: {
+          provider,
+          modelId: model,
+          source: "staticClassifier",
+          detail: "Quality fixture capability snapshot.",
+        },
+      };
+    }
     case "cowork/provider/codexAppServer/status": {
       const status: CodexAppServerInstallStatus = {
         available: false,

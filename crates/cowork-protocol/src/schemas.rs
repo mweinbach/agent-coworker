@@ -493,6 +493,25 @@ pub struct ProviderStatusRefreshParams {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCapabilitiesCheckParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderCodexAppServerStatusParams {
     pub cwd: Option<String>,
     pub check_latest: Option<bool>,
@@ -1175,6 +1194,7 @@ pub fn export_protocol_schema_manifest() -> Value {
     insert_schema!(ProviderCatalogReadParams);
     insert_schema!(ProviderAuthMethodsReadParams);
     insert_schema!(ProviderStatusRefreshParams);
+    insert_schema!(ProviderCapabilitiesCheckParams);
     insert_schema!(ProviderCodexAppServerStatusParams);
     insert_schema!(ProviderCodexAppServerUpdateParams);
     insert_schema!(ProviderLmStudioLocalStatusParams);

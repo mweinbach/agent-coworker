@@ -862,6 +862,13 @@ export type AppStoreState = {
   }) => Promise<void>;
   checkCodexAppServerStatus: (opts?: { checkLatest?: boolean }) => Promise<void>;
   updateCodexAppServer: (opts?: { force?: boolean }) => Promise<void>;
+  checkProviderCapabilities: (opts?: {
+    workspaceId?: string;
+    provider?: ProviderName;
+    model?: string;
+    strategy?: import("../lib/wsProtocol").ToolCallingStrategy;
+    refresh?: boolean;
+  }) => Promise<import("../lib/wsProtocol").ProviderCapabilitiesCheckResult | null>;
   checkLibreOfficeRuntime: (opts?: {
     smoke?: boolean;
   }) => Promise<import("../lib/wsProtocol").LibreOfficeRuntimeDiagnostic | null>;

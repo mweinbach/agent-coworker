@@ -47,7 +47,7 @@ pub use schemas::{
     NAMESPACE_NAMES, NegotiatedServerCapabilities, ProviderAuthAuthorizeParams,
     ProviderAuthCallbackParams, ProviderAuthCopyApiKeyParams, ProviderAuthLogoutParams,
     ProviderAuthMethodsReadParams, ProviderAuthSetApiKeyParams, ProviderAuthSetConfigParams,
-    ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
+    ProviderCapabilitiesCheckParams, ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelPreferencePatch,

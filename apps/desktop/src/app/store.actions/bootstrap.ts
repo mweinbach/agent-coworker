@@ -81,6 +81,7 @@ import {
   normalizeDesktopSettings,
   normalizePrivacyTelemetrySettings,
   normalizeSidebarSectionOrder,
+  normalizeWorkspaceToolCalling,
   normalizeWorkspaceUserProfile,
   type PersistedCloudSyncSettings,
   type PersistedOnboardingState,
@@ -240,6 +241,14 @@ const persistedWorkspaceSchema = z
       }
       return undefined;
     }, z.number().int().nonnegative().nullable().optional()),
+    defaultToolCalling: z
+      .object({
+        codeMode: z.boolean().optional(),
+        deferredToolSearch: z.boolean().optional(),
+        strategy: z.enum(["auto", "native", "harness"]).optional(),
+      })
+      .passthrough()
+      .optional(),
     defaultWorkflowMaxConcurrentAgents: z.preprocess((value) => {
       if (value === undefined) return undefined;
       if (typeof value === "number" && Number.isFinite(value)) {
@@ -311,6 +320,9 @@ const persistedWorkspaceSchema = z
       defaultPreferredChildModelRef: preferredChildModelRef,
       defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
       defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
+      ...(workspace.defaultToolCalling !== undefined
+        ? { defaultToolCalling: normalizeWorkspaceToolCalling(workspace.defaultToolCalling) }
+        : {}),
       defaultWorkflowMaxConcurrentAgents: workspace.defaultWorkflowMaxConcurrentAgents,
       providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
       userName: workspace.userName,
@@ -1469,6 +1481,9 @@ export function createBootstrapActions(
                   ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
                   allowedChildModelRefs: source.defaultAllowedChildModelRefs ?? [],
                   defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars ?? null,
+                  ...(source.defaultToolCalling !== undefined
+                    ? { toolCalling: source.defaultToolCalling }
+                    : {}),
                   ...(source.defaultWorkflowMaxConcurrentAgents !== undefined
                     ? { workflowMaxConcurrentAgents: source.defaultWorkflowMaxConcurrentAgents }
                     : {}),

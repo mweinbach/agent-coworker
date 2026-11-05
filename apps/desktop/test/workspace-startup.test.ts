@@ -323,7 +323,6 @@ describe("workspace startup flow", () => {
       clearTimeout(timer);
     }
     RUNTIME.workspaceServerRestartStabilityTimers.clear();
-    RUNTIME.modelStreamByThread.clear();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.sessionSnapshots.clear();
     __internalOperationIntent.reset();
@@ -971,7 +970,6 @@ describe("workspace startup flow", () => {
           messageCount: 1,
           lastEventSeq: 1,
           draft: false,
-          legacyTranscriptId: null,
         },
       ],
       selectedWorkspaceId: workspaceId,

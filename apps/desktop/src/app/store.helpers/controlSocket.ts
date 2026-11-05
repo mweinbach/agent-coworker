@@ -193,9 +193,6 @@ export function createControlSocketHelpers(
       const existing = serverBackedBySessionId.get(session.sessionId);
       const threadId = existing?.id ?? session.sessionId;
       const runtime = threadRuntimeById[threadId];
-      const legacyTranscriptId =
-        existing?.legacyTranscriptId ??
-        (existing && existing.id !== session.sessionId ? existing.id : null);
       return {
         id: threadId,
         workspaceId,
@@ -216,20 +213,11 @@ export function createControlSocketHelpers(
         draft: false,
         archived: existing?.archived ?? false,
         archivedAt: existing?.archivedAt,
-        legacyTranscriptId,
         ...(existing?.taskId ? { taskId: existing.taskId } : {}),
         ...(existing?.taskThreadId ? { taskThreadId: existing.taskThreadId } : {}),
         ...(existing?.reasoningEffort ? { reasoningEffort: existing.reasoningEffort } : {}),
       } satisfies ThreadRecord;
     });
-    const claimedLegacyThreadIds = new Set(
-      nextServerThreads
-        .map((thread) => thread.legacyTranscriptId)
-        .filter(
-          (threadId): threadId is string =>
-            typeof threadId === "string" && threadId.trim().length > 0,
-        ),
-    );
     const claimedServerThreadIds = new Set(nextServerThreads.map((thread) => thread.id));
     return [
       ...allThreads.filter((thread) => thread.workspaceId !== workspaceId),
@@ -237,11 +225,7 @@ export function createControlSocketHelpers(
         right.lastMessageAt.localeCompare(left.lastMessageAt),
       ),
       ...clientOwnedThreads
-        .filter(
-          (thread) =>
-            thread.draft === true ||
-            (!claimedServerThreadIds.has(thread.id) && !claimedLegacyThreadIds.has(thread.id)),
-        )
+        .filter((thread) => thread.draft === true || !claimedServerThreadIds.has(thread.id))
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
     ];
   }
@@ -318,14 +302,6 @@ export function createControlSocketHelpers(
     };
     if (nextThreads.some((thread) => thread.id === selectedThreadId && selectable(thread))) {
       return selectionFor(selectedThreadId);
-    }
-
-    const migratedThreadId =
-      nextThreads.find(
-        (thread) => thread.legacyTranscriptId === selectedThreadId && selectable(thread),
-      )?.id ?? null;
-    if (migratedThreadId) {
-      return selectionFor(migratedThreadId);
     }
 
     if (selectionIntent.context === "task") {
@@ -777,7 +753,6 @@ export function createControlSocketHelpers(
       for (const threadId of releasedThreadIds) {
         if (!isCurrent()) return null;
         if (get().threadRuntimeById[threadId]) continue;
-        RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.optimisticUserMessageIds.delete(threadId);
       }
       for (const sessionId of removedSessionSnapshotIds) {
@@ -1958,21 +1933,6 @@ export function createControlSocketHelpers(
           kind: "error",
           title: "Control session error",
           detail: `${evt.source}/${evt.code}: ${evt.message}`,
-        }),
-      }));
-      return;
-    }
-
-    if (evt.type === "assistant_message") {
-      const text = String(evt.text).trim();
-      if (!text) return;
-      set((s) => ({
-        notifications: deps.pushNotification(s.notifications, {
-          id: deps.makeId(),
-          ts: deps.nowIso(),
-          kind: "info",
-          title: "Server message",
-          detail: text,
         }),
       }));
     }

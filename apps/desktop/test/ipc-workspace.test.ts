@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { scratchRoots } from "../../../src/platform/sandbox";
+import { scratchRoots } from "../../../scripts/scratchRoots";
 import type { DesktopIpcModuleContext } from "../electron/ipc/types";
 import { WorkspaceRootsController } from "../electron/ipc/workspaceRoots";
 import { assertWorkspaceDirectory } from "../electron/services/validation";

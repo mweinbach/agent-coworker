@@ -5,8 +5,8 @@ import {
   MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE,
 } from "../../../../src/shared/attachments";
 import { type NewChatLandingTarget, resolveNewChatLandingTarget } from "../lib/newChatLanding";
-import type { TurnReference } from "../lib/wsProtocol";
-import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
+import { isProviderNameString } from "../lib/providerDisplayNames";
+import type { ProviderName, TurnReference } from "../lib/wsProtocol";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import type { WorkspaceRecord } from "./types";
 
@@ -447,7 +447,7 @@ function normalizePersistedComposerDrafts<TAttachment>(
       text: typeof candidate.text === "string" ? candidate.text : "",
       attachments,
       references: hydrateReferences(candidate.references),
-      provider: isProviderName(candidate.provider) ? candidate.provider : null,
+      provider: isProviderNameString(candidate.provider) ? candidate.provider : null,
       model:
         typeof candidate.model === "string" && candidate.model.trim()
           ? candidate.model.trim()
@@ -576,10 +576,6 @@ function isValidComposerDraftKey(
     return options.validProjectWorkspaceIds.has(key.slice("new:project:".length));
   }
   return false;
-}
-
-function isProviderName(value: unknown): value is ProviderName {
-  return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
 export function isReasoningEffortValue(value: unknown): value is ReasoningEffortValue {

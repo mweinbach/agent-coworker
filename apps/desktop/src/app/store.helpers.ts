@@ -44,7 +44,10 @@ import {
   stopWorkspaceServer,
 } from "../lib/desktopCommands";
 import type { NewChatLandingTarget } from "../lib/newChatLanding";
-import { fallbackAuthMethods } from "../lib/providerDisplayNames";
+import {
+  fallbackAuthMethods,
+  isProviderNameString as isProviderName,
+} from "../lib/providerDisplayNames";
 import type {
   CodexAppServerInstallStatus,
   ConversationImportSource,
@@ -62,7 +65,6 @@ import type {
   TodoItem,
   TurnReference,
 } from "../lib/wsProtocol";
-import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import type {
   ComposerDraftAttachment,
   ComposerDraftRevision,
@@ -203,10 +205,6 @@ type ProviderAuthMethodsEvent = Extract<SessionEvent, { type: "provider_auth_met
 type ProviderAuthMethod = ProviderAuthMethodsEvent["methods"][string][number];
 type ProviderAuthChallengeEvent = Extract<SessionEvent, { type: "provider_auth_challenge" }>;
 type ProviderAuthResultEvent = Extract<SessionEvent, { type: "provider_auth_result" }>;
-
-function isProviderName(v: unknown): v is ProviderName {
-  return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
-}
 
 function providerAuthMethodsFor(
   state: AppStoreState,

@@ -417,7 +417,6 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       sessionId: asNonEmptyString(item.sessionId) ?? null,
       messageCount: asNonNegativeInteger(item.messageCount, 0),
       lastEventSeq: asNonNegativeInteger(item.lastEventSeq, 0),
-      legacyTranscriptId: asNonEmptyString(item.legacyTranscriptId) ?? null,
       archived: typeof item.archived === "boolean" ? item.archived : false,
       archivedAt: typeof item.archivedAt === "string" ? item.archivedAt : undefined,
       ...(isReasoningEffortValue(item.reasoningEffort)

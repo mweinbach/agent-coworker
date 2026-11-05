@@ -9,13 +9,13 @@ import { app } from "electron";
 import { z } from "zod";
 import { hostArch, hostPlatform } from "../../../../src/platform/host";
 import { killTree } from "../../../../src/platform/processTree";
-import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
 import {
+  findWindowsHelper,
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
-} from "../../../../src/platform/sandbox/windows";
+} from "../../../../src/platform/windowsSandboxHelper";
 import {
   COWORK_RUNTIME_BOOTSTRAP_PHASES,
   COWORK_RUNTIME_STARTUP_COMPONENT,
@@ -839,16 +839,6 @@ function shouldMirrorServerOutput(
   return !isPackaged || env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
 }
 
-function buildHarnessTerminalLogsEnv(
-  baseEnv: Record<string, string | undefined>,
-): NodeJS.ProcessEnv {
-  const inherited = baseEnv.COWORK_HARNESS_TERMINAL_LOGS?.trim();
-  if (inherited) {
-    return { COWORK_HARNESS_TERMINAL_LOGS: inherited };
-  }
-  return shouldMirrorServerOutput(baseEnv) ? { COWORK_HARNESS_TERMINAL_LOGS: "1" } : {};
-}
-
 function createServerOutputMirror(
   opts: { stdoutWrite?: (chunk: string) => void; stderrWrite?: (chunk: string) => void } = {},
 ): ServerOutputMirror {
@@ -1095,7 +1085,6 @@ function buildServerEnv(
     ...(featureFlags?.tasks ? { COWORK_ENABLE_TASKS: "1" } : {}),
     ...(featureFlags?.workflows ? { COWORK_ENABLE_WORKFLOWS: "1" } : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
-    ...buildHarnessTerminalLogsEnv(processEnv),
     ...buildDesktopObservabilityEnv(privacyTelemetrySettings),
     ...buildDesktopCrashReportingEnv(privacyTelemetrySettings),
     ...buildDesktopProductAnalyticsEnv(
@@ -1291,13 +1280,11 @@ function captureWorkspaceServerStartupFailure(input: {
   error: unknown;
   workspaceId: string;
   mode: "dev" | "packaged";
-  attempt: number;
 }): void {
   captureError(input.error, {
     tags: {
       operation: "workspace_server_start",
       mode: input.mode,
-      attempt: input.attempt,
     },
     extra: {
       workspaceId: input.workspaceId,
@@ -1576,8 +1563,6 @@ export class ServerManager {
 
     logServerManagerEvent("workspace server spawn attempt", {
       workspaceId,
-      attempt: 1,
-      attemptCount: 1,
       spawn: spawnDescription,
     });
 
@@ -1669,7 +1654,6 @@ export class ServerManager {
         error,
         workspaceId,
         mode,
-        attempt: 1,
       });
       logServerManagerEvent("workspace server start failed", {
         workspaceId,
@@ -1978,7 +1962,6 @@ export const __internal = {
   getServerLogPath,
   getServerStartupTimeoutMs,
   appendBrowserAccessToken,
-  buildHarnessTerminalLogsEnv,
   createServerOutputMirror,
   ensureWindowsSandboxReady,
   runWindowsSandboxHelper,

@@ -321,7 +321,6 @@ export function createJsonRpcWorkspaceModule(
     if (!options.preserveInFlight) {
       for (const threadId of reconnectIds) {
         flushPendingContentForThread(set, threadId);
-        RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         clearPendingThreadSteers(threadId);
       }
@@ -455,31 +454,15 @@ export function createJsonRpcWorkspaceModule(
       rememberThreadForReconnect(workspaceId, toThreadId);
     }
     set((s) => {
-      const existingThread = s.threads.find((thread) => thread.id === fromThreadId);
       const existingRuntime = s.threadRuntimeById[fromThreadId];
       const replacementThread = s.threads.find((thread) => thread.id === toThreadId);
       const replacementRuntime = s.threadRuntimeById[toThreadId];
 
       const nextThreads = replacementThread
-        ? s.threads
-            .filter((thread) => thread.id !== fromThreadId)
-            .map((thread) =>
-              thread.id === toThreadId &&
-              existingThread?.legacyTranscriptId &&
-              !thread.legacyTranscriptId
-                ? { ...thread, legacyTranscriptId: existingThread.legacyTranscriptId }
-                : thread,
-            )
+        ? s.threads.filter((thread) => thread.id !== fromThreadId)
         : s.threads.map((thread) =>
             thread.id === fromThreadId
-              ? {
-                  ...thread,
-                  id: toThreadId,
-                  sessionId: toThreadId,
-                  draft: false,
-                  legacyTranscriptId:
-                    thread.legacyTranscriptId ?? (thread.id !== toThreadId ? thread.id : null),
-                }
+              ? { ...thread, id: toThreadId, sessionId: toThreadId, draft: false }
               : thread,
           );
 

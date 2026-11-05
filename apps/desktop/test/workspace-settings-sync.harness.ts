@@ -494,7 +494,6 @@ function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
         messageCount: 2,
         lastEventSeq: 4,
         draft: false,
-        legacyTranscriptId: null,
       },
     ],
     threadRuntimeById: {
@@ -631,7 +630,6 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.workspaceServerRestartAttempts.clear();
-    RUNTIME.modelStreamByThread.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
 
     setAppState(useAppStore, {

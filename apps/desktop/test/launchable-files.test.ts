@@ -1,9 +1,8 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import { scratchRoots } from "../../../scripts/scratchRoots";
 import { hostPlatform } from "../../../src/platform/host";
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import { isLaunchableFile } from "../electron/services/launchableFiles";
 
 describe("isLaunchableFile", () => {

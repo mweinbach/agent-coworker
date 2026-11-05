@@ -130,8 +130,8 @@ mock.module("../src/lib/desktopCommands", () =>
         {
           ts: "2024-01-01T00:00:02.000Z",
           threadId,
-          direction: "server",
-          payload: { type: "assistant_message", text: "Transcript fallback reply" },
+          direction: "client",
+          payload: { type: "user_message", text: "Transcript fallback question" },
         },
       ];
     },
@@ -211,10 +211,7 @@ function restoreWindowMock() {
 function canonicalThreadId(sessionId: string, fallbackThreadId?: string): string {
   const state = useAppStore.getState();
   const thread = state.threads.find(
-    (item) =>
-      item.id === sessionId ||
-      item.sessionId === sessionId ||
-      (fallbackThreadId ? item.legacyTranscriptId === fallbackThreadId : false),
+    (item) => item.id === sessionId || item.sessionId === sessionId,
   );
   return thread?.id ?? state.selectedThreadId ?? fallbackThreadId ?? sessionId;
 }
@@ -406,7 +403,6 @@ function seedStore(
         messageCount: 2,
         lastEventSeq: 4,
         draft: false,
-        legacyTranscriptId: null,
         ...threadPatch,
       },
     ],
@@ -498,7 +494,6 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.modelStreamByThread.clear();
     setDefaultJsonRpcHandlers();
   });
 
@@ -1222,9 +1217,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
 
   test("selectThread falls back to transcript hydration when thread/read has no snapshot", async () => {
     jsonRpcHandlers.set("thread/read", async () => ({ coworkSnapshot: null }));
-    const { threadId } = seedStore({
-      legacyTranscriptId: "legacy-thread-1",
-    });
+    const { threadId } = seedStore();
 
     await useAppStore.getState().selectThread(threadId);
     await flushAsyncWork();
@@ -1233,8 +1226,8 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     const runtime = useAppStore.getState().threadRuntimeById[activeThreadId];
     expect(runtime?.transcriptOnly).toBe(true);
     expect(runtime?.feed[0]?.kind).toBe("message");
-    expect(runtime?.feed[0]?.role).toBe("assistant");
-    expect(readTranscriptCalls).toEqual(["legacy-thread-1", "session-1", threadId]);
+    expect(runtime?.feed[0]?.role).toBe("user");
+    expect(readTranscriptCalls).toEqual(["session-1", threadId]);
     expect(jsonRpcRequests.map((entry) => entry.method)).not.toContain("thread/resume");
   });
 

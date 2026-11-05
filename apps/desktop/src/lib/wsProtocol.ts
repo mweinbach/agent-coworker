@@ -107,33 +107,7 @@ const desktopSessionEventSchema = z.discriminatedUnion("type", [
   workflowProgressEventSchema,
 ]);
 
-function normalizeLegacySessionSnapshotEvent(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return raw;
-  }
-
-  const event = raw as Record<string, unknown>;
-  if (event.type !== "session_snapshot") {
-    return raw;
-  }
-
-  const snapshot = event.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
-    return raw;
-  }
-
-  const snapshotRecord = snapshot as Record<string, unknown>;
-  return {
-    ...event,
-    snapshot: {
-      ...snapshotRecord,
-      ...(Object.hasOwn(snapshotRecord, "taskType") ? {} : { taskType: null }),
-      ...(Object.hasOwn(snapshotRecord, "targetPaths") ? {} : { targetPaths: null }),
-    },
-  };
-}
-
 export function safeParseSessionEvent(raw: unknown): CoreSessionEvent | null {
-  const parsed = desktopSessionEventSchema.safeParse(normalizeLegacySessionSnapshotEvent(raw));
+  const parsed = desktopSessionEventSchema.safeParse(raw);
   return parsed.success ? (parsed.data as CoreSessionEvent) : null;
 }

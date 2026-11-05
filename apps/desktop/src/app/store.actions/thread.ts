@@ -258,10 +258,8 @@ function findLatestVisibleSandboxInteraction(
   return latest;
 }
 
-export function transcriptIdsForThread(
-  thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
-): string[] {
-  const ids = [thread.legacyTranscriptId ?? null, thread.sessionId ?? null, thread.id];
+export function transcriptIdsForThread(thread: Pick<ThreadRecord, "id" | "sessionId">): string[] {
+  const ids = [thread.sessionId ?? null, thread.id];
   return [
     ...new Set(
       ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0),
@@ -416,7 +414,7 @@ export async function hydrateThreadSelection(
     });
   };
 
-  const hydrateLegacyTranscript = async (candidate: ThreadRecord) => {
+  const hydrateLocalTranscript = async (candidate: ThreadRecord) => {
     if (!isOperationCurrent()) return null;
     const transcriptIds = transcriptIdsForThread(candidate);
     if (transcriptIds.length === 0) return null;
@@ -536,9 +534,7 @@ export async function hydrateThreadSelection(
   const shouldFetchHarnessSnapshot =
     Boolean(sessionId) &&
     !skipHarnessSnapshotFetch &&
-    (thread.messageCount > 0 ||
-      getEffectiveThreadLastEventSeq(get(), thread.id) > 0 ||
-      Boolean(thread.legacyTranscriptId));
+    (thread.messageCount > 0 || getEffectiveThreadLastEventSeq(get(), thread.id) > 0);
 
   if (!isOperationCurrent()) return;
   const requestId = beginThreadSelectionRequest(threadId);
@@ -595,9 +591,9 @@ export async function hydrateThreadSelection(
         }
 
         if (!loadedFromHarness && !matchingCachedSnapshot && !alreadyLoaded) {
-          const snapshot = await waitForOperation(hydrateLegacyTranscript(thread), options.signal);
+          const snapshot = await waitForOperation(hydrateLocalTranscript(thread), options.signal);
           if (!snapshot) {
-            throw new Error("No harness snapshot or legacy transcript cache was available.");
+            throw new Error("No harness snapshot or local transcript cache was available.");
           }
           if (!isSelectionCurrent(requestId)) return;
           set((state) => ({
@@ -882,7 +878,7 @@ export function createThreadActions(
   };
 
   const readTranscriptEvents = async (
-    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+    thread: Pick<ThreadRecord, "id" | "sessionId">,
   ): Promise<TranscriptEvent[] | null> => {
     const transcriptIds = transcriptIdsForThread(thread);
     if (transcriptIds.length === 0) return null;
@@ -1231,7 +1227,6 @@ export function createThreadActions(
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
-      RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
       clearPendingThreadSteers(threadId);
       forgetThreadNavigationIntent(threadId);
@@ -1705,7 +1700,6 @@ export function createThreadActions(
         RUNTIME.optimisticUserMessageIds.delete(threadId);
         RUNTIME.pendingThreadMessages.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
-        RUNTIME.modelStreamByThread.delete(threadId);
         forgetThreadNavigationIntent(threadId);
         const rekey = rollbackDraftRekey;
         rollbackDraftRekey = null;

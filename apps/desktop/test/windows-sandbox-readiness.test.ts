@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../../scripts/scratchRoots";
 import {
   readWindowsSandboxReadiness,
   type WindowsSandboxReadiness,

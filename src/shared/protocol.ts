@@ -4,9 +4,7 @@ import type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
   CommandInfo,
-  HarnessContextPayload,
   MCPServerConfig,
-  ObservabilityHealth,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
   PluginInstallPreview,
@@ -35,7 +33,6 @@ import type {
   SessionKind,
 } from "./agents";
 import type { ImportableItem, ImportableKind, ImportSource } from "./importTypes";
-import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStreamParts";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "./openaiCompatibleOptions";
 import type { OpenAiNativeConnectorsEvent } from "./openaiNativeConnectors";
 import type {
@@ -53,7 +50,6 @@ import type {
 } from "./protocolTypes";
 import type { ProviderAuthMethod } from "./providerAuthMethods";
 import type { SessionSnapshot } from "./sessionSnapshot";
-import type { ToolInputDigest } from "./toolInputDigest";
 import type { WorkflowProgressPayload } from "./workflows";
 
 type MCPServerEventSource = "workspace" | "user" | "system" | "plugin";
@@ -135,9 +131,6 @@ export type SessionEvent =
       type: "server_hello";
       sessionId: string;
       protocolVersion?: string;
-      capabilities?: {
-        modelStreamChunk: "v1";
-      };
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & {
         outputDirectory?: string;
       };
@@ -309,50 +302,8 @@ export type SessionEvent =
       clientMessageId?: string;
       steerRequestId?: string;
     }
-  | {
-      type: "user_message";
-      sessionId: string;
-      text: string;
-      clientMessageId?: string;
-      steerRequestId?: string;
-      turnId?: string;
-      idempotencyFingerprint?: string;
-      annotations?: Array<Record<string, unknown>>;
-    }
-  | {
-      type: "model_stream_chunk";
-      sessionId: string;
-      turnId: string;
-      index: number;
-      provider: AgentConfig["provider"];
-      model: string;
-      normalizerVersion?: number;
-      partType: ModelStreamPartType;
-      part: Record<string, unknown>;
-      rawPart?: unknown;
-    }
-  | {
-      type: "model_stream_raw";
-      sessionId: string;
-      turnId: string;
-      index: number;
-      provider: AgentConfig["provider"];
-      model: string;
-      format: ModelStreamRawFormat;
-      normalizerVersion: number;
-      event: Record<string, unknown>;
-      toolCallMetadata?: Array<{
-        toolKey: string;
-        toolName: string;
-        inputDigest: ToolInputDigest;
-        retryOf?: string;
-      }>;
-    }
-  | { type: "assistant_message"; sessionId: string; text: string }
-  | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }
   | { type: "log"; sessionId: string; line: string }
   | { type: "todos"; sessionId: string; todos: TodoItem[] }
-  | { type: "reset_done"; sessionId: string }
   | { type: "ask"; sessionId: string; requestId: string; question: string; options?: string[] }
   | {
       type: "approval";
@@ -363,15 +314,6 @@ export type SessionEvent =
       reasonCode: ApprovalRiskCode;
       detail?: string;
       category?: SandboxDenialCategory;
-    }
-  | {
-      type: "interaction_resolved";
-      sessionId: string;
-      requestId: string;
-      kind: "ask" | "approval";
-      hasPendingAsk: boolean;
-      hasPendingApproval: boolean;
-      response?: { kind: "ask"; answer: string } | { kind: "approval"; approved: boolean };
     }
   | {
       type: "config_updated";
@@ -496,27 +438,6 @@ export type SessionEvent =
       sessionId: string;
     } & WorkspaceBackupDeltaPreview)
   | {
-      type: "observability_status";
-      sessionId: string;
-      enabled: boolean;
-      health: ObservabilityHealth;
-      config: {
-        provider: "langfuse";
-        baseUrl: string;
-        otelEndpoint: string;
-        tracingEnvironment?: string;
-        release?: string;
-        hasPublicKey: boolean;
-        hasSecretKey: boolean;
-        configured: boolean;
-      } | null;
-    }
-  | {
-      type: "harness_context";
-      sessionId: string;
-      context: (HarnessContextPayload & { updatedAt: string }) | null;
-    }
-  | {
       type: "turn_usage";
       sessionId: string;
       turnId: string;
@@ -590,5 +511,4 @@ export type SessionEvent =
       data?: ServerErrorData;
       clientMessageId?: string;
       steerRequestId?: string;
-    }
-  | { type: "pong"; sessionId: string };
+    };

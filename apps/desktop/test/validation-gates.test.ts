@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { scratchRoots } from "../../../src/platform/sandbox";
+import { scratchRoots } from "../../../scripts/scratchRoots";
 import {
   assertDirection,
   assertSafeId,

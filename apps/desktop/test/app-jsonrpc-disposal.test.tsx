@@ -234,7 +234,6 @@ function seedWorkspaceState() {
         messageCount: 1,
         lastEventSeq: 1,
         draft: false,
-        legacyTranscriptId: null,
       },
     ],
     selectedWorkspaceId: workspaceId,

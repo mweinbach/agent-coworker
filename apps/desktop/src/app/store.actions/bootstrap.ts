@@ -343,7 +343,6 @@ const persistedThreadSchema = z
     sessionId: normalizedSessionIdSchema,
     messageCount: normalizedLastEventSeqSchema,
     lastEventSeq: normalizedLastEventSeqSchema,
-    legacyTranscriptId: normalizedSessionIdSchema.optional(),
     taskId: optionalSafeIdSchema,
     taskThreadId: optionalSafeIdSchema,
     draft: z
@@ -376,7 +375,6 @@ const persistedThreadSchema = z
       sessionId: thread.sessionId,
       messageCount: thread.messageCount,
       lastEventSeq: thread.lastEventSeq,
-      legacyTranscriptId: thread.legacyTranscriptId ?? (thread.id !== id ? thread.id : null),
       ...(thread.taskId ? { taskId: thread.taskId } : {}),
       ...(thread.taskThreadId ? { taskThreadId: thread.taskThreadId } : {}),
       draft: thread.draft ?? false,
@@ -624,10 +622,7 @@ function buildResolvedDesktopUiState(
     workspaceThreads[0]?.id ??
     null;
   const migratedSelectedThreadId = normalizedUi.selectedThreadId
-    ? (workspaceThreads.find((thread) => thread.id === normalizedUi.selectedThreadId)?.id ??
-      workspaceThreads.find((thread) => thread.legacyTranscriptId === normalizedUi.selectedThreadId)
-        ?.id ??
-      null)
+    ? (workspaceThreads.find((thread) => thread.id === normalizedUi.selectedThreadId)?.id ?? null)
     : null;
   const selectedThreadId =
     normalizedUi.selectedThreadId === null && normalizedUi.newChatLandingTarget

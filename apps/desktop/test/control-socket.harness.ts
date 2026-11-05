@@ -116,7 +116,6 @@ function makeThread(threadId: string, workspaceId: string) {
     messageCount: 1,
     lastEventSeq: 1,
     draft: false,
-    legacyTranscriptId: null,
   };
 }
 

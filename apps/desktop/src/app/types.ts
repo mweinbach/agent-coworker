@@ -145,7 +145,6 @@ export type ThreadRecord = {
   lastEventSeq: number;
   hasPendingAsk?: boolean;
   hasPendingApproval?: boolean;
-  legacyTranscriptId?: string | null;
   draft?: boolean;
   archived?: boolean;
   archivedAt?: string;
@@ -391,13 +390,7 @@ export type TranscriptEvent = {
   payload: unknown;
 };
 
-export type ToolFeedState =
-  | "input-streaming"
-  | "input-available"
-  | "approval-requested"
-  | "output-available"
-  | "output-error"
-  | "output-denied";
+export type { ToolFeedState } from "../../../../src/shared/toolFeedState";
 
 export type FeedItem = SessionFeedItem;
 

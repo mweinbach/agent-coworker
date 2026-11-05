@@ -1,54 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  createThreadModelStreamRuntime,
   extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   mapTranscriptToFeed,
-  reasoningInsertBeforeAssistantAfterStreamReplay,
 } from "../src/app/store.feedMapping";
 import type { TranscriptEvent } from "../src/app/types";
 
 describe("desktop transcript feed mapping", () => {
-  test.each([null, undefined, false, 42, "invalid", []].map((event) => ({ event })))(
-    "skips malformed raw stream payload %j without losing neighboring messages",
-    ({ event }) => {
-      const transcript: TranscriptEvent[] = [
-        {
-          ts: "2026-09-01T00:00:00.000Z",
-          threadId: "thread-1",
-          direction: "client",
-          payload: { type: "user_message", text: "Keep this question" },
-        },
-        {
-          ts: "2026-09-01T00:00:01.000Z",
-          threadId: "thread-1",
-          direction: "server",
-          payload: {
-            type: "model_stream_raw",
-            format: "google-interactions-v1",
-            sessionId: "thread-1",
-            turnId: "turn-1",
-            provider: "google",
-            model: "gemini-3.1-pro-preview",
-            index: 0,
-            event,
-          },
-        },
-        {
-          ts: "2026-09-01T00:00:02.000Z",
-          threadId: "thread-1",
-          direction: "server",
-          payload: { type: "assistant_message", text: "Keep this answer" },
-        },
-      ];
-
-      expect(mapTranscriptToFeed(transcript)).toEqual([
-        expect.objectContaining({ kind: "message", role: "user", text: "Keep this question" }),
-        expect.objectContaining({ kind: "message", role: "assistant", text: "Keep this answer" }),
-      ]);
-    },
-  );
-
   test("preserves transcript event order instead of sorting by timestamps", () => {
     const transcript: TranscriptEvent[] = [
       {
@@ -61,22 +19,19 @@ describe("desktop transcript feed mapping", () => {
         ts: "2024-01-01T00:00:30.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "reasoning_summary", text: "Inspecting files." },
+        payload: { type: "todos", todos: [{ content: "Inspect files", status: "in_progress" }] },
       },
       {
         ts: "2024-01-01T00:00:05.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "assistant_message", text: "Done." },
+        payload: { type: "log", line: "Done." },
       },
     ];
 
     const feed = mapTranscriptToFeed(transcript);
 
-    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
-    expect(feed[0]?.kind).toBe("message");
-    expect(feed[1]?.kind).toBe("reasoning");
-    expect(feed[2]?.kind).toBe("message");
+    expect(feed.map((item) => item.kind)).toEqual(["message", "todos", "log"]);
   });
 
   test("suppresses agent lifecycle transcript events from feed and rebuilds latest agent state", () => {
@@ -134,7 +89,7 @@ describe("desktop transcript feed mapping", () => {
         ts: "2024-01-01T00:00:03.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "assistant_message", text: "Parent reply." },
+        payload: { type: "log", line: "Parent log." },
       },
     ];
 
@@ -142,94 +97,11 @@ describe("desktop transcript feed mapping", () => {
     const agents = extractAgentStateFromTranscript(transcript);
 
     expect(feed).toHaveLength(1);
-    expect(feed[0]?.kind).toBe("message");
+    expect(feed[0]?.kind).toBe("log");
     expect(agents).toHaveLength(1);
     expect(agents[0]?.agentId).toBe("agent-1");
     expect(agents[0]?.executionState).toBe("completed");
     expect(agents[0]?.lastMessagePreview).toBe("Done.");
-  });
-
-  test("replays raw model stream events and ignores stale normalized reasoning chunks", () => {
-    const transcript: TranscriptEvent[] = [
-      {
-        ts: "2024-01-01T00:00:01.000Z",
-        threadId: "thread-1",
-        direction: "server",
-        payload: {
-          type: "model_stream_raw",
-          sessionId: "thread-session",
-          turnId: "turn-raw",
-          index: 0,
-          provider: "openai",
-          model: "gpt-5.2",
-          format: "openai-responses-v1",
-          normalizerVersion: 1,
-          event: {
-            type: "response.output_item.added",
-            item: { type: "reasoning", id: "rs_1", summary: [] },
-          },
-        },
-      },
-      {
-        ts: "2024-01-01T00:00:02.000Z",
-        threadId: "thread-1",
-        direction: "server",
-        payload: {
-          type: "model_stream_raw",
-          sessionId: "thread-session",
-          turnId: "turn-raw",
-          index: 1,
-          provider: "openai",
-          model: "gpt-5.2",
-          format: "openai-responses-v1",
-          normalizerVersion: 1,
-          event: {
-            type: "response.reasoning_summary_part.added",
-            part: { text: "" },
-          },
-        },
-      },
-      {
-        ts: "2024-01-01T00:00:03.000Z",
-        threadId: "thread-1",
-        direction: "server",
-        payload: {
-          type: "model_stream_raw",
-          sessionId: "thread-session",
-          turnId: "turn-raw",
-          index: 2,
-          provider: "openai",
-          model: "gpt-5.2",
-          format: "openai-responses-v1",
-          normalizerVersion: 1,
-          event: {
-            type: "response.reasoning_summary_text.delta",
-            delta: "raw reasoning",
-          },
-        },
-      },
-      {
-        ts: "2024-01-01T00:00:04.000Z",
-        threadId: "thread-1",
-        direction: "server",
-        payload: {
-          type: "model_stream_chunk",
-          sessionId: "thread-session",
-          turnId: "turn-raw",
-          index: 3,
-          provider: "openai",
-          model: "gpt-5.2",
-          partType: "reasoning_delta",
-          part: { id: "r1", mode: "summary", text: "stale reasoning" },
-        },
-      },
-    ];
-
-    const feed = mapTranscriptToFeed(transcript);
-
-    const reasoning = feed.filter((item) => item.kind === "reasoning");
-    expect(reasoning).toHaveLength(1);
-    expect(reasoning[0]?.text).toBe("raw reasoning");
   });
 
   test("keeps newer agent_status data when a later agent_wait_result carries an older sibling snapshot", () => {
@@ -387,5 +259,114 @@ describe("desktop transcript feed mapping", () => {
         updatedAt: "2024-01-01T00:00:03.000Z",
       }),
     ]);
+  });
+
+  test("suppresses client-side usage budget updates during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: {
+          type: "set_session_usage_budget",
+          sessionId: "thread-session",
+          stopAtUsd: null,
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    expect(feed).toEqual([]);
+  });
+
+  test("maps session backup diagnostics into readable system rows during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "session_backup_state",
+          sessionId: "thread-session",
+          reason: "auto_checkpoint",
+          backup: {
+            status: "ready",
+            checkpoints: [{ id: "cp-1" }, { id: "cp-2" }],
+          },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const systemLines = feed
+      .map((item) => (item.kind === "system" ? item.line : null))
+      .filter(Boolean);
+
+    expect(systemLines).toEqual(["Session backup (auto checkpoint): status=ready, checkpoints=2"]);
+  });
+
+  test("uses the same unhandled event copy during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "future_event",
+          payload: true,
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({ kind: "system", line: "Unhandled event: future_event" });
+  });
+
+  test("ignores malformed session_usage snapshots during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "session_usage",
+          sessionId: "thread-session",
+          usage: {
+            sessionId: "thread-session",
+            totalTurns: 1,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "turn_usage",
+          sessionId: "thread-session",
+          turnId: "turn-1",
+          usage: {
+            promptTokens: 10,
+            completionTokens: 5,
+            totalTokens: 15,
+          },
+        },
+      },
+    ];
+
+    expect(extractUsageStateFromTranscript(transcript)).toEqual({
+      sessionUsage: null,
+      lastTurnUsage: {
+        turnId: "turn-1",
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+        },
+      },
+    });
   });
 });

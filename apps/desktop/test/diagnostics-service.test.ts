@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../../scripts/scratchRoots";
 import { symlinkOrJunction } from "../../../test/helpers/platform";
 import { createElectronMock } from "./helpers/mockElectron";
 

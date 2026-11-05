@@ -4,8 +4,8 @@ import { EventEmitter, once } from "node:events";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import { scratchRoots } from "../../../scripts/scratchRoots";
 import { hostPlatform } from "../../../src/platform/host";
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
 
 type Fixture = (
   input: { qualityOptions: Record<string, unknown> },

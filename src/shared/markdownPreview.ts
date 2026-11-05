@@ -37,7 +37,7 @@ export function normalizeReasoningMarkdown(text: string): string {
 }
 
 function isStandaloneMarkdownHeading(line: string): boolean {
-  return /^(?:#{1,6}\s+\S|\*\*[^*]+\*\*|__[^_]+__)$/.test(line.trim());
+  return /^(?:#{1,6}\s+\S.*|\*\*[^*]+\*\*|__[^_]+__)$/.test(line.trim());
 }
 
 export function buildMarkdownPreviewText(text: string, maxLines = 2, maxChars = 180): string {

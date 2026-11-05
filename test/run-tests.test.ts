@@ -96,7 +96,7 @@ describe("project test runner", () => {
     ]);
   });
 
-  test("runs each full-suite test file in a fresh Bun canary process on every platform", () => {
+  test("runs each full-suite test file in a fresh Bun process on every platform", () => {
     const testFiles = Array.from({ length: 3 }, (_, index) => `test/case-${index}.test.ts`);
 
     expect(

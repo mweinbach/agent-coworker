@@ -962,10 +962,7 @@ impl ActiveReplSession {
                 let cwd_str = self.cwd.to_string_lossy().into_owned();
                 let state = self
                     .rpc
-                    .request(
-                        "cowork/session/state/read",
-                        Some(json!({ "cwd": cwd_str, "threadId": self.thread_id })),
-                    )
+                    .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
                     .await?;
                 if let Some(tc) = state["events"].as_array().and_then(|evts| {
                     evts.iter()

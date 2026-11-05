@@ -464,6 +464,7 @@ describe("desktop chat message scroller", () => {
       ) as HTMLElement | null;
       if (!viewport) throw new Error("missing viewport");
       expect(viewport.scrollTop).toBe(0);
+      expect(viewport.tabIndex).toBe(0);
 
       heights.set("assistant-1", 500);
       await act(async () => {
@@ -495,10 +496,14 @@ describe("desktop chat message scroller", () => {
         '[aria-label="Jump to latest"]',
       ) as HTMLButtonElement | null;
       expect(scrollToEnd).not.toBeNull();
-      expect(scrollToEnd?.style.bottom).toBe("172px");
-      expect(scrollToEnd?.className).toContain("app-surface-opaque");
-      expect(scrollToEnd?.className).toContain("rounded-full");
-      expect(scrollToEnd?.getAttribute("data-size")).toBe("icon-sm");
+      // The wrapper owns placement because glisse animates presses via inline translate.
+      const jumpWrapper = scrollToEnd?.closest('[data-slot="chat-jump-to-latest"]') as
+        | HTMLElement
+        | null
+        | undefined;
+      expect(jumpWrapper?.style.bottom).toBe("172px");
+      expect(scrollToEnd?.getAttribute("data-slot")).toBe("glass-button");
+      expect(scrollToEnd?.getAttribute("data-icon")).toBe("only");
       await act(async () => {
         scrollToEnd?.click();
         await new Promise((resolve) => setTimeout(resolve, 10));

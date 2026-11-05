@@ -74,6 +74,10 @@
   background: var(--surface-muted-fill);
 }
 
+.app-surface-danger-subtle {
+  background: var(--surface-danger-subtle);
+}
+
 /* Variant-compatible fills: usable as hover:app-hover-wash,
    group-hover:app-fill-strong, etc. Pair with transition-colors. */
 @utility app-hover-wash {
@@ -119,6 +123,10 @@
 
 @utility app-border-strong {
   border-color: var(--border-strong);
+}
+
+@utility app-border-danger-subtle {
+  border-color: var(--border-danger-subtle);
 }
 
 .app-border-glass {

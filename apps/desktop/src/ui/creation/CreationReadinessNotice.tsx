@@ -24,6 +24,79 @@ function repairLabel(action: CreationRepairAction): string {
   }
 }
 
+function findBalancedJsonEnd(text: string, startIndex: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = startIndex; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+export function formatReadinessError(raw: string): string {
+  const trimmed = raw.trim();
+  const braceIndex = trimmed.indexOf("{");
+  if (braceIndex === -1) return raw;
+  const prefix = trimmed
+    .slice(0, braceIndex)
+    .trim()
+    .replace(/[:\-–—]+$/, "")
+    .trim();
+  const endIndex = findBalancedJsonEnd(trimmed, braceIndex);
+  if (endIndex === -1) {
+    const body = trimmed.slice(braceIndex);
+    const messageMatch = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body);
+    const clean = messageMatch?.[1]?.replace(/\\"/g, '"').trim();
+    if (!clean) return raw;
+    const cachedMatch = /\b(Using cached [^\n]+)$/.exec(body);
+    const base = prefix ? `${prefix}: ${clean}` : clean;
+    return cachedMatch?.[1] ? `${base} ${cachedMatch[1].trim()}` : base;
+  }
+  const suffix = trimmed.slice(endIndex + 1).trim();
+  const candidate = trimmed.slice(braceIndex, endIndex + 1);
+  try {
+    const parsed: unknown = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== "object") return raw;
+    const record = parsed as Record<string, unknown>;
+    const errorField = record.error;
+    const nested =
+      typeof errorField === "string"
+        ? errorField
+        : errorField &&
+            typeof errorField === "object" &&
+            typeof (errorField as Record<string, unknown>).message === "string"
+          ? ((errorField as Record<string, unknown>).message as string)
+          : typeof record.message === "string"
+            ? record.message
+            : null;
+    const clean = nested?.trim();
+    if (!clean) return raw;
+    const base = prefix ? `${prefix}: ${clean}` : clean;
+    return suffix ? `${base} ${suffix}` : base;
+  } catch {
+    return raw;
+  }
+}
+
 export function CreationReadinessNotice({
   checking,
   error,
@@ -78,23 +151,26 @@ export function CreationReadinessNotice({
     <Alert variant="destructive" role="alert" aria-live="assertive">
       <AlertTriangleIcon aria-hidden />
       <AlertTitle>Not ready to start</AlertTitle>
-      <AlertDescription>
+      <AlertDescription className="flex flex-col gap-2">
         {error ? (
           <div className="flex flex-wrap items-center gap-2">
-            <p className="min-w-0 flex-1">{error}</p>
+            <p className="min-w-0 flex-1 break-words">{formatReadinessError(error)}</p>
             <Button type="button" variant="outline" size="xs" onClick={onRetry}>
               <RotateCcwIcon data-icon="inline-start" />
               Retry check
             </Button>
           </div>
-        ) : (
+        ) : null}
+        {blockedChecks.length > 0 ? (
           <ul className="flex list-disc flex-col gap-2 pl-4">
             {blockedChecks.map((entry) => {
               const repairAction = entry.repairAction;
               return (
                 <li key={entry.id}>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="min-w-0 flex-1">{entry.message}</span>
+                    <span className="min-w-0 flex-1 break-words">
+                      {formatReadinessError(entry.message)}
+                    </span>
                     {repairAction ? (
                       <Button
                         type="button"
@@ -114,7 +190,7 @@ export function CreationReadinessNotice({
               );
             })}
           </ul>
-        )}
+        ) : null}
       </AlertDescription>
     </Alert>
   );

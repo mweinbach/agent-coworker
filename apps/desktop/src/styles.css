@@ -9,6 +9,7 @@
 @import "./styles/platform/linux.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./styles/glass.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -50,28 +51,6 @@ body,
   background: var(--surface-opaque);
   border-color: currentColor;
   box-shadow: none;
-}
-
-.new-chat-landing__starter {
-  background: var(--surface-landing-starter);
-  border-color: var(--border-subtle);
-  box-shadow: none;
-  transition:
-    background-color var(--motion-fast) var(--ease-out-strong),
-    border-color var(--motion-fast) var(--ease-out-strong),
-    transform var(--motion-fast) var(--ease-out-strong);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .new-chat-landing__starter:hover:not(:disabled) {
-    background: var(--surface-landing-starter-hover);
-    border-color: var(--border-default);
-  }
-}
-
-:root[data-high-contrast="true"] .new-chat-landing__starter {
-  background: var(--surface-opaque);
-  border-color: currentColor;
 }
 
 .new-chat-landing__starter-icon {
@@ -228,23 +207,90 @@ samp {
   font-family: var(--font-mono);
 }
 
-/* Thin overlay-style scrollbars for Chromium 146+ */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+/* Continuous corners: Apple draws rounded rectangles as superellipses, so the
+   curve eases into the straight edge instead of meeting it at a visible seam.
+   Capsules (`rounded-full`) stay circular, as they are on Apple platforms, and
+   inline mention chips stay plain so they match the textarea highlight mirror. */
+@supports (corner-shape: superellipse(1.5)) {
+  :where(
+    [class*="rounded-"]:not([class*="rounded-full"], .app-mention-chip),
+    .settings-nav-tile,
+    .app-icon-tile,
+    .app-glass-edge
+  ) {
+    corner-shape: superellipse(1.5);
+  }
 }
 
-::-webkit-scrollbar-track {
+/* Menus: macOS proportions, with the highlighted item filled in the accent. */
+:is([data-slot="dropdown-menu-content"], [data-slot="select-content"]) {
+  border-radius: 0.75rem;
+  padding: 0.3125rem;
+  box-shadow: var(--shadow-menu);
+}
+
+:is([data-slot="dropdown-menu-item"], [data-slot="select-item"]) {
+  border-radius: 0.4375rem;
+}
+
+:is([data-slot="dropdown-menu-item"], [data-slot="select-item"]):not(
+  [data-variant="destructive"]
+)[data-highlighted] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+:is([data-slot="dropdown-menu-item"], [data-slot="select-item"]):not(
+    [data-variant="destructive"]
+  )[data-highlighted]
+  :is(svg, [class*="text-"]) {
+  color: inherit;
+}
+
+[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted],
+[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted] * {
+  background-color: var(--danger);
+  color: var(--danger-foreground);
+}
+
+/* Sidebar symbols take the accent, like Finder and Mail sidebars. Increase
+   Contrast hands them back to the row's text color so they never sit on a
+   Highlight fill in the same color. */
+.app-sidebar__nav-icon {
+  color: var(--accent);
+}
+
+:root[data-high-contrast="true"] .app-sidebar__nav-icon {
+  color: inherit;
+}
+
+/* Overlay-style scrollbars, like macOS: a slim inset thumb that appears while
+   the pointer is over (or focus is inside) the scroll area. Increase Contrast
+   keeps it visible at all times. */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 3px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: transparent;
+  background-clip: padding-box;
+}
+
+:is(:hover, :focus-within)::-webkit-scrollbar-thumb,
+:root[data-high-contrast="true"] ::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 ::selection {
@@ -337,13 +383,13 @@ samp {
 }
 
 @media (forced-colors: active) {
-  .new-chat-landing__starter:is(:hover, :focus-visible) {
+  .new-chat-landing__starter-chip:is(:hover, :focus-visible) {
     forced-color-adjust: none;
     background: Highlight;
     color: HighlightText;
   }
 
-  .new-chat-landing__starter:is(:hover, :focus-visible) * {
+  .new-chat-landing__starter-chip:is(:hover, :focus-visible) * {
     background: transparent;
     color: inherit;
     opacity: 1;
@@ -445,7 +491,7 @@ samp {
     background-color: CanvasText !important;
   }
 
-  :root [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] {
+  :root [data-slot="switch"][data-state="unchecked"] .lg-thumb-face {
     /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
     background-color: Canvas !important;
   }
@@ -455,10 +501,72 @@ samp {
     background-color: Highlight !important;
   }
 
-  :root [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+  :root [data-slot="switch"][data-state="checked"] .lg-thumb-face {
     /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
     background-color: HighlightText !important;
   }
+}
+
+/* Sheets: a hairline edge and a deep, soft shadow instead of a hard outline. */
+:is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-sheet);
+}
+
+/* Command palette as Spotlight: a large search field on a rounded slab, the
+   selected row filled in the accent, and only a faint scrim behind it. */
+.app-spotlight[data-slot="dialog-content"] {
+  border-color: var(--border-subtle);
+  border-radius: 1.375rem;
+  box-shadow: var(--shadow-sheet);
+}
+
+.app-spotlight-scrim[data-slot="dialog-overlay"] {
+  background: var(--surface-spotlight-scrim);
+}
+
+.app-spotlight [data-slot="command-input-wrapper"] {
+  height: 3.5rem;
+  gap: 0.75rem;
+  padding-inline: 1.125rem;
+  border-color: var(--border-subtle);
+}
+
+.app-spotlight [data-slot="command-input"] {
+  height: 3.5rem;
+  font-size: 1.125rem;
+  letter-spacing: -0.012em;
+}
+
+.app-spotlight [data-slot="command-list"] {
+  max-height: min(26rem, 60vh);
+  padding-top: 0.375rem;
+  padding-bottom: 0.625rem;
+  scroll-padding-block: 0.5rem;
+}
+
+.app-spotlight [data-slot="command-item"] {
+  border-radius: 0.625rem;
+}
+
+.app-spotlight [data-slot="command-item"][data-selected="true"],
+.app-spotlight [data-search-overlay-item="true"][data-active="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.app-spotlight
+  :is(
+    [data-slot="command-item"][data-selected="true"],
+    [data-search-overlay-item="true"][data-active="true"]
+  )
+  :is(svg, [class*="text-"], [class*="app-text-"], kbd) {
+  color: inherit;
+}
+
+.app-spotlight [data-slot="command-item"][data-selected="true"] kbd {
+  border-color: currentColor;
+  background: transparent;
 }
 
 :root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] {
@@ -466,9 +574,7 @@ samp {
   background-color: CanvasText !important;
 }
 
-:root[data-high-contrast="true"]
-  [data-slot="switch"][data-state="unchecked"]
-  [data-slot="switch-thumb"] {
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] .lg-thumb-face {
   /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
   background-color: Canvas !important;
 }
@@ -478,9 +584,7 @@ samp {
   background-color: Highlight !important;
 }
 
-:root[data-high-contrast="true"]
-  [data-slot="switch"][data-state="checked"]
-  [data-slot="switch-thumb"] {
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] .lg-thumb-face {
   /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
   background-color: HighlightText !important;
 }
@@ -512,8 +616,8 @@ samp {
 
 [data-slot="command-input"]:focus,
 [data-slot="command-input"]:focus-visible,
-[data-sidebar-search-overlay="true"] :where(input, button):focus,
-[data-sidebar-search-overlay="true"] :where(input, button):focus-visible,
+[data-sidebar-search-overlay="true"] :where(input, [data-search-overlay-item="true"]):focus,
+[data-sidebar-search-overlay="true"] :where(input, [data-search-overlay-item="true"]):focus-visible,
 [data-sidebar-search-trigger="true"]:focus-visible {
   outline: none;
   box-shadow: none;
@@ -644,10 +748,9 @@ samp {
 .app-topbar__thread-subtitle {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 0.74rem;
-  font-weight: 560;
+  font-size: 0.78rem;
+  font-weight: 500;
   line-height: 1;
-  font-style: italic;
   color: var(--text-subtle);
 }
 
@@ -765,16 +868,6 @@ samp {
   background: var(--surface-context-panel-nested);
 }
 
-.settings-shell__back-button {
-  border: none;
-  background: transparent;
-  box-shadow: none;
-}
-
-.settings-shell__back-button:hover {
-  background: var(--surface-settings-nav-hover);
-}
-
 .settings-shell__nav-button {
   min-height: 2.125rem;
 }
@@ -789,10 +882,119 @@ samp {
   box-shadow: none;
 }
 
+/* System Settings–style icon tiles: a white glyph on an Apple system color.
+   Used by the settings navigation and by notification banners. */
+:is(.settings-nav-tile, .app-icon-tile) {
+  --settings-tile-fill: var(--settings-tile-gray);
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 0.375rem;
+  background: var(--settings-tile-sheen), var(--settings-tile-fill);
+  box-shadow: var(--settings-tile-edge);
+  color: var(--settings-tile-glyph);
+}
+
+:is(.settings-nav-tile, .app-icon-tile) > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="blue"] {
+  --settings-tile-fill: var(--settings-tile-blue);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="indigo"] {
+  --settings-tile-fill: var(--settings-tile-indigo);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="purple"] {
+  --settings-tile-fill: var(--settings-tile-purple);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="pink"] {
+  --settings-tile-fill: var(--settings-tile-pink);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="red"] {
+  --settings-tile-fill: var(--settings-tile-red);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="orange"] {
+  --settings-tile-fill: var(--settings-tile-orange);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="green"] {
+  --settings-tile-fill: var(--settings-tile-green);
+}
+
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="teal"] {
+  --settings-tile-fill: var(--settings-tile-teal);
+}
+
+.app-notification-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+}
+
+.app-notification-icon > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+@keyframes app-notification-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.app-notification-banner {
+  box-shadow: var(--shadow-banner);
+  animation: app-notification-banner-in 160ms var(--ease-out-strong, cubic-bezier(0.23, 1, 0.32, 1))
+    both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-notification-banner {
+    animation: none;
+  }
+}
+
+/* Increase Contrast and forced colors: outline glyphs in the row's own color. */
+:root[data-high-contrast="true"] :is(.settings-nav-tile, .app-icon-tile) {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+  color: inherit;
+}
+
+:root[data-high-contrast="true"] .settings-shell__nav-button--active .settings-nav-tile {
+  color: var(--text-settings-nav-active-icon);
+}
+
+/* Forced colors: a bare system-colored glyph. A settings row already carries the
+   Highlight fill, and a hairline tile outline anti-aliases unpredictably. */
+@media (forced-colors: active) {
+  /* Outranks the Increase Contrast outline, which forced colors also turns on. */
+  :is(.settings-nav-tile, .app-icon-tile),
+  :root[data-high-contrast="true"] :is(.settings-nav-tile, .app-icon-tile) {
+    background: transparent;
+    box-shadow: none;
+    color: inherit;
+  }
+}
+
 /* The chrome resets above are unlayered and would otherwise erase the global focus ring. */
 .app-topbar__thread-button:focus-visible,
 .app-topbar__plain-icon-button:focus-visible,
-.settings-shell__back-button:focus-visible,
 .settings-shell__nav-button--active:focus-visible {
   box-shadow: var(--focus-ring-shadow);
 }

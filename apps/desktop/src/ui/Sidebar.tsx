@@ -835,7 +835,7 @@ export const Sidebar = memo(function Sidebar() {
       )}
       onClick={() => void openNewChatLanding()}
     >
-      <SquarePenIcon className="h-4 w-4" />
+      <SquarePenIcon className="app-sidebar__nav-icon h-4 w-4" />
       New Chat
     </Button>
   );
@@ -866,7 +866,7 @@ export const Sidebar = memo(function Sidebar() {
         )}
         onClick={() => setSearchOpen(true)}
       >
-        <SearchIcon className="h-4 w-4" />
+        <SearchIcon className="app-sidebar__nav-icon h-4 w-4" />
         Search
       </Button>
       <SidebarSearchOverlay
@@ -894,7 +894,7 @@ export const Sidebar = memo(function Sidebar() {
           onClick={() => void handleOpenNextInteraction()}
           aria-label={`Open next chat needing input, ${interactionCount} pending`}
         >
-          <MessageCircleQuestionIcon data-icon="inline-start" />
+          <MessageCircleQuestionIcon data-icon="inline-start" className="app-sidebar__nav-icon" />
           Needs input
           <Badge variant="outline" className="ml-auto h-5 min-w-5 justify-center px-1.5 text-xs">
             {interactionCount}
@@ -913,7 +913,7 @@ export const Sidebar = memo(function Sidebar() {
           )}
           onClick={() => void openNewTask()}
         >
-          <ClipboardPlusIcon className="h-4 w-4" />
+          <ClipboardPlusIcon className="app-sidebar__nav-icon h-4 w-4" />
           New Task
         </Button>
       ) : null}
@@ -927,7 +927,7 @@ export const Sidebar = memo(function Sidebar() {
           )}
           onClick={() => void openSkills()}
         >
-          <SparklesIcon className="h-4 w-4" />
+          <SparklesIcon className="app-sidebar__nav-icon h-4 w-4" />
           Plugins
         </Button>
       </nav>

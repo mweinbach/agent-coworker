@@ -1087,13 +1087,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       if (!action || !isCurrentScope()) return;
 
       if (action === "open") {
-        if (entry.isDirectory) {
-          toggleDirectory(targetPath);
-        } else {
-          void openFile(workspaceId, targetPath, false).catch((error) =>
-            reportFileActionError("Open file", error),
-          );
-        }
+        void openFile(workspaceId, targetPath, false).catch((error) =>
+          reportFileActionError(entry.isDirectory ? "Open folder" : "Open file", error),
+        );
       } else if (action === "expand" || action === "collapse") {
         toggleDirectory(targetPath);
       } else if (action === "reveal") {
@@ -1356,7 +1352,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               type="button"
               variant="link"
               size="sm"
-              className="app-type-label h-auto min-w-0 justify-start p-0 tracking-[0.16em] uppercase app-text-muted no-underline hover:text-foreground hover:underline"
+              className="app-type-label h-auto min-w-0 justify-start p-0 font-semibold app-text-muted no-underline hover:text-foreground hover:underline"
               data-file-explorer-control="true"
               onClick={() =>
                 void openFile(workspaceId, rootPath, false).catch((error) =>
@@ -1369,7 +1365,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             </Button>
           ) : (
             <>
-              <div className="app-type-label shrink-0 tracking-[0.16em] app-text-muted uppercase">
+              <div className="app-type-label shrink-0 font-semibold app-text-muted">
                 Workspace files
               </div>
               <div className="app-text-muted text-xs shrink-0 font-light">/</div>

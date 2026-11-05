@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { CreationReadinessNotice } from "../src/ui/creation/CreationReadinessNotice";
+import {
+  CreationReadinessNotice,
+  formatReadinessError,
+} from "../src/ui/creation/CreationReadinessNotice";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("CreationReadinessNotice", () => {
@@ -87,6 +90,41 @@ describe("CreationReadinessNotice", () => {
     expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "openai" });
   });
 
+  test("keeps blocked repair actions available when a repair fails", () => {
+    const onRepair = mock(() => {});
+    act(() => {
+      root.render(
+        createElement(CreationReadinessNotice, {
+          checking: false,
+          error: "Provider settings could not be opened.",
+          result: {
+            ready: false,
+            checks: [
+              {
+                id: "provider_credentials",
+                status: "blocked",
+                message: "Connect OpenAI with an API key to start this chat.",
+                repairAction: { type: "connectProvider", provider: "openai" },
+              },
+            ],
+          },
+          repairing: false,
+          onRepair,
+          onRetry: () => {},
+        }),
+      );
+    });
+
+    expect(container.textContent).toContain("Provider settings could not be opened.");
+    expect(container.textContent).toContain("Retry check");
+    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Connect OpenAI"),
+    );
+    expect(connect).not.toBeNull();
+    act(() => connect?.click());
+    expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "openai" });
+  });
+
   test("shows startup work as polite progress instead of an assertive failure", () => {
     act(() => {
       root.render(
@@ -137,5 +175,30 @@ describe("CreationReadinessNotice", () => {
     });
 
     expect(container.textContent).toBe("");
+  });
+
+  test("extracts human-readable messages from JSON preflight errors", () => {
+    expect(
+      formatReadinessError(
+        '400 Bad Request - {"error":{"message":"Model gpt-unknown does not exist."}}',
+      ),
+    ).toBe("400 Bad Request: Model gpt-unknown does not exist.");
+    expect(
+      formatReadinessError(
+        'google model list failed: 400 Bad Request - { "error": { "code": 400, "message": "API key not valid." } } — Using cached model catalog.',
+      ),
+    ).toBe(
+      "google model list failed: 400 Bad Request: API key not valid. — Using cached model catalog.",
+    );
+    expect(
+      formatReadinessError(
+        'Google model discovery failed: 400 Bad Request - { "error": { "code": 400, "message": "API key not valid. Please pass a valid API key.", "details": [ { "domain": "googleapis.com", " Using cached model catalog from 2026-10-08T17:11:40.172Z.',
+      ),
+    ).toBe(
+      "Google model discovery failed: 400 Bad Request: API key not valid. Please pass a valid API key. Using cached model catalog from 2026-10-08T17:11:40.172Z.",
+    );
+    expect(formatReadinessError("Workspace server disconnected.")).toBe(
+      "Workspace server disconnected.",
+    );
   });
 });

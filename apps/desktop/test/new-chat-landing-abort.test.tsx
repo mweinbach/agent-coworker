@@ -108,6 +108,37 @@ describe("NewChatLanding", () => {
     expect(findStarter()).toBeUndefined();
   });
 
+  test("keeps the draft editable while attachments prepare", async () => {
+    seedLandingState(() => false);
+    useAppStore.setState({
+      composerAttachmentIngestionCountByKey: { [draftKey]: 1 },
+    });
+    act(() => root.render(createElement(NewChatLanding)));
+    await flushEffects();
+
+    const textarea = container.querySelector("textarea");
+    const submit = container.querySelector('button[type="submit"]');
+    expect(textarea?.disabled).toBe(false);
+    expect(submit?.disabled).toBe(true);
+    expect(submit?.getAttribute("aria-label")).toBe("Send message");
+    expect(submit?.getAttribute("aria-busy")).toBeNull();
+    expect(container.querySelector('[data-slot="message-composer-status"]')?.textContent).toBe(
+      "Preparing attachments…",
+    );
+
+    act(() => useAppStore.getState().setComposerText("Keep writing while files prepare"));
+    await flushEffects();
+    expect(textarea?.value).toBe("Keep writing while files prepare");
+
+    act(() => useAppStore.setState({ composerAttachmentIngestionCountByKey: {} }));
+    await flushEffects();
+    expect(submit?.disabled).toBe(false);
+    expect(textarea?.value).toBe("Keep writing while files prepare");
+    expect(container.querySelector('[data-slot="message-composer-status"]')?.textContent).not.toBe(
+      "Preparing attachments…",
+    );
+  });
+
   test("unmount after a committed chat selection does not abort creation", async () => {
     let capturedSignal: AbortSignal | undefined;
     const submitComposerDraft = mock<AppStoreState["submitComposerDraft"]>((_request, options) => {

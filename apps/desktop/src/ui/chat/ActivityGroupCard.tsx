@@ -9,7 +9,7 @@ import {
   RotateCcwIcon,
   ShieldAlertIcon,
 } from "lucide-react";
-import type { WheelEvent } from "react";
+import type { KeyboardEvent, WheelEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -260,6 +260,8 @@ const ReasoningTimelineNode = memo(function ReasoningTimelineNode({
   );
 });
 
+const ACTIVITY_DETACH_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
+
 function ActivityTimeline({
   summary,
   live,
@@ -269,7 +271,7 @@ function ActivityTimeline({
   live?: boolean;
   contentSummary: string | null;
 }) {
-  const containerRef: { current: HTMLDivElement | null } = useRef(null);
+  const containerRef: { current: HTMLElement | null } = useRef(null);
   const contentRef: { current: HTMLDivElement | null } = useRef(null);
   const [following, setFollowing] = useState(true);
   const [newActivityCount, setNewActivityCount] = useState(0);
@@ -365,7 +367,7 @@ function ActivityTimeline({
   }, [captureAnchor, setFollowTail]);
 
   const handleWheel = useCallback(
-    (event: WheelEvent<HTMLDivElement>) => {
+    (event: WheelEvent<HTMLElement>) => {
       const node = containerRef.current;
       if (!node) return;
       const canScrollUp = node.scrollTop > 0;
@@ -380,6 +382,18 @@ function ActivityTimeline({
         setFollowTail(false);
         captureAnchor();
       }
+    },
+    [captureAnchor, markUserScrollPending, setFollowTail],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (!containerRef.current || !ACTIVITY_DETACH_KEYS.has(event.key)) return;
+      // Nested keyboard scrolling owns follow state just like nested wheel scrolling.
+      event.stopPropagation();
+      markUserScrollPending();
+      setFollowTail(false);
+      captureAnchor();
     },
     [captureAnchor, markUserScrollPending, setFollowTail],
   );
@@ -436,10 +450,14 @@ function ActivityTimeline({
           </Button>
         ) : null}
       </div>
-      <div
+      <section
         ref={containerRef}
         data-slot="activity-timeline-viewport"
         className="max-h-[26rem] overflow-y-auto pr-1 scrollbar-thin scrollbar-gutter-stable [overflow-anchor:none]"
+        aria-label="Activity timeline"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users must focus this scrollable region
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
         onScroll={handleScroll}
         onWheel={handleWheel}
       >
@@ -477,7 +495,7 @@ function ActivityTimeline({
             );
           })}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

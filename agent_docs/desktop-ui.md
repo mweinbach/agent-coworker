@@ -18,7 +18,7 @@ Load this file when working in `apps/desktop/`.
 
 ## shadcn/ui
 
-- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI.
+- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI. The one exception is the Liquid Glass layer below.
 - Tailwind v4 CSS lives in `apps/desktop/src/styles.css`; imports use `@/components/ui/*`, utilities `@/lib/utils`, icons are lucide.
 - Before adding or changing a shadcn component, run `bunx --bun shadcn@latest info --json` from `apps/desktop` and use that output as the source of truth for aliases, base (`radix`), icon library, and installed components.
 - Use the CLI for registry work: `bunx --bun shadcn@latest add <component>` from `apps/desktop`. For existing components, preview first with `--dry-run` or `--diff` and do not overwrite local wrappers without checking their desktop-specific behavior and tests.
@@ -26,6 +26,27 @@ Load this file when working in `apps/desktop/`.
 - Follow shadcn composition rules: use variants before custom styling, semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`) instead of raw colors, `gap-*` instead of `space-*`, `size-*` for square icons/controls, and `cn()` for conditional classes.
 - Buttons with icons use lucide icons with `data-icon="inline-start"` or `data-icon="inline-end"`; let the `Button` component own icon sizing. For binary settings use the shared `Switch`; reserve `Checkbox` for checklist selection.
 - Keep desktop UI thin. Business logic belongs in the harness/server, exposed through JSON-RPC/WebSocket controls.
+
+## Liquid Glass (glisse)
+
+- `glisse` (pinned in `apps/desktop/package.json`) supplies Liquid Glass controls. Import only the wrappers: `@/components/ui/glass` (`GlassGroup`, `GlassButton`), `switch` (the shared `Switch` is glisse-backed), `search-field`, and `segmented-control`. Never import `glisse` directly from feature code.
+- Tokens, desktop sizing, and Reduce Transparency / Increase Contrast / forced-colors overrides live in `apps/desktop/src/styles/glass.css`. glisse's rules are unlayered, so Tailwind utilities (layered) cannot override its properties; put glisse overrides in `glass.css`, not in `className`.
+- Glass belongs on small chrome that floats over moving content (jump-to-latest pill, toolbar capsules, composer controls). Do not put glass on reading surfaces, dialogs, or popovers; selector popovers stay `app-surface-opaque`.
+- glisse regenerates an SVG refraction lens whenever an element changes size, so keep it off large or frequently resizing surfaces. Text surfaces such as the chat composer stay opaque (the quality gate requires opaque text backgrounds to prove contrast) and take the `app-glass-edge` rim light instead.
+- glisse press animations write inline `scale`/`translate`. Position glass buttons with a wrapper element, never translate utilities on the button itself.
+
+## Apple craft details
+
+- Rounded rectangles draw as superellipses (`corner-shape`, gated by `@supports` in `styles.css`) for every `rounded-*` class except `rounded-full`; capsules stay circular. Pseudo-elements that trace a rounded surface need `corner-shape: inherit` too.
+- `Button` push variants (`default`, `outline`, `secondary`, `destructive`) are capsules; `ghost` and `link` keep a soft rectangle because they double as rows and inline actions.
+- Settings navigation uses System Settings–style icon tiles: give each page a `tint` in `settingsPages.ts`; colors are the `--settings-tile-*` tokens. Increase Contrast turns tiles into outlines; forced colors shows the bare system-colored glyph.
+- Menus (`dropdown-menu-content`, `select-content`) take macOS proportions and fill the highlighted item with the accent. Destructive items highlight in `--danger`.
+- The chat composer shows a conic "working" glow (`data-agent-working`, `styles/glass.css`) while a turn runs. It stays outside or behind the opaque surface; Reduce Motion stops it, and Increase Contrast swaps it for a solid Highlight rim.
+- The command palette is Spotlight-shaped (`app-spotlight` in `styles.css`): anchored in the upper third so it grows downward instead of re-centering, with a large search field, an accent-filled selected row, and a faint scrim.
+- Dialog and alert-dialog sheets use a hairline `--border-subtle` edge and `--shadow-sheet`; do not give them heavy outlines.
+- In-app toasts are notification banners: rounded, lifted by `--shadow-banner`, with severity carried by an `app-icon-tile` (same tile styles as settings) and a neutral title.
+- Primary sidebar symbols (`app-sidebar__nav-icon`) take the accent, like Finder and Mail sidebars; Increase Contrast hands them back to the row's text color.
+- Scrollbars are overlay-style: the thumb appears while the pointer is over, or focus is inside, the scroll area (always visible in Increase Contrast).
 
 ## Electron tooling
 

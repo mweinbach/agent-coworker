@@ -459,6 +459,30 @@ describe("workspace file explorer UI", () => {
     }
   });
 
+  test.serial("opens a folder natively instead of duplicating the expand action", async () => {
+    const openWorkspaceFile = mock(async () => {});
+    rootEntries = [makeDirectoryEntry("docs", 1700000000000)];
+    showContextMenuMock.mockResolvedValueOnce("open");
+    useAppStore.setState({ openWorkspaceFile });
+    const explorer = await mountExplorerForInteraction();
+    try {
+      const folder = explorer.container.querySelector<HTMLElement>('[role="treeitem"]');
+      expect(folder?.getAttribute("aria-expanded")).toBe("false");
+
+      await act(async () => {
+        explorer.container
+          .querySelector<HTMLButtonElement>('button[aria-label="More options for docs"]')
+          ?.click();
+        await flushUi();
+      });
+
+      expect(openWorkspaceFile).toHaveBeenCalledWith(workspaceId, `${rootPath}/docs`, false);
+      expect(folder?.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      await explorer.cleanup();
+    }
+  });
+
   for (const action of ["open", "reveal", "copy"] as const) {
     test.serial(`reports a failed ${action} action from the file menu`, async () => {
       showContextMenuMock.mockResolvedValueOnce(action);

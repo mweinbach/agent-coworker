@@ -8,8 +8,5 @@
     "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
     "generate-provider-specs": "bun src/generate_provider_specs.ts",
     "run": "bun src/run_raw_agent_loops.ts"
-  },
-  "devDependencies": {
-    "bun-types": "^1.3.14"
   }
 }

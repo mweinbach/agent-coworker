@@ -1,4 +1,4 @@
-import { ArchiveIcon, ClockIcon, RotateCcwIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import { ArchiveIcon, ClockIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { countOutstandingInteractions } from "../../../app/interactionQueue";
 import { useAppStore } from "../../../app/store";
@@ -6,7 +6,7 @@ import { isStandardChatThread } from "../../../app/threadFilters";
 import { workspaceLabelForThread } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Input } from "../../../components/ui/input";
+import { SearchField } from "../../../components/ui/search-field";
 import {
   Select,
   SelectContent,
@@ -129,18 +129,16 @@ export function ArchivedChatsPage() {
             searchQuery.trim() ? ` of ${archivedThreads.length}` : ""
           })`}
         >
-          <div className="relative mb-3">
-            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
+          <div className="px-4 py-3">
+            <SearchField
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onValueChange={setSearchQuery}
               placeholder="Search archived chats"
               aria-label="Search archived chats"
-              className="h-9 pl-8 app-type-body"
             />
           </div>
           {filteredArchivedThreads.length === 0 ? (
-            <div className="px-1 py-4 text-sm text-muted-foreground">
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
               No archived chats match “{searchQuery.trim()}”.
             </div>
           ) : (

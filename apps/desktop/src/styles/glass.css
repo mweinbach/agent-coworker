@@ -1,0 +1,534 @@
+/*
+ * Liquid Glass (glisse) bridge.
+ *
+ * glisse injects its own stylesheet at the start of <head> with zero-specificity
+ * `:where()` tokens and unlayered component rules. Everything here is unlayered
+ * too, so it beats glisse on order and Tailwind utilities on cascade layer.
+ * Keep glisse-specific overrides in this file rather than in component classes:
+ * Tailwind utilities live in `@layer utilities` and lose to glisse's rules.
+ */
+
+/* Color tokens live in tokens/base.css (token-compliance keeps color formulas there). */
+
+/* ---------------------------------------------------------------------------
+ * Glass edge for opaque surfaces
+ *
+ * Text surfaces (the composer) stay opaque so the quality gate can prove text
+ * contrast; they take the glass rim light and lift without the translucency.
+ * ------------------------------------------------------------------------- */
+
+.app-glass-edge {
+  box-shadow:
+    inset 0 0.5px 0 var(--app-glass-highlight),
+    inset 0 0 0 0.5px var(--border-glass),
+    var(--app-glass-shadow);
+}
+
+/* ---------------------------------------------------------------------------
+ * Working glow
+ *
+ * While the agent runs, a slow conic light circles the composer rim with a soft
+ * halo behind it, in the spirit of Apple Intelligence. Both layers sit outside
+ * or behind the opaque surface, so text contrast is untouched.
+ * ------------------------------------------------------------------------- */
+
+@property --app-composer-glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.app-composer-surface[data-agent-working]::before,
+.app-composer-surface[data-agent-working]::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1.5px;
+  border-radius: inherit;
+  corner-shape: inherit;
+  background: conic-gradient(
+    from var(--app-composer-glow-angle),
+    var(--app-composer-glow-1),
+    var(--app-composer-glow-2),
+    var(--app-composer-glow-3),
+    var(--app-composer-glow-4),
+    var(--app-composer-glow-1)
+  );
+  pointer-events: none;
+  animation: app-composer-glow-turn 5s linear infinite;
+}
+
+/* The rim: the gradient clipped to a 1.5px ring just outside the surface. */
+.app-composer-surface[data-agent-working]::before {
+  padding: 1.5px;
+  mask:
+    var(--app-mask-fill) content-box exclude,
+    var(--app-mask-fill);
+}
+
+/* The halo: the same light, blurred and faint, behind the surface. */
+.app-composer-surface[data-agent-working]::after {
+  inset: 2px;
+  filter: blur(14px);
+  opacity: var(--app-composer-glow-halo-opacity);
+}
+
+@keyframes app-composer-glow-turn {
+  to {
+    --app-composer-glow-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-composer-surface[data-agent-working]::before,
+  .app-composer-surface[data-agent-working]::after {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * glisse components at desktop density
+ * ------------------------------------------------------------------------- */
+
+.app-glass-button.lg-button {
+  gap: 0.375rem;
+  height: 2rem;
+  padding: 0 0.875rem;
+  border-radius: 999px;
+  font-size: var(--type-body-size, 0.8125rem);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.app-glass-button.lg-button[data-size="sm"] {
+  height: 1.75rem;
+  padding: 0 0.75rem;
+  font-size: var(--type-caption-size, 0.75rem);
+}
+
+.app-glass-button.lg-button[data-size="lg"] {
+  height: 2.5rem;
+  padding: 0 1.125rem;
+}
+
+.app-glass-button.lg-button[data-icon] {
+  padding-left: 0.625rem;
+}
+
+.app-glass-button.lg-button[data-icon="only"] {
+  width: 2rem;
+  padding: 0;
+}
+
+.app-glass-button.lg-button[data-icon="only"][data-size="sm"] {
+  width: 1.75rem;
+}
+
+.app-glass-button.lg-button[data-icon="only"][data-size="lg"] {
+  width: 2.5rem;
+}
+
+.app-glass-button.lg-button > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.app-glass-button.lg-button[data-variant="filled"] {
+  color: var(--accent-foreground);
+}
+
+.app-glass-button.lg-button[data-variant="filled"]:disabled {
+  --lg-button-fill: var(--surface-muted-fill);
+  background-color: var(--lg-button-fill);
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* Composer: an in-flight send keeps the accent fill while it is disabled. */
+.app-glass-button.app-composer-send.lg-button[data-variant="filled"][aria-busy="true"]:disabled {
+  --lg-button-fill: var(--lg-fill);
+  background-color: var(--lg-button-fill);
+  color: var(--accent-foreground);
+}
+
+/* Inside the opaque composer card there is nothing behind the send button to
+   refract; when disabled on macOS, drop the specular rim and lift shadow so
+   the muted circle sits quietly instead of wearing a floating lens halo. */
+:root[data-platform="darwin"] .app-glass-button.app-composer-send.lg-button {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-platform="darwin"]:not([data-high-contrast="true"])
+  .app-glass-button.app-composer-send.lg-button[data-variant="filled"]:not(
+    [aria-busy="true"]
+  ):disabled {
+  background-image: none;
+  box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.lg-button[data-variant="filled"]:disabled:hover {
+    background-color: var(--lg-button-fill);
+  }
+}
+
+.app-glass-button.app-composer-stop.lg-button {
+  padding-right: 0.75rem;
+  color: var(--text-muted);
+  font-size: var(--type-caption-size, 0.75rem);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.app-composer-stop.lg-button:hover:not(:disabled) {
+    color: var(--danger);
+  }
+}
+
+.app-glass-button.app-composer-stop.lg-button:disabled {
+  opacity: 0.6;
+}
+
+/* New-chat landing starters: quiet caption-size capsules. */
+.app-glass-button.new-chat-landing__starter-chip.lg-button {
+  color: var(--text-secondary);
+  font-size: var(--type-caption-size, 0.75rem);
+}
+
+.app-glass-button.new-chat-landing__starter-chip.lg-button > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.new-chat-landing__starter-chip.lg-button:hover:not(:disabled) {
+    color: var(--text-primary);
+  }
+}
+
+/* Settings back button: a navigation capsule, like an iOS back button.
+   It sits on the translucent vibrancy sidebar (alpha < 1), where Chromium
+   backdrop-filter cannot sample native OS vibrancy and ghosts on transparent
+   backing stores; keep the glass fill + specular rim without CSS backdrop blur. */
+.app-glass-button.settings-shell__back-glass.lg-button {
+  color: var(--text-secondary);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.settings-shell__back-glass.lg-button:hover {
+    color: var(--text-primary);
+  }
+}
+
+/* Glass groups: a capsule of plain icon buttons sharing one glass slab, like a
+   macOS toolbar group. */
+.app-glass-group.lg-glass {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.125rem;
+  border-radius: 999px;
+}
+
+.app-glass-group .app-topbar__plain-icon-button {
+  transition:
+    background-color var(--motion-fast, 120ms) var(--ease-out-strong, ease-out),
+    color var(--motion-fast, 120ms) var(--ease-out-strong, ease-out);
+}
+
+.app-glass-group .app-topbar__plain-icon-button[data-state="open"] {
+  background: var(--lg-highlight);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-group .app-topbar__plain-icon-button:hover {
+    background: var(--lg-highlight);
+  }
+}
+
+/* The collapse control keeps its collapsed New Chat reveal wrapper mounted at
+   max-w-0; zero the flex gap so the single-button state stays a true circle. */
+.app-sidebar-collapse-control .app-glass-group.lg-glass {
+  gap: 0;
+}
+
+/* Native vibrancy/Mica lives beneath Chromium's WebContents backing store, so
+   glisse's SVG feDisplacementMap samples alpha < 1 pixels at the bezel and
+   produces a bright edge ring when composited by the OS window server. */
+:root[data-disable-css-blur="true"] :where(.app-topbar, .settings-shell__nav) .lg-glass,
+:root[data-platform="win32"] :where(.app-topbar, .settings-shell__nav) .lg-glass {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* macOS uses a compact 38px titlebar with traffic lights centered at y = 20px;
+   size topbar capsules to 28px with 24×24px hit targets so they align cleanly. */
+:root[data-platform="darwin"] .app-topbar__glass-group.lg-glass {
+  padding: 2px;
+  min-block-size: 1.75rem;
+}
+
+:root[data-platform="darwin"] .app-topbar__glass-group .app-topbar__plain-icon-button {
+  width: 1.5rem;
+  height: 1.5rem;
+  min-inline-size: 1.5rem;
+  min-block-size: 1.5rem;
+}
+
+:root[data-platform="darwin"] .app-topbar__glass-group .app-topbar__plain-icon-button > svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+
+:root[data-platform="darwin"]:not([data-reduced-transparency="true"]):not(
+    [data-high-contrast="true"]
+  )
+  :is(
+    .app-sidebar-collapse-control[data-sidebar-collapsed="false"] .app-topbar__glass-group.lg-glass,
+    .app-glass-button.settings-shell__back-glass.lg-button
+  ) {
+  --lg-glass: var(--app-topbar-sidebar-capsule-bg);
+  --lg-glass-active: var(--app-topbar-sidebar-capsule-active-bg);
+  --lg-edge: var(--app-topbar-sidebar-capsule-edge);
+  --lg-drop: transparent;
+  background-image: none;
+}
+
+:root[data-platform="darwin"]:not([data-high-contrast="true"])
+  :is(.app-topbar__toolbar--right, .app-sidebar-collapse-control[data-sidebar-collapsed="true"])
+  .app-topbar__glass-group.lg-glass {
+  --lg-glass: var(--app-topbar-header-capsule-bg);
+  --lg-edge: var(--app-topbar-header-capsule-edge);
+}
+
+/* Switch: glisse draws an iOS-sized track; its thumb travel is a fixed pixel
+   distance, so shrink the whole control with zoom instead of --lg-scale. */
+.app-glass-switch.lg-switch {
+  zoom: 0.72;
+}
+
+.app-glass-switch.lg-switch[data-size="sm"] {
+  zoom: 0.58;
+}
+
+.app-glass-switch.lg-switch:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Search field */
+/* `revert-layer` hands width back to layered Tailwind utilities; the SearchField
+   wrapper defaults to `w-full` like the shadcn Input, and callers override it. */
+.app-glass-search.lg-input {
+  width: revert-layer;
+  max-width: revert-layer;
+  height: 2rem;
+  padding: 0 0.75rem;
+  border-radius: 999px;
+  gap: 0.5rem;
+  transition: box-shadow var(--motion-fast, 120ms) var(--ease-out-strong, ease-out);
+}
+
+.app-glass-search.lg-input:has(input:focus-visible) {
+  box-shadow:
+    inset 0 0 0 0.5px var(--lg-edge),
+    var(--focus-ring-shadow);
+}
+
+.app-glass-search.lg-input input {
+  font-size: var(--type-body-size, 0.8125rem);
+}
+
+.app-glass-search.lg-input input:focus,
+.app-glass-search.lg-input input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.app-glass-search.lg-input .lg-input-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.app-glass-search.lg-input .lg-input-clear {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: -0.375rem;
+  border-radius: 999px;
+  transition:
+    background-color var(--motion-fast, 120ms) var(--ease-out-strong, ease-out),
+    color var(--motion-fast, 120ms) var(--ease-out-strong, ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-search.lg-input .lg-input-clear:hover {
+    background: var(--lg-highlight);
+    color: var(--lg-foreground);
+  }
+}
+
+.app-glass-search.lg-input .lg-input-clear:focus-visible {
+  outline: 2px solid var(--lg-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+/* Segmented control */
+.app-glass-segmented.lg-tab-bar {
+  --lg-tab-height: 1.75rem;
+  --lg-lens-grow-x: 14px;
+  --lg-lens-grow-y: 10px;
+  max-width: 100%;
+  padding: 3px;
+  border-radius: 999px;
+}
+
+.app-glass-segmented.lg-tab-bar :is(.lg-tab-lens, .lg-tab-tint) {
+  top: 3px;
+  left: 3px;
+}
+
+.app-glass-segmented.lg-tab-bar :is(.lg-tab, .lg-tab-copy) {
+  overflow: hidden;
+  padding: 0 0.375rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  gap: 0.375rem;
+  font-size: var(--type-body-size, 0.8125rem);
+  font-weight: 500;
+}
+
+/* ---------------------------------------------------------------------------
+ * Accessibility: Reduce Transparency, Increase Contrast, forced colors
+ * ------------------------------------------------------------------------- */
+
+@media (forced-colors: active) {
+  .app-composer-surface[data-agent-working]::before,
+  .app-composer-surface[data-agent-working]::after {
+    display: none;
+  }
+
+  :is(.lg-glass, .lg-menu-surface, .lg-switch-thumb, .lg-slider-thumb) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-image: none;
+    border: 1px solid CanvasText;
+  }
+
+  [data-slot="switch"] .lg-switch-fill {
+    background: Highlight;
+  }
+
+  .app-glass-search.lg-input:has(input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+
+  .app-glass-segmented.lg-tab-bar :is(.lg-tab-lens, .lg-tab-tint) {
+    display: none;
+  }
+
+  .app-glass-segmented.lg-tab-bar .lg-tab[aria-selected="true"] {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .app-glass-segmented.lg-tab-bar .lg-tab:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+}
+
+:root[data-reduced-transparency="true"]
+  :is(.lg-glass, .lg-menu-surface, .lg-switch-thumb, .lg-slider-thumb) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-image: none;
+}
+
+:root[data-reduced-transparency="true"] {
+  --lg-glass: var(--surface-opaque);
+  --lg-glass-active: var(--app-glass-opaque-active);
+  --lg-surface: var(--surface-opaque);
+  --lg-selection: var(--app-glass-opaque-active);
+  --lg-lens: var(--app-glass-opaque-active);
+}
+
+/* Without refraction, place the opaque active pill behind tab labels so drag/press
+   keeps the selected segment visible without covering the text. */
+:root[data-reduced-transparency="true"]:not([data-high-contrast="true"])
+  .app-glass-segmented.lg-tab-bar
+  .lg-tab-lens.lg-glass {
+  z-index: 0;
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+
+:root[data-high-contrast="true"] {
+  --lg-glass: Canvas;
+  --lg-glass-active: Canvas;
+  --lg-surface: Canvas;
+  --lg-edge: CanvasText;
+  --lg-surface-edge: CanvasText;
+  --lg-foreground: CanvasText;
+  --lg-muted: CanvasText;
+  --lg-track: CanvasText;
+  --lg-on: Highlight;
+  --lg-fill: Highlight;
+  --lg-ring: Highlight;
+  --app-glass-highlight: transparent;
+  --shadow-menu: 0 0 0 1px CanvasText;
+  --shadow-sheet: 0 0 0 1px CanvasText;
+  --shadow-banner: 0 0 0 1px CanvasText;
+}
+
+:root[data-high-contrast="true"] .app-glass-segmented.lg-tab-bar :is(.lg-tab-lens, .lg-tab-tint) {
+  display: none;
+}
+
+:root[data-high-contrast="true"] .app-glass-segmented.lg-tab-bar .lg-tab[aria-selected="true"] {
+  background: Highlight;
+  color: HighlightText;
+}
+
+:root[data-high-contrast="true"] .app-glass-segmented.lg-tab-bar .lg-tab:focus-visible {
+  outline-offset: 1px;
+}
+
+:root[data-high-contrast="true"]
+  :is(.lg-glass, .lg-menu-surface, .lg-switch-thumb, .lg-slider-thumb) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-image: none;
+}
+
+:root[data-high-contrast="true"] .app-composer-surface[data-agent-working]::after,
+:root[data-reduced-transparency="true"] .app-composer-surface[data-agent-working]::after {
+  display: none;
+}
+
+:root[data-high-contrast="true"] .app-composer-surface[data-agent-working]::before {
+  background: Highlight;
+  animation: none;
+}
+
+:root[data-high-contrast="true"] .app-glass-edge {
+  box-shadow: inset 0 0 0 1px CanvasText;
+}
+
+:root[data-high-contrast="true"] .lg-glass {
+  box-shadow: inset 0 0 0 1px CanvasText;
+}
+
+:root[data-high-contrast="true"] .app-glass-button.lg-button[data-variant="filled"] {
+  color: HighlightText;
+}
+
+:root[data-high-contrast="true"] .app-glass-button.lg-button[data-variant="filled"]:disabled {
+  --lg-button-fill: Canvas;
+  color: GrayText;
+  box-shadow: inset 0 0 0 1px GrayText;
+}

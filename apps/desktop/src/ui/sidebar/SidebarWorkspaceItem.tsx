@@ -238,9 +238,9 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
             variant="ghost"
           >
             {expanded ? (
-              <FolderOpenIcon className="sidebar-symbol-default h-4 w-4" />
+              <FolderOpenIcon className="sidebar-symbol-default app-sidebar__nav-icon h-4 w-4" />
             ) : (
-              <FolderIcon className="sidebar-symbol-default h-4 w-4" />
+              <FolderIcon className="sidebar-symbol-default app-sidebar__nav-icon h-4 w-4" />
             )}
             <ChevronRightIcon
               className={cn(

@@ -53,7 +53,7 @@ Use the root scripts to run both non-overlapping scopes; do not hand-maintain st
 - `bun run check:tooling` — scoped Vite+ lint/format plus strict build-config TypeScript check
 - `bun run web:build` — browser production build through the local Vite+ CLI
 - `bun run docs:check` — protocol/docs consistency against Rust's exported JSON-RPC manifest (runs in CI)
-- `bun run knip` — dead-export check
+- `bun run knip` — dead-code and unused-dependency checks. CI runs `bun run knip --include dependencies,devDependencies` after installing mobile dependencies. Desktop retains two packaging exceptions: the build script spawns `electron-builder`, and the packaged main process loads `posthog-node` through shared telemetry code.
 
 For code, dependency, build, and runtime configuration changes, the canonical pre-commit verification lane is `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `bun run test`, `bun run typecheck`, `bun run check`, and `bun run docs:check`. `bun run check` includes lint and format checks for both tooling scopes. Run this lane for each committed logical slice; results from the same unchanged slice need not be repeated just to finish the task.
 

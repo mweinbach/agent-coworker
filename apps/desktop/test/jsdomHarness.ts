@@ -7,6 +7,7 @@ type JsdomGlobalKey =
   | "CSS"
   | "HTMLElement"
   | "Element"
+  | "HTMLAnchorElement"
   | "HTMLButtonElement"
   | "HTMLFormElement"
   | "HTMLInputElement"
@@ -100,6 +101,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "CSS",
     "HTMLElement",
     "Element",
+    "HTMLAnchorElement",
     "HTMLButtonElement",
     "HTMLFormElement",
     "HTMLInputElement",
@@ -180,6 +182,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
 
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
   setGlobalProperty("Element", dom.window.Element);
+  setGlobalProperty("HTMLAnchorElement", dom.window.HTMLAnchorElement);
   setGlobalProperty("HTMLButtonElement", dom.window.HTMLButtonElement);
   setGlobalProperty("HTMLFormElement", dom.window.HTMLFormElement);
   setGlobalProperty("HTMLInputElement", dom.window.HTMLInputElement);

@@ -242,6 +242,7 @@ describe("tool access tabs", () => {
       expect(bodyText()).toContain("Install failed");
       expect(bodyText()).toContain(PLUGIN_MUTATION_ERROR);
       expect(bodyText()).toContain(SKILL_MUTATION_ERROR);
+      expect(harness.dom.window.document.querySelectorAll('[role="alert"]')).toHaveLength(2);
 
       const dismissButtons = () =>
         Array.from(harness.dom.window.document.querySelectorAll("button")).filter(
@@ -477,10 +478,21 @@ describe("tool access tabs", () => {
       expect(bodyText()).toContain("Alpha Plugin");
       expect(bodyText()).not.toContain("skill-one");
 
+      const doc = harness.dom.window.document;
+      const expectPanelLabelledBy = (label: string) => {
+        const panel = doc.querySelector('[role="tabpanel"]');
+        const tab = findTab(harness, label);
+        expect(tab.id).not.toBe("");
+        expect(tab.getAttribute("aria-controls")).toBe(panel?.id ?? null);
+        expect(panel?.getAttribute("aria-labelledby")).toBe(tab.id);
+      };
+      expectPanelLabelledBy("Plugins");
+
       await selectTab(harness, "Skills");
 
       expect(bodyText()).toContain("skill-one");
       expect(bodyText()).not.toContain("Alpha Plugin");
+      expectPanelLabelledBy("Skills");
     } finally {
       if (root) {
         await act(async () => {
@@ -843,9 +855,13 @@ describe("tool access tabs", () => {
       expect(bodyText()).not.toContain("Available from marketplaces");
       expect(bodyText()).not.toContain("Cursor Team Kit");
 
-      // Skills tab: the query narrows both installed and available cards.
+      // Skills starts unfiltered instead of inheriting the plugin-only query.
       await selectTab(harness, "Skills");
+      expect(searchInput("Search skills…").value).toBe("");
+      expect(bodyText()).toContain("skill-one");
+      expect(bodyText()).toContain("Imagegen");
 
+      // Skills tab: the query narrows both installed and available cards.
       await act(async () => {
         setInputValue(harness, searchInput("Search skills…"), "imagegen");
       });

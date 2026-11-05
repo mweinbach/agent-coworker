@@ -782,22 +782,6 @@ impl TurnInput {
             }
         }
     }
-
-    pub fn extract_text(&self) -> Result<String, String> {
-        let extracted = self.extract_payload()?;
-        if extracted.text.trim().is_empty() && !extracted.attachments.is_empty() {
-            let names: Vec<&str> = extracted
-                .attachments
-                .iter()
-                .map(|a| match a {
-                    TurnAttachmentInputPart::InlineFile { filename, .. }
-                    | TurnAttachmentInputPart::UploadedFile { filename, .. } => filename.as_str(),
-                })
-                .collect();
-            return Ok(format!("[{}]", names.join(", ")));
-        }
-        Ok(extracted.text)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

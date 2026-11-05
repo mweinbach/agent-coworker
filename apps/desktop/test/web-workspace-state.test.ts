@@ -41,7 +41,8 @@ function restoreLocalStorageMock() {
 installLocalStorageMock();
 
 const {
-  getCurrentWebWorkspaceScopeKey,
+  createWebWorkspaceScope,
+  getWebWorkspaceScopeKey,
   loadPersistedState,
   savePersistedState,
   saveServerUrl,
@@ -122,10 +123,12 @@ describe("web workspace state", () => {
   });
 
   test("uses the full server and workspace tuple as the collision-safe outbox scope", () => {
-    saveServerUrl("ws://127.0.0.1:7337/ws");
-    saveWorkspacePath("/tmp/workspace:with-delimiters");
+    const scope = createWebWorkspaceScope(
+      "ws://127.0.0.1:7337/ws",
+      "/tmp/workspace:with-delimiters",
+    );
 
-    expect(JSON.parse(getCurrentWebWorkspaceScopeKey() ?? "null")).toEqual([
+    expect(JSON.parse(getWebWorkspaceScopeKey(scope))).toEqual([
       "ws://127.0.0.1:7337/ws",
       "/tmp/workspace:with-delimiters",
     ]);

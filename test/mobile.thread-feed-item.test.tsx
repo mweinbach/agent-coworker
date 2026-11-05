@@ -3,7 +3,7 @@ import path from "node:path";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ActivityFeedItem } from "../apps/mobile/src/features/cowork/activityGroups";
-import type { ToolFeedState } from "../apps/mobile/src/features/cowork/toolFeedState";
+import type { ToolFeedState } from "../src/shared/toolFeedState";
 
 mock.restore();
 

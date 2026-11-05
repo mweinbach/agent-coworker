@@ -277,8 +277,6 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
-    env:
-      RUN_LINUX_SANDBOX_INTEGRATION: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -298,14 +296,6 @@ jobs:
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
         run: bun -e 'if (process.platform !== "linux" || process.arch !== process.env.EXPECTED_ARCH) throw new Error("Native Linux runner architecture mismatch")'
-
-      - name: Enforce filesystem and socket boundaries
-        run: >
-          bun run test --
-          test/platform/sandbox.linux-sockets.integration.test.ts
-          test/platform/sandbox.enforcement.integration.test.ts
-          test/platform/sandbox.test.ts
-          test/platform/sandbox.parity.test.ts
 
       - name: Rust sandbox, runtime, and QuickJS VM regressions
         run: cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm -p cowork-tools
@@ -376,7 +366,6 @@ jobs:
           $env:COWORK_WIN_SANDBOX_SETUP_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $setupPath).Hash.ToLowerInvariant()
           $env:COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $commandRunnerPath).Hash.ToLowerInvariant()
           $env:COWORK_WIN_SANDBOX_HOME = Join-Path $env:RUNNER_TEMP "cowork-windows-sandbox"
-          $env:RUN_WINDOWS_SANDBOX_INTEGRATION = "1"
           $setupWorkspace = Join-Path $env:RUNNER_TEMP "cowork-windows-sandbox-setup-workspace"
           New-Item -ItemType Directory -Force -Path $setupWorkspace | Out-Null
 
@@ -386,7 +375,7 @@ jobs:
           cargo test -p cowork-tools --test bash_approval_parity_tests windows_bash_uses_host_sandbox -- --exact --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.windows-scope.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
+          bun run test -- test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Windows path and desktop smoke tests
@@ -431,11 +420,9 @@ jobs:
       - name: Rust sandbox, runtime, and QuickJS VM regressions
         run: cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm
 
-      - name: macOS sandbox and runtime enforcement
+      - name: macOS runtime and desktop sidecar smoke
         run: >
           bun run test --
-          test/platform/sandbox.enforcement.integration.test.ts
-          test/platform/sandbox.test.ts
           test/cli-entrypoint.test.ts
           test/build-desktop-resources.test.ts
           apps/desktop/test/sidecar.test.ts

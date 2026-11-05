@@ -1370,6 +1370,8 @@ describe("desktop bootstrap cache", () => {
             mode: null,
             depth: 0,
             nickname: null,
+            taskType: null,
+            targetPaths: null,
             requestedModel: "gpt-5.2",
             effectiveModel: "gpt-5.2",
             requestedReasoningEffort: null,

@@ -20,6 +20,7 @@ pub mod hardening;
 pub mod legacy_import;
 pub mod memory_store;
 pub mod migrations;
+pub mod safe_open;
 pub mod session_db;
 pub mod task_review_policy;
 pub mod task_types;
@@ -69,8 +70,7 @@ pub use task_types::{
     TaskQuestionOption, TaskQuestionResolutionRecordInput, TaskQuestionStatus, TaskQuestionUrgency,
     TaskRecord, TaskRequirement, TaskRequirementKind, TaskReviewRecord, TaskReviewVerdict,
     TaskStatus, TaskSummary, TaskThread, TaskWorkItemRecordInput, UpdateTaskPlanInput,
-    ValidatedTaskCreationInput, WorkItem, WorkItemStatus, get_task_input_resume_failure,
-    parse_and_validate_task_creation_input,
+    ValidatedTaskCreationInput, WorkItem, WorkItemStatus, parse_and_validate_task_creation_input,
 };
 pub use tasks::{
     ArtifactRevisionFinalizationOutcome, BoxTaskValidator,
@@ -84,12 +84,11 @@ pub use thread_journal::{
 pub use types::{
     AgentExecutionState, ConversationImportPersistResult, CreateTaskInput,
     PersistedExternalConversationImport, PersistedExternalConversationImportMutation,
-    PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord,
-    PersistedSessionSnapshotData, PersistedSessionSummary, PersistedThreadJournalEvent,
-    PersistedThreadJournalFailure, PersistedThreadMetadata, PersistedThreadMetadataPatch,
-    SessionDbOptions, SessionKind, SessionPersistenceStatus, SessionTitleSource,
-    StartupReconciliationReport, TaskThreadInput, ThreadJournalEventInput, WorkItemInput,
-    resolve_restored_agent_execution_state,
+    PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
+    PersistedSessionSummary, PersistedThreadJournalEvent, PersistedThreadJournalFailure,
+    PersistedThreadMetadata, PersistedThreadMetadataPatch, SessionDbOptions, SessionKind,
+    SessionPersistenceStatus, SessionTitleSource, StartupReconciliationReport, TaskThreadInput,
+    ThreadJournalEventInput, WorkItemInput, resolve_restored_agent_execution_state,
 };
 pub use write_coordinator::{
     DEFAULT_ACQUIRE_TIMEOUT_MS, DEFAULT_HEARTBEAT_MS, DEFAULT_RETRY_DELAY_MS,

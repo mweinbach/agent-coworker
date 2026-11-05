@@ -8,10 +8,7 @@ description = "Embedded QuickJS + oxc TypeScript-stripping isolate runtime for c
 
 [dependencies]
 async-trait.workspace = true
-cowork-config.workspace = true
-cowork-protocol.workspace = true
 cowork-storage.workspace = true
-futures.workspace = true
 hex.workspace = true
 jsonschema.workspace = true
 oxc_allocator.workspace = true

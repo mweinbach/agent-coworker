@@ -6,11 +6,8 @@ import {
   summarizeActivityGroup,
   unresolvedToolFailureIds,
 } from "../apps/mobile/src/features/cowork/activityGroups";
-import {
-  HIDDEN_RETRY_TURN_PROMPT,
-  isHiddenRetryTurnMessage,
-} from "../apps/mobile/src/features/cowork/chatRetry";
 import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
+import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "../src/shared/chatRetry";
 
 describe("mobile chat activity groups", () => {
   test("groups consecutive reasoning and tool items into one activity block", () => {
@@ -475,8 +472,20 @@ describe("mobile chat activity groups", () => {
   });
 
   test("parseReasoningSections handles concatenated bold markers and headings with underscores", () => {
+    // Shared (desktop) normalization turns `****` boundaries into paragraph
+    // breaks and drops a fully wrapping bold pair, so the chunks render as text.
     expect(
-      parseReasoningSections("**Checking state_transitions****Verifying my_file.ts**\nLooks good."),
+      parseReasoningSections("**Checking state_transitions****Verifying my_file.ts**"),
+    ).toEqual([
+      {
+        title: "",
+        body: "Checking state_transitions\n\nVerifying my_file.ts",
+      },
+    ]);
+    expect(
+      parseReasoningSections(
+        "**Checking state_transitions**\n**Verifying my_file.ts**\nLooks good.",
+      ),
     ).toEqual([
       {
         title: "Checking state_transitions",

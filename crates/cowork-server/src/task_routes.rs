@@ -475,7 +475,7 @@ fn count_recorded_user_messages(
     };
     let stored = live.lock().messages.clone();
     let text = text.trim();
-    crate::turn_runner::parse_stored_canonical_messages(&stored)
+    crate::jsonrpc_turn::parse_stored_canonical_messages(&stored)
         .iter()
         .filter(|m| {
             m.role == cowork_inference::MessageRole::User
@@ -796,7 +796,8 @@ impl ServerRuntimeState {
             SessionTitleSource::Default
         };
 
-        let (output_directory, uploads_directory) = crate::turn_runner::config_io_dir_strings(&cfg);
+        let (output_directory, uploads_directory) =
+            crate::jsonrpc_turn::config_io_dir_strings(&cfg);
         let live = LiveSession {
             id: session_id.clone(),
             session_kind: SessionKind::Root,

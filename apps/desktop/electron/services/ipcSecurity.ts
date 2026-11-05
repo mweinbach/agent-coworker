@@ -60,7 +60,8 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
  *
  * Global "New chat" sessions run with their cwd under `~/.cowork/chats/<session>`,
  * which the server already trusts as a valid thread workspace (see
- * `requireWorkspacePath` in `src/server/jsonrpc/routes/shared.ts`). Those session
+ * `ServerRuntimeState::resolve_workspace_path` in
+ * `crates/cowork-server/src/registry.rs`). Those session
  * directories are not persisted as project workspace roots, so the Files panel
  * must allow them explicitly; otherwise `listDirectory`/`readFile` for a global
  * chat cwd throws "path is outside allowed workspace roots".

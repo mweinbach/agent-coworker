@@ -16,7 +16,6 @@ import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers";
 import type { MemoryListEntry } from "../../../app/types";
 import {
-  CHATS_WORKSPACE_TARGET_ID,
   resolveWorkspaceDisplayTargets,
   type WorkspaceDisplayTarget,
 } from "../../../app/workspaceDisplayTargets";
@@ -75,7 +74,6 @@ type DraftMemory = {
 };
 
 const HOT_MEMORY_ID = "hot";
-export const CHATS_MEMORY_TARGET_ID = CHATS_WORKSPACE_TARGET_ID;
 export const MEMORY_LOADING_STALL_MS = 1_500;
 export { parentDirectoryPath } from "../../../app/workspaceDisplayTargets";
 

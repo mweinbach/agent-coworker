@@ -42,6 +42,8 @@ __pycache__/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .codex/config.toml
+.cursor/hooks/state/
+.cursor/plans/
 /native
 # heroui-agents-md
 .heroui-docs/

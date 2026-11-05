@@ -22,11 +22,9 @@ bun install                     # installs root + apps/desktop deps
 bun install --cwd apps/mobile --frozen-lockfile # required by the full test suite
 
 # Run in different modes:
-bun run start                   # Desktop app (default) -- starts server automatically
-bun run cli                     # CLI REPL -- connects to server via WebSocket
+bun run start                   # Desktop app in dev mode -- starts server automatically
+bun run cli                     # Rust CLI REPL via cargo
 bun run serve                   # Standalone WebSocket server
-bun run desktop:dev             # Desktop development mode
-bun run dev                     # Run the Rust CLI REPL via cargo
 ```
 
 ## Architecture Overview
@@ -74,7 +72,7 @@ crates/
   cowork-cli/           # CLI REPL binary
 src/
   types.ts              # Shared TypeScript types
-  client/               # WebSocket JSON-RPC client (AgentSocket)
+  client/               # WebSocket JSON-RPC client (JsonRpcSocket)
   models/               # Static client model registry
   platform/             # Desktop host/path/sandbox helpers
   providers/            # Static client provider catalog
@@ -87,11 +85,11 @@ apps/
   desktop/              # Electron desktop app
   mobile/               # Optional Expo mobile app (React Native)
 packages/
-  harness/              # Developer harness and docs generation
+  harness/              # Developer harness, docs checks and provider spec generation
 config/
   defaults.json         # Built-in default configuration
   mcp-servers.json      # System-level MCP server definitions
-skills/                 # Built-in skills (doc, pdf, slides, spreadsheet, frontend-skill, git-workflow)
+skills/                 # Built-in skills (memories, task, workflow)
 prompts/                # System prompts, sub-agent prompts, command templates
 scripts/                # Runtime packaging and release build helpers
 docs/                   # Architecture docs, protocol spec, harness docs
@@ -139,7 +137,7 @@ Follow these four steps whenever you add a new JSON-RPC request, result, or noti
 1. **Add the type/schema** to `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts` (and `SessionEvent` in `src/shared/protocol.ts` when consumed by clients).
 2. **Add validation** in `crates/cowork-protocol/` and `crates/cowork-server/src/jsonrpc.rs` when the message is client-originated.
 3. **Add the handler** in `crates/cowork-server/src/` (request routing) and/or `crates/cowork-harness/` (session logic).
-4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow, then regenerate and verify schemas with `bun run docs:generate-jsonrpc` and `bun run docs:check`.
+4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow, then verify with `bun run docs:check`.
 
 The protocol doc is the source of truth for anyone building an alternative UI.
 

@@ -36,7 +36,6 @@ cowork-mcp = { path = "crates/cowork-mcp" }
 cowork-tools = { path = "crates/cowork-tools" }
 cowork-harness = { path = "crates/cowork-harness" }
 cowork-server = { path = "crates/cowork-server" }
-cowork-cli = { path = "crates/cowork-cli" }
 
 # Core async, HTTP/WS, TLS & serialization
 anyhow = "1"
@@ -52,7 +51,6 @@ eventsource-stream = "0.2"
 futures = "0.3"
 futures-util = "0.3"
 hex = "0.4"
-hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
 jsonschema = { version = "0.60", default-features = false }
 parking_lot = "0.12"
@@ -74,14 +72,10 @@ thiserror = "2"
 time = "0.3"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
-tokio-stream = "0.1"
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 tokio-util = "0.7"
-tower = "0.5"
-tower-http = "0.6"
 tracing = "0.1"
-tracing-appender = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "std"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 x509-parser = "0.18"
@@ -115,7 +109,6 @@ grep-searcher = "0.1"
 htmd = "0.5"
 ignore = "0.4"
 libc = "0.2"
-nix = "0.31"
 notify = "8"
 oxc_allocator = "0.156"
 oxc_ast = "0.156"

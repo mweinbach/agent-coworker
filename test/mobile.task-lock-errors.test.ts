@@ -8,7 +8,7 @@ import {
 import {
   applyProjectedCompletion,
   applyProjectedStart,
-  createMobileFeedState,
+  type MobileFeedState,
 } from "../apps/mobile/src/features/cowork/snapshotReducer";
 
 const terminalLockData = {
@@ -111,7 +111,7 @@ describe("mobile task lock error protocol", () => {
 
   test("live projection reducer keeps task_locked data and ordinary errors remain data-less", () => {
     const now = "2026-06-21T09:00:00.000Z";
-    let state = createMobileFeedState();
+    let state: MobileFeedState = { feed: [], lastEventSeq: 0 };
     state = applyProjectedStart(state, projectedError("error-terminal", terminalLockData), now, 1);
     state = applyProjectedCompletion(
       state,

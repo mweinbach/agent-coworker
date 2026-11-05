@@ -152,6 +152,4 @@ Canvas collaboration prompts likewise remain populated while sending and clear o
 
 ## Related
 
-- UI backlog: `docs/ui-quality-audit-2026-07.md`
-- Settings audit: `docs/desktop-settings-ui-ux-audit-2026-03-13.md`
 - WebSocket/protocol (not visual): `docs/websocket-protocol.md`

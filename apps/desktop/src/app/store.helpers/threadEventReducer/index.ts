@@ -12,7 +12,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   const ctx = createThreadEventReducerContext(deps);
   const workspace = createWorkspaceStateHelpers(ctx);
 
-  const feed = createFeedProjectionModule(ctx, workspace);
+  const feed = createFeedProjectionModule(ctx);
   const messaging = createMessagingModule(ctx, workspace, feed);
 
   const forwardRefs = {
@@ -48,7 +48,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     },
   );
 
-  const handlers = createHandlersModule(ctx, workspace, feed, messaging);
+  const handlers = createHandlersModule(ctx, feed, messaging);
   forwardRefs.handleThreadEvent = handlers.handleThreadEvent;
 
   const socket = createSocketModule(ctx, workspace, jsonRpc, feed, messaging, handlers);
@@ -59,20 +59,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     disposeAllThreadEventState: disposeAllThreadEventStateInternal,
     reactivateWorkspaceThreadEventState,
     isWorkspaceDisposed,
-    resetLiveModelStreamRuntime,
   } = workspace;
 
-  const resetAndDiscardThreadStream = (threadId: string) => {
-    feed.discardPendingContentForThread(threadId);
-    resetLiveModelStreamRuntime(threadId);
-  };
-
   function disposeWorkspaceThreadEventState(workspaceId: string, getOverride?: StoreGet) {
-    disposeWorkspaceThreadEventStateInternal(workspaceId, getOverride, resetAndDiscardThreadStream);
+    disposeWorkspaceThreadEventStateInternal(
+      workspaceId,
+      getOverride,
+      feed.discardPendingContentForThread,
+    );
   }
 
   function disposeAllThreadEventState() {
-    disposeAllThreadEventStateInternal(resetAndDiscardThreadStream);
+    disposeAllThreadEventStateInternal(feed.discardPendingContentForThread);
     feed.discardAllPendingContent();
   }
 

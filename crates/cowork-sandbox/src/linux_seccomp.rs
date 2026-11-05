@@ -418,15 +418,3 @@ pub fn apply_linux_seccomp_filter(deny_network: bool) -> std::io::Result<()> {
     }
     Ok(())
 }
-
-/// Registers a Linux `pre_exec` hook on `cmd` that installs the native Rust seccomp-BPF filter
-/// in the forked child immediately before `execve`.
-#[cfg(target_os = "linux")]
-pub fn install_linux_seccomp_pre_exec(cmd: &mut std::process::Command, deny_network: bool) {
-    use std::os::unix::process::CommandExt;
-    // SAFETY: `apply_linux_seccomp_filter` uses only stack memory and raw `prctl` syscalls
-    // (async-signal-safe between `fork` and `exec`).
-    unsafe {
-        cmd.pre_exec(move || apply_linux_seccomp_filter(deny_network));
-    }
-}

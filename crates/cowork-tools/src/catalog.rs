@@ -31,54 +31,13 @@ use crate::thread_tools::ThreadManagementTool;
 use crate::web::{WebFetchTool, WebSearchTool};
 use crate::workflow::WorkflowTool;
 
+use cowork_config::web_search_options::{
+    codex_web_search_backend, google_native_web_search_enabled,
+};
+
 pub const MAX_PARALLEL_READ_BATCH: usize = 4;
 
 pub type ToolMap = BTreeMap<String, Arc<dyn BuiltinTool>>;
-
-/// Legacy `pickBoolean`: a boolean, or a string spelling one.
-fn pick_boolean(value: Option<&Value>) -> Option<bool> {
-    match value? {
-        Value::Bool(b) => Some(*b),
-        Value::String(raw) => match raw.trim().to_lowercase().as_str() {
-            "1" | "true" | "yes" | "y" | "on" => Some(true),
-            "0" | "false" | "no" | "n" | "off" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Legacy `getCodexWebSearchBackendFromProviderOptions(options, "native")`: the
-/// `codex-cli.webSearchBackend` value when it is exactly `native`, `exa`, or `parallel`.
-fn codex_web_search_backend(options: &Map<String, Value>) -> &'static str {
-    options
-        .get("codex-cli")
-        .and_then(Value::as_object)
-        .and_then(|codex| codex.get("webSearchBackend"))
-        .and_then(Value::as_str)
-        .and_then(|raw| {
-            ["native", "exa", "parallel"]
-                .into_iter()
-                .find(|b| *b == raw)
-        })
-        .unwrap_or("native")
-}
-
-/// Legacy `getGoogleNativeWebSearchFromProviderOptions` (mirrors
-/// `cowork_providers::web_search_options::google_native_web_search_enabled`, which the Google
-/// transport uses to attach native `google_search`): an explicit `google.nativeWebSearch` wins,
-/// otherwise native search is on while the Codex backend is `native` (the default).
-fn google_native_web_search_enabled(options: &Map<String, Value>) -> bool {
-    if let Some(explicit) = pick_boolean(
-        options
-            .get("google")
-            .and_then(Value::as_object)
-            .and_then(|google| google.get("nativeWebSearch")),
-    ) {
-        return explicit;
-    }
-    codex_web_search_backend(options) == "native"
-}
 
 /// TS `createTools`' `includeLegacyWebSearch` (`src/tools/index.ts`): the custom Exa/Parallel
 /// `webSearch` tool is omitted when Gemini's native Google Search is active, and for
@@ -86,8 +45,10 @@ fn google_native_web_search_enabled(options: &Map<String, Value>) -> bool {
 /// native backend (the default) already searches.
 pub fn includes_custom_web_search(ctx: &ToolExecutionContext) -> bool {
     match ctx.provider {
-        ProviderName::Google => !google_native_web_search_enabled(&ctx.provider_options),
-        ProviderName::CodexCli => codex_web_search_backend(&ctx.provider_options) != "native",
+        ProviderName::Google => !google_native_web_search_enabled(Some(&ctx.provider_options)),
+        ProviderName::CodexCli => {
+            codex_web_search_backend(Some(&ctx.provider_options)).unwrap_or("native") != "native"
+        }
         _ => true,
     }
 }
@@ -431,10 +392,6 @@ impl DeferredToolCatalog {
                 parameters: Self::tool_call_schema(),
             },
         ]
-    }
-
-    pub fn active_tool_definitions(&self, activated: &BTreeSet<String>) -> Vec<ToolDefinition> {
-        self.active_tool_definitions_with_code_mode(activated, false)
     }
 
     pub fn active_tool_definitions_with_code_mode(

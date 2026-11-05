@@ -7,19 +7,15 @@ publish = false
 description = "Built-in agent tools (bash, read/write/edit, in-process glob/grep, SSRF-safe webFetch/webSearch, memory, threadManagement)."
 
 [dependencies]
-anyhow.workspace = true
 async-trait.workspace = true
-bytes.workspace = true
 chrono.workspace = true
 cowork-config.workspace = true
 cowork-env.workspace = true
 cowork-inference.workspace = true
 cowork-js-vm.workspace = true
 cowork-mcp.workspace = true
-cowork-protocol.workspace = true
 cowork-sandbox.workspace = true
 cowork-storage.workspace = true
-dashmap.workspace = true
 data-encoding.workspace = true
 futures.workspace = true
 grep-regex.workspace = true
@@ -43,7 +39,6 @@ tokio.workspace = true
 tokio-util.workspace = true
 url.workspace = true
 uuid.workspace = true
-walkdir.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

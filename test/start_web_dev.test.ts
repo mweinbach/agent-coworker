@@ -14,9 +14,9 @@ import {
   normalizeProcessExitCode,
   type WebDevDependencies,
 } from "../apps/desktop/scripts/start_web_dev";
+import { scratchRoots } from "../scripts/scratchRoots";
 import { buildWorkspaceBinary, resolveWorkspaceServerBinary } from "../scripts/workspaceRustBinary";
 import { hostArch, hostPlatform } from "../src/platform/host";
-import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const encoder = new TextEncoder();
 const fixtureRoots: string[] = [];
@@ -204,7 +204,6 @@ describe("web dev process lifecycle", () => {
     expect(startedServers).toHaveLength(1);
     expect(startedServers[0].cmd[0]).toBe(fixture.stagedBinary);
     expect(startedServers[0].cmd[0]).not.toBe(process.execPath);
-    expect(startedServers[0].cmd).not.toContain("src/server/index.ts");
     expect(startedServers[0].cmd.slice(1)).toEqual(["--dir", "/private/tmp/web-dev-ws", "--json"]);
     expect(startedServers[0].env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
     expect(startedServers[0].env.COWORK_REPO_ROOT).toBe(fixture.root);

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { scratchRoots } from "../src/platform/sandbox";
+import { scratchRoots } from "../scripts/scratchRoots";
 
 test("renders mobile hub headers and grouped lists in an isolated component harness", async () => {
   const repoRoot = path.resolve(import.meta.dir, "..");

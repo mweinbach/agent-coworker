@@ -29,7 +29,6 @@
       "!!.agents",
       "!!.claude",
       "!!skills",
-      "!!docs/generated",
       "!!src/generated",
       "!!crates/cowork-protocol/src/ws_jsonrpc_schema.json",
       "!!crates/cowork-harness/tests/fixtures/conversation_import_parity"
@@ -97,15 +96,6 @@
       }
     },
     {
-      "includes": ["docs/generated/**"],
-      "formatter": {
-        "enabled": false
-      },
-      "linter": {
-        "enabled": false
-      }
-    },
-    {
       "includes": ["test/**", "apps/desktop/test/**", "scripts/**"],
       "linter": {
         "rules": {
@@ -149,10 +139,7 @@
       }
     },
     {
-      "includes": [
-        "apps/desktop/src/components/ui/**",
-        "apps/desktop/src/components/ai-elements/**"
-      ],
+      "includes": ["apps/desktop/src/components/ui/**"],
       "linter": {
         "enabled": false
       }
@@ -262,7 +249,7 @@
       }
     },
     {
-      "includes": ["scripts/**", "examples/**"],
+      "includes": ["scripts/**"],
       "linter": {
         "rules": {
           "suspicious": {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { scratchRoots } from "../src/platform/sandbox/policy";
+import { scratchRoots } from "../scripts/scratchRoots";
 import toolingConfig from "../vite.config";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
@@ -191,12 +191,7 @@ describe("main CI workflow", () => {
     expect(rootPackage.scripts?.["harness:run"]).toBe(
       "bun packages/harness/src/run_raw_agent_loops.ts",
     );
-    expect(harnessPackage.scripts).toEqual({
-      "check-docs": "bun src/check_docs.ts",
-      "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
-      "generate-provider-specs": "bun src/generate_provider_specs.ts",
-      run: "bun src/run_raw_agent_loops.ts",
-    });
+    expect(harnessPackage.scripts).toBeUndefined();
     expect(harnessPackage.devDependencies.typescript).toBeUndefined();
   });
 
@@ -222,11 +217,9 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER_SHA256");
     expect(workflow).toContain("COWORK_WIN_SANDBOX_SETUP_SHA256");
     expect(workflow).toContain("COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256");
-    expect(workflow).toContain('RUN_WINDOWS_SANDBOX_INTEGRATION = "1"');
     expect(workflow).toContain("$helperPath setup --sandbox-home");
     expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER=%CD%");
-    expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
-    expect(workflow).toContain("test/platform/sandbox.test.ts");
+    expect(workflow).not.toContain("test/platform/sandbox");
     expect(workflow).toContain("test/build-desktop-resources.test.ts");
     expect(workflow).toContain("- name: Windows path and desktop smoke tests");
     expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
@@ -241,9 +234,8 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("macos-smoke:");
     expect(workflow).toContain("name: macOS ARM64 smoke");
     expect(workflow).toContain("runs-on: macos-15");
-    expect(workflow).toContain("- name: macOS sandbox and runtime enforcement");
+    expect(workflow).toContain("- name: macOS runtime and desktop sidecar smoke");
     expect(workflow).toContain("cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm");
-    expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
     expect(workflow).toContain("test/cli-entrypoint.test.ts");
     expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
   });

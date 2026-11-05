@@ -1,10 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import { scratchRoots } from "../scripts/scratchRoots";
 import { symlink } from "../src/platform/fs";
 import { canonicalizeSync } from "../src/platform/paths";
-import { scratchRoots } from "../src/platform/sandbox";
 import {
   fileChangeVersionFromStat,
   openAuthorizedFile,

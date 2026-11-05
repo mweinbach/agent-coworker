@@ -5,18 +5,18 @@ import os from "node:os";
 import path from "node:path";
 
 import { __internal } from "../scripts/build_desktop_resources";
+import { scratchRoots } from "../scripts/scratchRoots";
 import {
   computeSourceFingerprint,
   WIN_SANDBOX_PREBUILT_LOCK_NAME,
   type WinSandboxPrebuiltLock,
 } from "../scripts/winSandboxPrebuilt";
-import { scratchRoots } from "../src/platform/sandbox/policy";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
-} from "../src/platform/sandbox/windows";
+} from "../src/platform/windowsSandboxHelper";
 import { buildStoredZipBuffer } from "./helpers/zipFixture";
 
 describe("desktop resource build helpers", () => {
@@ -55,12 +55,10 @@ describe("desktop resource build helpers", () => {
     const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
 
     try {
-      await fs.mkdir(path.join(binariesDir, "server"), { recursive: true });
+      await fs.mkdir(binariesDir, { recursive: true });
       await fs.writeFile(path.join(binariesDir, "cowork-server-manifest.json"), "{}");
       await fs.writeFile(path.join(binariesDir, "cowork-server-x86_64-pc-windows-msvc.exe"), "");
       await fs.writeFile(path.join(binariesDir, "cowork-server-aarch64-apple-darwin"), "");
-      await fs.writeFile(path.join(binariesDir, "bun.exe"), "");
-      await fs.writeFile(path.join(binariesDir, "server", "index.js"), "");
       await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "sandbox");
       await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_SETUP_NAME), "setup");
       await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME), "runner");
@@ -77,8 +75,6 @@ describe("desktop resource build helpers", () => {
       await expect(
         fs.stat(path.join(binariesDir, "cowork-server-aarch64-apple-darwin")),
       ).rejects.toThrow();
-      await expect(fs.stat(path.join(binariesDir, "bun.exe"))).rejects.toThrow();
-      await expect(fs.stat(path.join(binariesDir, "server"))).rejects.toThrow();
       await expect(
         fs.readFile(path.join(binariesDir, WINDOWS_SANDBOX_SETUP_NAME), "utf8"),
       ).resolves.toBe("setup");
@@ -99,29 +95,6 @@ describe("desktop resource build helpers", () => {
     ) as { scripts?: { dev?: string } };
 
     expect(desktopPackage.scripts?.dev).not.toContain("--force-windows-sandbox-build");
-  });
-
-  test("removes stale native title addons the Rust sidecar never loads", async () => {
-    const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-desktop-resources-"));
-    const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
-
-    try {
-      await fs.mkdir(path.join(binariesDir, "tsfm-sdk", "native"), { recursive: true });
-      await fs.mkdir(path.join(binariesDir, "windows-ai-electron"), { recursive: true });
-      await fs.writeFile(path.join(binariesDir, "tsfm-sdk", "native", "lib.dylib"), "");
-      await fs.writeFile(path.join(binariesDir, "windows-ai-electron", "index.js"), "");
-      await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "sandbox");
-
-      await __internal.removeLegacyNativeTitleAddons(binariesDir);
-
-      await expect(fs.stat(path.join(binariesDir, "tsfm-sdk"))).rejects.toThrow();
-      await expect(fs.stat(path.join(binariesDir, "windows-ai-electron"))).rejects.toThrow();
-      await expect(
-        fs.readFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "utf8"),
-      ).resolves.toBe("sandbox");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
   });
 
   test("builds and copies the Windows sandbox helper for Windows targets", async () => {

@@ -1,9 +1,8 @@
 import { appendFile, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-
-import { scratchRoots } from "../src/platform/sandbox/policy";
 import { scanComplexity } from "./complexity";
+import { scratchRoots } from "./scratchRoots";
 
 type Report = Awaited<ReturnType<typeof scanComplexity>>;
 type Hunk = { oldStart: number; oldCount: number; newStart: number; newCount: number };

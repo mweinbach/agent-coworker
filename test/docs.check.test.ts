@@ -14,17 +14,13 @@ import {
   resolveDocReferencePath,
   validateReferencedPaths,
 } from "../packages/harness/src/check_docs";
-import {
-  loadRustProtocolSchemaManifest,
-  loadRustWebSocketJsonRpcSchemaJson,
-} from "../packages/harness/src/protocolManifest";
+import { loadRustProtocolSchemaManifest } from "../packages/harness/src/protocolManifest";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/shared/protocol";
 
 // Export the Rust protocol manifest at suite load, outside per-test timeouts:
 // on a cold target dir `cargo run` compiles cowork-protocol first. Later calls
 // read the loader's in-process cache.
 loadRustProtocolSchemaManifest();
-loadRustWebSocketJsonRpcSchemaJson();
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -211,13 +207,8 @@ describe("docs checker parity", () => {
     }
   });
 
-  test("Rust protocol schema manifest matches generated websocket-jsonrpc.schema.json", async () => {
+  test("Rust protocol schema manifest matches the TS protocol version and method counts", () => {
     const manifest = loadRustProtocolSchemaManifest();
-    const schemaJson = loadRustWebSocketJsonRpcSchemaJson();
-    const onDisk = await fs.readFile(
-      path.join(repoRoot(), "docs", "generated", "websocket-jsonrpc.schema.json"),
-      "utf-8",
-    );
 
     expect(manifest.websocketProtocolVersion).toBe(WEBSOCKET_PROTOCOL_VERSION);
     expect(manifest.namespaces).toHaveLength(21);
@@ -227,7 +218,6 @@ describe("docs checker parity", () => {
       "item/tool/requestUserInput",
       "item/commandExecution/requestApproval",
     ]);
-    expect(onDisk).toBe(schemaJson);
   });
 
   test("extracts and resolves agent_docs/ repo paths in markdown and inline spans", () => {
@@ -261,16 +251,7 @@ describe("docs checker parity", () => {
   test("curated path checks cover all active agent_docs, harness docs, docs guides, and desktop README", async () => {
     const cwd = repoRoot();
     const curatedSet = new Set<string>(CURATED_DOCS_WITH_PATH_CHECKS);
-    const historicalDocs = new Set<string>([
-      "docs/audit-code-bloat.md",
-      "docs/bun-native-migration.md",
-      "docs/desktop-settings-ui-ux-audit-2026-03-13.md",
-      "docs/engineering-overhaul.md",
-      "docs/platform-abstraction-plan.md",
-      "docs/simplification-plan.md",
-      "docs/ui-foundation-plan.md",
-      "docs/ui-quality-audit-2026-07.md",
-    ]);
+    const historicalDocs = new Set<string>(["docs/ui-foundation-plan.md"]);
 
     const listMarkdownFiles = async (relDir: string): Promise<string[]> => {
       const entries = await fs.readdir(path.join(cwd, relDir), { withFileTypes: true });
@@ -308,12 +289,6 @@ describe("docs checker parity", () => {
     for (const historicalFile of historicalDocs) {
       expect(curatedSet.has(historicalFile)).toBe(false);
     }
-
-    const bunMigrationDoc = await fs.readFile(
-      path.join(cwd, "docs", "bun-native-migration.md"),
-      "utf-8",
-    );
-    expect(bunMigrationDoc).toContain("Historical");
   });
 
   test("validateReferencedPaths passes on every curated doc and catches missing paths", async () => {

@@ -4,9 +4,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-
+import { scratchRoots } from "../scripts/scratchRoots";
 import { hostPlatform } from "../src/platform/host";
-import { scratchRoots } from "../src/platform/sandbox/policy";
 import { jsonRpcRuntimeResultSchemas } from "../src/shared/jsonrpcControlSchemas";
 import { resolveRustBinaryPath } from "./helpers/rustServerHarness";
 

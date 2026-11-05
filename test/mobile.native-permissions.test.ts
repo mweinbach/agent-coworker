@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-
+import { scratchRoots } from "../scripts/scratchRoots";
 import { hostPlatform } from "../src/platform/host";
-import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const require = createRequire(import.meta.url);
 const androidManifestPath = new URL(

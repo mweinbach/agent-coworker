@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { scratchRoots } from "../scripts/scratchRoots";
 import {
   computeSourceFingerprint,
   parsePrebuiltLock,
@@ -10,7 +10,6 @@ import {
   WIN_SANDBOX_PREBUILT_LOCK_NAME,
   type WinSandboxPrebuiltLock,
 } from "../scripts/winSandboxPrebuilt";
-import { scratchRoots } from "../src/platform/sandbox/policy";
 
 async function writeCrate(crateDir: string, lineEnding: "\n" | "\r\n"): Promise<void> {
   const body = ["[package]", 'name = "test"', ""].join(lineEnding);

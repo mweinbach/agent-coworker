@@ -31,8 +31,14 @@ const requiredFlags = [
   "--unshare-net",
 ];
 
-/** Replace ONLY the mount view of the real SandboxManager bwrap command.
- * Preserve its namespace/session controls and entire Python/seccomp launcher.
+function within(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith("/") ? parent : `${parent}/`);
+}
+
+/** Replace ONLY the mount view of the real Rust sandbox bwrap command
+ * (`cowork-server __sandbox-exec --print-command`).
+ * Preserve its namespace/session controls and entire seccomp re-exec launcher
+ * (`<cowork-server> __sandbox-exec --linux-seccomp --deny-network -- <file> ...`).
  * Reject unknown wrapper options rather than accidentally restoring host reads.
  */
 export function positiveLinuxReadView(
@@ -47,6 +53,10 @@ export function positiveLinuxReadView(
   const separator = original.indexOf("--");
   if (separator < 0) throw new Error("Missing bubblewrap inner command");
   const control: string[] = [];
+  // Credential read-deny masks (`--tmpfs D --remount-ro D`, `--ro-bind /dev/null F`) and
+  // protected-metadata re-binds (`--ro-bind P P`, e.g. <root>/.git). They are re-applied below
+  // only when they fall inside a root this positive view mounts.
+  const overlays: string[][] = [];
   for (let i = 0; i < separator; ) {
     const flag = original[i];
     if (requiredFlags.includes(flag)) {
@@ -54,7 +64,21 @@ export function positiveLinuxReadView(
       i++;
     } else if (["--ro-bind", "--bind"].includes(flag)) {
       if (i + 2 >= separator) throw new Error("Truncated bubblewrap mount");
+      if (
+        flag === "--ro-bind" &&
+        (original[i + 1] === "/dev/null" || original[i + 1] === original[i + 2])
+      ) {
+        overlays.push(original.slice(i, i + 3));
+      }
       i += 3; // Discard ALL original host mounts, including --ro-bind / /.
+    } else if (flag === "--tmpfs") {
+      if (i + 1 >= separator) throw new Error("Truncated bubblewrap option");
+      const target = original[i + 1];
+      if (original[i + 2] !== "--remount-ro" || original[i + 3] !== target) {
+        throw new Error("Unexpected bubblewrap tmpfs mount");
+      }
+      overlays.push(original.slice(i, i + 4));
+      i += 4;
     } else if (["--dev", "--proc", "--chdir"].includes(flag)) {
       if (i + 1 >= separator) throw new Error("Truncated bubblewrap option");
       i += 2;
@@ -66,11 +90,14 @@ export function positiveLinuxReadView(
     throw new Error("Missing required namespace/session enforcement");
   }
   const inner = original.slice(separator);
+  const launcher = inner[1];
   if (
-    inner[1] !== "/usr/bin/python3" ||
-    inner[2] !== "-I" ||
-    inner[3] !== "-S" ||
-    inner[4] !== "-c"
+    !launcher?.startsWith("/") ||
+    inner[2] !== "__sandbox-exec" ||
+    inner[3] !== "--linux-seccomp" ||
+    inner[4] !== "--deny-network" ||
+    inner[5] !== "--" ||
+    !inner[6]
   ) {
     throw new Error("Unexpected sandbox seccomp launcher");
   }
@@ -84,7 +111,8 @@ export function positiveLinuxReadView(
       mounts.push("--ro-bind", filesystem.realpath(destination), destination);
     }
   }
-  for (const file of new Set(opts.executables)) {
+  // The seccomp launcher re-execs the sandbox binary itself, so it must be visible inside.
+  for (const file of new Set([launcher, ...opts.executables])) {
     if (!filesystem.isFile(file) || filesystem.realpath(file) !== file) {
       throw new Error(`Executable must be a resolved regular file: ${file}`);
     }
@@ -99,18 +127,12 @@ export function positiveLinuxReadView(
     }
     mounts.push("--ro-bind", opts.canaryDir, opts.canaryDir);
   }
-  mounts.push(
-    "--bind",
-    opts.root,
-    opts.root,
-    "--proc",
-    "/proc",
-    "--dev",
-    "/dev",
-    "--remount-ro",
-    "/",
-    "--chdir",
-    opts.root,
-  );
+  mounts.push("--bind", opts.root, opts.root);
+  const mounted = [opts.root, opts.assets, ...(opts.canaryDir ? [opts.canaryDir] : [])];
+  for (const overlay of overlays) {
+    const target = overlay[overlay.length - 1];
+    if (target !== "/" && mounted.some((root) => within(root, target))) mounts.push(...overlay);
+  }
+  mounts.push("--proc", "/proc", "--dev", "/dev", "--remount-ro", "/", "--chdir", opts.root);
   return [...control, ...mounts, ...inner];
 }

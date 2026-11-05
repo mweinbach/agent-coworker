@@ -131,7 +131,7 @@ export function buildMixedRuns(platform: NodeJS.Platform = hostPlatform()): RunS
             `Use bash to run: ${shell.printWorkingDirectory()}`,
             `Use grep to search for pattern "approve_command" in path "${repoDir}/crates/cowork-tools/src" (caseSensitive=true).`,
             `Use read to read "${repoDir}/crates/cowork-tools/src/bash.rs" (limit=200, offset=1).`,
-            `Use read to read "${repoDir}/src/platform/approval.ts" (limit=240, offset=1).`,
+            `Use read to read "${repoDir}/crates/cowork-sandbox/src/approval.rs" (limit=240, offset=1).`,
             `Use write to create "bash_tool_notes.md" with:
 - A short overview
 - A table listing: approval hook, working directory behavior, timeout defaults, stdout/stderr truncation

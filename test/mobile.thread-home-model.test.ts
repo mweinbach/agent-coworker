@@ -10,7 +10,6 @@ import {
   getVisibleListSlice,
   normalizeHomeSectionOrder,
   reorderHomeSections,
-  toggleHomeSectionOrder,
 } from "../apps/mobile/src/features/cowork/threadHomeModel";
 import type { MobileThreadSummary } from "../apps/mobile/src/features/cowork/threadStore";
 
@@ -45,11 +44,6 @@ describe("thread home model", () => {
   test("reorderHomeSections moves a section without dropping keys", () => {
     expect(reorderHomeSections(["chats", "projects"], 0, 2)).toEqual(["projects", "chats"]);
     expect(reorderHomeSections(["projects", "chats"], 1, 0)).toEqual(["chats", "projects"]);
-  });
-
-  test("toggleHomeSectionOrder swaps chats and projects", () => {
-    expect(toggleHomeSectionOrder(["chats", "projects"])).toEqual(["projects", "chats"]);
-    expect(toggleHomeSectionOrder(["projects", "chats"])).toEqual(["chats", "projects"]);
   });
 
   test("getVisibleListSlice limits rows until showAll is enabled", () => {

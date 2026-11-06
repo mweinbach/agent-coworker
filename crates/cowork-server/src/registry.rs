@@ -5600,4 +5600,217 @@ mod tests {
             "reasoning parts must not become visible seed text"
         );
     }
+
+    fn config_object(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().expect("config object")
+    }
+
+    fn apply_config_patch(value: Value) -> Result<ProjectConfigPatch, String> {
+        let mut patch = ProjectConfigPatch::default();
+        apply_session_config_to_project_patch(&config_object(value), &mut patch)?;
+        Ok(patch)
+    }
+
+    #[test]
+    fn session_defaults_reject_endpoint_overrides_and_invalid_tool_calling() {
+        for provider_options in [
+            json!({ "openai": { "baseUrl": "https://evil.example/v1", "reasoningEffort": "high" } }),
+            json!({ "openai": { "headers": { "Authorization": "Bearer secret" } } }),
+            json!({ "openai": { "apiKey": "sk-secret" } }),
+            json!({ "baseUrl": "https://evil.example" }),
+            json!({ "lmstudio": { "baseUrl": "https://evil.example:1234", "contextLength": 4096 } }),
+        ] {
+            let err = sanitize_session_defaults_config_patch(config_object(json!({
+                "toolCalling": { "codeMode": true, "strategy": "native" },
+                "providerOptions": provider_options,
+            })))
+            .expect_err("endpoint override must reject the whole defaults patch");
+            assert!(err.contains("cannot override provider endpoints"), "{err}");
+        }
+
+        assert_eq!(
+            sanitize_session_defaults_config_patch(config_object(json!({
+                "providerOptions": null
+            })))
+            .expect_err("non-object providerOptions"),
+            "providerOptions must be an object"
+        );
+
+        let sanitized = sanitize_session_defaults_config_patch(config_object(json!({
+            "clearToolCalling": false,
+            "toolCalling": { "strategy": " local ", "codeMode": true },
+            "providerOptions": {
+                "toolCallingStrategy": "native",
+                "codeMode": false,
+                "openai": { "reasoningEffort": "low" },
+                "lmstudio": { "baseUrl": "http://127.0.0.1:1234", "contextLength": 4096 }
+            }
+        })))
+        .expect("loopback lmstudio baseUrl is the only endpoint a defaults patch may keep");
+        let mut applied = ProjectConfigPatch::default();
+        apply_session_config_to_project_patch(&sanitized, &mut applied).unwrap();
+        let tool_calling = applied.tool_calling.expect("toolCalling patch");
+        assert_eq!(tool_calling.code_mode, Some(true));
+        assert_eq!(tool_calling.deferred_tool_search, None);
+        assert_eq!(tool_calling.strategy, Some(ToolCallingStrategy::Harness));
+        assert!(!applied.clear_tool_calling);
+        let persisted = applied.provider_options.expect("editable provider options");
+        assert!(persisted.get("codeMode").is_none());
+        assert!(persisted.get("toolCallingStrategy").is_none());
+        assert_eq!(persisted["openai"]["reasoningEffort"], json!("low"));
+        assert_eq!(
+            persisted["lmstudio"]["baseUrl"],
+            json!("http://127.0.0.1:1234")
+        );
+        assert_eq!(persisted["lmstudio"]["contextLength"], json!(4096));
+
+        assert_eq!(
+            apply_config_patch(json!({
+                "toolCalling": { "strategy": "harness" },
+                "clearToolCalling": true
+            }))
+            .expect_err("set and clear"),
+            "toolCalling cannot be combined with clearToolCalling"
+        );
+        assert_eq!(
+            apply_config_patch(json!({ "toolCalling": { "codeMode": "true" } }))
+                .expect_err("string bool"),
+            "toolCalling.codeMode must be a boolean"
+        );
+        assert_eq!(
+            apply_config_patch(json!({ "toolCalling": { "deferredToolSearch": 1 } }))
+                .expect_err("numeric bool"),
+            "toolCalling.deferredToolSearch must be a boolean"
+        );
+        assert_eq!(
+            apply_config_patch(json!({ "toolCalling": { "strategy": "remote" } }))
+                .expect_err("unknown strategy"),
+            "toolCalling.strategy must be one of: auto, native, harness"
+        );
+        assert_eq!(
+            apply_config_patch(json!({ "toolCalling": null })).expect_err("non-object"),
+            "toolCalling must be an object"
+        );
+
+        // A string clear sentinel is not a clear, and a bogus legacy strategy is ignored.
+        // The explicit toolCalling strategy still wins over providerOptions.
+        let kept = apply_config_patch(json!({
+            "clearToolCalling": "true",
+            "providerOptions": { "toolCallingStrategy": "remote", "codeMode": true },
+            "toolCalling": { "strategy": "harness" }
+        }))
+        .unwrap();
+        assert!(!kept.clear_tool_calling);
+        let tool_calling = kept.tool_calling.expect("partial toolCalling");
+        assert_eq!(tool_calling.code_mode, Some(true));
+        assert_eq!(tool_calling.strategy, Some(ToolCallingStrategy::Harness));
+    }
+
+    #[test]
+    fn session_tool_calling_overrides_ignore_invalid_fields_and_strip_endpoints() {
+        let mut overrides = config_object(json!({
+            "toolCalling": {
+                "codeMode": true,
+                "deferredToolSearch": false,
+                "strategy": "native"
+            },
+            "providerOptions": {
+                "codeMode": true,
+                "deferredToolSearch": false,
+                "toolCallingStrategy": "native",
+                "openai": { "reasoningEffort": "low" }
+            }
+        }));
+
+        merge_session_config_overrides(
+            &mut overrides,
+            config_object(json!({
+                "toolCalling": {
+                    "strategy": "nope",
+                    "deferredToolSearch": "yes",
+                    "codeMode": false
+                }
+            })),
+        );
+        assert_eq!(overrides["toolCalling"]["codeMode"], json!(false));
+        assert_eq!(overrides["toolCalling"]["deferredToolSearch"], json!(false));
+        assert_eq!(overrides["toolCalling"]["strategy"], json!("native"));
+        assert_eq!(overrides["providerOptions"]["codeMode"], json!(false));
+        assert_eq!(
+            overrides["providerOptions"]["deferredToolSearch"],
+            json!(false)
+        );
+        assert_eq!(
+            overrides["providerOptions"]["toolCallingStrategy"],
+            json!("native")
+        );
+        assert_eq!(
+            overrides["providerOptions"]["openai"]["reasoningEffort"],
+            json!("low")
+        );
+
+        merge_session_config_overrides(
+            &mut overrides,
+            config_object(json!({ "toolCalling": { "strategy": "LOCAL" } })),
+        );
+        assert_eq!(overrides["toolCalling"]["codeMode"], json!(false));
+        assert_eq!(overrides["toolCalling"]["strategy"], json!("harness"));
+        assert_eq!(
+            overrides["providerOptions"]["toolCallingStrategy"],
+            json!("harness")
+        );
+
+        let before_ignored = overrides.clone();
+        merge_session_config_overrides(
+            &mut overrides,
+            config_object(json!({
+                "providerOptions": null,
+                "toolCalling": "native"
+            })),
+        );
+        assert_eq!(overrides, before_ignored);
+
+        merge_session_config_overrides(
+            &mut overrides,
+            config_object(json!({
+                "providerOptions": {
+                    "codeMode": true,
+                    "openai": {
+                        "baseUrl": "https://evil.example/v1",
+                        "apiKey": "sk-secret",
+                        "headers": { "Authorization": "Bearer sk-secret" },
+                        "reasoningEffort": "high"
+                    }
+                }
+            })),
+        );
+        let provider_options = overrides["providerOptions"].as_object().unwrap();
+        assert!(provider_options.get("baseUrl").is_none());
+        assert_eq!(provider_options["codeMode"], json!(true));
+        assert_eq!(provider_options["toolCallingStrategy"], json!("harness"));
+        let openai = provider_options["openai"].as_object().unwrap();
+        assert!(openai.get("baseUrl").is_none());
+        assert!(openai.get("apiKey").is_none());
+        assert!(openai.get("headers").is_none());
+        assert_eq!(openai["reasoningEffort"], json!("high"));
+        assert_eq!(overrides["toolCalling"]["codeMode"], json!(true));
+        assert_eq!(overrides["toolCalling"]["strategy"], json!("harness"));
+
+        merge_session_config_overrides(
+            &mut overrides,
+            config_object(json!({ "clearToolCalling": false })),
+        );
+        assert!(overrides.get("toolCalling").is_some());
+
+        merge_session_config_overrides(
+            &mut overrides,
+            config_object(json!({ "clearToolCalling": true })),
+        );
+        assert!(overrides.get("toolCalling").is_none());
+        let provider_options = overrides["providerOptions"].as_object().unwrap();
+        assert!(provider_options.get("codeMode").is_none());
+        assert!(provider_options.get("deferredToolSearch").is_none());
+        assert!(provider_options.get("toolCallingStrategy").is_none());
+        assert_eq!(provider_options["openai"]["reasoningEffort"], json!("high"));
+    }
 }

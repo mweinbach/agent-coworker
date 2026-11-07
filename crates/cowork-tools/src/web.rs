@@ -1211,3 +1211,389 @@ impl BuiltinTool for WebSearchTool {
         })))
     }
 }
+
+#[cfg(test)]
+mod ssrf_gate_tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    fn parse_ip(raw: &str) -> IpAddr {
+        raw.parse()
+            .unwrap_or_else(|err| panic!("parse {raw}: {err}"))
+    }
+
+    fn dns_that_must_not_run() -> (DnsOverrideFn, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&hits);
+        let dns: DnsOverrideFn = Arc::new(move |host: &str, _port: u16| {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Err(format!("DNS must not be consulted for '{host}'"))
+        });
+        (dns, hits)
+    }
+
+    fn dns_answers(
+        answers: Vec<IpAddr>,
+    ) -> (
+        DnsOverrideFn,
+        Arc<AtomicUsize>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hosts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&hits);
+        let seen = Arc::clone(&hosts);
+        let dns: DnsOverrideFn = Arc::new(move |host: &str, _port: u16| {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            seen.lock().expect("host lock").push(host.to_owned());
+            Ok((answers.clone(), None))
+        });
+        (dns, hits, hosts)
+    }
+
+    async fn resolve(raw: &str, dns: Option<&DnsOverrideFn>) -> ToolResult<(String, SocketAddr)> {
+        let url = Url::parse(raw).unwrap_or_else(|err| panic!("parse {raw}: {err}"));
+        resolve_and_validate_url_target(&url, dns).await
+    }
+
+    fn assert_path_denied(result: ToolResult<(String, SocketAddr)>, raw: &str) -> String {
+        match result {
+            Err(ToolError::PathDenied(message)) => message,
+            other => panic!("{raw} should be PathDenied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ip_classifier_blocks_reserved_ranges_and_allows_their_public_neighbors() {
+        let blocked = [
+            "0.0.0.0",
+            "0.255.255.255",
+            "10.0.0.0",
+            "10.255.255.255",
+            "100.64.0.0",
+            "100.127.255.255",
+            "127.0.0.0",
+            "127.0.0.1",
+            "127.255.255.255",
+            "169.254.0.0",
+            "169.254.169.254",
+            "169.254.255.255",
+            "172.16.0.0",
+            "172.31.255.255",
+            "192.0.0.0",
+            "192.0.0.255",
+            "192.0.2.1",
+            "192.168.0.0",
+            "192.168.255.255",
+            "198.18.0.0",
+            "198.19.255.255",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.0",
+            "239.255.255.255",
+            "240.0.0.0",
+            "255.255.255.254",
+            "255.255.255.255",
+            "::",
+            "::1",
+            "fc00::1",
+            "fdff::1",
+            "fe80::1",
+            "febf::1",
+            "ff00::1",
+            "ff02::1",
+            "2001:db8::1",
+            "64:ff9b::1",
+            "64:ff9b:1::1",
+            "::ffff:0.0.0.0",
+            "::ffff:10.0.0.1",
+            "::ffff:a00:1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:192.168.1.50",
+            "::ffff:c0a8:132",
+        ];
+        let allowed = [
+            "1.1.1.1",
+            "8.8.8.8",
+            "9.255.255.255",
+            "11.0.0.0",
+            "100.63.255.255",
+            "100.128.0.1",
+            "169.253.255.255",
+            "169.255.0.0",
+            "172.15.255.255",
+            "172.32.0.0",
+            "192.0.1.1",
+            "192.167.255.255",
+            "192.169.0.0",
+            "198.17.255.255",
+            "198.20.0.1",
+            "223.255.255.255",
+            "2001:4860:4860::8888",
+            "2001:db9::1",
+            "64:ff9c::1",
+            "::ffff:8.8.8.8",
+            "::ffff:808:808",
+        ];
+
+        for raw in blocked {
+            assert!(is_blocked_ip(parse_ip(raw)), "{raw} must be blocked");
+        }
+        for raw in allowed {
+            assert!(!is_blocked_ip(parse_ip(raw)), "{raw} must stay reachable");
+        }
+    }
+
+    #[test]
+    fn hostname_classifier_matches_internal_suffixes_without_substring_false_positives() {
+        let blocked = [
+            "",
+            "   ",
+            "localhost",
+            "LOCALHOST",
+            "localhost.",
+            "  LocalHost.  ",
+            "metadata",
+            "metadata.google.internal",
+            "metadata.goog",
+            "instance-data",
+            "broadcasthost",
+            "foo.localhost",
+            "foo.LOCALHOST",
+            "foo.localhost.",
+            "printer.local",
+            "printer.local.",
+            "corp.internal",
+            "App.Internal",
+            "x.home.arpa",
+        ];
+        let allowed = [
+            "example.com",
+            "localhost.example",
+            "localhost.example.",
+            "foo.localhost.example",
+            "notlocalhost",
+            "localhost.evil.com",
+            "notlocal",
+        ];
+
+        for raw in blocked {
+            assert!(is_blocked_hostname(raw), "{raw} must be blocked");
+        }
+        for raw in allowed {
+            assert!(!is_blocked_hostname(raw), "{raw} is not an internal suffix");
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_schemes_and_credentials_are_rejected_before_dns() {
+        let (dns, hits) = dns_that_must_not_run();
+        let cases = [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "ftp://example.com/a",
+            "ws://example.com/socket",
+            "wss://example.com/socket",
+            "https://user:secret@example.com/path",
+            "https://user@example.com/path",
+            "https://:secret@example.com/path",
+            "https://example.com@evil.com/path",
+            "http://user:secret@8.8.8.8/path",
+        ];
+        for raw in cases {
+            let message = assert_path_denied(resolve(raw, Some(&dns)).await, raw);
+            let lower = message.to_ascii_lowercase();
+            assert!(
+                lower.contains("scheme") || lower.contains("credential"),
+                "{raw}: {message}"
+            );
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn obfuscated_and_reserved_literals_never_reach_dns() {
+        let (dns, hits) = dns_that_must_not_run();
+        let cases = [
+            "http://2130706433/secret",
+            "http://0x7f000001/secret",
+            "http://0177.0.0.1/secret",
+            "http://127.1/secret",
+            "http://0x7f.0.0.1/secret",
+            "http://127.0.0.2/secret",
+            "http://0.0.0.0/",
+            "http://10.255.255.255/",
+            "http://100.64.0.0/",
+            "http://100.127.255.255/",
+            "http://169.254.169.254/latest/meta-data",
+            "http://172.16.0.0/",
+            "http://172.31.255.255/",
+            "http://192.0.0.8/",
+            "http://192.0.2.1/",
+            "http://198.18.0.1/",
+            "http://198.19.255.255/",
+            "http://224.0.0.1/",
+            "http://240.0.0.1/",
+            "http://[::1]/",
+            "http://[::]/",
+            "http://[fe80::1]/",
+            "http://[febf::1]/",
+            "http://[fc00::1]/",
+            "http://[fd00::1]/",
+            "http://[ff02::1]/",
+            "http://[2001:db8::1]/",
+            "http://[64:ff9b::1]/",
+            "http://[64:ff9b:1::1]/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://[::ffff:192.168.1.50]/",
+            "http://localhost./secret",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://printer.local/",
+            "http://corp.internal/",
+            "http://foo.localhost/",
+            "http://x.home.arpa/",
+        ];
+        for raw in cases {
+            let message = assert_path_denied(resolve(raw, Some(&dns)).await, raw);
+            assert!(
+                message.to_ascii_lowercase().contains("blocked"),
+                "{raw}: {message}"
+            );
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "literal and internal-name blocks must not consult DNS"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_literals_are_pinned_to_themselves_without_dns() {
+        let (dns, hits) = dns_that_must_not_run();
+        let (host, addr) = resolve("http://8.8.8.8:8443/x", Some(&dns))
+            .await
+            .expect("public ipv4 literal");
+        assert_eq!(host, "8.8.8.8");
+        assert_eq!(addr, SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 8443)));
+
+        let (v6_host, v6_addr) = resolve("http://[2001:4860:4860::8888]/", Some(&dns))
+            .await
+            .expect("public ipv6 literal");
+        assert_eq!(v6_host, "[2001:4860:4860::8888]");
+        assert_eq!(
+            v6_addr,
+            SocketAddr::from(("2001:4860:4860::8888".parse::<Ipv6Addr>().unwrap(), 80))
+        );
+
+        let (_mapped_host, mapped_addr) = resolve("http://[::ffff:8.8.8.8]/", Some(&dns))
+            .await
+            .expect("public ipv4-mapped literal");
+        let IpAddr::V6(mapped) = mapped_addr.ip() else {
+            panic!("mapped literal should stay ipv6, got {mapped_addr}");
+        };
+        assert_eq!(mapped.to_ipv4_mapped(), Some(Ipv4Addr::new(8, 8, 8, 8)));
+        assert_eq!(mapped_addr.port(), 80);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn one_private_dns_answer_blocks_the_name_and_empty_answers_fail_closed() {
+        let private_sets = [
+            vec![
+                "8.8.8.8".parse::<IpAddr>().unwrap(),
+                "10.1.2.3".parse().unwrap(),
+            ],
+            vec![
+                "10.1.2.3".parse::<IpAddr>().unwrap(),
+                "8.8.8.8".parse().unwrap(),
+            ],
+            vec![
+                "2001:4860:4860::8888".parse::<IpAddr>().unwrap(),
+                "fd00::1".parse().unwrap(),
+            ],
+            vec![
+                "1.1.1.1".parse::<IpAddr>().unwrap(),
+                "::ffff:192.168.1.50".parse().unwrap(),
+            ],
+        ];
+        for answers in private_sets {
+            let blocked_ip = answers
+                .iter()
+                .copied()
+                .find(|ip| is_blocked_ip(*ip))
+                .unwrap();
+            let (dns, hits, hosts) = dns_answers(answers);
+            let message = assert_path_denied(
+                resolve("https://rebind.example/path", Some(&dns)).await,
+                "https://rebind.example/path",
+            );
+            assert!(message.contains("rebind.example"), "{message}");
+            assert!(message.contains(&blocked_ip.to_string()), "{message}");
+            assert_eq!(hits.load(Ordering::SeqCst), 1);
+            assert_eq!(hosts.lock().unwrap().as_slice(), ["rebind.example"]);
+        }
+
+        let (dns, hits, _) = dns_answers(Vec::new());
+        match resolve("https://missing.example/", Some(&dns)).await {
+            Err(ToolError::Execution(message)) => {
+                assert!(message.contains("no addresses"), "{message}");
+                assert!(message.contains("missing.example"), "{message}");
+            }
+            other => panic!("empty DNS should fail closed, got {other:?}"),
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        let (dns, hits, hosts) =
+            dns_answers(vec!["1.0.0.1".parse().unwrap(), "8.8.8.8".parse().unwrap()]);
+        let (host, addr) = resolve("http://docs.example:8443/a", Some(&dns))
+            .await
+            .expect("all-public DNS");
+        assert_eq!(host, "docs.example");
+        assert_eq!(addr, SocketAddr::from((Ipv4Addr::new(1, 0, 0, 1), 8443)));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(hosts.lock().unwrap().as_slice(), ["docs.example"]);
+    }
+
+    #[tokio::test]
+    async fn empty_userinfo_and_localhost_lookalikes_still_check_the_real_host() {
+        let lookalikes = [
+            "https://@example.com/path",
+            "https://:@example.com/path",
+            "http://localhost.example/",
+            "http://foo.localhost.example/",
+            "http://notlocalhost/",
+            "http://localhost.evil.com/",
+        ];
+        for raw in lookalikes {
+            let (dns, hits, hosts) = dns_answers(vec!["10.0.0.1".parse().unwrap()]);
+            let message = assert_path_denied(resolve(raw, Some(&dns)).await, raw);
+            assert!(message.contains("10.0.0.1"), "{raw}: {message}");
+            assert_eq!(hits.load(Ordering::SeqCst), 1, "{raw}");
+            let seen = hosts.lock().unwrap().clone();
+            assert_eq!(seen.len(), 1, "{raw}");
+            assert!(
+                !seen[0].contains('@')
+                    && !seen[0].ends_with(".localhost")
+                    && seen[0] != "localhost",
+                "{raw} looked up {}",
+                seen[0]
+            );
+        }
+
+        let (dns, hits, hosts) = dns_answers(vec!["93.184.216.34".parse().unwrap()]);
+        let (host, addr) = resolve("https://@example.com/path", Some(&dns))
+            .await
+            .expect("empty userinfo keeps the real host");
+        assert_eq!(host, "example.com");
+        assert_eq!(
+            addr,
+            SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), 443))
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(hosts.lock().unwrap().as_slice(), ["example.com"]);
+    }
+}

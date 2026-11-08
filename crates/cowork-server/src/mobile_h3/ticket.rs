@@ -184,3 +184,205 @@ pub fn verify_h3_pairing_nonce(session: &H3PairingSession, nonce: &str) -> bool 
     let actual = nonce.as_bytes();
     expected.len() == actual.len() && bool::from(expected.ct_eq(actual))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn valid_value() -> Value {
+        json!({
+            "v": 1,
+            "scheme": "h3",
+            "hosts": ["192.168.1.40", "100.88.12.9"],
+            "port": 49_555,
+            "certSha256": "a".repeat(64),
+            "spkiSha256": format!("{}-_{}", "b".repeat(21), "B".repeat(20)),
+            "identityPub": "identity-pub",
+            "nonce": format!("{}-_{}", "d".repeat(10), "D".repeat(10)),
+            "expiresAt": 1_777_329_000_000i64,
+        })
+    }
+
+    fn encode_raw(value: &Value) -> String {
+        format!(
+            "{TICKET_PREFIX}{}",
+            base32_encode_lower(value.to_string().as_bytes())
+        )
+    }
+
+    fn assert_ticket_err(result: anyhow::Result<impl std::fmt::Debug>, needle: &str) {
+        let err = result.expect_err(needle).to_string();
+        assert!(err.contains(needle), "{err}");
+    }
+
+    #[test]
+    fn decode_trims_hosts_and_identity_and_accepts_both_schemes() {
+        let mut value = valid_value();
+        value["hosts"] = json!(["  192.168.1.40  ", "\t100.88.12.9\n"]);
+        value["identityPub"] = json!("  identity-pub  ");
+        let decoded = decode_cowork_pairing_ticket(&format!("  {}  ", encode_raw(&value))).unwrap();
+        assert_eq!(
+            decoded.hosts,
+            vec!["192.168.1.40".to_owned(), "100.88.12.9".to_owned()]
+        );
+        assert_eq!(decoded.identity_pub, "identity-pub");
+        assert_eq!(decoded.scheme, CoworkTicketScheme::H3);
+        assert_eq!(decoded.port, 49_555);
+        assert_eq!(decoded.spki_sha256, value["spkiSha256"].as_str().unwrap());
+
+        value["scheme"] = json!("opentunnel");
+        value["hosts"] = json!(["desktop.local"]);
+        let opentunnel = decode_cowork_pairing_ticket(&encode_raw(&value)).unwrap();
+        assert_eq!(opentunnel.scheme, CoworkTicketScheme::Opentunnel);
+        assert_eq!(opentunnel.hosts, vec!["desktop.local".to_owned()]);
+    }
+
+    #[test]
+    fn validate_rejects_tickets_that_would_weaken_pairing() {
+        let base = decode_cowork_pairing_ticket(&encode_raw(&valid_value())).unwrap();
+        let reject = |mutate: fn(&mut CoworkPairingTicket), needle: &str| {
+            let mut ticket = base.clone();
+            mutate(&mut ticket);
+            assert_ticket_err(validate_cowork_pairing_ticket(&ticket), needle);
+            assert_ticket_err(encode_cowork_pairing_ticket(&ticket), needle);
+        };
+
+        reject(|t| t.v = 0, "Pairing ticket version must be 1.");
+        reject(|t| t.v = 2, "Pairing ticket version must be 1.");
+        reject(|t| t.hosts.clear(), "at least one host");
+        reject(
+            |t| t.hosts = vec!["ok".into(), "   ".into()],
+            "host cannot be empty",
+        );
+        reject(|t| t.port = 0, "port must be between 1 and 65535");
+        reject(
+            |t| t.cert_sha256 = "A".repeat(64),
+            "certSha256 must be 64 lowercase hex",
+        );
+        reject(
+            |t| t.cert_sha256 = "a".repeat(63),
+            "certSha256 must be 64 lowercase hex",
+        );
+        reject(
+            |t| t.cert_sha256 = format!("{}g", "a".repeat(63)),
+            "certSha256 must be 64 lowercase hex",
+        );
+        reject(
+            |t| t.spki_sha256 = "b".repeat(42),
+            "spkiSha256 must be 43 base64url",
+        );
+        reject(
+            |t| t.spki_sha256 = "b".repeat(44),
+            "spkiSha256 must be 43 base64url",
+        );
+        reject(
+            |t| t.spki_sha256 = format!("{}+", "b".repeat(42)),
+            "spkiSha256 must be 43 base64url",
+        );
+        reject(
+            |t| t.spki_sha256 = format!("{}/", "b".repeat(42)),
+            "spkiSha256 must be 43 base64url",
+        );
+        reject(
+            |t| t.identity_pub = "   ".into(),
+            "identityPub cannot be empty",
+        );
+        reject(
+            |t| t.nonce = "d".repeat(21),
+            "nonce must be at least 22 base64url",
+        );
+        reject(
+            |t| t.nonce = format!("{}+", "d".repeat(21)),
+            "nonce must be at least 22 base64url",
+        );
+        reject(|t| t.expires_at = 0, "expiresAt must be positive");
+        reject(|t| t.expires_at = -1, "expiresAt must be positive");
+
+        let mut edge = base.clone();
+        edge.port = u16::MAX;
+        edge.nonce = "d".repeat(22);
+        edge.expires_at = 1;
+        assert_eq!(
+            validate_cowork_pairing_ticket(&edge).unwrap().port,
+            u16::MAX
+        );
+    }
+
+    #[test]
+    fn decode_rejects_malformed_or_extended_payloads_before_use() {
+        assert_ticket_err(
+            decode_cowork_pairing_ticket("https://example.invalid/pair"),
+            "must start with cowork-pair://",
+        );
+        assert_ticket_err(
+            decode_cowork_pairing_ticket("  cowork-pair://  "),
+            "Pairing ticket is empty.",
+        );
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&format!("{TICKET_PREFIX}1")),
+            "invalid base32",
+        );
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&format!("{TICKET_PREFIX}abc def")),
+            "invalid base32",
+        );
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&format!(
+                "{TICKET_PREFIX}{}",
+                base32_encode_lower(&[0xff, 0xfe])
+            )),
+            "not valid UTF-8",
+        );
+
+        let mut extra = valid_value();
+        extra["admin"] = json!(true);
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&encode_raw(&extra)),
+            "Invalid pairing ticket JSON",
+        );
+
+        let mut scheme = valid_value();
+        scheme["scheme"] = json!("H3");
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&encode_raw(&scheme)),
+            "Invalid pairing ticket JSON",
+        );
+
+        let mut missing = valid_value();
+        missing.as_object_mut().unwrap().remove("nonce");
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&encode_raw(&missing)),
+            "Invalid pairing ticket JSON",
+        );
+
+        let mut bad_pin = valid_value();
+        bad_pin["certSha256"] = json!("A".repeat(64));
+        assert_ticket_err(
+            decode_cowork_pairing_ticket(&encode_raw(&bad_pin)),
+            "certSha256 must be 64 lowercase hex",
+        );
+    }
+
+    #[test]
+    fn verify_h3_pairing_nonce_rejects_expired_and_unequal_nonces() {
+        let nonce = "n".repeat(32);
+        let live = H3PairingSession {
+            nonce: nonce.clone(),
+            expires_at: Utc::now().timestamp_millis() + 60_000,
+        };
+        assert!(verify_h3_pairing_nonce(&live, &nonce));
+
+        let mut same_length = nonce.clone();
+        same_length.replace_range(31..32, "m");
+        assert!(!verify_h3_pairing_nonce(&live, &same_length));
+        assert!(!verify_h3_pairing_nonce(&live, &nonce[..31]));
+        assert!(!verify_h3_pairing_nonce(&live, &format!("{nonce}n")));
+
+        let expired = H3PairingSession {
+            nonce: nonce.clone(),
+            expires_at: Utc::now().timestamp_millis() - 1,
+        };
+        assert!(!verify_h3_pairing_nonce(&expired, &nonce));
+    }
+}

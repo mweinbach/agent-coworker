@@ -1296,3 +1296,262 @@ pub fn sign_bedrock_request(
         }
     }
 }
+
+#[cfg(test)]
+mod credential_boundary_tests {
+    use super::*;
+
+    fn assert_allowed(uri: &str) {
+        validate_container_full_uri(uri)
+            .unwrap_or_else(|err| panic!("{uri} should be allowed: {err}"));
+    }
+
+    fn assert_policy_denied(uri: &str) {
+        let err = validate_container_full_uri(uri).expect_err(uri);
+        assert!(
+            err.contains("must use https"),
+            "{uri} should fail the container URI policy: {err}"
+        );
+    }
+
+    fn assert_invalid_url(uri: &str) {
+        let err = validate_container_full_uri(uri).expect_err(uri);
+        assert!(
+            err.contains("is not a valid URL"),
+            "{uri} should be an invalid URL: {err}"
+        );
+    }
+
+    #[test]
+    fn http_container_credentials_allow_only_loopback_ecs_and_eks() {
+        for uri in [
+            "https://example.com/creds",
+            "https://169.254.169.254/latest/meta-data",
+            "HTTPS://evil.example/creds",
+            "http://127.0.0.1/creds",
+            "http://127.0.0.1:9/creds",
+            "http://127.255.255.255/creds",
+            "http://localhost/creds",
+            "http://LOCALHOST/creds",
+            "http://[::1]/creds",
+            "http://[::1]:9/creds",
+            "http://169.254.170.2/v2/credentials",
+            "http://169.254.170.2:80/v2/credentials",
+            "http://169.254.170.23/creds",
+            "http://[fd00:ec2::23]/creds",
+            "http://[fd00:ec2:0:0:0:0:0:23]/creds",
+            "http://user:token@169.254.170.2/creds",
+        ] {
+            assert_allowed(uri);
+        }
+
+        for uri in [
+            "http://203.0.113.5/credentials",
+            "http://10.0.0.1/creds",
+            "http://192.168.0.1/creds",
+            "http://172.16.0.1/creds",
+            "http://0.0.0.0/creds",
+            "http://169.254.169.254/latest/meta-data",
+            "http://169.254.170.1/creds",
+            "http://169.254.170.3/creds",
+            "http://169.254.170.22/creds",
+            "http://169.254.170.24/creds",
+            "http://169.254.170.2.evil.com/creds",
+            "http://localhost.evil.com/creds",
+            "http://localhost./creds",
+            "http://127.0.0.1.evil.com/creds",
+            "http://[::2]/creds",
+            "http://[fd00:ec2::22]/creds",
+            "http://[fd00:ec2::24]/creds",
+            "http://[::ffff:10.0.0.1]/creds",
+            "http://169.254.170.2@evil.com/creds",
+            "http://127.0.0.1@10.0.0.1/creds",
+            "file:///etc/passwd",
+            "ftp://127.0.0.1/creds",
+            "javascript:alert(1)",
+        ] {
+            assert_policy_denied(uri);
+        }
+
+        for uri in ["", "   ", "not a url", "http://"] {
+            assert_invalid_url(uri);
+        }
+    }
+
+    #[test]
+    fn container_credential_json_rejects_failed_or_incomplete_payloads() {
+        let ok = parse_container_credentials(
+            r#"{"AccessKeyId":" AKIA ","SecretAccessKey":" secret ","Token":"  "}"#,
+        )
+        .unwrap();
+        assert_eq!(ok.access_key_id(), "AKIA");
+        assert_eq!(ok.secret_access_key(), "secret");
+        assert_eq!(ok.session_token(), None);
+        assert!(ok.expiry().is_none());
+
+        let with_token = parse_container_credentials(
+            r#"{"Code":"success","AccessKeyId":"AKIA","SecretAccessKey":"secret","Token":" tok ","Expiration":"2026-11-08T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(with_token.session_token(), Some("tok"));
+        assert!(with_token.expiry().is_some());
+
+        let failure = parse_container_credentials(
+            r#"{"Code":"Failure","Message":"not ready","AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#,
+        )
+        .unwrap_err();
+        assert!(failure.contains("Failure"), "{failure}");
+        assert!(failure.contains("not ready"), "{failure}");
+
+        let no_message = parse_container_credentials(r#"{"Code":"ExpiredToken"}"#).unwrap_err();
+        assert!(no_message.contains("ExpiredToken"), "{no_message}");
+        assert!(no_message.contains("no message"), "{no_message}");
+
+        for body in [
+            r#"{"SecretAccessKey":"secret"}"#,
+            r#"{"AccessKeyId":"  ","SecretAccessKey":"secret"}"#,
+            r#"{"Code":"Success","SecretAccessKey":"secret"}"#,
+        ] {
+            let err = parse_container_credentials(body).unwrap_err();
+            assert!(err.contains("missing AccessKeyId"), "{body}: {err}");
+        }
+        let missing_secret = parse_container_credentials(r#"{"AccessKeyId":"AKIA"}"#).unwrap_err();
+        assert!(
+            missing_secret.contains("missing SecretAccessKey"),
+            "{missing_secret}"
+        );
+        let bad_expiry = parse_container_credentials(
+            r#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret","Expiration":"tomorrow"}"#,
+        )
+        .unwrap_err();
+        assert!(bad_expiry.contains("invalid Expiration"), "{bad_expiry}");
+        let bad_json = parse_container_credentials("not-json").unwrap_err();
+        assert!(bad_json.contains("invalid JSON"), "{bad_json}");
+    }
+
+    #[test]
+    fn explicit_bedrock_endpoint_yields_only_official_hosts() {
+        assert!(should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            Some("us-east-1"),
+            false,
+        ));
+        assert!(should_use_explicit_bedrock_endpoint(
+            "https://BEDROCK-RUNTIME.US-EAST-1.AMAZONAWS.COM/model",
+            Some("US-EAST-1"),
+            true,
+        ));
+        assert!(should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.cn-north-1.amazonaws.com.cn",
+            Some("cn-north-1"),
+            false,
+        ));
+        assert!(should_use_explicit_bedrock_endpoint(
+            "https://user:token@bedrock-runtime.us-east-1.amazonaws.com:8443",
+            Some("us-east-1"),
+            false,
+        ));
+        // A blank configured region is not "no region", so a profile does not yield the URL.
+        assert!(should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            Some("   "),
+            true,
+        ));
+
+        assert!(!should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.eu-west-1.amazonaws.com",
+            Some("us-east-1"),
+            false,
+        ));
+        assert!(!should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.cn-north-1.amazonaws.com.cn",
+            Some("us-east-1"),
+            false,
+        ));
+        assert!(!should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.us-east-1.amazonaws.com:8443",
+            Some("eu-central-1"),
+            true,
+        ));
+        assert!(!should_use_explicit_bedrock_endpoint(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            None,
+            true,
+        ));
+
+        for url in [
+            "https://bedrock-runtime.us-east-1.amazonaws.com.evil.com",
+            "https://notbedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com.cn.evil.com",
+            "https://example.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com.",
+        ] {
+            assert!(
+                should_use_explicit_bedrock_endpoint(url, Some("eu-west-1"), true),
+                "{url} must stay an explicit endpoint"
+            );
+        }
+
+        for url in ["", "   ", "not a url", "://missing"] {
+            assert!(
+                !should_use_explicit_bedrock_endpoint(url, Some("us-east-1"), false),
+                "{url} must not be used as an endpoint"
+            );
+        }
+    }
+
+    fn sources(pairs: &[(&str, &str)]) -> Vec<AmbientRoleSource> {
+        let env = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        ambient_role_sources(&env)
+    }
+
+    #[test]
+    fn ambient_role_markers_advertise_imds_only_behind_an_ec2_hint() {
+        assert!(sources(&[]).is_empty());
+        assert!(sources(&[("AWS_EC2_METADATA_DISABLED", " TRUE ")]).is_empty());
+        assert!(sources(&[("AWS_EXECUTION_ENV", "AWS_Lambda_nodejs")]).is_empty());
+        assert!(
+            sources(&[
+                ("AWS_CONTAINER_CREDENTIALS_FULL_URI", "   "),
+                ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "\n"),
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", "  "),
+            ])
+            .is_empty()
+        );
+
+        assert_eq!(
+            sources(&[("AWS_EC2_METADATA_DISABLED", "False")]),
+            vec![AmbientRoleSource::Imds]
+        );
+        assert_eq!(
+            sources(&[("AWS_EXECUTION_ENV", "ec2")]),
+            vec![AmbientRoleSource::Imds]
+        );
+        assert_eq!(
+            sources(&[
+                ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials"),
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/secrets/token"),
+                ("AWS_EC2_METADATA_DISABLED", "false"),
+            ]),
+            vec![
+                AmbientRoleSource::WebIdentity,
+                AmbientRoleSource::Container,
+                AmbientRoleSource::Imds
+            ]
+        );
+        assert_eq!(
+            sources(&[
+                (
+                    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                    "https://example.com/creds"
+                ),
+                ("AWS_EC2_METADATA_DISABLED", "true"),
+                ("AWS_EXECUTION_ENV", "AWS_ECS_EC2"),
+            ]),
+            vec![AmbientRoleSource::Container]
+        );
+    }
+}

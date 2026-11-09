@@ -20,7 +20,11 @@ fn keeps_loopback_lmstudio_base_url() {
     for url in [
         "http://localhost:1234",
         "http://127.0.0.1:1234/v1",
+        "http://127.0.0.1:65535",
         "https://[::1]:1234",
+        "http://[::1]",
+        "https://[::1]/v1",
+        "http://[0:0:0:0:0:0:0:1]:1234",
         "http://LOCALHOST",
     ] {
         let out = strip(json!({ "lmstudio": { "baseUrl": url, "contextLength": 4096 } }));
@@ -37,6 +41,33 @@ fn drops_non_loopback_lmstudio_base_url_but_keeps_siblings() {
         json!("http://localhost.evil.example"),
         json!("http://user@localhost:1234"),
         json!("ftp://localhost"),
+        // A WHATWG parser rewrites these to loopback. This filter compares the raw host
+        // and must keep rejecting them, or a cloned repo can aim LM Studio at an address
+        // the next client interprets as 127.0.0.1 only after a laxer parse.
+        json!("http://2130706433"),
+        json!("http://2130706433:80/v1"),
+        json!("http://0x7f000001"),
+        json!("http://0x7f.0.0.1:1234"),
+        json!("http://0177.0.0.1"),
+        json!("http://127.1"),
+        json!("http://127.0.1:1234"),
+        json!("http://127.0.0.1."),
+        json!("http://localhost."),
+        json!("http://localhost.:1234"),
+        json!("http://127%2e0%2e0%2e1:1234"),
+        json!("http://127.0.0.1%00"),
+        json!("http://127.0.0.1%2eevil.com"),
+        json!("http://[::ffff:127.0.0.1]:1234"),
+        json!("http://[::ffff:7f00:1]"),
+        json!("http://[127.0.0.1]:1234"),
+        json!("http://[::1%eth0]:1234"),
+        json!("http://[::1"),
+        json!("http://[::]"),
+        json!("http://0.0.0.0:1234"),
+        json!("http://[::1]80"),
+        json!("http://127.0.0.1:65536"),
+        json!("http://127.0.0.1:+80"),
+        json!("http://127.0.0.1:80:80"),
         json!(""),
         json!(42),
         json!(null),
@@ -61,6 +92,47 @@ fn still_strips_other_endpoint_overrides() {
     assert!(!out.contains_key("baseUrl"));
     assert_eq!(out["openai"], json!({ "reasoningEffort": "low" }));
     assert_eq!(out["lmstudio"], json!({}));
+}
+
+#[test]
+fn loopback_exception_is_only_the_lmstudio_base_url_key() {
+    let out = strip(json!({
+        "base_url": "http://127.0.0.1:1",
+        "extraHeaders": { "Authorization": "Bearer secret" },
+        "extra_headers": { "x-api-key": "secret" },
+        "api_key": "sk-top",
+        "openai": {
+            "base_url": "http://127.0.0.1:1",
+            "baseURL": "http://localhost:1",
+            "extraHeaders": { "x": "1" },
+            "api_key": "sk-openai",
+            "reasoningEffort": "low"
+        },
+        "google": {
+            "endpoint": "http://[::1]:1",
+            "headers": { "x": "1" },
+            "apiKey": "sk-google"
+        },
+        "lmstudio": {
+            "baseUrl": "http://127.0.0.1:1234",
+            "base_url": "http://127.0.0.1:9",
+            "baseURL": "http://localhost:9",
+            "endpoint": "http://[::1]:9",
+            "extraHeaders": { "Authorization": "Bearer lm" },
+            "api_key": "lm-secret",
+            "contextLength": 2048
+        }
+    }));
+    assert!(!out.contains_key("base_url"));
+    assert!(!out.contains_key("extraHeaders"));
+    assert!(!out.contains_key("extra_headers"));
+    assert!(!out.contains_key("api_key"));
+    assert_eq!(out["openai"], json!({ "reasoningEffort": "low" }));
+    assert_eq!(out["google"], json!({}));
+    assert_eq!(
+        out["lmstudio"],
+        json!({ "baseUrl": "http://127.0.0.1:1234", "contextLength": 2048 })
+    );
 }
 
 #[test]

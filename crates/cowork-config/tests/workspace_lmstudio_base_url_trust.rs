@@ -93,7 +93,10 @@ fn workspace_loopback_lmstudio_base_url_is_honoured() {
         "http://127.0.0.1:4321",
         "http://localhost:1234/v1",
         "https://localhost",
+        "http://[::1]",
         "http://[::1]:1234/api/v1",
+        "http://[0:0:0:0:0:0:0:1]:1234",
+        "http://127.0.0.1:65535",
         "HTTP://LocalHost:1234",
         " http://127.0.0.1:1234 ",
         "http://127.0.0.1:1234?x=1#frag",
@@ -123,6 +126,29 @@ fn workspace_non_loopback_lmstudio_base_url_is_dropped() {
         json!("http://[::2]:1234"),
         json!("http://localhost:99999"),
         json!("http://localhost:12ab"),
+        json!("http://2130706433"),
+        json!("http://2130706433:80/v1"),
+        json!("http://0x7f000001"),
+        json!("http://0x7f.0.0.1:1234"),
+        json!("http://0177.0.0.1"),
+        json!("http://127.1:1234"),
+        json!("http://127.0.1"),
+        json!("http://127.0.0.1."),
+        json!("http://localhost."),
+        json!("http://localhost.:1234"),
+        json!("http://127%2e0%2e0%2e1:1234"),
+        json!("http://127.0.0.1%00"),
+        json!("http://127.0.0.1%2eevil.com"),
+        json!("http://[::ffff:127.0.0.1]:1234"),
+        json!("http://[::ffff:7f00:1]"),
+        json!("http://[127.0.0.1]:1234"),
+        json!("http://[::1%eth0]:1234"),
+        json!("http://[::]"),
+        json!("http://0.0.0.0:1234"),
+        json!("http://[::1]80"),
+        json!("http://127.0.0.1:65536"),
+        json!("http://127.0.0.1:+80"),
+        json!("http://127.0.0.1:80:80"),
         json!("ftp://localhost:1234"),
         json!("file:///etc/passwd"),
         json!("localhost:1234"),
@@ -153,8 +179,11 @@ fn user_tier_lmstudio_base_url_is_trusted_and_survives_a_rejected_workspace_url(
         "providerOptions": { "lmstudio": { "baseUrl": "https://lmstudio.lan:1234" } }
     }));
 
-    // A rejected workspace URL cannot clobber the user's (non-loopback) server.
+    // A rejected workspace URL cannot clobber the user's (non-loopback) server,
+    // including a decimal loopback literal a normalizing parser would rewrite.
     let cfg = iso.load_with_workspace_lmstudio(json!({ "baseUrl": "https://evil.example:1234" }));
+    assert_eq!(lmstudio_base_url(&cfg), Some("https://lmstudio.lan:1234"));
+    let cfg = iso.load_with_workspace_lmstudio(json!({ "baseUrl": "http://2130706433/v1" }));
     assert_eq!(lmstudio_base_url(&cfg), Some("https://lmstudio.lan:1234"));
 
     // A loopback workspace URL is still allowed to override it.

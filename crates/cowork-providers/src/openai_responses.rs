@@ -2167,3 +2167,7 @@ impl OpenAiStreamState {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "openai_native_rejection_tests.rs"]
+mod openai_native_rejection_tests;

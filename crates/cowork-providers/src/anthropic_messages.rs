@@ -2074,3 +2074,7 @@ fn summarize_anthropic_server_tool_result(block_type: &str, content: &Value) -> 
     }
     (content.to_string(), false)
 }
+
+#[cfg(test)]
+#[path = "anthropic_native_rejection_tests.rs"]
+mod anthropic_native_rejection_tests;

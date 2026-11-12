@@ -387,11 +387,12 @@ describe("desktop transcript feed mapping", () => {
       index: number,
       partType: string,
       part: Record<string, unknown>,
+      turnId = "turn-1",
     ) =>
       evt(second, {
         type: "model_stream_chunk",
         sessionId: "s",
-        turnId: "turn-1",
+        turnId,
         index,
         partType,
         part,
@@ -499,6 +500,200 @@ describe("desktop transcript feed mapping", () => {
         args: { command: "bun test" },
         result: "ok",
       });
+    });
+
+    test("keeps each turn's tool card when a later turn reuses the tool id", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "first" }, "client"),
+        chunk(2, 0, "tool_input_start", { toolCallId: "call-1", toolName: "bash" }),
+        chunk(2, 1, "tool_input_delta", { toolCallId: "call-1", delta: '{"command":"ls"}' }),
+        chunk(3, 2, "tool_result", { toolCallId: "call-1", output: "a.txt" }),
+        chunk(4, 3, "text_delta", { id: "t1", text: "Listed a.txt" }),
+        chunk(
+          5,
+          0,
+          "tool_call",
+          { toolCallId: "call-1", toolName: "bash", input: { command: "pwd" } },
+          "turn-2",
+        ),
+        chunk(6, 1, "text_delta", { id: "t1", text: "Next" }, "turn-2"),
+        evt(7, { type: "user_message", text: "again" }, "client"),
+        evt(8, { type: "assistant_message", text: "Listed a.txt" }),
+      ]);
+
+      const toolItems = feed.filter((item) => item.kind === "tool");
+      expect(toolItems).toHaveLength(2);
+      expect(toolItems[0]).toMatchObject({
+        name: "bash",
+        state: "output-available",
+        args: { command: "ls" },
+        result: "a.txt",
+      });
+      expect(toolItems[1]).toMatchObject({
+        name: "bash",
+        state: "input-available",
+        args: { command: "pwd" },
+      });
+      expect(feed.filter((item) => item.kind === "message").map((item) => item.text)).toEqual([
+        "first",
+        "Listed a.txt",
+        "Next",
+        "again",
+        "Listed a.txt",
+      ]);
+    });
+
+    test("keeps partial tool arguments through end, error, and denial", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "run" }, "client"),
+        chunk(2, 0, "tool_input_start", {
+          id: "call-partial",
+          toolName: "bash",
+          input: { cwd: "/tmp" },
+        }),
+        chunk(2, 1, "tool_input_delta", { id: "call-partial", delta: '{"command":' }),
+        chunk(3, 2, "tool_input_end", { id: "call-partial", toolName: "shell" }),
+        chunk(4, 3, "tool_input_end", { id: "never-started" }),
+        chunk(5, 4, "tool_input_delta", { id: 7, delta: 1 }),
+        chunk(6, 5, "tool_error", { toolCallId: 7, toolName: "bash", error: "boom" }),
+        chunk(7, 6, "tool_input_start", {
+          toolCallId: "call-denied",
+          toolName: "bash",
+          args: { command: "rm" },
+        }),
+        chunk(8, 7, "tool_output_denied", { toolCallId: "call-denied", reason: "policy" }),
+        chunk(9, 8, "tool_output_denied", { id: "call-bare-deny" }),
+      ]);
+
+      const toolItems = feed.filter((item) => item.kind === "tool");
+      expect(toolItems).toHaveLength(4);
+      expect(toolItems[0]).toMatchObject({
+        name: "shell",
+        state: "input-available",
+        args: { cwd: "/tmp", input: '{"command":' },
+      });
+      expect(toolItems[1]).toMatchObject({
+        name: "bash",
+        state: "output-error",
+        args: { input: "1" },
+        result: { error: "boom" },
+        completedAt: "2024-01-01T00:00:06.000Z",
+      });
+      expect(toolItems[2]).toMatchObject({
+        name: "bash",
+        state: "output-denied",
+        args: { command: "rm" },
+        result: { reason: "policy" },
+        completedAt: "2024-01-01T00:00:08.000Z",
+      });
+      expect(toolItems[3]).toMatchObject({
+        name: "tool",
+        state: "output-denied",
+        completedAt: "2024-01-01T00:00:09.000Z",
+      });
+      expect(toolItems[3]?.kind === "tool" ? toolItems[3].result : "present").toBeUndefined();
+    });
+
+    test("suppresses a final assistant reply only when it repeats streamed text", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "Explain" }, "client"),
+        chunk(2, 0, "text_delta", { id: "c1", phase: "commentary", text: "Checking" }),
+        chunk(3, 1, "text_delta", { id: "a1", text: "Hello" }),
+        chunk(3, 2, "text_delta", { id: "a1", text: " world" }),
+        evt(4, { type: "assistant_message", text: "Hello" }),
+        evt(5, { type: "assistant_message", text: "Hello world" }),
+        evt(6, { type: "assistant_message", text: "Hello world!" }),
+        evt(7, { type: "assistant_message", text: "Checking" }),
+        evt(8, { type: "assistant_message", text: "   " }),
+        evt(9, { type: "assistant_message", text: 0 }),
+      ]);
+
+      expect(feed.map((item) => (item.kind === "message" ? item.text : item.kind))).toEqual([
+        "Explain",
+        "reasoning",
+        "Hello world",
+        "Hello world!",
+        "Checking",
+        "0",
+      ]);
+      expect(feed[1]).toMatchObject({ kind: "reasoning", mode: "summary", text: "Checking" });
+    });
+
+    test("inserts unseen reasoning before the reply and drops a whitespace-equivalent stream", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "Explain" }, "client"),
+        chunk(2, 0, "text_delta", { id: "a1", text: "Answer" }),
+        chunk(3, 1, "reasoning_delta", { id: "r1", text: "Need  to" }),
+        chunk(3, 2, "reasoning_delta", { id: "r1", text: " call ls." }),
+        evt(4, { type: "reasoning", text: "Need to call ls." }),
+        evt(5, { type: "reasoning_summary", text: "One line." }),
+        evt(6, { type: "assistant_reasoning", text: "Still thinking." }),
+      ]);
+
+      expect(feed.map((item) => item.kind)).toEqual([
+        "message",
+        "reasoning",
+        "reasoning",
+        "message",
+        "reasoning",
+      ]);
+      expect(feed[1]).toMatchObject({ kind: "reasoning", mode: "summary", text: "One line." });
+      expect(feed[2]).toMatchObject({
+        kind: "reasoning",
+        mode: "reasoning",
+        text: "Still thinking.",
+      });
+      expect(feed[3]).toMatchObject({ kind: "message", role: "assistant", text: "Answer" });
+      expect(feed[4]).toMatchObject({
+        kind: "reasoning",
+        mode: "reasoning",
+        text: "Need  to call ls.",
+      });
+    });
+
+    test("shows the final assistant reply again only after the turn is marked idle", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "Status" }, "client"),
+        chunk(2, 0, "text_delta", { id: "t1", text: "Done." }),
+        evt(3, { type: "session_busy", busy: true }),
+        evt(4, { type: "assistant_message", text: "Done." }),
+        evt(5, { type: "session_busy", busy: false }),
+        evt(6, { type: "assistant_message", text: "Done." }),
+      ]);
+
+      expect(feed.filter((item) => item.kind === "message" && item.text === "Done.")).toHaveLength(
+        2,
+      );
+      expect(feed.filter((item) => item.kind === "system").map((item) => item.line)).toEqual([
+        "[session_busy]",
+        "[session_busy]",
+      ]);
+    });
+
+    test("attaches citations only to the assistant stream they close", () => {
+      const first = [{ type: "url_citation", url: "https://example.com/a", title: "A" }];
+      const second = [{ type: "url_citation", url: "https://example.com/b", title: "B" }];
+      const next = [{ type: "url_citation", url: "https://example.com/c", title: "C" }];
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "Sources" }, "client"),
+        chunk(2, 0, "text_delta", { text: "First." }),
+        chunk(2, 1, "text_delta", { id: "t2", text: "Second." }),
+        chunk(3, 0, "text_end", {
+          annotations: ["skip", { type: "url_citation", url: "https://example.com/a", title: "A" }],
+        }),
+        chunk(3, 5, "text_end", { id: "missing", annotations: second }),
+        chunk(4, 9, "text_end", { annotations: [] }),
+        chunk(4, 2, "text_end", { phase: "commentary", annotations: second }),
+        chunk(5, 8, "text_end", { annotations: second }),
+        chunk(6, 0, "text_delta", { id: "t2", text: "Next." }, "turn-2"),
+        chunk(6, 1, "text_end", { id: "t2", annotations: next }, "turn-2"),
+      ]);
+
+      const messages = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+      expect(messages.map((item) => item.text)).toEqual(["First.", "Second.", "Next."]);
+      expect(messages[0]).toMatchObject({ annotations: first });
+      expect(messages[1]).toMatchObject({ annotations: second });
+      expect(messages[2]).toMatchObject({ annotations: next });
     });
   });
 });

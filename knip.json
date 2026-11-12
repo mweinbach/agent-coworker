@@ -14,11 +14,11 @@
       "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"]
     },
     "packages/harness": {
-      "entry": ["src/*.ts", "src/**/*.test.ts"],
+      "entry": ["src/*.ts"],
       "project": ["src/**/*.{ts,tsx}"]
     },
     "apps/mobile": {
-      "entry": ["index.js", "app.config.ts", "src/app/**/*.{ts,tsx}", "plugins/*.js"],
+      "entry": ["index.js", "src/app/**/*.{ts,tsx}", "plugins/*.js"],
       "project": ["src/**/*.{ts,tsx}", "plugins/*.js"]
     },
     "apps/desktop": {

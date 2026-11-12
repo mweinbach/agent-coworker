@@ -469,35 +469,6 @@ impl StepBudget {
         }
     }
 
-    /// Runs `fut` hard-capped at `min(timeout_ms, remaining)` plus caller cancellation. Only for
-    /// operations that must complete *entirely* within `timeout_ms` (e.g. unary RPCs); never wrap
-    /// a streamed model response in it — use [`StepBudget::run`].
-    pub async fn run_attempt<T, F>(
-        &self,
-        timeout_ms: u64,
-        fut: F,
-    ) -> Result<T, ProviderTransportError>
-    where
-        F: Future<Output = Result<T, ProviderTransportError>>,
-    {
-        let timeout_dur = self.attempt_timeout(timeout_ms)?;
-        tokio::select! {
-            biased;
-            () = self.cancel_token.cancelled() => {
-                Err(ProviderTransportError::aborted("Model turn aborted."))
-            }
-            res = tokio::time::timeout(timeout_dur, fut) => {
-                match res {
-                    Ok(inner) => inner,
-                    Err(_) if self.is_expired() => Err(self.step_exceeded()),
-                    Err(_) => Err(ProviderTransportError::timeout(format!(
-                        "Operation exceeded {timeout_ms}ms timeout."
-                    ))),
-                }
-            }
-        }
-    }
-
     /// Sleeps for `delay` bounded by the step deadline and caller `CancellationToken`.
     pub async fn sleep(&self, delay: Duration) -> Result<(), ProviderTransportError> {
         self.check_live()?;

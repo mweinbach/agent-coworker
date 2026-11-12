@@ -100,6 +100,8 @@ pub fn run_cli(args: CliArgs) -> anyhow::Result<()> {
         // Apply seccomp and exec before starting any Tokio worker threads.
         std::process::exit(cowork_sandbox::run_sandbox_exec_cli(args));
     }
+    // The REPL hosts `cowork-server` in-process; route its `tracing` events to stderr.
+    cowork_server::init_tracing();
     run_client(args)
 }
 

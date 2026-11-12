@@ -21,8 +21,8 @@ export function displayProviderName(provider: ProviderName): string {
   );
 }
 
-export function isProviderNameString(value: string): value is ProviderName {
-  return (PROVIDER_NAMES as readonly string[]).includes(value);
+export function isProviderNameString(value: unknown): value is ProviderName {
+  return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
 export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {

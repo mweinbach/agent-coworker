@@ -15,7 +15,7 @@ use cowork_providers::codex_app_server::{
     build_codex_spawn_env, filter_codex_dynamic_tools, from_codex_mcp_tool_name,
     read_codex_account, read_openai_native_connectors, resolve_codex_home,
     resolve_codex_sandbox_and_approval_policy, set_openai_native_connector_enabled,
-    sync_codex_windows_sandbox_setup_state, to_codex_mcp_tool_name,
+    to_codex_mcp_tool_name,
 };
 use cowork_providers::{ProviderStepRequest, ProviderTransport, ToolDefinition};
 use serde_json::{Map, Value, json};
@@ -74,14 +74,17 @@ fn spawns_isolated_codex_home_strips_codex_env_and_syncs_windows_sandbox_markers
     .unwrap();
     std::fs::write(
         cowork_home.join(".sandbox-secrets/sandbox_users.json"),
-        json!({ "version": 5, "offline_user": "CodexSandboxOffline" }).to_string(),
+        json!({
+            "version": 5,
+            "offline": { "username": "CodexSandboxOffline", "password": "p1" },
+            "online": { "username": "CodexSandboxOnline", "password": "p2" },
+        })
+        .to_string(),
     )
     .unwrap();
 
-    assert!(sync_codex_windows_sandbox_setup_state(
-        &cowork_home,
-        &codex_home
-    ));
+    // Spawning again syncs the newest v5 state into the isolated Codex home.
+    build_codex_spawn_env(&cowork_home, &parent_env);
     assert!(codex_home.join(".sandbox/setup_marker.json").is_file());
     assert!(
         codex_home

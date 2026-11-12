@@ -288,7 +288,7 @@ impl ServerRuntimeState {
         if let (Some(cfg), Some((_, _, _, overrides, _))) =
             (workspace_cfg.as_mut(), thread_snapshot.as_ref())
         {
-            crate::turn_runner::apply_session_config_overrides(cfg, overrides);
+            crate::jsonrpc_turn::apply_session_config_overrides(cfg, overrides);
         }
 
         let mut merged_provider_opts = workspace_cfg
@@ -360,7 +360,7 @@ impl ServerRuntimeState {
                 resolve_lmstudio_options(&self.env, Some(&merged_provider_opts), None)
                     .inference_base_url,
             ),
-            _ => crate::turn_runner::provider_base_url_override(
+            _ => cowork_providers::provider_base_url_override(
                 provider,
                 &merged_provider_opts,
                 &self.env,

@@ -150,10 +150,10 @@ bun run start
 Browser development:
 
 ```bash
-bun run web:dev
+bun run desktop:web
 ```
 
-`web:dev` (also `desktop:web`) and `bun run setup:runtime` build only `cowork-server` with Cargo (a no-op when it is already fresh), so they never launch a binary older than your checkout. Without a Rust toolchain they fall back to a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
+`desktop:web` and `bun run setup:runtime` build only `cowork-server` with Cargo (a no-op when it is already fresh), so they never launch a binary older than your checkout. Without a Rust toolchain they fall back to a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
 
 CLI:
 
@@ -265,9 +265,9 @@ cargo fmt --all -- --check
 bun run test                # run all TS/client/black-box tests through the project runner
 bun run typecheck           # typecheck root, harness, and desktop
 bun run docs:check          # verify docs/protocol consistency against Rust's exported manifest
-bun run desktop:dev         # run Electron desktop app in dev mode
+bun run start               # run Electron desktop app in dev mode
 bun run desktop:demo        # run desktop app with onboarding demo mode
-bun run dev                 # run the Rust CLI REPL via cargo
+bun run cli                 # run the Rust CLI REPL via cargo
 bun run harness:run         # run harness scenarios against cowork-server in report-only mode
 ```
 
@@ -291,7 +291,7 @@ Repository map:
 | `crates/cowork-harness/` | Agent turn loop, subagents, workflows, and session runtime |
 | `crates/cowork-mcp/` | MCP config, auth, and client lifecycle |
 | `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery |
-| `src/` | Shared TypeScript client contracts, models/pricing catalogs, and desktop platform helpers |
+| `src/` | Shared TypeScript client contracts, model catalog, cost formatting, and desktop platform helpers |
 | `apps/desktop/` | Electron desktop app |
 | `apps/mobile/` | Optional Expo mobile app |
 | `packages/harness/` | Developer harness scripts and validation |

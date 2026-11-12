@@ -165,10 +165,6 @@ impl StreamEventProjector {
         self.capabilities
     }
 
-    pub fn set_capabilities(&mut self, capabilities: ClientCapabilities) {
-        self.capabilities = capabilities;
-    }
-
     pub fn project(&mut self, event: &StreamEvent) -> Vec<ProjectedNotification> {
         let mut out = Vec::new();
         match event {

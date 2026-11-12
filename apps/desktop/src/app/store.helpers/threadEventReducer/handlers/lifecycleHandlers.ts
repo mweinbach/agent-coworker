@@ -6,10 +6,7 @@ import {
   type ReasoningEffortValue,
   type WorkspaceProviderOptions,
 } from "../../../openaiCompatibleProviderOptions";
-import {
-  developerDiagnosticSystemLineFromSessionEvent,
-  upsertAgentSummary,
-} from "../../../store.feedMapping";
+import { sessionBackupDiagnosticLine, upsertAgentSummary } from "../../../store.feedMapping";
 import type { ChatInteraction } from "../../../types";
 import {
   clearPendingThreadSteers,
@@ -150,8 +147,7 @@ export function handleLifecycleThreadEvent(
   dispatch: HandlerDispatch,
   evt: SessionEvent,
 ): boolean {
-  const { ctx, pushFeedItem, flushOneQueuedThreadMessageIfReady, resetLiveModelStreamRuntime } =
-    module;
+  const { ctx, pushFeedItem, flushOneQueuedThreadMessageIfReady } = module;
   const { get, set, threadId } = dispatch;
 
   const retryPendingWorkspaceDefaultApply = (): boolean => {
@@ -174,9 +170,6 @@ export function handleLifecycleThreadEvent(
       resumedBusy &&
       prevRt?.busy === true &&
       (!evt.turnId || !prevRt.activeTurnId || evt.turnId === prevRt.activeTurnId);
-    if (!resumedSameLiveTurn) {
-      resetLiveModelStreamRuntime(threadId);
-    }
     const draftModelSelection =
       prevRt?.draftComposerProvider != null &&
       typeof prevRt.draftComposerModel === "string" &&
@@ -246,16 +239,6 @@ export function handleLifecycleThreadEvent(
     return true;
   }
 
-  if (evt.type === "observability_status") {
-    pushFeedItem(set, threadId, {
-      id: ctx.deps.makeId(),
-      kind: "system",
-      ts: ctx.deps.nowIso(),
-      line: developerDiagnosticSystemLineFromSessionEvent(evt),
-    });
-    return true;
-  }
-
   if (evt.type === "session_settings") {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -279,7 +262,6 @@ export function handleLifecycleThreadEvent(
       return true;
     }
 
-    resetLiveModelStreamRuntime(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -487,12 +469,12 @@ export function handleLifecycleThreadEvent(
     return true;
   }
 
-  if (evt.type === "session_backup_state" || evt.type === "harness_context") {
+  if (evt.type === "session_backup_state") {
     pushFeedItem(set, threadId, {
       id: ctx.deps.makeId(),
       kind: "system",
       ts: ctx.deps.nowIso(),
-      line: developerDiagnosticSystemLineFromSessionEvent(evt),
+      line: sessionBackupDiagnosticLine(evt),
     });
     return true;
   }

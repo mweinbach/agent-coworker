@@ -2,7 +2,7 @@ import { expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { createElectronMock } from "./helpers/mockElectron";
 
 test("main crash reporting honors live opt-out and opt-in without environment feedback", async () => {

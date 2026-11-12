@@ -6,6 +6,11 @@ on:
       - ".github/workflows/office-conversion-qualification.yml"
       - "scripts/officeWasmQualification.ts"
       - "scripts/officeWasmQualification/**"
+      - "scripts/workspaceRustBinary.ts"
+      - "crates/cowork-sandbox/**"
+      - "crates/cowork-server/**"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "test/office-wasm.integration.test.ts"
       - "test/fixtures/office-wasm/**"
   pull_request:
@@ -13,6 +18,11 @@ on:
       - ".github/workflows/office-conversion-qualification.yml"
       - "scripts/officeWasmQualification.ts"
       - "scripts/officeWasmQualification/**"
+      - "scripts/workspaceRustBinary.ts"
+      - "crates/cowork-sandbox/**"
+      - "crates/cowork-server/**"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "test/office-wasm.integration.test.ts"
       - "test/fixtures/office-wasm/**"
   workflow_dispatch:
@@ -62,11 +72,22 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: office-qualification
+
+      # The qualification sandbox is the Rust one (`cowork-server __sandbox-exec --print-command`).
+      - name: Build sandbox server binary
+        run: |
+          cargo build --locked -p cowork-server --bin cowork-server
+          echo "COWORK_SANDBOX_SERVER_BIN=$GITHUB_WORKSPACE/target/debug/cowork-server" >> "$GITHUB_ENV"
+
       - name: Install Linux qualification tools
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap python3 poppler-utils
+          sudo apt-get install --yes --no-install-recommends bubblewrap poppler-utils
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi

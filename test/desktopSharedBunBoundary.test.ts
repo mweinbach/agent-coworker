@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Guardrail for the Bun-native migration (docs/bun-native-migration.md).
+ * Guardrail for desktop-shared root modules staying Bun-free.
  *
  * Files under apps/desktop/electron/** run in Electron's MAIN process (Node
  * runtime) and files under apps/desktop/src/** run in the renderer (Chromium).

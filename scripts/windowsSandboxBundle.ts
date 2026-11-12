@@ -7,13 +7,13 @@ import { getEnv, mergePathDirs, setEnv } from "../src/platform/env";
 import { which } from "../src/platform/exec";
 import { hostArch, hostPlatform } from "../src/platform/host";
 import { home } from "../src/platform/paths";
+import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
-} from "../src/platform/sandbox/windows";
-import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
+} from "../src/platform/windowsSandboxHelper";
 import { pathExists, runCommand } from "./releaseBuildUtils";
 import { tryDownloadPrebuiltHelpers } from "./winSandboxPrebuilt";
 

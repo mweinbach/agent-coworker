@@ -602,7 +602,7 @@ impl LmStudioLocalService {
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-        cmd.env_remove("COWORK_DESKTOP_PARENT_MANAGED");
+        cmd.env_remove(cowork_sandbox::PARENT_MANAGED_ENV_VAR);
 
         let mut child_opt = cmd.spawn().ok();
 

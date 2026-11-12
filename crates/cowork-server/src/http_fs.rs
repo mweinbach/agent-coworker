@@ -8,6 +8,7 @@ use axum::http::{HeaderValue, Response, StatusCode, header};
 use bytes::Bytes;
 use cowork_config::{canonicalize_sync, is_inside};
 use cowork_harness::ooxml::read_file_change_version;
+use cowork_storage::safe_open::{open_no_follow, restore_blocking_mode, same_file_identity};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -330,49 +331,6 @@ fn assert_opened_file_within_roots(
         ))
     }
 }
-
-#[cfg(unix)]
-fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file_identity(_a: &std::fs::Metadata, _b: &std::fs::Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    // O_NOFOLLOW refuses a final-component symlink swapped in after the check; O_NONBLOCK keeps
-    // a FIFO swapped in from blocking the open (its fstat is then refused). Cleared afterwards.
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
-
-#[cfg(unix)]
-fn restore_blocking_mode(file: &std::fs::File) {
-    use std::os::fd::AsRawFd;
-    let fd = file.as_raw_fd();
-    // SAFETY: `fd` is a valid open descriptor owned by `file` for the duration of these calls.
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        if flags >= 0 && flags & libc::O_NONBLOCK != 0 {
-            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn restore_blocking_mode(_file: &std::fs::File) {}
 
 /// Opens `path` (a canonical path an earlier root check accepted) for reading, for the
 /// `/cowork/fs/*` read routes. Requires a regular file both before (`lstat`) and after (`fstat`)

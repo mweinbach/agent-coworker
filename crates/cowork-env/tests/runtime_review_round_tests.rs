@@ -19,11 +19,10 @@ fn tempdir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
     (tmp, root)
 }
 
-fn pdftoppm_request(first: Option<u32>, last: Option<u32>, dpi: u32) -> PdftoppmJobRequest {
+fn pdftoppm_request(first: Option<u32>, last: Option<u32>) -> PdftoppmJobRequest {
     PdftoppmJobRequest {
         pdf_path: PathBuf::from("/in/deck.pdf"),
         output_dir: PathBuf::from("/out"),
-        dpi,
         first_page: first,
         last_page: last,
         cwd: PathBuf::from("/out"),
@@ -35,33 +34,31 @@ fn pdftoppm_request(first: Option<u32>, last: Option<u32>, dpi: u32) -> Pdftoppm
 #[test]
 fn pdftoppm_args_bound_the_raster_long_edge_like_the_ts_preview() {
     assert_eq!(PDFTOPPM_MAX_LONG_EDGE_PX, 1600);
-    for dpi in [72, 150, 600] {
-        let args = build_pdftoppm_args(
-            &pdftoppm_request(Some(1), Some(201), dpi),
-            Path::new("/in/deck.pdf"),
-            Path::new("/out/page"),
-        );
-        assert_eq!(
-            args,
-            [
-                "-png",
-                "-scale-to",
-                "1600",
-                "-f",
-                "1",
-                "-l",
-                "201",
-                "/in/deck.pdf",
-                "/out/page"
-            ],
-            "dpi={dpi}: the physical page size must never size the bitmap"
-        );
-        assert!(!args.iter().any(|a| a == "-r"), "dpi={dpi}: {args:?}");
-        validate_pdftoppm_args(&args).expect("generated args validate");
-    }
+    let args = build_pdftoppm_args(
+        &pdftoppm_request(Some(1), Some(201)),
+        Path::new("/in/deck.pdf"),
+        Path::new("/out/page"),
+    );
+    assert_eq!(
+        args,
+        [
+            "-png",
+            "-scale-to",
+            "1600",
+            "-f",
+            "1",
+            "-l",
+            "201",
+            "/in/deck.pdf",
+            "/out/page"
+        ],
+        "the physical page size must never size the bitmap"
+    );
+    assert!(!args.iter().any(|a| a == "-r"), "{args:?}");
+    validate_pdftoppm_args(&args).expect("generated args validate");
 
     let no_range = build_pdftoppm_args(
-        &pdftoppm_request(None, None, 150),
+        &pdftoppm_request(None, None),
         Path::new("/in/deck.pdf"),
         Path::new("/out/page"),
     );

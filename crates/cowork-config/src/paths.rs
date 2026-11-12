@@ -18,7 +18,8 @@ pub enum CaseSensitivity {
     Insensitive,
 }
 
-pub fn host_platform() -> &'static str {
+/// Returns the Node-compatible host platform identifier (`"darwin"`, `"linux"`, `"win32"`).
+pub const fn host_platform() -> &'static str {
     if cfg!(target_os = "windows") {
         "win32"
     } else if cfg!(target_os = "macos") {
@@ -365,16 +366,6 @@ pub fn is_inside_with_options(
             Err(_) => false,
         }
     }
-}
-
-pub fn assert_within_roots(roots: &[PathBuf], target: &Path) -> Result<PathBuf> {
-    let canon_target = canonicalize_sync(target);
-    for root in roots {
-        if is_inside(root, &canon_target) {
-            return Ok(canon_target);
-        }
-    }
-    Err(ConfigError::OutsidePermittedRoots(canon_target))
 }
 
 /// Deny-side check: does `target` relative to `base` pass through `.git` or `.cowork`?

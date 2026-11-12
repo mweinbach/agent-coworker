@@ -10,7 +10,7 @@ import { hostPlatform } from "../../../src/platform/host";
 
 export type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colors";
 export type QualityScenario = "first-launch" | "product";
-export type QualityDeltaBurstPath = "legacy-chunk" | "legacy-raw" | "projected";
+export type QualityDeltaBurstPath = "projected";
 
 export type QualityDeltaBurstDescriptor = {
   count: number;

@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { hostPlatform } from "../../../src/platform/host";
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 
 type Fixture = (
   input: { qualityOptions: Record<string, unknown> },

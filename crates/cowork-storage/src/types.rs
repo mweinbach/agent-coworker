@@ -288,20 +288,6 @@ pub struct PersistedSessionRecord {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PersistedModelStreamChunk {
-    pub session_id: String,
-    pub turn_id: String,
-    pub chunk_index: u64,
-    pub ts: String,
-    pub provider: ProviderName,
-    pub model: String,
-    pub raw_format: String,
-    pub normalizer_version: u32,
-    pub raw_event: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ThreadJournalEventInput {
     pub thread_id: String,
     pub ts: String,

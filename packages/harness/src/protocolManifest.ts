@@ -22,7 +22,6 @@ export type RustProtocolSchemaManifest = {
 };
 
 let cachedManifest: RustProtocolSchemaManifest | null = null;
-let cachedSchemaJson: string | null = null;
 
 function buildCargoEnv(): NodeJS.ProcessEnv {
   const userHome = home();
@@ -33,11 +32,11 @@ function buildCargoEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function invokeRustExporter(mode: "manifest" | "schema"): string {
+function invokeRustManifestExporter(): string {
   const env = buildCargoEnv();
   const explicitBin = process.env.COWORK_PROTOCOL_MANIFEST_BINARY?.trim();
   if (explicitBin) {
-    return execFileSync(explicitBin, [mode === "schema" ? "--schema" : "--manifest"], {
+    return execFileSync(explicitBin, ["--manifest"], {
       cwd: REPO_ROOT,
       env,
       encoding: "utf-8",
@@ -57,7 +56,7 @@ function invokeRustExporter(mode: "manifest" | "schema"): string {
         "--bin",
         "cowork-protocol-manifest",
         "--",
-        mode === "schema" ? "--schema" : "--manifest",
+        "--manifest",
       ],
       { env, cwd: REPO_ROOT },
     );
@@ -75,7 +74,7 @@ function invokeRustExporter(mode: "manifest" | "schema"): string {
   for (const profile of ["release", "debug"]) {
     const manifestCandidate = path.join(REPO_ROOT, "target", profile, manifestExe);
     if (fsSync.existsSync(manifestCandidate)) {
-      return execFileSync(manifestCandidate, [mode === "schema" ? "--schema" : "--manifest"], {
+      return execFileSync(manifestCandidate, ["--manifest"], {
         cwd: REPO_ROOT,
         env,
         encoding: "utf-8",
@@ -84,9 +83,7 @@ function invokeRustExporter(mode: "manifest" | "schema"): string {
     }
     const serverCandidate = path.join(REPO_ROOT, "target", profile, serverExe);
     if (fsSync.existsSync(serverCandidate)) {
-      const args = ["__export-jsonrpc-schema"];
-      if (mode === "manifest") args.push("--manifest");
-      return execFileSync(serverCandidate, args, {
+      return execFileSync(serverCandidate, ["__export-jsonrpc-schema", "--manifest"], {
         cwd: REPO_ROOT,
         env,
         encoding: "utf-8",
@@ -102,7 +99,7 @@ function invokeRustExporter(mode: "manifest" | "schema"): string {
 
 export function loadRustProtocolSchemaManifest(): RustProtocolSchemaManifest {
   if (cachedManifest) return cachedManifest;
-  const raw = invokeRustExporter("manifest");
+  const raw = invokeRustManifestExporter();
   const parsed = JSON.parse(raw) as Partial<RustProtocolSchemaManifest> | null;
   if (
     !parsed ||
@@ -130,12 +127,4 @@ export function loadRustProtocolSchemaManifest(): RustProtocolSchemaManifest {
   };
   cachedManifest = validated;
   return validated;
-}
-
-export function loadRustWebSocketJsonRpcSchemaJson(): string {
-  if (cachedSchemaJson !== null) return cachedSchemaJson;
-  const raw = invokeRustExporter("schema");
-  JSON.parse(raw);
-  cachedSchemaJson = `${raw.trimEnd()}\n`;
-  return cachedSchemaJson;
 }

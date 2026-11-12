@@ -14,19 +14,6 @@ export function assertSafeId(id: string, label: string): void {
   }
 }
 
-export function assertValidFileName(name: string, label: string): void {
-  if (
-    !name ||
-    name.includes("/") ||
-    name.includes("\\") ||
-    name.includes("\0") ||
-    name === ".." ||
-    name === "."
-  ) {
-    throw new Error(`${label} is invalid`);
-  }
-}
-
 export async function assertWorkspaceDirectory(workspacePath: string): Promise<void> {
   if (!workspacePath.trim()) {
     throw new Error("workspacePath must not be empty");

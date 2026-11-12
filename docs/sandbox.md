@@ -22,11 +22,11 @@ crates/cowork-sandbox/
   src/windows.rs          Windows: cowork-win-sandbox.exe run + native WinVerifyTrust + v5 setup sync
   src/detect.rs           Capability and integrity probes (sandbox-exec / bwrap / helper bundle)
   src/denial.rs           Structured network vs filesystem denial classification
-src/platform/sandbox/     Retained TypeScript desktop/platform helpers & parity fixtures
+src/platform/windowsSandboxHelper.ts  Desktop-side Windows helper lookup + setup constants
 crates/cowork-win-sandbox/ Windows setup, sandbox, and command-runner helpers
 ```
 
-`SandboxManager` (`crates/cowork-sandbox/src/manager.rs`, with parity client/desktop helpers in `src/platform/sandbox/`) is the single abstraction every platform flows through. Given the command argv and a policy it selects a backend (`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and invokes the self-exec `cowork-server __sandbox-exec` wrapper or native helper, mirroring Codex's `SandboxManager::transform`. The bash tool (`crates/cowork-tools/src/bash.rs`) and `SofficeRunner` (`crates/cowork-env/src/soffice.rs`) wrap commands before spawning and attach marker env vars (`COWORK_SANDBOX`, `COWORK_SANDBOX_NETWORK_DISABLED`) to the child.
+`SandboxManager` (`crates/cowork-sandbox/src/manager.rs`) is the single abstraction every platform flows through. Given the command argv and a policy it selects a backend (`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and invokes the self-exec `cowork-server __sandbox-exec` wrapper or native helper, mirroring Codex's `SandboxManager::transform`. The bash tool (`crates/cowork-tools/src/bash.rs`) and `SofficeRunner` (`crates/cowork-env/src/soffice.rs`) wrap commands before spawning and attach marker env vars (`COWORK_SANDBOX`, `COWORK_SANDBOX_NETWORK_DISABLED`) to the child.
 
 ## Policy model
 
@@ -112,7 +112,7 @@ creates a directory bind source rather than an empty file.
 
 There is no pre-run command prompt. Commands run inside the sandbox silently. If
 a sandboxed command fails in a way that looks like a sandbox denial
-(`crates/cowork-sandbox/src/denial.rs` / `src/platform/sandbox/denied.ts` — "operation not permitted", "read-only file
+(`crates/cowork-sandbox/src/denial.rs` — "operation not permitted", "read-only file
 system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 `approval` event, reason `sandbox_denied_escalation`) whether to re-run it with
 `danger-full-access`. Unsandboxed fallback because a backend is unavailable uses
@@ -132,7 +132,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
 
 ## Per-platform backends
 
-- **macOS — Seatbelt** (`crates/cowork-sandbox/src/seatbelt.rs`, client parity in `src/platform/sandbox/seatbelt.ts`): generates a `.sbpl` profile (deny-by-default
+- **macOS — Seatbelt** (`crates/cowork-sandbox/src/seatbelt.rs`): generates a `.sbpl` profile (deny-by-default
   base + dynamic `file-read*`/`file-write*`/network sections, `-D` path params)
   and runs it under `/usr/bin/sandbox-exec`. Pure string/argv generation. Protected
   metadata (`.git`/`.cowork`) is excluded per writable root via `-D` subpath
@@ -141,7 +141,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   the direct `.git`/`.cowork` children plus any existing nested ones, matching the
   bwrap backend. Capability detection accepts only the fixed, root-owned,
   non-writable `/usr/bin/sandbox-exec` after its Apple code signature verifies.
-- **Linux — bubblewrap** (`crates/cowork-sandbox/src/bwrap.rs`, client parity in `src/platform/sandbox/bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
+- **Linux — bubblewrap** (`crates/cowork-sandbox/src/bwrap.rs`): `--ro-bind / /` for reads, `--bind` per
   writable root, `--ro-bind` to re-protect `.git`/`.cowork`, `--unshare-net` when
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
   resolved only from trusted system dirs (`/usr/bin`, `/bin`, …) or an absolute
@@ -192,7 +192,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   full setup resets those shared accounts' passwords, independent provisioning
   from two homes invalidates the other home's stored credentials (each side
   then re-runs an elevated setup — a clobber loop). Cowork prevents this two
-  ways (`crates/cowork-sandbox/src/windows.rs` and `src/platform/sandbox/windowsSetupSync.ts`): the pooled app-server
+  ways (`crates/cowork-sandbox/src/windows.rs`): the pooled app-server
   client newest-wins syncs the setup marker + DPAPI credentials between
   `~/.cowork` and the app-server home before spawn, so neither Cowork-spawned
   engine ever sees a stale marker and triggers a full re-setup over the
@@ -208,27 +208,17 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
 
 ## Verification
 
-- Unit & Rust integration: `cargo test -p cowork-sandbox -p cowork-server` and `test/platform/sandbox.test.ts` assert exact argv / policy text per policy × platform, cached `.git`/`.cowork` discovery, and escalate-on-failure detection.
-- **Enforcement (real OS sandbox):** `test/platform/sandbox.enforcement.integration.test.ts`
-  spawns the actual backend and asserts allow/deny on a real kernel — in-workspace
-  writes allowed, `.git`/`.cowork` (incl. nested, on macOS) denied, out-of-workspace
-  writes denied, reads allowed, and child `targetPaths` scoping. It is gated by
-  platform + backend availability. Dedicated GitHub Linux x64/ARM64 jobs install
-  prerequisites and require native enforcement, rather than accepting skips.
-  Run it before merging:
-  - macOS: `bun run test -- test/platform/sandbox.enforcement.integration.test.ts`
-  - Linux: production `cowork-server __sandbox-exec` uses native Rust seccomp-BPF (`crates/cowork-sandbox/src/linux_seccomp.rs`) with zero Python runtime dependency; to also run the TypeScript differential socket probe harness, install `bubblewrap` and `/usr/bin/python3`, enable usable user
-    namespaces, and run
-    `RUN_LINUX_SANDBOX_INTEGRATION=1 bun run test -- test/platform/sandbox.linux-sockets.integration.test.ts test/platform/sandbox.enforcement.integration.test.ts`.
-    The socket suite verifies arbitrary host endpoints, alias paths, socketpair
-    reconnection, syscall ABIs, inherited enforcement, and permitted TCP.
+- Unit & Rust integration: `cargo test -p cowork-sandbox -p cowork-server` asserts exact argv / policy text per policy × platform, cached `.git`/`.cowork` discovery, credential read-deny masks, escalate-on-failure detection, and the `__sandbox-exec` CLI (including `--print-command`, which prints the transformed backend launch as one JSON line without executing it).
+- **Enforcement (real OS sandbox):** `crates/cowork-sandbox/tests/backends_and_seccomp.rs`,
+  `seatbelt_live_macos.rs`, and `crates/cowork-server/tests/sandbox_exec_e2e.rs` spawn the
+  actual backend and assert allow/deny on a real kernel. Dedicated GitHub Linux x64/ARM64
+  and macOS ARM64 jobs install prerequisites and run `cargo test -p cowork-sandbox` natively.
+  - Linux: production `cowork-server __sandbox-exec` uses native Rust seccomp-BPF (`crates/cowork-sandbox/src/linux_seccomp.rs`) with zero Python runtime dependency; install `bubblewrap` and enable usable user namespaces.
   - Windows: build all helpers (`cargo build --release --bins --manifest-path
     crates/cowork-win-sandbox/Cargo.toml`), set the three absolute
-    `COWORK_WIN_SANDBOX_*` paths and SHA-256 values, opt in with
-    `RUN_WINDOWS_SANDBOX_INTEGRATION=1`, and run the same command after one-time
-    setup. CI runs this suite natively on both x64 (`windows-latest`) and ARM64
+    `COWORK_WIN_SANDBOX_*` paths and SHA-256 values, and run the helper's one-time
+    `setup` probe. CI runs this natively on both x64 (`windows-latest`) and ARM64
     (`windows-11-arm`).
-
-CI also runs the macOS enforcement suite on the native ARM64 `macos-15` runner,
-including system-binary trust, symlink and child-process escape denial, and a
-loopback network-denial probe.
+- The Office conversion qualification (`scripts/officeWasmQualification.ts`) runs its
+  converter under the Rust sandbox via `cowork-server __sandbox-exec --print-command`
+  and only tightens the printed launch (positive Linux mount view, extra Seatbelt denies).

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use cowork_config::now_iso;
 use cowork_config::{
     AgentConfig, FileLockOptions, ProviderName, SkillImprovementScope, canonicalize_sync,
     ensure_private_dir_sync, file_lock_root_for_cowork_home, get_ai_coworker_paths, host_platform,
@@ -23,15 +24,12 @@ use cowork_inference::{
     CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
     RequestPolicy, StepBudget, ToolDefinition, ToolResultPart,
 };
-use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
-use cowork_providers::chat_completions::lmstudio::resolve_lmstudio_options;
 use cowork_providers::codex_app_server::{
     CodexSandboxRestrictions, DynamicToolCallOutput, DynamicToolHandler,
 };
 use cowork_providers::{
-    AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
-    CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
-    ProviderStepRequest, ProviderTransport, resolve_provider_api_key,
+    CodexAppServerTransport, ProviderStepRequest, ResolvedProviderConnection,
+    resolve_provider_connection,
 };
 use cowork_storage::process_alive;
 use cowork_tools::{
@@ -777,12 +775,6 @@ impl DynamicToolHandler for SkillImproverCodexToolHandler {
     }
 }
 
-struct ResolvedImproverTransport {
-    transport: Arc<dyn ProviderTransport>,
-    base_url: Option<String>,
-    api_key: Option<String>,
-}
-
 fn resolve_improver_transport_and_endpoint(
     provider: ProviderName,
     homedir: &Path,
@@ -791,71 +783,15 @@ fn resolve_improver_transport_and_endpoint(
     provider_opts: &Map<String, Value>,
     built_in_dir: &Path,
     codex_tool_handler: Arc<dyn DynamicToolHandler>,
-) -> Result<ResolvedImproverTransport, String> {
-    let api_key = resolve_provider_api_key(provider, conn_store, env);
-    let bedrock_auth = if provider == ProviderName::Bedrock {
-        let mut auth = resolve_bedrock_auth_config(homedir, env, conn_store);
-        if let (Some(reg), Some(b_cfg)) = (
-            extract_bedrock_region_override(provider_opts),
-            auth.as_mut(),
-        ) {
-            b_cfg.region = reg;
-            b_cfg.has_configured_region = true;
-        }
-        auth
-    } else {
-        None
-    };
-
-    let base_url = match provider {
-        ProviderName::Lmstudio => {
-            let lms = resolve_lmstudio_options(env, Some(provider_opts), None);
-            Some(lms.inference_base_url)
-        }
-        other => {
-            let env_key = match other {
-                ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
-                ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
-                p => format!(
-                    "{}_BASE_URL",
-                    p.as_str().to_ascii_uppercase().replace('-', "_")
-                ),
-            };
-            provider_opts
-                .get(other.as_str())
-                .and_then(Value::as_object)
-                .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
-                .or_else(|| {
-                    provider_opts
-                        .get("baseUrl")
-                        .or_else(|| provider_opts.get("base_url"))
-                })
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .or_else(|| {
-                    env.get(&env_key)
-                        .map(String::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                })
-        }
-    };
-
-    let transport: Arc<dyn ProviderTransport> = match provider {
-        ProviderName::Openai => Arc::new(OpenAiResponsesTransport::new()),
-        ProviderName::Anthropic => Arc::new(AnthropicMessagesTransport::new()),
-        ProviderName::Google => Arc::new(GoogleInteractionsTransport::new()),
-        ProviderName::Bedrock => match bedrock_auth {
-            Some(auth) => Arc::new(BedrockConverseTransport::with_auth(auth)),
-            None => Arc::new(BedrockConverseTransport::with_isolated_env(
-                homedir.to_path_buf(),
-                env.clone(),
-            )),
-        },
-        ProviderName::CodexCli => Arc::new(
+) -> Result<ResolvedProviderConnection, String> {
+    resolve_provider_connection(
+        provider,
+        homedir,
+        env,
+        conn_store,
+        provider_opts,
+        true,
+        || {
             CodexAppServerTransport::with_env_and_bridges(
                 env.clone(),
                 Some(codex_tool_handler),
@@ -867,18 +803,9 @@ fn resolve_improver_transport_and_endpoint(
                 read_only_role: true,
                 ..CodexSandboxRestrictions::default()
             })
-            .with_built_in_dir(Some(built_in_dir.to_path_buf())),
-        ),
-        other => ChatCompletionsTransport::new(other)
-            .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
-            .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str()))?,
-    };
-
-    Ok(ResolvedImproverTransport {
-        transport,
-        base_url,
-        api_key,
-    })
+            .with_built_in_dir(Some(built_in_dir.to_path_buf()))
+        },
+    )
 }
 
 #[async_trait]
@@ -1020,7 +947,7 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
                 executor: Arc::clone(&executor),
             });
 
-        let ResolvedImproverTransport {
+        let ResolvedProviderConnection {
             transport,
             base_url,
             api_key,
@@ -1209,10 +1136,6 @@ impl SkillImproverRunner for ModelBackedSkillImprover {
             error: None,
         }
     }
-}
-
-fn now_iso() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn parse_iso_ms(raw: &str) -> Option<i64> {

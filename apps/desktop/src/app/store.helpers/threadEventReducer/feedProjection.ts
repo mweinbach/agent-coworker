@@ -7,11 +7,6 @@ import {
   projectedItemSchema,
   projectedTodosFromItem,
 } from "../../../../../../src/shared/projectedItems";
-import type { ModelStreamUpdate } from "../../modelStream";
-import {
-  applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
-  type ThreadModelStreamRuntime,
-} from "../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, SessionSnapshot } from "../../types";
 import {
@@ -22,7 +17,6 @@ import {
 } from "../runtimeState";
 import { MAX_FEED_ITEMS } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
-import type { WorkspaceStateHelpers } from "./workspaceState";
 
 export type FeedProjectionModule = ReturnType<typeof createFeedProjectionModule>;
 
@@ -39,16 +33,6 @@ type PendingContentOperation =
       mode: "reasoning" | "summary";
       chunks: string[];
       ts: string;
-    }
-  | {
-      kind: "item-update";
-      itemId: string;
-      updates: Array<(item: FeedItem) => FeedItem>;
-    }
-  | {
-      kind: "insert-content";
-      item: FeedItem;
-      beforeItemId: string | null;
     };
 
 export function latestTodosFromFeed(
@@ -62,20 +46,15 @@ export function latestTodosFromFeed(
 }
 
 type PendingThreadContent = {
-  eventSequenceIncrements: number;
   operations: PendingContentOperation[];
 };
 
 type PendingStoreContent = {
-  get: StoreGet | null;
   set: StoreSet;
   threads: Map<string, PendingThreadContent>;
 };
 
-export function createFeedProjectionModule(
-  ctx: ThreadEventReducerContext,
-  workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
-) {
+export function createFeedProjectionModule(ctx: ThreadEventReducerContext) {
   /**
    * All high-frequency content paths share one queue. A frame publishes once per
    * Zustand store, even when multiple items or threads receive interleaved
@@ -99,13 +78,7 @@ export function createFeedProjectionModule(
     current: PendingContentOperation | undefined,
     next: PendingContentOperation,
   ): boolean {
-    if (
-      !current ||
-      current.kind === "insert-content" ||
-      next.kind === "insert-content" ||
-      current.itemId !== next.itemId ||
-      current.kind !== next.kind
-    ) {
+    if (!current || current.itemId !== next.itemId || current.kind !== next.kind) {
       return false;
     }
     switch (current.kind) {
@@ -120,11 +93,6 @@ export function createFeedProjectionModule(
         current.mode = next.mode;
         return true;
       }
-      case "item-update": {
-        if (next.kind !== "item-update") return false;
-        current.updates.push(...next.updates);
-        return true;
-      }
       default: {
         const exhaustive: never = current;
         return exhaustive;
@@ -132,21 +100,15 @@ export function createFeedProjectionModule(
     }
   }
 
-  function pendingThreadContent(
-    set: StoreSet,
-    threadId: string,
-    get: StoreGet | null = null,
-  ): PendingThreadContent {
+  function pendingThreadContent(set: StoreSet, threadId: string): PendingThreadContent {
     let storeBatch = pendingContentByStore.get(set);
     if (!storeBatch) {
-      storeBatch = { get, set, threads: new Map() };
+      storeBatch = { set, threads: new Map() };
       pendingContentByStore.set(set, storeBatch);
-    } else if (get) {
-      storeBatch.get = get;
     }
     let threadBatch = storeBatch.threads.get(threadId);
     if (!threadBatch) {
-      threadBatch = { eventSequenceIncrements: 0, operations: [] };
+      threadBatch = { operations: [] };
       storeBatch.threads.set(threadId, threadBatch);
     }
     return threadBatch;
@@ -252,26 +214,6 @@ export function createFeedProjectionModule(
           }
           break;
         }
-        case "item-update": {
-          const index = findItemIndex(operation.itemId);
-          const current = index >= 0 ? feed[index] : undefined;
-          if (!current) break;
-          let updated = current;
-          for (const update of operation.updates) {
-            updated = update(updated);
-          }
-          if (updated !== current) {
-            writableFeed()[index] = updated;
-            if (updated.id !== current.id) indexById?.clear();
-          }
-          break;
-        }
-        case "insert-content": {
-          if (findItemIndex(operation.item.id) >= 0) break;
-          const beforeIndex = operation.beforeItemId ? findItemIndex(operation.beforeItemId) : -1;
-          insertItem(operation.item, beforeIndex < 0 ? feed.length : beforeIndex);
-          break;
-        }
         default: {
           const exhaustive: never = operation;
           return exhaustive;
@@ -293,11 +235,7 @@ export function createFeedProjectionModule(
           pending.operations.length > 0
             ? applyPendingContentOperations(runtime.feed, pending.operations)
             : runtime.feed;
-        const nextLastEventSeq =
-          pending.eventSequenceIncrements > 0
-            ? getEffectiveThreadLastEventSeq(state, threadId) + pending.eventSequenceIncrements
-            : runtime.lastEventSeq;
-        if (nextFeed === runtime.feed && nextLastEventSeq === runtime.lastEventSeq) {
+        if (nextFeed === runtime.feed) {
           continue;
         }
         if (!runtimeChanged) {
@@ -307,15 +245,11 @@ export function createFeedProjectionModule(
         nextRuntimeById[threadId] = {
           ...runtime,
           feed: nextFeed,
-          lastEventSeq: nextLastEventSeq,
         };
       }
 
       return runtimeChanged ? { threadRuntimeById: nextRuntimeById } : {};
     });
-    if (batch.get) {
-      void ctx.deps.persist(batch.get);
-    }
   }
 
   function flushPendingContent() {
@@ -340,7 +274,6 @@ export function createFeedProjectionModule(
       contentFlushScheduled = false;
     }
     publishPendingStoreContent({
-      get: storeBatch.get,
       set,
       threads: new Map([[threadId, threadBatch]]),
     });
@@ -363,12 +296,6 @@ export function createFeedProjectionModule(
     contentFlushScheduled = false;
   }
 
-  function recordPendingThreadEvent(get: StoreGet, set: StoreSet, threadId: string) {
-    const pending = pendingThreadContent(set, threadId, get);
-    pending.eventSequenceIncrements += 1;
-    scheduleContentFlush();
-  }
-
   function trimFeed(feed: FeedItem[]): FeedItem[] {
     return feed.length > MAX_FEED_ITEMS ? feed.slice(feed.length - MAX_FEED_ITEMS) : feed;
   }
@@ -382,32 +309,6 @@ export function createFeedProjectionModule(
         threadRuntimeById: {
           ...s.threadRuntimeById,
           [threadId]: { ...rt, feed: trimFeed([...rt.feed, item]) },
-        },
-      };
-    });
-  }
-
-  function insertFeedItemBefore(
-    set: StoreSet,
-    threadId: string,
-    beforeItemId: string,
-    item: FeedItem,
-  ) {
-    flushPendingContentForThread(set, threadId);
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt) return {};
-      const beforeIndex = rt.feed.findIndex((entry) => entry.id === beforeItemId);
-      const nextFeed = [...rt.feed];
-      if (beforeIndex < 0) {
-        nextFeed.push(item);
-      } else {
-        nextFeed.splice(beforeIndex, 0, item);
-      }
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...rt, feed: trimFeed(nextFeed) },
         },
       };
     });
@@ -471,7 +372,6 @@ export function createFeedProjectionModule(
     threadId: string,
     item: Extract<ProjectedItem, { type: "userMessage" }>,
   ) {
-    workspace.resetLiveModelStreamRuntime(threadId);
     const cmid = typeof item.clientMessageId === "string" ? item.clientMessageId : null;
     const trackedSteer = cmid ? RUNTIME.pendingThreadSteers.get(threadId)?.get(cmid) : undefined;
     const steerRequestMatches =
@@ -622,67 +522,6 @@ export function createFeedProjectionModule(
       itemId,
       chunks: [delta],
       ts: ctx.deps.nowIso(),
-    });
-  }
-
-  function applyModelStreamUpdateToThreadFeed(
-    get: StoreGet,
-    set: StoreSet,
-    threadId: string,
-    stream: ThreadModelStreamRuntime,
-    update: ModelStreamUpdate,
-  ) {
-    applyModelStreamUpdateToThreadFeedCore(stream, update, {
-      makeId: ctx.deps.makeId,
-      nowIso: ctx.deps.nowIso,
-      pushFeedItem: (item) => {
-        if (item.kind === "reasoning" || (item.kind === "message" && item.role === "assistant")) {
-          queueContentOperation(set, threadId, {
-            kind: "insert-content",
-            item,
-            beforeItemId: null,
-          });
-          return;
-        }
-        flushPendingContentForThread(set, threadId);
-        pushFeedItem(set, threadId, item);
-      },
-      insertFeedItemBefore: (beforeItemId, item) => {
-        if (item.kind === "reasoning") {
-          queueContentOperation(set, threadId, {
-            kind: "insert-content",
-            item,
-            beforeItemId,
-          });
-          return;
-        }
-        flushPendingContentForThread(set, threadId);
-        insertFeedItemBefore(set, threadId, beforeItemId, item);
-      },
-      updateFeedItem: (itemId, updateItem) => {
-        queueContentOperation(set, threadId, {
-          kind: "item-update",
-          itemId,
-          updates: [updateItem],
-        });
-      },
-      flushPendingContent: () => {
-        flushPendingContentForThread(set, threadId);
-      },
-      onToolTerminal: () => {
-        flushPendingContentForThread(set, threadId);
-        const thread = get().threads.find((t) => t.id === threadId);
-        if (thread) {
-          set((state) => ({
-            workspaceExplorerRefreshById: {
-              ...state.workspaceExplorerRefreshById,
-              [thread.workspaceId]:
-                (state.workspaceExplorerRefreshById[thread.workspaceId] ?? 0) + 1,
-            },
-          }));
-          void get().refreshWorkspaceFiles(thread.workspaceId);
-        }
-      },
     });
   }
 
@@ -877,17 +716,14 @@ export function createFeedProjectionModule(
 
   return {
     pushFeedItem,
-    insertFeedItemBefore,
     parseProjectedItem,
     applyProjectedStarted,
     applyProjectedCompleted,
     applyProjectedReasoningDeltaToThread,
     applyProjectedAssistantDeltaToThread,
-    applyModelStreamUpdateToThreadFeed,
     applyJsonRpcThreadSnapshot,
     flushPendingContentForThread,
     discardPendingContentForThread,
     discardAllPendingContent,
-    recordPendingThreadEvent,
   };
 }

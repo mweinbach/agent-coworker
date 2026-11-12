@@ -216,15 +216,6 @@ pub fn classify_sandbox_denial_detailed(
     None
 }
 
-/// Boolean helper returning whether `output` + `exit_code` indicates a likely OS sandbox denial.
-pub fn is_likely_sandbox_denied(
-    output: &str,
-    exit_code: i32,
-    opts: ClassifyDenialOptions<'_>,
-) -> bool {
-    classify_sandbox_denial(output, exit_code, opts).is_some()
-}
-
 /// Safe user-facing summary of a classified sandbox denial (never echoing untrusted stderr).
 pub const fn describe_sandbox_denial(category: SandboxDenialCategory) -> &'static str {
     match category {

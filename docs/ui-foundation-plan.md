@@ -6,7 +6,7 @@ The shared desktop/web renderer now uses TanStack Router **1.170.32** and
 Vite+ **0.3.0**. This replaces screen switches and eager settings-page imports;
 it does not introduce TanStack Start, SSR, a second server, or TanStack Query.
 Electron-vite still orchestrates native builds against the pinned Vite+ core.
-Bun remains the harness runtime and test runner; mobile stays on Expo/Metro.
+The Rust `cowork-server` owns the backend; Bun remains the TypeScript test runner and mobile stays on Expo/Metro.
 
 ## Ownership
 
@@ -14,7 +14,7 @@ Bun remains the harness runtime and test runner; mobile stays on Expo/Metro.
 | --- | --- |
 | Current screen, back/forward, settings location | TanStack Router and its history |
 | Selected entities, live messages, reconnect state, optimistic IDs, drafts | Existing WebSocket/Zustand state |
-| Agent behavior, permissions, persistence, task lifecycle | Existing Bun harness/server |
+| Agent behavior, permissions, persistence, task lifecycle | Rust server (`crates/cowork-server`, `crates/cowork-harness`) |
 | Native windows, privileged operations, preload bridge | Existing Electron main/preload |
 | Shared renderer dev/build | Vite+ core with electron-vite for native builds |
 | Lint/format | Disjoint Vite+ and Biome scopes listed below |

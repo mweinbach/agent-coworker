@@ -7,7 +7,6 @@ import {
   findEnvKey,
   getEnv,
   mergePathDirs,
-  minimalSandboxEnv,
   pathDelimiter,
   readPathValue,
   runtimePathDirs,
@@ -517,68 +516,6 @@ describe("sandboxEnvAllowlist", () => {
         expect(allowlist.has(name)).toBe(false);
       }
       expect(allowlist.size).toBe(base.length);
-    });
-  }
-});
-
-describe("minimalSandboxEnv", () => {
-  test("win32: preserves the inherited key spelling ('Path', not 'PATH')", () => {
-    const env = minimalSandboxEnv(
-      { Path: "C:\\Windows;C:\\bin", userprofile: "C:\\Users\\me" },
-      "win32",
-    );
-    expect(env).toEqual({ Path: "C:\\Windows;C:\\bin", userprofile: "C:\\Users\\me" });
-  });
-
-  test("win32: exact spelling is preferred when present", () => {
-    const env = minimalSandboxEnv({ PATH: "exact", HOME: "C:\\Users\\me" }, "win32");
-    expect(env).toEqual({ PATH: "exact", HOME: "C:\\Users\\me" });
-  });
-
-  test("win32: profile vars from the allowlist extension pass through", () => {
-    const env = minimalSandboxEnv(
-      {
-        APPDATA: "C:\\Users\\me\\AppData\\Roaming",
-        "ProgramFiles(x86)": "C:\\Program Files (x86)",
-        PYTHONUTF8: "1",
-        SECRET_TOKEN: "leak-me-not",
-      },
-      "win32",
-    );
-    expect(env).toEqual({
-      APPDATA: "C:\\Users\\me\\AppData\\Roaming",
-      "ProgramFiles(x86)": "C:\\Program Files (x86)",
-      PYTHONUTF8: "1",
-    });
-  });
-
-  for (const platform of POSIX_PLATFORMS) {
-    test(`${platform}: exact-key matching only — 'path' does not satisfy PATH`, () => {
-      const env = minimalSandboxEnv({ path: "/bin", PATH: "/usr/bin", HOME: "/home/me" }, platform);
-      expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/me" });
-    });
-
-    test(`${platform}: win32-only profile vars are stripped`, () => {
-      const env = minimalSandboxEnv({ APPDATA: "x", USERPROFILE: "y", PATH: "/bin" }, platform);
-      expect(env).toEqual({ PATH: "/bin" });
-    });
-  }
-
-  for (const platform of ALL_PLATFORMS) {
-    test(`${platform}: non-allowlisted and undefined values never leak`, () => {
-      const env = minimalSandboxEnv(
-        { AWS_SECRET_ACCESS_KEY: "nope", PATH: undefined, CI: "true" },
-        platform,
-      );
-      expect(env).toEqual({ CI: "true" });
-    });
-
-    test(`${platform}: cowork runtime pointers survive`, () => {
-      const env = minimalSandboxEnv(
-        { COWORK_RUNTIME_BIN: "/rt/bin", NODE_OPTIONS: "--import=x" },
-        platform,
-      );
-      expect(env).toEqual({ COWORK_RUNTIME_BIN: "/rt/bin", NODE_OPTIONS: "--import=x" });
     });
   }
 });

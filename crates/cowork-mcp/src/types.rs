@@ -48,9 +48,6 @@ impl McpConfigSource {
     }
 }
 
-/// Backward-compatible alias for `McpConfigSource`.
-pub type McpConfigLayer = McpConfigSource;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum McpAuthScope {

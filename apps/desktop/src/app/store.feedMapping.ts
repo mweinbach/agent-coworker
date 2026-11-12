@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
-import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 import { upsertRetainedWorkflowRun } from "../../../../src/shared/workflows";
 import {
   SERVER_ERROR_CODES,
@@ -8,19 +7,19 @@ import {
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../../../src/types";
-import type { SessionEvent } from "../lib/wsProtocol";
 import { safeParseSessionEvent } from "../lib/wsProtocol";
 import {
-  clearModelStreamReplayRuntime,
-  createModelStreamReplayRuntime,
-  type ModelStreamChunkEvent,
-  type ModelStreamRawEvent,
-  type ModelStreamReplayRuntime,
-  type ModelStreamUpdate,
-  mapModelStreamChunk,
-  replayModelStreamRawEvent,
-  shouldIgnoreNormalizedChunkForRawBackedTurn,
-} from "./modelStream";
+  applyLegacyModelStreamChunk,
+  createLegacyStreamReplay,
+  LEGACY_TRANSCRIPT_SILENT_TYPES,
+  type LegacyStreamReplay,
+  type LegacyTranscriptPayload,
+  legacyAssistantMessageAlreadyStreamed,
+  legacyReasoningAlreadyStreamed,
+  legacyReasoningInsertIndex,
+  parseLegacyTranscriptPayload,
+  resetLegacyStreamReplay,
+} from "./store.legacyTranscript";
 import type {
   FeedItem,
   ThreadAgentSummary,
@@ -29,47 +28,7 @@ import type {
   TranscriptEvent,
 } from "./types";
 
-type ThreadToolStreamItem = {
-  itemId: string;
-  name: string;
-  terminal: boolean;
-  syntheticApproval: boolean;
-};
-
-export type ThreadModelStreamRuntime = {
-  activeTurnId: string | null;
-  assistantItemIdByStream: Map<string, string>;
-  assistantTextByStream: Map<string, string>;
-  assistantTextHistoryInTurn: string[];
-  lastAssistantStreamKeyByTurn: Map<string, string>;
-  reasoningItemIdByStream: Map<string, string>;
-  reasoningTextByStream: Map<string, string>;
-  reasoningTextsSeenInTurn: Set<string>;
-  reasoningTextHistoryInTurn: string[];
-  toolItemsByKey: Map<string, ThreadToolStreamItem>;
-  toolInputByKey: Map<string, string>;
-  lastAssistantTurnId: string | null;
-  replay: ModelStreamReplayRuntime;
-};
-
-export type ThreadModelStreamFeedOps = {
-  makeId: () => string;
-  nowIso: () => string;
-  pushFeedItem: (item: FeedItem) => void;
-  insertFeedItemBefore?: (beforeItemId: string, item: FeedItem) => void;
-  updateFeedItem: (itemId: string, update: (item: FeedItem) => FeedItem) => void;
-  flushPendingContent?: () => void;
-  onToolTerminal?: () => void;
-};
-
 export type TranscriptUsageState = Pick<ThreadRuntime, "sessionUsage" | "lastTurnUsage">;
-
-type DeveloperDiagnosticSessionEvent = Extract<
-  SessionEvent,
-  {
-    type: "observability_status" | "session_backup_state" | "harness_context";
-  }
->;
 
 const serverErrorCodeSet = new Set<string>(SERVER_ERROR_CODES);
 const serverErrorSourceSet = new Set<string>(SERVER_ERROR_SOURCES);
@@ -86,31 +45,11 @@ function normalizeServerErrorSource(value: unknown): ServerErrorSource {
     : "session";
 }
 
-function yesNo(value: boolean): string {
-  return value ? "yes" : "no";
-}
-
 function humanizeUnderscoreLabel(value: string): string {
   return value.replace(/_/g, " ");
 }
 
-function formatObservabilityDiagnosticLine(evt: {
-  enabled: boolean;
-  health: { status?: unknown; reason?: unknown; message?: unknown };
-  config?: unknown;
-}): string {
-  const configured =
-    isRecord(evt.config) && typeof evt.config.configured === "boolean"
-      ? evt.config.configured
-      : false;
-  const healthStatus = typeof evt.health.status === "string" ? evt.health.status : "unknown";
-  const healthReason = typeof evt.health.reason === "string" ? evt.health.reason : "unknown";
-  const healthMessage = previewValue(evt.health.message);
-  const healthDetail = healthMessage ? `${healthReason}: ${healthMessage}` : healthReason;
-  return `Observability: enabled=${yesNo(evt.enabled)}, configured=${yesNo(configured)}, health=${healthStatus} (${healthDetail})`;
-}
-
-function formatSessionBackupDiagnosticLine(evt: { reason?: unknown; backup?: unknown }): string {
+export function sessionBackupDiagnosticLine(evt: { reason?: unknown; backup?: unknown }): string {
   const reason =
     typeof evt.reason === "string" && evt.reason.trim().length > 0
       ? humanizeUnderscoreLabel(evt.reason)
@@ -126,169 +65,9 @@ function formatSessionBackupDiagnosticLine(evt: { reason?: unknown; backup?: unk
     : `Session backup (${reason}): status=${status}, checkpoints=${checkpointCount}`;
 }
 
-function formatHarnessContextDiagnosticLine(evt: { context?: unknown }): string {
-  if (evt.context === null || evt.context === undefined) {
-    return "Harness context cleared";
-  }
-  if (!isRecord(evt.context)) {
-    return "Harness context updated";
-  }
-
-  const details: string[] = [];
-  if (typeof evt.context.taskId === "string" && evt.context.taskId.trim().length > 0) {
-    details.push(`taskId=${evt.context.taskId}`);
-  }
-  if (typeof evt.context.runId === "string" && evt.context.runId.trim().length > 0) {
-    details.push(`runId=${evt.context.runId}`);
-  }
-  if (typeof evt.context.objective === "string" && evt.context.objective.trim().length > 0) {
-    details.push(`objective=${previewValue(evt.context.objective, 80)}`);
-  }
-  if (Array.isArray(evt.context.acceptanceCriteria)) {
-    details.push(`acceptanceCriteria=${evt.context.acceptanceCriteria.length}`);
-  }
-  if (Array.isArray(evt.context.constraints)) {
-    details.push(`constraints=${evt.context.constraints.length}`);
-  }
-  return details.length > 0
-    ? `Harness context updated: ${details.join(", ")}`
-    : "Harness context updated";
-}
-
-export function developerDiagnosticSystemLineFromSessionEvent(
-  evt:
-    | DeveloperDiagnosticSessionEvent
-    | ReturnType<typeof transcriptDeveloperDiagnosticPayloadSchema.parse>,
-): string {
-  switch (evt.type) {
-    case "observability_status":
-      return formatObservabilityDiagnosticLine(evt);
-    case "session_backup_state":
-      return formatSessionBackupDiagnosticLine(evt);
-    case "harness_context":
-      return formatHarnessContextDiagnosticLine(evt);
-  }
-}
-
-function developerDiagnosticSystemLineFromPayload(payload: unknown): string | null {
-  const parsed = transcriptDeveloperDiagnosticPayloadSchema.safeParse(payload);
-  return parsed.success ? developerDiagnosticSystemLineFromSessionEvent(parsed.data) : null;
-}
-
 export function unhandledEventSystemLine(type: string): string {
   return `Unhandled event: ${type}`;
 }
-
-export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
-  return {
-    activeTurnId: null,
-    assistantItemIdByStream: new Map(),
-    assistantTextByStream: new Map(),
-    assistantTextHistoryInTurn: [],
-    lastAssistantStreamKeyByTurn: new Map(),
-    reasoningItemIdByStream: new Map(),
-    reasoningTextByStream: new Map(),
-    reasoningTextsSeenInTurn: new Set(),
-    reasoningTextHistoryInTurn: [],
-    toolItemsByKey: new Map(),
-    toolInputByKey: new Map(),
-    lastAssistantTurnId: null,
-    replay: createModelStreamReplayRuntime(),
-  };
-}
-
-export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
-  runtime.activeTurnId = null;
-  clearStepLocalModelStreamRuntime(runtime, { snapshotReasoning: false, snapshotAssistant: false });
-  runtime.assistantTextHistoryInTurn = [];
-  runtime.reasoningTextsSeenInTurn.clear();
-  runtime.reasoningTextHistoryInTurn = [];
-  runtime.toolItemsByKey.clear();
-  runtime.toolInputByKey.clear();
-  clearModelStreamReplayRuntime(runtime.replay);
-}
-
-function normalizeReasoningText(text: string): string | null {
-  const normalized = text.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function rememberStreamedReasoningText(runtime: ThreadModelStreamRuntime, text: string) {
-  const normalized = normalizeReasoningText(text);
-  if (!normalized) return;
-  runtime.reasoningTextsSeenInTurn.add(normalized);
-  runtime.reasoningTextHistoryInTurn.push(normalized);
-}
-
-function rememberStreamedAssistantText(runtime: ThreadModelStreamRuntime, text: string) {
-  if (!hasVisibleAssistantText(text)) return;
-  runtime.assistantTextHistoryInTurn.push(text);
-}
-
-function rememberStreamedReasoningTexts(runtime: ThreadModelStreamRuntime) {
-  for (const text of runtime.reasoningTextByStream.values()) {
-    rememberStreamedReasoningText(runtime, text);
-  }
-}
-
-function rememberStreamedAssistantTexts(runtime: ThreadModelStreamRuntime) {
-  for (const text of runtime.assistantTextByStream.values()) {
-    rememberStreamedAssistantText(runtime, text);
-  }
-}
-
-function clearStepLocalModelStreamRuntime(
-  runtime: ThreadModelStreamRuntime,
-  opts: { snapshotReasoning?: boolean; snapshotAssistant?: boolean } = {},
-) {
-  if (opts.snapshotAssistant !== false) {
-    rememberStreamedAssistantTexts(runtime);
-  }
-  if (opts.snapshotReasoning !== false) {
-    rememberStreamedReasoningTexts(runtime);
-  }
-  runtime.assistantItemIdByStream.clear();
-  runtime.assistantTextByStream.clear();
-  runtime.lastAssistantStreamKeyByTurn.clear();
-  runtime.reasoningItemIdByStream.clear();
-  runtime.reasoningTextByStream.clear();
-  runtime.lastAssistantTurnId = null;
-}
-
-export function hasMatchingStreamedReasoningText(
-  runtime: ThreadModelStreamRuntime,
-  text: string,
-): boolean {
-  const normalized = normalizeReasoningText(text);
-  if (!normalized) return false;
-  if (runtime.reasoningTextsSeenInTurn.has(normalized)) return true;
-
-  for (const current of runtime.reasoningTextByStream.values()) {
-    if (normalizeReasoningText(current) === normalized) {
-      return true;
-    }
-  }
-
-  const aggregate = normalizeTranscriptReplayText(
-    [
-      ...runtime.reasoningTextHistoryInTurn,
-      ...[...runtime.reasoningTextByStream.values()]
-        .map((current) => normalizeReasoningText(current))
-        .filter((current): current is string => current !== null),
-    ].join("\n\n"),
-  );
-  if (aggregate && aggregate === normalizeTranscriptReplayText(normalized)) {
-    return true;
-  }
-  return false;
-}
-
-function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
-  runtime.toolItemsByKey.clear();
-  runtime.toolInputByKey.clear();
-}
-
-import { isTerminalToolState } from "./toolFeedState";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -396,669 +175,6 @@ export function extractUsageStateFromTranscript(
   return { sessionUsage, lastTurnUsage };
 }
 
-function previewValue(value: unknown, maxChars = 160): string {
-  if (value === undefined) return "";
-  if (typeof value === "string") {
-    return value.length > maxChars ? `${value.slice(0, maxChars - 1)}...` : value;
-  }
-  try {
-    const raw = JSON.stringify(value);
-    if (!raw) return "";
-    return raw.length > maxChars ? `${raw.slice(0, maxChars - 1)}...` : raw;
-  } catch {
-    const fallback = String(value);
-    return fallback.length > maxChars ? `${fallback.slice(0, maxChars - 1)}...` : fallback;
-  }
-}
-
-function incompleteToolStreamResult(error?: unknown): Record<string, unknown> {
-  return {
-    error: error ?? "Turn failed before the tool call completed.",
-  };
-}
-
-function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
-  const parsed = parseStructuredToolInput(inputText);
-  const base = isRecord(existingArgs) ? existingArgs : {};
-  const { input: _discardInput, ...rest } = base;
-
-  if (isRecord(parsed)) {
-    return { ...rest, ...parsed };
-  }
-
-  if (Object.keys(rest).length > 0) {
-    return { ...rest, input: inputText };
-  }
-
-  return { input: inputText };
-}
-
-function toolSyntheticApprovalKey(turnId: string, approvalId: string): string {
-  return `${turnId}:approval:${approvalId}`;
-}
-
-function toolKeyFromApproval(toolCall: unknown): string | null {
-  if (!isRecord(toolCall)) return null;
-  for (const key of [toolCall.toolCallId, toolCall.id]) {
-    if (typeof key === "string" && key.trim().length > 0) return key;
-  }
-  return null;
-}
-
-function toolNameFromApproval(toolCall: unknown): string {
-  if (isRecord(toolCall)) {
-    const toolName = toolCall.toolName;
-    if (typeof toolName === "string" && toolName.trim().length > 0) return toolName;
-    const name = toolCall.name;
-    if (typeof name === "string" && name.trim().length > 0) return name;
-  }
-  return "tool";
-}
-
-function toolArgsFromApproval(toolCall: unknown): unknown {
-  if (!isRecord(toolCall)) return undefined;
-  if ("args" in toolCall) return toolCall.args;
-  if ("input" in toolCall) return toolCall.input;
-  return undefined;
-}
-
-function rememberToolItem(
-  stream: ThreadModelStreamRuntime,
-  fullKey: string,
-  itemId: string,
-  name: string,
-  syntheticApproval = false,
-) {
-  stream.toolItemsByKey.set(fullKey, { itemId, name, terminal: false, syntheticApproval });
-}
-
-function findPendingToolItem(
-  stream: ThreadModelStreamRuntime,
-  turnId: string,
-  name: string,
-  syntheticApproval: boolean,
-): { fullKey: string; itemId: string } | null {
-  let match: { fullKey: string; itemId: string } | null = null;
-  for (const [fullKey, item] of stream.toolItemsByKey) {
-    if (
-      !fullKey.startsWith(`${turnId}:`) ||
-      item.terminal ||
-      item.name !== name ||
-      item.syntheticApproval !== syntheticApproval
-    ) {
-      continue;
-    }
-    if (match) return null;
-    match = { fullKey, itemId: item.itemId };
-  }
-  return match;
-}
-
-function resolveToolItem(
-  stream: ThreadModelStreamRuntime,
-  turnId: string,
-  key: string,
-  name: string,
-): { fullKey: string; itemId?: string } {
-  const fullKey = `${turnId}:${key}`;
-  const direct = stream.toolItemsByKey.get(fullKey);
-  if (direct) {
-    if (!direct.terminal) direct.name = name;
-    return { fullKey, itemId: direct.itemId };
-  }
-
-  // A concrete call ID is its identity, even when another call has the same
-  // name. Only an unambiguous ID-less approval placeholder can be rekeyed.
-  const pending = findPendingToolItem(stream, turnId, name, true);
-  const placeholder = pending ? stream.toolItemsByKey.get(pending.fullKey) : undefined;
-  if (!pending || !placeholder) return { fullKey };
-  stream.toolItemsByKey.delete(pending.fullKey);
-  stream.toolItemsByKey.set(fullKey, { ...placeholder, syntheticApproval: false });
-  const input = stream.toolInputByKey.get(pending.fullKey);
-  if (input !== undefined) {
-    stream.toolInputByKey.delete(pending.fullKey);
-    stream.toolInputByKey.set(fullKey, input);
-  }
-  return { fullKey, itemId: placeholder.itemId };
-}
-
-export function shouldSuppressRawDebugLogLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) return false;
-
-  if (/^raw stream part:/i.test(trimmed)) return true;
-  if (/response\.function_call_arguments\./i.test(trimmed)) return true;
-  if (/response\.reasoning(?:_|\.|[a-z])/i.test(trimmed)) return true;
-  if (/"type"\s*:\s*"response\./i.test(trimmed)) return true;
-  if (/\bobfuscation\b/i.test(trimmed)) return true;
-
-  return false;
-}
-
-function recentAssistantTextSinceLastUser(feed: FeedItem[]): string {
-  const assistantTexts: string[] = [];
-  for (let i = feed.length - 1; i >= 0; i -= 1) {
-    const item = feed[i];
-    if (item.kind !== "message") continue;
-    if (item.role === "user") break;
-    const text = item.text.trim();
-    if (item.role === "assistant" && text) {
-      assistantTexts.push(text);
-    }
-  }
-
-  if (assistantTexts.length === 0) return "";
-  return assistantTexts.reverse().join("\n\n").trim();
-}
-
-function normalizeTranscriptReplayText(text: string): string {
-  return text
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function hasVisibleAssistantText(text: string): boolean {
-  return text.trim().length > 0;
-}
-
-export function shouldSkipAssistantMessageAfterStreamReplay(
-  stream: ThreadModelStreamRuntime,
-  assistantText: string,
-  feed: FeedItem[] = [],
-): boolean {
-  const normalizedAssistantText = normalizeTranscriptReplayText(assistantText);
-  if (!normalizedAssistantText) return true;
-
-  if (stream.lastAssistantTurnId) {
-    const assistantKey = stream.lastAssistantStreamKeyByTurn.get(stream.lastAssistantTurnId);
-    const streamed = normalizeTranscriptReplayText(
-      assistantKey ? (stream.assistantTextByStream.get(assistantKey) ?? "") : "",
-    );
-    if (streamed) {
-      if (normalizedAssistantText === streamed) return true;
-      if (streamed.startsWith(normalizedAssistantText)) return true;
-
-      if (stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
-        return normalizedAssistantText.endsWith(streamed);
-      }
-    }
-  }
-
-  const exactStreamedAssistantText = normalizeTranscriptReplayText(
-    [...stream.assistantTextHistoryInTurn, ...stream.assistantTextByStream.values()].join(""),
-  );
-  if (exactStreamedAssistantText) {
-    if (normalizedAssistantText === exactStreamedAssistantText) return true;
-    if (exactStreamedAssistantText.startsWith(normalizedAssistantText)) return true;
-
-    if (
-      stream.lastAssistantTurnId &&
-      stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)
-    ) {
-      return normalizedAssistantText.endsWith(exactStreamedAssistantText);
-    }
-  }
-
-  const aggregatedAssistantText = normalizeTranscriptReplayText(
-    recentAssistantTextSinceLastUser(feed),
-  );
-  if (!aggregatedAssistantText) return false;
-  if (normalizedAssistantText === aggregatedAssistantText) return true;
-
-  if (stream.lastAssistantTurnId && stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
-    return normalizedAssistantText.endsWith(aggregatedAssistantText);
-  }
-
-  return false;
-}
-
-export function reasoningInsertBeforeAssistantAfterStreamReplay(
-  stream: ThreadModelStreamRuntime,
-): string | null {
-  const turnId = stream.lastAssistantTurnId;
-  if (!turnId) return null;
-
-  const assistantKey = stream.lastAssistantStreamKeyByTurn.get(turnId);
-  if (!assistantKey) return null;
-
-  return stream.assistantItemIdByStream.get(assistantKey) ?? null;
-}
-
-function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
-  if (update.kind === "turn_abort") {
-    const reason = previewValue(update.reason);
-    return reason ? `Turn aborted: ${reason}` : "Turn aborted";
-  }
-
-  if (update.kind === "turn_error") {
-    const detail = previewValue(update.error);
-    return detail ? `Stream error: ${detail}` : "Stream error";
-  }
-
-  if (update.kind === "reasoning_start") {
-    return `Reasoning started (${update.mode})`;
-  }
-
-  if (update.kind === "reasoning_end") {
-    return `Reasoning ended (${update.mode})`;
-  }
-
-  if (update.kind === "source") {
-    const sourcePreview = previewValue(update.source);
-    return sourcePreview ? `Source: ${sourcePreview}` : "Source";
-  }
-
-  if (update.kind === "file") {
-    const filePreview = previewValue(update.file);
-    return filePreview ? `File: ${filePreview}` : "File";
-  }
-
-  if (update.kind === "unknown") {
-    const payloadPreview = previewValue(update.payload);
-    return payloadPreview
-      ? `Unhandled stream part (${update.partType}): ${payloadPreview}`
-      : `Unhandled stream part (${update.partType})`;
-  }
-
-  return null;
-}
-
-function applyModelStreamUpdate(
-  stream: ThreadModelStreamRuntime,
-  update: ModelStreamUpdate,
-  ops: ThreadModelStreamFeedOps,
-) {
-  const push = (item: FeedItem) => {
-    ops.pushFeedItem(item);
-  };
-
-  const appendReasoningDelta = (
-    turnId: string,
-    streamId: string,
-    mode: Extract<FeedItem, { kind: "reasoning" }>["mode"],
-    text: string,
-  ) => {
-    const key = `${turnId}:${streamId}`;
-    const itemId = stream.reasoningItemIdByStream.get(key);
-    const nextText = `${stream.reasoningTextByStream.get(key) ?? ""}${text}`;
-    stream.reasoningTextByStream.set(key, nextText);
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "reasoning" ? { ...item, mode, text: nextText } : item,
-      );
-    } else if (nextText) {
-      const id = ops.makeId();
-      stream.reasoningItemIdByStream.set(key, id);
-      const item: FeedItem = {
-        id,
-        kind: "reasoning",
-        mode,
-        ts: ops.nowIso(),
-        text: nextText,
-      };
-      const beforeAssistantId =
-        turnId === stream.lastAssistantTurnId
-          ? reasoningInsertBeforeAssistantAfterStreamReplay(stream)
-          : null;
-      if (beforeAssistantId && ops.insertFeedItemBefore) {
-        ops.insertFeedItemBefore(beforeAssistantId, item);
-      } else {
-        push(item);
-      }
-    }
-  };
-
-  const appendAssistantDelta = (turnId: string, streamId: string, text: string) => {
-    if (!text) return;
-    stream.lastAssistantTurnId = turnId;
-    const assistantKey = `${turnId}:${streamId}`;
-    stream.lastAssistantStreamKeyByTurn.set(turnId, assistantKey);
-    const itemId = stream.assistantItemIdByStream.get(assistantKey);
-    const nextText = `${stream.assistantTextByStream.get(assistantKey) ?? ""}${text}`;
-    stream.assistantTextByStream.set(assistantKey, nextText);
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "message" && item.role === "assistant" ? { ...item, text: nextText } : item,
-      );
-    } else if (hasVisibleAssistantText(nextText)) {
-      const id = ops.makeId();
-      stream.assistantItemIdByStream.set(assistantKey, id);
-      push({ id, kind: "message", role: "assistant", ts: ops.nowIso(), text: nextText });
-    }
-  };
-
-  const failActiveToolStreams = (turnId: string | null, error?: unknown) => {
-    for (const [fullKey, tool] of stream.toolItemsByKey) {
-      if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
-      tool.terminal = true;
-      ops.updateFeedItem(tool.itemId, (item) => {
-        if (item.kind !== "tool" || isTerminalToolState(item.state)) return item;
-        return { ...item, state: "output-error", result: incompleteToolStreamResult(error) };
-      });
-    }
-    ops.onToolTerminal?.();
-  };
-
-  if (update.kind === "turn_start") {
-    if (stream.activeTurnId !== update.turnId) {
-      clearThreadModelStreamRuntime(stream);
-      stream.activeTurnId = update.turnId;
-    } else {
-      clearStepLocalModelStreamRuntime(stream);
-      clearStepLocalToolRuntime(stream);
-    }
-    return;
-  }
-
-  if (
-    update.kind === "turn_finish" ||
-    update.kind === "step_start" ||
-    update.kind === "step_finish" ||
-    update.kind === "assistant_text_start"
-  ) {
-    // Keep these as state-only boundaries to avoid noisy transcript/feed reconstruction.
-    return;
-  }
-
-  if (update.kind === "turn_error") {
-    failActiveToolStreams(update.turnId, update.error);
-  }
-
-  if (update.kind === "turn_abort") {
-    failActiveToolStreams(update.turnId, update.reason);
-  }
-
-  if (update.kind === "assistant_text_end") {
-    const assistantKey = `${update.turnId}:${update.streamId}`;
-    const itemId = stream.assistantItemIdByStream.get(assistantKey);
-    if (itemId && update.annotations) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "message" && item.role === "assistant"
-          ? { ...item, annotations: update.annotations }
-          : item,
-      );
-    }
-    return;
-  }
-
-  if (update.kind === "assistant_delta") {
-    appendAssistantDelta(update.turnId, update.streamId, update.text);
-    return;
-  }
-
-  if (update.kind === "reasoning_start" || update.kind === "reasoning_end") {
-    return;
-  }
-
-  if (update.kind === "reasoning_delta") {
-    appendReasoningDelta(update.turnId, update.streamId, update.mode, update.text);
-    return;
-  }
-
-  if (update.kind === "tool_input_start") {
-    const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
-    stream.toolInputByKey.delete(fullKey);
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool" && !isTerminalToolState(item.state)
-          ? {
-              ...item,
-              name: update.name,
-              state: "input-streaming",
-              args: update.args ?? item.args,
-            }
-          : item,
-      );
-      return;
-    }
-
-    const id = ops.makeId();
-    rememberToolItem(stream, fullKey, id, update.name);
-    push({
-      id,
-      kind: "tool",
-      ts: ops.nowIso(),
-      name: update.name,
-      state: "input-streaming",
-      args: update.args,
-    });
-    return;
-  }
-
-  if (update.kind === "tool_input_delta") {
-    const fullKey = `${update.turnId}:${update.key}`;
-    const nextInput = `${stream.toolInputByKey.get(fullKey) ?? ""}${update.delta}`;
-    stream.toolInputByKey.set(fullKey, nextInput);
-    const itemId = stream.toolItemsByKey.get(fullKey)?.itemId;
-    if (!itemId) {
-      const id = ops.makeId();
-      rememberToolItem(stream, fullKey, id, "tool");
-      push({
-        id,
-        kind: "tool",
-        ts: ops.nowIso(),
-        name: "tool",
-        state: "input-streaming",
-        args: normalizeToolArgsFromInput(nextInput),
-      });
-      return;
-    }
-    ops.updateFeedItem(itemId, (item) => {
-      if (item.kind !== "tool") return item;
-      if (isTerminalToolState(item.state)) return item;
-      return {
-        ...item,
-        state: item.state === "approval-requested" ? item.state : "input-streaming",
-        args: normalizeToolArgsFromInput(nextInput, item.args),
-      };
-    });
-    return;
-  }
-
-  if (update.kind === "tool_input_end") {
-    const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
-    const nextInput = stream.toolInputByKey.get(fullKey) ?? "";
-
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool" && !isTerminalToolState(item.state)
-          ? {
-              ...item,
-              name: update.name,
-              state: item.state === "approval-requested" ? item.state : "input-available",
-              args: nextInput ? normalizeToolArgsFromInput(nextInput, item.args) : item.args,
-            }
-          : item,
-      );
-      return;
-    }
-
-    if (!nextInput) return;
-    const id = ops.makeId();
-    rememberToolItem(stream, fullKey, id, update.name);
-    push({
-      id,
-      kind: "tool",
-      ts: ops.nowIso(),
-      name: update.name,
-      state: "input-available",
-      args: normalizeToolArgsFromInput(nextInput),
-    });
-    return;
-  }
-
-  if (update.kind === "tool_call") {
-    const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool" && !isTerminalToolState(item.state)
-          ? {
-              ...item,
-              name: update.name,
-              state: item.state === "approval-requested" ? item.state : "input-available",
-              args: update.args ?? item.args,
-            }
-          : item,
-      );
-      return;
-    }
-
-    const id = ops.makeId();
-    rememberToolItem(stream, fullKey, id, update.name);
-    push({
-      id,
-      kind: "tool",
-      ts: ops.nowIso(),
-      name: update.name,
-      state: "input-available",
-      args: update.args,
-    });
-    return;
-  }
-
-  if (
-    update.kind === "tool_result" ||
-    update.kind === "tool_error" ||
-    update.kind === "tool_output_denied"
-  ) {
-    const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
-    const result =
-      update.kind === "tool_result"
-        ? update.result
-        : update.kind === "tool_error"
-          ? { error: update.error }
-          : { denied: true, reason: update.reason };
-    const state =
-      update.kind === "tool_result"
-        ? "output-available"
-        : update.kind === "tool_error"
-          ? "output-error"
-          : "output-denied";
-    const completedAt = ops.nowIso();
-
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool"
-          ? {
-              ...item,
-              name: update.name,
-              state,
-              result,
-              completedAt: item.completedAt ?? completedAt,
-            }
-          : item,
-      );
-    } else {
-      const id = ops.makeId();
-      rememberToolItem(stream, fullKey, id, update.name);
-      push({ id, kind: "tool", ts: completedAt, name: update.name, state, result, completedAt });
-    }
-    const tool = stream.toolItemsByKey.get(fullKey);
-    if (tool) tool.terminal = true;
-
-    ops.onToolTerminal?.();
-    return;
-  }
-
-  if (update.kind === "tool_approval_request") {
-    const name = toolNameFromApproval(update.toolCall);
-    const key = toolKeyFromApproval(update.toolCall);
-    const syntheticKey = toolSyntheticApprovalKey(update.turnId, update.approvalId);
-    const existingSynthetic = stream.toolItemsByKey.get(syntheticKey);
-    const resolved = key
-      ? resolveToolItem(stream, update.turnId, key, name)
-      : existingSynthetic
-        ? { fullKey: syntheticKey, itemId: existingSynthetic.itemId }
-        : (findPendingToolItem(stream, update.turnId, name, false) ?? { fullKey: syntheticKey });
-    const { fullKey, itemId } = resolved;
-
-    if (itemId) {
-      if (stream.toolItemsByKey.get(fullKey)?.terminal) return;
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "tool"
-          ? {
-              ...item,
-              name,
-              state: "approval-requested",
-              args: item.args ?? toolArgsFromApproval(update.toolCall),
-              approval: { approvalId: update.approvalId, toolCall: update.toolCall },
-            }
-          : item,
-      );
-      ops.flushPendingContent?.();
-      return;
-    }
-
-    const id = ops.makeId();
-    rememberToolItem(stream, fullKey, id, name, key === null);
-    push({
-      id,
-      kind: "tool",
-      ts: ops.nowIso(),
-      name,
-      state: "approval-requested",
-      args: toolArgsFromApproval(update.toolCall),
-      approval: { approvalId: update.approvalId, toolCall: update.toolCall },
-    });
-    ops.flushPendingContent?.();
-    return;
-  }
-
-  const systemLine = modelStreamSystemLine(update);
-  if (systemLine) {
-    push({ id: ops.makeId(), kind: "system", ts: ops.nowIso(), line: systemLine });
-  }
-}
-
-function appendModelStreamUpdateToFeed(
-  out: FeedItem[],
-  ts: string,
-  stream: ThreadModelStreamRuntime,
-  update: ModelStreamUpdate,
-) {
-  applyModelStreamUpdate(stream, update, {
-    makeId: () => crypto.randomUUID(),
-    nowIso: () => ts,
-    pushFeedItem: (item) => out.push(item),
-    insertFeedItemBefore: (beforeItemId, item) => {
-      const idx = out.findIndex((entry) => entry.id === beforeItemId);
-      if (idx < 0) {
-        out.push(item);
-        return;
-      }
-      out.splice(idx, 0, item);
-    },
-    updateFeedItem: (itemId, updateItem) => {
-      const idx = out.findIndex((item) => item.id === itemId);
-      if (idx < 0) return;
-      const current = out[idx];
-      if (!current) return;
-      out[idx] = updateItem(current);
-    },
-  });
-}
-
-function failActiveToolStreamsInFeed(
-  out: FeedItem[],
-  stream: ThreadModelStreamRuntime,
-  turnId: string | null,
-  error?: unknown,
-) {
-  for (const [fullKey, tool] of stream.toolItemsByKey) {
-    if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
-    tool.terminal = true;
-    const idx = out.findIndex((item) => item.id === tool.itemId);
-    if (idx < 0) continue;
-    const current = out[idx];
-    if (current?.kind !== "tool" || isTerminalToolState(current.state)) continue;
-    out[idx] = { ...current, state: "output-error", result: incompleteToolStreamResult(error) };
-  }
-}
-
 const transcriptPayloadTypeSchema = z
   .object({
     type: z.string(),
@@ -1070,47 +186,6 @@ const transcriptUserMessagePayloadSchema = z
     type: z.literal("user_message"),
     text: z.unknown().optional(),
     clientMessageId: z.string().optional(),
-  })
-  .passthrough();
-
-const transcriptModelStreamPayloadSchema = z
-  .object({
-    type: z.literal("model_stream_chunk"),
-  })
-  .passthrough();
-
-const transcriptModelStreamRawPayloadSchema = z
-  .object({
-    type: z.literal("model_stream_raw"),
-  })
-  .passthrough();
-
-const transcriptAssistantMessagePayloadSchema = z
-  .object({
-    type: z.literal("assistant_message"),
-    text: z.unknown().optional(),
-  })
-  .passthrough();
-
-const transcriptReasoningPayloadSchema = z
-  .object({
-    type: z.literal("reasoning"),
-    kind: z.enum(["reasoning", "summary"]).optional(),
-    text: z.unknown().optional(),
-  })
-  .passthrough();
-
-const transcriptAssistantReasoningPayloadSchema = z
-  .object({
-    type: z.literal("assistant_reasoning"),
-    text: z.unknown().optional(),
-  })
-  .passthrough();
-
-const transcriptReasoningSummaryPayloadSchema = z
-  .object({
-    type: z.literal("reasoning_summary"),
-    text: z.unknown().optional(),
   })
   .passthrough();
 
@@ -1144,19 +219,6 @@ const transcriptSessionBusyPayloadSchema = z
   })
   .passthrough();
 
-const transcriptObservabilityStatusPayloadSchema = z
-  .object({
-    type: z.literal("observability_status"),
-    enabled: z.boolean(),
-    health: z.object({
-      status: z.unknown(),
-      reason: z.unknown(),
-      message: z.unknown().optional(),
-    }),
-    config: z.unknown().optional(),
-  })
-  .passthrough();
-
 const transcriptSessionBackupStatePayloadSchema = z
   .object({
     type: z.literal("session_backup_state"),
@@ -1165,31 +227,13 @@ const transcriptSessionBackupStatePayloadSchema = z
   })
   .passthrough();
 
-const transcriptHarnessContextPayloadSchema = z
-  .object({
-    type: z.literal("harness_context"),
-    context: z.unknown().nullable().optional(),
-  })
-  .passthrough();
-
-const transcriptDeveloperDiagnosticPayloadSchema = z.discriminatedUnion("type", [
-  transcriptObservabilityStatusPayloadSchema,
-  transcriptSessionBackupStatePayloadSchema,
-  transcriptHarnessContextPayloadSchema,
-]);
-
 const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
   transcriptUserMessagePayloadSchema,
-  transcriptModelStreamPayloadSchema,
-  transcriptModelStreamRawPayloadSchema,
-  transcriptAssistantMessagePayloadSchema,
-  transcriptReasoningPayloadSchema,
-  transcriptAssistantReasoningPayloadSchema,
-  transcriptReasoningSummaryPayloadSchema,
   transcriptTodosPayloadSchema,
   transcriptLogPayloadSchema,
   transcriptErrorPayloadSchema,
   transcriptSessionBusyPayloadSchema,
+  transcriptSessionBackupStatePayloadSchema,
 ]);
 
 const transcriptFeedSuppressedTypes = new Set([
@@ -1258,26 +302,21 @@ export function extractWorkflowRunsFromTranscript(events: TranscriptEvent[]): Th
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   const out: FeedItem[] = [];
   const seenUser = new Set<string>();
-  const stream = createThreadModelStreamRuntime();
+  const legacyStream = createLegacyStreamReplay();
   const makeId = () => crypto.randomUUID();
 
   for (const evt of events) {
     const parsedPayload = transcriptFeedPayloadSchema.safeParse(evt.payload);
     if (!parsedPayload.success) {
-      const developerDiagnosticLine = developerDiagnosticSystemLineFromPayload(evt.payload);
-      if (developerDiagnosticLine) {
-        out.push({
-          id: makeId(),
-          kind: "system",
-          ts: evt.ts,
-          line: developerDiagnosticLine,
-        });
+      const legacy = parseLegacyTranscriptPayload(evt.payload);
+      if (legacy) {
+        appendLegacyTranscriptEvent(out, legacyStream, evt.ts, legacy);
         continue;
       }
-
       const parsedTypeOnly = transcriptPayloadTypeSchema.safeParse(evt.payload);
       if (!parsedTypeOnly.success) continue;
       if (transcriptFeedSuppressedTypes.has(parsedTypeOnly.data.type)) continue;
+      if (LEGACY_TRANSCRIPT_SILENT_TYPES.has(parsedTypeOnly.data.type)) continue;
       out.push({
         id: makeId(),
         kind: "system",
@@ -1290,7 +329,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     const payload = parsedPayload.data;
 
     if (payload.type === "user_message") {
-      clearThreadModelStreamRuntime(stream);
+      resetLegacyStreamReplay(legacyStream);
       const cmid = payload.clientMessageId ?? "";
       if (cmid && seenUser.has(cmid)) continue;
       if (cmid) seenUser.add(cmid);
@@ -1301,71 +340,6 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         ts: evt.ts,
         text: String(payload.text ?? ""),
       });
-      continue;
-    }
-
-    if (payload.type === "model_stream_chunk") {
-      if (
-        shouldIgnoreNormalizedChunkForRawBackedTurn(stream.replay, payload as ModelStreamChunkEvent)
-      ) {
-        continue;
-      }
-      const mapped = mapModelStreamChunk(payload as ModelStreamChunkEvent);
-      if (mapped) appendModelStreamUpdateToFeed(out, evt.ts, stream, mapped);
-      continue;
-    }
-
-    if (payload.type === "model_stream_raw") {
-      const updates = replayModelStreamRawEvent(stream.replay, payload as ModelStreamRawEvent);
-      for (const update of updates) {
-        appendModelStreamUpdateToFeed(out, evt.ts, stream, update);
-      }
-      continue;
-    }
-
-    if (payload.type === "assistant_message") {
-      const text = String(payload.text ?? "");
-      if (shouldSkipAssistantMessageAfterStreamReplay(stream, text, out)) continue;
-      out.push({
-        id: makeId(),
-        kind: "message",
-        role: "assistant",
-        ts: evt.ts,
-        text,
-      });
-      continue;
-    }
-
-    if (
-      payload.type === "reasoning" ||
-      payload.type === "assistant_reasoning" ||
-      payload.type === "reasoning_summary"
-    ) {
-      if (hasMatchingStreamedReasoningText(stream, String(payload.text ?? ""))) continue;
-      const mode =
-        payload.type === "reasoning_summary"
-          ? "summary"
-          : payload.type === "reasoning"
-            ? payload.kind === "summary"
-              ? "summary"
-              : "reasoning"
-            : "reasoning";
-      const item: FeedItem = {
-        id: makeId(),
-        kind: "reasoning",
-        mode,
-        ts: evt.ts,
-        text: String(payload.text ?? ""),
-      };
-      const beforeAssistantId = reasoningInsertBeforeAssistantAfterStreamReplay(stream);
-      if (beforeAssistantId) {
-        const assistantIndex = out.findIndex((entry) => entry.id === beforeAssistantId);
-        if (assistantIndex >= 0) {
-          out.splice(assistantIndex, 0, item);
-          continue;
-        }
-      }
-      out.push(item);
       continue;
     }
 
@@ -1380,14 +354,11 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (payload.type === "log") {
-      const line = String(payload.line ?? "");
-      if (shouldSuppressRawDebugLogLine(line)) continue;
-      out.push({ id: makeId(), kind: "log", ts: evt.ts, line });
+      out.push({ id: makeId(), kind: "log", ts: evt.ts, line: String(payload.line ?? "") });
       continue;
     }
 
     if (payload.type === "error") {
-      failActiveToolStreamsInFeed(out, stream, stream.activeTurnId, payload.message);
       out.push({
         id: makeId(),
         kind: "error",
@@ -1399,17 +370,18 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
       continue;
     }
 
+    if (payload.type === "session_backup_state") {
+      out.push({
+        id: makeId(),
+        kind: "system",
+        ts: evt.ts,
+        line: sessionBackupDiagnosticLine(payload),
+      });
+      continue;
+    }
+
     if (payload.type === "session_busy") {
-      if (payload.busy === false) {
-        const failed =
-          isRecord(payload) && (payload.outcome === "error" || payload.outcome === "cancelled");
-        const turnId =
-          isRecord(payload) && typeof payload.turnId === "string" ? payload.turnId : null;
-        if (failed) {
-          failActiveToolStreamsInFeed(out, stream, turnId ?? stream.activeTurnId);
-        }
-        clearThreadModelStreamRuntime(stream);
-      }
+      if (payload.busy === false) resetLegacyStreamReplay(legacyStream);
       out.push({
         id: makeId(),
         kind: "system",
@@ -1422,12 +394,37 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   return out;
 }
 
-export function applyModelStreamUpdateToThreadFeed(
-  stream: ThreadModelStreamRuntime,
-  update: ModelStreamUpdate,
-  ops: ThreadModelStreamFeedOps,
-) {
-  applyModelStreamUpdate(stream, update, ops);
+function appendLegacyTranscriptEvent(
+  out: FeedItem[],
+  stream: LegacyStreamReplay,
+  ts: string,
+  payload: LegacyTranscriptPayload,
+): void {
+  if (payload.type === "model_stream_chunk") {
+    applyLegacyModelStreamChunk(out, stream, ts, payload);
+    return;
+  }
+
+  const text = String(payload.text ?? "");
+  if (payload.type === "assistant_message") {
+    if (legacyAssistantMessageAlreadyStreamed(stream, text)) return;
+    out.push({ id: crypto.randomUUID(), kind: "message", role: "assistant", ts, text });
+    return;
+  }
+
+  if (legacyReasoningAlreadyStreamed(stream, text)) return;
+  const mode =
+    payload.type === "reasoning_summary" ||
+    (payload.type === "reasoning" && payload.kind === "summary")
+      ? "summary"
+      : "reasoning";
+  out.splice(legacyReasoningInsertIndex(out, stream), 0, {
+    id: crypto.randomUUID(),
+    kind: "reasoning",
+    mode,
+    ts,
+    text,
+  });
 }
 
 export function buildContextPreamble(feed: FeedItem[], maxPairs = 10): string {

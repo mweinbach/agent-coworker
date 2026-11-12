@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use chrono::DateTime;
-use cowork_config::{ensure_private_dir_sync, harden_private_file_sync, write_text_file_atomic};
+use cowork_config::ensure_private_dir_sync;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::installer::{
     CodexRuntimeTarget, managed_codex_current_path, managed_codex_root,
@@ -12,7 +10,6 @@ use super::installer::{
 };
 
 pub const CODEX_APP_SERVER_MANAGED_VERSION: &str = "0.160.0";
-const WINDOWS_SANDBOX_SETUP_VERSION: u64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,12 +54,12 @@ pub fn build_codex_spawn_env(
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| cowork_home.to_path_buf());
-    let _ = sync_codex_windows_sandbox_setup_state(&sandbox_home, &codex_home);
+    cowork_sandbox::sync_codex_windows_sandbox_setup_state_between(&sandbox_home, &codex_home);
 
     let mut spawn_env = HashMap::with_capacity(parent_env.len() + 1);
     for (k, v) in parent_env {
         if k.to_ascii_uppercase().starts_with("CODEX_")
-            || k.eq_ignore_ascii_case("COWORK_DESKTOP_PARENT_MANAGED")
+            || k.eq_ignore_ascii_case(cowork_sandbox::PARENT_MANAGED_ENV_VAR)
         {
             continue;
         }
@@ -73,97 +70,6 @@ pub fn build_codex_spawn_env(
         codex_home.to_string_lossy().into_owned(),
     );
     spawn_env
-}
-
-#[derive(Debug, Clone)]
-struct SandboxMarkerBundle {
-    root: PathBuf,
-    marker_raw: String,
-    users_raw: String,
-    sort_timestamp_ms: i64,
-}
-
-fn read_valid_v5_bundle(root: &Path) -> Option<SandboxMarkerBundle> {
-    let marker_path = root.join(".sandbox").join("setup_marker.json");
-    let users_path = root.join(".sandbox-secrets").join("sandbox_users.json");
-    let marker_raw = std::fs::read_to_string(&marker_path).ok()?;
-    let users_raw = std::fs::read_to_string(&users_path).ok()?;
-
-    let marker_val: Value = serde_json::from_str(&marker_raw).ok()?;
-    let users_val: Value = serde_json::from_str(&users_raw).ok()?;
-    if marker_val.get("version").and_then(Value::as_u64) != Some(WINDOWS_SANDBOX_SETUP_VERSION) {
-        return None;
-    }
-    if users_val.get("version").and_then(Value::as_u64) != Some(WINDOWS_SANDBOX_SETUP_VERSION) {
-        return None;
-    }
-
-    let created_ts = marker_val
-        .get("created_at")
-        .or_else(|| marker_val.get("updated_at"))
-        .and_then(Value::as_str)
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.timestamp_millis())
-        .or_else(|| {
-            std::fs::metadata(&marker_path)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-        })
-        .unwrap_or(0);
-
-    Some(SandboxMarkerBundle {
-        root: root.to_path_buf(),
-        marker_raw,
-        users_raw,
-        sort_timestamp_ms: created_ts,
-    })
-}
-
-fn write_v5_bundle(target_root: &Path, bundle: &SandboxMarkerBundle) -> bool {
-    let sandbox_dir = target_root.join(".sandbox");
-    let secrets_dir = target_root.join(".sandbox-secrets");
-    if ensure_private_dir_sync(&sandbox_dir).is_err()
-        || ensure_private_dir_sync(&secrets_dir).is_err()
-    {
-        return false;
-    }
-    let marker_dest = sandbox_dir.join("setup_marker.json");
-    let users_dest = secrets_dir.join("sandbox_users.json");
-    if write_text_file_atomic(&users_dest, &bundle.users_raw, Some(0o600)).is_err()
-        || write_text_file_atomic(&marker_dest, &bundle.marker_raw, Some(0o600)).is_err()
-    {
-        return false;
-    }
-    harden_private_file_sync(&users_dest);
-    harden_private_file_sync(&marker_dest);
-    true
-}
-
-/// Synchronizes Windows sandbox `version == 5` setup markers (`setup_marker.json` +
-/// `sandbox_users.json`) newest-wins between `<cowork_home>` and `<codex_home>`.
-pub fn sync_codex_windows_sandbox_setup_state(cowork_home: &Path, codex_home: &Path) -> bool {
-    let cowork_bundle = read_valid_v5_bundle(cowork_home);
-    let codex_bundle = read_valid_v5_bundle(codex_home);
-
-    match (cowork_bundle, codex_bundle) {
-        (None, None) => false,
-        (Some(b), None) => write_v5_bundle(codex_home, &b),
-        (None, Some(b)) => write_v5_bundle(cowork_home, &b),
-        (Some(a), Some(b)) => {
-            if a.sort_timestamp_ms >= b.sort_timestamp_ms {
-                if a.marker_raw != b.marker_raw || a.users_raw != b.users_raw {
-                    let _ = &a.root;
-                    write_v5_bundle(codex_home, &a)
-                } else {
-                    true
-                }
-            } else {
-                write_v5_bundle(cowork_home, &b)
-            }
-        }
-    }
 }
 
 fn parse_override_args(raw: Option<&str>) -> Vec<String> {

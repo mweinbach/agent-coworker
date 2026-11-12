@@ -2,6 +2,7 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { LockKeyholeIcon } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { HIDDEN_RETRY_TURN_PROMPT } from "../../../../src/shared/chatRetry";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
 import {
   buildCitationOverflowFilePathsByMessageId,
@@ -53,7 +54,6 @@ import {
   getComposerSubmitState,
   resolveCurrentReasoningEffort,
 } from "./chat/chatLogic";
-import { HIDDEN_RETRY_TURN_PROMPT } from "./chat/chatRetry";
 import { promoteCitationSourcesToFinalAssistants } from "./chat/citationSourcesForTurn";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { prepareFeedDerivationFeed } from "./chat/feedWindow";
@@ -129,12 +129,10 @@ export {
   composerBusyHint,
   countActiveChildAgents,
   formatSessionBudgetLine,
-  formatSessionUsageHeadline,
   getComposerSubmitState,
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveCurrentReasoningEffort,
-  sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "./chat/chatLogic";
 export {

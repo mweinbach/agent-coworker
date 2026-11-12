@@ -43,10 +43,6 @@ type ReferencedPluginContext = {
   skillNames: string[];
 };
 
-export function isProviderName(v: unknown): v is ProviderName {
-  return providerNameSchema.safeParse(v).success;
-}
-
 export function resolveProviderName(v: unknown): ProviderName | null {
   const parsed = providerNameSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
@@ -147,7 +143,7 @@ export type WorkspaceFeatureFlags = {
 
 type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
 
-export interface SandboxConfig {
+interface SandboxConfig {
   mode: SandboxMode;
   network?: boolean;
   requireBackend?: boolean;
@@ -167,8 +163,8 @@ export interface AgentConfig {
   runtime?: RuntimeName;
   /**
    * OS-level sandbox configuration for shell command execution. When omitted,
-   * defaults to workspace-write with network enabled. See
-   * `src/platform/sandbox`.
+   * defaults to workspace-write with network enabled. Enforced by the Rust
+   * `crates/cowork-sandbox` crate.
    */
   sandbox?: SandboxConfig;
   /** Optional provider-neutral or native tool-calling envelopes; both default to disabled. */
@@ -817,15 +813,6 @@ interface ObservabilityConfig {
   release?: string;
   recordInputs?: boolean;
   recordOutputs?: boolean;
-}
-
-type ObservabilityHealthStatus = "disabled" | "ready" | "degraded";
-
-export interface ObservabilityHealth {
-  status: ObservabilityHealthStatus;
-  reason: string;
-  message?: string;
-  updatedAt: string;
 }
 
 interface HarnessConfig {

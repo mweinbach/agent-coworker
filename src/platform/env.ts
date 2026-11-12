@@ -318,24 +318,3 @@ export function sandboxEnvAllowlist(
 ): ReadonlySet<string> {
   return platform === "win32" ? sandboxAllowlistWin32 : sandboxAllowlistPosix;
 }
-
-/**
- * Build the minimal env for a sandboxed child from the allowlist. Environment
- * keys are case-insensitive on Windows, but Node preserves the spelling it
- * inherited (normally "Path", not "PATH") — the inherited spelling is
- * preserved so passing an explicit child env never drops the Windows search
- * path. POSIX matches allowlist names by exact key only.
- */
-export function minimalSandboxEnv(
-  source: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = hostPlatform(),
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of sandboxEnvAllowlist(platform)) {
-    const sourceKey = findEnvKey(source, name, platform);
-    if (sourceKey === undefined || Object.hasOwn(env, sourceKey)) continue;
-    const value = source[sourceKey];
-    if (typeof value === "string") env[sourceKey] = value;
-  }
-  return env;
-}

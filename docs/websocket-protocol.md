@@ -315,7 +315,7 @@ must remain disabled after that fallback.
 - `cowork/workspace/spreadsheet/patch`
 - `cowork/workspace/presentation/preview`
 
-`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream. For `turn/start`, the key is idempotent within a thread: retrying the exact request returns the original turn with `replayed: true` on the `turn/start` result (never on the `turn/started` notification), including after a WebSocket reconnect or server restart, instead of appending another user message or starting another model run. The server retains the accepted key and payload fingerprint for the full retained thread journal horizon; reusing a key with different text, attachments, references, or `tools` mode is rejected.
+`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected user message items. For `turn/start`, the key is idempotent within a thread: retrying the exact request returns the original turn with `replayed: true` on the `turn/start` result (never on the `turn/started` notification), including after a WebSocket reconnect or server restart, instead of appending another user message or starting another model run. The server retains the accepted key and payload fingerprint for the full retained thread journal horizon; reusing a key with different text, attachments, references, or `tools` mode is rejected.
 
 A successful `turn/start` result acknowledges admission of that request's message, not completion of the full model turn. Concurrent requests receive independent admission results; a busy or rejected send cannot borrow another request's turn ID. This also applies when `clientMessageId` is omitted.
 
@@ -972,7 +972,7 @@ Harness-projected conversation items are now the only supported UI rendering con
 - live updates: `turn/*` + `item/*`
 - hydration: `thread/read.coworkSnapshot`
 
-UI clients should render chat from projected items and should not depend on provider-specific session event payloads such as `model_stream_*`, `assistant_message`, or `reasoning` for chat presentation.
+UI clients should render chat from projected items (`item/*` notifications); the server no longer emits provider-specific session event payloads for chat presentation.
 
 `item/started` and `item/completed` carry a discriminated `item` union. `turnId` is nullable so the harness can project feed items that are not owned by a model turn.
 
@@ -1376,7 +1376,7 @@ To resume a thread, call `thread/resume` with `threadId` and optional `afterSeq`
 
 ### Thread Identity Migration (Desktop UI)
 
-The desktop UI can create draft threads with local IDs before the first JSON-RPC `thread/start` call. Once `thread/start` returns the canonical thread id, the desktop client migrates the local record to that id while retaining `legacyTranscriptId` only for on-disk transcript lookup during desktop state migration.
+The desktop UI can create draft threads with local IDs before the first JSON-RPC `thread/start` call. Once `thread/start` returns the canonical thread id, the desktop client migrates the local record to that id.
 
 ### One-Off Chat Workspaces
 
@@ -1397,7 +1397,7 @@ All JSON-RPC messages are validated before dispatch:
 
 Validation failures produce JSON-RPC error responses.
 
-JSON-RPC notifications and method results can also be validated client-side with the generated JSON Schema artifact at `docs/generated/websocket-jsonrpc.schema.json`. If a received notification fails validation, clients should ignore/drop that notification rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics without changing runtime behavior.
+JSON-RPC notifications and method results can also be validated client-side with the JSON Schema at `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (also exported by `cowork-server __export-jsonrpc-schema`). If a received notification fails validation, clients should ignore/drop that notification rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics without changing runtime behavior.
 
 ## Shared Types
 
@@ -1871,37 +1871,6 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | `path` | `string` | Workspace-relative path for the changed entry |
 | `change` | `"added" \| "modified" \| "deleted"` | Change classification |
 | `kind` | `"file" \| "directory" \| "symlink"` | Filesystem entry kind |
-
-### ObservabilityHealth
-
-```json
-{
-  "status": "ready",
-  "reason": "runtime_ready",
-  "message": null,
-  "updatedAt": "2026-02-19T08:45:00.000Z"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | `"disabled" \| "ready" \| "degraded"` | Health status |
-| `reason` | `string` | Machine-readable reason code |
-| `message` | `string?` | Optional detail message (present for degraded states) |
-| `updatedAt` | `string` | ISO 8601 timestamp |
-
-### ModelStreamPartType
-
-```
-"start" | "finish" | "abort" | "error"
-| "start_step" | "finish_step"
-| "text_start" | "text_delta" | "text_end"
-| "reasoning_start" | "reasoning_delta" | "reasoning_end"
-| "tool_input_start" | "tool_input_delta" | "tool_input_end"
-| "tool_call" | "tool_result" | "tool_error"
-| "tool_output_denied" | "tool_approval_request"
-| "source" | "file" | "raw" | "unknown"
-```
 
 ### ApprovalRiskCode
 
@@ -2634,132 +2603,6 @@ Acknowledges that a `steer_message` was accepted for the active turn. The steer 
 
 ---
 
-### user_message
-
-Echoed/accepted user message. Sent when a `user_message` or `execute_command` client message is processed.
-
-```json
-{ "type": "user_message", "sessionId": "...", "text": "Explain this code", "clientMessageId": "msg-1" }
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"user_message"` | — |
-| `sessionId` | `string` | Session identifier |
-| `text` | `string` | The user message text (for `execute_command`, this is the slash command display text) |
-| `clientMessageId` | `string?` | Echoed from the client message if provided |
-| `steerRequestId` | `string?` | Stable steer correlation id when this user message materializes accepted guidance |
-
----
-
-### model_stream_chunk
-
-Incremental model stream chunk. Emitted during a turn for each streaming part from the active runtime/model pipeline.
-
-```json
-{
-  "type": "model_stream_chunk",
-  "sessionId": "...",
-  "turnId": "turn-abc",
-  "index": 0,
-  "provider": "openai",
-  "model": "gpt-5.4",
-  "normalizerVersion": 1,
-  "partType": "text_delta",
-  "part": { "text": "Hello" },
-  "rawPart": { ... }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"model_stream_chunk"` | — |
-| `sessionId` | `string` | Session identifier |
-| `turnId` | `string` | Unique turn identifier (groups all chunks for one turn). Fallback: `"unknown-turn"` |
-| `index` | `number` | Sequential chunk index within the turn (starting at 0). Fallback: `-1` |
-| `provider` | `ProviderName \| "unknown"` | Provider that generated this chunk. Fallback: `"unknown"` |
-| `model` | `string` | Model that generated this chunk. Fallback: `"unknown"` |
-| `normalizerVersion` | `number?` | Optional normalization version for the persisted `partType`/`part` mapping |
-| `partType` | `ModelStreamPartType` | Part type (see [ModelStreamPartType](#modelstreamparttype)) |
-| `part` | `object` | Normalized part payload. Shape varies by `partType`. If a non-object part is received, it is normalized to `{ "value": <original> }` |
-| `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
-
-Notes:
-- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload. The `skill` tool and every `read` result are exempt so complete `SKILL.md` instructions, references, and script source remain inline.
-- `preview` is a fixed inline preview of the first 5,000 characters plus a truncation note when additional content was written to disk.
-- The runtime emits a companion `file` chunk with `{ "kind": "tool-output-overflow", "toolName": "...", "toolCallId": "...", "path": "...", "chars": 12345, "preview": "..." }`.
-
----
-
-### model_stream_raw
-
-Provider-native raw model stream event. Emitted before any derived `model_stream_chunk` parts for the same provider event so clients can replay or re-normalize the stream themselves.
-
-```json
-{
-  "type": "model_stream_raw",
-  "sessionId": "...",
-  "turnId": "turn-abc",
-  "index": 0,
-  "provider": "openai",
-  "model": "gpt-5.4",
-  "format": "openai-responses-v1",
-  "normalizerVersion": 1,
-  "event": { "type": "response.output_item.added", "item": { "type": "reasoning" } }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"model_stream_raw"` | — |
-| `sessionId` | `string` | Session identifier |
-| `turnId` | `string` | Unique turn identifier (groups all raw events for one turn). Fallback: `"unknown-turn"` |
-| `index` | `number` | Sequential raw-event index within the turn (starting at 0). Fallback: `-1` |
-| `provider` | `ProviderName \| "unknown"` | Provider that generated this event. Fallback: `"unknown"` |
-| `model` | `string` | Model that generated this event. Fallback: `"unknown"` |
-| `format` | `"openai-responses-v1" \| "google-interactions-v1" \| "codex-app-server-v2"` | Raw event envelope format |
-| `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
-| `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
-
-For OpenAI Responses providers, `event.item.type` may be `web_search_call`. Clients may surface these raw events as synthetic native web-search activity (for example `nativeWebSearch`) without treating them as executable local function tools.
-
-For Google Interactions providers, `event` is the provider-native SSE payload and typically uses `event_type` values like `interaction.start`, `content.delta`, and `interaction.complete`.
-
----
-
-### assistant_message
-
-Final assistant text for a turn. Sent after the model finishes generating.
-
-```json
-{ "type": "assistant_message", "sessionId": "...", "text": "Here is the explanation..." }
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"assistant_message"` | — |
-| `sessionId` | `string` | Session identifier |
-| `text` | `string` | Final assistant response text |
-
----
-
-### reasoning
-
-Reasoning or summary text produced by the model during a turn.
-
-```json
-{ "type": "reasoning", "sessionId": "...", "kind": "reasoning", "text": "Let me think about..." }
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"reasoning"` | — |
-| `sessionId` | `string` | Session identifier |
-| `kind` | `"reasoning" \| "summary"` | Whether this is reasoning (e.g. Anthropic extended thinking) or a summary (e.g. OpenAI reasoning summary) |
-| `text` | `string` | Reasoning/summary text |
-
----
-
 ### log
 
 Tool or runtime log line.
@@ -2795,21 +2638,6 @@ Current todo state list. Sent whenever the todo list changes.
 | `type` | `"todos"` | — |
 | `sessionId` | `string` | Session identifier |
 | `todos` | `TodoItem[]` | Full todo list (see [TodoItem](#todoitem)) |
-
----
-
-### reset_done
-
-Confirmation that a `reset` completed.
-
-```json
-{ "type": "reset_done", "sessionId": "..." }
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"reset_done"` | — |
-| `sessionId` | `string` | Session identifier |
 
 ---
 
@@ -3412,97 +3240,9 @@ Changed-file preview for a specific workspace backup checkpoint.
 
 ---
 
-### observability_status
-
-Langfuse observability status. Sent on connection and when health changes.
-
-```json
-{
-  "type": "observability_status",
-  "sessionId": "...",
-  "enabled": true,
-  "health": {
-    "status": "ready",
-    "reason": "runtime_ready",
-    "updatedAt": "2026-02-19T08:45:00.000Z"
-  },
-  "config": {
-    "provider": "langfuse",
-    "baseUrl": "https://cloud.langfuse.com",
-    "otelEndpoint": "https://cloud.langfuse.com/api/public/otel/v1/traces",
-    "tracingEnvironment": "dev",
-    "release": "abc123",
-    "hasPublicKey": true,
-    "hasSecretKey": true,
-    "configured": true
-  }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"observability_status"` | — |
-| `sessionId` | `string` | Session identifier |
-| `enabled` | `boolean` | Whether observability is enabled |
-| `health` | `ObservabilityHealth` | Health status (see [ObservabilityHealth](#observabilityhealth)) |
-| `config` | `object \| null` | Langfuse config or `null` if not configured |
-
-Config fields (when non-null):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `provider` | `"langfuse"` | Always `"langfuse"` |
-| `baseUrl` | `string` | Langfuse base URL |
-| `otelEndpoint` | `string` | OTEL traces endpoint |
-| `tracingEnvironment` | `string?` | Optional environment label |
-| `release` | `string?` | Optional release identifier |
-| `hasPublicKey` | `boolean` | Whether a public key is configured |
-| `hasSecretKey` | `boolean` | Whether a secret key is configured |
-| `configured` | `boolean` | Whether both keys are present |
-
-Notes:
-- Secret values are never sent over this event.
-- `health.message` is optional and present for degraded states with details.
-
----
-
-### harness_context
-
-Current harness context state for the session.
-
-```json
-{
-  "type": "harness_context",
-  "sessionId": "...",
-  "context": {
-    "runId": "run-abc-123",
-    "taskId": "task-1",
-    "objective": "Fix the authentication bug",
-    "acceptanceCriteria": ["Login works"],
-    "constraints": ["No schema changes"],
-    "metadata": { "priority": "high" },
-    "updatedAt": "2026-02-19T18:15:00.000Z"
-  }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"harness_context"` | — |
-| `sessionId` | `string` | Session identifier |
-| `context` | `(HarnessContextPayload & { updatedAt: string }) \| null` | Context with timestamp, or `null` if no context is set |
-
-When non-null, `context` contains all [HarnessContextPayload](#harnesscontextpayload) fields plus an `updatedAt` ISO 8601 timestamp.
-
----
-
-
-
----
-
 ### turn_usage
 
-Token usage data for a completed turn. Emitted after `assistant_message` when the provider returns usage data.
+Token usage data for a completed turn. Emitted after the final assistant output when the provider returns usage data.
 
 ```json
 {
@@ -4249,18 +3989,3 @@ Structured error event. Can be emitted in response to any client message or duri
 | `data` | `ServerErrorData?` | Optional structured error payload, for example task lock data with `lockKind`, `taskId`, and `taskStatus` |
 | `clientMessageId` | `string?` | Original client id when the error drops an already accepted queued steer |
 | `steerRequestId` | `string?` | Stable correlation id when the error is a direct or asynchronous `turn/steer` outcome |
-
----
-
-### pong
-
-Keepalive pong in response to `ping`.
-
-```json
-{ "type": "pong", "sessionId": "..." }
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"pong"` | — |
-| `sessionId` | `string` | Session identifier |

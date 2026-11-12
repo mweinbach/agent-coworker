@@ -198,7 +198,6 @@ export function createWorkspaceActions(
         RUNTIME.pendingThreadMessages.delete(thread.id);
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
-        RUNTIME.modelStreamByThread.delete(thread.id);
         clearPendingThreadSteers(thread.id);
         forgetThreadNavigationIntent(thread.id);
         for (const sessionId of [thread.sessionId, get().threadRuntimeById[thread.id]?.sessionId]) {

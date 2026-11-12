@@ -4,9 +4,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
-
 import { buildWorkspaceBinary } from "../../scripts/workspaceRustBinary";
-import { scratchRoots } from "../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../src/platform/scratchRoots";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 // Compile at suite load, outside individual test/handshake timeouts. Let Cargo

@@ -150,21 +150,6 @@ pub enum CanvasDocumentSaveResult {
     },
 }
 
-impl CanvasDocumentSaveResult {
-    pub fn saved_file(&self) -> Option<(&str, &CanvasDocumentRevision)> {
-        match self {
-            Self::Ok {
-                ok: true,
-                path,
-                revision,
-                status,
-                ..
-            } if status == "saved" => Some((path.as_str(), revision)),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CanvasDocumentCloseResult {

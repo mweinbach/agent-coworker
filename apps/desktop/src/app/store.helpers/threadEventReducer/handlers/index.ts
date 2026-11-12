@@ -1,30 +1,24 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
 import { unhandledEventSystemLine } from "../../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../../store.helpers";
-import { getEffectiveThreadLastEventSeq, getModelStreamRuntime } from "../../runtimeState";
+import { getEffectiveThreadLastEventSeq } from "../../runtimeState";
 import type { ThreadEventReducerContext } from "../context";
 import type { FeedProjectionModule } from "../feedProjection";
 import type { MessagingModule } from "../messaging";
-import type { WorkspaceStateHelpers } from "../workspaceState";
 import { handleContentThreadEvent } from "./contentHandlers";
 import { handleLifecycleThreadEvent } from "./lifecycleHandlers";
 import type { HandlerModuleContext } from "./shared";
 
 export function createHandlersModule(
   ctx: ThreadEventReducerContext,
-  workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
   feed: FeedProjectionModule,
   messaging: Pick<MessagingModule, "flushOneQueuedThreadMessageIfReady">,
 ) {
   const moduleContext: HandlerModuleContext = {
     ctx,
     pushFeedItem: feed.pushFeedItem,
-    insertFeedItemBefore: feed.insertFeedItemBefore,
-    applyModelStreamUpdateToThreadFeed: feed.applyModelStreamUpdateToThreadFeed,
     flushPendingContentForThread: feed.flushPendingContentForThread,
-    recordPendingThreadEvent: feed.recordPendingThreadEvent,
     flushOneQueuedThreadMessageIfReady: messaging.flushOneQueuedThreadMessageIfReady,
-    resetLiveModelStreamRuntime: workspace.resetLiveModelStreamRuntime,
   };
 
   function handleThreadEvent(
@@ -42,16 +36,10 @@ export function createHandlersModule(
     }
 
     ctx.deps.appendThreadTranscript(threadId, "server", evt);
-    const batchedContentEvent =
-      evt.type === "model_stream_chunk" || evt.type === "model_stream_raw";
-    if (options?.recordEventSequence === false) {
-      // Reconstructed reconnect metadata is not another persisted server event.
-      // Counting it would make the following authoritative snapshot look stale.
-      if (!batchedContentEvent) moduleContext.flushPendingContentForThread(set, threadId);
-    } else if (batchedContentEvent) {
-      moduleContext.recordPendingThreadEvent(get, set, threadId);
-    } else {
-      moduleContext.flushPendingContentForThread(set, threadId);
+    moduleContext.flushPendingContentForThread(set, threadId);
+    // Reconstructed reconnect metadata is not another persisted server event.
+    // Counting it would make the following authoritative snapshot look stale.
+    if (options?.recordEventSequence !== false) {
       set((s) => {
         const nextLastEventSeq = getEffectiveThreadLastEventSeq(s, threadId) + 1;
         const runtime = s.threadRuntimeById[threadId];
@@ -77,8 +65,7 @@ export function createHandlersModule(
       return;
     }
 
-    const stream = getModelStreamRuntime(threadId);
-    if (handleContentThreadEvent(moduleContext, dispatch, evt, stream)) {
+    if (handleContentThreadEvent(moduleContext, dispatch, evt)) {
       return;
     }
 

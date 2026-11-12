@@ -894,7 +894,9 @@ fn build_google_interactions_payload(
 
     // TS `buildGoogleStreamOptions`: `getGoogleNativeWebSearchFromProviderOptions` (default on).
     let native_web_requested = !tools_disabled
-        && crate::web_search_options::google_native_web_search_enabled(Some(provider_options));
+        && cowork_config::web_search_options::google_native_web_search_enabled(Some(
+            provider_options,
+        ));
 
     let web_authorized = !tools_disabled
         && match authorized_tool_names {

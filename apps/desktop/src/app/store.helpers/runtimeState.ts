@@ -2,11 +2,6 @@ import type { JsonRpcSocket } from "../../lib/agentSocket";
 import type { ProviderName, TurnReference } from "../../lib/wsProtocol";
 import type { ComposerDraftRevision } from "../composerDrafts";
 import type { ReasoningEffortValue } from "../openaiCompatibleProviderOptions";
-import {
-  clearThreadModelStreamRuntime,
-  createThreadModelStreamRuntime,
-  type ThreadModelStreamRuntime,
-} from "../store.feedMapping";
 import type { AppStoreState } from "../store.helpers";
 import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../types";
 import type { FileAttachmentInput } from "./jsonRpcSocket";
@@ -76,7 +71,6 @@ export type RuntimeMaps = {
   workspaceStartGenerations: Map<string, number>;
   workspaceServerRestartAttempts: Map<string, number>;
   workspaceServerRestartStabilityTimers: Map<string, ReturnType<typeof setTimeout>>;
-  modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   sessionSnapshots: Map<string, CachedSessionSnapshot>;
   workspacePickerOpen: boolean;
   /** Monotonic counter so overlapping provider status refreshes do not clear `providerStatusRefreshing` early. */
@@ -104,7 +98,6 @@ export const RUNTIME: RuntimeMaps = {
   workspaceStartGenerations: new Map(),
   workspaceServerRestartAttempts: new Map(),
   workspaceServerRestartStabilityTimers: new Map(),
-  modelStreamByThread: new Map(),
   sessionSnapshots: new Map(),
   workspacePickerOpen: false,
   providerStatusRefreshGeneration: 0,
@@ -135,23 +128,6 @@ export function bumpAgentProfilesCatalogGeneration(workspaceId: string): number 
   const next = getAgentProfilesCatalogGeneration(workspaceId) + 1;
   RUNTIME.agentProfilesCatalogGenerations.set(workspaceId, next);
   return next;
-}
-
-export function getModelStreamRuntime(threadId: string): ThreadModelStreamRuntime {
-  const existing = RUNTIME.modelStreamByThread.get(threadId);
-  if (existing) return existing;
-  const next = createThreadModelStreamRuntime();
-  RUNTIME.modelStreamByThread.set(threadId, next);
-  return next;
-}
-
-export function resetModelStreamRuntime(threadId: string) {
-  const existing = RUNTIME.modelStreamByThread.get(threadId);
-  if (existing) {
-    clearThreadModelStreamRuntime(existing);
-    return;
-  }
-  RUNTIME.modelStreamByThread.set(threadId, createThreadModelStreamRuntime());
 }
 
 export function queuePendingThreadMessage(
@@ -264,7 +240,6 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyByThread, fromThreadId, toThreadId);
-  moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.threadSelectionRequests, fromThreadId, toThreadId);
 }
 

@@ -73,11 +73,6 @@ export function getCurrentWebWorkspaceScopeHash(): string | null {
   return fnv1a32(`${scope.serverUrl}\0${scope.workspacePath}`);
 }
 
-export function getCurrentWebWorkspaceScopeKey(): string | null {
-  const scope = getCurrentScope();
-  return scope ? getWebWorkspaceScopeKey(scope) : null;
-}
-
 export function getWebWorkspaceScopeKey(scope: WebWorkspaceScope): string {
   return JSON.stringify([scope.serverUrl, scope.workspacePath]);
 }

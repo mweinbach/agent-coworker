@@ -1,7 +1,7 @@
 # Line-ending policy: repository bytes are LF for all text files, on every
 # platform. Biome enforces `lineEnding: "lf"`, build fingerprints hash file
 # bytes, and the test suite runs on Windows/macOS/Linux — checkout bytes must
-# be identical everywhere. (docs/platform-abstraction-plan.md, Phase 0.)
+# be identical everywhere.
 * text=auto eol=lf
 
 # cmd.exe label parsing misbehaves with LF-only batch files.

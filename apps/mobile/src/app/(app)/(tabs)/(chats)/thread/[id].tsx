@@ -28,7 +28,6 @@ import {
   buildChatRenderItems,
   latestRetryableActivityGroupId,
 } from "@/features/cowork/activityGroups";
-import { HIDDEN_RETRY_TURN_PROMPT } from "@/features/cowork/chatRetry";
 import {
   type ComposerSubmission,
   getComposerPolicy,
@@ -77,6 +76,7 @@ import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import { useAppTheme } from "@/theme/use-app-theme";
+import { HIDDEN_RETRY_TURN_PROMPT } from "../../../../../../../../src/shared/chatRetry";
 
 type ThreadActionError =
   | { kind: "load"; message: string }

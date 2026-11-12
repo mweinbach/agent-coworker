@@ -41,7 +41,7 @@ pub use client::{
     CodexTurnSteerParams, DynamicToolCallOutput, DynamicToolHandler,
 };
 pub use connectors::{
-    CodexAccountInfo, CodexChatGptLoginChallenge, CodexRateLimits, OpenAiNativeConnectorInfo,
+    CodexAccountInfo, CodexChatGptLoginChallenge, OpenAiNativeConnectorInfo,
     OpenAiNativeConnectorsEvent, await_codex_chatgpt_login_completion, list_codex_models,
     logout_codex_account, parse_codex_chatgpt_login_challenge, read_codex_account,
     read_openai_native_connectors, set_openai_native_connector_enabled, start_codex_chatgpt_login,
@@ -53,7 +53,6 @@ pub use installer::{
 pub use isolation::{
     CODEX_APP_SERVER_MANAGED_VERSION, CodexInstallStatus, build_codex_spawn_env,
     codex_app_server_override_configured, resolve_codex_app_server_status, resolve_codex_home,
-    sync_codex_windows_sandbox_setup_state,
 };
 pub use policy::{
     CodexSandboxNarrowingInput, CodexSandboxNarrowingOutput, codex_workspace_write_roots,

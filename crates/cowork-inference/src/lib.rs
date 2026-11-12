@@ -45,7 +45,7 @@ pub use legacy_messages::migrate_stored_message;
 pub use partial_json::{StreamingToolDeltaParser, parse_partial_json, parse_partial_json_object};
 pub use pricing::{
     ModelPricing, PricingCatalogEntry, PricingEngine, TokenCostBreakdown,
-    calculate_token_cost_breakdown, format_cost, format_token_count,
+    calculate_token_cost_breakdown, format_cost,
 };
 pub use projector::{ClientCapabilities, ProjectedNotification, StreamEventProjector};
 pub use registry::InferenceModelRegistry;

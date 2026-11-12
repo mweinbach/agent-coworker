@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use chrono::{SecondsFormat, Utc};
+pub use cowork_config::now_iso;
 use cowork_storage::{
     StorageError, TaskActivity, TaskActivityKind, TaskArtifact, TaskArtifactRevision,
     TaskQuestionStatus, TaskRecord, TaskRequirement, TaskRequirementKind,
@@ -17,8 +17,6 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use super::locks::{TaskLockError, get_pending_terminal_task_lock, is_terminal_task_status};
-
-pub const DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS: &[u64] = &[0, 25, 100, 250, 500, 1000];
 
 #[derive(Debug, Clone)]
 pub struct TaskReviewMaterial {
@@ -69,10 +67,6 @@ impl From<StorageError> for TaskCoordinatorError {
             other => Self::InvalidRequest(other.to_string()),
         }
     }
-}
-
-pub fn now_iso() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub fn non_empty(value: &str, name: &str) -> Result<String, TaskCoordinatorError> {

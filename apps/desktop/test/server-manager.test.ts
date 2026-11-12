@@ -6,18 +6,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-
 import { buildWorkspaceBinary } from "../../../scripts/workspaceRustBinary";
 import { hostArch, hostPlatform } from "../../../src/platform/host";
-import { isAlive, killTree } from "../../../src/platform/proc";
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
-} from "../../../src/platform/sandbox/windows";
+} from "../../../src/platform/windowsSandboxHelper";
 import { raceWithAbort } from "../../../src/utils/abortSignal";
+import { isAlive, killTree } from "../../../test/helpers/process";
 
 import {
   buildSidecarManifest,
@@ -650,9 +649,6 @@ describe("desktop server manager startup mode", () => {
       process.env.COWORK_BOOTSTRAP_DEFAULT_SKILLS ?? "1",
     );
     expect(env.COWORK_RUNTIME_ALLOW_NETWORK).toBe(process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1");
-    expect(env.COWORK_HARNESS_TERMINAL_LOGS).toBe(
-      process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
-    );
     expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
     expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
   });

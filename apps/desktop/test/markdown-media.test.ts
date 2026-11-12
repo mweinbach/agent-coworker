@@ -5,7 +5,6 @@ import path from "node:path";
 import type * as Electron from "electron";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-
 import { hostPlatform } from "../../../src/platform/host";
 import {
   isPathEqualOrInsideLexical,
@@ -13,7 +12,7 @@ import {
   resolve as resolvePathString,
   styleFor,
 } from "../../../src/platform/pathString";
-import { scratchRoots } from "../../../src/platform/sandbox";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import {
   type DesktopMediaPathAdapter,
   type DesktopMediaWorkspaceRoots,

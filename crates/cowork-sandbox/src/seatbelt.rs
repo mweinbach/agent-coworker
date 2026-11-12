@@ -59,14 +59,6 @@ const SEATBELT_NETWORK_POLICY: &str = r#"(allow network-outbound)
   (global-name "com.apple.nsurlsessiond")
   (global-name "com.apple.symptom_diagnostics"))"#;
 
-/// Builds a macOS `/usr/bin/sandbox-exec` invocation enforcing `policy` without touching `PATH`.
-pub fn build_seatbelt_command(
-    inner: &SandboxCommand,
-    policy: &SandboxPolicy,
-) -> TransformedCommand {
-    build_seatbelt_command_with_cache(inner, policy, None)
-}
-
 /// Builds a macOS `/usr/bin/sandbox-exec` invocation using an optional `WorkspaceProtectedPathsCache`
 /// to avoid per-command workspace walks.
 pub fn build_seatbelt_command_with_cache(

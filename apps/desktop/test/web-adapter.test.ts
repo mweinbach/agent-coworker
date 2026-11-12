@@ -101,7 +101,7 @@ const {
   normalizeWebServerUrl,
   withBrowserAccessToken,
 } = await import("../src/lib/webAdapter");
-const { getCurrentWebWorkspaceScopeKey } = await import("../src/lib/webWorkspaceState");
+const { getCurrentWebWorkspaceScopeHash } = await import("../src/lib/webWorkspaceState");
 
 let workspaceSequence = 0;
 
@@ -234,10 +234,10 @@ describe("webAdapter connection isolation", () => {
 
   test("keeps the current tab cache namespace when another tab changes saved connection preferences", () => {
     configureWebAdapter("ws://first.invalid/ws", "/tmp/first");
-    const scope = getCurrentWebWorkspaceScopeKey();
+    const scope = getCurrentWebWorkspaceScopeHash();
     localStorageMock.setItem("cowork:web:serverUrl", "ws://second.invalid/ws");
     localStorageMock.setItem("cowork:web:workspacePath", "/tmp/second");
-    expect(getCurrentWebWorkspaceScopeKey()).toBe(scope);
+    expect(getCurrentWebWorkspaceScopeHash()).toBe(scope);
   });
 
   test("applies browser action sheet layout styles", async () => {

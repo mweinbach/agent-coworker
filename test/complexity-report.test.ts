@@ -24,7 +24,7 @@ describe("repository complexity report", () => {
       [
         { path: "README.md", lines: 8 },
         { path: "src/agent.ts", lines: 20 },
-        { path: "src/server/index.ts", lines: 10 },
+        { path: "src/shared/protocol.ts", lines: 10 },
         { path: "apps/mobile/src/main.tsx", lines: 12 },
         { path: "apps/desktop/src/main.tsx", lines: 15 },
         { path: "crates/cowork-win-sandbox/src/main.rs", lines: 14 },
@@ -50,13 +50,13 @@ describe("repository complexity report", () => {
         hotspot("src/agent.ts", 16, 20),
         hotspot("test/agent.test.ts", 30, 4),
         hotspot("apps/desktop/quality-gates/start.pw.ts", 19),
-        hotspot("src/server/start.ts", 30, 7),
+        hotspot("src/client/jsonRpcSocket.ts", 30, 7),
         { category: "deserialize", severity: "info", message: "schema version warning" },
       ]),
     );
 
     expect(report.hotspots).toEqual([
-      { path: "src/server/start.ts", line: 7, column: 1, score: 30, test: false },
+      { path: "src/client/jsonRpcSocket.ts", line: 7, column: 1, score: 30, test: false },
       { path: "test/agent.test.ts", line: 4, column: 1, score: 30, test: true },
       { path: "apps/desktop/quality-gates/start.pw.ts", line: 1, column: 1, score: 19, test: true },
       { path: "src/agent.ts", line: 20, column: 1, score: 16, test: false },

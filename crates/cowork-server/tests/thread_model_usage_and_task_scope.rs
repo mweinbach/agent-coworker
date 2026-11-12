@@ -629,19 +629,16 @@ async fn task_routes_require_authorized_canonical_cwd() {
         .desktop_service
         .as_ref()
         .expect("desktop service")
-        .save_state_json(
-            json!({
-                "workspaces": [{
-                    "id": "ws-registered",
-                    "name": "Registered",
-                    "path": registered.to_string_lossy(),
-                    "workspaceKind": "project",
-                    "createdAt": "2026-01-01T00:00:00.000Z",
-                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
-                }]
-            }),
-            &iso.workspace,
-        )
+        .save_state_json(json!({
+            "workspaces": [{
+                "id": "ws-registered",
+                "name": "Registered",
+                "path": registered.to_string_lossy(),
+                "workspaceKind": "project",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+            }]
+        }))
         .unwrap();
     let mut ws = connect(server.ws_url()).await;
     let mut ignored = Vec::new();

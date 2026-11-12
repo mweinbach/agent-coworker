@@ -9,7 +9,7 @@ import path from "node:path";
  * For every platform-sensitive concern there is exactly one implementation and
  * it lives under `src/platform/`. Platform branching happens INSIDE that
  * module; callers never read `process.platform` (or the other banned tokens
- * below) directly. See docs/platform-abstraction-plan.md §4.1.
+ * below) directly.
  *
  * Mechanics: `platform-boundary.baseline.json` grandfathers current offenders
  * as `{ file → token count }`. This test fails when
@@ -229,7 +229,7 @@ describe("platform boundary", () => {
 
     expect(
       failures,
-      `Platform branching outside src/platform/ (see docs/platform-abstraction-plan.md):\n${failures.join("\n")}`,
+      `Platform branching outside src/platform/ (route it through src/platform/):\n${failures.join("\n")}`,
     ).toEqual([]);
   });
 });

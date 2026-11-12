@@ -9,7 +9,6 @@ description = "SQLite sessions.db engine (migrations 1..28), ThreadJournal, memo
 [dependencies]
 chrono.workspace = true
 cowork-config.workspace = true
-cowork-protocol.workspace = true
 hex.workspace = true
 icu_collator.workspace = true
 libc.workspace = true
@@ -24,7 +23,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile.workspace = true

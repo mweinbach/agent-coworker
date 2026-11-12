@@ -512,7 +512,6 @@ describe("desktop JSON-RPC single connection path", () => {
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.modelStreamByThread.clear();
     setAppState(useAppStore, {
       ready: true,
       startupError: null,

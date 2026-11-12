@@ -47,7 +47,7 @@ impl WorkspaceServer {
             .envs(&runtime.env)
             .env_remove("COWORK_BUILTIN_DIR")
             .env(cowork_config::COWORK_HOME_OVERRIDE_ENV, &runtime.homedir)
-            .env("COWORK_DESKTOP_PARENT_MANAGED", "1")
+            .env(cowork_sandbox::PARENT_MANAGED_ENV_VAR, "1")
             .env("COWORK_H3_MOBILE_PAIRING", "0")
             .env_remove("COWORK_DESKTOP_STARTUP_EVENTS")
             // The child's web service issues a token specific to its own listener.

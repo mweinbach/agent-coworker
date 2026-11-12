@@ -374,7 +374,6 @@ describe("desktop JSON-RPC event mapping", () => {
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.modelStreamByThread.clear();
     RUNTIME.optimisticUserMessageIds.clear();
     setDefaultHandlers(sessionId);
 
@@ -1354,6 +1353,57 @@ describe("desktop JSON-RPC event mapping", () => {
     );
     expect(
       state.notifications.some((entry) => entry.detail === "session/internal_error: boom"),
+    ).toBe(true);
+  });
+
+  test("typed cowork notifications from the Rust server reach the thread reducer", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+
+    socket.notify("cowork/todos", {
+      type: "todos",
+      sessionId,
+      todos: [{ content: "Wire todos", status: "in_progress", activeForm: "Wiring todos" }],
+    });
+    socket.notify("cowork/log", {
+      type: "log",
+      sessionId,
+      line: "ask timed out",
+    });
+    socket.notify("cowork/session/backupState", {
+      type: "session_backup_state",
+      sessionId,
+      reason: "auto_checkpoint",
+      backup: { status: "ready", checkpoints: [{ id: "cp-1" }] },
+    });
+    socket.notify("error", {
+      type: "error",
+      sessionId,
+      message: "could not persist defaults",
+      code: "internal_error",
+      source: "session",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const state = useAppStore.getState();
+    const runtime = state.threadRuntimeById[threadId];
+    expect(state.latestTodosByThreadId[threadId]).toEqual([
+      { content: "Wire todos", status: "in_progress", activeForm: "Wiring todos" },
+    ]);
+    expect(runtime?.feed.some((item) => item.kind === "log" && item.line === "ask timed out")).toBe(
+      true,
+    );
+    expect(
+      runtime?.feed.some(
+        (item) =>
+          item.kind === "system" &&
+          item.line === "Session backup (auto checkpoint): status=ready, checkpoints=1",
+      ),
+    ).toBe(true);
+    expect(
+      runtime?.feed.some(
+        (item) => item.kind === "error" && item.message === "could not persist defaults",
+      ),
     ).toBe(true);
   });
 

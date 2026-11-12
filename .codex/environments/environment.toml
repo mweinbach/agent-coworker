@@ -8,7 +8,7 @@ script = "bun install"
 [[actions]]
 name = "Run Desktop"
 icon = "run"
-command = "bun run desktop:dev"
+command = "bun run start"
 
 [[actions]]
 name = "Test"

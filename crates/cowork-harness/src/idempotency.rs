@@ -172,16 +172,7 @@ impl TurnIdempotencyLedger {
         })
     }
 
-    pub fn lookup_existing(
-        &self,
-        client_message_id: &str,
-        text: &str,
-        attachments: &[TurnAttachmentInputPart],
-    ) -> Result<Option<IdempotencyCheckOutcome>, JsonRpcLiteError> {
-        self.lookup_existing_turn_with_journal(client_message_id, text, attachments, None, |_| None)
-    }
-
-    /// Like [`Self::lookup_existing`], consulting `load_receipt` (the durable journal) when the
+    /// Looks up an existing turn receipt, consulting `load_receipt` (the durable journal) when the
     /// key is not cached and the cache can no longer prove it was never accepted.
     pub fn lookup_existing_with_journal(
         &self,

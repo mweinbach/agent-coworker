@@ -20,6 +20,7 @@ pub mod extension_mcp_agent_routes;
 pub mod http_desktop;
 pub mod http_fs;
 pub mod jsonrpc;
+pub mod jsonrpc_turn;
 pub mod memory_and_fork_routes;
 pub mod mobile_h3;
 pub mod observability;
@@ -31,7 +32,6 @@ pub mod send_queue;
 pub mod startup;
 pub mod task_routes;
 pub mod transport;
-pub mod turn_runner;
 pub mod workspace_file_monitor;
 mod workspace_servers;
 
@@ -69,6 +69,25 @@ use transport::{AppState, build_router};
 
 /// Maximum buffered outbound WebSocket frames per client connection before delta eviction.
 pub const MAX_OUTBOUND_QUEUE_CAPACITY: usize = 500;
+
+/// Installs the process-wide `tracing` subscriber used by the server binaries.
+///
+/// Events are written to **stderr only**: stdout carries the NDJSON startup handshake
+/// (`server_startup_progress` / `server_listening`) that the Electron sidecar manager parses
+/// line-by-line, so log output must never reach it. The filter comes from `RUST_LOG`
+/// (falling back to `warn`), and ANSI colors are only used when stderr is a terminal.
+/// Calling this more than once (or after another subscriber is set) is a no-op.
+pub fn init_tracing() {
+    use std::io::IsTerminal;
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .with_ansi(std::io::stderr().is_terminal())
+        .try_init();
+}
 
 /// Default loopback bind address for `cowork-server`.
 pub const DEFAULT_BIND_HOST: &str = "127.0.0.1";
@@ -266,7 +285,7 @@ async fn start_server_inner(
     trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
     on_runtime_progress: Option<cowork_env::RuntimeProgressCallback>,
 ) -> anyhow::Result<ServerHandle> {
-    opts.env.remove("COWORK_DESKTOP_PARENT_MANAGED");
+    opts.env.remove(cowork_sandbox::PARENT_MANAGED_ENV_VAR);
 
     let meta = std::fs::metadata(&opts.working_directory).map_err(|_| {
         anyhow::anyhow!(
@@ -479,7 +498,7 @@ pub async fn run_from_cli_with_parent_flag(
     }
 
     let mut env = env_map_from_process();
-    env.remove("COWORK_DESKTOP_PARENT_MANAGED");
+    env.remove(cowork_sandbox::PARENT_MANAGED_ENV_VAR);
 
     let shutdown = ShutdownCoordinator::new();
     shutdown.install_process_watchers(parent_managed);
@@ -563,15 +582,6 @@ pub async fn run_from_cli_with_parent_flag(
     shutdown.cancelled().await;
     let _ = tokio::time::timeout(Duration::from_secs(9), handle.shutdown()).await;
     Ok(())
-}
-
-/// Entrypoint preserving compatibility for direct `run_from_cli(cli)` callers.
-pub async fn run_from_cli(cli: ServerCli) -> anyhow::Result<()> {
-    let parent_managed = std::env::var("COWORK_DESKTOP_PARENT_MANAGED")
-        .ok()
-        .as_deref()
-        == Some("1");
-    run_from_cli_with_parent_flag(cli, parent_managed).await
 }
 
 #[cfg(test)]

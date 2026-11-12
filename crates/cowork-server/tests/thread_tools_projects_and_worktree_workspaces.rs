@@ -167,13 +167,13 @@ fn init_repo(dir: &Path) {
     git(dir, &["commit", "-q", "-m", "init"]);
 }
 
-fn save_workspaces(server: &ServerHandle, iso: &Iso, workspaces: Value) {
+fn save_workspaces(server: &ServerHandle, workspaces: Value) {
     server
         .runtime()
         .desktop_service
         .as_ref()
         .expect("desktop service")
-        .save_state_json(json!({ "workspaces": workspaces }), &iso.workspace)
+        .save_state_json(json!({ "workspaces": workspaces }))
         .unwrap();
 }
 
@@ -217,7 +217,6 @@ async fn list_projects_returns_project_summaries_without_one_off_chats() {
     fs::create_dir_all(&other).unwrap();
     save_workspaces(
         &server,
-        &iso,
         json!([
             {
                 "id": "ws-main",
@@ -335,7 +334,6 @@ async fn create_thread_worktree_registers_desktop_workspace() {
     let server = start_server(iso.options()).await.unwrap();
     save_workspaces(
         &server,
-        &iso,
         json!([{
             "id": "ws-main",
             "name": "Main",

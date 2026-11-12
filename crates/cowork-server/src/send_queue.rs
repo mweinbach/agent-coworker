@@ -108,14 +108,6 @@ impl SocketSendQueue {
         self.inner.lock().connections.remove(connection_id);
     }
 
-    pub fn should_send_notification(&self, connection_id: &str, method: &str) -> bool {
-        let guard = self.inner.lock();
-        guard
-            .connections
-            .get(connection_id)
-            .is_none_or(|state| !state.opt_out_methods.contains(method))
-    }
-
     pub fn tool_retry_lineage_enabled(&self, connection_id: &str) -> bool {
         self.inner
             .lock()

@@ -212,24 +212,9 @@ A minimal client must handle these notifications and server requests:
 { "id": "req-2", "result": { "approved": true } }
 ```
 
-## Model Stream Events
+## Streaming Output
 
-During a turn, the server emits `model_stream_chunk` events with streaming LLM output. Each chunk has a `partType` field:
-
-| Part Type | Meaning |
-|-----------|---------|
-| `text_delta` | Incremental assistant text |
-| `reasoning_delta` | Incremental reasoning/thinking text |
-| `tool_call` | Complete tool invocation (name, args, result) |
-| `tool_input_delta` | Streaming tool input (for large tool args) |
-| `tool_result` | Tool execution result |
-| `tool_approval_request` | Tool needs user approval before executing |
-| `start` / `finish` | Turn lifecycle boundaries |
-| `error` / `abort` | Turn failed or was cancelled |
-
-**Stream normalization**: The `modelStream.ts` module (`src/client/modelStream.ts`) provides `mapModelStreamChunk()` to normalize provider-specific streaming differences into a unified `ModelStreamUpdate` type. Use it to avoid writing provider-specific rendering logic.
-
-For client-side raw stream reconstruction, `src/shared/modelStreamReplay.ts` can replay streamed turns from persisted raw events using provider-specific projectors (Google Interactions, OpenAI Responses), complementing server-owned `ThreadJournal` (`crates/cowork-storage/src/thread_journal.rs`) and `SessionSnapshot` projection (`crates/cowork-inference/src/projector.rs`).
+During a turn the server streams JSON-RPC notifications rather than raw provider chunks: `item/started`, incremental `item/agentMessage/delta` and `item/reasoning/delta`, then `item/completed` for each assistant message, reasoning block, or tool call, bracketed by `turn/started` / `turn/completed`. Tool approvals and asks arrive as server requests (`item/commandExecution/requestApproval`, `item/tool/requestUserInput`). See `docs/websocket-protocol.md` for the payload shapes. Durable turn history is server-owned: `ThreadJournal` (`crates/cowork-storage/src/thread_journal.rs`) and the `SessionSnapshot` projection (`crates/cowork-inference/src/projector.rs`).
 
 ## Session Management
 
@@ -372,9 +357,8 @@ The Electron desktop app (`apps/desktop/`) is the canonical example of a native 
 3. **Handle the core event loop**: `initialize` / `initialized`, `thread/started`, `turn/started`, `item/*` deltas and completions, `item/tool/requestUserInput`, `item/commandExecution/requestApproval`, `turn/completed`
 4. **Implement ask/approval UX**: The agent blocks tool execution until the client responds with the matching JSON-RPC request `id`
 5. **Handle thread resume**: Store `threadId` + `lastSeq`, reconnect with `thread/resume`
-6. **Optional: normalize model streams**: Use `src/client/modelStream.ts` for stream chunk projection helpers
-7. **Optional: multi-session support**: One workspace control socket + per-thread sockets
-8. **Optional: provider auth flows**: Use `cowork/provider/*` routes for in-app provider setup and OAuth PKCE
+6. **Optional: multi-session support**: One workspace control socket + per-thread sockets
+7. **Optional: provider auth flows**: Use `cowork/provider/*` routes for in-app provider setup and OAuth PKCE
 
 ## Further Reading
 

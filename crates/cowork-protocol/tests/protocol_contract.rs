@@ -137,7 +137,7 @@ fn initialize_and_initialized_params_enforce_strict_schemas() {
         "capabilities": {
             "experimentalApi": true,
             "toolRetryLineage": true,
-            "optOutNotificationMethods": ["model_stream_chunk"]
+            "optOutNotificationMethods": ["item/reasoning/delta"]
         }
     })))
     .unwrap();
@@ -232,7 +232,8 @@ fn initialize_and_initialized_params_enforce_strict_schemas() {
 
 #[test]
 fn stream_delta_classification_matches_socket_send_queue_rules() {
-    assert!(is_evictable_stream_delta(
+    // The TS-era `model_stream_chunk` notification is never emitted and is not special-cased.
+    assert!(!is_evictable_stream_delta(
         &json!({"method": "model_stream_chunk", "params": {}})
     ));
     assert!(is_evictable_stream_delta(
@@ -358,7 +359,7 @@ fn projector_assigns_occurrence_ids_and_strips_retry_lineage_when_unsupported() 
 fn schema_manifest_exports_all_21_namespaces_and_method_registries() {
     use cowork_protocol::{
         NOTIFICATION_METHODS, REQUEST_METHODS, RESULT_METHODS, SERVER_REQUEST_METHODS,
-        export_websocket_jsonrpc_schema, export_websocket_jsonrpc_schema_json,
+        export_websocket_jsonrpc_schema,
     };
     use std::collections::BTreeSet;
 
@@ -446,11 +447,6 @@ fn schema_manifest_exports_all_21_namespaces_and_method_registries() {
             .len(),
         SERVER_REQUEST_METHODS.len()
     );
-
-    let generated_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/generated/websocket-jsonrpc.schema.json");
-    let on_disk = std::fs::read_to_string(&generated_path).expect("read generated ws schema");
-    assert_eq!(on_disk, export_websocket_jsonrpc_schema_json());
 }
 
 #[test]

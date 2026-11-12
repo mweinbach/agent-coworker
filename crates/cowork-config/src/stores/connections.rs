@@ -14,15 +14,6 @@ use crate::paths::{
 };
 use crate::providers::ProviderName;
 
-pub const TOOL_API_KEY_NAMES: [&str; 2] = ["exa", "parallel"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ToolApiKeyName {
-    Exa,
-    Parallel,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionMode {

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use chrono::Utc;
+pub(crate) use cowork_config::now_iso;
 use parking_lot::Mutex as SyncMutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
@@ -240,7 +240,7 @@ impl SessionDbWriteCoordinator {
                 ticker.tick().await;
                 let mut guard = owner.lock();
                 let Some(owner) = guard.as_mut() else { break };
-                owner.updated_at = now_iso_millis();
+                owner.updated_at = now_iso();
                 let _ = write_owner_metadata(&owner_path, owner);
             }
         })
@@ -287,7 +287,7 @@ fn is_contention_io_error(err: &std::io::Error) -> bool {
 }
 
 fn make_owner_metadata(operation: &str) -> LockOwnerMetadata {
-    let at = now_iso_millis();
+    let at = now_iso();
     LockOwnerMetadata {
         pid: std::process::id(),
         started_at: at.clone(),
@@ -355,8 +355,4 @@ pub fn process_alive(pid: u32) -> bool {
         let _ = pid;
         true
     }
-}
-
-pub(crate) fn now_iso_millis() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }

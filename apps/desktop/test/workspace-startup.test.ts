@@ -323,7 +323,6 @@ describe("workspace startup flow", () => {
       clearTimeout(timer);
     }
     RUNTIME.workspaceServerRestartStabilityTimers.clear();
-    RUNTIME.modelStreamByThread.clear();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.sessionSnapshots.clear();
     __internalOperationIntent.reset();

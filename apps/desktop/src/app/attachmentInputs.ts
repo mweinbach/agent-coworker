@@ -1,6 +1,5 @@
 import {
   formatUserInputDisplayText,
-  getAttachmentCountValidationMessage,
   getAttachmentUploadByteLengthValidationMessage,
 } from "../../../../src/shared/attachments";
 
@@ -9,17 +8,6 @@ import type { FileAttachmentInput } from "./store.helpers/jsonRpcSocket";
 const BASE64_BINARY_CHUNK_SIZE = 0x8000;
 const FNV1A_OFFSET_BASIS = 0x811c9dc5;
 const FNV1A_PRIME = 0x01000193;
-type AttachmentCountLike = { length: number };
-type AttachmentSizeLike = { size: number };
-type AttachmentValidationInput = AttachmentCountLike | readonly AttachmentSizeLike[];
-
-function getAttachmentLength(input?: AttachmentValidationInput): number {
-  return Array.isArray(input) ? input.length : (input?.length ?? 0);
-}
-
-function getAttachmentByteLengths(input?: AttachmentValidationInput): number[] {
-  return Array.isArray(input) ? input.map((attachment) => attachment.size) : [];
-}
 
 export function encodeArrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -38,23 +26,6 @@ export function buildUserInputDisplayText(
   return formatUserInputDisplayText(
     text,
     attachments?.map((attachment) => attachment.filename),
-  );
-}
-
-export function getAttachmentPickerValidationMessage(
-  existingAttachments?: AttachmentValidationInput,
-  selectedFiles?: AttachmentValidationInput,
-): string | null {
-  const totalCount = getAttachmentLength(existingAttachments) + getAttachmentLength(selectedFiles);
-  if (totalCount === 0) {
-    return null;
-  }
-  return (
-    getAttachmentCountValidationMessage(totalCount) ??
-    getAttachmentUploadByteLengthValidationMessage([
-      ...getAttachmentByteLengths(existingAttachments),
-      ...getAttachmentByteLengths(selectedFiles),
-    ])
   );
 }
 

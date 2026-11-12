@@ -11,7 +11,9 @@ use cowork_config::{
 use crate::env_utils::{
     PARENT_MANAGED_ENV_VAR, host_platform, minimal_sandbox_env, remove_env, sanitized_process_env,
 };
-use crate::manager::{SandboxGateDecision, SandboxManager, TransformOptions};
+use crate::manager::{
+    SandboxCapabilities, SandboxEnforcement, SandboxGateDecision, SandboxManager, TransformOptions,
+};
 use crate::policy::{ResolveSandboxPolicyInput, SandboxPolicy, normalize_sandbox_child_env};
 use crate::runner::{
     SandboxExecutionRequest, SandboxExecutionResult, SandboxRunner, extract_exit_code,
@@ -36,6 +38,9 @@ pub struct RunSandboxExecOptions {
     pub require_backend: bool,
     pub timeout_ms: Option<u64>,
     pub json_result: bool,
+    /// `--print-command`: print the fully transformed backend launch as one JSON object
+    /// ([`PreparedSandboxLaunch`]) instead of executing it.
+    pub print_command: bool,
     pub command: Vec<String>,
 }
 
@@ -70,6 +75,7 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
     let mut require_backend = false;
     let mut timeout_ms: Option<u64> = None;
     let mut json_result = false;
+    let mut print_command = false;
 
     let mut idx = 0;
     let mut command_start: Option<usize> = None;
@@ -142,6 +148,7 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
                 timeout_ms = Some(parsed);
             }
             "--json-result" => json_result = true,
+            "--print-command" => print_command = true,
             other => return Err(format!("unknown __sandbox-exec flag: {other}")),
         }
 
@@ -176,6 +183,7 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
             require_backend,
             timeout_ms,
             json_result,
+            print_command,
             command,
         },
     )))
@@ -408,6 +416,7 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
             let RunSandboxExecOptions {
                 timeout_ms,
                 json_result,
+                print_command,
                 command,
                 ..
             } = run_opts.as_ref();
@@ -429,6 +438,34 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 host_platform(),
                 &cwd,
             );
+
+            if *print_command {
+                let launch = match prepare_sandbox_launch(
+                    &inner,
+                    &policy,
+                    &cwd,
+                    yolo,
+                    require_backend,
+                    has_scoped_targets,
+                    &read_denied_roots,
+                    None,
+                ) {
+                    Ok(launch) => launch,
+                    Err(code) => return code,
+                };
+                let mut out = std::io::stdout().lock();
+                return match serde_json::to_string(&launch) {
+                    Ok(json_line) => {
+                        let _ = writeln!(out, "{json_line}");
+                        let _ = out.flush();
+                        0
+                    }
+                    Err(err) => {
+                        let _ = writeln!(std::io::stderr(), "cowork-server __sandbox-exec: {err}");
+                        125
+                    }
+                };
+            }
 
             if *json_result {
                 let Ok(rt) = tokio::runtime::Builder::new_current_thread()
@@ -475,6 +512,118 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
     }
 }
 
+/// Fully transformed backend launch printed by `__sandbox-exec --print-command`: exactly what
+/// the transparent (non `--json-result`) execution path would spawn.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedSandboxLaunch {
+    /// Backend wrapping the command (`"linux-bwrap"`, `"macos-seatbelt"`, `"windows-sandbox"`,
+    /// or `"none"` when it runs unsandboxed, e.g. `--yolo` without a hard floor).
+    pub sandbox: SandboxType,
+    /// Program to spawn (`bwrap`, `/usr/bin/sandbox-exec`, the Windows helper, or the raw command).
+    pub file: String,
+    pub args: Vec<String>,
+    /// Working directory the program is spawned in.
+    pub cwd: PathBuf,
+    /// The COMPLETE child environment: the process environment is cleared and replaced with
+    /// exactly this map (the sandbox allowlist + policy normalization + backend variables;
+    /// the full inherited environment only for an unsandboxed `--yolo` run).
+    pub env: HashMap<String, String>,
+    /// Just the backend-specific variables (e.g. `COWORK_SANDBOX`), already merged into `env`.
+    pub sandbox_env: HashMap<String, String>,
+    /// Per-dimension enforcement the backend reported (all `false` when unsandboxed).
+    pub enforcement: SandboxEnforcement,
+    pub unsandboxed: bool,
+}
+
+/// Runs the gate + backend transform + child-env construction shared by real execution and
+/// `--print-command`. On a gate refusal the `SANDBOX_REQUIRED` message is written to stderr and
+/// the exit code (`125`) is returned as the error.
+#[allow(clippy::too_many_arguments)]
+fn prepare_sandbox_launch(
+    inner: &SandboxCommand,
+    policy: &SandboxPolicy,
+    cwd: &Path,
+    yolo: bool,
+    require_backend: bool,
+    has_scoped_targets: bool,
+    read_denied_roots: &[PathBuf],
+    capabilities: Option<&SandboxCapabilities>,
+) -> Result<PreparedSandboxLaunch, i32> {
+    let platform = host_platform();
+    let env_src = sanitized_process_env();
+    let manager = SandboxManager::new();
+    let (decision, enforcement) = manager.evaluate_gate_with_enforcement(
+        inner,
+        policy,
+        cwd,
+        yolo,
+        require_backend,
+        has_scoped_targets,
+        TransformOptions {
+            platform: Some(platform),
+            capabilities,
+            sandbox_exec_path: None,
+            env_source: Some(&env_src),
+            read_denied_roots,
+        },
+    );
+
+    let (sandbox, file, args, sandbox_env, unsandboxed) = match decision {
+        SandboxGateDecision::Deny { stderr, .. } => {
+            let _ = writeln!(std::io::stderr(), "SANDBOX_REQUIRED: {stderr}");
+            return Err(125);
+        }
+        SandboxGateDecision::RequireUnsandboxedApproval { warning, .. } => {
+            let detail = warning
+                .as_deref()
+                .unwrap_or("OS sandbox backend does not enforce filesystem/network scope");
+            let _ = writeln!(
+                std::io::stderr(),
+                "SANDBOX_REQUIRED: Refusing to run unsandboxed without interactive approval ({detail})."
+            );
+            return Err(125);
+        }
+        SandboxGateDecision::RunUnsandboxed { .. } => (
+            SandboxType::None,
+            inner.file.clone(),
+            inner.args.clone(),
+            HashMap::new(),
+            true,
+        ),
+        SandboxGateDecision::RunSandboxed(t) => {
+            debug_assert_ne!(t.sandbox, SandboxType::None);
+            (t.sandbox, t.file, t.args, t.env, t.unsandboxed)
+        }
+    };
+
+    let mut env = if unsandboxed && yolo {
+        env_src
+    } else {
+        let allowlisted = minimal_sandbox_env(&env_src, platform);
+        normalize_sandbox_child_env(&allowlisted, policy, Some(platform))
+    };
+    for (k, v) in &sandbox_env {
+        env.insert(k.clone(), v.clone());
+    }
+    remove_env(&mut env, PARENT_MANAGED_ENV_VAR, platform);
+
+    Ok(PreparedSandboxLaunch {
+        sandbox,
+        file,
+        args,
+        cwd: cwd.to_path_buf(),
+        env,
+        sandbox_env,
+        enforcement: if unsandboxed {
+            SandboxEnforcement::NONE
+        } else {
+            enforcement
+        },
+        unsandboxed,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_transparent_cli_command(
     inner: &SandboxCommand,
@@ -486,59 +635,24 @@ fn run_transparent_cli_command(
     timeout: Option<Duration>,
     read_denied_roots: &[PathBuf],
 ) -> i32 {
-    let platform = host_platform();
-    let env_src = sanitized_process_env();
-    let manager = SandboxManager::new();
-    let decision = manager.evaluate_gate(
+    let PreparedSandboxLaunch {
+        file: exec_file,
+        args: exec_args,
+        env: child_env,
+        ..
+    } = match prepare_sandbox_launch(
         inner,
         policy,
         cwd,
         yolo,
         require_backend,
         has_scoped_targets,
-        TransformOptions {
-            platform: Some(platform),
-            capabilities: None,
-            sandbox_exec_path: None,
-            env_source: Some(&env_src),
-            read_denied_roots,
-        },
-    );
-
-    let (exec_file, exec_args, sandbox_env, unsandboxed) = match decision {
-        SandboxGateDecision::Deny { stderr, .. } => {
-            let _ = writeln!(std::io::stderr(), "SANDBOX_REQUIRED: {stderr}");
-            return 125;
-        }
-        SandboxGateDecision::RequireUnsandboxedApproval { warning, .. } => {
-            let detail = warning
-                .as_deref()
-                .unwrap_or("OS sandbox backend does not enforce filesystem/network scope");
-            let _ = writeln!(
-                std::io::stderr(),
-                "SANDBOX_REQUIRED: Refusing to run unsandboxed without interactive approval ({detail})."
-            );
-            return 125;
-        }
-        SandboxGateDecision::RunUnsandboxed { .. } => {
-            (inner.file.clone(), inner.args.clone(), HashMap::new(), true)
-        }
-        SandboxGateDecision::RunSandboxed(t) => {
-            debug_assert_ne!(t.sandbox, SandboxType::None);
-            (t.file, t.args, t.env, t.unsandboxed)
-        }
+        read_denied_roots,
+        None,
+    ) {
+        Ok(launch) => launch,
+        Err(code) => return code,
     };
-
-    let mut child_env = if unsandboxed && yolo {
-        env_src
-    } else {
-        let allowlisted = minimal_sandbox_env(&env_src, platform);
-        normalize_sandbox_child_env(&allowlisted, policy, Some(platform))
-    };
-    for (k, v) in sandbox_env {
-        child_env.insert(k, v);
-    }
-    remove_env(&mut child_env, PARENT_MANAGED_ENV_VAR, platform);
 
     let mut cmd = Command::new(&exec_file);
     cmd.args(&exec_args)
@@ -652,4 +766,87 @@ fn exec_linux_seccomp_stage(_deny_network: bool, _command: &[String]) -> i32 {
         "Linux sandbox socket mediation failed: seccomp-BPF is only supported on Linux"
     );
     125
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_args(raw: &[&str]) -> ParsedSandboxExecArgs {
+        parse_sandbox_exec_args(&raw.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn print_command_bwrap_launch_matches_execution_transform() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = canonicalize_sync(tmp.path());
+        let cwd_str = cwd.to_string_lossy().into_owned();
+        let parsed = run_args(&[
+            "--print-command",
+            "--cwd",
+            &cwd_str,
+            "--mode",
+            "workspace-write",
+            "--no-network",
+            "--",
+            "/bin/echo",
+            "hi",
+        ]);
+        let ParsedSandboxExecArgs::Run(opts) = &parsed else {
+            panic!("expected Run");
+        };
+        assert!(opts.print_command);
+        let (policy, cwd, yolo, require_backend, scoped) = resolve_cli_run_policy(&parsed).unwrap();
+        let caps = SandboxCapabilities {
+            backend: SandboxType::Bwrap,
+            bwrap_path: Some(PathBuf::from("/usr/bin/bwrap")),
+            windows_helper_path: None,
+            enforcement: SandboxEnforcement::FULL,
+            warning: None,
+            setup_required: false,
+        };
+        let launch = prepare_sandbox_launch(
+            &SandboxCommand::new("/bin/echo", ["hi"]),
+            &policy,
+            &cwd,
+            yolo,
+            require_backend,
+            scoped,
+            &[],
+            Some(&caps),
+        )
+        .expect("gate allows an enforcing backend");
+
+        assert_eq!(launch.sandbox, SandboxType::Bwrap);
+        assert_eq!(launch.file, "/usr/bin/bwrap");
+        assert!(!launch.unsandboxed);
+        assert_eq!(launch.enforcement, SandboxEnforcement::FULL);
+        assert!(launch.args.contains(&"--unshare-net".to_owned()));
+        let tail = &launch.args[launch.args.len() - 8..];
+        assert_eq!(tail[0], "--");
+        assert_eq!(
+            &tail[2..],
+            &[
+                "__sandbox-exec",
+                "--linux-seccomp",
+                "--deny-network",
+                "--",
+                "/bin/echo",
+                "hi"
+            ]
+        );
+        assert_eq!(
+            launch.sandbox_env.get("COWORK_SANDBOX").map(String::as_str),
+            Some("linux-bwrap")
+        );
+        for (k, v) in &launch.sandbox_env {
+            assert_eq!(launch.env.get(k), Some(v));
+        }
+        assert!(!launch.env.contains_key(PARENT_MANAGED_ENV_VAR));
+
+        let json = serde_json::to_value(&launch).unwrap();
+        assert_eq!(json["sandbox"], "linux-bwrap");
+        assert!(json["sandboxEnv"].is_object());
+        assert_eq!(json["enforcement"]["network"], true);
+    }
 }

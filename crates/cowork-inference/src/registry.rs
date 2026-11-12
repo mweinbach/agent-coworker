@@ -2,11 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use cowork_config::{
-    ModelRegistry, ProviderName, SupportedModel, legacy_model_alias,
-    reconcile_reasoning_provider_options,
-};
-use serde_json::{Map, Value};
+use cowork_config::{ModelRegistry, ProviderName, SupportedModel, legacy_model_alias};
 
 use crate::error::InferenceError;
 
@@ -94,13 +90,6 @@ impl InferenceModelRegistry {
         &self.models
     }
 
-    pub fn models_for_provider(&self, provider: ProviderName) -> &[SupportedModel] {
-        self.by_provider
-            .get(&provider)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
     pub fn get(&self, provider: ProviderName, model_id: &str) -> Option<&SupportedModel> {
         let trimmed = model_id.trim();
         let effective = legacy_model_alias(provider, trimmed).unwrap_or(trimmed);
@@ -125,17 +114,5 @@ impl InferenceModelRegistry {
     ) -> SupportedModel {
         self.inner
             .resolve_model_for_config(provider, requested_model, homedir, env)
-    }
-
-    pub fn reconcile_provider_options(
-        &self,
-        provider_options: &Map<String, Value>,
-        model: &SupportedModel,
-    ) -> Option<Map<String, Value>> {
-        reconcile_reasoning_provider_options(
-            provider_options,
-            model.provider,
-            &model.provider_options_defaults,
-        )
     }
 }

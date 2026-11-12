@@ -20,7 +20,7 @@ When adding a JSON-RPC method or notification:
 
 1. Add schema + validation in `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts` when consumed by TS clients.
 2. Wire the handler in `crates/cowork-server/src/jsonrpc.rs` and/or the session runtime in `crates/cowork-harness/`.
-3. Document it in `docs/websocket-protocol.md` — the source of truth for alternative UI builders — and run `bun run docs:generate-jsonrpc` + `bun run docs:check`.
+3. Document it in `docs/websocket-protocol.md` — the source of truth for alternative UI builders — and run `bun run docs:check`.
 
 ## Layout
 
@@ -43,8 +43,8 @@ Use the root scripts to run both non-overlapping scopes; do not hand-maintain st
 
 - `bun install` — install root and workspace dependencies
 - `bun install --cwd apps/mobile --frozen-lockfile` — install the locked mobile SDK dependencies required by the full test suite
-- `bun run start` / `bun run cli` / `bun run serve` — desktop app / CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
-- `bun run desktop:dev` — Electron dev mode
+- `bun run start` / `bun run cli` / `bun run serve` — Electron desktop app in dev mode / Rust CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
+- `bun run desktop:web` — browser development build of the desktop UI
 - `cargo test --workspace` — run all Rust crate unit and integration tests
 - `cargo clippy --workspace --all-targets -- -D warnings` / `cargo fmt --all -- --check` — Rust lint and format checks
 - `bun run test` — full TypeScript/client/black-box suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.

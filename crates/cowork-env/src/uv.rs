@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -98,17 +97,6 @@ impl UvPythonManager {
     /// Returns `<cowork_home>/cache/uv/venvs` for content-addressed reusable environments.
     pub fn cached_venvs_dir(&self) -> PathBuf {
         self.cache_dir().join("venvs")
-    }
-
-    pub fn base_env_paths(&self) -> UvEnvironmentPaths {
-        UvEnvironmentPaths {
-            cache_dir: self.cache_dir(),
-            venv_dir: None,
-            venv_bin_dir: None,
-            python_executable: self.cfg.base_python.clone(),
-            offline: self.cfg.offline,
-            wheelhouse_dir: self.cfg.wheelhouse_dir.clone(),
-        }
     }
 
     fn resolve_uv_binary(&self) -> Result<PathBuf> {
@@ -325,108 +313,5 @@ impl UvPythonManager {
             env_paths,
             cleaned: false,
         })
-    }
-
-    /// Provisions or reuses a content-addressed cached `.venv` under `<cowork_home>/cache/uv/venvs/<blake3>`,
-    /// serializing concurrent builds via an `fs4` file lock.
-    pub async fn ensure_cached_venv(&self, packages: &[&str]) -> Result<UvEnvironmentPaths> {
-        let mut sorted_pkgs: Vec<&str> = packages.to_vec();
-        sorted_pkgs.sort_unstable();
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(self.cfg.base_python.to_string_lossy().as_bytes());
-        for pkg in &sorted_pkgs {
-            hasher.update(b"\0");
-            hasher.update(pkg.as_bytes());
-        }
-        let key = hasher.finalize().to_hex().to_string();
-
-        let venvs_root = self.cached_venvs_dir();
-        std::fs::create_dir_all(&venvs_root)?;
-        let target_venv = venvs_root.join(&key[..24]);
-        let ready_marker = target_venv.join(".cowork-uv-ready");
-
-        if ready_marker.is_file() {
-            let (bin, py) = Self::venv_bin_and_python(&target_venv);
-            return Ok(UvEnvironmentPaths {
-                cache_dir: self.cache_dir(),
-                venv_dir: Some(target_venv),
-                venv_bin_dir: Some(bin),
-                python_executable: py,
-                offline: self.cfg.offline,
-                wheelhouse_dir: self.cfg.wheelhouse_dir.clone(),
-            });
-        }
-
-        let lock_path = venvs_root.join(format!("{}.lock", &key[..24]));
-        let lock_file = tokio::task::spawn_blocking(move || -> Result<File> {
-            let f = OpenOptions::new()
-                .create(true)
-                .read(true)
-                .write(true)
-                .truncate(false)
-                .open(&lock_path)?;
-            <File as fs4::FileExt>::lock(&f)?;
-            Ok(f)
-        })
-        .await
-        .map_err(|e| EnvError::Lock(format!("uv cache lock join failed: {e}")))??;
-
-        let res = async {
-            if !ready_marker.is_file() {
-                if target_venv.exists() {
-                    let _ = std::fs::remove_dir_all(&target_venv);
-                }
-                let cache_dir = self.cache_dir();
-                let venv_args = vec![
-                    "venv".to_owned(),
-                    "--no-project".to_owned(),
-                    "--python".to_owned(),
-                    self.cfg.base_python.to_string_lossy().into_owned(),
-                    "--cache-dir".to_owned(),
-                    cache_dir.to_string_lossy().into_owned(),
-                    "--link-mode".to_owned(),
-                    Self::default_link_mode().to_owned(),
-                    target_venv.to_string_lossy().into_owned(),
-                ];
-                self.run_uv(&venv_args).await?;
-                let (_, py) = Self::venv_bin_and_python(&target_venv);
-                if !sorted_pkgs.is_empty() {
-                    let mut pip_args = vec![
-                        "pip".to_owned(),
-                        "install".to_owned(),
-                        "--python".to_owned(),
-                        py.to_string_lossy().into_owned(),
-                        "--cache-dir".to_owned(),
-                        cache_dir.to_string_lossy().into_owned(),
-                    ];
-                    if self.cfg.offline {
-                        pip_args.push("--offline".to_owned());
-                        pip_args.push("--no-index".to_owned());
-                    }
-                    if let Some(wh) = &self.cfg.wheelhouse_dir {
-                        pip_args.push("--find-links".to_owned());
-                        pip_args.push(wh.to_string_lossy().into_owned());
-                    }
-                    for pkg in &sorted_pkgs {
-                        pip_args.push((*pkg).to_owned());
-                    }
-                    self.run_uv(&pip_args).await?;
-                }
-                std::fs::write(&ready_marker, b"ok\n")?;
-            }
-            let (bin, py) = Self::venv_bin_and_python(&target_venv);
-            Ok(UvEnvironmentPaths {
-                cache_dir: self.cache_dir(),
-                venv_dir: Some(target_venv),
-                venv_bin_dir: Some(bin),
-                python_executable: py,
-                offline: self.cfg.offline,
-                wheelhouse_dir: self.cfg.wheelhouse_dir.clone(),
-            })
-        }
-        .await;
-
-        let _ = <File as fs4::FileExt>::unlock(&lock_file);
-        res
     }
 }

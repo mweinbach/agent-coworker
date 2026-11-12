@@ -92,14 +92,11 @@ function createSnapshotHarness(initialWorkflowRuns: ThreadWorkflowRun[] = []) {
     };
   };
 
-  const projection = createFeedProjectionModule(
-    {
-      deps: {
-        normalizeThreadTitleSource: () => "model",
-      },
-    } as never,
-    { resetLiveModelStreamRuntime: () => {} },
-  );
+  const projection = createFeedProjectionModule({
+    deps: {
+      normalizeThreadTitleSource: () => "model",
+    },
+  } as never);
 
   return { get, set, projection };
 }

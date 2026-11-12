@@ -106,10 +106,6 @@ export const agentProfilesCatalogSchema = z
 
 export type AgentProfilesCatalog = z.infer<typeof agentProfilesCatalogSchema>;
 
-export type AgentProfileRef =
-  | { kind: "bare"; id: string }
-  | { kind: "scoped"; scope: AgentProfileScope; id: string };
-
 export type AgentProfileUpsertInput = AgentProfileDefinition & {
   scope: AgentProfileScope;
 };
@@ -138,35 +134,6 @@ export const agentProfileCopyInputSchema = z
 
 export type AgentProfileCopyInput = z.infer<typeof agentProfileCopyInputSchema>;
 
-export function normalizeAgentProfileDefinition(input: unknown): AgentProfileDefinition {
-  const parsed = agentProfileDefinitionSchema.parse(input);
-  return {
-    ...parsed,
-    allowedBuiltInTools: dedupeStrings(parsed.allowedBuiltInTools),
-    allowedMcpServers: dedupeStrings(parsed.allowedMcpServers),
-    skillNames: dedupeStrings(parsed.skillNames),
-  };
-}
-
-export function parseAgentProfileRef(refRaw: string): AgentProfileRef {
-  const ref = refRaw.trim();
-  if (!ref) {
-    throw new Error("profileRef must not be empty");
-  }
-  const scoped = /^(workspace|global):(.+)$/.exec(ref);
-  if (scoped) {
-    return {
-      kind: "scoped",
-      scope: scoped[1] as AgentProfileScope,
-      id: agentProfileIdSchema.parse(scoped[2]),
-    };
-  }
-  return {
-    kind: "bare",
-    id: agentProfileIdSchema.parse(ref),
-  };
-}
-
 export function buildAgentProfileRef(scope: AgentProfileScope, id: string): string {
   return `${scope}:${id}`;
 }
@@ -193,16 +160,4 @@ function createAgentProfileSnapshot(
     ...(profile.defaultContextMode ? { defaultContextMode: profile.defaultContextMode } : {}),
     resolvedAt,
   });
-}
-
-function dedupeStrings(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-  return normalized;
 }

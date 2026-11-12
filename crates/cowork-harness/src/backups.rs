@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
+use cowork_config::now_iso;
 use cowork_config::{
     FileLockOptions, canonicalize_sync, ensure_private_dir_sync, file_lock_root_for_cowork_home,
     harden_private_file_sync, is_inside, same_workspace_path, with_file_lock_sync,
@@ -260,10 +261,6 @@ struct StoredSessionBackupMetadata {
 struct EntrySignature {
     kind: DeltaEntryKind,
     digest: String,
-}
-
-fn now_iso() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn is_excluded_top_level_name(name: &str) -> bool {
@@ -2676,24 +2673,6 @@ impl WorkspaceBackupManager {
         })?;
 
         self.read_workspace_backups(&canon_wd, session_id_for_event, lookup_session)
-    }
-
-    /// Marks an existing session backup `metadata.json` as `"closed"` with `closedAt`.
-    pub fn mark_session_closed(&self, session_id: &str) -> Result<(), String> {
-        let Some(session_dir) = self.find_existing_session_dir(session_id)? else {
-            return Ok(());
-        };
-        self.run_locked(&session_dir, || {
-            let mut meta = Self::read_metadata(&session_dir)?;
-            if meta.state != BackupMetadataState::Closed {
-                let now = now_iso();
-                meta.state = BackupMetadataState::Closed;
-                meta.closed_at = Some(now.clone());
-                meta.updated_at = Some(now);
-                Self::write_metadata(&session_dir, &meta)?;
-            }
-            Ok(())
-        })
     }
 
     fn resolve_snapshot_ref(

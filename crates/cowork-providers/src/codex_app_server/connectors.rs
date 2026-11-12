@@ -28,17 +28,6 @@ pub struct CodexAccountInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexRateLimits {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secondary: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_type: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct OpenAiNativeConnectorInfo {
     pub id: String,
     pub name: String,

@@ -719,7 +719,16 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
         .unwrap();
     #[cfg(target_os = "linux")]
     let child_pids = {
-        let pids = live_pids_with_argv(&["sleep", &sleep_secs]);
+        // `$!` is written as soon as bash forks, possibly before the child has exec'd
+        // `sleep`, so give the argv a moment to appear.
+        let mut pids = live_pids_with_argv(&["sleep", &sleep_secs]);
+        for _ in 0..50 {
+            if !pids.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            pids = live_pids_with_argv(&["sleep", &sleep_secs]);
+        }
         assert!(
             !pids.is_empty(),
             "sleep {sleep_secs} must be running before the interrupt"

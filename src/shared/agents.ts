@@ -18,7 +18,6 @@ const AGENT_MODE_VALUES = ["collaborative", "delegate"] as const;
 export type AgentMode = (typeof AGENT_MODE_VALUES)[number];
 
 const AGENT_CONTEXT_MODE_VALUES = ["none", "brief", "full"] as const;
-type AgentContextMode = (typeof AGENT_CONTEXT_MODE_VALUES)[number];
 
 const AGENT_LIFECYCLE_STATE_VALUES = ["active", "closed"] as const;
 type AgentLifecycleState = (typeof AGENT_LIFECYCLE_STATE_VALUES)[number];
@@ -31,16 +30,6 @@ const AGENT_EXECUTION_STATE_VALUES = [
   "closed",
 ] as const;
 export type AgentExecutionState = (typeof AGENT_EXECUTION_STATE_VALUES)[number];
-
-/** Recover metadata only when no live execution owns the child. */
-export function resolveRestoredAgentExecutionState(
-  executionState: AgentExecutionState | null | undefined,
-  lifecycleState: AgentLifecycleState = "active",
-): AgentExecutionState {
-  if (lifecycleState === "closed") return "closed";
-  if (executionState === "running" || executionState === "pending_init") return "errored";
-  return executionState ?? "completed";
-}
 
 const AGENT_TASK_TYPE_VALUES = ["research", "plan", "implement", "verify"] as const;
 export type AgentTaskType = (typeof AGENT_TASK_TYPE_VALUES)[number];
@@ -76,67 +65,7 @@ const persistentAgentProfileSnapshotSchema = z
   })
   .strict();
 
-function dedupeStringsPreserveOrder(values: readonly string[]): string[] {
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    if (seen.has(value)) continue;
-    seen.add(value);
-    normalized.push(value);
-  }
-  return normalized;
-}
-
-export function normalizeAgentTargetPaths(
-  targetPaths: readonly string[] | null | undefined,
-): string[] | undefined {
-  if (targetPaths === undefined || targetPaths === null) return undefined;
-  const normalized: string[] = [];
-  for (const rawPath of targetPaths) {
-    const trimmed = rawPath.trim();
-    if (!trimmed) {
-      throw new Error("targetPaths entries must not be empty");
-    }
-    normalized.push(trimmed);
-  }
-  return dedupeStringsPreserveOrder(normalized);
-}
-
 export const agentTargetPathsSchema = z.array(z.string().trim().min(1));
-
-export type AgentSpawnContextOptions = {
-  contextMode?: AgentContextMode;
-  briefing?: string;
-  includeParentTodos?: boolean;
-  includeHarnessContext?: boolean;
-  forkContext?: boolean;
-  nickname?: string;
-  taskType?: AgentTaskType;
-  targetPaths?: string[];
-};
-
-export type ResolvedAgentSpawnContextOptions = {
-  contextMode: AgentContextMode;
-  briefing?: string;
-  includeParentTodos: boolean;
-  includeHarnessContext: boolean;
-};
-
-export function resolveAgentSpawnContextOptions(
-  opts: AgentSpawnContextOptions | null | undefined,
-): ResolvedAgentSpawnContextOptions {
-  const contextMode = opts?.contextMode ?? (opts?.forkContext === true ? "full" : "none");
-  const briefing = opts?.briefing?.trim();
-  if (contextMode === "brief" && !briefing) {
-    throw new Error('briefing is required when contextMode is "brief"');
-  }
-  return {
-    contextMode,
-    ...(briefing ? { briefing } : {}),
-    includeParentTodos: opts?.includeParentTodos === true,
-    includeHarnessContext: opts?.includeHarnessContext === true,
-  };
-}
 
 export type PersistentAgentSummary = {
   agentId: string;
@@ -261,17 +190,3 @@ const agentInspectResultSchema: z.ZodType<AgentInspectResult> = z
     lastTurnUsage: turnUsageSchema.nullable(),
   })
   .strict();
-
-export function mapLegacyAgentTypeToRole(role: string | null | undefined): AgentRole | null {
-  if (!role) return null;
-  switch (role) {
-    case "explore":
-      return "explorer";
-    case "research":
-      return "research";
-    case "general":
-      return "worker";
-    default:
-      return null;
-  }
-}

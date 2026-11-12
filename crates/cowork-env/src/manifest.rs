@@ -182,16 +182,6 @@ impl TrustedKeyRing {
         self.keys.insert(key_id.into(), key);
     }
 
-    pub fn insert_pem_or_encoded(
-        &mut self,
-        key_id: impl Into<String>,
-        encoded: &str,
-    ) -> Result<()> {
-        let vk = parse_ed25519_verifying_key(encoded)?;
-        self.insert_verifying_key(key_id, vk);
-        Ok(())
-    }
-
     pub fn get(&self, key_id: &str) -> Option<&VerifyingKey> {
         self.keys.get(key_id)
     }

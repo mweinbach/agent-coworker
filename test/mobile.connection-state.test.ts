@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-const { describeTransportStatus, isWorkspaceConnectionReady, toneForTransportState } = await import(
+const { describeTransportStatus, isWorkspaceConnectionReady } = await import(
   "../apps/mobile/src/features/relay/connectionState"
 );
 
@@ -26,19 +26,13 @@ describe("mobile connection state helpers", () => {
     ).toBe(false);
   });
 
-  test("fallback and unsupported modes surface distinct labels and tones", () => {
+  test("fallback and unsupported modes surface distinct labels", () => {
     expect(
       describeTransportStatus({
         status: "connected",
         transportMode: "fallback",
       }),
     ).toBe("Fallback demo");
-    expect(
-      toneForTransportState({
-        status: "connected",
-        transportMode: "fallback",
-      }),
-    ).toBe("warning");
 
     expect(
       describeTransportStatus({
@@ -46,11 +40,5 @@ describe("mobile connection state helpers", () => {
         transportMode: "unsupported",
       }),
     ).toBe("Unsupported");
-    expect(
-      toneForTransportState({
-        status: "error",
-        transportMode: "unsupported",
-      }),
-    ).toBe("danger");
   });
 });

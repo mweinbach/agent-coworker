@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use chrono::DateTime;
-use cowork_config::{canonicalize_sync, resolve_home_dir, windows_path_compare_key};
-use serde::Deserialize;
+use cowork_config::{
+    canonicalize_sync, ensure_private_dir_sync, harden_private_file_sync, resolve_home_dir,
+    windows_path_compare_key, write_text_file_atomic,
+};
 use serde_json::Value;
 
 use crate::env_utils::{get_env, host_platform};
@@ -286,25 +287,6 @@ pub fn is_native_windows_binary(binary_path: &Path, expected_arch: &str) -> bool
         _ => return false,
     };
     read_windows_pe_machine(binary_path) == Some(expected_machine)
-}
-
-/// Parsed `cowork-win-sandbox.sha256.json` manifest produced by `scripts/windowsSandboxBundle.ts`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowsSandboxHashManifest {
-    pub schema_version: u32,
-    pub rust_target: String,
-    pub files: HashMap<String, String>,
-}
-
-/// Loads `cowork-win-sandbox.sha256.json` from `bundle_dir` if present and valid (`schemaVersion == 1`).
-pub fn load_windows_sandbox_hash_manifest(bundle_dir: &Path) -> Option<WindowsSandboxHashManifest> {
-    let raw = std::fs::read_to_string(bundle_dir.join(WINDOWS_SANDBOX_HASH_MANIFEST_NAME)).ok()?;
-    let manifest: WindowsSandboxHashManifest = serde_json::from_str(&raw).ok()?;
-    if manifest.schema_version != 1 {
-        return None;
-    }
-    Some(manifest)
 }
 
 /// Verifies Windows Authenticode signature on `file_path` via offline-safe native `WinVerifyTrust`
@@ -612,10 +594,14 @@ fn read_valid_setup_state(home_dir: &Path) -> Option<SetupStateCandidate> {
         return None;
     }
 
-    let created_ms = marker_json
-        .get("created_at")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
+    let created_ms = ["created_at", "updated_at"]
+        .into_iter()
+        .find_map(|key| {
+            marker_json
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.timestamp_millis());
 
@@ -637,27 +623,14 @@ fn read_valid_setup_state(home_dir: &Path) -> Option<SetupStateCandidate> {
     })
 }
 
+/// Atomically writes `content` to `dest` (`0600`, inside a `0700` parent on Unix).
 fn write_atomic_private(dest: &Path, content: &str) -> std::io::Result<()> {
-    static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
     let Some(parent) = dest.parent() else {
         return Err(std::io::Error::other("missing parent directory"));
     };
-    std::fs::create_dir_all(parent)?;
-    let nonce = NEXT_NONCE.fetch_add(1, Ordering::Relaxed);
-    let tmp = parent.join(format!(
-        ".{}.tmp-{}-{}",
-        dest.file_name().and_then(|n| n.to_str()).unwrap_or("sync"),
-        std::process::id(),
-        nonce
-    ));
-    if let Err(err) = std::fs::write(&tmp, content.as_bytes()) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(err);
-    }
-    if let Err(err) = std::fs::rename(&tmp, dest) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(err);
-    }
+    ensure_private_dir_sync(parent).map_err(std::io::Error::other)?;
+    write_text_file_atomic(dest, content, Some(0o600)).map_err(std::io::Error::other)?;
+    harden_private_file_sync(dest);
     Ok(())
 }
 

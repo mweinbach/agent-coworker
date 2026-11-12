@@ -7,16 +7,9 @@ import {
   previousActivityPageStart,
 } from "../apps/mobile/src/features/cowork/activityEntryPagination";
 import { buildChatRenderItems } from "../apps/mobile/src/features/cowork/activityGroups";
-import {
-  MOBILE_LIST_PERFORMANCE_CONTRACTS,
-  MOBILE_LONG_FIXTURE_SIZE,
-  MOBILE_STREAM_PERFORMANCE_BUDGET,
-} from "../apps/mobile/src/features/cowork/mobilePerformanceContracts";
+import { getMobileListPerformanceContract } from "../apps/mobile/src/features/cowork/mobilePerformanceContracts";
 import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
-import {
-  buildThreadHomeListSections,
-  threadHomeListRowCount,
-} from "../apps/mobile/src/features/cowork/threadHomeListModel";
+import { buildThreadHomeListSections } from "../apps/mobile/src/features/cowork/threadHomeListModel";
 import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
@@ -30,6 +23,10 @@ import {
   type MobileThreadSummary,
   useThreadStore,
 } from "../apps/mobile/src/features/cowork/threadStore";
+import {
+  MOBILE_LONG_FIXTURE_SIZE,
+  MOBILE_STREAM_PERFORMANCE_BUDGET,
+} from "./fixtures/mobile-performance-budgets";
 
 const FIXTURE_TS = "2026-07-10T00:00:00.000Z";
 
@@ -65,7 +62,7 @@ describe("mobile long-list performance contracts", () => {
     "%s keeps deterministic thread and home render windows within budget",
     (platform) => {
       for (const surface of ["thread", "home"] as const) {
-        const contract = MOBILE_LIST_PERFORMANCE_CONTRACTS[platform][surface];
+        const contract = getMobileListPerformanceContract(platform, surface);
         expect(contract.initialNumToRender).toBeLessThanOrEqual(12);
         expect(contract.maxToRenderPerBatch).toBeLessThanOrEqual(8);
         expect(contract.windowSize).toBeLessThanOrEqual(7);
@@ -172,7 +169,9 @@ describe("mobile long-list performance contracts", () => {
 
     expect(sections[0]?.key).toBe("chats");
     expect(sections[0]?.data).toHaveLength(MOBILE_LONG_FIXTURE_SIZE);
-    expect(threadHomeListRowCount(sections)).toBe(MOBILE_LONG_FIXTURE_SIZE + 1);
+    expect(sections.reduce((total, section) => total + section.data.length, 0)).toBe(
+      MOBILE_LONG_FIXTURE_SIZE + 1,
+    );
   });
 
   test("all 1,000 Activity entries remain reachable through bounded inline pages", () => {

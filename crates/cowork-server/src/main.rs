@@ -2,7 +2,7 @@ use clap::Parser;
 use cowork_server::{ServerCli, ServerSubcommand, run_from_cli_with_parent_flag};
 
 fn main() -> anyhow::Result<()> {
-    let parent_managed = std::env::var("COWORK_DESKTOP_PARENT_MANAGED")
+    let parent_managed = std::env::var(cowork_sandbox::PARENT_MANAGED_ENV_VAR)
         .ok()
         .as_deref()
         == Some("1");
@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
         // SAFETY: Called on the main thread before starting the Tokio runtime or spawning threads,
         // ensuring child processes never inherit COWORK_DESKTOP_PARENT_MANAGED.
         unsafe {
-            std::env::remove_var("COWORK_DESKTOP_PARENT_MANAGED");
+            std::env::remove_var(cowork_sandbox::PARENT_MANAGED_ENV_VAR);
         }
     }
 
@@ -51,6 +51,7 @@ fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    cowork_server::init_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskRecord } from "../../../src/shared/tasks";
-import { createThreadModelStreamRuntime } from "../src/app/store.feedMapping";
 import {
   isThreadNavigationIntentCurrent,
   recordThreadNavigationIntent,
@@ -238,9 +237,6 @@ describe("workspace settings sync", () => {
     const retainedTask = makeTask(`task-${retainedWorkspaceId}`, retainedPath);
 
     for (const { threadId, sessionId } of allThreads) {
-      const stream = createThreadModelStreamRuntime();
-      stream.assistantTextHistoryInTurn.push("Retained streamed content");
-      RUNTIME.modelStreamByThread.set(threadId, stream);
       RUNTIME.optimisticUserMessageIds.set(threadId, new Set(["optimistic-message"]));
       RUNTIME.pendingThreadMessages.set(threadId, [
         {
@@ -332,7 +328,6 @@ describe("workspace settings sync", () => {
       },
     });
     const before = useAppStore.getState();
-    const retainedStream = RUNTIME.modelStreamByThread.get(retained.threadId);
 
     try {
       await useAppStore.getState().removeWorkspace(workspaceId);
@@ -363,7 +358,6 @@ describe("workspace settings sync", () => {
         RUNTIME.pendingThreadSteers,
         RUNTIME.threadSelectionRequests,
         RUNTIME.pendingWorkspaceDefaultApplyByThread,
-        RUNTIME.modelStreamByThread,
       ]) {
         expect(map.has(removed.threadId)).toBe(false);
         expect(map.has(removedChild.threadId)).toBe(false);
@@ -375,7 +369,6 @@ describe("workspace settings sync", () => {
       }
       expect(RUNTIME.sessionSnapshots.has(retained.sessionId)).toBe(true);
       expect(RUNTIME.sessionSnapshots.has(`live-${retained.sessionId}`)).toBe(true);
-      expect(RUNTIME.modelStreamByThread.get(retained.threadId)).toBe(retainedStream);
       expect(isThreadNavigationIntentCurrent(removed.threadId)).toBe(false);
       expect(isThreadNavigationIntentCurrent(removedChild.threadId)).toBe(false);
       expect(isThreadNavigationIntentCurrent(retained.threadId)).toBe(true);

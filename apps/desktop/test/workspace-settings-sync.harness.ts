@@ -631,7 +631,6 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.workspaceServerRestartAttempts.clear();
-    RUNTIME.modelStreamByThread.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
 
     setAppState(useAppStore, {

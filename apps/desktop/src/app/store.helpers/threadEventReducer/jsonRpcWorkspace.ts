@@ -321,7 +321,6 @@ export function createJsonRpcWorkspaceModule(
     if (!options.preserveInFlight) {
       for (const threadId of reconnectIds) {
         flushPendingContentForThread(set, threadId);
-        RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         clearPendingThreadSteers(threadId);
       }

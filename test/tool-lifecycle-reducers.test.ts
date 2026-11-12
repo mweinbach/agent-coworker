@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { ProjectedItem as MobileProjectedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
   applyProjectedCompletion,
-  createMobileFeedState,
+  type MobileFeedState,
 } from "../apps/mobile/src/features/cowork/snapshotReducer";
 import { applyProjectedItemCompleted, type ProjectedItem } from "../src/shared/projectedItems";
 
@@ -40,7 +40,7 @@ describe("tool lifecycle reducers", () => {
   });
 
   test("mobile reducer applies the authoritative final state for one stable call id", () => {
-    let state = createMobileFeedState();
+    let state: MobileFeedState = { feed: [], lastEventSeq: 0 };
     state = applyProjectedCompletion(
       state,
       provisionalSuccess satisfies MobileProjectedItem,

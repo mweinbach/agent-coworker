@@ -67,20 +67,6 @@ export const MOBILE_TABS = [
   },
 ] as const satisfies readonly MobileTabDefinition[];
 
-export const MOBILE_DEEP_LINKS = {
-  chats: "/threads",
-  thread: "/thread/[id]",
-  workspace: "/workspace",
-  workspaceGeneral: "/workspace/general",
-  workspaceMemory: "/workspace/memory",
-  workspaceBackups: "/workspace/backups",
-  skills: "/skills",
-  settings: "/settings",
-  settingsProviders: "/settings/providers",
-  settingsMcp: "/settings/mcp",
-  settingsUsage: "/settings/usage",
-} as const;
-
 export function pendingInputBadgeValue(
   pendingRequests: Readonly<Record<string, unknown | null | undefined>>,
 ): string | undefined {

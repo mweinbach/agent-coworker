@@ -6,9 +6,15 @@ export { sortAgentSummaries } from "../store.feedMapping";
 
 export const MAX_FEED_ITEMS = SESSION_FEED_ITEM_LIMIT;
 
+/**
+ * JSON-RPC notifications whose params are a typed session event (`{ type, sessionId, ... }`)
+ * and are dispatched straight into the thread event reducer.
+ */
 export const JSONRPC_THREAD_EVENT_METHODS = new Set([
-  "model_stream_chunk",
-  "model_stream_raw",
+  "cowork/todos",
+  "cowork/log",
+  "error",
+  "cowork/session/backupState",
   "cowork/session/settings",
   "cowork/session/info",
   "cowork/session/configUpdated",

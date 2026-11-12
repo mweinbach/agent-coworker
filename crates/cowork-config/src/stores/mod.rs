@@ -4,10 +4,10 @@ pub mod discovery_cache;
 pub mod model_preferences;
 
 pub use connections::{
-    ConnectionMode, ConnectionStore, StoredConnection, TOOL_API_KEY_NAMES, ToolApiKeyName,
-    ToolApiKeys, get_saved_provider_api_key, parse_connection_store_json, read_connection_store,
-    read_connection_store_for_update_sync, read_connection_store_sync, remove_provider_connection,
-    save_provider_connection, write_connection_store,
+    ConnectionMode, ConnectionStore, StoredConnection, ToolApiKeys, get_saved_provider_api_key,
+    parse_connection_store_json, read_connection_store, read_connection_store_for_update_sync,
+    read_connection_store_sync, remove_provider_connection, save_provider_connection,
+    write_connection_store,
 };
 pub use custom_models::{
     CustomModelEntry, CustomModelStore, delete_custom_model, normalize_custom_model_id,

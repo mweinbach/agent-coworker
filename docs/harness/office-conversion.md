@@ -45,8 +45,10 @@ OS backend. A missing backend is a failure, not a successful skipped conversion.
 `.github/workflows/office-conversion-qualification.yml` runs native macOS ARM64,
 Linux x64, and Linux ARM64 qualification. It does not publish a runtime. Setup
 uses Node 24, system Poppler, and checksum-pinned test packages without lifecycle
-scripts. Linux also requires bubblewrap, system Python/ctypes, and usable user
-namespaces.
+scripts. The sandbox is the Rust one: qualification asks
+`cowork-server __sandbox-exec --print-command` for the backend launch (the workflow
+builds the binary; locally set `COWORK_SANDBOX_SERVER_BIN` or let Cargo build it).
+Linux also requires bubblewrap and usable user namespaces.
 
 ```sh
 export OFFICE_WASM_TEMP_DIR="$RUNNER_TEMP"

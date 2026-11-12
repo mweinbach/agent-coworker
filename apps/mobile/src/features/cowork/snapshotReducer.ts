@@ -12,16 +12,6 @@ export type MobileFeedState = {
   lastEventSeq: number;
 };
 
-export function createMobileFeedState(
-  feed: SessionFeedItem[] = [],
-  lastEventSeq = 0,
-): MobileFeedState {
-  return {
-    feed,
-    lastEventSeq,
-  };
-}
-
 function asCanonicalFeed(feed: SessionFeedItem[]): CanonicalSessionFeedItem[] {
   return feed as CanonicalSessionFeedItem[];
 }

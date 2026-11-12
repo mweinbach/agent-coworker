@@ -106,11 +106,6 @@ function resolvedLockRoot(lockRoot?: string): string {
   return canonicalizeSync(lockRoot ?? fileLockRootForCoworkHome(coworkHome()));
 }
 
-export function lockDatabasePathFor(targetPath: string, lockRoot?: string): string {
-  const canonicalSnapshot = canonicalizeSync(targetPath);
-  return databasePathForIdentity(stablePathIdentity(canonicalSnapshot), resolvedLockRoot(lockRoot));
-}
-
 function resolveLockSet(targetPath: string, lockRoot?: string): ResolvedLockSet {
   const root = resolvedLockRoot(lockRoot);
   const lexicalIdentity = stablePathIdentity(path.resolve(targetPath));

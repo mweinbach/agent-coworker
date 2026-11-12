@@ -4,12 +4,12 @@ import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
 import { buildChatRenderItems } from "../../apps/mobile/src/features/cowork/activityGroups";
+import type { SessionFeedItem } from "../../apps/mobile/src/features/cowork/protocolTypes";
+import { buildThreadDetailList } from "../../apps/mobile/src/features/cowork/threadListModel";
 import {
   MOBILE_LONG_FIXTURE_SIZE,
   MOBILE_RUNTIME_PROFILE_BUDGET,
-} from "../../apps/mobile/src/features/cowork/mobilePerformanceContracts";
-import type { SessionFeedItem } from "../../apps/mobile/src/features/cowork/protocolTypes";
-import { buildThreadDetailList } from "../../apps/mobile/src/features/cowork/threadListModel";
+} from "./mobile-performance-budgets";
 
 type RuntimeProfileRowProps = {
   id: string;

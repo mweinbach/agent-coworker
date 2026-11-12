@@ -11,16 +11,18 @@ import {
 } from "@/features/cowork/activityEntryPagination";
 import type { ActivityFeedItem, ActivityGroupSummary } from "@/features/cowork/activityGroups";
 import {
-  activityTimestampMs,
-  firstActivityTimestampMs,
-  formatActivityElapsedMs,
   parseReasoningSections,
   summarizeActivityGroup,
   unresolvedToolFailureIds,
 } from "@/features/cowork/activityGroups";
 import { formatToolCard } from "@/features/cowork/toolCardFormatting";
-import type { ToolFeedState } from "@/features/cowork/toolFeedState";
 import { useAppTheme } from "@/theme/use-app-theme";
+import {
+  activityTimestampMs,
+  firstActivityTimestampMs,
+  formatActivityElapsedMs,
+} from "../../../../../src/shared/activityGroups";
+import type { ToolFeedState } from "../../../../../src/shared/toolFeedState";
 import { SFSymbol } from "../ui/sf-symbol";
 import { MarkdownText } from "./markdown-text";
 

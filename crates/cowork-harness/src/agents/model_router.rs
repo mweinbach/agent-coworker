@@ -54,13 +54,8 @@ fn is_openai_compatible_provider(provider: ProviderName) -> bool {
     matches!(provider, ProviderName::Openai | ProviderName::CodexCli)
 }
 
-/// `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`).
-fn is_openai_reasoning_effort(value: &str) -> bool {
-    matches!(
-        value,
-        "none" | "minimal" | "light" | "low" | "medium" | "high" | "xhigh" | "max"
-    )
-}
+// `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`).
+use cowork_config::models::is_openai_reasoning_effort;
 
 /// The parent's current effort from its (merged) provider options — `currentReasoningEffort`
 /// in `modelRouter.ts`. Only OpenAI-compatible providers carry a `reasoningEffort`.

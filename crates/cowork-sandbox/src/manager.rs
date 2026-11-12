@@ -126,11 +126,6 @@ impl SandboxManager {
         Self { cache }
     }
 
-    /// Returns a reference to the underlying `WorkspaceProtectedPathsCache`.
-    pub fn protected_paths_cache(&self) -> &Arc<WorkspaceProtectedPathsCache> {
-        &self.cache
-    }
-
     /// Detects OS sandbox capabilities on `platform_override` (defaulting to `host_platform()`).
     pub fn detect_capabilities(
         &self,
@@ -347,17 +342,64 @@ impl SandboxManager {
         has_scoped_target_paths: bool,
         opts: TransformOptions<'_>,
     ) -> SandboxGateDecision {
+        self.evaluate_gate_with_enforcement(
+            inner,
+            policy,
+            cwd,
+            yolo,
+            require_backend,
+            has_scoped_target_paths,
+            opts,
+        )
+        .0
+    }
+
+    /// [`Self::evaluate_gate`], also returning the per-dimension enforcement the selected backend
+    /// reported for the transformed command ([`SandboxEnforcement::NONE`] when `--yolo` lifts
+    /// sandboxing before any backend is consulted).
+    #[allow(clippy::too_many_arguments)]
+    pub fn evaluate_gate_with_enforcement(
+        &self,
+        inner: &SandboxCommand,
+        policy: &SandboxPolicy,
+        cwd: &Path,
+        yolo: bool,
+        require_backend: bool,
+        has_scoped_target_paths: bool,
+        opts: TransformOptions<'_>,
+    ) -> (SandboxGateDecision, SandboxEnforcement) {
         let hard_floor = requires_hard_floor_enforcement(policy, yolo, has_scoped_target_paths);
 
         // `--yolo` lifts sandboxing ONLY when no hard floor (`read-only`, `no-project-write`,
         // `targetPaths`, or `network: false`) applies.
         if yolo && !hard_floor {
-            return SandboxGateDecision::RunUnsandboxed { warning: None };
+            return (
+                SandboxGateDecision::RunUnsandboxed { warning: None },
+                SandboxEnforcement::NONE,
+            );
         }
 
         let (transformed, enforcement, warning) =
             self.transform_with_options(inner, policy, cwd, opts);
+        let decision = Self::gate_transformed(
+            policy,
+            hard_floor,
+            require_backend,
+            transformed,
+            enforcement,
+            warning,
+        );
+        (decision, enforcement)
+    }
 
+    fn gate_transformed(
+        policy: &SandboxPolicy,
+        hard_floor: bool,
+        require_backend: bool,
+        transformed: TransformedCommand,
+        enforcement: SandboxEnforcement,
+        warning: Option<String>,
+    ) -> SandboxGateDecision {
         let requires_sandbox_enforcement =
             !matches!(policy, SandboxPolicy::DangerFullAccess { .. })
                 || !policy_allows_network(policy);

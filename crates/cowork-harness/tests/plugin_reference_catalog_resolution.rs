@@ -113,13 +113,7 @@ fn plugin_without_plugin_md_or_readme_resolves_to_its_bundled_skills() {
 
     // Without a config the plugin still resolves through its discovered plugin-owned skills.
     let skills = discover_skills_for_config(&fx.cfg);
-    let fallback = resolve_turn_references(
-        "go",
-        &[plugin_ref("docs-free")],
-        &skills,
-        &fx.cfg.user_cowork_dir,
-        &fx.ws,
-    );
+    let fallback = resolve_turn_references("go", &[plugin_ref("docs-free")], &skills);
     assert_eq!(fallback.referenced_plugins.len(), 1);
     assert_eq!(
         fallback.referenced_plugins[0].skill_names,

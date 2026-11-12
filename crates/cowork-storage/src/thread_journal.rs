@@ -12,7 +12,7 @@ use crate::session_db::SessionDb;
 use crate::types::{
     PersistedThreadJournalEvent, PersistedThreadJournalFailure, ThreadJournalEventInput,
 };
-use crate::write_coordinator::now_iso_millis;
+use crate::write_coordinator::now_iso;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -542,7 +542,7 @@ async fn record_failure(
             .map(|p| p.dropped_event_count)
             .unwrap_or(0)
             + dropped_count,
-        last_failure_at: now_iso_millis(),
+        last_failure_at: now_iso(),
         last_failure_message: message.to_string(),
     };
 

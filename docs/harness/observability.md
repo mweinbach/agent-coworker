@@ -9,8 +9,7 @@ Independent of Langfuse telemetry, the server writes session `log` and `error` e
 build — packaged desktop builds have no terminal, so this file is the durable record of harness tool
 traces and turn failures. Entries pass through credential and sensitive-text redaction
 (`crates/cowork-server/src/observability.rs`, mirrored on the client in `src/diagnostics/redaction.ts`) before hitting disk, files are `0600` inside a `0700` directory, and files older than 14 days
-are swept automatically. Set `COWORK_SERVER_FILE_LOGS=0` to disable. Terminal mirroring via
-`COWORK_HARNESS_TERMINAL_LOGS=1` is unchanged and independent.
+are swept automatically. Set `COWORK_SERVER_FILE_LOGS=0` to disable.
 
 The server also runs best-effort startup maintenance (`crates/cowork-storage/src/session_db.rs` and `crates/cowork-server/src/lib.rs`):
 stale `running`/`pending_init` execution states are reconciled to `interrupted` before any turn can
@@ -91,5 +90,3 @@ Set `AGENT_OBSERVABILITY_RECORD_PAYLOADS=true` only for runs where prompt/respon
 Run metadata (`run_meta.json`) includes `observabilityEnabled` plus an `observability` summary with `startHealth` and `endHealth` snapshots.
 
 Raw-loop trace files intentionally contain the scenario's model inputs and outputs. Their configuration snapshots redact credential fields and credential-bearing text regardless of payload-recording settings, without changing the configuration used to run the model.
-
-The WebSocket-facing runtime status is documented separately in [`docs/websocket-protocol.md`](../websocket-protocol.md) under `observability_status`.

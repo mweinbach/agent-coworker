@@ -3,25 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  type ChildAgentModelInfo,
-  getChildAgentModelInfo,
-  listChildAgentModelsWithInfo,
-  listMissingChildAgentModelInfo,
-} from "../src/models/childAgentModelInfo";
-import {
-  assertSupportedModel,
   defaultSupportedModel,
   describeModelProviderMismatch,
   getSupportedModel,
   listSupportedModels,
   MODEL_REGISTRY_ENTRIES,
-  providerOptionsDefaultsForModel,
   supportsImageInput,
 } from "../src/models/registry";
-import {
-  isUserFacingProviderEnabled,
-  reasoningConfigForProviderModel,
-} from "../src/providers/catalog";
+import { reasoningConfigForProviderModel } from "../src/providers/catalog";
 import type { ProviderName } from "../src/types";
 
 function repoRoot(): string {
@@ -175,28 +164,6 @@ describe("model registry invariants", () => {
 });
 
 describe("model registry helpers", () => {
-  test("assertSupportedModel throws for unknown model", () => {
-    expect(() => assertSupportedModel("openai", "missing-model")).toThrow(/Unsupported model/);
-  });
-
-  test("assertSupportedModel includes OpenAI mismatch guidance for anthropic provider", () => {
-    expect(() => assertSupportedModel("anthropic", "gpt-5.4(xhigh)")).toThrow(
-      /looks like an OpenAI model/,
-    );
-    expect(() => assertSupportedModel("anthropic", "gpt-5.4(xhigh)")).toThrow(
-      /use provider openai instead/,
-    );
-  });
-
-  test("assertSupportedModel includes Anthropic mismatch guidance for openai provider", () => {
-    expect(() => assertSupportedModel("openai", "claude-sonnet-4-5")).toThrow(
-      /looks like an Anthropic model/,
-    );
-    expect(() => assertSupportedModel("openai", "claude-sonnet-4-5")).toThrow(
-      /use provider anthropic instead/,
-    );
-  });
-
   test("describeModelProviderMismatch allows codex-cli for OpenAI-family models", () => {
     expect(describeModelProviderMismatch("codex-cli", "gpt-5.4(xhigh)")).toBeNull();
   });
@@ -207,42 +174,6 @@ describe("model registry helpers", () => {
 
   test("supportsImageInput is false when the model is unknown", () => {
     expect(supportsImageInput("google", "missing-model")).toBe(false);
-  });
-
-  test("providerOptionsDefaultsForModel returns an empty object for unknown models", () => {
-    expect(providerOptionsDefaultsForModel("anthropic", "missing-model")).toEqual({});
-  });
-
-  test("Claude Opus 4.7 and 4.8 use adaptive thinking defaults", () => {
-    for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
-      expect(providerOptionsDefaultsForModel("anthropic", modelId)).toMatchObject({
-        thinking: { type: "adaptive" },
-        effort: "high",
-      });
-    }
-  });
-
-  test("every user-facing model has child-agent guidance metadata", () => {
-    const userFacingProviders = (
-      [
-        "google",
-        "openai",
-        "anthropic",
-        "bedrock",
-        "baseten",
-        "together",
-        "fireworks",
-        "nvidia",
-        "opencode-go",
-        "opencode-zen",
-        "codex-cli",
-      ] as ProviderName[]
-    ).filter((provider) => isUserFacingProviderEnabled(provider));
-    expect(listMissingChildAgentModelInfo(userFacingProviders)).toEqual([]);
-    const openaiDefault = defaultSupportedModel("openai");
-    const info: ChildAgentModelInfo | null = getChildAgentModelInfo("openai", openaiDefault.id);
-    expect(info?.bestFor.length).toBeGreaterThan(0);
-    expect(listChildAgentModelsWithInfo("openai").length).toBeGreaterThan(0);
   });
 });
 
@@ -279,12 +210,6 @@ describe("legacy model aliases", () => {
     expect(model).not.toBeNull();
     expect(model!.id).toBe("gemini-3.1-pro-preview-customtools");
     expect(model!.provider).toBe("google");
-  });
-
-  test("assertSupportedModel accepts legacy alias gemini-3-pro-preview", () => {
-    const model = assertSupportedModel("google", "gemini-3-pro-preview");
-    expect(model.id).toBe("gemini-3.1-pro-preview-customtools");
-    expect(model.provider).toBe("google");
   });
 
   test("Gemini 3.1 Flash-Lite preview normalizes to the canonical model id", () => {

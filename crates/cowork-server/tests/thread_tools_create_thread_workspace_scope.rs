@@ -320,7 +320,7 @@ async fn create_thread_rejects_symlink_escaping_allowed_roots() {
     fs::create_dir_all(&registered).unwrap();
     let nested_link = registered.join("escape");
     std::os::unix::fs::symlink(&outside, &nested_link).unwrap();
-    register_project(&server, &iso, &registered);
+    register_project(&server, &registered);
     assert_rejected(
         &server,
         json!({ "prompt": "x", "cwd": nested_link.to_string_lossy() }),
@@ -330,25 +330,22 @@ async fn create_thread_rejects_symlink_escaping_allowed_roots() {
     server.shutdown().await;
 }
 
-fn register_project(server: &ServerHandle, iso: &Iso, path: &Path) {
+fn register_project(server: &ServerHandle, path: &Path) {
     server
         .runtime()
         .desktop_service
         .as_ref()
         .expect("desktop service")
-        .save_state_json(
-            json!({
-                "workspaces": [{
-                    "id": "ws-registered",
-                    "name": "Registered",
-                    "path": path.to_string_lossy(),
-                    "workspaceKind": "project",
-                    "createdAt": "2026-01-01T00:00:00.000Z",
-                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
-                }]
-            }),
-            &iso.workspace,
-        )
+        .save_state_json(json!({
+            "workspaces": [{
+                "id": "ws-registered",
+                "name": "Registered",
+                "path": path.to_string_lossy(),
+                "workspaceKind": "project",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+            }]
+        }))
         .unwrap();
 }
 
@@ -379,7 +376,7 @@ async fn create_thread_accepts_registered_workspaces_and_one_off_chats() {
         json!({ "prompt": "x", "cwd": registered.to_string_lossy() }),
     )
     .await;
-    register_project(&server, &iso, &registered);
+    register_project(&server, &registered);
     assert_created_in(&server, &registered).await;
 
     // Managed one-off chat workspace.

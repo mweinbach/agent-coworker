@@ -622,15 +622,6 @@ export function canonicalKeyLexical(p: string, style: PathStyle): string {
 }
 
 /**
- * True when two path strings denote the same path lexically. win32: case-folded,
- * separator-normalized, trailing-separator-stripped, verbatim-prefix-insensitive.
- * posix: case-exact (only dot-segments/duplicate/trailing separators are normalized).
- */
-export function samePath(a: string, b: string, style: PathStyle): boolean {
-  return canonicalKeyLexical(a, style) === canonicalKeyLexical(b, style);
-}
-
-/**
  * Pure lexical containment for already-absolute paths whose syntax may differ from the
  * host. This is useful at serialization and IPC boundaries, where node:path would
  * otherwise reinterpret a posix path as win32 (or vice versa). Filesystem-facing callers
@@ -659,16 +650,6 @@ export function isPathEqualOrInsideLexical(
 // Separator conversion
 // ---------------------------------------------------------------------------
 
-/**
- * Rewrites every separator (both families) to the style's canonical one: "\" for win32,
- * "/" for posix. Pure character substitution — no normalization. Note the posix
- * direction assumes win32-shaped input (a literal backslash in a posix filename would be
- * rewritten); use {@link toPosix} when the input's origin platform is unknown.
- */
-export function normalizeSeparators(p: string, style: PathStyle): string {
-  return style === "win32" ? p.replaceAll("/", "\\") : p.replaceAll("\\", "/");
-}
-
 function isWin32Shaped(p: string): boolean {
   if (/^[A-Za-z]:[\\/]/.test(p)) return true;
   if (p.startsWith("\\")) return true;
@@ -689,145 +670,10 @@ export function toPosix(p: string): string {
 // file: URLs
 // ---------------------------------------------------------------------------
 
-function decodePathnameComponent(pathname: string): string {
-  try {
-    return decodeURIComponent(pathname);
-  } catch {
-    throw new Error(`file: URL has malformed percent-encoding: ${JSON.stringify(pathname)}`);
-  }
-}
-
-/**
- * Converts a file: URL string to a path in the given style. win32: `file:///C:/a` →
- * `C:\a` and `file://server/share/x` → `\\server\share\x`. posix: `file:///a/b` →
- * `/a/b`; a non-localhost host THROWS (never emits `\\host\...` on POSIX — the
- * DesktopMarkdown bug). Throws on non-file URLs, encoded separators (%2F, and %5C on
- * win32), and win32 URLs with neither a drive letter nor a UNC host.
- */
-export function fromFileUrl(url: string, style: PathStyle): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Invalid URL: ${JSON.stringify(url)}`);
-  }
-  if (parsed.protocol !== "file:") {
-    throw new Error(`Expected a file: URL, got: ${JSON.stringify(url)}`);
-  }
-  const pathname = parsed.pathname;
-  if (/%2f/i.test(pathname) || (style === "win32" && /%5c/i.test(pathname))) {
-    throw new Error(`file: URL path must not include encoded separators: ${JSON.stringify(url)}`);
-  }
-  if (style === "posix") {
-    if (parsed.hostname !== "" && parsed.hostname !== "localhost") {
-      throw new Error(
-        `file: URL host ${JSON.stringify(parsed.hostname)} cannot be represented as a posix path`,
-      );
-    }
-    const decoded = decodePathnameComponent(pathname);
-    return decoded.length > 0 ? decoded : "/";
-  }
-  const decoded = decodePathnameComponent(pathname).replaceAll("/", "\\");
-  if (parsed.hostname !== "" && parsed.hostname !== "localhost") {
-    return `\\\\${parsed.hostname}${decoded}`;
-  }
-  if (/^\\[A-Za-z]:(\\|$)/.test(decoded)) {
-    const local = decoded.slice(1);
-    return /^[A-Za-z]:$/.test(local) ? `${local}\\` : local;
-  }
-  throw new Error(
-    `file: URL must name a drive letter or UNC host for a win32 path: ${JSON.stringify(url)}`,
-  );
-}
-
-function encodeFileUrlSegments(segments: string[]): string {
-  return segments.map((segment) => encodeURIComponent(segment)).join("/");
-}
-
-/**
- * Converts an absolute path to a file: URL string. win32: drive paths → `file:///C:/...`,
- * UNC paths → `file://server/...` (UNC hosts exist ONLY for win32 style); `\\?\` drive/
- * UNC verbatim prefixes are de-namespaced first. posix: `/a b` → `file:///a%20b`.
- * Throws for non-fully-qualified input (relative, drive-relative "C:foo", rooted "\foo")
- * and for win32 device-namespace paths, which have no URL form.
- */
-export function toFileUrl(p: string, style: PathStyle): string {
-  if (style === "posix") {
-    if (!isAbsolute(p, "posix")) {
-      throw new Error(`posix path must be absolute to become a file URL: ${JSON.stringify(p)}`);
-    }
-    const segments = normalizePosix(p).split("/").filter(Boolean);
-    return `file:///${encodeFileUrlSegments(segments)}`;
-  }
-  const verbatim = parseVerbatimPrefix(p);
-  if (verbatim?.kind === "device") {
-    throw new Error(`win32 device namespace path has no file URL form: ${JSON.stringify(p)}`);
-  }
-  const normalized = normalizeWin32(verbatim ? verbatim.path : p);
-  const unc = /^\\\\([^\\]+)\\([\s\S]*)$/.exec(normalized);
-  if (unc) {
-    const segments = (unc[2] ?? "").split("\\").filter(Boolean);
-    return `file://${unc[1]}/${encodeFileUrlSegments(segments)}`;
-  }
-  const drive = /^([A-Za-z]:)\\([\s\S]*)$/.exec(normalized);
-  if (drive) {
-    const segments = (drive[2] ?? "").split("\\").filter(Boolean);
-    const rest = encodeFileUrlSegments(segments);
-    return rest.length > 0 ? `file:///${drive[1]}/${rest}` : `file:///${drive[1]}/`;
-  }
-  throw new Error(
-    `win32 path must be fully qualified (drive or UNC) to become a file URL: ${JSON.stringify(p)}`,
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Local-path regex family (redaction + auto-linking share one source)
 // ---------------------------------------------------------------------------
 
-// A character that can appear inside a matched path (stops at whitespace, quotes,
-// backticks, and common prose/markup delimiters).
-const PATH_CHAR = "[^\\s\"'`<>{}\\[\\]]";
-// Drive paths anywhere ("C:\..." / "C:/...") or UNC prefixes ("\\server\...").
-const WIN32_LOCAL_PATH_SOURCE = `(?:\\b[A-Za-z]:[\\\\/]|\\\\\\\\[^\\s\\\\/"'\`<>{}\\[\\]]+[\\\\/])${PATH_CHAR}*`;
-// Absolute paths under user-data roots (optionally file://-prefixed). Deliberately
-// root-anchored so ordinary URL paths ("https://x/a/b") never match.
-const POSIX_LOCAL_PATH_SOURCE = `(?:file:\\/\\/)?\\/(?:Users|home|root|private|etc|opt|srv|tmp|var|Volumes|mnt|media)${PATH_CHAR}*`;
-
-/**
- * One source of truth for the "does this text contain a local filesystem path" regex
- * family (redaction, auto-linking). "win32" matches drive + UNC paths, "posix" matches
- * absolute paths under user-data roots (/Users, /home, /tmp, ...), "any" matches both —
- * on every host. Returns a FRESH RegExp (global flag) per call, so callers never share
- * lastIndex state.
- */
-export function localPathPattern(kind: "posix" | "win32" | "any"): RegExp {
-  const source =
-    kind === "win32"
-      ? WIN32_LOCAL_PATH_SOURCE
-      : kind === "posix"
-        ? POSIX_LOCAL_PATH_SOURCE
-        : `(?:${WIN32_LOCAL_PATH_SOURCE}|${POSIX_LOCAL_PATH_SOURCE})`;
-  return new RegExp(source, "g");
-}
-
 // ---------------------------------------------------------------------------
 // Zip entry paths
 // ---------------------------------------------------------------------------
-
-/**
- * Normalizes an archive entry name to the zip-canonical form on every platform:
- * backslashes become "/", empty and "." segments are dropped, ".." pops (clamped at the
- * archive root, so entries can never escape it), and there is no leading slash.
- */
-export function normalizeZipPath(p: string): string {
-  const parts: string[] = [];
-  for (const segment of p.replaceAll("\\", "/").split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(segment);
-  }
-  return parts.join("/");
-}

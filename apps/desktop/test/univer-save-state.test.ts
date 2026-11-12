@@ -21,7 +21,7 @@ import {
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import type {
   SpreadsheetBatchPatchResult,
   SpreadsheetWorkbookSnapshot,

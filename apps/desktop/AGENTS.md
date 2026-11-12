@@ -13,7 +13,7 @@ Electron + React + TypeScript GUI for the agent-coworker server. This is a UI la
 
 From the repo root:
 
-- `bun run desktop:dev` — dev mode (builds sidecar resources first, then `electron-vite dev`)
+- `bun run start` — dev mode (builds sidecar resources first, then `electron-vite dev`)
 - `bun run typecheck:desktop` — desktop TypeScript check
 - `bun run test -- apps/desktop/test` — desktop tests
 - `bun run desktop:build` — distributables (macOS/Windows)
@@ -31,7 +31,7 @@ and CSS remain under Biome. See `docs/ui-foundation-plan.md` for rollout boundar
 - `BrowserWindow` runs with `contextIsolation: true`, `nodeIntegration: false`. All privileged actions go through explicit preload methods; validate sender and inputs in the main process. Never expose unrestricted Node APIs to the renderer.
 - API keys are handled by the core server, never the desktop UI. Never log sensitive workspace paths, keys, or session data.
 - New desktop command: channel in `apps/desktop/src/lib/desktopApi.ts` → expose in `apps/desktop/electron/preload.ts` → handler in `apps/desktop/electron/ipc.ts` → renderer wrapper in `apps/desktop/src/lib/desktopCommands.ts`. Keep all four in sync.
-- New WebSocket message: schema/route in `crates/cowork-protocol/` and `crates/cowork-server/` first, then renderer handling in `apps/desktop/src/app/store.ts`; update `docs/websocket-protocol.md` and run `bun run docs:generate-jsonrpc`.
+- New WebSocket message: schema/route in `crates/cowork-protocol/` and `crates/cowork-server/` first, then renderer handling in `apps/desktop/src/app/store.ts`; update `docs/websocket-protocol.md` and run `bun run docs:check`.
 - Verify affected UI behavior in the live running app using the tool preference and evidence requirements in `../../agent_docs/desktop-ui.md` — tests alone are not proof.
 
 ## Read when relevant

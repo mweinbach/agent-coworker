@@ -224,11 +224,6 @@ export function buildThreadHomeViewModel({
   };
 }
 
-export function toggleHomeSectionOrder(current: HomeSectionKey[]): HomeSectionKey[] {
-  const normalized = normalizeHomeSectionOrder(current);
-  return normalized[0] === "chats" ? ["projects", "chats"] : ["chats", "projects"];
-}
-
 export function reorderHomeSections(
   current: HomeSectionKey[],
   sourceIndex: number,

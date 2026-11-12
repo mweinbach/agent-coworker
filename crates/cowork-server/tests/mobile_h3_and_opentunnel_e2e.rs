@@ -2184,13 +2184,10 @@ async fn mobile_tls_mcp_validation_requires_turns_and_user_mcp_layer_is_read_onl
         .desktop_service
         .as_ref()
         .unwrap()
-        .save_state_json(
-            json!({ "workspaces": [{
+        .save_state_json(json!({ "workspaces": [{
             "id": "home-project", "name": "Home", "path": iso.home_dir, "workspaceKind": "project",
             "createdAt": "2026-01-01T00:00:00Z", "lastOpenedAt": "2026-01-01T00:00:00Z"
-        }] }),
-            &iso.workspace_dir,
-        )
+        }] }))
         .unwrap();
     let h3 = server
         .listening_event()
@@ -2563,13 +2560,10 @@ async fn mobile_tls_session_subprocess_import_and_user_layer_routes_are_gated() 
     // Home is a legitimate selectable project, but its `.cowork` directories are the user layer.
     let desktop = server.runtime().desktop_service.as_ref().unwrap();
     desktop
-        .save_state_json(
-            json!({ "workspaces": [{
+        .save_state_json(json!({ "workspaces": [{
             "id": "home-project", "name": "Home", "path": iso.home_dir, "workspaceKind": "project",
             "createdAt": "2026-01-01T00:00:00Z", "lastOpenedAt": "2026-01-01T00:00:00Z"
-        }] }),
-            &iso.workspace_dir,
-        )
+        }] }))
         .unwrap();
     let h3 = server
         .listening_event()

@@ -10,7 +10,6 @@ description = "Canonical multi-provider inference AST, model registry, tiered pr
 chrono.workspace = true
 cowork-config.workspace = true
 cowork-protocol.workspace = true
-futures-util.workspace = true
 hex.workspace = true
 rand.workspace = true
 regex.workspace = true

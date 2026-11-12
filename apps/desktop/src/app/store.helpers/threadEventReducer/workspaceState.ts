@@ -1,5 +1,5 @@
 import type { StoreGet } from "../../store.helpers";
-import { hasDeferredWorkspaceDefaultApply, resetModelStreamRuntime } from "../runtimeState";
+import { hasDeferredWorkspaceDefaultApply } from "../runtimeState";
 import type { ThreadEventReducerContext } from "./context";
 
 export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
@@ -19,10 +19,6 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
 
   function reactivateWorkspaceThreadEventState(workspaceId: string) {
     disposedWorkspaces.delete(workspaceId);
-  }
-
-  function resetLiveModelStreamRuntime(threadId: string) {
-    resetModelStreamRuntime(threadId);
   }
 
   function workspaceIdForThread(get: StoreGet, threadId: string): string | null {
@@ -89,7 +85,7 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
   function disposeWorkspaceThreadEventState(
     workspaceId: string,
     getOverride?: StoreGet,
-    resetLiveModelStream?: (threadId: string) => void,
+    onThreadDisposed?: (threadId: string) => void,
   ) {
     disposedWorkspaces.add(workspaceId);
     const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
@@ -100,15 +96,15 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
     jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
     for (const threadId of trackedThreadIdsForWorkspace(workspaceId, getOverride)) {
       jsonRpcThreadConnectPromises.delete(threadId);
-      resetLiveModelStream?.(threadId);
+      onThreadDisposed?.(threadId);
     }
     jsonRpcReconnectThreadsByWorkspace.delete(workspaceId);
     threadStoreGettersByWorkspace.delete(workspaceId);
   }
 
-  function disposeAllThreadEventState(resetLiveModelStream?: (threadId: string) => void) {
+  function disposeAllThreadEventState(onThreadDisposed?: (threadId: string) => void) {
     for (const workspaceId of trackedWorkspaceIds()) {
-      disposeWorkspaceThreadEventState(workspaceId, undefined, resetLiveModelStream);
+      disposeWorkspaceThreadEventState(workspaceId, undefined, onThreadDisposed);
     }
   }
 
@@ -116,7 +112,6 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
     isWorkspaceDisposed,
     reactivateWorkspaceThreadEventState,
     hasDeferredWorkspaceDefaultApply,
-    resetLiveModelStreamRuntime,
     workspaceIdForThread,
     rememberThreadStoreGet,
     trackedThreadIdsForWorkspace,

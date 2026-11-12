@@ -374,12 +374,13 @@ pub fn reconcile_reasoning_provider_options(
 }
 
 /// Effort values recognised as OpenAI-style reasoning efforts (`OPENAI_REASONING_EFFORT_VALUES`
-/// in `src/shared/openaiCompatibleOptions.ts`).
-const OPENAI_REASONING_EFFORT_VALUES: [&str; 8] = [
+/// in `src/shared/openaiCompatibleOptions.ts`), in catalog (ladder) order.
+pub const OPENAI_REASONING_EFFORT_VALUES: [&str; 8] = [
     "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
 ];
 
-fn is_openai_reasoning_effort(value: &str) -> bool {
+/// Whether `value` is one of [`OPENAI_REASONING_EFFORT_VALUES`].
+pub fn is_openai_reasoning_effort(value: &str) -> bool {
     OPENAI_REASONING_EFFORT_VALUES.contains(&value)
 }
 

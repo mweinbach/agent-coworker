@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { hostPlatform } from "../../src/platform/host";
 import { killDetachedPosixGroup } from "../../src/platform/processTree";
-import { sandboxManager } from "../../src/platform/sandbox";
 import { positiveLinuxReadView } from "./linuxReadView";
+import { printSandboxCommand, resolveSandboxServerBinary } from "./rustSandbox";
 
 export const limits = {
   timeoutMs: 180_000,
@@ -74,6 +74,8 @@ function workspaceBytes(directory: string): number {
   return bytes;
 }
 
+let sandboxServerBinary: string | undefined;
+
 export async function supervise(opts: {
   label: string;
   file: string;
@@ -86,18 +88,19 @@ export async function supervise(opts: {
   executables: string[];
   canaryDir?: string;
 }): Promise<{ stdout: string }> {
-  const transformed = sandboxManager.transform({
+  sandboxServerBinary ??= resolveSandboxServerBinary();
+  const transformed = printSandboxCommand(sandboxServerBinary, {
     file: opts.file,
     args: opts.args,
-    cwd: opts.root,
-    policy: { kind: "workspace-write", writableRoots: [opts.root], network: false },
+    root: opts.root,
+    env: opts.env,
   });
   if (
     transformed.unsandboxed ||
     !["macos-seatbelt", "linux-bwrap"].includes(transformed.sandbox) ||
     Object.values(transformed.enforcement).some((value) => value !== true)
   )
-    throw new Error(`Required sandbox unavailable: ${transformed.warning ?? transformed.sandbox}`);
+    throw new Error(`Required sandbox unavailable: ${transformed.sandbox}`);
 
   let args = [...transformed.args];
   // Only tighten the real backend policy. In particular, remove unrelated
@@ -128,12 +131,13 @@ ${readRoots.map((root) => `(require-not (subpath ${JSON.stringify(root)}))`).joi
   }
   fs.writeFileSync(
     path.join(opts.artifacts, `${opts.label}.policy.json`),
-    JSON.stringify({ ...transformed, args }, null, 2),
+    JSON.stringify({ ...transformed, args, env: undefined }, null, 2),
   );
   const started = performance.now();
   const child = spawn(transformed.file, args, {
     cwd: opts.root,
-    env: { ...opts.env, ...transformed.env },
+    // Same shape as before the Rust port: the caller's isolated env plus backend variables.
+    env: { ...opts.env, ...transformed.sandboxEnv },
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });

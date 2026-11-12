@@ -559,17 +559,3 @@ fn collect_drawing_text(xml: &str) -> Result<String, String> {
     }
     Ok(normalize_whitespace(&tokens.join(" ")))
 }
-
-pub fn same_media(left: &[OoxmlMedia], right: &[OoxmlMedia]) -> bool {
-    let mut l: Vec<(&str, &str)> = left
-        .iter()
-        .map(|m| (m.path.as_str(), m.sha256.as_str()))
-        .collect();
-    let mut r: Vec<(&str, &str)> = right
-        .iter()
-        .map(|m| (m.path.as_str(), m.sha256.as_str()))
-        .collect();
-    l.sort_by_key(|(p, _)| *p);
-    r.sort_by_key(|(p, _)| *p);
-    l == r
-}

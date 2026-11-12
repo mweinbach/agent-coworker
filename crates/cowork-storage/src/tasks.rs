@@ -1793,23 +1793,6 @@ impl SessionDb {
         self.with_read_conn(|conn| get_artifact_detail_sync(conn, task_id, artifact_id))
     }
 
-    pub fn get_task_artifact_version(
-        &self,
-        task_id: &str,
-        artifact_id: &str,
-        version_id: &str,
-    ) -> Result<Option<TaskArtifactVersion>> {
-        self.with_read_conn(|conn| {
-            conn.query_row(
-                "SELECT * FROM task_artifact_versions WHERE task_id = ?1 AND artifact_id = ?2 AND version_id = ?3",
-                params![task_id, artifact_id, version_id],
-                map_artifact_version_from_row,
-            )
-            .optional()
-            .map_err(StorageError::from)
-        })
-    }
-
     pub fn get_active_task_artifact_revision_for_session(
         &self,
         session_id: &str,
@@ -1898,25 +1881,6 @@ impl SessionDb {
                      WHERE task_id = ?1 AND status = 'completed' AND result_version_id IS NOT NULL AND settlement_status = ?2
                      LIMIT 1",
                     params![task_id, PENDING_ARTIFACT_REVISION_SETTLEMENT],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            Ok(found.is_some())
-        })
-    }
-
-    pub fn has_pending_task_artifact_revision_settlement_for_work_item(
-        &self,
-        task_id: &str,
-        work_item_id: &str,
-    ) -> Result<bool> {
-        self.with_read_conn(|conn| {
-            let found: Option<i64> = conn
-                .query_row(
-                    "SELECT 1 FROM task_artifact_revisions
-                     WHERE task_id = ?1 AND work_item_id = ?2 AND status = 'completed' AND result_version_id IS NOT NULL AND settlement_status = ?3
-                     LIMIT 1",
-                    params![task_id, work_item_id, PENDING_ARTIFACT_REVISION_SETTLEMENT],
                     |r| r.get(0),
                 )
                 .optional()?;

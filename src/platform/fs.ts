@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -67,21 +67,12 @@ export interface PrivatePathDeps extends FsDeps {
   runCommand?: (file: string, args: string[]) => Promise<PrivatePathCommandResult>;
 }
 
-export interface PrivatePathSyncDeps {
-  chmodSync?: typeof fsSync.chmodSync;
-  currentUserSid?: string;
-  platform?: NodeJS.Platform;
-  runCommandSync?: (file: string, args: string[]) => PrivatePathCommandResult;
-}
-
 const DEFAULT_MAX_ATTEMPTS = 8;
 const DEFAULT_INITIAL_DELAY_MS = 20;
 const DEFAULT_MAX_DELAY_MS = 500;
 
 /** Windows codes a rename-over can transiently throw while AV/indexers/readers hold the file. */
 const WIN32_RENAME_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
-/** Windows codes rm can transiently throw (ENOTEMPTY: a child delete is still pending). */
-const WIN32_REMOVE_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
 /**
  * Typed error thrown by {@link symlink} when creating a FILE symlink on win32 fails
  * with EPERM/EACCES: file symlinks require Developer Mode or elevation, and junctions
@@ -275,159 +266,6 @@ export async function writeFileAtomic(
   }
 }
 
-/**
- * Atomically replaces `destPath` with the FILE at `sourcePath` (move semantics: the
- * source is gone afterwards). Primary path is rename-over — atomic on POSIX, retried
- * on win32 lock codes. On EXDEV (cross-device/cross-drive) it falls back to
- * copy-to-temp-in-dest-dir + fsync + rename-over + unlink source, so `destPath`
- * NEVER has a missing/zero-length window on any platform (no delete-first, ever).
- * Files only — the EXDEV fallback uses copyFile.
- */
-export async function replaceFileAtomic(
-  sourcePath: string,
-  destPath: string,
-  deps: FsDeps = {},
-): Promise<void> {
-  const ctx = resolveDeps(deps);
-  try {
-    await withWin32Retry(
-      () => ctx.fsImpl.rename(sourcePath, destPath),
-      WIN32_RENAME_RETRY_CODES,
-      ctx,
-    );
-    return;
-  } catch (error) {
-    if (errorCode(error) !== "EXDEV") {
-      throw error;
-    }
-  }
-  // EXDEV: stage a copy next to dest so the publish step is a same-volume rename.
-  await ctx.fsImpl.mkdir(path.dirname(destPath), { recursive: true });
-  const tempPath = tempSiblingPath(destPath);
-  try {
-    await ctx.fsImpl.copyFile(sourcePath, tempPath);
-    await fsyncPath(tempPath, ctx);
-    await withWin32Retry(
-      () => ctx.fsImpl.rename(tempPath, destPath),
-      WIN32_RENAME_RETRY_CODES,
-      ctx,
-    );
-  } finally {
-    await unlinkBestEffort(tempPath, ctx.fsImpl);
-  }
-  await withWin32Retry(() => ctx.fsImpl.unlink(sourcePath), WIN32_REMOVE_RETRY_CODES, ctx);
-}
-
-/** Best-effort removal of stale `<dest>.old-*` aside files from previous swaps. */
-async function cleanupAsideFilesBestEffort(destPath: string, fsImpl: FsLike): Promise<void> {
-  const dir = path.dirname(destPath);
-  const prefix = `${path.basename(destPath)}.old-`;
-  let entries: string[];
-  try {
-    entries = await fsImpl.readdir(dir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!entry.startsWith(prefix)) continue;
-    await unlinkBestEffort(path.join(dir, entry), fsImpl);
-  }
-}
-
-/**
- * Atomically replaces a possibly-RUNNING executable at `destPath` with the one at
- * `sourcePath`, converging the codex/ripgrep installers on one promoted path.
- *
- * - POSIX: a plain rename — replacing a running executable's directory entry is
- *   legal; the running image keeps its unlinked inode. Stage the new file on the
- *   same volume (no EXDEV fallback here by design).
- * - win32: you cannot rename OVER a running exe, but you can rename it ASIDE. The
- *   existing dest is renamed to `<dest>.old-<pid>` (retried on lock codes), the new
- *   file is renamed into place (retried; rolled back to the aside on failure,
- *   best-effort), then the aside and any stale `<dest>.old-*` leftovers from prior
- *   swaps are removed best-effort (a still-running old image keeps its aside file
- *   until a later call sweeps it).
- *
- * Returns `{ finalPath }` — always `destPath` — so callers pin ONE promoted path on
- * every platform.
- */
-export async function replaceExecutableAtomic(
-  sourcePath: string,
-  destPath: string,
-  deps: FsDeps = {},
-): Promise<{ finalPath: string }> {
-  const ctx = resolveDeps(deps);
-  if (ctx.platform !== "win32") {
-    await ctx.fsImpl.rename(sourcePath, destPath);
-    return { finalPath: destPath };
-  }
-  await cleanupAsideFilesBestEffort(destPath, ctx.fsImpl);
-  const asidePath = `${destPath}.old-${process.pid}`;
-  let movedAside = false;
-  try {
-    await withWin32Retry(
-      () => ctx.fsImpl.rename(destPath, asidePath),
-      WIN32_RENAME_RETRY_CODES,
-      ctx,
-    );
-    movedAside = true;
-  } catch (error) {
-    if (errorCode(error) !== "ENOENT") {
-      throw error;
-    }
-    // No existing dest — nothing to move aside.
-  }
-  try {
-    await withWin32Retry(
-      () => ctx.fsImpl.rename(sourcePath, destPath),
-      WIN32_RENAME_RETRY_CODES,
-      ctx,
-    );
-  } catch (error) {
-    if (movedAside) {
-      // Best-effort rollback so dest is not left missing.
-      try {
-        await ctx.fsImpl.rename(asidePath, destPath);
-      } catch {
-        // The aside file remains for the next cleanup sweep.
-      }
-    }
-    throw error;
-  }
-  if (movedAside) {
-    await unlinkBestEffort(asidePath, ctx.fsImpl);
-  }
-  return { finalPath: destPath };
-}
-
-/**
- * Removes a file or directory with per-platform retry semantics. Missing targets
- * are always OK (`force`). On win32, transient EPERM/EBUSY/ENOTEMPTY (AV scanners,
- * lagging child deletes) are retried with bounded backoff; POSIX gets one attempt.
- * `recursive: true` removes directory trees. `bestEffort: true` swallows whatever
- * error remains after the retry budget — cleanup-path semantics for callers that
- * must not fail their own teardown (the mutationGuard/test-loop convergence point).
- */
-export async function removeWithRetry(
-  p: string,
-  opts: { recursive?: boolean; bestEffort?: boolean } = {},
-  deps: FsDeps = {},
-): Promise<void> {
-  const ctx = resolveDeps(deps);
-  try {
-    await withWin32Retry(
-      () => ctx.fsImpl.rm(p, { recursive: opts.recursive ?? false, force: true, maxRetries: 0 }),
-      WIN32_REMOVE_RETRY_CODES,
-      ctx,
-    );
-  } catch (error) {
-    if (opts.bestEffort) {
-      return;
-    }
-    throw error;
-  }
-}
-
 /** How {@link symlink} actually materialized the link. */
 export type SymlinkMechanism = "symlink" | "junction";
 
@@ -544,18 +382,6 @@ async function defaultPrivatePathCommand(
   });
 }
 
-function defaultPrivatePathCommandSync(file: string, args: string[]): PrivatePathCommandResult {
-  const result = spawnSync(file, args, { encoding: "utf8", windowsHide: true });
-  return {
-    exitCode: result.status ?? 1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    ...(result.error
-      ? { errorCode: (result.error as NodeJS.ErrnoException).code ?? result.error.message }
-      : {}),
-  };
-}
-
 async function resolveWin32UserSid(deps: PrivatePathDeps): Promise<string> {
   if (deps.currentUserSid !== undefined) {
     return normalizeWin32UserSid(deps.currentUserSid);
@@ -576,17 +402,6 @@ async function resolveWin32UserSid(deps: PrivatePathDeps): Promise<string> {
   return await pendingWin32UserSid;
 }
 
-function resolveWin32UserSidSync(deps: PrivatePathSyncDeps): string {
-  if (deps.currentUserSid !== undefined) {
-    return normalizeWin32UserSid(deps.currentUserSid);
-  }
-  if (cachedWin32UserSid !== undefined) return cachedWin32UserSid;
-  const runCommandSync = deps.runCommandSync ?? defaultPrivatePathCommandSync;
-  const sid = parseWin32UserSid(runCommandSync("whoami.exe", ["/user", "/fo", "csv", "/nh"]));
-  if (deps.runCommandSync === undefined) cachedWin32UserSid = sid;
-  return sid;
-}
-
 function win32PrivatePathArgs(p: string, sid: string, kind: "directory" | "file"): string[] {
   const permission = kind === "directory" ? "(OI)(CI)F" : "F";
   return [p, "/inheritancelevel:r", "/grant:r", `*${sid}:${permission}`, "/Q"];
@@ -599,21 +414,6 @@ async function hardenPrivatePathWin32(
 ): Promise<void> {
   const sid = await resolveWin32UserSid(deps);
   const result = await (deps.runCommand ?? defaultPrivatePathCommand)(
-    "icacls.exe",
-    win32PrivatePathArgs(p, sid, kind),
-  );
-  if (result.exitCode !== 0) {
-    throw commandFailure(`harden private ${kind} ${p}`, "icacls.exe", result);
-  }
-}
-
-function hardenPrivatePathWin32Sync(
-  p: string,
-  kind: "directory" | "file",
-  deps: PrivatePathSyncDeps,
-): void {
-  const sid = resolveWin32UserSidSync(deps);
-  const result = (deps.runCommandSync ?? defaultPrivatePathCommandSync)(
     "icacls.exe",
     win32PrivatePathArgs(p, sid, kind),
   );
@@ -646,24 +446,4 @@ export async function hardenPrivateFile(p: string, deps: PrivatePathDeps = {}): 
     return;
   }
   await ctx.fsImpl.chmod(p, 0o600);
-}
-
-/** Synchronous counterpart for sync-only persistence boundaries such as bun:sqlite. */
-export function hardenPrivateDirSync(p: string, deps: PrivatePathSyncDeps = {}): void {
-  const platform = deps.platform ?? hostPlatform();
-  if (platform === "win32") {
-    hardenPrivatePathWin32Sync(p, "directory", deps);
-    return;
-  }
-  (deps.chmodSync ?? fsSync.chmodSync)(p, 0o700);
-}
-
-/** Synchronous counterpart for sync-only persistence boundaries such as bun:sqlite. */
-export function hardenPrivateFileSync(p: string, deps: PrivatePathSyncDeps = {}): void {
-  const platform = deps.platform ?? hostPlatform();
-  if (platform === "win32") {
-    hardenPrivatePathWin32Sync(p, "file", deps);
-    return;
-  }
-  (deps.chmodSync ?? fsSync.chmodSync)(p, 0o600);
 }

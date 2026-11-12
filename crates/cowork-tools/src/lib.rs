@@ -42,7 +42,7 @@ pub use context::{
     TodosUpdatedCallback, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
     ToolResult, WorkflowProgressCallback, assert_read_path_allowed, assert_write_path_allowed,
     canonicalize_with_missing_tail, cowork_home_read_roots, create_read_path_checker,
-    effective_sandbox_mode, lexical_tool_path, normalize_and_validate_args, normalize_lexical_path,
+    lexical_tool_path, normalize_and_validate_args, normalize_lexical_path,
     protected_credential_roots, resolve_tool_path,
 };
 pub use fs_tools::{EditTool, ReadTool, WriteTool};
@@ -78,8 +78,7 @@ pub use task_tools::{
 };
 pub use text_codec::{
     DecodedTextBuffer, LineEnding, TextEncoding, apply_eol, decode_text_buffer, detect_bom,
-    detect_dominant_eol, encode_text_buffer, looks_binary_without_utf16_bom, normalize_to_lf,
-    replace_respecting_eol,
+    detect_dominant_eol, encode_text_buffer, normalize_to_lf, replace_respecting_eol,
 };
 pub use thread_tools::ThreadManagementTool;
 pub use web::{
@@ -138,8 +137,3 @@ pub const CANONICAL_BUILTIN_TOOL_IDS: [&str; 27] = [
     "waitAgent",
     "closeAgent",
 ];
-
-/// Returns `true` if a tool's output is exempt from `.cowork-scratchpad` overflow truncation.
-pub fn is_overflow_spill_exempt(tool_id: &str) -> bool {
-    is_overflow_exempt_tool(tool_id, None)
-}

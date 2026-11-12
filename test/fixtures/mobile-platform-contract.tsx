@@ -6,10 +6,7 @@ import { act, createElement, forwardRef, type ReactNode, useState } from "react"
 import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
-import {
-  MOBILE_DEEP_LINKS,
-  MOBILE_TABS,
-} from "../../apps/mobile/src/features/navigation/mobile-navigation";
+import { MOBILE_TABS } from "../../apps/mobile/src/features/navigation/mobile-navigation";
 
 type Platform = "ios" | "android";
 type AccessibilityState = {
@@ -684,26 +681,26 @@ function buildNavigationSnapshot(container: Element) {
     "(workspace)": workspaceSettings.initialRouteName,
   };
   const targets = {
-    [MOBILE_DEEP_LINKS.chats]: { route: "(chats)", screen: "threads/index" },
-    [MOBILE_DEEP_LINKS.thread]: { route: "(chats)", screen: "thread/[id]" },
-    [MOBILE_DEEP_LINKS.settings]: { route: "(settings)", screen: "settings/index" },
-    [MOBILE_DEEP_LINKS.settingsMcp]: { route: "(settings)", screen: "settings/mcp" },
-    [MOBILE_DEEP_LINKS.settingsProviders]: {
+    "/threads": { route: "(chats)", screen: "threads/index" },
+    "/thread/[id]": { route: "(chats)", screen: "thread/[id]" },
+    "/settings": { route: "(settings)", screen: "settings/index" },
+    "/settings/mcp": { route: "(settings)", screen: "settings/mcp" },
+    "/settings/providers": {
       route: "(settings)",
       screen: "settings/providers",
     },
-    [MOBILE_DEEP_LINKS.settingsUsage]: { route: "(settings)", screen: "settings/usage" },
-    [MOBILE_DEEP_LINKS.skills]: { route: "(skills)", screen: "skills/index" },
-    [MOBILE_DEEP_LINKS.workspace]: { route: "(workspace)", screen: "workspace/index" },
-    [MOBILE_DEEP_LINKS.workspaceBackups]: {
+    "/settings/usage": { route: "(settings)", screen: "settings/usage" },
+    "/skills": { route: "(skills)", screen: "skills/index" },
+    "/workspace": { route: "(workspace)", screen: "workspace/index" },
+    "/workspace/backups": {
       route: "(workspace)",
       screen: "workspace/backups",
     },
-    [MOBILE_DEEP_LINKS.workspaceGeneral]: {
+    "/workspace/general": {
       route: "(workspace)",
       screen: "workspace/general",
     },
-    [MOBILE_DEEP_LINKS.workspaceMemory]: {
+    "/workspace/memory": {
       route: "(workspace)",
       screen: "workspace/memory",
     },
@@ -728,8 +725,8 @@ function buildNavigationSnapshot(container: Element) {
       state[active].push(target.screen);
     }
   };
-  visit(targets[MOBILE_DEEP_LINKS.workspaceGeneral]);
-  visit(targets[MOBILE_DEEP_LINKS.settingsProviders]);
+  visit(targets["/workspace/general"]);
+  visit(targets["/settings/providers"]);
   active = "(workspace)";
   history.push(active);
   const preservedBeforeBack = structuredClone(state);

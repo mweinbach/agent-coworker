@@ -777,7 +777,6 @@ export function createControlSocketHelpers(
       for (const threadId of releasedThreadIds) {
         if (!isCurrent()) return null;
         if (get().threadRuntimeById[threadId]) continue;
-        RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.optimisticUserMessageIds.delete(threadId);
       }
       for (const sessionId of removedSessionSnapshotIds) {
@@ -1958,21 +1957,6 @@ export function createControlSocketHelpers(
           kind: "error",
           title: "Control session error",
           detail: `${evt.source}/${evt.code}: ${evt.message}`,
-        }),
-      }));
-      return;
-    }
-
-    if (evt.type === "assistant_message") {
-      const text = String(evt.text).trim();
-      if (!text) return;
-      set((s) => ({
-        notifications: deps.pushNotification(s.notifications, {
-          id: deps.makeId(),
-          ts: deps.nowIso(),
-          kind: "info",
-          title: "Server message",
-          detail: text,
         }),
       }));
     }

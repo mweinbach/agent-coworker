@@ -162,24 +162,6 @@ impl PricingEngine {
         best_match.cloned()
     }
 
-    pub fn calculate_cost(
-        &self,
-        prompt_tokens: u64,
-        completion_tokens: u64,
-        pricing: &ModelPricing,
-        cached_prompt_tokens: u64,
-        cache_write_prompt_tokens: u64,
-    ) -> f64 {
-        self.calculate_breakdown(
-            prompt_tokens,
-            completion_tokens,
-            pricing,
-            cached_prompt_tokens,
-            cache_write_prompt_tokens,
-        )
-        .total_cost_usd
-    }
-
     pub fn calculate_breakdown(
         &self,
         prompt_tokens: u64,
@@ -195,29 +177,6 @@ impl PricingEngine {
             cached_prompt_tokens,
             cache_write_prompt_tokens,
         )
-    }
-
-    pub fn list_catalog(&self) -> Vec<PricingCatalogEntry> {
-        let mut entries: Vec<PricingCatalogEntry> = self
-            .table
-            .iter()
-            .filter_map(|(key, pricing)| {
-                let (prov_raw, model) = key.split_once(':')?;
-                let provider = ProviderName::parse(prov_raw)?;
-                Some(PricingCatalogEntry {
-                    provider,
-                    model: model.to_string(),
-                    pricing: pricing.clone(),
-                })
-            })
-            .collect();
-        entries.sort_by(|a, b| {
-            a.provider
-                .as_str()
-                .cmp(b.provider.as_str())
-                .then_with(|| a.model.cmp(&b.model))
-        });
-        entries
     }
 }
 
@@ -293,17 +252,6 @@ pub fn format_cost(usd: f64) -> String {
         format!("${usd:.4}")
     } else {
         format!("${usd:.2}")
-    }
-}
-
-/// Formats token counts (`"950"`, `"1.2k"`, `"1.23M"`).
-pub fn format_token_count(count: u64) -> String {
-    if count < 1_000 {
-        count.to_string()
-    } else if count < 1_000_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else {
-        format!("{:.2}M", count as f64 / 1_000_000.0)
     }
 }
 

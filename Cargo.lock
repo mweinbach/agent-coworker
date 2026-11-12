@@ -1082,7 +1082,6 @@ dependencies = [
  "cowork-config",
  "cowork-env",
  "cowork-inference",
- "cowork-js-vm",
  "cowork-mcp",
  "cowork-protocol",
  "cowork-providers",
@@ -1126,7 +1125,6 @@ dependencies = [
  "chrono",
  "cowork-config",
  "cowork-protocol",
- "futures-util",
  "hex",
  "rand 0.9.5",
  "regex",
@@ -1145,10 +1143,7 @@ name = "cowork-js-vm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "cowork-config",
- "cowork-protocol",
  "cowork-storage",
- "futures",
  "hex",
  "jsonschema",
  "oxc_allocator",
@@ -1181,27 +1176,20 @@ dependencies = [
  "bytes",
  "chrono",
  "cowork-config",
- "cowork-env",
- "cowork-protocol",
- "cowork-storage",
  "dashmap",
  "data-encoding",
  "eventsource-stream",
  "futures",
  "futures-util",
- "hex",
  "libc",
  "parking_lot",
  "rand 0.9.5",
  "reqwest",
  "serde",
- "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "thiserror",
  "tokio",
- "tokio-util",
  "tracing",
  "url",
  "uuid",
@@ -1214,7 +1202,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]
@@ -1234,7 +1221,6 @@ dependencies = [
  "chrono",
  "cowork-config",
  "cowork-inference",
- "cowork-protocol",
  "cowork-sandbox",
  "data-encoding",
  "eventsource-stream",
@@ -1250,7 +1236,6 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
- "thiserror",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1262,10 +1247,8 @@ dependencies = [
 name = "cowork-sandbox"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "cowork-config",
- "dashmap",
  "hex",
  "ignore",
  "libc",
@@ -1276,9 +1259,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "thiserror",
  "tokio",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -1296,7 +1277,6 @@ dependencies = [
  "cowork-env",
  "cowork-harness",
  "cowork-inference",
- "cowork-js-vm",
  "cowork-mcp",
  "cowork-protocol",
  "cowork-providers",
@@ -1308,7 +1288,6 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hex",
- "hyper",
  "hyper-util",
  "libc",
  "notify",
@@ -1325,15 +1304,12 @@ dependencies = [
  "sha2 0.10.9",
  "subtle",
  "tempfile",
- "thiserror",
  "time",
  "tokio",
  "tokio-rustls",
- "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
- "tracing-appender",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -1348,7 +1324,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "cowork-config",
- "cowork-protocol",
  "hex",
  "icu_collator",
  "libc",
@@ -1369,20 +1344,16 @@ dependencies = [
 name = "cowork-tools"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "axum",
- "bytes",
  "chrono",
  "cowork-config",
  "cowork-env",
  "cowork-inference",
  "cowork-js-vm",
  "cowork-mcp",
- "cowork-protocol",
  "cowork-sandbox",
  "cowork-storage",
- "dashmap",
  "data-encoding",
  "futures",
  "grep-regex",
@@ -1406,7 +1377,6 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
- "walkdir",
  "windows-sys 0.61.2",
 ]
 
@@ -1435,15 +1405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "crossbeam-channel"
-version = "0.5.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
-dependencies = [
- "crossbeam-utils",
 ]
 
 [[package]]
@@ -4823,12 +4784,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "symlink"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
-
-[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5040,17 +4995,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-stream"
-version = "0.1.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
 name = "tokio-tungstenite"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5139,19 +5083,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-appender"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
-dependencies = [
- "crossbeam-channel",
- "symlink",
- "thiserror",
- "time",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "tracing-attributes"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5169,28 +5100,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
- "valuable",
-]
-
-[[package]]
-name = "tracing-log"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
-dependencies = [
- "log",
- "once_cell",
- "tracing-core",
-]
-
-[[package]]
-name = "tracing-serde"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
-dependencies = [
- "serde",
- "tracing-core",
 ]
 
 [[package]]
@@ -5203,15 +5112,10 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
- "serde",
- "serde_json",
  "sharded-slab",
- "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
- "tracing-log",
- "tracing-serde",
 ]
 
 [[package]]
@@ -5362,12 +5266,6 @@ dependencies = [
  "outref",
  "vsimd",
 ]
-
-[[package]]
-name = "valuable"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vcpkg"

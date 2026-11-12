@@ -6,11 +6,7 @@ import { expect, type QualityDeltaBurstPath, test } from "../fixtures";
 import type { QualityGateMetrics } from "../runtime";
 
 const transcriptRenderBarrierTimeoutMs = 20_000;
-const deltaBurstPaths = [
-  "projected",
-  "legacy-chunk",
-  "legacy-raw",
-] as const satisfies readonly QualityDeltaBurstPath[];
+const deltaBurstPaths = ["projected"] as const satisfies readonly QualityDeltaBurstPath[];
 
 function assertPositiveRendererMetrics(
   metrics: QualityGateMetrics,

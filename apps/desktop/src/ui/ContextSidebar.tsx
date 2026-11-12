@@ -12,11 +12,11 @@ import { memo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
+import { buildMarkdownPreviewText } from "../../../../src/shared/markdownPreview";
 import { useAppStore } from "../app/store";
 import type { FeedItem, ThreadAgentSummary, ThreadRuntime } from "../app/types";
 import { cn } from "../lib/utils";
 import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
-import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 import { DesktopMarkdown } from "./markdown";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";

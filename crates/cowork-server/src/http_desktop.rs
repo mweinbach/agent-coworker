@@ -150,9 +150,8 @@ impl WebDesktopService {
     /// TS `saveState(state)`: normalizes the full incoming state (it replaces,
     /// not merges, the persisted state), writes it atomically, notifies
     /// `state.json` listeners (`workspace/listChanged`), and returns what was
-    /// persisted. `_fallback_cwd` is unused (TS `saveState` takes none) and kept
-    /// for call-site compatibility.
-    pub fn save_state_json(&self, incoming: Value, _fallback_cwd: &Path) -> anyhow::Result<Value> {
+    /// persisted.
+    pub fn save_state_json(&self, incoming: Value) -> anyhow::Result<Value> {
         let normalized = normalize_state(&incoming, &self.homedir);
         ensure_private_dir_sync(&self.user_data_dir)?;
         let serialized = serde_json::to_string_pretty(&normalized)?;
@@ -270,8 +269,7 @@ impl WebDesktopService {
             "yolo": false,
         }));
         state["workspaces"] = Value::Array(workspaces);
-        self.save_state_json(state, fallback_cwd)
-            .map_err(|e| e.to_string())?;
+        self.save_state_json(state).map_err(|e| e.to_string())?;
         Ok(
             cowork_harness::importers::conversations::EnsuredWorkspaceOutcome {
                 workspace_id: Some(id),
@@ -656,7 +654,7 @@ fn route_desktop_request(
         ("POST", "/cowork/desktop/state") => {
             let incoming = read_json_object(body)?;
             let saved = svc
-                .save_state_json(Value::Object(incoming), working_directory)
+                .save_state_json(Value::Object(incoming))
                 .map_err(|err| {
                     RouteError::with_status(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?;

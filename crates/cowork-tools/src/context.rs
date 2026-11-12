@@ -10,8 +10,8 @@ use cowork_config::{AgentConfig, ConfigError, ProviderName};
 use cowork_inference::{ToolDefinition, ToolResultPart};
 use cowork_mcp::WorkspaceMcpToolCache;
 use cowork_sandbox::{
-    ResolveSandboxPolicyInput, SandboxConfig, SandboxMode, SandboxPolicy, resolve_sandbox_policy,
-    scratch_roots, tmp_scratch_roots,
+    ResolveSandboxPolicyInput, SandboxConfig, SandboxPolicy, resolve_sandbox_policy, scratch_roots,
+    tmp_scratch_roots,
 };
 use cowork_storage::{
     MemoryStore, SessionDb, SessionKind, TaskContextSnapshot, TaskCreationResult, TaskDirective,
@@ -1328,10 +1328,6 @@ pub fn create_read_path_checker(
 ) -> impl Fn(&Path) -> bool + Send + Sync + use<> {
     let ctx_clone = ctx.clone();
     move |path: &Path| assert_read_path_allowed(path, &ctx_clone).is_ok()
-}
-
-pub fn effective_sandbox_mode(ctx: &ToolExecutionContext) -> SandboxMode {
-    ctx.sandbox_policy.mode()
 }
 
 #[cfg(test)]

@@ -2368,19 +2368,16 @@ async fn one_off_chat_promotion_and_active_turn_question_steer_e2e() {
     // then resolve the non-blocking question via `task/questions/resolve` WHILE the primary turn is active -> `steered`!
     let canon_one_off = fs::canonicalize(&one_off_cwd).unwrap();
     if let Some(svc) = &server.runtime().desktop_service {
-        svc.save_state_json(
-            json!({
-                "workspaces": [{
-                    "id": "ws-promoted-1",
-                    "name": "Quick Note Task",
-                    "path": canon_one_off.to_string_lossy(),
-                    "workspaceKind": "project",
-                    "createdAt": "2026-01-01T00:00:00.000Z",
-                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
-                }]
-            }),
-            &iso.workspace,
-        )
+        svc.save_state_json(json!({
+            "workspaces": [{
+                "id": "ws-promoted-1",
+                "name": "Quick Note Task",
+                "path": canon_one_off.to_string_lossy(),
+                "workspaceKind": "project",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+            }]
+        }))
         .unwrap();
 
         let tr = ws_call(

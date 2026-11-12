@@ -3,8 +3,8 @@ import path from "node:path";
 
 import { writeFileAtomic } from "../src/platform/fs";
 import { hostArch, hostPlatform } from "../src/platform/host";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
+import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/windowsSandboxHelper";
 import { SIDECAR_MANIFEST_NAME } from "../src/shared/runtimeProgress";
 import {
   copyDir,
@@ -19,7 +19,10 @@ import { computeSourceFingerprint } from "./winSandboxPrebuilt";
 import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
 const defaultRoot = path.resolve(import.meta.dirname, "..");
-const resourceDirs = ["prompts", "config", "docs", "skills", "workflows"] as const;
+// Runtime resources the Rust server reads from next to its executable.
+const resourceDirs = ["prompts", "config", "skills", "workflows"] as const;
+// Maintainer-only research notes that live next to the model prompts but are never loaded at runtime.
+const excludedResourcePaths = [path.join("prompts", "system-models", ".research")];
 
 async function resolveOutputPath(target: string): Promise<string> {
   try {
@@ -78,6 +81,9 @@ async function copyBundledResourceDirs(root: string, outDir: string): Promise<st
     await rmrf(dest);
     await copyDir(srcDir, dest);
     bundledDirs.push(dir);
+  }
+  for (const excluded of excludedResourcePaths) {
+    await rmrf(path.join(outDir, excluded));
   }
 
   return bundledDirs;

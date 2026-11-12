@@ -22,9 +22,6 @@ pub mod shell;
 pub mod soffice;
 pub mod uv;
 
-/// Parent-managed sidecar lifecycle variable that MUST be stripped from child tool processes.
-pub const PARENT_MANAGED_ENV_VAR: &str = "COWORK_DESKTOP_PARENT_MANAGED";
-
 /// Modular v2 `.tar.zst` runtime pack identifiers.
 pub const RUNTIME_V2_PACK_IDS: [&str; 3] = ["core", "python-wheels", "libreoffice"];
 
@@ -87,7 +84,6 @@ mod tests {
 
     #[test]
     fn runtime_env_invariants_are_defined() {
-        assert_eq!(PARENT_MANAGED_ENV_VAR, "COWORK_DESKTOP_PARENT_MANAGED");
         assert_eq!(
             RUNTIME_V2_PACK_IDS,
             ["core", "python-wheels", "libreoffice"]

@@ -97,10 +97,6 @@ pub const PDFTOPPM_MAX_LONG_EDGE_PX: u32 = 1600;
 pub struct PdftoppmJobRequest {
     pub pdf_path: PathBuf,
     pub output_dir: PathBuf,
-    /// Requested resolution. Retained for API compatibility only: every page is rendered with
-    /// `-scale-to` [`PDFTOPPM_MAX_LONG_EDGE_PX`], which supersedes `-r` in `pdftoppm`, so the
-    /// output bitmap is bounded regardless of the page's physical size.
-    pub dpi: u32,
     pub first_page: Option<u32>,
     pub last_page: Option<u32>,
     pub cwd: PathBuf,

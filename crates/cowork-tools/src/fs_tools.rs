@@ -9,6 +9,8 @@ use cowork_config::ModelRegistry;
 use cowork_inference::{MediaKind, MediaSource, ToolResultPart};
 use serde_json::{Map, Value, json};
 
+pub(crate) use cowork_storage::safe_open::{open_no_follow, restore_blocking_mode};
+
 use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
     assert_read_path_allowed, assert_write_path_allowed, lexical_tool_path,
@@ -199,36 +201,6 @@ pub(crate) fn open_checked_with(
     Ok(file)
 }
 
-#[cfg(unix)]
-pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    // O_NONBLOCK: a FIFO swapped in after the check must not block the open; the handle's
-    // fstat then rejects it. It has no effect on regular-file reads and is cleared afterwards.
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-}
-
-#[cfg(windows)]
-pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    // Open a reparse point (symlink/junction) itself instead of its target; its metadata is
-    // then not a regular file and the read is refused.
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<File> {
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(std::io::Error::other("symbolic link"));
-    }
-    File::open(path)
-}
-
 pub(crate) fn is_symlink_open_error(err: &std::io::Error) -> bool {
     #[cfg(unix)]
     {
@@ -241,22 +213,6 @@ pub(crate) fn is_symlink_open_error(err: &std::io::Error) -> bool {
         false
     }
 }
-
-#[cfg(unix)]
-pub(crate) fn restore_blocking_mode(file: &File) {
-    use std::os::fd::AsRawFd;
-    let fd = file.as_raw_fd();
-    // SAFETY: `fd` is a valid open descriptor owned by `file` for the duration of these calls.
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        if flags >= 0 && flags & libc::O_NONBLOCK != 0 {
-            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-pub(crate) fn restore_blocking_mode(_file: &File) {}
 
 /// The real path of the file `file` has open (`/proc/self/fd` on Linux, `F_GETPATH` on macOS,
 /// `GetFinalPathNameByHandleW` on Windows; elsewhere the canonical `requested` path, only if it
@@ -645,7 +601,7 @@ fn read_text_window_streaming(
         head_n += n;
     }
     let (encoding, bom_len) = detect_bom(&head[..head_n]);
-    // Same rule as `looks_binary_without_utf16_bom`: a NUL in the leading 8 KiB of a file
+    // A NUL in the leading 8 KiB of a file
     // without a UTF-16 BOM marks it binary. NULs later in the file are decoded as text.
     if matches!(encoding, TextEncoding::Utf8 | TextEncoding::Utf8Bom)
         && head[bom_len..head_n].contains(&0)

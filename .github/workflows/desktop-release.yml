@@ -266,7 +266,6 @@ jobs:
         if: ${{ runner.os == 'macOS' }}
         run: |
           cargo test -p cowork-sandbox -p cowork-env
-          bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts
 
       - name: Build macOS desktop artifacts
         if: ${{ runner.os == 'macOS' }}

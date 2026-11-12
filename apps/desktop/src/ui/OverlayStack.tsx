@@ -192,10 +192,6 @@ export function OverlayStackProvider({ children }: { children: ReactNode }) {
   return <OverlayStackContext.Provider value={stack}>{children}</OverlayStackContext.Provider>;
 }
 
-export function OverlayLayerBoundary({ children }: { children: ReactNode }) {
-  return <>{children}</>;
-}
-
 export function useOverlayStack(): Pick<OverlayStack, "hasOpenOverlay"> {
   const stack = useContext(OverlayStackContext);
   return useMemo(

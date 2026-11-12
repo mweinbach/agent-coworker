@@ -38,7 +38,6 @@ pub mod windows;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 pub use approval::{
     CommandApprovalClassification, CommandApprovalReasonCode, CommandRiskLevel,
@@ -53,8 +52,7 @@ pub use cowork_config::{SandboxConfig, SandboxMode as SandboxConfigMode};
 pub use denial::{
     ClassifyDenialOptions, SandboxDenialCategory, SandboxDenialClassification,
     SandboxDenialDetailKind, SandboxEscalationPlan, classify_sandbox_denial,
-    classify_sandbox_denial_detailed, describe_sandbox_denial, is_likely_sandbox_denied,
-    plan_sandbox_escalation,
+    classify_sandbox_denial_detailed, describe_sandbox_denial, plan_sandbox_escalation,
 };
 pub use detect::{
     BWRAP_RETRY_COOLDOWN_MS, BwrapProbeOptions, ProbeCommandOutput, SEATBELT_RETRY_COOLDOWN_MS,
@@ -66,14 +64,14 @@ pub use detect::{
 };
 pub use env_utils::{
     PARENT_MANAGED_ENV_VAR, find_env_key, get_env, host_arch, host_platform, minimal_sandbox_env,
-    remove_env, sandbox_env_allowlist, sanitized_process_env, set_env,
+    remove_env, sanitized_process_env, set_env,
 };
+#[cfg(target_os = "linux")]
+pub use linux_seccomp::apply_linux_seccomp_filter;
 pub use linux_seccomp::{
     LinuxSeccompInstruction, build_linux_socket_filter, build_linux_socket_filter_fixed,
     evaluate_seccomp_bpf,
 };
-#[cfg(target_os = "linux")]
-pub use linux_seccomp::{apply_linux_seccomp_filter, install_linux_seccomp_pre_exec};
 pub use manager::{
     SandboxCapabilities, SandboxEnforcement, SandboxGateDecision, SandboxManager, TransformOptions,
 };
@@ -93,14 +91,13 @@ pub use runner::{
     DEFAULT_MAX_BUFFER_BYTES, SandboxExecutionRequest, SandboxExecutionResult, SandboxRunner,
 };
 pub use seatbelt::{
-    MACOS_SEATBELT_EXECUTABLE, build_seatbelt_command, build_seatbelt_command_with_cache,
+    MACOS_SEATBELT_EXECUTABLE, build_seatbelt_command_with_cache,
     build_seatbelt_command_with_read_denies,
 };
 pub use windows::{
     CODEX_WINDOWS_SANDBOX_SETUP_VERSION, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
     WINDOWS_SANDBOX_HASH_MANIFEST_NAME, WINDOWS_SANDBOX_HELPER_NAME, WINDOWS_SANDBOX_SETUP_NAME,
-    WindowsSandboxHashManifest, build_windows_sandbox_command, is_native_windows_binary,
-    load_windows_sandbox_hash_manifest, read_windows_pe_machine,
+    build_windows_sandbox_command, is_native_windows_binary, read_windows_pe_machine,
     sync_codex_windows_sandbox_setup_state, sync_codex_windows_sandbox_setup_state_between,
     verify_windows_authenticode, windows_sandbox_home, windows_sandbox_home_for_platform,
 };
@@ -114,13 +111,6 @@ pub enum SandboxMode {
     NoProjectWrite,
     WorkspaceWrite,
     DangerFullAccess,
-}
-
-impl SandboxMode {
-    /// Returns whether this mode represents a hard floor that `--yolo` MUST NOT lift.
-    pub const fn is_hard_floor(self) -> bool {
-        matches!(self, Self::ReadOnly | Self::NoProjectWrite)
-    }
 }
 
 /// Active OS sandbox backend identifier matching wire `"macos-seatbelt" | "linux-bwrap" | "windows-sandbox" | "none"`.
@@ -187,17 +177,4 @@ pub struct TransformedCommand {
     pub env: HashMap<String, String>,
     pub sandbox: SandboxType,
     pub unsandboxed: bool,
-}
-
-/// Typed errors surfaced by `cowork-sandbox`.
-#[derive(Debug, Error)]
-pub enum SandboxError {
-    #[error("SANDBOX_REQUIRED: {0}")]
-    SandboxRequired(String),
-    #[error("sandbox execution timed out")]
-    Timeout,
-    #[error("sandbox execution cancelled")]
-    Cancelled,
-    #[error("sandbox I/O error: {0}")]
-    Io(#[from] std::io::Error),
 }

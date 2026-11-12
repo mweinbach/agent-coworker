@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cloud-only SessionStart hook. The full test suite needs both the root workspace
-# and the independently locked mobile SDK; apps/mobile is not a root workspace.
+# and the independently locked mobile SDK (apps/mobile is not a root workspace),
+# plus the pinned Rust toolchain that builds cowork-server/cowork-cli.
 # The versioned Cowork runtime is activated separately by the harness.
 
 set -uo pipefail
@@ -20,9 +21,6 @@ for ca in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem; do
     break
   fi
 done
-
-# Skip optional postinstall work, not either dependency root.
-export SKIP_POSTINSTALL=1
 
 dependency_hash() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -61,8 +59,26 @@ install_dependencies() (
   exit 1
 )
 
+ensure_rust_toolchain() {
+  # The backend is Rust; `rust-toolchain.toml` pins the channel and rustup
+  # resolves it on first use. Only bootstrap rustup when cargo is missing.
+  export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  if command -v cargo >/dev/null 2>&1; then
+    echo "[cloud-setup] cargo found; skipping Rust toolchain install"
+    return 0
+  fi
+  echo "[cloud-setup] installing rustup (toolchain pinned by rust-toolchain.toml)…"
+  if ! curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain none --no-modify-path; then
+    echo "[cloud-setup] WARNING: rustup install failed; Rust builds and tests will be unavailable." >&2
+    return 1
+  fi
+  rustup toolchain install || rustup show active-toolchain || true
+}
+
 # Don't hard-fail the session: a non-zero SessionStart hook shouldn't block
 # startup. Retry transient failures without rewriting either committed lockfile.
 install_dependencies "." || true
 install_dependencies "apps/mobile" || true
+ensure_rust_toolchain || true
 exit 0

@@ -69,7 +69,6 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const {
-  CHATS_MEMORY_TARGET_ID,
   MEMORY_LOADING_STALL_MS,
   MemoryPage,
   buildMemoryGenerationModelGroups,
@@ -79,6 +78,7 @@ const {
   resolveMemoryGenerationModelSelection,
   resolveMemoryTargets,
 } = await import("../src/ui/settings/pages/MemoryPage");
+const { CHATS_WORKSPACE_TARGET_ID } = await import("../src/app/workspaceDisplayTargets");
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { operationKey } = await import("../src/app/store.helpers/operations");
@@ -591,7 +591,7 @@ describe("desktop memory page", () => {
     expect(targets.map((target) => target.label)).toEqual(["Chats", "Cowork", "GoogleIO"]);
     expect(targets.filter((target) => target.label === "New chat")).toHaveLength(0);
     expect(activeTarget).toEqual({
-      id: CHATS_MEMORY_TARGET_ID,
+      id: CHATS_WORKSPACE_TARGET_ID,
       label: "Chats",
       kind: "chats",
       workspaceId: "chat-2",

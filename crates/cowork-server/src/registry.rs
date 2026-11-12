@@ -697,7 +697,7 @@ pub struct ServerRuntimeState {
     pub(crate) codex_pool: Arc<cowork_providers::codex_app_server::CodexAppServerPool>,
     pub(crate) pending_codex_logins:
         DashMap<(ProviderName, String), crate::provider_routes::PendingCodexLogin>,
-    pub(crate) active_turns: DashMap<String, crate::turn_runner::ActiveTurnControl>,
+    pub(crate) active_turns: DashMap<String, crate::jsonrpc_turn::ActiveTurnControl>,
     /// Sessions deleted (or being deleted) by `cowork/session/delete`. Session ids are never
     /// reused, so a tombstone makes late writers (a cancelled turn's final persist, title or
     /// memory jobs) no-ops instead of resurrecting the deleted rows.
@@ -1895,7 +1895,8 @@ impl ServerRuntimeState {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let mut subscribers = HashSet::new();
         subscribers.insert(connection_id.to_owned());
-        let (output_directory, uploads_directory) = crate::turn_runner::config_io_dir_strings(&cfg);
+        let (output_directory, uploads_directory) =
+            crate::jsonrpc_turn::config_io_dir_strings(&cfg);
 
         let live = LiveSession {
             id: winning_id.clone(),
@@ -2061,7 +2062,7 @@ impl ServerRuntimeState {
     /// `localThreadHost.forkThread` parity).
     pub(crate) fn new_session_io_dirs(&self, cwd: &Path) -> (Option<String>, Option<String>) {
         self.load_workspace_config(cwd)
-            .map(|cfg| crate::turn_runner::config_io_dir_strings(&cfg))
+            .map(|cfg| crate::jsonrpc_turn::config_io_dir_strings(&cfg))
             .unwrap_or_default()
     }
 
@@ -2308,7 +2309,7 @@ impl ServerRuntimeState {
                     .map(|im| Arc::clone(im.value()))
                 {
                     for (request_id, method, params) in
-                        crate::turn_runner::capture_pending_server_requests(&im)
+                        crate::jsonrpc_turn::capture_pending_server_requests(&im)
                     {
                         if replayed_request_ids.contains(&request_id)
                             || !emitted.emitted_requests.contains(&request_id)
@@ -2956,11 +2957,11 @@ impl ServerRuntimeState {
                 active.with_tracker(|tracker| {
                     (
                         tracker.get_budget_status(),
-                        crate::turn_runner::session_usage_event(&live.id, tracker),
+                        crate::jsonrpc_turn::session_usage_event(&live.id, tracker),
                     )
                 })
             } else {
-                let mut tracker = crate::turn_runner::rehydrate_session_cost_tracker(
+                let mut tracker = crate::jsonrpc_turn::rehydrate_session_cost_tracker(
                     &live.id,
                     live.cost_tracker_snapshot.clone(),
                     live.warn_at_usd,
@@ -2972,7 +2973,7 @@ impl ServerRuntimeState {
                 }
                 (
                     tracker.get_budget_status(),
-                    crate::turn_runner::session_usage_event(&live.id, &tracker),
+                    crate::jsonrpc_turn::session_usage_event(&live.id, &tracker),
                 )
             };
             live.warn_at_usd = budget.warn_at_usd;
@@ -3194,7 +3195,7 @@ impl ServerRuntimeState {
                 && before["config"] != evt["config"])
                 .then(|| {
                     let mut effective = cfg.clone();
-                    crate::turn_runner::apply_session_config_overrides(
+                    crate::jsonrpc_turn::apply_session_config_overrides(
                         &mut effective,
                         &live.config_overrides,
                     );
@@ -3547,7 +3548,7 @@ impl ServerRuntimeState {
                 }
                 if live.enable_mcp != prev_enable_mcp {
                     let mut effective = refreshed_cfg.clone();
-                    crate::turn_runner::apply_session_config_overrides(
+                    crate::jsonrpc_turn::apply_session_config_overrides(
                         &mut effective,
                         &live.config_overrides,
                     );
@@ -4723,19 +4724,6 @@ fn pick_positive_integer(value: Option<&Value>) -> Option<u64> {
     (floored >= 1.0).then_some(floored as u64)
 }
 
-/// TS `pickBoolean`: a boolean or a yes/no style string.
-fn pick_boolean(value: Option<&Value>) -> Option<bool> {
-    match value? {
-        Value::Bool(b) => Some(*b),
-        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "y" | "on" => Some(true),
-            "0" | "false" | "no" | "n" | "off" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// TS `pickOpenAiCompatibleProviderOptionsSection`, without the empty-section check.
 fn pick_openai_compatible_fields(obj: &Map<String, Value>) -> Map<String, Value> {
     let mut dst = Map::new();
@@ -4842,7 +4830,7 @@ fn pick_google_thinking_config(obj: &Map<String, Value>) -> Option<Map<String, V
 /// defined value) so the Google request never carries `response_format: null`.
 fn pick_google_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
     let mut dst = Map::new();
-    if let Some(b) = pick_boolean(obj.get("nativeWebSearch")) {
+    if let Some(b) = cowork_config::web_search_options::pick_boolean(obj.get("nativeWebSearch")) {
         dst.insert("nativeWebSearch".to_owned(), Value::Bool(b));
     }
     if let Some(tc) = obj
@@ -4874,7 +4862,7 @@ fn pick_lmstudio_section(obj: &Map<String, Value>) -> Option<Map<String, Value>>
         dst.insert("contextLength".to_owned(), Value::from(n));
     }
     for key in ["autoLoad", "reloadOnContextMismatch"] {
-        if let Some(b) = pick_boolean(obj.get(key)) {
+        if let Some(b) = cowork_config::web_search_options::pick_boolean(obj.get(key)) {
             dst.insert(key.to_owned(), Value::Bool(b));
         }
     }
@@ -4899,7 +4887,7 @@ fn pick_editable_provider_section(provider: &str, section: &Value) -> Option<Map
 /// Layers a session's stored `providerOptions` override onto the workspace provider options one
 /// provider section deep: a section's keys replace the workspace section's keys, and a
 /// non-object value replaces the entry. This is the merge the root turn runner applies before
-/// a turn (`turn_runner.rs`), so anything reporting the effective session options must use it.
+/// a turn (`jsonrpc_turn.rs`), so anything reporting the effective session options must use it.
 pub(crate) fn overlay_session_provider_options(
     base: &mut Map<String, Value>,
     over: Map<String, Value>,
@@ -5078,7 +5066,7 @@ fn merge_editable_provider_options(
 }
 
 /// Top-level boolean tool-exposure toggles the Rust turn runner reads from session
-/// `providerOptions` (`turn_runner.rs`). They select tools, never endpoints or credentials.
+/// `providerOptions` (`jsonrpc_turn.rs`). They select tools, never endpoints or credentials.
 const SESSION_TOOL_EXPOSURE_KEYS: [&str; 2] = ["deferredToolSearch", "codeMode"];
 
 /// Reduces a client-supplied `providerOptions` map to what a session may store: the editable

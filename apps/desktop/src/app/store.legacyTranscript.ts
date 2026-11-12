@@ -96,6 +96,12 @@ function asId(value: unknown): string | undefined {
   return undefined;
 }
 
+function asRecordArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const records = value.filter(isRecord);
+  return records.length > 0 ? records : undefined;
+}
+
 function normalizeText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
@@ -188,6 +194,19 @@ export function applyLegacyModelStreamChunk(
         ts,
         text,
       }));
+      return;
+    }
+    case "text_end": {
+      if (part.phase === "commentary") return;
+      const annotations = asRecordArray(part.annotations);
+      if (!annotations) return;
+      const streamId = asId(part.id);
+      const streamed = streamId
+        ? replay.assistantStreams.get(streamId)
+        : (replay.assistantStreams.get(`text:${index}`) ??
+          [...replay.assistantStreams.values()].at(-1));
+      const item = findItem(out, streamed?.itemId, "message");
+      if (item && item.role === "assistant") item.annotations = annotations;
       return;
     }
     case "reasoning_delta": {

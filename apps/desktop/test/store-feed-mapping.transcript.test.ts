@@ -455,5 +455,31 @@ describe("desktop transcript feed mapping", () => {
         false,
       );
     });
+
+    test("restores citation annotations from text_end chunks onto streamed assistant messages", () => {
+      const annotations = [
+        { type: "url_citation", url: "https://example.com/docs", title: "Docs" },
+      ];
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "Where are the docs?" }, "client"),
+        chunk(2, 0, "text_delta", { id: "t1", phase: "commentary", text: "Checking..." }),
+        chunk(2, 1, "text_end", {
+          id: "t1",
+          phase: "commentary",
+          annotations: [{ type: "url_citation", url: "https://ignored.example" }],
+        }),
+        chunk(3, 2, "text_delta", { id: "t2", text: "See the docs." }),
+        chunk(3, 3, "text_end", { id: "t2", annotations }),
+        evt(4, { type: "assistant_message", text: "See the docs." }),
+      ]);
+
+      expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
+      expect(feed[2]).toMatchObject({
+        kind: "message",
+        role: "assistant",
+        text: "See the docs.",
+        annotations,
+      });
+    });
   });
 });

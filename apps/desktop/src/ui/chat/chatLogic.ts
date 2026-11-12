@@ -1,4 +1,4 @@
-import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
+import { formatCost } from "../../../../../src/session/pricing";
 import type { ComposerSubmission } from "../../app/composerSubmission";
 import type {
   FeedItem,
@@ -7,7 +7,6 @@ import type {
   ThreadPendingSteer,
   ThreadPendingTurnStart,
   ThreadStatus,
-  TurnUsageSnapshot,
 } from "../../app/types";
 
 export function reasoningLabelForMode(mode: "reasoning" | "summary"): string {
@@ -55,33 +54,6 @@ export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: bool
     : feed.filter((item) => item.kind !== "system" && item.kind !== "log");
 }
 
-export function formatSessionUsageHeadline(
-  sessionUsage: SessionUsageSnapshot | null,
-  lastTurnUsage: TurnUsageSnapshot | null,
-  opts?: { showTokens?: boolean },
-): string | null {
-  const parts: string[] = [];
-  const showTokens = opts?.showTokens === true;
-
-  if (sessionUsage) {
-    if (showTokens) {
-      parts.push(`${sessionUsage.totalTurns} turn${sessionUsage.totalTurns === 1 ? "" : "s"}`);
-      parts.push(`${formatTokenCount(sessionUsage.totalTokens)} tokens`);
-    }
-    if (sessionUsage.costTrackingAvailable && sessionUsage.estimatedTotalCostUsd !== null) {
-      parts.push(`est. ${formatCost(sessionUsage.estimatedTotalCostUsd)}`);
-    } else if (sessionUsage.totalTurns > 0) {
-      parts.push("est. cost unavailable");
-    }
-  }
-
-  if (showTokens && lastTurnUsage) {
-    parts.push(`last ${formatTokenCount(lastTurnUsage.usage.totalTokens)} tokens`);
-  }
-
-  return parts.length > 0 ? parts.join(" • ") : null;
-}
-
 export function formatSessionBudgetLine(sessionUsage: SessionUsageSnapshot | null): string | null {
   const budget = sessionUsage?.budgetStatus;
   if (!budget?.configured) return null;
@@ -97,17 +69,6 @@ export function formatSessionBudgetLine(sessionUsage: SessionUsageSnapshot | nul
   if (budget.warnAtUsd !== null) parts.push(`Warn ${formatCost(budget.warnAtUsd)}`);
   if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
   return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
-}
-
-export function sessionUsageTone(sessionUsage: SessionUsageSnapshot | null): string {
-  const budget = sessionUsage?.budgetStatus;
-  if (budget?.stopTriggered) {
-    return "border-destructive/40 bg-destructive/10 text-destructive";
-  }
-  if (budget?.warningTriggered) {
-    return "border-warning/40 bg-warning/10 text-warning";
-  }
-  return "border-border/50 bg-background/80 text-muted-foreground";
 }
 
 export function canClearSessionHardCap(opts: {

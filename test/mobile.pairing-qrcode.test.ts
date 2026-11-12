@@ -3,7 +3,26 @@ import {
   parsePairingQrPayload,
   validatePairingPayload,
 } from "../apps/mobile/src/features/pairing/qrValidation";
-import { encodeCoworkPairingTicket } from "../src/shared/coworkTicket";
+
+const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+
+/** Fixture encoder mirroring the desktop pairing ticket format (base32 JSON). */
+function encodeCoworkPairingTicket(ticket: object): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(ticket));
+  let output = "";
+  let value = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  return `cowork-pair://${output}`;
+}
 
 function buildPayload(
   overrides?: Partial<{

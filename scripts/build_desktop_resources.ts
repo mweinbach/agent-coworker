@@ -8,8 +8,8 @@ import {
   SIDECAR_MANIFEST_NAME,
 } from "../apps/desktop/electron/services/sidecar";
 import { hostArch, hostPlatform } from "../src/platform/host";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
+import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/windowsSandboxHelper";
 import {
   copyDir,
   pathExists,
@@ -20,24 +20,20 @@ import {
 import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
-const CACHE_VERSION = 15;
-const LEGACY_BUN_EXECUTABLE_NAME = "bun.exe";
-const LEGACY_BUN_ENTRYPOINT_DIR = "server";
-// Node-API title-generation addons the Bun sidecar loaded; the Rust sidecar never reads them.
-const LEGACY_NATIVE_TITLE_ADDON_DIRS = ["tsfm-sdk", "windows-ai-electron"];
+const CACHE_VERSION = 16;
+// Maintainer-only research notes that live next to the model prompts but are never loaded at runtime.
+const PROMPTS_EXCLUDED_PATHS = [path.join("system-models", ".research")];
 
 type DesktopResourcesCache = {
   version: number;
   platform: NodeJS.Platform;
   arch: string;
-  includeDocs: boolean;
   sidecarFingerprint: string;
   promptsFingerprint: string;
   configFingerprint: string;
   skillsFingerprint: string;
   workflowsFingerprint: string;
   windowsSandboxHelperFingerprint: string | null;
-  docsFingerprint: string | null;
 };
 
 async function walkForFingerprint(
@@ -120,15 +116,13 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       parsed.platform.length === 0 ||
       typeof parsed.arch !== "string" ||
       parsed.arch.length === 0 ||
-      typeof parsed.includeDocs !== "boolean" ||
       typeof parsed.sidecarFingerprint !== "string" ||
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
       typeof parsed.workflowsFingerprint !== "string" ||
       (parsed.windowsSandboxHelperFingerprint !== null &&
-        typeof parsed.windowsSandboxHelperFingerprint !== "string") ||
-      (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
+        typeof parsed.windowsSandboxHelperFingerprint !== "string")
     ) {
       return null;
     }
@@ -142,28 +136,13 @@ async function writeCache(cachePath: string, cache: DesktopResourcesCache): Prom
   await fs.writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
 }
 
-async function removeLegacyCodexAppServerBinaries(desktopBinariesDir: string): Promise<void> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(desktopBinariesDir);
-  } catch {
-    return;
-  }
-  await Promise.all(
-    entries
-      .filter((entry) => entry.startsWith("codex-app-server"))
-      .map(async (entry) => {
-        await fs.rm(path.join(desktopBinariesDir, entry), { force: true });
-      }),
-  );
-}
-
 async function syncCopiedDir(opts: {
   label: string;
   src: string;
   dest: string;
   previousFingerprint: string | null;
   nextFingerprint: string;
+  excludePaths?: string[];
 }): Promise<void> {
   const needsCopy =
     opts.previousFingerprint !== opts.nextFingerprint || !(await pathExists(opts.dest));
@@ -174,13 +153,10 @@ async function syncCopiedDir(opts: {
 
   await rmrf(opts.dest);
   await copyDir(opts.src, opts.dest);
-  console.log(`[resources] ${opts.label}: updated`);
-}
-
-async function removeLegacyNativeTitleAddons(desktopBinariesDir: string): Promise<void> {
-  for (const dirName of LEGACY_NATIVE_TITLE_ADDON_DIRS) {
-    await rmrf(path.join(desktopBinariesDir, dirName));
+  for (const excluded of opts.excludePaths ?? []) {
+    await rmrf(path.join(opts.dest, excluded));
   }
+  console.log(`[resources] ${opts.label}: updated`);
 }
 
 async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise<void> {
@@ -191,11 +167,8 @@ async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise
   const entries = await fs.readdir(desktopBinariesDir, { withFileTypes: true });
   for (const entry of entries) {
     const isSidecarArtifact =
-      (entry.isFile() &&
-        (entry.name.startsWith("cowork-server-") ||
-          entry.name === SIDECAR_MANIFEST_NAME ||
-          entry.name === LEGACY_BUN_EXECUTABLE_NAME)) ||
-      (entry.isDirectory() && entry.name === LEGACY_BUN_ENTRYPOINT_DIR);
+      entry.isFile() &&
+      (entry.name.startsWith("cowork-server-") || entry.name === SIDECAR_MANIFEST_NAME);
     if (isSidecarArtifact) {
       await rmrf(path.join(desktopBinariesDir, entry.name));
     }
@@ -230,13 +203,9 @@ async function main() {
   const rustTarget = resolveRustCompileTarget(platform, arch);
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
-  const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
   const cachePath = path.join(distDir, `.desktop-resources-cache-${platform}-${arch}.json`);
 
   await fs.mkdir(distDir, { recursive: true });
-  await rmrf(path.join(distDir, "server"));
-  await rmrf(path.join(distDir, "codex-primary-runtime"));
-  await rmrf(path.join(distDir, "artifact-runtime"));
 
   const cache = await loadCache(cachePath);
 
@@ -255,7 +224,6 @@ async function main() {
   const configSrc = path.join(root, "config");
   const skillsSrc = path.join(root, "skills");
   const workflowsSrc = path.join(root, "workflows");
-  const docsSrc = path.join(root, "docs");
   const promptsFingerprint = await fingerprintInputs([promptsSrc], root);
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
@@ -274,7 +242,6 @@ async function main() {
   const windowsSandboxHelperFingerprint = windowsSandboxHelperInputs
     ? await fingerprintInputs(windowsSandboxHelperInputs, root)
     : null;
-  const docsFingerprint = includeDocs ? await fingerprintInputs([docsSrc], root) : null;
   const sidecarFingerprint = await fingerprintInputs(
     sidecarInputs,
     root,
@@ -291,7 +258,6 @@ async function main() {
   const sidecarNeedsBuild =
     cache?.platform !== platform ||
     cache?.arch !== arch ||
-    cache?.includeDocs !== includeDocs ||
     cache?.sidecarFingerprint !== sidecarFingerprint ||
     !(await pathExists(sidecarManifestPath)) ||
     !(await pathExists(sidecarOutfile)) ||
@@ -340,10 +306,6 @@ async function main() {
     console.log("[resources] sidecar: cached");
   }
 
-  await removeLegacyCodexAppServerBinaries(desktopBinariesDir);
-  await removeLegacyNativeTitleAddons(desktopBinariesDir);
-  console.log("[resources] codex app-server: runtime-managed");
-
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
   const skillsDest = path.join(distDir, "skills");
@@ -355,6 +317,7 @@ async function main() {
     dest: promptsDest,
     previousFingerprint: cache?.promptsFingerprint ?? null,
     nextFingerprint: promptsFingerprint,
+    excludePaths: PROMPTS_EXCLUDED_PATHS,
   });
 
   await syncCopiedDir({
@@ -391,35 +354,17 @@ async function main() {
     forceBuild: forceWindowsSandboxBuild,
   });
 
-  const docsDest = path.join(distDir, "docs");
-  if (!includeDocs) {
-    await rmrf(docsDest);
-    console.log("[resources] docs: disabled");
-  } else {
-    await syncCopiedDir({
-      label: "docs",
-      src: docsSrc,
-      dest: docsDest,
-      previousFingerprint: cache?.docsFingerprint ?? null,
-      nextFingerprint: docsFingerprint!,
-    });
-  }
-
   await writeCache(cachePath, {
     version: CACHE_VERSION,
     platform,
     arch,
-    includeDocs,
     sidecarFingerprint,
     promptsFingerprint,
     configFingerprint,
     skillsFingerprint,
     workflowsFingerprint,
     windowsSandboxHelperFingerprint,
-    docsFingerprint,
   });
-
-  console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");
 
   await pruneStaleDesktopBinaryArtifacts(desktopBinariesDir);
 }
@@ -473,7 +418,6 @@ if (import.meta.main) {
 export const __internal = {
   fingerprintInputs,
   clearDesktopSidecarArtifacts,
-  removeLegacyNativeTitleAddons,
   syncWindowsSandboxHelper,
   pruneStaleDesktopBinaryArtifacts,
 };

@@ -243,7 +243,6 @@ export async function main(
         COWORK_REPO_ROOT: env.COWORK_REPO_ROOT?.trim() || repoRoot,
         COWORK_WEB_DESKTOP_SERVICE: "1",
         COWORK_DESKTOP_PARENT_MANAGED: "1",
-        COWORK_HARNESS_TERMINAL_LOGS: env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
       },
     });
     children.push(serverProc);

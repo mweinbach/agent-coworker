@@ -99,9 +99,7 @@ describe("desktop overlay ownership", () => {
     const harness = setupJsdom();
 
     try {
-      const { OverlayLayerBoundary, OverlayStackProvider, useOverlayOwner } = await import(
-        "../src/ui/OverlayStack"
-      );
+      const { OverlayStackProvider, useOverlayOwner } = await import("../src/ui/OverlayStack");
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
@@ -144,24 +142,20 @@ describe("desktop overlay ownership", () => {
             },
             "Open later portal",
           ),
-          createElement(
-            OverlayLayerBoundary,
-            null,
-            earlierOpen
-              ? createPortal(
-                  createElement(
-                    "div",
-                    {
-                      "data-testid": "earlier-independent-portal",
-                      role: "dialog",
-                      style: { zIndex: earlierOwner?.zIndex },
-                    },
-                    "Earlier independent portal",
-                  ),
-                  harness.dom.window.document.body,
-                )
-              : null,
-          ),
+          earlierOpen
+            ? createPortal(
+                createElement(
+                  "div",
+                  {
+                    "data-testid": "earlier-independent-portal",
+                    role: "dialog",
+                    style: { zIndex: earlierOwner?.zIndex },
+                  },
+                  "Earlier independent portal",
+                ),
+                harness.dom.window.document.body,
+              )
+            : null,
           laterOpen
             ? createPortal(
                 createElement(
@@ -317,9 +311,7 @@ describe("desktop overlay ownership", () => {
     const harness = setupJsdom();
 
     try {
-      const { OverlayLayerBoundary, OverlayStackProvider, useOverlayOwner } = await import(
-        "../src/ui/OverlayStack"
-      );
+      const { OverlayStackProvider, useOverlayOwner } = await import("../src/ui/OverlayStack");
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
@@ -362,29 +354,25 @@ describe("desktop overlay ownership", () => {
             },
             "Open competitor",
           ),
-          createElement(
-            OverlayLayerBoundary,
-            null,
-            editorOpen
-              ? createPortal(
-                  createElement(
-                    "div",
-                    {
-                      "data-testid": "custom-editor",
-                      role: "dialog",
-                      style: { zIndex: editorOwner?.zIndex },
+          editorOpen
+            ? createPortal(
+                createElement(
+                  "div",
+                  {
+                    "data-testid": "custom-editor",
+                    role: "dialog",
+                    style: { zIndex: editorOwner?.zIndex },
+                  },
+                  createElement("input", {
+                    "aria-label": "Custom editor input",
+                    onKeyDown: (event) => {
+                      if (event.key === "Escape") editorOwner?.handleEscape(event);
                     },
-                    createElement("input", {
-                      "aria-label": "Custom editor input",
-                      onKeyDown: (event) => {
-                        if (event.key === "Escape") editorOwner?.handleEscape(event);
-                      },
-                    }),
-                  ),
-                  harness.dom.window.document.body,
-                )
-              : null,
-          ),
+                  }),
+                ),
+                harness.dom.window.document.body,
+              )
+            : null,
           competingOpen
             ? createPortal(
                 createElement(

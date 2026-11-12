@@ -262,7 +262,3 @@ export function buildThreadHomeListSections({
     orderIndex,
   }));
 }
-
-export function threadHomeListRowCount(sections: readonly ThreadHomeListSection[]): number {
-  return sections.reduce((total, section) => total + section.data.length, 0);
-}

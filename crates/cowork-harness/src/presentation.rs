@@ -453,7 +453,6 @@ async fn render_native_slides(
         .render_pdf_pages(PdftoppmJobRequest {
             pdf_path: conv.output_path,
             output_dir: scratch_dir.clone(),
-            dpi: 150,
             first_page: Some(1),
             last_page: Some((MAX_PRESENTATION_SLIDES + 1) as u32),
             cwd: scratch_dir.clone(),

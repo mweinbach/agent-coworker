@@ -7,26 +7,17 @@ const SIDECAR_BASE_NAME = "cowork-server";
 
 export { SIDECAR_MANIFEST_NAME };
 
-type ExecutableSidecarLaunchSpec = {
+type SidecarLaunchSpec = {
   kind: "executable";
   path: string;
   args?: string[];
 };
-
-type SidecarLaunchSpec = ExecutableSidecarLaunchSpec;
 
 export type SidecarManifest = {
   targetTriple: string;
   platform: NodeJS.Platform;
   arch: string;
   launch: SidecarLaunchSpec;
-};
-
-type LegacySidecarManifest = {
-  filename: string;
-  targetTriple: string;
-  platform: NodeJS.Platform;
-  arch: string;
 };
 
 export type SidecarLaunchCommand = {
@@ -88,7 +79,7 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function isExecutableLaunchSpec(value: unknown): value is ExecutableSidecarLaunchSpec {
+function isSidecarLaunchSpec(value: unknown): value is SidecarLaunchSpec {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -100,10 +91,6 @@ function isExecutableLaunchSpec(value: unknown): value is ExecutableSidecarLaunc
     candidate.path.length > 0 &&
     (candidate.args === undefined || isStringArray(candidate.args))
   );
-}
-
-function isSidecarLaunchSpec(value: unknown): value is SidecarLaunchSpec {
-  return isExecutableLaunchSpec(value);
 }
 
 function isSidecarManifest(value: unknown): value is SidecarManifest {
@@ -123,24 +110,6 @@ function isSidecarManifest(value: unknown): value is SidecarManifest {
   );
 }
 
-function isLegacySidecarManifest(value: unknown): value is LegacySidecarManifest {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.filename === "string" &&
-    candidate.filename.length > 0 &&
-    typeof candidate.targetTriple === "string" &&
-    candidate.targetTriple.length > 0 &&
-    typeof candidate.platform === "string" &&
-    candidate.platform.length > 0 &&
-    typeof candidate.arch === "string" &&
-    candidate.arch.length > 0
-  );
-}
-
 type FindPackagedSidecarLaunchOptions = {
   explicitPath?: string;
   platform?: NodeJS.Platform;
@@ -157,27 +126,10 @@ function resolveRelativeManifestPath(dir: string, target: string): string {
 
 function buildSidecarLaunchCommand(
   dir: string,
-  manifest: SidecarManifest | LegacySidecarManifest,
+  manifest: SidecarManifest,
   existsSync: typeof fs.existsSync,
   manifestPath?: string,
 ): SidecarLaunchCommand {
-  if (isLegacySidecarManifest(manifest)) {
-    const command = resolveRelativeManifestPath(dir, manifest.filename);
-    if (!existsSync(command)) {
-      throw new Error(
-        `Bundled sidecar manifest points to a missing binary: ${manifestPath ?? dir} -> ${manifest.filename}`,
-      );
-    }
-    return {
-      command,
-      args: [],
-      targetTriple: manifest.targetTriple,
-      platform: manifest.platform,
-      arch: manifest.arch,
-      manifestPath,
-    };
-  }
-
   const command = resolveRelativeManifestPath(dir, manifest.launch.path);
   if (!existsSync(command)) {
     throw new Error(
@@ -249,7 +201,7 @@ export function findPackagedSidecarLaunchCommand(
         );
       }
 
-      if (!isSidecarManifest(parsed) && !isLegacySidecarManifest(parsed)) {
+      if (!isSidecarManifest(parsed)) {
         throw new Error(`Bundled sidecar manifest is invalid: ${manifestPath}`);
       }
 

@@ -18,7 +18,7 @@ import { z } from "zod";
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 export const PROVIDER_SPECS_SOURCE_REL = "config/providers.json";
 export const GENERATED_PROVIDER_SPECS_REL = "src/generated/providerSpecs.ts";
-const GENERATED_WS_SCHEMA_REL = "docs/generated/websocket-jsonrpc.schema.json";
+const WS_SCHEMA_REL = "crates/cowork-protocol/src/ws_jsonrpc_schema.json";
 const MODELS_DIR_REL = "config/models";
 const GENERATE_COMMAND = "bun run providers:generate";
 
@@ -319,7 +319,7 @@ export async function checkProviderSpecs(): Promise<string[]> {
     }
   }
 
-  const schemaRaw = await readOptionalText(GENERATED_WS_SCHEMA_REL);
+  const schemaRaw = await readOptionalText(WS_SCHEMA_REL);
   if (schemaRaw !== null) {
     const enums: string[][] = [];
     collectProviderEnums(JSON.parse(schemaRaw), providerIds, enums);
@@ -327,7 +327,7 @@ export async function checkProviderSpecs(): Promise<string[]> {
     const drifted = enums.filter((values) => values.join(",") !== canonical);
     if (drifted.length > 0) {
       failures.push(
-        `${GENERATED_WS_SCHEMA_REL} has ${String(drifted.length)} provider enum(s) that differ from ${PROVIDER_SPECS_SOURCE_REL} (expected [${canonical}], e.g. got [${drifted[0]?.join(",")}]); update crates/cowork-protocol/src/ws_jsonrpc_schema.json and run \`bun run docs:generate-jsonrpc\``,
+        `${WS_SCHEMA_REL} has ${String(drifted.length)} provider enum(s) that differ from ${PROVIDER_SPECS_SOURCE_REL} (expected [${canonical}], e.g. got [${drifted[0]?.join(",")}]); update the provider enums in ${WS_SCHEMA_REL}`,
       );
     }
   }

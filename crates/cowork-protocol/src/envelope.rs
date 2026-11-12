@@ -310,7 +310,6 @@ pub fn decode_client_message_bytes(
 /// Classifies whether an outbound JSON-RPC-lite frame is an evictable streaming delta under backpressure.
 ///
 /// Exact parity with `src/server/runtime/SocketSendQueue.ts`:
-/// - `method == "model_stream_chunk"`
 /// - `method == "item/agentMessage/delta"`
 /// - `method == "item/reasoning/delta"`
 /// - `params.type == "agentMessage/delta"`
@@ -319,10 +318,7 @@ pub fn is_evictable_stream_delta(payload: &Value) -> bool {
         return false;
     };
     if let Some(method) = obj.get("method").and_then(Value::as_str)
-        && matches!(
-            method,
-            "model_stream_chunk" | "item/agentMessage/delta" | "item/reasoning/delta"
-        )
+        && matches!(method, "item/agentMessage/delta" | "item/reasoning/delta")
     {
         return true;
     }

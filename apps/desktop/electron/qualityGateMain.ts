@@ -88,7 +88,9 @@ type QualityLifecycle = {
   networkGuardInstalled: number;
 };
 
-type QualityDeltaBurstPath = "legacy-chunk" | "legacy-raw" | "projected";
+// Mirrors the Rust server's projected streaming notifications
+// (item/started → item/agentMessage/delta → item/completed).
+type QualityDeltaBurstPath = "projected";
 
 type QualityDeltaBurstDescriptor = {
   count: number;
@@ -175,7 +177,6 @@ const pendingDeltaBursts = new Map<
   {
     descriptor: QualityDeltaBurstDescriptor;
     emitted: number;
-    streamId: string;
     timer: ReturnType<typeof setTimeout> | null;
     turnId: string;
   }
@@ -632,7 +633,7 @@ const hydratedTranscript: HydratedTranscriptSnapshot = {
       ts: "2026-07-09T11:57:00.000Z",
       name: "read",
       state: "output-available",
-      args: { path: "docs/ui-quality-audit-2026-07.md" },
+      args: { path: "docs/desktop-design-system.md" },
       result: "Audit loaded successfully.",
       completedAt: "2026-07-09T11:57:01.000Z",
     },
@@ -861,7 +862,7 @@ function emitStreamingActivity(): void {
       type: "toolCall",
       toolName: "read",
       state: "output-available",
-      args: { path: "docs/ui-quality-audit-2026-07.md" },
+      args: { path: "docs/desktop-design-system.md" },
       result: "Loaded the current audit and acceptance criteria.",
     },
     turnId,
@@ -922,16 +923,6 @@ function deltaBurstToken(path: QualityDeltaBurstPath, runId: number, index: numb
   return `[${path}:${runId}:${String(index).padStart(4, "0")}]`;
 }
 
-function sendLegacyStreamEvent(
-  path: Exclude<QualityDeltaBurstPath, "projected">,
-  event: Record<string, unknown>,
-): void {
-  sendNotification(path === "legacy-chunk" ? "model_stream_chunk" : "model_stream_raw", {
-    threadId: PROJECT_THREAD_ID,
-    ...event,
-  });
-}
-
 function emitNextDeltaBurstBatch(itemId: string): void {
   const pending = pendingDeltaBursts.get(itemId);
   if (!pending || pending.emitted >= pending.descriptor.count) {
@@ -942,44 +933,12 @@ function emitNextDeltaBurstBatch(itemId: string): void {
   while (pending.emitted < batchEnd) {
     const index = pending.emitted;
     const delta = deltaBurstToken(pending.descriptor.path, pending.descriptor.runId, index);
-    if (pending.descriptor.path === "projected") {
-      sendNotification("item/agentMessage/delta", {
-        threadId: PROJECT_THREAD_ID,
-        turnId: pending.turnId,
-        itemId,
-        delta,
-      });
-    } else if (pending.descriptor.path === "legacy-chunk") {
-      sendLegacyStreamEvent("legacy-chunk", {
-        type: "model_stream_chunk",
-        sessionId: PROJECT_THREAD_ID,
-        turnId: pending.turnId,
-        index: index + 1,
-        provider: "openai",
-        model: "gpt-5.2",
-        normalizerVersion: 1,
-        partType: "text_delta",
-        part: { id: pending.streamId, text: delta },
-      });
-    } else {
-      sendLegacyStreamEvent("legacy-raw", {
-        type: "model_stream_raw",
-        sessionId: PROJECT_THREAD_ID,
-        turnId: pending.turnId,
-        index: index + 2,
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        format: "openai-responses-v1",
-        normalizerVersion: 1,
-        event: {
-          type: "response.output_text.delta",
-          output_index: 0,
-          content_index: 0,
-          item_id: pending.streamId,
-          delta,
-        },
-      });
-    }
+    sendNotification("item/agentMessage/delta", {
+      threadId: PROJECT_THREAD_ID,
+      turnId: pending.turnId,
+      itemId,
+      delta,
+    });
     pending.emitted += 1;
   }
   pending.timer =
@@ -996,7 +955,6 @@ function emitDeltaBurst(
   const boundedCount = Math.max(1, Math.min(10_000, Math.floor(count)));
   const itemId = `quality-delta-${path}-${runId}`;
   const turnId = `quality-performance-turn-${path}-${runId}`;
-  const streamId = `quality-performance-stream-${path}-${runId}`;
   const expectedText = Array.from({ length: boundedCount }, (_, index) =>
     deltaBurstToken(path, runId, index),
   ).join("");
@@ -1011,7 +969,6 @@ function emitDeltaBurst(
   pendingDeltaBursts.set(itemId, {
     descriptor,
     emitted: 0,
-    streamId,
     timer: null,
     turnId,
   });
@@ -1019,62 +976,15 @@ function emitDeltaBurst(
     threadId: PROJECT_THREAD_ID,
     turn: { id: turnId, status: "inProgress" },
   });
-  if (path === "projected") {
-    sendProjectedItem(
-      "item/started",
-      {
-        id: itemId,
-        type: "agentMessage",
-        text: "",
-      },
-      turnId,
-    );
-  } else if (path === "legacy-chunk") {
-    sendLegacyStreamEvent("legacy-chunk", {
-      type: "model_stream_chunk",
-      sessionId: PROJECT_THREAD_ID,
-      turnId,
-      index: 0,
-      provider: "openai",
-      model: "gpt-5.2",
-      normalizerVersion: 1,
-      partType: "text_start",
-      part: { id: streamId },
-    });
-  } else {
-    sendLegacyStreamEvent("legacy-raw", {
-      type: "model_stream_raw",
-      sessionId: PROJECT_THREAD_ID,
-      turnId,
-      index: 0,
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { id: streamId, type: "message", role: "assistant", content: [] },
-      },
-    });
-    sendLegacyStreamEvent("legacy-raw", {
-      type: "model_stream_raw",
-      sessionId: PROJECT_THREAD_ID,
-      turnId,
-      index: 1,
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.content_part.added",
-        output_index: 0,
-        content_index: 0,
-        item_id: streamId,
-        part: { type: "output_text", text: "", annotations: [] },
-      },
-    });
-  }
+  sendProjectedItem(
+    "item/started",
+    {
+      id: itemId,
+      type: "agentMessage",
+      text: "",
+    },
+    turnId,
+  );
   const pending = pendingDeltaBursts.get(itemId);
   if (pending) {
     pending.timer = setTimeout(() => emitNextDeltaBurstBatch(itemId), 0);
@@ -1093,47 +1003,15 @@ function completeDeltaBurst(itemId: string): void {
     );
   }
   pendingDeltaBursts.delete(itemId);
-  if (pending.descriptor.path === "projected") {
-    sendProjectedItem(
-      "item/completed",
-      {
-        id: itemId,
-        type: "agentMessage",
-        text: pending.descriptor.expectedText,
-      },
-      pending.turnId,
-    );
-  } else if (pending.descriptor.path === "legacy-chunk") {
-    sendLegacyStreamEvent("legacy-chunk", {
-      type: "model_stream_chunk",
-      sessionId: PROJECT_THREAD_ID,
-      turnId: pending.turnId,
-      index: pending.descriptor.count + 1,
-      provider: "openai",
-      model: "gpt-5.2",
-      normalizerVersion: 1,
-      partType: "text_end",
-      part: { id: pending.streamId },
-    });
-  } else {
-    sendLegacyStreamEvent("legacy-raw", {
-      type: "model_stream_raw",
-      sessionId: PROJECT_THREAD_ID,
-      turnId: pending.turnId,
-      index: pending.descriptor.count + 2,
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.output_text.done",
-        output_index: 0,
-        content_index: 0,
-        item_id: pending.streamId,
-        text: pending.descriptor.expectedText,
-      },
-    });
-  }
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: itemId,
+      type: "agentMessage",
+      text: pending.descriptor.expectedText,
+    },
+    pending.turnId,
+  );
   sendNotification("turn/completed", {
     threadId: PROJECT_THREAD_ID,
     turn: { id: pending.turnId, status: "completed" },

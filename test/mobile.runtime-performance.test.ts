@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { MOBILE_RUNTIME_PROFILE_BUDGET } from "../apps/mobile/src/features/cowork/mobilePerformanceContracts";
+import { MOBILE_RUNTIME_PROFILE_BUDGET } from "./fixtures/mobile-performance-budgets";
 import type { MobileRuntimeProfile } from "./fixtures/mobile-runtime-profile";
 
 const PROFILE_FIELDS: Array<keyof MobileRuntimeProfile> = [

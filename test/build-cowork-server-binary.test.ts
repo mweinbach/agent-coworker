@@ -4,13 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { buildServerBinary } from "../scripts/build_cowork_server_binary";
-import { scratchRoots } from "../src/platform/sandbox/policy";
+import { scratchRoots } from "../src/platform/scratchRoots";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
-} from "../src/platform/sandbox/windows";
+} from "../src/platform/windowsSandboxHelper";
 
 describe("standalone server bundles", () => {
   test("rejects repository-root output before compiling or deleting source resources", async () => {
@@ -93,6 +93,15 @@ describe("standalone server bundles", () => {
       try {
         await fs.mkdir(path.join(root, "prompts"));
         await fs.writeFile(path.join(root, "prompts", "system.md"), "bundled prompt");
+        await fs.mkdir(path.join(root, "prompts", "system-models", ".research"), {
+          recursive: true,
+        });
+        await fs.writeFile(
+          path.join(root, "prompts", "system-models", ".research", "notes.md"),
+          "maintainer notes",
+        );
+        await fs.mkdir(path.join(root, "docs"));
+        await fs.writeFile(path.join(root, "docs", "architecture.md"), "repo docs");
         const protectedFile = path.join(root, "Cargo.lock");
         await fs.writeFile(protectedFile, "protected lockfile");
         await fs.mkdir(path.dirname(outfile), { recursive: true });
@@ -167,6 +176,14 @@ describe("standalone server bundles", () => {
         expect(await fs.readFile(path.join(outputDir, "prompts", "system.md"), "utf8")).toBe(
           "bundled prompt",
         );
+        expect(await Bun.file(path.join(outputDir, "docs", "architecture.md")).exists()).toBe(
+          false,
+        );
+        expect(
+          await Bun.file(
+            path.join(outputDir, "prompts", "system-models", ".research", "notes.md"),
+          ).exists(),
+        ).toBe(false);
         expect(commands).toContainEqual([
           "cargo",
           "build",

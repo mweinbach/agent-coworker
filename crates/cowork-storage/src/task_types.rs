@@ -1135,26 +1135,3 @@ pub fn parse_and_validate_task_creation_input(
         review_rounds,
     })
 }
-
-/// Matches `getTaskInputResumeFailure` in `src/shared/tasks.ts`.
-pub fn get_task_input_resume_failure(task: &TaskRecord) -> Option<String> {
-    if task.status != TaskStatus::Failed {
-        return None;
-    }
-    let latest_status_change = task
-        .activity
-        .iter()
-        .filter(|a| a.kind == TaskActivityKind::StatusChanged)
-        .max_by_key(|a| a.seq)?;
-    let detail_raw = latest_status_change.detail.as_deref()?;
-    let parsed: Value = serde_json::from_str(detail_raw).ok()?;
-    if parsed.get("kind").and_then(Value::as_str) != Some("input_resume_failed") {
-        return None;
-    }
-    parsed
-        .get("message")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-}

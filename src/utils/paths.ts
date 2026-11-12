@@ -6,12 +6,6 @@ import {
   crossesProtectedMetadata,
 } from "../platform/paths";
 
-export function resolveMaybeRelative(p: string, baseDir: string): string {
-  if (!p) return p;
-  if (path.isAbsolute(p)) return path.normalize(p);
-  return path.normalize(path.join(baseDir, p));
-}
-
 export function isPathInside(parent: string, child: string): boolean {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
 
@@ -83,27 +77,4 @@ export async function resolvePathInsideRootForBoundaryCheck(
   }
 
   return canonicalTarget;
-}
-
-export function truncateText(s: string, maxChars: number): string {
-  if (s.length <= maxChars) return s;
-  // Count by code point so astral symbols (emoji, flags, CJK-ext) are never
-  // split mid-surrogate-pair into invalid UTF-16. Walk code points to find the
-  // UTF-16 end index, then slice once — no full-string allocation, so the BMP
-  // hot path stays cheap.
-  let count = 0;
-  let end = 0;
-  while (end < s.length && count < maxChars) {
-    const unit = s.charCodeAt(end);
-    const next = end + 1 < s.length ? s.charCodeAt(end + 1) : -1;
-    const isSurrogatePair = unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
-    end += isSurrogatePair ? 2 : 1;
-    count++;
-  }
-  return s.slice(0, end);
-}
-
-export function truncateLine(s: string, maxChars: number): string {
-  if (s.length <= maxChars) return s;
-  return `${s.slice(0, maxChars)}...`;
 }

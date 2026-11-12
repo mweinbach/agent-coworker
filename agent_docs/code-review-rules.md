@@ -32,5 +32,5 @@ Load this file when reviewing diffs. Apply these rules only when the changed cod
 ## Optimistic message identity (desktop)
 
 - Search for chat send, retry, steer, replay, or projection changes that drop or regenerate `clientMessageId`. Preserve the originating ID through JSON-RPC, server events, projected user items, retries, and reconciliation so an accepted send cannot render duplicate user messages.
-  - Where to look: `crates/cowork-server/src/turn_runner.rs`, `crates/cowork-inference/src/projector.rs`, `crates/cowork-protocol/src/projector.rs`, `apps/desktop/src/app/store.ts`
+  - Where to look: `crates/cowork-server/src/jsonrpc_turn.rs`, `crates/cowork-inference/src/projector.rs`, `crates/cowork-protocol/src/projector.rs`, `apps/desktop/src/app/store.ts`
   - Related: `repo-contracts.md` → Optimistic chat sends, JSON-RPC projector

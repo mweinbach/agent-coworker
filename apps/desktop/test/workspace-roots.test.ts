@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { scratchRoots } from "../../../src/platform/sandbox";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { WorkspaceRootsController } from "../electron/ipc/workspaceRoots";
 
 const temporaryDirectories: string[] = [];

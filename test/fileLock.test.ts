@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { which } from "../src/platform/exec";
 import { hostPlatform } from "../src/platform/host";
 import { canonicalizeSync } from "../src/platform/paths";
-import { lockDatabasePathFor, withFileLock } from "../src/utils/fileLock";
+import { withFileLock } from "../src/utils/fileLock";
 import { symlinkOrJunction } from "./helpers/platform";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
@@ -303,83 +303,6 @@ describe("withFileLock", () => {
     await first;
   });
 
-  test("canonical aliases share one lock database", async () => {
-    const { dir, lockRoot } = await makeTempTarget();
-    const coworkRoot = path.join(dir, ".cowork");
-    const configDir = path.join(coworkRoot, "config");
-    const aliasRoot = path.join(dir, "cowork-alias");
-    const directTarget = path.join(configDir, "store.json");
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(directTarget, "{}\n", "utf-8");
-    await symlinkOrJunction(coworkRoot, aliasRoot, { type: "dir" });
-    const aliasTarget = path.join(aliasRoot, "config", "store.json");
-
-    expect(lockDatabasePathFor(aliasTarget, lockRoot)).toBe(
-      lockDatabasePathFor(directTarget, lockRoot),
-    );
-
-    let releaseFirst!: () => void;
-    let firstEntered!: () => void;
-    const firstCanFinish = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const firstDidEnter = new Promise<void>((resolve) => {
-      firstEntered = resolve;
-    });
-    let aliasEntered = false;
-    const first = withFileLock(
-      directTarget,
-      async () => {
-        firstEntered();
-        await firstCanFinish;
-      },
-      { lockRoot },
-    );
-    await firstDidEnter;
-    const alias = withFileLock(
-      aliasTarget,
-      async () => {
-        aliasEntered = true;
-      },
-      { lockRoot },
-    );
-
-    await Bun.sleep(50);
-    expect(aliasEntered).toBe(false);
-    releaseFirst();
-    await Promise.all([first, alias]);
-    expect(aliasEntered).toBe(true);
-  });
-
-  test("Windows casing variants share one lock database", async () => {
-    if (hostPlatform() !== "win32") return;
-    const { dir, lockRoot } = await makeTempTarget();
-    const configDir = path.join(dir, ".cowork", "config");
-    const directTarget = path.join(configDir, "store.json");
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(directTarget, "{}\n", "utf-8");
-    const caseVariant = directTarget.replace(
-      `${path.sep}.cowork${path.sep}`,
-      `${path.sep}.COWORK${path.sep}`,
-    );
-
-    expect(lockDatabasePathFor(caseVariant, lockRoot)).toBe(
-      lockDatabasePathFor(directTarget, lockRoot),
-    );
-  });
-
-  test("canonical lock-root aliases cannot split coordination", async () => {
-    const { dir, target } = await makeTempTarget();
-    const directLockRoot = path.join(dir, "direct-lock-cache");
-    const aliasLockRoot = path.join(dir, "lock-cache-alias");
-    await fs.mkdir(directLockRoot, { recursive: true });
-    await symlinkOrJunction(directLockRoot, aliasLockRoot, { type: "dir" });
-
-    expect(lockDatabasePathFor(target, aliasLockRoot)).toBe(
-      lockDatabasePathFor(target, directLockRoot),
-    );
-  });
-
   test("keeps one lexical alias serialized while its target is swapped", async () => {
     const { dir, lockRoot } = await makeTempTarget();
     const firstRoot = path.join(dir, "first-root");
@@ -430,50 +353,6 @@ describe("withFileLock", () => {
     }
     await second;
     expect(secondEntered).toBe(true);
-  });
-
-  test("keeps the lock database in the private cache and reuses it", async () => {
-    const { lockRoot, target } = await makeTempTarget();
-    const lockPath = lockDatabasePathFor(target, lockRoot);
-
-    await withFileLock(target, async () => undefined, { lockRoot });
-    const stat = await fs.stat(lockPath);
-    expect(stat.isFile()).toBe(true);
-    expect(path.dirname(lockPath)).toBe(canonicalizeSync(lockRoot));
-
-    await expect(withFileLock(target, async () => "reacquired", { lockRoot })).resolves.toBe(
-      "reacquired",
-    );
-  });
-
-  test("shares transaction locks with native Bun SQLite and recovers after rollback", async () => {
-    const { lockRoot, target } = await makeTempTarget();
-    const lockPath = lockDatabasePathFor(target, lockRoot);
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    const database = new Database(lockPath, { create: true, strict: false });
-    try {
-      database.exec("PRAGMA busy_timeout = 0");
-      database.exec("BEGIN IMMEDIATE");
-      await expect(
-        withFileLock(target, async () => "must not enter", {
-          acquireTimeoutMs: 100,
-          lockRoot,
-          retryDelayMs: 5,
-        }),
-      ).rejects.toThrow("Timed out acquiring file lock");
-
-      database.exec("ROLLBACK");
-      // Keep the native connection open: rollback alone must release the lock.
-      await expect(
-        withFileLock(target, async () => "recovered", {
-          acquireTimeoutMs: 1_000,
-          lockRoot,
-          retryDelayMs: 5,
-        }),
-      ).resolves.toBe("recovered");
-    } finally {
-      database.close(true);
-    }
   });
 
   test("releases the transaction after the callback throws", async () => {

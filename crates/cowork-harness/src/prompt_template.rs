@@ -13,7 +13,7 @@ use cowork_config::{ChildModelRoutingMode, ProviderName};
 use regex::{Captures, NoExpand, Regex};
 use serde_json::{Map, Value};
 
-use cowork_providers::web_search_options::{
+use cowork_config::web_search_options::{
     google_native_web_search_enabled, local_web_search_provider,
 };
 

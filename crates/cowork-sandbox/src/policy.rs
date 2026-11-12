@@ -64,11 +64,6 @@ impl SandboxPolicy {
             Self::WorkspaceWrite { .. } => "workspace-write",
         }
     }
-
-    /// Returns whether outbound and loopback network access is permitted by this policy.
-    pub fn allows_network(&self) -> bool {
-        policy_allows_network(self)
-    }
 }
 
 /// Returns whether a policy allows network access (`DangerFullAccess` defaults to `true`).

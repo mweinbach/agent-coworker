@@ -265,14 +265,14 @@ Configuration merges across three tiers (each overrides the previous):
 1. Add JSON-RPC request/result/notification schemas in `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts`
 2. Add a `SessionEvent` type in `src/shared/protocol.ts` when consumed by clients
 3. Add handler in `crates/cowork-server/src/` or `crates/cowork-harness/`
-4. Document in `docs/websocket-protocol.md` and run `bun run docs:generate-jsonrpc` + `bun run docs:check`
+4. Document in `docs/websocket-protocol.md` and run `bun run docs:check`
 
 ### Adding a Provider
 
 Static provider metadata lives in `config/providers.json` (Rust: `crates/cowork-config/src/provider_specs.rs`; TypeScript: generated `src/generated/providerSpecs.ts`). The full checklist is in [`agent_docs/adding-models.md`](../agent_docs/adding-models.md#adding-a-provider).
 
-1. OpenAI-compatible Chat Completions provider: add a `config/providers.json` entry, the matching `ProviderName` variant in `crates/cowork-config/src/providers.rs`, `config/models/<provider>/*.json` (imported in `src/models/registry.ts`), optional quirks in `crates/cowork-providers/src/chat_completions/quirks.rs`, and the id in the provider enums of `crates/cowork-protocol/src/ws_jsonrpc_schema.json`; then run `bun run providers:generate` and `bun run docs:generate-jsonrpc`.
-2. New wire protocol: additionally add a `ProviderWireProtocol` variant, a transport module in `crates/cowork-providers/src/` (see `anthropic_messages.rs` / `google_interactions.rs`), its branch in `select_provider_transport` (`crates/cowork-server/src/turn_runner.rs`), and legacy replay conversion in `crates/cowork-inference/src/legacy_messages.rs` when it carries provider-specific state.
+1. OpenAI-compatible Chat Completions provider: add a `config/providers.json` entry, the matching `ProviderName` variant in `crates/cowork-config/src/providers.rs`, `config/models/<provider>/*.json` (imported in `src/models/registry.ts`), optional quirks in `crates/cowork-providers/src/chat_completions/quirks.rs`, and the id in the provider enums of `crates/cowork-protocol/src/ws_jsonrpc_schema.json`; then run `bun run providers:generate`.
+2. New wire protocol: additionally add a `ProviderWireProtocol` variant, a transport module in `crates/cowork-providers/src/` (see `anthropic_messages.rs` / `google_interactions.rs`), its branch in `select_provider_transport` (`crates/cowork-providers/src/connection.rs`, the single transport-selection point), and legacy replay conversion in `crates/cowork-inference/src/legacy_messages.rs` when it carries provider-specific state.
 3. `bun run docs:check` fails when the generated module is stale or provider enums/default models drift.
 
 ### Adding a Skill

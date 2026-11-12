@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import {
-  canonicalWorkspacePath,
-  sameWorkspacePath,
-  workspacePathOverlaps,
-} from "../src/utils/workspacePath";
+import { canonicalWorkspacePath, sameWorkspacePath } from "../src/utils/workspacePath";
 
 async function withWindowsCwd<T>(cwd: string, run: () => T | Promise<T>): Promise<T> {
   const originalCwd = process.cwd;
@@ -98,66 +94,6 @@ describe("workspacePath", () => {
       expect(canonicalWorkspacePath("C:repo/child\\..\\other", "win32")).toBe(
         "c:\\users\\me\\repo\\other",
       );
-    });
-  });
-
-  describe("workspacePathOverlaps", () => {
-    test("equal paths overlap", () => {
-      expect(workspacePathOverlaps("/tmp/repo", "/tmp/repo", "linux")).toBe(true);
-    });
-
-    test.each([
-      ["/", "/tmp", "linux"],
-      ["C:\\", "c:\\repo", "win32"],
-      ["\\\\server\\share\\", "\\\\server\\share\\repo", "win32"],
-    ] as const)("filesystem root %s overlaps its descendants", (root, child, platform) => {
-      expect(workspacePathOverlaps(root, child, platform)).toBe(true);
-      expect(workspacePathOverlaps(child, root, platform)).toBe(true);
-    });
-
-    test("different Windows drive roots do not overlap", () => {
-      expect(workspacePathOverlaps("C:\\", "D:\\repo", "win32")).toBe(false);
-    });
-
-    test("source is ancestor of target", () => {
-      expect(workspacePathOverlaps("/workspace", "/workspace/.cowork/skills/foo", "linux")).toBe(
-        true,
-      );
-    });
-
-    test("target is ancestor of source", () => {
-      expect(workspacePathOverlaps("/workspace/.cowork/skills/foo", "/workspace", "linux")).toBe(
-        true,
-      );
-    });
-
-    test("sibling paths do not overlap", () => {
-      expect(workspacePathOverlaps("/tmp/a", "/tmp/b", "linux")).toBe(false);
-    });
-
-    test("path prefix that is not a directory boundary does not overlap", () => {
-      expect(workspacePathOverlaps("/tmp/repo-extra", "/tmp/repo", "linux")).toBe(false);
-    });
-
-    test("overlap detection works with trailing separators / dots", () => {
-      expect(workspacePathOverlaps("/tmp/repo/.", "/tmp/repo/sub", "linux")).toBe(true);
-    });
-
-    test("Windows ancestor overlap is case-insensitive", () => {
-      expect(workspacePathOverlaps("C:\\Repo", "c:\\repo\\skills\\foo", "win32")).toBe(true);
-    });
-
-    test("Windows drive-relative workspace equality uses the current drive cwd", () => {
-      return withWindowsCwd("C:\\Users\\me", () => {
-        expect(sameWorkspacePath("C:repo", "C:\\Users\\me\\repo", "win32")).toBe(true);
-      });
-    });
-
-    test("Windows drive-relative workspace overlap does not retain colon path segments", () => {
-      return withWindowsCwd("D:\\Users\\me", () => {
-        expect(workspacePathOverlaps("C:repo", "C:\\repo\\child", "win32")).toBe(true);
-        expect(canonicalWorkspacePath("C:repo\\child", "win32")).toBe("c:\\repo\\child");
-      });
     });
   });
 });

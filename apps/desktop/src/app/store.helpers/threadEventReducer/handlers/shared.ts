@@ -2,17 +2,12 @@ import type { StoreGet, StoreSet } from "../../../store.helpers";
 import type { ThreadEventReducerContext } from "../context";
 import type { FeedProjectionModule } from "../feedProjection";
 import type { MessagingModule } from "../messaging";
-import type { WorkspaceStateHelpers } from "../workspaceState";
 
 export type HandlerModuleContext = {
   ctx: ThreadEventReducerContext;
   pushFeedItem: FeedProjectionModule["pushFeedItem"];
-  insertFeedItemBefore: FeedProjectionModule["insertFeedItemBefore"];
-  applyModelStreamUpdateToThreadFeed: FeedProjectionModule["applyModelStreamUpdateToThreadFeed"];
   flushPendingContentForThread: FeedProjectionModule["flushPendingContentForThread"];
-  recordPendingThreadEvent: FeedProjectionModule["recordPendingThreadEvent"];
   flushOneQueuedThreadMessageIfReady: MessagingModule["flushOneQueuedThreadMessageIfReady"];
-  resetLiveModelStreamRuntime: WorkspaceStateHelpers["resetLiveModelStreamRuntime"];
 };
 
 type HandlerDispatchArgs = {

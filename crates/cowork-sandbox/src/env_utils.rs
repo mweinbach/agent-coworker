@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Parent-managed sidecar lifecycle variable that MUST never leak into child processes.
 pub const PARENT_MANAGED_ENV_VAR: &str = "COWORK_DESKTOP_PARENT_MANAGED";
@@ -70,16 +70,7 @@ const SANDBOX_ENV_ALLOWLIST_WIN32_EXTRA: &[&str] = &[
     "PYTHONIOENCODING",
 ];
 
-/// Returns the Node-compatible host platform identifier (`"darwin"`, `"linux"`, `"win32"`).
-pub const fn host_platform() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "darwin"
-    } else if cfg!(target_os = "windows") {
-        "win32"
-    } else {
-        "linux"
-    }
-}
+pub use cowork_config::host_platform;
 
 /// Returns the Node-compatible host architecture identifier (`"arm64"`, `"x64"`, `"ia32"`).
 pub const fn host_arch() -> &'static str {
@@ -137,15 +128,6 @@ pub fn remove_env(env: &mut HashMap<String, String>, name: &str, platform: &str)
     } else {
         env.remove(name);
     }
-}
-
-/// Returns the set of environment variable names allowed through to sandboxed child commands.
-pub fn sandbox_env_allowlist(platform: &str) -> HashSet<&'static str> {
-    let mut set: HashSet<&'static str> = SANDBOX_ENV_ALLOWLIST_BASE.iter().copied().collect();
-    if platform == "win32" {
-        set.extend(SANDBOX_ENV_ALLOWLIST_WIN32_EXTRA.iter().copied());
-    }
-    set
 }
 
 /// Builds the minimal redacted environment map for a sandboxed child process.

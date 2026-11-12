@@ -24,7 +24,6 @@ use regex::Regex;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use super::js_json::{JsJson, JsObjectWriter, js_string_coerce};
 
@@ -337,7 +336,7 @@ pub struct ConversationImportRunInput {
 // =============================================================================
 
 fn sha256_hex(text: &str) -> String {
-    hex::encode(Sha256::digest(text.as_bytes()))
+    cowork_storage::sha256_hex(text.as_bytes())
 }
 
 /// Hashes `serde_json` output. Only used for objects whose keys are already in alphabetical

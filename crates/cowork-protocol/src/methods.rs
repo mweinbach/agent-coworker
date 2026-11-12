@@ -1,8 +1,10 @@
 //! Authoritative JSON-RPC-lite method registry and canonical wire JSON Schema export.
 //!
-//! Consumed by `packages/harness/src/generate_ws_jsonrpc_schema.ts` (`bun run docs:generate-jsonrpc`)
-//! and `packages/harness/src/check_docs.ts` (`bun run docs:check`) so Rust `cowork-protocol` is the
-//! single source of truth for method registration and `docs/generated/websocket-jsonrpc.schema.json`.
+//! The embedded `ws_jsonrpc_schema.json` (in this crate) is the single source of truth for the wire
+//! schema: `packages/harness/src/generate_provider_specs.ts` reads it directly, and
+//! `packages/harness/src/protocolManifest.ts` exports the method/schema manifest via the
+//! `cowork-protocol-manifest` bin (or `cowork-server __export-jsonrpc-schema --manifest`) for
+//! `packages/harness/src/check_docs.ts` (`bun run docs:check`).
 
 use serde_json::Value;
 
@@ -388,8 +390,8 @@ pub const SERVER_REQUEST_METHODS: &[&str] = &[
     "item/commandExecution/requestApproval",
 ];
 
-/// Returns the canonical minified JSON Schema document written to
-/// `docs/generated/websocket-jsonrpc.schema.json`.
+/// Returns the canonical minified JSON Schema document (`ws_jsonrpc_schema.json`, embedded at
+/// build time; emitted by `cowork-server __export-jsonrpc-schema`).
 pub fn export_websocket_jsonrpc_schema_json() -> &'static str {
     CANONICAL_WS_JSONRPC_SCHEMA_JSON
 }

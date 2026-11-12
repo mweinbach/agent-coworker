@@ -12,7 +12,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
+use cowork_config::now_iso;
 use cowork_config::{
     AgentConfig, FileLockOptions, file_lock_root_for_cowork_home, with_file_lock_sync,
     write_text_file_atomic,
@@ -94,10 +95,6 @@ pub fn default_global_skills_failure_file(cfg: &AgentConfig) -> PathBuf {
     cfg.user_cowork_dir
         .join("config")
         .join(DEFAULT_SKILLS_FAILURE_FILE)
-}
-
-fn now_iso() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {

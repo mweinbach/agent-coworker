@@ -42,23 +42,3 @@ export function describeTransportStatus(
       return "Ready";
   }
 }
-
-export function toneForTransportState(
-  state: Pick<SecureTransportSnapshot, "status" | "transportMode">,
-): "neutral" | "success" | "warning" | "danger" {
-  if (isWorkspaceConnectionReady(state)) {
-    return "success";
-  }
-  if (state.transportMode === "unsupported" || state.status === "error") {
-    return "danger";
-  }
-  if (
-    state.transportMode === "fallback" ||
-    state.status === "connecting" ||
-    state.status === "reconnecting" ||
-    state.status === "pairing"
-  ) {
-    return "warning";
-  }
-  return "neutral";
-}

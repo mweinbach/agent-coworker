@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { scanComplexity } from "../scripts/complexity";
 import { compareRepositoryComplexity } from "../scripts/complexityCompare";
-import { scratchRoots } from "../src/platform/sandbox/policy";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 function git(root: string, args: string[]) {
   const result = Bun.spawnSync(

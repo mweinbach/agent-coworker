@@ -64,10 +64,6 @@ impl StateChangeHub {
         self.listeners.lock().retain(|(lid, _)| *lid != id);
     }
 
-    pub fn listener_count(&self) -> usize {
-        self.listeners.lock().len()
-    }
-
     /// Runs every listener (outside the registry lock).
     pub fn notify(&self) {
         let listeners: Vec<Listener> = self

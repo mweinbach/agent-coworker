@@ -11,6 +11,12 @@ import {
 } from "lucide-react";
 import type { WheelEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  activityTimestampMs,
+  firstActivityTimestampMs,
+  formatActivityElapsedMs,
+} from "../../../../../src/shared/activityGroups";
+import { normalizeReasoningMarkdown } from "../../../../../src/shared/markdownPreview";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader } from "../../components/ui/card";
@@ -24,15 +30,11 @@ import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
 import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
 import {
-  activityTimestampMs,
-  firstActivityTimestampMs,
   formatActivityContentSummary,
-  formatActivityElapsedMs,
   hasTrailingUnrecoveredToolFailure,
   summarizeActivityGroup,
 } from "./activityGroups";
 import { bucketTimelineEntries, TimelineNode, ToolClusterNode } from "./activityToolCluster";
-import { normalizeReasoningMarkdown } from "./markdownPreview";
 import {
   captureScrollAnchor,
   countNewIds,

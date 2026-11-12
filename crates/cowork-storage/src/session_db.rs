@@ -16,15 +16,15 @@ use crate::migrations::{bootstrap_session_db, get_applied_migration_versions};
 use crate::types::{
     AgentExecutionState, ConversationImportPersistResult, CreateTaskInput,
     PersistedExternalConversationImport, PersistedExternalConversationImportMutation,
-    PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord,
-    PersistedSessionSnapshotData, PersistedSessionSummary, PersistedThreadJournalEvent,
-    PersistedThreadJournalFailure, PersistedThreadMetadata, PersistedThreadMetadataPatch,
-    SessionDbOptions, SessionKind, SessionPersistenceStatus, SessionTitleSource,
-    StartupReconciliationReport, ThreadJournalEventInput,
+    PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
+    PersistedSessionSummary, PersistedThreadJournalEvent, PersistedThreadJournalFailure,
+    PersistedThreadMetadata, PersistedThreadMetadataPatch, SessionDbOptions, SessionKind,
+    SessionPersistenceStatus, SessionTitleSource, StartupReconciliationReport,
+    ThreadJournalEventInput,
 };
 use crate::write_coordinator::{
     SessionDbWriteCoordinator, SessionDbWriteCoordinatorOptions, SessionDbWriteLockDiagnostics,
-    now_iso_millis,
+    now_iso,
 };
 
 pub const DEFAULT_BUSY_TIMEOUT_MS: u64 = 5_000;
@@ -292,7 +292,7 @@ impl SessionDb {
             .get("updatedAt")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(now_iso_millis);
+            .unwrap_or_else(now_iso);
         let serialized = serde_json::to_string(snapshot)?;
         let sid = session_id.to_string();
 
@@ -707,44 +707,6 @@ impl SessionDb {
         })
     }
 
-    pub async fn persist_model_stream_chunks(
-        &self,
-        chunks: &[PersistedModelStreamChunk],
-    ) -> Result<()> {
-        if chunks.is_empty() {
-            return Ok(());
-        }
-        self.write_coordinator
-            .run_exclusive("persist_model_stream_chunks", || async {
-                self.with_rw_conn_mut(|conn| {
-                    let tx = conn.transaction()?;
-                    for c in chunks {
-                        let raw_json = serde_json::to_string(&c.raw_event)?;
-                        tx.execute(
-                            "INSERT INTO session_model_stream_chunks (
-                               session_id, turn_id, chunk_index, ts, provider, model,
-                               raw_format, normalizer_version, raw_event_json
-                             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                            params![
-                                c.session_id,
-                                c.turn_id,
-                                c.chunk_index as i64,
-                                c.ts,
-                                c.provider.as_str(),
-                                c.model,
-                                c.raw_format,
-                                c.normalizer_version as i64,
-                                raw_json,
-                            ],
-                        )?;
-                    }
-                    tx.commit()?;
-                    Ok(())
-                })
-            })
-            .await
-    }
-
     pub async fn append_thread_journal_events(
         &self,
         events: &[ThreadJournalEventInput],
@@ -1017,16 +979,16 @@ impl SessionDb {
                     let next_pinned = patch.pinned.unwrap_or(cur_pinned != 0);
                     let next_pinned_at = match patch.pinned_at {
                         Some(val) => val,
-                        None if next_pinned => cur_pinned_at.or_else(|| Some(now_iso_millis())),
+                        None if next_pinned => cur_pinned_at.or_else(|| Some(now_iso())),
                         None => None,
                     };
                     let next_archived = patch.archived.unwrap_or(cur_archived != 0);
                     let next_archived_at = match patch.archived_at {
                         Some(val) => val,
-                        None if next_archived => cur_archived_at.or_else(|| Some(now_iso_millis())),
+                        None if next_archived => cur_archived_at.or_else(|| Some(now_iso())),
                         None => None,
                     };
-                    let updated_at = patch.updated_at.unwrap_or_else(now_iso_millis);
+                    let updated_at = patch.updated_at.unwrap_or_else(now_iso);
 
                     conn.execute(
                         "INSERT INTO thread_metadata (
@@ -1093,7 +1055,7 @@ impl SessionDb {
         self.write_coordinator
             .run_exclusive("bind_thread_creation_key", || async move {
                 self.with_rw_conn_mut(|conn| {
-                    let now = now_iso_millis();
+                    let now = now_iso();
                     conn.execute(
                         "INSERT OR IGNORE INTO thread_creation_keys (
                            creation_key, thread_id, created_at, updated_at
@@ -1134,7 +1096,7 @@ impl SessionDb {
                     // another process waits on `busy_timeout` instead of reading a stale binding.
                     let tx =
                         conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                    let now = now_iso_millis();
+                    let now = now_iso();
                     tx.execute(
                         "INSERT OR IGNORE INTO thread_creation_keys (
                            creation_key, thread_id, created_at, updated_at
@@ -1180,70 +1142,6 @@ impl SessionDb {
     ) -> Result<Option<PersistedExternalConversationImport>> {
         self.with_read_conn(|conn| {
             read_external_conversation_import_from_conn(conn, source, fingerprint)
-        })
-    }
-
-    pub fn list_external_conversation_imports(
-        &self,
-        source: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<Vec<PersistedExternalConversationImport>> {
-        let clamped_limit = limit.unwrap_or(250).clamp(1, 1000) as i64;
-        self.with_read_conn(|conn| {
-            let mut out = Vec::new();
-            let raw_rows: Vec<_> = if let Some(src) = source {
-                let mut stmt = conn.prepare(
-                    "SELECT source, fingerprint, imported_session_id, source_id, source_path,
-                            original_provider, original_model, imported_at, metadata_json
-                     FROM external_conversation_imports
-                     WHERE source = ?1
-                     ORDER BY imported_at DESC
-                     LIMIT ?2",
-                )?;
-                let iter = stmt.query_map(
-                    params![src, clamped_limit],
-                    map_external_conversation_import_row,
-                )?;
-                iter.collect::<rusqlite::Result<Vec<_>>>()?
-            } else {
-                let mut stmt = conn.prepare(
-                    "SELECT source, fingerprint, imported_session_id, source_id, source_path,
-                            original_provider, original_model, imported_at, metadata_json
-                     FROM external_conversation_imports
-                     ORDER BY imported_at DESC
-                     LIMIT ?1",
-                )?;
-                let iter =
-                    stmt.query_map(params![clamped_limit], map_external_conversation_import_row)?;
-                iter.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-            for (
-                src,
-                fingerprint,
-                imported_session_id,
-                source_id,
-                source_path,
-                original_provider,
-                original_model,
-                imported_at,
-                metadata_json,
-            ) in raw_rows
-            {
-                let metadata: Value =
-                    serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({}));
-                out.push(PersistedExternalConversationImport {
-                    source: src,
-                    fingerprint,
-                    imported_session_id,
-                    source_id,
-                    source_path,
-                    original_provider,
-                    original_model,
-                    imported_at,
-                    metadata,
-                });
-            }
-            Ok(out)
         })
     }
 
@@ -1330,7 +1228,7 @@ impl SessionDb {
                         .get("updatedAt")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned)
-                        .unwrap_or_else(now_iso_millis);
+                        .unwrap_or_else(now_iso);
                     let serialized_snapshot = serde_json::to_string(&full_snapshot)?;
                     tx.execute(
                         "INSERT INTO session_snapshots (session_id, updated_at, snapshot_json)
@@ -1931,7 +1829,7 @@ fn reconcile_stale_execution_states_sync(
     workspace_filter: Option<&str>,
 ) -> Result<StartupReconciliationReport> {
     let tx = conn.transaction()?;
-    let now = now_iso_millis();
+    let now = now_iso();
 
     let candidates: Vec<(String, String)> = {
         let mut stmt = tx.prepare(

@@ -620,32 +620,6 @@ impl AdvancedMemoryStore {
         })
     }
 
-    pub fn rename_folder(&self, from_folder: &str, to_folder: &str) -> ToolResult<()> {
-        let from_clean = sanitize_folder_key(from_folder)?;
-        let to_clean = sanitize_folder_key(to_folder)?;
-        let base = self.memories_base_dir();
-        let src = base.join(from_clean);
-        let dst = base.join(to_clean);
-        if !src.exists() {
-            return Err(ToolError::Execution(format!(
-                "Memory folder '{from_folder}' does not exist."
-            )));
-        }
-        fs::rename(src, dst)
-            .map_err(|e| ToolError::Execution(format!("Failed to rename memory folder: {e}")))
-    }
-
-    pub fn delete_folder(&self, folder: &str) -> ToolResult<bool> {
-        let clean = sanitize_folder_key(folder)?;
-        let target = self.memories_base_dir().join(clean);
-        if !target.exists() {
-            return Ok(false);
-        }
-        fs::remove_dir_all(target)
-            .map_err(|e| ToolError::Execution(format!("Failed to delete memory folder: {e}")))?;
-        Ok(true)
-    }
-
     pub fn read_index_summary(&self) -> String {
         let mut sections = Vec::new();
         for (scope, dir) in self.readable_scope_dirs() {

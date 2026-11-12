@@ -130,19 +130,27 @@ describe("desktop sidecar packaging helpers", () => {
     });
   });
 
-  test("findPackagedSidecarLaunchCommand rejects legacy Bun sidecar manifests", () => {
+  test.each([
+    {
+      name: "Bun launch spec",
+      shape: {
+        launch: {
+          kind: "bun",
+          runtime: "bun.exe",
+          entrypoint: "server/index.js",
+          args: ["--legacy"],
+        },
+      },
+    },
+    { name: "filename-only", shape: { filename: "cowork-server.exe" } },
+  ])("findPackagedSidecarLaunchCommand rejects legacy $name sidecar manifests", ({ shape }) => {
     const dir = path.join(path.sep, "bundle", "Resources", "binaries");
     const manifestPath = path.join(dir, SIDECAR_MANIFEST_NAME);
     const manifest = {
       targetTriple: "aarch64-pc-windows-msvc",
       platform: "win32",
       arch: "arm64",
-      launch: {
-        kind: "bun",
-        runtime: "bun.exe",
-        entrypoint: "server/index.js",
-        args: ["--legacy"],
-      },
+      ...shape,
     };
 
     expect(() =>
@@ -169,20 +177,16 @@ describe("desktop sidecar packaging helpers", () => {
     { platform: "win32", arch: "arm64", targetTriple: "x86_64-pc-windows-msvc" },
   ])("rejects sidecar manifests incompatible with the native Windows ARM64 host: %j", (target) => {
     const dir = path.join(path.sep, "bundle", "Resources", "binaries");
-    for (const launch of [
-      { launch: { kind: "executable", path: "cowork-server.exe" } },
-      { filename: "cowork-server.exe" },
-    ]) {
-      expect(() =>
-        findPackagedSidecarLaunchCommand([dir], {
-          platform: "win32",
-          arch: "arm64",
-          existsSync: () => true,
-          readFileSync: () => JSON.stringify({ ...target, ...launch }),
-          readdirSync: () => [],
-        }),
-      ).toThrow("this host requires win32/arm64 (aarch64-pc-windows-msvc)");
-    }
+    const launch = { kind: "executable", path: "cowork-server.exe" };
+    expect(() =>
+      findPackagedSidecarLaunchCommand([dir], {
+        platform: "win32",
+        arch: "arm64",
+        existsSync: () => true,
+        readFileSync: () => JSON.stringify({ ...target, launch }),
+        readdirSync: () => [],
+      }),
+    ).toThrow("this host requires win32/arm64 (aarch64-pc-windows-msvc)");
   });
 
   test("findPackagedSidecarLaunchCommand falls back to the expected exact filename", () => {

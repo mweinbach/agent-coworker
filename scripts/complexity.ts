@@ -37,9 +37,7 @@ export function buildComplexityReport(files: TrackedFile[], rawBiomeReport: unkn
         ? "(root)"
         : ["apps", "packages", "crates"].includes(parts[0])
           ? parts.slice(0, 2).join("/")
-          : file.path.startsWith("src/server/")
-            ? "src/server"
-            : parts[0];
+          : parts[0];
     const summary = areas.get(area) ?? { area, files: 0, textLines: 0 };
     summary.files += 1;
     summary.textLines += file.lines ?? 0;

@@ -450,7 +450,7 @@ fn import_workspace_creation_preserves_unknown_workspace_fields() {
     existing["userProfile"] = json!({ "instructions": "be brief" });
     existing["defaultAllowedChildModelRefs"] = json!(["openai:gpt-5"]);
     existing["defaultSkillImprovementEnabled"] = json!(true);
-    svc.save_state_json(json!({ "workspaces": [existing] }), &env.workspace)
+    svc.save_state_json(json!({ "workspaces": [existing] }))
         .unwrap();
 
     let target = env.workspace.parent().unwrap().join("imported-target");

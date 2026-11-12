@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, params};
 
 use crate::error::Result;
-use crate::write_coordinator::now_iso_millis;
+use crate::write_coordinator::now_iso;
 
 pub const BASE_SCHEMA_MIGRATION: u32 = 1;
 pub const LEGACY_IMPORT_MIGRATION: u32 = 2;
@@ -159,10 +159,7 @@ where
         ensure_artifact_revision_settlement_status_column(&tx)?;
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-            params![
-                TASK_ARTIFACT_REVISION_SETTLEMENT_MIGRATION,
-                now_iso_millis()
-            ],
+            params![TASK_ARTIFACT_REVISION_SETTLEMENT_MIGRATION, now_iso()],
         )?;
         tx.commit()?;
     }
@@ -208,7 +205,7 @@ pub fn get_applied_migration_versions(conn: &Connection) -> Result<BTreeSet<u32>
 fn mark_migration(conn: &Connection, version: u32) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-        params![version, now_iso_millis()],
+        params![version, now_iso()],
     )?;
     Ok(())
 }

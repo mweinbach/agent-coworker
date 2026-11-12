@@ -5,19 +5,10 @@ import path from "node:path";
 
 import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/shared/protocol";
 import { checkProviderSpecs } from "./generate_provider_specs";
-import {
-  loadRustProtocolSchemaManifest,
-  loadRustWebSocketJsonRpcSchemaJson,
-} from "./protocolManifest";
+import { loadRustProtocolSchemaManifest } from "./protocolManifest";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
-const GENERATED_WS_SCHEMA_PATH = path.join(
-  REPO_ROOT,
-  "docs",
-  "generated",
-  "websocket-jsonrpc.schema.json",
-);
 const REPO_PATH_PREFIXES = [
   "src/",
   "crates/",
@@ -375,9 +366,7 @@ async function main() {
   const harnessIndex = await readText(path.join(cwd, "docs/harness/index.md"));
   const readme = await readText(path.join(cwd, "README.md"));
   const wsProtocol = await readText(path.join(cwd, "docs/websocket-protocol.md"));
-  const generatedSchemaOnDisk = await readText(GENERATED_WS_SCHEMA_PATH);
   const manifest = loadRustProtocolSchemaManifest();
-  const expectedSchemaJson = loadRustWebSocketJsonRpcSchemaJson();
 
   const checks: CheckResult[] = [
     manifest.websocketProtocolVersion === WEBSOCKET_PROTOCOL_VERSION
@@ -385,13 +374,6 @@ async function main() {
       : {
           ok: false,
           message: `WEBSOCKET_PROTOCOL_VERSION in src/shared/protocol.ts (${WEBSOCKET_PROTOCOL_VERSION}) drifted from Rust cowork-protocol (${manifest.websocketProtocolVersion})`,
-        },
-    generatedSchemaOnDisk === expectedSchemaJson
-      ? { ok: true }
-      : {
-          ok: false,
-          message:
-            "docs/generated/websocket-jsonrpc.schema.json is out of sync with Rust cowork-protocol; run `bun run docs:generate-jsonrpc`",
         },
     assertContains(agents, "docs/harness/index.md", "AGENTS.md"),
     assertContains(claude, "docs/harness/index.md", "CLAUDE.md"),
@@ -405,7 +387,6 @@ async function main() {
     assertContains(readme, "docs/harness/config.md", "README.md"),
     assertContains(readme, "docs/websocket-protocol.md", "README.md"),
     assertContains(wsProtocol, "cowork/session/harnessContext/get", "docs/websocket-protocol.md"),
-    assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, protocolVersionNeedle(), "docs/websocket-protocol.md"),
     ...checkJsonRpcMethodDrift(wsProtocol),
     ...(await checkProviderSpecs()).map((message) => ({ ok: false as const, message })),

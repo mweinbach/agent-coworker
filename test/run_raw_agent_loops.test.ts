@@ -36,7 +36,7 @@ import {
   type ServerTurnTraceResult,
   startRawLoopServer,
 } from "../packages/harness/src/run_raw_agent_loops";
-import { scratchRoots } from "../src/platform/sandbox/policy";
+import { scratchRoots } from "../src/platform/scratchRoots";
 import type { AgentConfig } from "../src/types";
 import {
   connectRustJsonRpc,

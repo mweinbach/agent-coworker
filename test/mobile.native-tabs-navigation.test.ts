@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { scratchRoots } from "../src/platform/sandbox";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 type Platform = "ios" | "android";
 

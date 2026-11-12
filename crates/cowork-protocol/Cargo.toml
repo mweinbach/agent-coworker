@@ -10,4 +10,3 @@ description = "JSON-RPC-lite wire protocol envelopes, 21 schema namespaces, item
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true

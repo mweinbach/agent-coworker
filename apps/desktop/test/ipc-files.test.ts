@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { hostPlatform } from "../../../src/platform/host";
-import { scratchRoots } from "../../../src/platform/sandbox";
+import { scratchRoots } from "../../../src/platform/scratchRoots";
 import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
 import { pinHome } from "../../../test/helpers/platform";
 import { parseWithSchema } from "../electron/ipc/parse";

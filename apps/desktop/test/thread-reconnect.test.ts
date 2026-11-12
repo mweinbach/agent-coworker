@@ -498,7 +498,6 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.modelStreamByThread.clear();
     setDefaultJsonRpcHandlers();
   });
 

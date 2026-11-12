@@ -11,15 +11,3 @@ export const toolInputDigestSchema = z
   .strict();
 
 export type ToolInputDigest = z.infer<typeof toolInputDigestSchema>;
-
-export function isToolInputDigest(value: unknown): value is ToolInputDigest {
-  return toolInputDigestSchema.safeParse(value).success;
-}
-
-export function sameToolInputDigest(left: ToolInputDigest, right: ToolInputDigest): boolean {
-  return (
-    left.algorithm === right.algorithm &&
-    left.value === right.value &&
-    left.canonicalBytes === right.canonicalBytes
-  );
-}

@@ -226,30 +226,6 @@ export const taskCreationToolInputSchema = z
   })
   .strict();
 
-export function parseTaskCreationToolInput(
-  input: z.input<typeof taskCreationToolInputSchema>,
-): z.output<typeof taskCreationInputSchema> {
-  return taskCreationInputSchema.parse({
-    ...input,
-    requirements: input.requirements.map((requirement) => ({
-      ...requirement,
-      permanence: requirement.permanence ?? undefined,
-    })),
-    workItems: input.workItems.map((workItem) => ({
-      ...workItem,
-      description: workItem.description ?? undefined,
-      dependsOn: workItem.dependsOn ?? undefined,
-      expectedOutputs: workItem.expectedOutputs ?? undefined,
-    })),
-    decisions: (input.decisions ?? []).map((decision) => ({
-      ...decision,
-      confidence: decision.confidence ?? undefined,
-    })),
-    reviewRequired: input.reviewRequired ?? undefined,
-    reviewRounds: input.reviewRounds ?? undefined,
-  });
-}
-
 const taskRequirementSchema = z
   .object({
     id: nonEmptyStringSchema,

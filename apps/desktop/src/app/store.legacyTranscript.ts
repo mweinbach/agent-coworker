@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 import type { FeedItem } from "./types";
 
 /**
@@ -65,6 +66,7 @@ export type LegacyStreamReplay = {
   /** Streamed reasoning text per stream id, in arrival order. */
   reasoningStreams: Map<string, StreamedText>;
   toolItemIdByKey: Map<string, string>;
+  toolInputByKey: Map<string, string>;
 };
 
 type StreamedText = { itemId: string; text: string };
@@ -75,6 +77,7 @@ export function createLegacyStreamReplay(): LegacyStreamReplay {
     assistantStreams: new Map(),
     reasoningStreams: new Map(),
     toolItemIdByKey: new Map(),
+    toolInputByKey: new Map(),
   };
 }
 
@@ -88,6 +91,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function asLooseText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
+function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
+  const parsed = parseStructuredToolInput(inputText);
+  const base = isRecord(existingArgs) ? existingArgs : {};
+  const { input: _discardInput, ...rest } = base;
+
+  if (isRecord(parsed)) {
+    return { ...rest, ...parsed };
+  }
+
+  if (Object.keys(rest).length > 0) {
+    return { ...rest, input: inputText };
+  }
+
+  return { input: inputText };
 }
 
 function asId(value: unknown): string | undefined {
@@ -222,36 +247,91 @@ export function applyLegacyModelStreamChunk(
       );
       return;
     }
-    case "tool_input_start":
-      upsertTool(out, replay, ts, toolKey(), toolName(), { state: "input-streaming" });
-      return;
-    case "tool_call":
-      upsertTool(out, replay, ts, toolKey(), toolName(), {
-        state: "input-available",
-        args: part.input,
+    case "tool_input_start": {
+      const key = toolKey();
+      replay.toolInputByKey.delete(key);
+      const args = part.input !== undefined ? part.input : part.args;
+      upsertTool(out, replay, ts, key, toolName(), {
+        state: "input-streaming",
+        ...(args !== undefined ? { args } : {}),
       });
       return;
-    case "tool_result":
+    }
+    case "tool_input_delta": {
+      const delta = asLooseText(part.delta);
+      if (delta === undefined) return;
+      const key = toolKey();
+      const nextInput = `${replay.toolInputByKey.get(key) ?? ""}${delta}`;
+      replay.toolInputByKey.set(key, nextInput);
+      const existing = findItem(out, replay.toolItemIdByKey.get(key), "tool");
+      if (existing) {
+        existing.args = normalizeToolArgsFromInput(nextInput, existing.args);
+        return;
+      }
+      upsertTool(out, replay, ts, key, toolName(), {
+        state: "input-streaming",
+        args: normalizeToolArgsFromInput(nextInput),
+      });
+      return;
+    }
+    case "tool_input_end": {
+      const key = toolKey();
+      const nextInput = replay.toolInputByKey.get(key) ?? "";
+      const existing = findItem(out, replay.toolItemIdByKey.get(key), "tool");
+      const explicitName = asString(part.toolName);
+      if (existing) {
+        if (explicitName) existing.name = explicitName;
+        if (nextInput) existing.args = normalizeToolArgsFromInput(nextInput, existing.args);
+        if (existing.state === "input-streaming") existing.state = "input-available";
+        return;
+      }
+      if (!nextInput) return;
+      upsertTool(out, replay, ts, key, toolName(), {
+        state: "input-available",
+        args: normalizeToolArgsFromInput(nextInput),
+      });
+      return;
+    }
+    case "tool_call": {
+      const args = part.input !== undefined ? part.input : part.args;
+      const explicitName = asString(part.toolName);
       upsertTool(out, replay, ts, toolKey(), toolName(), {
+        ...(explicitName ? { name: explicitName } : {}),
+        state: "input-available",
+        ...(args !== undefined ? { args } : {}),
+      });
+      return;
+    }
+    case "tool_result": {
+      const explicitName = asString(part.toolName);
+      upsertTool(out, replay, ts, toolKey(), toolName(), {
+        ...(explicitName ? { name: explicitName } : {}),
         state: "output-available",
         result: part.output,
         completedAt: ts,
       });
       return;
-    case "tool_error":
+    }
+    case "tool_error": {
+      const explicitName = asString(part.toolName);
       upsertTool(out, replay, ts, toolKey(), toolName(), {
+        ...(explicitName ? { name: explicitName } : {}),
         state: "output-error",
         result: { error: part.error },
         completedAt: ts,
       });
       return;
-    case "tool_output_denied":
+    }
+    case "tool_output_denied": {
+      const explicitName = asString(part.toolName);
       upsertTool(out, replay, ts, toolKey(), toolName(), {
+        ...(explicitName ? { name: explicitName } : {}),
         state: "output-denied",
         result: part.reason === undefined ? undefined : { reason: part.reason },
         completedAt: ts,
       });
       return;
+    }
     default:
       return;
   }

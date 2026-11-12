@@ -481,5 +481,24 @@ describe("desktop transcript feed mapping", () => {
         annotations,
       });
     });
+
+    test("accumulates tool_input_delta arguments when replaying turns without tool_call", () => {
+      const feed = mapTranscriptToFeed([
+        evt(1, { type: "user_message", text: "Run tests" }, "client"),
+        chunk(2, 0, "tool_input_start", { id: "call-1", toolName: "bash" }),
+        chunk(2, 1, "tool_input_delta", { id: "call-1", delta: '{"command":"bun ' }),
+        chunk(2, 2, "tool_input_delta", { id: "call-1", delta: 'test"}' }),
+        chunk(3, 3, "tool_result", { toolCallId: "call-1", toolName: "bash", output: "ok" }),
+      ]);
+
+      expect(feed.map((item) => item.kind)).toEqual(["message", "tool"]);
+      expect(feed[1]).toMatchObject({
+        kind: "tool",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        result: "ok",
+      });
+    });
   });
 });

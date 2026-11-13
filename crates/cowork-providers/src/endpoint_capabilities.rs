@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use cowork_config::{ProviderName, ToolCallingStrategy};
 use cowork_inference::ToolDefinition;
+use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -718,86 +719,55 @@ pub async fn check_endpoint_capabilities(
     stored
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn probe_anthropic_model_endpoint(
-    client: &reqwest::Client,
-    eff_base: &str,
-    host: Option<&str>,
-    model_id: &str,
-    api_key: &str,
-    extra_headers: Option<&HashMap<String, String>>,
-    static_caps: &EndpointToolCapabilities,
+/// Shared inputs for the model-probe decisions. The HTTP functions keep the request,
+/// and these interpreters own the status and body policy so official-host behavior can
+/// be tested without contacting those hosts.
+struct ProbeFacts<'a> {
+    is_official: bool,
+    is_openrouter: bool,
+    model_id: &'a str,
+    encoded_model: &'a str,
+    static_caps: &'a EndpointToolCapabilities,
     now_ms: u64,
+}
+
+fn probe_transport_error_fallback(
+    err: &impl std::fmt::Display,
+    facts: &ProbeFacts<'_>,
 ) -> EndpointToolCapabilities {
-    let encoded_model = encode_model_path_segment(strip_provider_prefix(model_id));
-    let url = if eff_base.ends_with("/v1") {
-        format!("{eff_base}/models/{encoded_model}")
-    } else {
-        format!("{eff_base}/v1/models/{encoded_model}")
-    };
-
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    headers.insert(
-        HeaderName::from_static("anthropic-version"),
-        HeaderValue::from_static(ANTHROPIC_API_VERSION),
-    );
-    let is_oauth = api_key.contains("sk-ant-oat");
-    if is_oauth {
-        if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
-            headers.insert(AUTHORIZATION, v);
-        }
-    } else if let Ok(v) = HeaderValue::from_str(api_key) {
-        headers.insert(HeaderName::from_static("x-api-key"), v);
+    EndpointToolCapabilities {
+        provider: facts.static_caps.provider.clone(),
+        model_id: facts.model_id.to_string(),
+        endpoint_host: facts.static_caps.endpoint_host.clone(),
+        native_tool_search: if facts.is_official || facts.is_openrouter {
+            facts.static_caps.native_tool_search
+        } else {
+            None
+        },
+        native_programmatic_tool_calling: if facts.is_official {
+            facts.static_caps.native_programmatic_tool_calling
+        } else {
+            None
+        },
+        source: EndpointCapabilitySource::EndpointCheck,
+        checked_at_ms: Some(facts.now_ms),
+        detail: Some(format!(
+            "Endpoint probe failed ({err}); using fallback resolution"
+        )),
     }
-    if let Some(extra) = extra_headers {
-        for (k, v) in extra {
-            if let (Ok(name), Ok(val)) = (
-                HeaderName::from_bytes(k.as_bytes()),
-                HeaderValue::from_str(v),
-            ) {
-                headers.insert(name, val);
-            }
-        }
-    }
+}
 
-    let is_official = host.is_some_and(is_official_anthropic_host);
-    let is_openrouter = host.is_some_and(is_openrouter_host);
-
-    let resp = match client
-        .get(&url)
-        .headers(headers)
-        .timeout(DEFAULT_ENDPOINT_CHECK_TIMEOUT)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(err) => {
-            return EndpointToolCapabilities {
-                provider: static_caps.provider.clone(),
-                model_id: model_id.to_string(),
-                endpoint_host: static_caps.endpoint_host.clone(),
-                native_tool_search: if is_official || is_openrouter {
-                    static_caps.native_tool_search
-                } else {
-                    None
-                },
-                native_programmatic_tool_calling: if is_official {
-                    static_caps.native_programmatic_tool_calling
-                } else {
-                    None
-                },
-                source: EndpointCapabilitySource::EndpointCheck,
-                checked_at_ms: Some(now_ms),
-                detail: Some(format!(
-                    "Endpoint probe failed ({err}); using fallback resolution"
-                )),
-            };
-        }
-    };
-
-    let status = resp.status();
-    let body_json: Option<Value> = resp.json().await.ok();
+fn interpret_anthropic_model_probe(
+    status: StatusCode,
+    body_json: Option<&Value>,
+    facts: &ProbeFacts<'_>,
+) -> EndpointToolCapabilities {
+    let is_official = facts.is_official;
+    let is_openrouter = facts.is_openrouter;
+    let model_id = facts.model_id;
+    let encoded_model = facts.encoded_model;
+    let static_caps = facts.static_caps;
+    let now_ms = facts.now_ms;
 
     if status.is_success()
         && let Some(json) = body_json
@@ -895,78 +865,18 @@ async fn probe_anthropic_model_endpoint(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn probe_openai_model_endpoint(
-    client: &reqwest::Client,
-    eff_base: &str,
-    host: Option<&str>,
-    model_id: &str,
-    api_key: &str,
-    extra_headers: Option<&HashMap<String, String>>,
-    static_caps: &EndpointToolCapabilities,
-    now_ms: u64,
+fn interpret_openai_model_probe(
+    status: StatusCode,
+    body_json: Option<&Value>,
+    has_openai_processing_header: bool,
+    facts: &ProbeFacts<'_>,
 ) -> EndpointToolCapabilities {
-    let is_official = host.is_some_and(is_official_openai_host);
-    let is_openrouter = host.is_some_and(is_openrouter_host);
-    let target_model = if is_openrouter {
-        model_id.trim()
-    } else {
-        strip_provider_prefix(model_id)
-    };
-    let encoded_model = encode_model_path_segment(target_model);
-    let url = format!("{eff_base}/models/{encoded_model}");
-
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
-        headers.insert(AUTHORIZATION, v);
-    }
-    if let Some(extra) = extra_headers {
-        for (k, v) in extra {
-            if let (Ok(name), Ok(val)) = (
-                HeaderName::from_bytes(k.as_bytes()),
-                HeaderValue::from_str(v),
-            ) {
-                headers.insert(name, val);
-            }
-        }
-    }
-
-    let resp = match client
-        .get(&url)
-        .headers(headers)
-        .timeout(DEFAULT_ENDPOINT_CHECK_TIMEOUT)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(err) => {
-            return EndpointToolCapabilities {
-                provider: static_caps.provider.clone(),
-                model_id: model_id.to_string(),
-                endpoint_host: static_caps.endpoint_host.clone(),
-                native_tool_search: if is_official || is_openrouter {
-                    static_caps.native_tool_search
-                } else {
-                    None
-                },
-                native_programmatic_tool_calling: if is_official {
-                    static_caps.native_programmatic_tool_calling
-                } else {
-                    None
-                },
-                source: EndpointCapabilitySource::EndpointCheck,
-                checked_at_ms: Some(now_ms),
-                detail: Some(format!(
-                    "Endpoint probe failed ({err}); using fallback resolution"
-                )),
-            };
-        }
-    };
-
-    let status = resp.status();
-    let has_openai_processing_header = resp.headers().contains_key("openai-processing-ms");
-    let body_json: Option<Value> = resp.json().await.ok();
+    let is_official = facts.is_official;
+    let is_openrouter = facts.is_openrouter;
+    let model_id = facts.model_id;
+    let encoded_model = facts.encoded_model;
+    let static_caps = facts.static_caps;
+    let now_ms = facts.now_ms;
 
     if status.is_success()
         && let Some(json) = body_json
@@ -1069,3 +979,142 @@ async fn probe_openai_model_endpoint(
         )),
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+async fn probe_anthropic_model_endpoint(
+    client: &reqwest::Client,
+    eff_base: &str,
+    host: Option<&str>,
+    model_id: &str,
+    api_key: &str,
+    extra_headers: Option<&HashMap<String, String>>,
+    static_caps: &EndpointToolCapabilities,
+    now_ms: u64,
+) -> EndpointToolCapabilities {
+    let encoded_model = encode_model_path_segment(strip_provider_prefix(model_id));
+    let url = if eff_base.ends_with("/v1") {
+        format!("{eff_base}/models/{encoded_model}")
+    } else {
+        format!("{eff_base}/v1/models/{encoded_model}")
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(
+        HeaderName::from_static("anthropic-version"),
+        HeaderValue::from_static(ANTHROPIC_API_VERSION),
+    );
+    let is_oauth = api_key.contains("sk-ant-oat");
+    if is_oauth {
+        if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+            headers.insert(AUTHORIZATION, v);
+        }
+    } else if let Ok(v) = HeaderValue::from_str(api_key) {
+        headers.insert(HeaderName::from_static("x-api-key"), v);
+    }
+    if let Some(extra) = extra_headers {
+        for (k, v) in extra {
+            if let (Ok(name), Ok(val)) = (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(v),
+            ) {
+                headers.insert(name, val);
+            }
+        }
+    }
+
+    let is_official = host.is_some_and(is_official_anthropic_host);
+    let is_openrouter = host.is_some_and(is_openrouter_host);
+
+    let facts = ProbeFacts {
+        is_official,
+        is_openrouter,
+        model_id,
+        encoded_model: &encoded_model,
+        static_caps,
+        now_ms,
+    };
+    let resp = match client
+        .get(&url)
+        .headers(headers)
+        .timeout(DEFAULT_ENDPOINT_CHECK_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(err) => return probe_transport_error_fallback(&err, &facts),
+    };
+    let status = resp.status();
+    let body_json: Option<Value> = resp.json().await.ok();
+    interpret_anthropic_model_probe(status, body_json.as_ref(), &facts)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn probe_openai_model_endpoint(
+    client: &reqwest::Client,
+    eff_base: &str,
+    host: Option<&str>,
+    model_id: &str,
+    api_key: &str,
+    extra_headers: Option<&HashMap<String, String>>,
+    static_caps: &EndpointToolCapabilities,
+    now_ms: u64,
+) -> EndpointToolCapabilities {
+    let is_official = host.is_some_and(is_official_openai_host);
+    let is_openrouter = host.is_some_and(is_openrouter_host);
+    let target_model = if is_openrouter {
+        model_id.trim()
+    } else {
+        strip_provider_prefix(model_id)
+    };
+    let encoded_model = encode_model_path_segment(target_model);
+    let url = format!("{eff_base}/models/{encoded_model}");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+        headers.insert(AUTHORIZATION, v);
+    }
+    if let Some(extra) = extra_headers {
+        for (k, v) in extra {
+            if let (Ok(name), Ok(val)) = (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(v),
+            ) {
+                headers.insert(name, val);
+            }
+        }
+    }
+
+    let facts = ProbeFacts {
+        is_official,
+        is_openrouter,
+        model_id,
+        encoded_model: &encoded_model,
+        static_caps,
+        now_ms,
+    };
+    let resp = match client
+        .get(&url)
+        .headers(headers)
+        .timeout(DEFAULT_ENDPOINT_CHECK_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(err) => return probe_transport_error_fallback(&err, &facts),
+    };
+    let status = resp.status();
+    let has_openai_processing_header = resp.headers().contains_key("openai-processing-ms");
+    let body_json: Option<Value> = resp.json().await.ok();
+    interpret_openai_model_probe(
+        status,
+        body_json.as_ref(),
+        has_openai_processing_header,
+        &facts,
+    )
+}
+
+#[cfg(test)]
+#[path = "endpoint_capability_probe_tests.rs"]
+mod endpoint_capability_probe_tests;

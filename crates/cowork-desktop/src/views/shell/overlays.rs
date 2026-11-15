@@ -1,16 +1,31 @@
 //! Top-level shell overlays: Toast stack (with OperationFeedback inline claim
-//! suppression), External URL modal, Confirm Dialog, LM Studio prompt, and Onboarding.
+//! suppression), Sidebar search overlay, Delete confirmation, Workflow run detail,
+//! External URL modal, Confirm Dialog, LM Studio prompt, and Onboarding.
 
 use cowork_protocol::CreationRepairAction;
-use rune::{El, ScrollSpec, col, el, icon, row, spacer, text};
-use rune_kit::{Badge, Button, ButtonVariant, Card, ControlSize, Dialog, Kit, Toast, ToastRegion};
+use rune::{El, Icon, ScrollSpec, col, el, icon, row, spacer, text};
+use rune_kit::{
+    Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Dialog, Kit, TextInput, Toast,
+    ToastRegion,
+};
 
-use crate::actions::{Action, NativeAction, NavAction, ShellAction};
+use crate::actions::{Action, ChatAction, NativeAction, NavAction, ShellAction};
 use crate::router::{SettingsPageId, ViewId};
-use crate::state::{AppState, ConfirmDialogRequest, NotificationTone, dismiss_toast};
+use crate::state::{
+    AppState, ConfirmDialogRequest, NotificationTone, WorkflowRunView, dismiss_toast,
+};
 use crate::theme::ThemeTokens;
 
-use super::{icons, palette};
+use super::{helpers, icons, palette};
+
+pub(crate) struct SearchOverlayItem {
+    pub(crate) key: String,
+    pub(crate) section: &'static str,
+    pub(crate) title: String,
+    pub(crate) subtitle: String,
+    pub(crate) icon_glyph: &'static Icon,
+    pub(crate) action: Action,
+}
 
 /// Collect all shell-managed overlays plus subview overlays for `rune_kit::root`.
 pub fn build_overlays(
@@ -21,6 +36,10 @@ pub fn build_overlays(
 ) -> Vec<El> {
     if let Some(pal) = palette::build_command_palette(s, k, t) {
         subview_overlays.push(pal);
+    }
+
+    if let Some(search) = build_sidebar_search_overlay(s, k, t) {
+        subview_overlays.push(search);
     }
 
     if let Some(onboarding) = build_onboarding_overlay(s, k, t) {
@@ -37,6 +56,14 @@ pub fn build_overlays(
 
     if let Some(confirm) = build_confirm_dialog(s.pending_confirm_dialog.as_ref(), k) {
         subview_overlays.push(confirm);
+    }
+
+    if let Some(delete_dialog) = build_delete_thread_confirm_dialog(s, k) {
+        subview_overlays.push(delete_dialog);
+    }
+
+    if let Some(run_dialog) = build_workflow_run_detail_dialog(s, k, t) {
+        subview_overlays.push(run_dialog);
     }
 
     if let Some(toasts) = build_toast_region(s, k, t) {
@@ -331,7 +358,7 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
         return None;
     }
 
-    let step_idx = s.onboarding.completed_steps.len().min(4);
+    let step_idx = s.shell_ui.onboarding_step.min(4);
     let step_titles = [
         ("1. Choose a project folder", &icons::FOLDER_PLUS),
         ("2. Connect a model provider", &icons::SPARKLES),
@@ -342,6 +369,7 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
 
     let has_ws = !s.workspaces.is_empty();
     let configured_providers = s.provider_catalog.iter().filter(|p| p.configured).count();
+    let setup_incomplete = !has_ws || configured_providers == 0;
 
     let (title, glyph) = step_titles[step_idx];
     let step_cards = row()
@@ -349,7 +377,8 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
         .gap(6.0)
         .children(step_titles.iter().enumerate().map(|(i, _)| {
             let active = i == step_idx;
-            let done = i < step_idx;
+            let step_key = format!("step-{}", i + 1);
+            let done = s.onboarding.completed_steps.contains(&step_key) || i < step_idx;
             let badge_txt = if done {
                 format!("✓ {}", i + 1)
             } else {
@@ -361,7 +390,12 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
                 .radius(6.0)
                 .center()
                 .fill(if active { t.accent_soft } else { t.elevated_bg })
+                .hover(t.hover)
                 .border(1.0, if active { t.accent } else { t.border_muted })
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.shell_ui.onboarding_step = i;
+                    s.shell_ui.onboarding_confirm_discard = false;
+                })
                 .child(text(badge_txt).font(t.caption).color(if active {
                     t.text_base
                 } else {
@@ -376,7 +410,7 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
             .accent(t.accent)
             .title(title, Some(glyph))
             .description(
-                "Add a folder from your computer so Antigravity can launch an isolated workspace runtime.",
+                "Add a folder from your computer so Cowork can launch an isolated workspace runtime.",
             )
             .child(
                 row()
@@ -465,6 +499,7 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
         Button::new("Finish setup")
             .variant(ButtonVariant::Contrast)
             .on_press_tx(|s: &mut AppState, _| {
+                s.shell_ui.onboarding_confirm_discard = false;
                 s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
             })
             .build(k)
@@ -472,6 +507,8 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
         Button::new("Next")
             .variant(ButtonVariant::Contrast)
             .on_press_tx(move |s: &mut AppState, _| {
+                s.shell_ui.onboarding_step = (step_idx + 1).min(4);
+                s.shell_ui.onboarding_confirm_discard = false;
                 s.dispatch(Action::Shell(ShellAction::CompleteOnboardingStep(
                     step_name.clone(),
                 )));
@@ -479,25 +516,79 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
             .build(k)
     };
 
-    let footer = row()
-        .w_full()
-        .pt(8.0)
-        .gap(8.0)
+    let mut footer = row().w_full().pt(8.0).gap(8.0);
+    if step_idx > 0 {
+        footer = footer.child(
+            Button::new("Back")
+                .variant(ButtonVariant::Ghost)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.shell_ui.onboarding_step = step_idx.saturating_sub(1);
+                    s.shell_ui.onboarding_confirm_discard = false;
+                })
+                .build(k),
+        );
+    }
+    footer = footer
         .child(
             Button::new("Skip onboarding")
                 .variant(ButtonVariant::Ghost)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
+                .on_press_tx(move |s: &mut AppState, _| {
+                    if setup_incomplete && !s.shell_ui.onboarding_confirm_discard {
+                        s.shell_ui.onboarding_confirm_discard = true;
+                    } else {
+                        s.shell_ui.onboarding_confirm_discard = false;
+                        s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
+                    }
                 })
                 .build(k),
         )
         .child(spacer())
         .child(next_btn);
 
+    let confirm_discard_banner = s.shell_ui.onboarding_confirm_discard.then(|| {
+        row()
+            .key("onboarding-confirm-discard")
+            .w_full()
+            .padding(10.0)
+            .radius(8.0)
+            .fill(t.elevated_bg)
+            .border(1.0, t.warning)
+            .gap(8.0)
+            .center_y()
+            .child(icon(&icons::ALERT_TRIANGLE, 14.0).color(t.warning))
+            .child(
+                text("Setup is incomplete (missing project folder or provider). Skip anyway?")
+                    .font(t.caption)
+                    .color(t.text_base)
+                    .wrap()
+                    .grow(1.0)
+                    .shrink(),
+            )
+            .child(
+                Button::new("Keep setting up")
+                    .variant(ButtonVariant::Ghost)
+                    .control_size(ControlSize::Small)
+                    .on_press_tx(|s: &mut AppState, _| {
+                        s.shell_ui.onboarding_confirm_discard = false;
+                    })
+                    .build(k),
+            )
+            .child(
+                Button::new("Skip anyway")
+                    .variant(ButtonVariant::Danger)
+                    .control_size(ControlSize::Small)
+                    .on_press_tx(|s: &mut AppState, _| {
+                        s.shell_ui.onboarding_confirm_discard = false;
+                        s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
+                    })
+                    .build(k),
+            )
+    });
+
     let card = col()
         .key("desktop-onboarding-card")
         .w(560.0)
-        .max_h(560.0)
+        .max_h(580.0)
         .padding(20.0)
         .gap(16.0)
         .radius(14.0)
@@ -509,11 +600,7 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
                 .center_y()
                 .child(icon(&icons::SPARKLES, 18.0).color(t.accent))
                 .child(el().w(8.0))
-                .child(
-                    text("Welcome to Antigravity")
-                        .font(t.title)
-                        .color(t.text_base),
-                )
+                .child(text("Welcome to Cowork").font(t.title).color(t.text_base))
                 .child(spacer())
                 .child(Badge::new(format!("Step {} / 5", step_idx + 1)).build(k)),
         )
@@ -526,10 +613,12 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
                 })
                 .child(content_col),
         )
+        .children(confirm_discard_banner)
         .child(footer);
 
     Some(
-        el().key("desktop-onboarding-backdrop")
+        col()
+            .key("desktop-onboarding-backdrop")
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
             .fill(t.scrim)
             .center()
@@ -537,6 +626,525 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
             .modal(false, |_: &mut AppState| {})
             .child(card),
     )
+}
+
+pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayItem> {
+    let query = s.shell_ui.search_edit.text.trim().to_ascii_lowercase();
+    let ws_filter = s.shell_ui.search_workspace_filter.as_deref();
+    let mut items = Vec::new();
+
+    let mut thread_count = 0usize;
+    for th in helpers::filtered_threads(s, "", false) {
+        if let Some(wid) = ws_filter
+            && th.workspace_id != wid
+        {
+            continue;
+        }
+        let ws_name = s
+            .workspaces
+            .iter()
+            .find(|w| w.id == th.workspace_id)
+            .map(|w| w.name.as_str())
+            .unwrap_or("Chat");
+        let title = if th.title.trim().is_empty() {
+            "New chat".to_owned()
+        } else {
+            th.title.clone()
+        };
+        let matches = query.is_empty()
+            || title.to_ascii_lowercase().contains(&query)
+            || ws_name.to_ascii_lowercase().contains(&query)
+            || th
+                .preview
+                .as_deref()
+                .is_some_and(|p| p.to_ascii_lowercase().contains(&query));
+        if !matches {
+            continue;
+        }
+        let age = helpers::format_relative_age(th.updated_at, s.now_secs);
+        let subtitle = if age.is_empty() {
+            ws_name.to_owned()
+        } else {
+            format!("{ws_name} · {age}")
+        };
+        items.push(SearchOverlayItem {
+            key: format!("sr-th-{}", th.id),
+            section: "Chats",
+            title,
+            subtitle,
+            icon_glyph: &icons::MESSAGE,
+            action: Action::Navigate(NavAction::OpenThread(th.id.clone())),
+        });
+        thread_count += 1;
+        if thread_count >= 15 {
+            break;
+        }
+    }
+
+    for ws in s
+        .workspaces
+        .iter()
+        .filter(|w| ws_filter.is_none_or(|wid| wid == w.id))
+        .filter(|w| {
+            query.is_empty()
+                || w.name.to_ascii_lowercase().contains(&query)
+                || w.path.to_ascii_lowercase().contains(&query)
+        })
+        .take(8)
+    {
+        items.push(SearchOverlayItem {
+            key: format!("sr-ws-{}", ws.id),
+            section: "Projects",
+            title: ws.name.clone(),
+            subtitle: ws.path.clone(),
+            icon_glyph: &icons::FOLDER,
+            action: Action::Navigate(NavAction::SelectWorkspace(ws.id.clone())),
+        });
+    }
+
+    if helpers::tasks_feature_enabled(s) {
+        let mut task_count = 0usize;
+        for sum in &s.tasks {
+            if let Some(wid) = ws_filter
+                && sum.workspace_id != wid
+            {
+                continue;
+            }
+            let matches = query.is_empty()
+                || sum.title.to_ascii_lowercase().contains(&query)
+                || sum.objective.to_ascii_lowercase().contains(&query)
+                || sum.status.to_ascii_lowercase().contains(&query);
+            if !matches {
+                continue;
+            }
+            let ws_name = s
+                .workspaces
+                .iter()
+                .find(|w| w.id == sum.workspace_id)
+                .map(|w| w.name.as_str())
+                .unwrap_or("Workspace");
+            items.push(SearchOverlayItem {
+                key: format!("sr-task-{}", sum.id),
+                section: "Tasks",
+                title: sum.title.clone(),
+                subtitle: format!("{ws_name} · {}", sum.status),
+                icon_glyph: &icons::CHECK_SQUARE,
+                action: Action::Navigate(NavAction::OpenTask(sum.id.clone())),
+            });
+            task_count += 1;
+            if task_count >= 10 {
+                break;
+            }
+        }
+    }
+
+    items.truncate(32);
+    items
+}
+
+fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
+    if !s.shell_ui.search_overlay_open {
+        return None;
+    }
+
+    let items = collect_search_overlay_items(s);
+    let selected_idx = s
+        .shell_ui
+        .search_selected
+        .min(items.len().saturating_sub(1));
+    let selected_action = items.get(selected_idx).map(|item| item.action.clone());
+
+    let search_input = TextInput::new(&s.shell_ui.search_edit)
+        .placeholder("Search chats, projects, and tasks...")
+        .label("Search conversations and workspaces")
+        .leading_icon(&icons::SEARCH)
+        .width(None)
+        .clear_button()
+        .on_edit(|s: &mut AppState| &mut s.shell_ui.search_edit)
+        .on_change(|s: &mut AppState, _| {
+            s.shell_ui.search_selected = 0;
+        })
+        .on_key(|s: &mut AppState, ev, _| {
+            let items = collect_search_overlay_items(s);
+            let max_idx = items.len().saturating_sub(1);
+            for (slot, digit) in ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+                .into_iter()
+                .enumerate()
+            {
+                if ev.is_command(digit)
+                    && !ev.mods.alt
+                    && !ev.mods.shift
+                    && let Some(item) = items.get(slot)
+                {
+                    s.shell_ui.search_overlay_open = false;
+                    s.shell_ui.search_selected = 0;
+                    s.dispatch(item.action.clone());
+                    return true;
+                }
+            }
+            match ev.key {
+                rune::Key::Up => {
+                    s.shell_ui.search_selected = s.shell_ui.search_selected.saturating_sub(1);
+                    true
+                }
+                rune::Key::Down => {
+                    if !items.is_empty() {
+                        s.shell_ui.search_selected = (s.shell_ui.search_selected + 1).min(max_idx);
+                    }
+                    true
+                }
+                rune::Key::Escape => {
+                    s.shell_ui.search_overlay_open = false;
+                    s.shell_ui.search_selected = 0;
+                    true
+                }
+                _ => false,
+            }
+        })
+        .on_action(move |s: &mut AppState, _| {
+            if let Some(act) = selected_action.as_ref() {
+                s.shell_ui.search_overlay_open = false;
+                s.shell_ui.search_selected = 0;
+                s.dispatch(act.clone());
+            }
+        })
+        .build(k);
+
+    let mut chips = row()
+        .key("search-overlay-workspace-filters")
+        .w_full()
+        .px(12.0)
+        .py(6.0)
+        .gap(6.0)
+        .center_y()
+        .child(
+            Button::new("All projects")
+                .variant(if s.shell_ui.search_workspace_filter.is_none() {
+                    ButtonVariant::Contrast
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .control_size(ControlSize::Small)
+                .on_press_tx(|s: &mut AppState, _| {
+                    s.shell_ui.search_workspace_filter = None;
+                    s.shell_ui.search_selected = 0;
+                })
+                .build(k),
+        );
+
+    for ws in s.workspaces.iter().take(5) {
+        let wid = ws.id.clone();
+        let active = s.shell_ui.search_workspace_filter.as_deref() == Some(ws.id.as_str());
+        chips = chips.child(
+            Button::new(ws.name.clone())
+                .variant(if active {
+                    ButtonVariant::Contrast
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .control_size(ControlSize::Small)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    if s.shell_ui.search_workspace_filter.as_deref() == Some(wid.as_str()) {
+                        s.shell_ui.search_workspace_filter = None;
+                    } else {
+                        s.shell_ui.search_workspace_filter = Some(wid.clone());
+                    }
+                    s.shell_ui.search_selected = 0;
+                })
+                .build(k),
+        );
+    }
+
+    let mut list_children: Vec<El> = Vec::new();
+    if items.is_empty() {
+        list_children.push(
+            el().w_full().px(16.0).py(28.0).center().child(
+                text("No chats, projects, or tasks match your search.")
+                    .font(t.body)
+                    .color(t.text_muted),
+            ),
+        );
+    } else {
+        let mut last_section: Option<&'static str> = None;
+        for (idx, item) in items.into_iter().enumerate() {
+            if last_section != Some(item.section) {
+                last_section = Some(item.section);
+                list_children.push(
+                    el().key(format!("sr-sec-{}", item.section))
+                        .w_full()
+                        .pt(8.0)
+                        .pb(4.0)
+                        .px(10.0)
+                        .child(text(item.section).font(t.caption).color(t.text_faint)),
+                );
+            }
+            let selected = idx == selected_idx;
+            let action = item.action;
+            let shortcut_badge = (idx < 9).then(|| {
+                Badge::new(format!("⌘{}", idx + 1))
+                    .variant(BadgeVariant::Neutral)
+                    .build(k)
+            });
+            let mut row_el = row()
+                .key(item.key)
+                .w_full()
+                .px(10.0)
+                .py(7.0)
+                .radius(8.0)
+                .gap(10.0)
+                .center_y()
+                .hover(t.hover)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.shell_ui.search_overlay_open = false;
+                    s.shell_ui.search_selected = 0;
+                    s.dispatch(action.clone());
+                })
+                .child(icon(item.icon_glyph, 15.0).color(if selected {
+                    t.accent
+                } else {
+                    t.text_muted
+                }))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .shrink()
+                        .gap(1.0)
+                        .child(text(item.title).font(t.label).color(t.text_base).truncate())
+                        .child(
+                            text(item.subtitle)
+                                .font(t.caption)
+                                .color(t.text_faint)
+                                .truncate(),
+                        ),
+                )
+                .children(shortcut_badge);
+
+            if selected {
+                row_el = row_el.fill(t.hover).border(1.0, t.border_muted);
+            }
+            list_children.push(row_el);
+        }
+    }
+
+    let card = col()
+        .key("sidebar-search-overlay-card")
+        .w(600.0)
+        .max_w(600.0)
+        .max_h(520.0)
+        .radius(12.0)
+        .fill(t.popover_bg)
+        .border(1.0, t.border_strong)
+        .child(el().w_full().padding(12.0).child(search_input))
+        .child(el().w_full().h(1.0).fill(t.border_muted))
+        .child(chips)
+        .child(el().w_full().h(1.0).fill(t.border_muted))
+        .child(
+            col()
+                .key("search-overlay-results-scroll")
+                .w_full()
+                .max_h(330.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .padding(6.0)
+                .gap(2.0)
+                .children(list_children),
+        )
+        .child(el().w_full().h(1.0).fill(t.border_muted))
+        .child(
+            row()
+                .key("search-overlay-footer")
+                .w_full()
+                .h(34.0)
+                .px(14.0)
+                .gap(12.0)
+                .center_y()
+                .fill(t.panel_bg)
+                .child(
+                    text("↑↓ navigate · Enter open · ⌘1-9 quick jump · Esc close")
+                        .font(t.caption)
+                        .color(t.text_faint),
+                )
+                .child(spacer())
+                .child(
+                    Button::new("Close")
+                        .variant(ButtonVariant::Ghost)
+                        .control_size(ControlSize::Small)
+                        .on_press_tx(|s: &mut AppState, _| {
+                            s.shell_ui.search_overlay_open = false;
+                            s.shell_ui.search_selected = 0;
+                        })
+                        .build(k),
+                ),
+        );
+
+    Some(
+        col()
+            .key("sidebar-search-overlay-backdrop")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .fill(t.scrim)
+            .items_center()
+            .pt(72.0)
+            .px(16.0)
+            .modal(true, |s: &mut AppState| {
+                s.shell_ui.search_overlay_open = false;
+                s.shell_ui.search_selected = 0;
+            })
+            .child(card),
+    )
+}
+
+fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit) -> Option<El> {
+    let thread_id = s.shell_ui.pending_delete_thread_id.as_deref()?;
+    let title = s
+        .threads
+        .iter()
+        .find(|th| th.id == thread_id)
+        .map(|th| th.title.as_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("this conversation");
+    let tid_for_confirm = thread_id.to_owned();
+
+    let footer = row()
+        .w_full()
+        .pt(8.0)
+        .gap(8.0)
+        .child(spacer())
+        .child(
+            Button::new("Cancel")
+                .variant(ButtonVariant::Ghost)
+                .on_press_tx(|s: &mut AppState, _| {
+                    s.shell_ui.pending_delete_thread_id = None;
+                })
+                .build(k),
+        )
+        .child(
+            Button::new("Delete")
+                .variant(ButtonVariant::Danger)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.shell_ui.pending_delete_thread_id = None;
+                    s.dispatch(Action::Chat(ChatAction::DeleteThread(
+                        tid_for_confirm.clone(),
+                    )));
+                })
+                .build(k),
+        );
+
+    let mut overlays = Vec::new();
+    Dialog::new("delete-thread-dialog", "Delete chat permanently?")
+        .description(format!(
+            "Delete \"{title}\"? All messages and artifacts in this chat will be removed."
+        ))
+        .open(true)
+        .width(420.0)
+        .click_outside(true)
+        .on_close(|s: &mut AppState| {
+            s.shell_ui.pending_delete_thread_id = None;
+        })
+        .child(footer)
+        .build(k, &mut overlays);
+
+    overlays.into_iter().next()
+}
+
+fn find_workflow_run<'a>(s: &'a AppState, run_id: &str) -> Option<&'a WorkflowRunView> {
+    s.workflow_runs.iter().find(|r| r.id == run_id).or_else(|| {
+        s.active_task
+            .as_ref()
+            .and_then(|task| task.runs.iter().find(|r| r.id == run_id))
+    })
+}
+
+fn format_run_duration(started_at_ms: i64, finished_at_ms: Option<i64>) -> Option<String> {
+    let fin = finished_at_ms?;
+    if fin < started_at_ms || started_at_ms <= 0 {
+        return None;
+    }
+    let secs = (fin - started_at_ms) / 1000;
+    if secs < 60 {
+        Some(format!("{secs}s"))
+    } else if secs < 3600 {
+        Some(format!("{}m {}s", secs / 60, secs % 60))
+    } else {
+        Some(format!("{}h {}m", secs / 3600, (secs % 3600) / 60))
+    }
+}
+
+fn build_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
+    let run_id = s.shell_ui.selected_workflow_run_id.as_deref()?;
+    let run = find_workflow_run(s, run_id)?;
+    let started_rel = helpers::format_relative_age(run.started_at, s.now_secs);
+    let duration = format_run_duration(run.started_at, run.finished_at);
+
+    let mut meta = row().w_full().gap(8.0).center_y().child(
+        Badge::new(run.status.clone())
+            .variant(BadgeVariant::Neutral)
+            .build(k),
+    );
+    if !started_rel.is_empty() {
+        meta = meta.child(
+            text(format!("Started {started_rel} ago"))
+                .font(t.caption)
+                .color(t.text_muted),
+        );
+    }
+    if let Some(dur) = duration {
+        meta = meta.child(text(format!("· {dur}")).font(t.caption).color(t.text_muted));
+    }
+
+    let summary_text = run
+        .summary
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("No output summary recorded for this workflow run.")
+        .to_owned();
+
+    let body = col()
+        .w_full()
+        .gap(12.0)
+        .child(meta)
+        .child(
+            text(format!("Run ID: {}", run.id))
+                .font(t.code)
+                .color(t.text_faint),
+        )
+        .child(
+            col()
+                .w_full()
+                .max_h(260.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .padding(10.0)
+                .radius(8.0)
+                .fill(t.elevated_bg)
+                .border(1.0, t.border_muted)
+                .child(text(summary_text).font(t.body).color(t.text_base).wrap()),
+        )
+        .child(
+            row().w_full().pt(4.0).child(spacer()).child(
+                Button::new("Close")
+                    .variant(ButtonVariant::Ghost)
+                    .on_press_tx(|s: &mut AppState, _| {
+                        s.shell_ui.selected_workflow_run_id = None;
+                    })
+                    .build(k),
+            ),
+        );
+
+    let mut overlays = Vec::new();
+    Dialog::new("workflow-run-detail-dialog", run.workflow_name.as_str())
+        .description("Workflow execution summary and runtime metadata.")
+        .open(true)
+        .width(500.0)
+        .click_outside(true)
+        .on_close(|s: &mut AppState| {
+            s.shell_ui.selected_workflow_run_id = None;
+        })
+        .child(body)
+        .build(k, &mut overlays);
+
+    overlays.into_iter().next()
 }
 
 #[cfg(test)]
@@ -591,5 +1199,62 @@ mod tests {
             extract_external_url_domain("not a url"),
             "unknown destination"
         );
+    }
+
+    #[test]
+    fn search_overlay_collects_and_filters_items() {
+        use crate::state::{TaskSummaryView, ThreadRecord, WorkspaceRecord};
+
+        let mut s = AppState::default();
+        s.workspaces.push(WorkspaceRecord {
+            id: "ws-a".into(),
+            name: "Alpha".into(),
+            path: "/tmp/alpha".into(),
+            ..Default::default()
+        });
+        s.workspaces.push(WorkspaceRecord {
+            id: "ws-b".into(),
+            name: "Beta".into(),
+            path: "/tmp/beta".into(),
+            ..Default::default()
+        });
+        s.threads.push(ThreadRecord {
+            id: "th-1".into(),
+            workspace_id: "ws-a".into(),
+            title: "Fix compiler error".into(),
+            updated_at: 200,
+            ..Default::default()
+        });
+        s.threads.push(ThreadRecord {
+            id: "th-2".into(),
+            workspace_id: "ws-b".into(),
+            title: "Design landing page".into(),
+            updated_at: 100,
+            ..Default::default()
+        });
+        s.tasks.push(TaskSummaryView {
+            id: "task-1".into(),
+            workspace_id: "ws-a".into(),
+            title: "Refactor auth".into(),
+            status: "running".into(),
+            ..Default::default()
+        });
+
+        let initial = collect_search_overlay_items(&s);
+        assert!(initial.iter().any(|i| i.key == "sr-th-th-1"));
+        assert!(initial.iter().any(|i| i.key == "sr-th-th-2"));
+        assert!(!initial.iter().any(|i| i.section == "Tasks"));
+
+        s.feature_flags.insert("tasks".into(), true);
+        s.shell_ui.search_workspace_filter = Some("ws-a".into());
+        let scoped = collect_search_overlay_items(&s);
+        assert!(scoped.iter().any(|i| i.key == "sr-th-th-1"));
+        assert!(!scoped.iter().any(|i| i.key == "sr-th-th-2"));
+        assert!(scoped.iter().any(|i| i.key == "sr-task-task-1"));
+
+        s.shell_ui.search_edit.text = "auth".into();
+        let queried = collect_search_overlay_items(&s);
+        assert_eq!(queried.len(), 1);
+        assert_eq!(queried[0].key, "sr-task-task-1");
     }
 }

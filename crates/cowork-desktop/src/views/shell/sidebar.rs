@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use rune::{Color, El, TextStyle, col, el, row, text};
 use rune_kit::shell::{RowStatus, Sidebar, SidebarRow, SidebarSection};
-use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, TextInput};
+use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem, TextInput};
 
 use crate::actions::{Action, ChatAction, NativeAction, NavAction, ShellAction, SidebarSectionKey};
 use crate::router::{SettingsPageId, ViewId};
@@ -21,7 +21,7 @@ use crate::views::shell::icons;
 const MAX_THREADS_PER_WORKSPACE: usize = 5;
 
 /// Renders the left application sidebar with quick actions, search filter, and ordered sections.
-pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
+pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
     let mut sb = Sidebar::new()
         .label("Workspace navigation")
         .inset(8.0)
@@ -34,7 +34,8 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
     }
 
     let query = s.sidebar_search.as_str();
-    let threads = filtered_threads(s, query, false);
+    let pending_filter = s.shell_ui.needs_input_only && pending_input_count(s) > 0;
+    let threads = filtered_threads(s, query, pending_filter);
     let (projects, one_off_ids, primary_one_off) = split_workspaces(s);
     let active_thread_id = s.route().active_thread_id.as_deref();
     let active_task_id = s.route().active_task_id.as_deref();
@@ -42,7 +43,8 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
     for section_key in &s.desktop_settings.sidebar_section_order {
         match section_key {
             SidebarSectionKey::Pinned => {
-                if let Some(sec) = build_pinned_section(s, k, t, &threads, active_thread_id) {
+                if let Some(sec) = build_pinned_section(s, k, t, layer, &threads, active_thread_id)
+                {
                     sb = sb.section(sec);
                 }
             }
@@ -55,6 +57,8 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
                 sb = sb.section(build_chats_section(
                     s,
                     k,
+                    t,
+                    layer,
                     &threads,
                     &one_off_ids,
                     primary_one_off,
@@ -62,7 +66,16 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
                 ));
             }
             SidebarSectionKey::Workspaces => {
-                sb = build_workspaces_section(s, k, t, sb, &projects, &threads, active_thread_id);
+                sb = build_workspaces_section(
+                    s,
+                    k,
+                    t,
+                    layer,
+                    sb,
+                    &projects,
+                    &threads,
+                    active_thread_id,
+                );
             }
         }
     }
@@ -115,6 +128,8 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
         .detail("⌘K")
         .height(30.0)
         .on_select(|s: &mut AppState, _| {
+            s.shell_ui.command_palette_selected = 0;
+            s.command_palette_edit.focused = true;
             s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(true)));
         })
         .build(k)
@@ -124,24 +139,40 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
 
     let pending = pending_input_count(s);
     if pending > 0 {
+        let jump_btn = IconButton::new(&icons::ARROW_RIGHT)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(ControlSize::Mini)
+            .help("Jump to next chat needing input")
+            .on_press_tx(|s: &mut AppState, _| {
+                if let Some(tid) = s.threads.iter().find_map(|tr| {
+                    s.thread_runtime_by_id
+                        .get(&tr.id)
+                        .is_some_and(|rt| !rt.pending_interactions.is_empty())
+                        .then(|| tr.id.clone())
+                }) {
+                    s.dispatch(Action::Navigate(NavAction::OpenThread(tid)));
+                }
+            })
+            .build(k)
+            .key("sidebar-needs-input-jump");
+
         items.push(
-            SidebarRow::new("Needs input")
-                .icon(&icons::ALERT_TRIANGLE)
-                .badge(pending.to_string())
-                .status(RowStatus::Attention)
-                .height(30.0)
-                .on_select(|s: &mut AppState, _| {
-                    if let Some(tid) = s.threads.iter().find_map(|tr| {
-                        s.thread_runtime_by_id
-                            .get(&tr.id)
-                            .is_some_and(|rt| !rt.pending_interactions.is_empty())
-                            .then(|| tr.id.clone())
-                    }) {
-                        s.dispatch(Action::Navigate(NavAction::OpenThread(tid)));
-                    }
-                })
-                .build(k)
-                .key("sidebar-needs-input"),
+            SidebarRow::new(if s.shell_ui.needs_input_only {
+                "Showing needs input"
+            } else {
+                "Needs input"
+            })
+            .icon(&icons::ALERT_TRIANGLE)
+            .badge(pending.to_string())
+            .status(RowStatus::Attention)
+            .selected(s.shell_ui.needs_input_only)
+            .trailing(jump_btn)
+            .height(30.0)
+            .on_select(|s: &mut AppState, _| {
+                s.shell_ui.needs_input_only = !s.shell_ui.needs_input_only;
+            })
+            .build(k)
+            .key("sidebar-needs-input"),
         );
     }
 
@@ -191,7 +222,28 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
         .key("sidebar-filter-input")
         .border(1.0, t.border_muted);
 
-    items.push(col().w_full().pt(4.0).child(search_input));
+    items.push(
+        row()
+            .w_full()
+            .pt(4.0)
+            .gap(4.0)
+            .center_y()
+            .child(el().grow(1.0).shrink().child(search_input))
+            .child(
+                IconButton::new(&icons::EXTERNAL_LINK)
+                    .variant(IconButtonVariant::GhostMuted)
+                    .control_size(ControlSize::Small)
+                    .help("Open full search")
+                    .shortcut("⌘⇧F")
+                    .on_press_tx(|s: &mut AppState, _| {
+                        s.shell_ui.search_overlay_open = true;
+                        s.shell_ui.search_selected = 0;
+                        s.shell_ui.search_edit.focused = true;
+                    })
+                    .build(k)
+                    .key("sidebar-open-search-overlay"),
+            ),
+    );
     items
 }
 
@@ -199,6 +251,7 @@ fn build_pinned_section(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
+    layer: &mut Vec<El>,
     threads: &[&ThreadRecord],
     active_thread_id: Option<&str>,
 ) -> Option<SidebarSection> {
@@ -206,14 +259,24 @@ fn build_pinned_section(
     if pinned.is_empty() {
         return None;
     }
+    let collapsed = s
+        .collapsed_sidebar_sections
+        .contains(&SidebarSectionKey::Pinned);
     let mut sec = SidebarSection::new("Pinned")
         .key("section-pinned")
-        .count(pinned.len());
+        .count(pinned.len())
+        .collapsed(collapsed)
+        .on_toggle(|s: &mut AppState, _| {
+            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+                SidebarSectionKey::Pinned,
+            )));
+        });
     for tr in pinned {
-        sec = sec.row(thread_row(
+        sec = sec.row(build_thread_row(
             s,
             k,
             t,
+            layer,
             tr,
             active_thread_id == Some(tr.id.as_str()),
             true,
@@ -241,9 +304,18 @@ fn build_tasks_section(
     if visible.is_empty() {
         return None;
     }
+    let collapsed = s
+        .collapsed_sidebar_sections
+        .contains(&SidebarSectionKey::Tasks);
     let mut sec = SidebarSection::new("Tasks")
         .key("section-tasks")
-        .count(visible.len());
+        .count(visible.len())
+        .collapsed(collapsed)
+        .on_toggle(|s: &mut AppState, _| {
+            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+                SidebarSectionKey::Tasks,
+            )));
+        });
     for task in visible {
         let task_id = task.id.clone();
         let status = match task.status.as_str() {
@@ -266,9 +338,12 @@ fn build_tasks_section(
     Some(sec)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_chats_section(
     s: &AppState,
     k: &Kit,
+    t: &ThemeTokens,
+    layer: &mut Vec<El>,
     threads: &[&ThreadRecord],
     one_off_ids: &HashSet<&str>,
     primary_one_off: Option<&str>,
@@ -280,9 +355,18 @@ fn build_chats_section(
         .filter(|tr| one_off_ids.contains(tr.workspace_id.as_str()))
         .collect();
 
+    let collapsed = s
+        .collapsed_sidebar_sections
+        .contains(&SidebarSectionKey::Chats);
     let mut sec = SidebarSection::new("Chats")
         .key("section-chats")
-        .count(chat_threads.len());
+        .count(chat_threads.len())
+        .collapsed(collapsed)
+        .on_toggle(|s: &mut AppState, _| {
+            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+                SidebarSectionKey::Chats,
+            )));
+        });
 
     let one_off_ws = primary_one_off.map(str::to_string);
     let new_btn = IconButton::new(&icons::PLUS)
@@ -307,31 +391,73 @@ fn build_chats_section(
         return sec.row(placeholder);
     }
 
-    for tr in chat_threads {
-        sec = sec.row(thread_row_plain(
+    let search_active = !s.sidebar_search.trim().is_empty();
+    let show_count = if search_active || s.shell_ui.chats_expanded {
+        chat_threads.len()
+    } else {
+        MAX_THREADS_PER_WORKSPACE
+    };
+
+    for tr in chat_threads.iter().take(show_count) {
+        sec = sec.row(build_thread_row(
             s,
             k,
+            t,
+            layer,
             tr,
             active_thread_id == Some(tr.id.as_str()),
+            false,
             0,
         ));
+    }
+
+    if !search_active && chat_threads.len() > MAX_THREADS_PER_WORKSPACE {
+        let label = if s.shell_ui.chats_expanded {
+            "Show less".to_string()
+        } else {
+            format!(
+                "Show {} more",
+                chat_threads.len() - MAX_THREADS_PER_WORKSPACE
+            )
+        };
+        sec = sec.row(
+            SidebarRow::new(label)
+                .depth(0)
+                .height(26.0)
+                .on_select(|s: &mut AppState, _| {
+                    s.shell_ui.chats_expanded = !s.shell_ui.chats_expanded;
+                })
+                .build(k)
+                .key("chats-show-more"),
+        );
     }
     sec
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_workspaces_section(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
+    layer: &mut Vec<El>,
     mut sb: Sidebar,
     projects: &[&WorkspaceRecord],
     threads: &[&ThreadRecord],
     active_thread_id: Option<&str>,
 ) -> Sidebar {
+    let section_collapsed = s
+        .collapsed_sidebar_sections
+        .contains(&SidebarSectionKey::Workspaces);
     if projects.is_empty() {
         let empty = SidebarSection::new("Projects")
             .key("section-projects")
             .count(0)
+            .collapsed(section_collapsed)
+            .on_toggle(|s: &mut AppState, _| {
+                s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+                    SidebarSectionKey::Workspaces,
+                )));
+            })
             .row(
                 SidebarRow::new("Open project folder…")
                     .icon(&icons::FOLDER_PLUS)
@@ -347,6 +473,12 @@ fn build_workspaces_section(
     let mut projects_header = SidebarSection::new("Projects")
         .key("section-projects")
         .count(projects.len())
+        .collapsed(section_collapsed)
+        .on_toggle(|s: &mut AppState, _| {
+            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+                SidebarSectionKey::Workspaces,
+            )));
+        })
         .action(
             IconButton::new(&icons::PLUS)
                 .variant(IconButtonVariant::GhostMuted)
@@ -359,7 +491,8 @@ fn build_workspaces_section(
                 .key("projects-add-btn"),
         );
 
-    for ws in projects {
+    let project_count = projects.len();
+    for (idx, ws) in projects.iter().enumerate() {
         let ws_id = ws.id.clone();
         let ws_id_new = ws.id.clone();
         let collapsed = s.collapsed_workspace_ids.contains(&ws.id);
@@ -388,6 +521,18 @@ fn build_workspaces_section(
                     .build(k)
                     .key(format!("ws-new-chat-{}", ws.id)),
             )
+            .reorder(
+                &s.shell_ui.sidebar_reorder,
+                idx,
+                project_count,
+                |s: &mut AppState| &mut s.shell_ui.sidebar_reorder,
+                |s: &mut AppState, from, to| {
+                    let order = reorder_project_workspaces(s, from, to);
+                    if !order.is_empty() {
+                        s.dispatch(Action::Shell(ShellAction::ReorderWorkspaces(order)));
+                    }
+                },
+            )
             .on_select(move |s: &mut AppState, _| {
                 s.dispatch(Action::Shell(ShellAction::ToggleWorkspaceCollapsed(
                     ws_id.clone(),
@@ -399,31 +544,45 @@ fn build_workspaces_section(
         projects_header = projects_header.row(ws_row);
 
         if !collapsed {
-            let show_count = if s.sidebar_search.trim().is_empty() {
-                MAX_THREADS_PER_WORKSPACE
-            } else {
+            let search_active = !s.sidebar_search.trim().is_empty();
+            let expanded = s.shell_ui.expanded_thread_workspaces.contains(&ws.id);
+            let show_count = if search_active || expanded {
                 ws_threads.len()
+            } else {
+                MAX_THREADS_PER_WORKSPACE
             };
             for tr in ws_threads.iter().take(show_count) {
-                projects_header = projects_header.row(thread_row_plain(
+                projects_header = projects_header.row(build_thread_row(
                     s,
                     k,
+                    t,
+                    layer,
                     tr,
                     active_thread_id == Some(tr.id.as_str()),
+                    false,
                     1,
                 ));
             }
-            if ws_threads.len() > show_count {
-                let remaining = ws_threads.len() - show_count;
+            if !search_active && ws_threads.len() > MAX_THREADS_PER_WORKSPACE {
+                let ws_toggle = ws.id.clone();
+                let label = if expanded {
+                    "Show less".to_string()
+                } else {
+                    format!("Show {} more", ws_threads.len() - MAX_THREADS_PER_WORKSPACE)
+                };
                 projects_header = projects_header.row(
-                    el().key(format!("ws-more-{}", ws.id))
-                        .pl(28.0)
-                        .py(4.0)
-                        .child(
-                            text(format!("{remaining} more threads in search (⌘K)"))
-                                .font(k.ty.small)
-                                .color(k.c.text_faint),
-                        ),
+                    SidebarRow::new(label)
+                        .depth(1)
+                        .height(26.0)
+                        .on_select(move |s: &mut AppState, _| {
+                            if !s.shell_ui.expanded_thread_workspaces.remove(&ws_toggle) {
+                                s.shell_ui
+                                    .expanded_thread_workspaces
+                                    .insert(ws_toggle.clone());
+                            }
+                        })
+                        .build(k)
+                        .key(format!("ws-more-{}", ws.id)),
                 );
             }
         }
@@ -431,6 +590,24 @@ fn build_workspaces_section(
 
     sb = sb.section(projects_header);
     sb
+}
+
+pub(crate) fn reorder_project_workspaces(s: &AppState, from: usize, to: usize) -> Vec<String> {
+    let ordered = s.resolve_workspace_display_targets();
+    let mut project_ids: Vec<String> = ordered
+        .iter()
+        .filter(|w| !w.one_off_chat)
+        .map(|w| w.id.clone())
+        .collect();
+    if from >= project_ids.len() || to >= project_ids.len() || from == to {
+        return Vec::new();
+    }
+    let moved = project_ids.remove(from);
+    project_ids.insert(to, moved);
+    for ws in ordered.iter().filter(|w| w.one_off_chat) {
+        project_ids.push(ws.id.clone());
+    }
+    project_ids
 }
 
 fn workspace_avatar(name: &str, fill: Color, k: &Kit) -> El {
@@ -455,10 +632,12 @@ fn workspace_avatar(name: &str, fill: Color, k: &Kit) -> El {
         )
 }
 
-fn thread_row(
+#[allow(clippy::too_many_arguments)]
+fn build_thread_row(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
+    layer: &mut Vec<El>,
     tr: &ThreadRecord,
     selected: bool,
     show_workspace_avatar: bool,
@@ -472,8 +651,9 @@ fn thread_row(
     let age = format_relative_age(tr.updated_at, s.now_secs);
     let tid_select = tr.id.clone();
     let tid_archive = tr.id.clone();
+    let tid_ctx = tr.id.clone();
 
-    let mut r = SidebarRow::new(title)
+    let mut r = SidebarRow::new(title.clone())
         .depth(depth)
         .selected(selected)
         .on_select(move |s: &mut AppState, _| {
@@ -482,6 +662,27 @@ fn thread_row(
         .on_close(move |s: &mut AppState, _| {
             s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_archive.clone())));
         });
+
+    if s.shell_ui.renaming_thread_id.as_deref() == Some(tr.id.as_str()) {
+        let tid_commit = tr.id.clone();
+        r = r.renaming(
+            &s.shell_ui.rename_edit,
+            |s: &mut AppState| &mut s.shell_ui.rename_edit,
+            move |s: &mut AppState, _| {
+                let next_title = s.shell_ui.rename_edit.text.trim().to_string();
+                s.shell_ui.renaming_thread_id = None;
+                if !next_title.is_empty() {
+                    s.dispatch(Action::Chat(ChatAction::RenameThread {
+                        thread_id: tid_commit.clone(),
+                        title: next_title,
+                    }));
+                }
+            },
+            |s: &mut AppState, _| {
+                s.shell_ui.renaming_thread_id = None;
+            },
+        );
+    }
 
     if show_workspace_avatar {
         if let Some(ws) = s.workspaces.iter().find(|w| w.id == tr.workspace_id) {
@@ -504,35 +705,116 @@ fn thread_row(
         r = r.status(status);
     }
 
-    r.build(k).key(format!("thread-{}", tr.id))
-}
-
-fn thread_row_plain(s: &AppState, k: &Kit, tr: &ThreadRecord, selected: bool, depth: u8) -> El {
-    let title = if tr.title.trim().is_empty() {
-        "Untitled chat".to_string()
-    } else {
-        tr.title.clone()
-    };
-    let age = format_relative_age(tr.updated_at, s.now_secs);
-    let tid_select = tr.id.clone();
-    let tid_archive = tr.id.clone();
-
-    let mut r = SidebarRow::new(title)
-        .icon(&icons::MESSAGE)
-        .depth(depth)
-        .selected(selected)
-        .on_select(move |s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenThread(tid_select.clone())));
-        })
-        .on_close(move |s: &mut AppState, _| {
-            s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_archive.clone())));
+    let row_el = r
+        .build(k)
+        .key(format!("thread-{}", tr.id))
+        .on_secondary_press(move |s: &mut AppState, pt, _| {
+            s.shell_ui.context_menu_thread_id = Some(tid_ctx.clone());
+            s.shell_ui.context_menu_point = Some(pt);
         });
 
-    if !age.is_empty() {
-        r = r.detail(age);
+    if s.shell_ui.context_menu_thread_id.as_deref() == Some(tr.id.as_str())
+        && let Some(pt) = s.shell_ui.context_menu_point
+    {
+        let tid_rename = tr.id.clone();
+        let current_title = title;
+        let tid_pin = tr.id.clone();
+        let next_pin = !tr.pinned;
+        let tid_fork = tr.id.clone();
+        let tid_arch = tr.id.clone();
+        let tid_del = tr.id.clone();
+
+        Menu::new(format!("thread-ctx-{}", tr.id))
+            .standard()
+            .at(pt.x, pt.y)
+            .open(true)
+            .on_close(|s: &mut AppState| {
+                s.shell_ui.context_menu_thread_id = None;
+                s.shell_ui.context_menu_point = None;
+            })
+            .item(MenuItem::new("Rename").icon(&icons::FILE_TEXT).on_select(
+                move |s: &mut AppState| {
+                    s.shell_ui.context_menu_thread_id = None;
+                    s.shell_ui.context_menu_point = None;
+                    s.shell_ui.renaming_thread_id = Some(tid_rename.clone());
+                    s.shell_ui.rename_edit.replace_text(&current_title);
+                    s.shell_ui.rename_edit.focused = true;
+                },
+            ))
+            .item(
+                MenuItem::new(if tr.pinned { "Unpin chat" } else { "Pin chat" })
+                    .icon(&icons::PIN)
+                    .on_select(move |s: &mut AppState| {
+                        s.shell_ui.context_menu_thread_id = None;
+                        s.shell_ui.context_menu_point = None;
+                        s.dispatch(Action::Chat(ChatAction::SetThreadPinned {
+                            thread_id: tid_pin.clone(),
+                            pinned: next_pin,
+                        }));
+                    }),
+            )
+            .item(
+                MenuItem::new("New branch from here")
+                    .icon(&icons::SPARKLES)
+                    .on_select(move |s: &mut AppState| {
+                        s.shell_ui.context_menu_thread_id = None;
+                        s.shell_ui.context_menu_point = None;
+                        s.dispatch(Action::Chat(ChatAction::ForkThread {
+                            thread_id: tid_fork.clone(),
+                            turn_id: None,
+                        }));
+                    }),
+            )
+            .item(MenuItem::new("Archive").on_select(move |s: &mut AppState| {
+                s.shell_ui.context_menu_thread_id = None;
+                s.shell_ui.context_menu_point = None;
+                s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_arch.clone())));
+            }))
+            .separator()
+            .item(
+                MenuItem::new("Delete permanently...")
+                    .danger(true)
+                    .on_select(move |s: &mut AppState| {
+                        s.shell_ui.context_menu_thread_id = None;
+                        s.shell_ui.context_menu_point = None;
+                        s.shell_ui.pending_delete_thread_id = Some(tid_del.clone());
+                    }),
+            )
+            .build(k, layer);
     }
-    if let Some(status) = thread_row_status(s, &tr.id) {
-        r = r.status(status);
+
+    row_el
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reorder_project_workspaces_preserves_one_off_chats() {
+        let mut s = AppState::default();
+        s.workspaces.push(WorkspaceRecord {
+            id: "ws-a".into(),
+            name: "Alpha".into(),
+            path: "/tmp/a".into(),
+            ..Default::default()
+        });
+        s.workspaces.push(WorkspaceRecord {
+            id: "oneoff".into(),
+            name: "Chats".into(),
+            path: "/tmp/chats".into(),
+            one_off_chat: true,
+            ..Default::default()
+        });
+        s.workspaces.push(WorkspaceRecord {
+            id: "ws-b".into(),
+            name: "Beta".into(),
+            path: "/tmp/b".into(),
+            ..Default::default()
+        });
+        s.workspace_order = vec!["ws-a".into(), "oneoff".into(), "ws-b".into()];
+
+        let next = reorder_project_workspaces(&s, 0, 1);
+        assert_eq!(next, vec!["ws-b", "ws-a", "oneoff"]);
     }
-    r.build(k).key(format!("thread-{}", tr.id))
 }

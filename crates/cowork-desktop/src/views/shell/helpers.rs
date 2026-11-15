@@ -12,6 +12,7 @@ use crate::state::{AppState, ThreadRecord, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 
 pub const NARROW_BREAKPOINT: f32 = 720.0;
+pub const COMPACT_BREAKPOINT: f32 = 960.0;
 pub const FULL_BREAKPOINT: f32 = 1120.0;
 pub const MIN_PRIMARY_WORKSPACE_WIDTH: f32 = 520.0;
 pub const MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH: f32 = 320.0;

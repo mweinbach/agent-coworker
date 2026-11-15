@@ -22,7 +22,6 @@ use rune_kit::{ControlSize, Kit};
 use crate::router::ViewId;
 use crate::state::{AppState, WindowMode};
 use crate::theme::ThemeTokens;
-use crate::views::SubviewOutput;
 
 /// Root view of `cowork-desktop`, mounted by `lib.rs` inside the Rune window.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El {
@@ -39,20 +38,21 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     }
 
     let route = s.route().clone();
-    let subview = match route.view {
-        ViewId::Chat => crate::views::chat::view(s, cx, k),
-        ViewId::Task => SubviewOutput {
-            content: tasks::build_task_view(s, k, t),
-            overlays: Vec::new(),
-        },
-        ViewId::Settings => crate::views::settings::view(s, cx, k),
-    };
-
-    let mut layer = subview.overlays;
-    let base = if route.view == ViewId::Settings {
-        build_settings_frame(t, subview.content)
-    } else {
-        build_workspace_split_frame(s, cx, k, t, subview.content, &mut layer)
+    let mut layer = Vec::new();
+    let base = match route.view {
+        ViewId::Settings => {
+            let layout = crate::views::settings::build_layout(s, cx, k, t);
+            build_settings_frame(s, cx, k, t, layout, &mut layer)
+        }
+        ViewId::Chat => {
+            let subview = crate::views::chat::view(s, cx, k);
+            layer.extend(subview.overlays);
+            build_workspace_split_frame(s, cx, k, t, subview.content, &mut layer)
+        }
+        ViewId::Task => {
+            let content = tasks::build_task_view(s, k, t);
+            build_workspace_split_frame(s, cx, k, t, content, &mut layer)
+        }
     };
 
     rune_kit::root(base, overlays::build_overlays(s, k, t, layer)).on_layout::<AppState>(
@@ -62,6 +62,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
                 s.shell_ui.viewport_width = width;
                 if width >= helpers::NARROW_BREAKPOINT {
                     s.shell_ui.left_overlay_open = false;
+                    s.settings_ui.mobile_nav_open = false;
                 }
                 if !state::right_rail_uses_overlay(s) {
                     s.shell_ui.right_overlay_open = false;
@@ -79,15 +80,95 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     )
 }
 
-fn build_settings_frame(t: &ThemeTokens, settings_content: El) -> El {
-    // `views::settings::shell` renders the full-height nav rail (`cx.titlebar_inset()`
-    // top padding) and `<- Back` control directly; avoid duplicating a shell topbar above it.
-    el().key("settings-shell-frame")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .fill(t.app_bg)
-        .child(settings_content)
+fn push_left_drawer_overlay(
+    layer: &mut Vec<El>,
+    chrome: rune::ChromeInsets,
+    t: &ThemeTokens,
+    sidebar_el: El,
+    on_close: fn(&mut AppState),
+) {
+    let left_drawer_top = if chrome.leading > 0.0 {
+        chrome.height
+    } else {
+        0.0
+    };
+    layer.push(
+        col()
+            .key("adaptive-left-drawer-backdrop")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .fill(t.scrim)
+            .items_start()
+            .modal(true, on_close)
+            .child(
+                el().key("adaptive-left-drawer-panel")
+                    .w(280.0)
+                    .h_full()
+                    .min_h(0.0)
+                    .pt(left_drawer_top)
+                    .fill(t.popover_bg)
+                    .border(1.0, t.border_strong)
+                    .child(sidebar_el),
+            ),
+    );
+}
+
+fn build_settings_frame(
+    s: &AppState,
+    cx: &mut Cx<AppState>,
+    k: &Kit,
+    t: &ThemeTokens,
+    layout: crate::views::settings::SettingsLayout,
+    layer: &mut Vec<El>,
+) -> El {
+    let chrome = cx.chrome_insets();
+    layer.extend(layout.overlays);
+    let adaptive = helpers::resolve_adaptive_layout(
+        s.shell_ui.viewport_width,
+        true,
+        s.settings_ui.nav_pane.width(),
+        false,
+        false,
+        0.0,
+        helpers::RightRailKind::Context,
+    );
+    let narrow = adaptive.left_overlay;
+    let toolbar = top_bar::build_settings_toolbar(
+        s,
+        cx,
+        k,
+        t,
+        narrow,
+        &layout.title,
+        layout.workspace_badge.as_deref(),
+        layout.header_actions,
+    );
+
+    let mut split = SplitView::new(layout.main).toolbar(toolbar);
+    if narrow {
+        if s.settings_ui.mobile_nav_open {
+            push_left_drawer_overlay(layer, chrome, t, layout.sidebar, |s| {
+                s.settings_ui.mobile_nav_open = false;
+            });
+        }
+    } else {
+        split = split
+            .sidebar(
+                &s.settings_ui.nav_pane,
+                |s: &mut AppState| &mut s.settings_ui.nav_pane,
+                layout.sidebar,
+            )
+            .sidebar_padding(12.0, 8.0);
+    }
+
+    split
+        .hide_sidebar_toggle()
+        .titlebar_inset(cx.titlebar_inset())
+        .frame_inset(8.0)
+        .toolbar_in_panel()
+        .pane_motion(PaneMotion::new().spring(Spring::new(0.3, 0.0)))
+        .reduced_motion(s.desktop_settings.reduce_motion)
+        .build(k)
+        .key("settings-shell-frame")
 }
 
 fn build_workspace_split_frame(
@@ -156,11 +237,6 @@ fn build_workspace_split_frame(
 
     let mut split = SplitView::new(primary_el).toolbar(toolbar);
     let chrome = cx.chrome_insets();
-    let left_drawer_top = if chrome.leading > 0.0 {
-        chrome.height
-    } else {
-        0.0
-    };
     let right_drawer_top = if chrome.trailing > 0.0 {
         chrome.height
     } else {
@@ -169,26 +245,9 @@ fn build_workspace_split_frame(
 
     if adaptive.left_overlay {
         if s.shell_ui.left_overlay_open {
-            layer.push(
-                col()
-                    .key("adaptive-left-drawer-backdrop")
-                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                    .fill(t.scrim)
-                    .items_start()
-                    .modal(true, |s: &mut AppState| {
-                        s.shell_ui.left_overlay_open = false;
-                    })
-                    .child(
-                        el().key("adaptive-left-drawer-panel")
-                            .w(280.0)
-                            .h_full()
-                            .min_h(0.0)
-                            .pt(left_drawer_top)
-                            .fill(t.popover_bg)
-                            .border(1.0, t.border_strong)
-                            .child(sidebar_el),
-                    ),
-            );
+            push_left_drawer_overlay(layer, chrome, t, sidebar_el, |s| {
+                s.shell_ui.left_overlay_open = false;
+            });
         }
     } else {
         split = split
@@ -296,6 +355,156 @@ mod tests {
         cx.focus_ring(2.0, 2.5, tokens.focus_ring);
         cx.web_focus();
         view(state, cx, &kit, &tokens)
+    }
+
+    #[test]
+    fn settings_mounts_inside_unified_split_frame_with_toolbar_and_narrow_drawer() {
+        use crate::actions::{Action, NavAction};
+        use crate::router::{SettingsPageId, ViewId};
+        use rune::{Env, Key, KeyEvent, Mods, Runtime, Tx};
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Models,
+        ))));
+        s.shell_ui.viewport_width = 1280.0;
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        let mut mac_insets = rune::ChromeInsets::default();
+        mac_insets.leading = 72.0;
+        mac_insets.height = 38.0;
+        rt.set_titlebar_inset(72.0);
+        rt.set_chrome_insets(mac_insets);
+        rt.frame(0.0);
+
+        let (rail_rect, _) = rt
+            .presented("settings-nav-rail")
+            .expect("settings nav rail should mount inline on wide viewport");
+        let (heading_rect, _) = rt
+            .presented("settings-toolbar-heading")
+            .expect("settings toolbar heading should mount");
+        let (main_rect, _) = rt
+            .presented("settings-main-pane")
+            .expect("settings main pane should mount");
+        assert!(
+            rail_rect[1] >= 38.0,
+            "settings nav rail must clear 38pt traffic light chrome, got y={}",
+            rail_rect[1]
+        );
+        assert!(
+            heading_rect[0] >= rail_rect[0] + rail_rect[2] && heading_rect[1] <= 56.0,
+            "settings heading should sit in top panel toolbar right of nav rail, got {heading_rect:?}"
+        );
+        assert!(
+            main_rect[0] >= rail_rect[0] + rail_rect[2],
+            "settings main pane must sit right of nav rail"
+        );
+
+        // Windows/Linux trailing caption reserve keeps page header actions clear of caption buttons.
+        let mut win_s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        win_s.onboarding.completed = true;
+        win_s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Models,
+        ))));
+        win_s.shell_ui.viewport_width = 1280.0;
+        let mut win_rt = Runtime::new(win_s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        let mut win_insets = rune::ChromeInsets::default();
+        win_insets.trailing = 136.0;
+        win_insets.height = 38.0;
+        win_rt.set_titlebar_inset(0.0);
+        win_rt.set_chrome_insets(win_insets);
+        win_rt.frame(0.0);
+        let (reserve_rect, _) = win_rt
+            .presented("topbar-caption-reserve")
+            .expect("Windows/Linux caption reserve must mount when chrome.trailing > 0");
+        assert!(
+            reserve_rect[2] >= 135.0
+                && reserve_rect[0] >= 1100.0
+                && reserve_rect[0] + reserve_rect[2] <= 1280.0,
+            "caption reserve must occupy trailing edge without overflow, got {reserve_rect:?}"
+        );
+
+        // Narrow viewport (< 720px) collapses nav rail behind narrow drawer toggle & Cmd+B / Escape.
+        let mut narrow_s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        narrow_s.onboarding.completed = true;
+        narrow_s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Models,
+        ))));
+        narrow_s.shell_ui.viewport_width = 640.0;
+        let mut narrow_rt = Runtime::new(
+            narrow_s,
+            test_shell_root,
+            (640.0, 820.0),
+            Env::new(true, 1.0),
+        );
+        narrow_rt.set_titlebar_inset(72.0);
+        narrow_rt.set_chrome_insets(mac_insets);
+        narrow_rt.frame(0.0);
+        assert!(
+            narrow_rt.presented("settings-nav-rail").is_none(),
+            "nav rail must collapse off-canvas below narrow breakpoint"
+        );
+        let (toggle_rect, _) = narrow_rt
+            .presented("topbar-narrow-settings-nav-toggle")
+            .expect("narrow settings drawer toggle must render");
+        assert!(
+            toggle_rect[0] >= 72.0 && toggle_rect[0] <= 112.0,
+            "narrow settings drawer toggle should clear traffic lights without double-padding, got x={}",
+            toggle_rect[0]
+        );
+
+        narrow_rt.pointer_move(
+            toggle_rect[0] + toggle_rect[2] * 0.5,
+            toggle_rect[1] + toggle_rect[3] * 0.5,
+        );
+        narrow_rt.pointer_down(
+            toggle_rect[0] + toggle_rect[2] * 0.5,
+            toggle_rect[1] + toggle_rect[3] * 0.5,
+        );
+        narrow_rt.pointer_up(
+            toggle_rect[0] + toggle_rect[2] * 0.5,
+            toggle_rect[1] + toggle_rect[3] * 0.5,
+        );
+        narrow_rt.frame(0.0);
+        assert!(narrow_rt.state.settings_ui.mobile_nav_open);
+        assert!(
+            narrow_rt.presented("adaptive-left-drawer-panel").is_some()
+                && narrow_rt.presented("settings-nav-rail").is_some(),
+            "toggling narrow settings button must present nav rail in drawer overlay"
+        );
+
+        let esc = KeyEvent {
+            key: Key::Escape,
+            mods: Mods::default(),
+        };
+        let mut tx = Tx::default();
+        assert!(handle_key(&mut narrow_rt.state, &esc, &mut tx));
+        assert!(!narrow_rt.state.settings_ui.mobile_nav_open);
+        assert_eq!(narrow_rt.state.route().view, ViewId::Settings);
+
+        let cmd_b = KeyEvent {
+            key: Key::Command('b'),
+            mods: Mods {
+                cmd: true,
+                ..Default::default()
+            },
+        };
+        assert!(handle_key(&mut narrow_rt.state, &cmd_b, &mut tx));
+        assert!(narrow_rt.state.settings_ui.mobile_nav_open);
+        assert!(handle_key(&mut narrow_rt.state, &esc, &mut tx));
+        assert!(!narrow_rt.state.settings_ui.mobile_nav_open);
+        assert!(handle_key(&mut narrow_rt.state, &esc, &mut tx));
+        assert_eq!(narrow_rt.state.route().view, ViewId::Chat);
     }
 
     #[test]

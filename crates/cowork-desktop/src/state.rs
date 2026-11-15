@@ -2533,6 +2533,11 @@ impl AppState {
                     }));
                 }
                 "toggle_sidebar" => self.dispatch(Action::Shell(ShellAction::ToggleSidebar)),
+                "open_workspaces_settings" => {
+                    self.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+                        SettingsPageId::Defaults,
+                    ))));
+                }
                 "command_palette" => {
                     self.dispatch(Action::Shell(ShellAction::ToggleCommandPalette));
                 }
@@ -6305,6 +6310,9 @@ impl AppState {
             "provider_status" => {
                 self.apply_provider_status_event(workspace_id, evt);
             }
+            "provider_auth_methods" => {
+                self.apply_provider_auth_methods_event(evt);
+            }
             "memory_list" => {
                 self.apply_memory_list_event(evt);
             }
@@ -6512,20 +6520,7 @@ impl AppState {
                 self.apply_provider_catalog_event(&payload);
             }
             "cowork/provider/authMethods/read" => {
-                let target = payload.get("event").unwrap_or(&payload);
-                if let Some(obj) = target.get("methodsByProvider").and_then(Value::as_object) {
-                    for (prov, val) in obj {
-                        if let Some(arr) = val.as_array() {
-                            let specs: Vec<ProviderAuthMethodSpec> = arr
-                                .iter()
-                                .filter_map(parse_provider_auth_method_spec)
-                                .collect();
-                            let ids: Vec<String> = specs.iter().map(|m| m.id.clone()).collect();
-                            self.provider_auth_methods.insert(prov.clone(), ids);
-                            self.provider_auth_method_specs.insert(prov.clone(), specs);
-                        }
-                    }
-                }
+                self.apply_provider_auth_methods_event(&payload);
             }
             "cowork/provider/status/refresh" => {
                 self.apply_provider_status_event(workspace_id, &payload);
@@ -7363,6 +7358,28 @@ impl AppState {
             || evt.get("userServers").is_some()
         {
             self.mcp_servers = servers;
+        }
+    }
+
+    fn apply_provider_auth_methods_event(&mut self, evt: &Value) {
+        let target = evt.get("event").unwrap_or(evt);
+        let Some(obj) = target
+            .get("methods")
+            .or_else(|| target.get("methodsByProvider"))
+            .and_then(Value::as_object)
+        else {
+            return;
+        };
+        for (prov, val) in obj {
+            if let Some(arr) = val.as_array() {
+                let specs: Vec<ProviderAuthMethodSpec> = arr
+                    .iter()
+                    .filter_map(parse_provider_auth_method_spec)
+                    .collect();
+                let ids: Vec<String> = specs.iter().map(|m| m.id.clone()).collect();
+                self.provider_auth_methods.insert(prov.clone(), ids);
+                self.provider_auth_method_specs.insert(prov.clone(), specs);
+            }
         }
     }
 
@@ -8451,10 +8468,10 @@ fn parse_provider_model_summary(v: &Value) -> Option<ProviderModelSummary> {
         .unwrap_or(&id)
         .to_string();
     let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(true);
-    let custom = v
-        .get("custom")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| v.get("origin").and_then(Value::as_str) == Some("custom"));
+    let custom = v.get("custom").and_then(Value::as_bool).unwrap_or_else(|| {
+        v.get("origin").and_then(Value::as_str) == Some("custom")
+            || v.pointer("/runtimeOptions/source").and_then(Value::as_str) == Some("custom")
+    });
     let reasoning_efforts: Vec<String> = v
         .get("reasoningEfforts")
         .or_else(|| v.pointer("/reasoning/availableEfforts"))
@@ -8547,7 +8564,8 @@ fn parse_provider_status_summary(v: &Value) -> Option<ProviderStatusSummary> {
         .or_else(|| {
             v.get("savedApiKeyMasks")
                 .and_then(Value::as_object)
-                .and_then(|m| m.values().find_map(Value::as_str))
+                .and_then(|m| m.get("api_key").or_else(|| m.get("apiKey")))
+                .and_then(Value::as_str)
                 .map(str::to_string)
         });
     let source = v.get("source").and_then(Value::as_str).map(str::to_string);
@@ -10587,7 +10605,8 @@ mod tests {
             method: "cowork/provider/authMethods/read".to_string(),
             result: Ok(json!({
                 "event": {
-                    "methodsByProvider": {
+                    "type": "provider_auth_methods",
+                    "methods": {
                         "anthropic": [
                             { "id": "api_key", "type": "api", "label": "API key" },
                             { "id": "claude-oauth", "type": "oauth", "label": "Claude Pro/Max" }
@@ -12100,6 +12119,10 @@ mod tests {
                                 "defaultEffort": "medium",
                                 "availableEfforts": ["low", "medium", "high"]
                             }
+                        }, {
+                            "id": "gpt-custom-e2e",
+                            "displayName": "Custom E2E",
+                            "runtimeOptions": { "source": "custom" }
                         }]
                     }],
                     "default": { "openai": "gpt-5.4" },
@@ -12110,10 +12133,13 @@ mod tests {
         assert_eq!(state.provider_catalog.len(), 1);
         assert_eq!(state.provider_catalog[0].id, "openai");
         assert!(state.provider_catalog[0].configured);
-        assert_eq!(state.provider_catalog[0].models.len(), 1);
+        assert_eq!(state.provider_catalog[0].models.len(), 2);
         assert_eq!(state.provider_catalog[0].models[0].name, "GPT-5.4");
+        assert!(!state.provider_catalog[0].models[0].custom);
         assert!(state.provider_catalog[0].models[0].enabled);
         assert!(state.provider_catalog[0].models[0].supports_reasoning);
+        assert_eq!(state.provider_catalog[0].models[1].id, "gpt-custom-e2e");
+        assert!(state.provider_catalog[0].models[1].custom);
         assert_eq!(
             state.provider_catalog[0].models[0].reasoning_efforts,
             vec!["low", "medium", "high"]
@@ -12143,13 +12169,23 @@ mod tests {
                         "message": "Configured via API key",
                         "checkedAt": "2026-01-01T00:00:00Z",
                         "methodId": "api_key",
-                        "savedApiKeyMasks": { "apiKey": "sk-...mock" }
+                        "savedApiKeyMasks": {
+                            "exa_api_key": "exa-...tool",
+                            "api_key": "sk-...mock"
+                        }
+                    }, {
+                        "provider": "google",
+                        "authorized": false,
+                        "verified": false,
+                        "savedApiKeyMasks": {
+                            "exa_api_key": "exa-...only"
+                        }
                     }]
                 }
             })),
         );
         let statuses = &state.workspace_runtime_by_id["ws-1"].provider_statuses;
-        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses.len(), 2);
         assert_eq!(statuses[0].provider, "openai");
         assert!(statuses[0].connected);
         assert!(statuses[0].healthy);
@@ -12162,5 +12198,7 @@ mod tests {
             statuses[0].saved_api_key_mask.as_deref(),
             Some("sk-...mock")
         );
+        assert_eq!(statuses[1].provider, "google");
+        assert!(statuses[1].saved_api_key_mask.is_none());
     }
 }

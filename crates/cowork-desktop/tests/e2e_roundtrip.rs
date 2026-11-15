@@ -239,6 +239,36 @@ fn set_isolated_env(home_dir: &Path, user_data_dir: &Path, openai_base_url: &str
     }
 }
 
+struct ShutdownGuard(Option<AppState>);
+
+impl ShutdownGuard {
+    fn new(state: AppState) -> Self {
+        Self(Some(state))
+    }
+}
+
+impl std::ops::Deref for ShutdownGuard {
+    type Target = AppState;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("AppState present until drop")
+    }
+}
+
+impl std::ops::DerefMut for ShutdownGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("AppState present until drop")
+    }
+}
+
+impl Drop for ShutdownGuard {
+    fn drop(&mut self) {
+        if let Some(mut state) = self.0.take() {
+            on_shutdown(&mut state);
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires built cowork-server binary; run `cargo build -p cowork-server --bin cowork-server && cargo test -p cowork-desktop --test e2e_roundtrip -- --ignored`"]
 fn desktop_starts_workspace_server_lists_threads_and_streams_reply() {
@@ -255,7 +285,7 @@ fn desktop_starts_workspace_server_lists_threads_and_streams_reply() {
     let mock_openai = MockOpenAiServer::start(MOCK_REPLY);
     set_isolated_env(&home_dir, &user_data_dir, &mock_openai.base_url);
 
-    let mut state = AppState::default();
+    let mut state = ShutdownGuard::new(AppState::default());
     let event_tx = state.services.event_tx.clone();
     state.services.ws_tx = Some(spawn_ws_manager(event_tx.clone(), None));
     state.services.native_tx = Some(spawn_native_worker(event_tx, None));
@@ -398,6 +428,10 @@ fn desktop_starts_workspace_server_lists_threads_and_streams_reply() {
         "default_model_by_provider should be populated"
     );
     assert!(
+        !state.provider_auth_methods.is_empty(),
+        "provider_auth_methods should be populated from cowork/provider/authMethods/read"
+    );
+    assert!(
         state
             .workspace_runtime_by_id
             .get(&ws_id)
@@ -407,6 +441,4 @@ fn desktop_starts_workspace_server_lists_threads_and_streams_reply() {
                 .any(|s| s.provider == "openai" && (s.connected || s.healthy))),
         "openai status should report connected with OPENAI_API_KEY"
     );
-
-    on_shutdown(&mut state);
 }

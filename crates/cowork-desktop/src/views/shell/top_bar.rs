@@ -116,7 +116,7 @@ pub fn build_toolbar(
                     .variant(IconButtonVariant::GhostMuted)
                     .control_size(ControlSize::Small)
                     .help("Stop current turn")
-                    .shortcut("⌘.")
+                    .shortcut(crate::shortcut_label("Cmd+."))
                     .on_press_tx(move |s: &mut AppState, _| {
                         s.dispatch(Action::Chat(ChatAction::CancelTurn {
                             thread_id: thread_id.clone(),
@@ -145,7 +145,7 @@ pub fn build_toolbar(
             .control_size(ControlSize::Regular)
             .expanded(drawer_open)
             .help("Toggle navigation drawer")
-            .shortcut("⌘B")
+            .shortcut(crate::shortcut_label("Cmd+B"))
             .on_press_tx(|s: &mut AppState, _| {
                 s.shell_ui.left_overlay_open = !s.shell_ui.left_overlay_open;
                 if s.shell_ui.left_overlay_open {
@@ -205,7 +205,7 @@ pub fn build_toolbar(
         } else {
             "Show context sidebar"
         })
-        .shortcut("⌥⌘I")
+        .shortcut(crate::shortcut_label("Opt+Cmd+I"))
         .on_press_tx(move |s: &mut AppState, _| {
             if super::state::right_rail_uses_overlay(s) {
                 let next_open = !super::state::is_right_overlay_visible(s);
@@ -230,7 +230,7 @@ pub fn build_toolbar(
         .variant(IconButtonVariant::GhostMuted)
         .control_size(ControlSize::Regular)
         .help("Settings")
-        .shortcut("⌘,")
+        .shortcut(crate::shortcut_label("Cmd+,"))
         .on_press_tx(|s: &mut AppState, _| {
             s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
         })

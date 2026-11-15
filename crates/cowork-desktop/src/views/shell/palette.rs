@@ -311,7 +311,10 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
             key: "pal-act-zoom-in".into(),
             section: "Actions",
             title: "Zoom In".into(),
-            subtitle: "Increase interface scale (⌘=)".into(),
+            subtitle: format!(
+                "Increase interface scale ({})",
+                crate::shortcut_label("Cmd+=")
+            ),
             icon_glyph: &icons::ZOOM_IN,
             action: Action::Shell(ShellAction::ZoomIn),
         },
@@ -319,7 +322,10 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
             key: "pal-act-zoom-out".into(),
             section: "Actions",
             title: "Zoom Out".into(),
-            subtitle: "Decrease interface scale (⌘-)".into(),
+            subtitle: format!(
+                "Decrease interface scale ({})",
+                crate::shortcut_label("Cmd+-")
+            ),
             icon_glyph: &icons::ZOOM_OUT,
             action: Action::Shell(ShellAction::ZoomOut),
         },
@@ -327,7 +333,10 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
             key: "pal-act-zoom-reset".into(),
             section: "Actions",
             title: "Actual Size".into(),
-            subtitle: "Reset interface zoom scale to 100% (⌘0)".into(),
+            subtitle: format!(
+                "Reset interface zoom scale to 100% ({})",
+                crate::shortcut_label("Cmd+0")
+            ),
             icon_glyph: &icons::REFRESH,
             action: Action::Shell(ShellAction::ResetZoom),
         },

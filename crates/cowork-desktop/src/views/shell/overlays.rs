@@ -498,9 +498,12 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
         3 => Card::new()
             .accent(t.accent)
             .title(title, Some(glyph))
-            .description(
-                "Press Cmd/Ctrl+K anywhere for the Command Palette, Cmd/Ctrl+B for sidebar, and Cmd/Ctrl+Shift+Space for Quick Chat.",
-            )
+            .description(format!(
+                "Press {} anywhere for the Command Palette, {} for sidebar, and {} for Quick Chat.",
+                crate::shortcut_label("Cmd+K"),
+                crate::shortcut_label("Cmd+B"),
+                crate::shortcut_label("CmdOrCtrl+Shift+Space"),
+            ))
             .build(k),
         _ => Card::new()
             .accent(t.success)
@@ -904,7 +907,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
             let selected = idx == selected_idx;
             let action = item.action;
             let shortcut_badge = (idx < 9).then(|| {
-                Badge::new(format!("⌘{}", idx + 1))
+                Badge::new(crate::shortcut_label(&format!("Cmd+{}", idx + 1)))
                     .variant(BadgeVariant::Neutral)
                     .build(k)
             });
@@ -984,9 +987,12 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 .center_y()
                 .fill(t.panel_bg)
                 .child(
-                    text("↑↓ navigate · Enter open · ⌘1-9 quick jump · Esc close")
-                        .font(t.caption)
-                        .color(t.text_faint),
+                    text(format!(
+                        "↑↓ navigate · Enter open · {} quick jump · Esc close",
+                        crate::shortcut_label("Cmd+1-9")
+                    ))
+                    .font(t.caption)
+                    .color(t.text_faint),
                 )
                 .child(spacer())
                 .child(

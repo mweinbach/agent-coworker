@@ -6,7 +6,7 @@
 use rune::{El, Key, ScrollSpec, col, el, row, text, text_input};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Divider, IconButton,
-    IconButtonVariant, Kit, Menu, MenuItem, glyphs,
+    IconButtonVariant, Kit, Menu, MenuItem, Placement, glyphs,
 };
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
@@ -422,6 +422,9 @@ fn open_or_toggle_explorer_entry(s: &mut AppState, ws_id: &str, path: &str, is_d
         }
     } else {
         s.shell_ui.canvas_overlay_dismissed_key = None;
+        if !(s.is_canvas_enabled() && crate::views::chat::is_canvas_document_path(path)) {
+            close_context_inspector(s);
+        }
         s.dispatch(Action::Native(NativeAction::LoadFilePreview {
             workspace_id: ws_id.to_string(),
             path: path.to_string(),
@@ -624,13 +627,14 @@ fn build_explorer_context_menu(
 
     let mut builder = Menu::new(format!("ws-file-ctx-{}", menu.path))
         .standard()
+        .min_width(220.0)
         .open(true)
         .on_close(|s: &mut AppState| {
             s.shell_ui.file_context_menu = None;
         });
 
     if let Some(trig) = trigger {
-        builder = builder.trigger(trig);
+        builder = builder.placement(Placement::BottomEnd).trigger(trig);
     } else if let Some(pt) = menu.point {
         builder = builder.at(pt.x, pt.y);
     }
@@ -1071,5 +1075,84 @@ mod tests {
         });
         assert!(crate::views::shell::state::handle_escape(&mut s));
         assert!(s.shell_ui.pending_trash_entry.is_none());
+    }
+
+    #[test]
+    fn opening_non_canvas_file_from_context_closes_context_and_menu_has_full_width() {
+        let mut s = AppState::default();
+        s.workspaces.push(crate::state::WorkspaceRecord {
+            id: "ws-1".into(),
+            name: "Demo".into(),
+            path: "/tmp/demo-ws".into(),
+            ..Default::default()
+        });
+        s.active_workspace_id = Some("ws-1".into());
+        s.feature_flags.insert("canvas".into(), true);
+        s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(true)));
+        s.shell_ui.right_overlay_open = true;
+
+        open_or_toggle_explorer_entry(&mut s, "ws-1", "notes.md", false);
+        assert!(
+            s.context_sidebar.is_open(),
+            "Canvas-supported file replaces context rail cleanly without closing context preference"
+        );
+
+        open_or_toggle_explorer_entry(&mut s, "ws-1", "budget.csv", false);
+        assert!(
+            !s.context_sidebar.is_open() && !s.shell_ui.right_overlay_open,
+            "Non-canvas inline preview should close Context to avoid a 4-pane squeeze"
+        );
+
+        let mut s_menu = AppState::default();
+        s_menu.workspaces.push(crate::state::WorkspaceRecord {
+            id: "ws-1".into(),
+            name: "Demo".into(),
+            path: "/tmp/demo-ws".into(),
+            ..Default::default()
+        });
+        s_menu.active_workspace_id = Some("ws-1".into());
+        s_menu.explorer_entries_by_dir.insert(
+            ".".into(),
+            vec![WorkspaceFileEntry {
+                name: "budget.csv".into(),
+                path: "budget.csv".into(),
+                is_dir: false,
+                size_bytes: Some(128),
+                git_status: None,
+            }],
+        );
+        s_menu.shell_ui.file_context_menu = Some(ExplorerContextMenu {
+            workspace_id: "ws-1".into(),
+            path: "budget.csv".into(),
+            name: "budget.csv".into(),
+            is_dir: false,
+            point: None,
+        });
+
+        let mut rt = rune::Runtime::new(
+            s_menu,
+            |state: &AppState, cx: &mut rune::Cx<AppState>| {
+                let dark = state.effective_dark(cx.system_dark());
+                let (kit, tokens) = crate::theme::build_kit(
+                    dark,
+                    state.desktop_settings.reduced_transparency,
+                    state.desktop_settings.high_contrast,
+                );
+                let mut layer = Vec::new();
+                let body = build_context_sidebar(state, &kit, &tokens, &mut layer);
+                rune_kit::root(body, layer)
+            },
+            (360.0, 600.0),
+            rune::Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let (menu_rect, _) = rt
+            .presented("ws-file-ctx-budget.csv-menu")
+            .expect("explorer context menu should be mounted");
+        assert!(
+            menu_rect[2] >= 220.0,
+            "explorer menu must expand to >= 220px to avoid label truncation, got w={}",
+            menu_rect[2]
+        );
     }
 }

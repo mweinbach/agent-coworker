@@ -2,7 +2,7 @@
 //! creation readiness notices, and the inline file preview split pane.
 
 use cowork_protocol::{CreationReadinessCheck, CreationRepairAction};
-use rune::{El, ScrollSpec, col, el, icon, row, spacer, text};
+use rune::{El, ScrollSpec, col, el, icon, row, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, IconButton, IconButtonVariant,
     Kit, Spinner,
@@ -95,8 +95,9 @@ pub fn build_primary_content(
                 .min_h(0.0)
                 .child(
                     el().key("primary-subview-pane")
-                        .grow(1.6)
+                        .grow(1.0)
                         .shrink()
+                        .min_w(240.0)
                         .min_h(0.0)
                         .h_full()
                         .child(main_subview),
@@ -376,16 +377,23 @@ fn build_creation_readiness_notice(
         return None;
     }
 
-    let first_issue = failing.first().copied();
-    let title = first_issue
-        .map(|c| c.id.as_str())
-        .unwrap_or("Workspace creation setup required");
+    let first_issue = failing
+        .iter()
+        .copied()
+        .find(|c| c.status == "blocked")
+        .or_else(|| failing.first().copied());
+    let title = readiness_issue_title(first_issue);
     let detail = first_issue
         .map(|c| c.message.as_str())
         .unwrap_or("Connect a provider or finish runtime checks before starting new chats.");
+    let accent = if first_issue.is_some_and(|c| c.status == "pending") {
+        t.accent
+    } else {
+        t.warning
+    };
 
     let mut card = Card::new()
-        .accent(t.warning)
+        .accent(accent)
         .title(title, Some(&icons::INFO))
         .description(detail);
 
@@ -430,6 +438,23 @@ fn build_creation_readiness_notice(
             .border(1.0, t.border)
             .child(card.build(k)),
     )
+}
+
+fn readiness_issue_title(issue: Option<&CreationReadinessCheck>) -> &'static str {
+    let Some(check) = issue else {
+        return "Workspace setup required";
+    };
+    if check.status == "pending" {
+        return "Finishing setup";
+    }
+    match check.id.as_str() {
+        "project_access" => "Workspace folder unavailable",
+        "provider_connected" => "Provider unavailable",
+        "credentials" => "Provider credentials required",
+        "model_available" => "Model unavailable",
+        "runtime_ready" => "Runtime setup incomplete",
+        _ => "Not ready to start",
+    }
 }
 
 fn repair_action_label(action: &CreationRepairAction) -> &'static str {
@@ -584,7 +609,27 @@ fn build_inline_file_preview(
     let path_for_open = preview.path.clone();
     let maximized = s.shell_ui.preview_maximized;
 
-    let mut header = row()
+    let mut title_group = row()
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .gap(8.0)
+        .center_y()
+        .child(icon(&icons::FILE_TEXT, 14.0).color(t.text_muted))
+        .child(
+            text(title)
+                .font(t.label)
+                .color(t.text_base)
+                .truncate()
+                .shrink()
+                .min_w(0.0),
+        );
+
+    if preview.is_markdown {
+        title_group = title_group.child(Badge::new("MD").variant(BadgeVariant::Subtle).build(k));
+    }
+
+    let header = row()
         .key("file-preview-header")
         .w_full()
         .h(40.0)
@@ -592,21 +637,7 @@ fn build_inline_file_preview(
         .gap(8.0)
         .center_y()
         .fill(t.panel_bg)
-        .child(icon(&icons::FILE_TEXT, 14.0).color(t.text_muted))
-        .child(
-            text(title)
-                .font(t.label)
-                .color(t.text_base)
-                .truncate()
-                .grow(1.0),
-        );
-
-    if preview.is_markdown {
-        header = header.child(Badge::new("MD").variant(BadgeVariant::Subtle).build(k));
-    }
-
-    header = header
-        .child(spacer())
+        .child(title_group)
         .child(
             Button::new(if maximized { "Restore" } else { "Maximize" })
                 .variant(ButtonVariant::Ghost)
@@ -705,7 +736,7 @@ fn build_inline_file_preview(
 
     col()
         .key("inline-file-preview")
-        .grow(1.0)
+        .grow(1.65)
         .shrink()
         .min_w(260.0)
         .min_h(0.0)
@@ -714,4 +745,67 @@ fn build_inline_file_preview(
         .child(header)
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(el().grow(1.0).shrink().min_h(0.0).w_full().child(body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cowork_protocol::CreationPreflightResult;
+
+    #[test]
+    fn readiness_issue_title_maps_raw_check_ids_to_human_headings() {
+        let blocked_credentials = CreationReadinessCheck {
+            id: "credentials".into(),
+            status: "blocked".into(),
+            message: "Connect OpenAI before starting this chat.".into(),
+            repair_action: None,
+        };
+        assert_eq!(
+            readiness_issue_title(Some(&blocked_credentials)),
+            "Provider credentials required"
+        );
+
+        let pending_runtime = CreationReadinessCheck {
+            id: "runtime_ready".into(),
+            status: "pending".into(),
+            message: "Cowork is finishing setup in the background.".into(),
+            repair_action: None,
+        };
+        assert_eq!(
+            readiness_issue_title(Some(&pending_runtime)),
+            "Finishing setup"
+        );
+
+        let unknown = CreationReadinessCheck {
+            id: "custom_check_key".into(),
+            status: "blocked".into(),
+            message: "Action needed.".into(),
+            repair_action: None,
+        };
+        assert_eq!(readiness_issue_title(Some(&unknown)), "Not ready to start");
+
+        let s = AppState {
+            workspace_creation_preflight: Some(CreationPreflightResult {
+                ready: false,
+                checks: vec![pending_runtime, blocked_credentials],
+            }),
+            ..Default::default()
+        };
+        fn notice_view(state: &AppState, cx: &mut rune::Cx<AppState>) -> El {
+            let dark = state.effective_dark(cx.system_dark());
+            let (kit, tok) = crate::theme::build_kit(
+                dark,
+                state.desktop_settings.reduced_transparency,
+                state.desktop_settings.high_contrast,
+            );
+            let notice = build_creation_readiness_notice(state, Some("ws-1".into()), &kit, &tok)
+                .expect("notice should render when preflight is not ready");
+            el().w_full().h_full().child(notice)
+        }
+        let mut rt = rune::Runtime::new(s, notice_view, (600.0, 200.0), rune::Env::new(true, 1.0));
+        rt.frame(0.0);
+        let tree = rt.a11y_json();
+        assert!(tree.contains("Provider credentials required"));
+        assert!(!tree.contains("\"credentials\""));
+    }
 }

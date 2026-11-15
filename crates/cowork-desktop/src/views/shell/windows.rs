@@ -15,7 +15,18 @@ use super::{helpers, icons};
 
 /// Render the compact Menu Bar Utility shell when `s.window_mode == WindowMode::Utility`.
 pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El {
-    let top_pad = cx.titlebar_inset().max(8.0);
+    let chrome = cx.chrome_insets();
+    let lead_pad = if chrome.leading > 0.0 {
+        chrome.leading + 12.0
+    } else {
+        14.0
+    };
+    let trail_pad = if chrome.trailing > 0.0 {
+        chrome.trailing + 12.0
+    } else {
+        14.0
+    };
+    let header_h = chrome.height.max(40.0);
     let active_ws = s
         .active_workspace_id
         .as_deref()
@@ -32,9 +43,9 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
     let mut header = row()
         .key("utility-header")
         .w_full()
-        .px(14.0)
-        .pt(top_pad)
-        .pb(10.0)
+        .h(header_h)
+        .pl(lead_pad)
+        .pr(trail_pad)
         .gap(8.0)
         .center_y()
         .window_drag()
@@ -210,7 +221,18 @@ pub fn build_quick_chat_window(
     t: &ThemeTokens,
     chat_subview: SubviewOutput,
 ) -> El {
-    let top_pad = cx.titlebar_inset().max(8.0);
+    let chrome = cx.chrome_insets();
+    let lead_pad = if chrome.leading > 0.0 {
+        chrome.leading + 12.0
+    } else {
+        14.0
+    };
+    let trail_pad = if chrome.trailing > 0.0 {
+        chrome.trailing + 12.0
+    } else {
+        14.0
+    };
+    let header_h = chrome.height.max(42.0);
     let ws_name = s
         .active_workspace_id
         .as_deref()
@@ -221,9 +243,9 @@ pub fn build_quick_chat_window(
     let header = row()
         .key("quick-chat-header")
         .w_full()
-        .px(14.0)
-        .pt(top_pad)
-        .pb(8.0)
+        .h(header_h)
+        .pl(lead_pad)
+        .pr(trail_pad)
         .gap(8.0)
         .center_y()
         .window_drag()

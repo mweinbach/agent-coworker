@@ -266,11 +266,21 @@ pub fn push_overlay(
             .child(list_col),
     );
 
+    let header_summary = text(format!(
+        "{enabled_count} of {} enabled. Enabled models appear in model pickers; disabling never blocks a model that is already selected.",
+        all_models.len()
+    ))
+    .font(k.ty.text_small)
+    .color(t.text_muted)
+    .wrap();
+
     let mut body = col()
         .w_full()
+        .min_w(0.0)
         .px(16.0)
         .pb(16.0)
         .gap(12.0)
+        .child(header_summary)
         .child(search_bar)
         .child(
             el().w_full()
@@ -285,7 +295,6 @@ pub fn push_overlay(
 
     if can_add_custom_model(provider_id) {
         let custom_id = s.settings_ui.custom_model_id_edit.text.trim().to_string();
-        let custom_name = s.settings_ui.custom_model_name_edit.text.trim().to_string();
         let add_disabled = !can_mutate || custom_id.is_empty();
         let ws_add = active_ws_id.map(str::to_owned);
         let prov_add = provider_id.to_string();
@@ -300,16 +309,8 @@ pub fn push_overlay(
                     TextInput::new(&s.settings_ui.custom_model_id_edit)
                         .label("Custom model ID")
                         .placeholder("Add custom model ID (e.g. gpt-4.1-mini)")
-                        .width(Some(240.0))
+                        .width(Some(300.0))
                         .on_edit(|s: &mut AppState| &mut s.settings_ui.custom_model_id_edit)
-                        .build(k),
-                )
-                .child(
-                    TextInput::new(&s.settings_ui.custom_model_name_edit)
-                        .label("Display name (optional)")
-                        .placeholder("Display label (optional)")
-                        .width(Some(180.0))
-                        .on_edit(|s: &mut AppState| &mut s.settings_ui.custom_model_name_edit)
                         .build(k),
                 )
                 .child(
@@ -323,26 +324,11 @@ pub fn push_overlay(
                                 let mid =
                                     s.settings_ui.custom_model_id_edit.text.trim().to_string();
                                 if !mid.is_empty() {
-                                    let dname = {
-                                        let trimmed =
-                                            s.settings_ui.custom_model_name_edit.text.trim();
-                                        if trimmed.is_empty() {
-                                            None
-                                        } else {
-                                            Some(trimmed.to_string())
-                                        }
-                                    };
                                     s.dispatch(Action::Settings(SettingsAction::AddCustomModel {
                                         workspace_id: ws_id.clone(),
                                         provider: prov_add.clone(),
                                         model_id: mid,
-                                        display_name: dname.or_else(|| {
-                                            if custom_name.is_empty() {
-                                                None
-                                            } else {
-                                                Some(custom_name.clone())
-                                            }
-                                        }),
+                                        display_name: None,
                                     }));
                                     s.settings_ui.custom_model_id_edit = rune::TextEdit::new("");
                                     s.settings_ui.custom_model_name_edit = rune::TextEdit::new("");
@@ -371,10 +357,6 @@ pub fn push_overlay(
         format!("Manage {provider_label} models"),
     )
     .open(true)
-    .description(format!(
-        "{enabled_count} of {} enabled. Enabled models appear in model pickers; disabling never blocks a model that is already selected.",
-        all_models.len()
-    ))
     .width(640.0)
     .fit()
     .on_close(|s: &mut AppState| {

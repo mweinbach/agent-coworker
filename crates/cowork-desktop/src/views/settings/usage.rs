@@ -334,7 +334,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let mut overlays = Vec::new();
     Dialog::new("usage-estimates-dialog", "How usage estimates work")
         .open(s.settings_ui.usage_estimates_dialog_open)
-        .description("Estimated cost is computed locally from provider-reported input, output, and cached prompt tokens multiplied by Cowork's model pricing catalog.")
         .width(460.0)
         .fit()
         .on_close(|s: &mut AppState| {
@@ -343,7 +342,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .child(
             col()
                 .w_full()
+                .min_w(0.0)
+                .px(16.0)
+                .pb(16.0)
                 .gap(12.0)
+                .child(
+                    text("Estimated cost is computed locally from provider-reported input, output, and cached prompt tokens multiplied by Cowork's model pricing catalog.")
+                        .font(k.ty.text_small)
+                        .color(t.text_muted)
+                        .wrap(),
+                )
                 .child(
                     text("Actual invoices may differ based on provider discounts, subscription tiers, cached-read pricing, or custom endpoints.")
                         .font(k.ty.text_small)

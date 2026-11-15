@@ -80,7 +80,7 @@ fn qr_pixels_for_url(url: &str) -> Option<Pixels> {
     })
 }
 
-/// Parses a paired device's `permissions` string (JSON map or CSV) into enabled permission keys.
+/// Parses a paired device's `permissions` string (JSON map, sentinel, or CSV) into enabled keys.
 pub fn parse_phone_permissions(raw: &str) -> HashSet<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -92,15 +92,25 @@ pub fn parse_phone_permissions(raw: &str) -> HashSet<String> {
             .filter_map(|(k, v)| v.as_bool().filter(|enabled| *enabled).map(|_| k))
             .collect();
     }
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(lower.as_str(), "none" | "read-only" | "readonly") {
+        return HashSet::new();
+    }
+    if matches!(lower.as_str(), "all" | "full" | "read-write") {
+        return PERMISSION_CONTROLS
+            .iter()
+            .map(|(k, _)| (*k).to_string())
+            .collect();
+    }
     trimmed
-        .split(',')
+        .split([',', ' ', ';'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
 }
 
-/// Serializes toggled device permissions cleanly while preserving JSON map format if originally JSON.
+/// Serializes toggled device permissions cleanly while matching `native::remote_access` patch syntax.
 pub fn update_phone_permission_string(raw: &str, key: &str, enabled: bool) -> String {
     let trimmed = raw.trim();
     if let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(trimmed) {
@@ -125,7 +135,11 @@ pub fn update_phone_permission_string(raw: &str, key: &str, enabled: bool) -> St
     }
     let mut ordered: Vec<String> = keys.into_iter().collect();
     ordered.sort();
-    ordered.join(",")
+    if ordered.is_empty() {
+        "none".to_string()
+    } else {
+        ordered.join(",")
+    }
 }
 
 fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
@@ -257,7 +271,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     }
 
     let toggle_btn = Button::new(if ra.running {
-        "Stop bridge"
+        "Stop"
     } else {
         "Enable remote access"
     })
@@ -277,7 +291,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     })
     .build(k);
 
-    let rotate_btn = Button::new("Rotate QR / key")
+    let rotate_btn = Button::new("Rotate QR / certificate")
         .variant(ButtonVariant::Outline)
         .icon(&icons::REFRESH_CCW)
         .control_size(ControlSize::Regular)

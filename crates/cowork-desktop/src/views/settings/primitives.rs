@@ -726,13 +726,26 @@ pub fn confirm_dialog(
 
     Dialog::new(spec.key, spec.title)
         .open(spec.open)
-        .description(spec.description)
         .width(440.0)
         .fit()
         .on_close(move |s: &mut AppState| {
             cancel_cb(s);
         })
-        .child(footer)
+        .child(
+            col()
+                .w_full()
+                .min_w(0.0)
+                .px(16.0)
+                .pb(16.0)
+                .gap(12.0)
+                .child(
+                    text(spec.description)
+                        .font(k.ty.text_small)
+                        .color(k.c.text_muted)
+                        .wrap(),
+                )
+                .child(footer),
+        )
         .build(k, overlays);
 }
 

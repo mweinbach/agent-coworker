@@ -7,7 +7,7 @@ use rune_kit::{
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NativeAction, SettingsAction};
-use crate::state::{AppState, ServerLifecycleState};
+use crate::state::{AppState, ServerLifecycleState, WorkspaceRecord, WorkspaceRuntime};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
@@ -17,6 +17,85 @@ use crate::views::settings::primitives::{
 use crate::views::settings::shell::PageContent;
 
 pub const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS: u64 = 30_000;
+
+/// Extracts `(available_bool, detail_message)` from either `RuntimeLibreOfficeCheckResult`
+/// (`{ "status": { "status": "available"|"missing"|"error", ... } }`), a flat
+/// `RuntimeLibreOfficeStatusView`, or a legacy `{ "available": bool }` payload.
+pub fn parse_libreoffice_status(raw: &Value) -> (Option<bool>, Option<String>) {
+    let inner = raw
+        .get("status")
+        .filter(|candidate| candidate.is_object())
+        .unwrap_or(raw);
+    let available = match inner.get("status").and_then(Value::as_str) {
+        Some("available") => Some(true),
+        Some("missing" | "error") => Some(false),
+        _ => inner.get("available").and_then(Value::as_bool),
+    };
+    let mut details: Vec<String> = Vec::new();
+    if let Some(version) = inner
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        details.push(format!("Version {version}"));
+    }
+    if let Some(path) = inner
+        .get("resolvedPath")
+        .or_else(|| inner.get("path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        details.push(path.to_string());
+    }
+    if let Some(msg) = inner
+        .get("message")
+        .or_else(|| inner.get("error"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        details.push(msg.to_string());
+    }
+    let detail = if details.is_empty() {
+        None
+    } else {
+        Some(details.join(" · "))
+    };
+    (available, detail)
+}
+
+/// Resolves `(overflow_enabled, uses_inherited, inherited_is_null, persisted_threshold)`
+/// from workspace defaults and runtime `controlSessionConfig`.
+pub fn resolve_workspace_overflow_config(
+    ws_record: Option<&WorkspaceRecord>,
+    runtime: Option<&WorkspaceRuntime>,
+) -> (bool, bool, bool, u64) {
+    let inherited_chars = runtime
+        .and_then(|rt| rt.control_session_config.as_ref())
+        .and_then(|cfg| cfg.get("toolOutputOverflowChars"));
+    let explicit_val = ws_record
+        .and_then(|w| w.defaults.as_object())
+        .and_then(|obj| obj.get("defaultToolOutputOverflowChars"));
+    let uses_inherited = explicit_val.is_none();
+    let inherited_is_null = matches!(inherited_chars, Some(Value::Null));
+    let overflow_enabled = match explicit_val {
+        Some(Value::Null) => false,
+        Some(Value::Number(_)) => true,
+        _ => !inherited_is_null,
+    };
+    let persisted_threshold = explicit_val
+        .and_then(Value::as_u64)
+        .or_else(|| inherited_chars.and_then(Value::as_u64))
+        .unwrap_or(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
+    (
+        overflow_enabled,
+        uses_inherited,
+        inherited_is_null,
+        persisted_threshold,
+    )
+}
 
 /// Parses a non-negative integer overflow threshold input.
 pub fn parse_overflow_threshold_draft(raw: &str) -> Option<u64> {
@@ -221,53 +300,51 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .build(k, t),
         );
 
-    let lo_available = s
-        .libreoffice_status
-        .as_ref()
-        .and_then(|v| v.get("available"))
-        .and_then(|v| v.as_bool());
-    let lo_detail = s
-        .libreoffice_status
-        .as_ref()
-        .and_then(|v| {
-            v.get("path")
-                .or_else(|| v.get("error"))
-                .or_else(|| v.get("message"))
-        })
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
+    let parsed_lo = s.libreoffice_status.as_ref().map(parse_libreoffice_status);
+    let lo_available = parsed_lo.as_ref().and_then(|(avail, _)| *avail);
+    let lo_detail = parsed_lo
+        .and_then(|(_, detail)| detail)
         .unwrap_or_else(|| {
-            "Checks whether soffice is available in this workspace runtime for document previews."
-                .to_string()
+            if active_target.is_some() {
+                "Checks whether soffice is available in this workspace runtime for document previews."
+                    .to_string()
+            } else {
+                "Open a workspace to check whether soffice is available in the server runtime for document previews."
+                    .to_string()
+            }
         });
-    let mut lo_controls = row().items_center().gap(8.0).child(status_pill(
-        match lo_available {
-            Some(true) => "Available",
-            Some(false) => "Not detected",
-            None => "Unchecked",
-        },
-        match lo_available {
-            Some(true) => StatusTone::Success,
-            Some(false) => StatusTone::Warning,
-            None => StatusTone::Neutral,
-        },
-        k,
-        t,
-    ));
-    if let Some(target) = active_target {
-        let ws_id = target.id.clone();
-        lo_controls = lo_controls.child(
+    let lo_ws_id = active_target.map(|target| target.id.clone());
+    let lo_controls = row()
+        .items_center()
+        .gap(8.0)
+        .child(status_pill(
+            match lo_available {
+                Some(true) => "Available",
+                Some(false) => "Not detected",
+                None => "Unchecked",
+            },
+            match lo_available {
+                Some(true) => StatusTone::Success,
+                Some(false) => StatusTone::Warning,
+                None => StatusTone::Neutral,
+            },
+            k,
+            t,
+        ))
+        .child(
             Button::new("Check runtime")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Regular)
+                .disabled(lo_ws_id.is_none())
                 .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::CheckLibreOfficeRuntime {
-                        workspace_id: ws_id.clone(),
-                    }));
+                    if let Some(ws_id) = &lo_ws_id {
+                        s.dispatch(Action::Settings(SettingsAction::CheckLibreOfficeRuntime {
+                            workspace_id: ws_id.clone(),
+                        }));
+                    }
                 })
                 .build(k),
         );
-    }
     let runtime_checks_section = Section::new()
         .title("Runtime checks")
         .description("Verify optional document conversion and preview dependencies.")
@@ -366,22 +443,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 None => status_pill("Stopped", StatusTone::Neutral, k, t),
             };
 
-            let inherited_chars = runtime
-                .and_then(|rt| rt.control_session_config.as_ref())
-                .and_then(|cfg| cfg.get("toolOutputOverflowChars"));
-            let explicit_val = ws_record
-                .and_then(|w| w.defaults.as_object())
-                .and_then(|obj| obj.get("defaultToolOutputOverflowChars"));
-            let overflow_uses_inherited = explicit_val.is_none();
-            let overflow_enabled = match explicit_val {
-                Some(Value::Null) => false,
-                Some(Value::Number(_)) => true,
-                _ => !matches!(inherited_chars, Some(Value::Null)),
-            };
-            let persisted_threshold = explicit_val
-                .and_then(Value::as_u64)
-                .or_else(|| inherited_chars.and_then(Value::as_u64))
-                .unwrap_or(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
+            let (overflow_enabled, overflow_uses_inherited, inherited_is_null, persisted_threshold) =
+                resolve_workspace_overflow_config(ws_record, runtime);
+            let persisted_str = persisted_threshold.to_string();
 
             if targets.len() > 1 {
                 let labels: Vec<String> = targets.iter().map(|entry| entry.label.clone()).collect();
@@ -413,15 +477,13 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         s.settings_ui.open_select_key = None;
                         if let Some((_, id)) = target_ids.iter().find(|(lbl, _)| lbl == chosen) {
                             s.settings_ui.developer_overflow_threshold_workspace = Some(id.clone());
-                            if let Some(ws) = s.workspaces.iter().find(|w| w.id == *id) {
-                                let chars = ws
-                                    .defaults
-                                    .get("defaultToolOutputOverflowChars")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
-                                s.settings_ui.developer_overflow_threshold_edit =
-                                    TextEdit::new(chars.to_string());
-                            }
+                            let ws_rec = s.workspaces.iter().find(|w| w.id == *id);
+                            let rt = s.workspace_runtime_by_id.get(id);
+                            let (_, _, _, chars) = resolve_workspace_overflow_config(ws_rec, rt);
+                            let chars_str = chars.to_string();
+                            s.settings_ui.developer_overflow_threshold_edit =
+                                TextEdit::new(chars_str.as_str());
+                            s.settings_ui.developer_overflow_threshold_synced = Some(chars_str);
                         }
                     })
                     .build(k, &mut overlays);
@@ -442,7 +504,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             }
 
             let ws_toggle = ws_id.clone();
-            let inherited_is_null = matches!(inherited_chars, Some(Value::Null));
             overflow_section = overflow_section.child(
                 SettingsRow::new("Save oversized tool output to scratch files")
                     .description(
@@ -460,8 +521,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                                 } else {
                                     json!({ "clearDefaultToolOutputOverflowChars": true })
                                 };
-                                s.settings_ui.developer_overflow_threshold_edit =
-                                    TextEdit::new(persisted_threshold.to_string());
+                                s.settings_ui.developer_overflow_threshold_edit = TextEdit::new("");
+                                s.settings_ui.developer_overflow_threshold_synced = None;
                                 s.dispatch(Action::Settings(
                                     SettingsAction::UpdateWorkspaceDefaults {
                                         workspace_id: ws_toggle.clone(),
@@ -474,7 +535,23 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .build(k, t),
             );
 
-            let draft_text = &s.settings_ui.developer_overflow_threshold_edit.text;
+            let prev_synced = s.settings_ui.developer_overflow_threshold_synced.as_deref();
+            let untouched = prev_synced.is_none()
+                || Some(
+                    s.settings_ui
+                        .developer_overflow_threshold_edit
+                        .text
+                        .as_str(),
+                ) == prev_synced;
+            let synced_fallback = if untouched && prev_synced != Some(persisted_str.as_str()) {
+                Some(TextEdit::new(persisted_str.as_str()))
+            } else {
+                None
+            };
+            let display_edit = synced_fallback
+                .as_ref()
+                .unwrap_or(&s.settings_ui.developer_overflow_threshold_edit);
+            let draft_text = &display_edit.text;
             let parsed = parse_overflow_threshold_draft(draft_text);
             let error_msg = if overflow_enabled && parsed.is_none() {
                 Some("Use a non-negative whole number.")
@@ -485,14 +562,25 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
             let ws_save = ws_id.clone();
             let ws_reset = ws_id;
+            let persisted_on_save = persisted_str.clone();
             let save_btn = Button::new("Save threshold")
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Regular)
                 .disabled(!overflow_enabled || !dirty || error_msg.is_some())
                 .on_press(move |s: &mut AppState| {
-                    if let Some(val) = parse_overflow_threshold_draft(
-                        &s.settings_ui.developer_overflow_threshold_edit.text,
-                    ) {
+                    let raw = if s.settings_ui.developer_overflow_threshold_synced.is_none() {
+                        persisted_on_save.as_str()
+                    } else {
+                        s.settings_ui
+                            .developer_overflow_threshold_edit
+                            .text
+                            .as_str()
+                    };
+                    if let Some(val) = parse_overflow_threshold_draft(raw) {
+                        let saved = val.to_string();
+                        s.settings_ui.developer_overflow_threshold_edit =
+                            TextEdit::new(saved.as_str());
+                        s.settings_ui.developer_overflow_threshold_synced = Some(saved);
                         s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                             workspace_id: ws_save.clone(),
                             defaults: json!({ "defaultToolOutputOverflowChars": val }),
@@ -506,8 +594,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .control_size(ControlSize::Regular)
                 .disabled(overflow_enabled && overflow_uses_inherited)
                 .on_press(move |s: &mut AppState| {
-                    s.settings_ui.developer_overflow_threshold_edit =
-                        TextEdit::new(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.to_string());
+                    s.settings_ui.developer_overflow_threshold_edit = TextEdit::new("");
+                    s.settings_ui.developer_overflow_threshold_synced = None;
                     let defaults = if overflow_enabled {
                         json!({ "clearDefaultToolOutputOverflowChars": true })
                     } else if inherited_is_null {
@@ -522,13 +610,30 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 })
                 .build(k);
 
-            let input_el = TextInput::new(&s.settings_ui.developer_overflow_threshold_edit)
+            let synced_for_edit = persisted_str;
+            let input_el = TextInput::new(display_edit)
                 .label("Spill after this many characters")
                 .placeholder(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.to_string())
                 .width(Some(220.0))
                 .disabled(!overflow_enabled)
                 .invalid(error_msg.is_some())
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.developer_overflow_threshold_edit)
+                .on_edit(move |s: &mut AppState| {
+                    let prev_synced = s.settings_ui.developer_overflow_threshold_synced.as_deref();
+                    let untouched = prev_synced.is_none()
+                        || Some(
+                            s.settings_ui
+                                .developer_overflow_threshold_edit
+                                .text
+                                .as_str(),
+                        ) == prev_synced;
+                    if untouched && prev_synced != Some(synced_for_edit.as_str()) {
+                        s.settings_ui.developer_overflow_threshold_edit =
+                            TextEdit::new(synced_for_edit.as_str());
+                        s.settings_ui.developer_overflow_threshold_synced =
+                            Some(synced_for_edit.clone());
+                    }
+                    &mut s.settings_ui.developer_overflow_threshold_edit
+                })
                 .build(k);
 
             let mut threshold_body = col().w_full().gap(8.0).child(input_el);

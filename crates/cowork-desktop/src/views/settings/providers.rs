@@ -7,7 +7,7 @@ use rune_kit::{
     Button, ButtonVariant, Checkbox, ControlSize, Dialog, IconButton, IconButtonVariant, Kit,
     Switch, TextInput,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::actions::{Action, SettingsAction, ShellAction};
 use crate::state::{
@@ -29,12 +29,12 @@ use crate::views::settings::shell::PageContent;
 const FALLBACK_PROVIDERS: &[(&str, &str)] = &[
     ("anthropic", "Anthropic"),
     ("openai", "OpenAI"),
-    ("openai-codex", "OpenAI Codex"),
-    ("google", "Google Gemini"),
-    ("openrouter", "OpenRouter"),
+    ("codex-cli", "Codex"),
+    ("google", "Google"),
     ("bedrock", "Amazon Bedrock"),
-    ("azure", "Azure OpenAI"),
-    ("ollama", "Ollama"),
+    ("together", "Together AI"),
+    ("fireworks", "Fireworks AI"),
+    ("nvidia", "NVIDIA"),
     ("lmstudio", "LM Studio"),
 ];
 
@@ -691,47 +691,6 @@ fn expanded_provider_body(
             }
             body = body.child(oauth_col);
         }
-
-        if summary.id != "codex-cli" {
-            let ws_cfg = active_ws_id.map(str::to_owned);
-            let prov_cfg = summary.id.clone();
-            body = body.child(
-                row()
-                    .w_full()
-                    .items_end()
-                    .flex_wrap()
-                    .gap(8.0)
-                    .pt(10.0)
-                    .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
-                    .child(
-                        TextInput::new(&s.settings_ui.base_url_edit)
-                            .label("Custom endpoint URL (optional)")
-                            .placeholder("https://api.example.com/v1")
-                            .width(Some(320.0))
-                            .on_edit(|s: &mut AppState| &mut s.settings_ui.base_url_edit)
-                            .build(k),
-                    )
-                    .child(
-                        Button::new("Save endpoint")
-                            .variant(ButtonVariant::Outline)
-                            .control_size(ControlSize::Regular)
-                            .disabled(!can_mutate)
-                            .on_press(move |s: &mut AppState| {
-                                if let Some(ws_id) = &ws_cfg {
-                                    let val = s.settings_ui.base_url_edit.text.trim().to_string();
-                                    s.dispatch(Action::Settings(
-                                        SettingsAction::SetProviderConfig {
-                                            workspace_id: ws_id.clone(),
-                                            provider: prov_cfg.clone(),
-                                            config: json!({ "baseUrl": val }),
-                                        },
-                                    ));
-                                }
-                            })
-                            .build(k),
-                    ),
-            );
-        }
     }
 
     if matches!(summary.id.as_str(), "codex-cli" | "openai-codex") {
@@ -1184,7 +1143,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
         Dialog::new("new-provider-dialog", "New provider")
             .open(true)
-            .description("Choose a provider to expand and configure credentials or OAuth sign-in.")
             .width(500.0)
             .fit()
             .on_close(|s: &mut AppState| {
@@ -1193,9 +1151,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .child(
                 col()
                     .w_full()
+                    .min_w(0.0)
                     .px(16.0)
                     .pb(16.0)
                     .gap(12.0)
+                    .child(
+                        text("Choose a provider to expand and configure credentials or OAuth sign-in.")
+                            .font(k.ty.text_small)
+                            .color(t.text_muted)
+                            .wrap(),
+                    )
                     .child(el().w_full().h(260.0).child(scroll_picker)),
             )
             .build(k, &mut overlays);

@@ -208,12 +208,13 @@ pub fn resolve_active_page(s: &AppState) -> SettingsPageId {
 
 fn nav_pane(
     s: &AppState,
-    _cx: &mut Cx<AppState>,
+    cx: &mut Cx<AppState>,
     k: &Kit,
     t: &ThemeTokens,
     active_page: SettingsPageId,
     groups: &[SettingsNavGroup],
 ) -> El {
+    let top_pad = cx.titlebar_inset().max(12.0);
     let back_button = row()
         .key("settings-back-button")
         .w_full()
@@ -235,7 +236,7 @@ fn nav_pane(
     let mut header = col()
         .w_full()
         .px(12.0)
-        .pt(12.0)
+        .pt(top_pad)
         .pb(10.0)
         .gap(6.0)
         .border_sides([0.0, 0.0, 1.0, 0.0], t.border_muted)
@@ -396,22 +397,25 @@ pub fn settings_shell(
     if !content.header_actions.is_empty() {
         header_row = header_row.child(
             row()
+                .key(format!("settings-header-actions-{}", page_key(active_page)))
                 .shrink()
                 .flex_wrap()
                 .items_center()
                 .justify_end()
                 .gap(8.0)
+                .transition(Transition::none())
                 .children(content.header_actions),
         );
     }
 
     let page_header = el()
-        .key("settings-page-header")
+        .key(format!("settings-page-header-{}", page_key(active_page)))
         .w_full()
         .px(20.0)
         .py(16.0)
         .fill(main_bg)
         .border_sides([0.0, 0.0, 1.0, 0.0], t.border_muted)
+        .transition(Transition::none())
         .child(header_row);
 
     // Instant page unmount matches the Electron settings shell and prevents

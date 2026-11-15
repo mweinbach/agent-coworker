@@ -414,4 +414,43 @@ mod tests {
         assert!(rt.find("quick-chat-shell").is_some());
         assert!(rt.find("shell-confirm-dialog-dialog").is_some());
     }
+
+    #[test]
+    fn move_to_trash_confirmation_dialog_mounts_and_resolves_full_path() {
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.workspaces.push(crate::state::WorkspaceRecord {
+            id: "ws-1".into(),
+            name: "Demo".into(),
+            path: "/tmp/demo-ws".into(),
+            ..Default::default()
+        });
+        s.shell_ui.pending_trash_entry = Some(state::PendingTrashEntry {
+            workspace_id: "ws-1".into(),
+            path: "src/notes.md".into(),
+            name: "notes.md".into(),
+            is_dir: false,
+        });
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(
+            rt.find("trash-entry-dialog-dialog").is_some(),
+            "Move to Trash confirmation dialog should mount before trashing"
+        );
+        let (tx, ty) = rt
+            .find("trash-entry-confirm-btn")
+            .expect("Move to Trash confirm button should be mounted");
+        rt.pointer_move(tx, ty);
+        rt.pointer_down(tx, ty);
+        rt.pointer_up(tx, ty);
+        rt.frame(0.0);
+        assert!(
+            rt.state.shell_ui.pending_trash_entry.is_none(),
+            "Confirming Move to Trash should clear pending_trash_entry"
+        );
+    }
 }

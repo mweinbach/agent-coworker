@@ -530,6 +530,7 @@ mod tests {
                 description: "Review code".to_string(),
                 scope: "project".to_string(),
                 enabled: true,
+                ..Default::default()
             }],
             &[],
         );

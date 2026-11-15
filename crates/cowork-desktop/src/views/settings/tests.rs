@@ -167,6 +167,7 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
             output_tokens: 500,
             cached_tokens: 200,
             estimated_cost_usd: 0.12,
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -199,6 +200,7 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
                 output_tokens: 1_000,
                 cached_tokens: 300,
                 estimated_cost_usd: 0.25,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -211,6 +213,7 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
                 output_tokens: 2_000,
                 cached_tokens: 0,
                 estimated_cost_usd: 0.50,
+                ..Default::default()
             }),
             ..Default::default()
         },

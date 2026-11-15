@@ -74,4 +74,29 @@ All product/session/tool logic lives in `crates/cowork-server` and `crates/cowor
 | Chat views | `chat` | `src/views/chat/` — landing, virtualized feed, markdown, activity/tool cards, approvals/questions, composer, attachments, agent run viewer |
 | App shell & overlays | `shell` | `src/views/shell/` — main/quick-chat/utility shells, top bar, sidebar, command palette, search, onboarding, toasts, task views, context inspector, inline preview |
 | Settings | `settings` | `src/views/settings/` — settings shell and pages (`models`, `subagents`, `toolAccess`, `defaults`, `profileMemory`, `remoteAccess`, `backup`, `chats`, `usage`, `privacyTelemetry`, `desktop`, `updates`, `experiments`, `diagnostics`) |
-| Native host integration | `native` | `src/native/` — sidecar lifecycle, state persistence, path/root security, redacting local logs, file explorer/watcher/preview, OS dialogs, menus, tray/global shortcut, notifications, diagnostics, remote access, updater stub |
+| Native host integration | `native` | `src/native/` — sidecar lifecycle, state persistence, path/root security, redacting local logs, file explorer/watcher/preview, OS dialogs, menus, tray/global shortcut, notifications, diagnostics, remote access, Minisign auto-updater |
+
+## Packaging & releases
+
+Native desktop installers, signed archives, and updater feeds are built with `cargo-packager` (`0.11.8`), replacing `electron-builder` without putting packaging metadata in `crates/cowork-desktop/Cargo.toml`.
+
+- **Local unsigned macOS build** (creates `.app`, `.dmg`, `-mac.zip`, and `.app.tar.gz` under `target/rune-package/<platformKey>/out/`):
+  ```bash
+  bun run desktop:rune:package -- --unsigned
+  ```
+- **Packaging inputs**: [`crates/cowork-desktop/packaging/Packager.toml`](packaging/Packager.toml) (shared identity `com.cowork.desktop`, product `Cowork`, min macOS `12.0`), `entitlements.mac.plist`, and icons under `packaging/icons/`. Runtime staging pulls `dist/{prompts,config,skills,workflows}`, the target `cowork-server` sidecar + `cowork-server-manifest.json`, `tray/icon.{png,ico}`, and (on Windows) `windows-sandbox/` helpers with refreshed `cowork-win-sandbox.sha256.json` hashes.
+- **Release pipeline**: [`.github/workflows/desktop-rune-release.yml`](../../.github/workflows/desktop-rune-release.yml) builds all 6 targets (`macos-{aarch64,x86_64}`, `windows-{x86_64,aarch64}`, `linux-{x86_64,aarch64}`) on `desktop-rune-v*` tags or `workflow_dispatch`, Minisign-signs updater payloads, and aggregates `updater-fragment-*.json` into `latest.json` via [`scripts/desktop_rune_release_manifest.ts`](../../scripts/desktop_rune_release_manifest.ts).
+
+### CI Secrets & Variables
+
+- **Updater feed (Minisign)**:
+  - `vars.COWORK_UPDATER_PUBKEY`: Minisign public key compiled into `cowork-desktop` (`COWORK_UPDATER_PUBKEY` / `CARGO_PACKAGER_SIGN_PUBLIC_KEY`).
+  - `secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY`: Minisign private key used to sign `.app.tar.gz`, `*-setup.exe`, and `*.AppImage` updater payloads.
+  - `secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD`: Password for encrypted Minisign private keys (optional).
+- **macOS signing & Apple notarization**:
+  - `secrets.APPLE_CERTIFICATE` (or `CSC_LINK`) + `secrets.APPLE_CERTIFICATE_PASSWORD` (or `CSC_KEY_PASSWORD`), and optional `secrets.APPLE_SIGNING_IDENTITY`.
+  - App Store Connect API key: `secrets.APPLE_API_KEY` (Key ID, or PEM key content when paired with `secrets.APPLE_API_KEY_ID`) + `secrets.APPLE_API_ISSUER` (or `APPLE_API_KEY_ISSUER`) + `APPLE_API_KEY_PATH` when passed via path; or Apple ID fallback (`secrets.APPLE_ID`, `secrets.APPLE_PASSWORD` / `APPLE_APP_SPECIFIC_PASSWORD`, `secrets.APPLE_TEAM_ID`).
+- **Windows Authenticode**:
+  - `secrets.WIN_CSC_LINK` + `secrets.WIN_CSC_KEY_PASSWORD` (PFX base64/path + password), or `secrets.WINDOWS_CERTIFICATE_THUMBPRINT`, or `secrets.WINDOWS_SIGN_COMMAND` (`CARGO_PACKAGER_WINDOWS_SIGN_COMMAND`).
+- **Optional build-time telemetry (`vars`)**:
+  - `COWORK_SENTRY_DSN`, `COWORK_SENTRY_ENVIRONMENT`, `COWORK_POSTHOG_KEY`, `COWORK_POSTHOG_HOST`, `COWORK_POSTHOG_ENVIRONMENT`.

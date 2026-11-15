@@ -508,11 +508,15 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
     let next_btn = if step_idx >= 4 {
         Button::new("Finish setup")
             .variant(ButtonVariant::Contrast)
-            .on_press_tx(|s: &mut AppState, _| {
+            .on_press_tx(move |s: &mut AppState, _| {
                 s.shell_ui.onboarding_confirm_discard = false;
-                s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
+                s.dispatch(Action::Shell(ShellAction::CompleteOnboardingStep(
+                    step_name.clone(),
+                )));
+                s.dispatch(Action::Shell(ShellAction::CompleteOnboarding));
             })
             .build(k)
+            .key("onboarding-finish-setup")
     } else {
         Button::new("Next")
             .variant(ButtonVariant::Contrast)
@@ -1341,5 +1345,37 @@ mod tests {
         let queried = collect_search_overlay_items(&s);
         assert_eq!(queried.len(), 1);
         assert_eq!(queried[0].key, "sr-task-task-1");
+    }
+
+    #[test]
+    fn finish_setup_completes_onboarding_and_records_final_step() {
+        use rune::{Env, Runtime};
+
+        let mut s = AppState::default();
+        s.shell_ui.onboarding_step = 4;
+        assert!(is_onboarding_visible(&s));
+
+        let mut rt = Runtime::new(
+            s,
+            |state: &AppState, cx: &mut rune::Cx<AppState>| {
+                let (k, t) = crate::theme::build_kit(false, false, false);
+                crate::views::shell::view(state, cx, &k, &t)
+            },
+            (1280.0, 820.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let (fx, fy) = rt
+            .find("onboarding-finish-setup")
+            .expect("Finish setup button must render on final onboarding step");
+        rt.pointer_move(fx, fy);
+        rt.pointer_down(fx, fy);
+        rt.pointer_up(fx, fy);
+        rt.frame(0.0);
+
+        assert!(rt.state.onboarding.completed);
+        assert!(!rt.state.onboarding.dismissed);
+        assert!(rt.state.onboarding.completed_steps.contains("step-5"));
+        assert!(!is_onboarding_visible(&rt.state));
     }
 }

@@ -2,10 +2,12 @@
 
 use rune::{Cx, El, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::shell::RowStatus;
-use rune_kit::{Badge, Button, ButtonVariant, ControlSize, Kit};
+use rune_kit::{
+    Badge, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, glyphs,
+};
 
 use crate::actions::{Action, NavAction, ShellAction};
-use crate::state::{AppState, WindowMode};
+use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::SubviewOutput;
 
@@ -35,6 +37,7 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         .pb(10.0)
         .gap(8.0)
         .center_y()
+        .window_drag()
         .child(icon(&icons::SPARKLES, 15.0).color(t.accent))
         .child(text("Cowork").font(t.label).color(t.text_base));
     if busy_count > 0 {
@@ -45,8 +48,12 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
             .icon(&icons::POPOUT)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.dispatch(Action::Shell(ShellAction::SetWindowMode(WindowMode::Main)));
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.dispatch(Action::Shell(ShellAction::FocusMainWindow {
+                    open_new_chat_workspace: None,
+                    open_thread_id: None,
+                }));
+                tx.close_window();
             })
             .build(k),
     );
@@ -90,11 +97,12 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
                 .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .icon(&icons::PLUS)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Shell(ShellAction::SetWindowMode(WindowMode::Main)));
-                    s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                        workspace_id: ws_id.clone(),
+                .on_press_tx(move |s: &mut AppState, tx| {
+                    s.dispatch(Action::Shell(ShellAction::FocusMainWindow {
+                        open_new_chat_workspace: Some(ws_id.clone().unwrap_or_default()),
+                        open_thread_id: None,
                     }));
+                    tx.close_window();
                 })
                 .build(&primary_kit)
         })
@@ -103,10 +111,9 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
                 .icon(&icons::MESSAGE)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Shell(ShellAction::SetWindowMode(
-                        WindowMode::QuickChat,
-                    )));
+                .on_press_tx(|s: &mut AppState, tx| {
+                    s.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
+                    tx.close_window();
                 })
                 .build(k),
         );
@@ -154,9 +161,12 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
                     .radius(7.0)
                     .fill(t.card_bg)
                     .hover(t.hover)
-                    .on_press_tx(move |s: &mut AppState, _| {
-                        s.dispatch(Action::Shell(ShellAction::SetWindowMode(WindowMode::Main)));
-                        s.dispatch(Action::Navigate(NavAction::OpenThread(tid.clone())));
+                    .on_press_tx(move |s: &mut AppState, tx| {
+                        s.dispatch(Action::Shell(ShellAction::FocusMainWindow {
+                            open_new_chat_workspace: None,
+                            open_thread_id: Some(tid.clone()),
+                        }));
+                        tx.close_window();
                     })
                     .child(item_row)
             }))
@@ -207,6 +217,7 @@ pub fn build_quick_chat_window(
         .and_then(|id| s.workspaces.iter().find(|w| w.id == id && !w.one_off_chat))
         .map(|w| w.name.as_str());
 
+    let new_chat_ws = s.active_workspace_id.clone();
     let header = row()
         .key("quick-chat-header")
         .w_full()
@@ -215,21 +226,52 @@ pub fn build_quick_chat_window(
         .pb(8.0)
         .gap(8.0)
         .center_y()
+        .window_drag()
         .fill(t.panel_bg)
         .child(icon(&icons::SPARKLES, 14.0).color(t.accent))
         .child(text("Quick Chat").font(t.label).color(t.text_base))
         .children(ws_name.map(|name| Badge::new(name).build(k)))
         .child(spacer())
         .child(
+            IconButton::new(&icons::PLUS)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .help("New chat")
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.dispatch(Action::Navigate(NavAction::OpenNewChat {
+                        workspace_id: new_chat_ws.clone(),
+                    }));
+                })
+                .build(k)
+                .key("quick-chat-new-chat"),
+        )
+        .child(
             Button::new("Pop out")
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
                 .icon(&icons::POPOUT)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Shell(ShellAction::SetWindowMode(WindowMode::Main)));
+                .on_press_tx(|s: &mut AppState, tx| {
+                    let active_thread_id = s.route().active_thread_id.clone();
+                    s.dispatch(Action::Shell(ShellAction::FocusMainWindow {
+                        open_new_chat_workspace: None,
+                        open_thread_id: active_thread_id,
+                    }));
                     s.dispatch(Action::Shell(ShellAction::SetQuickChatOpen(false)));
+                    tx.close_window();
                 })
-                .build(k),
+                .build(k)
+                .key("quick-chat-pop-out"),
+        )
+        .child(
+            IconButton::new(&glyphs::CLOSE)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .help("Close Quick Chat")
+                .on_press_tx(|_: &mut AppState, tx| {
+                    tx.close_window();
+                })
+                .build(k)
+                .key("quick-chat-close"),
         );
 
     let frame = col()
@@ -248,74 +290,8 @@ pub fn build_quick_chat_window(
                 .child(chat_subview.content),
         );
 
-    rune_kit::root(frame, chat_subview.overlays)
-}
-
-/// Fallback centered Quick Chat spotlight sheet when opened inside the Main window.
-pub fn build_inline_quick_chat_overlay(
-    s: &AppState,
-    k: &Kit,
-    t: &ThemeTokens,
-    chat_content: El,
-) -> Option<El> {
-    if !s.quick_chat_open || s.window_mode != WindowMode::Main {
-        return None;
-    }
-
-    let ws_name = s
-        .active_workspace_id
-        .as_deref()
-        .and_then(|id| s.workspaces.iter().find(|w| w.id == id && !w.one_off_chat))
-        .map(|w| w.name.as_str());
-
-    let sheet = col()
-        .key("inline-quick-chat-sheet")
-        .w(640.0)
-        .h(520.0)
-        .max_h(560.0)
-        .radius(14.0)
-        .fill(t.panel_bg)
-        .border(1.0, t.border_strong)
-        .child(
-            row()
-                .w_full()
-                .h(42.0)
-                .px(14.0)
-                .gap(8.0)
-                .center_y()
-                .fill(t.elevated_bg)
-                .child(icon(&icons::SPARKLES, 14.0).color(t.accent))
-                .child(text("Quick Chat").font(t.label).color(t.text_base))
-                .children(ws_name.map(|name| Badge::new(name).build(k)))
-                .child(spacer())
-                .child(
-                    Button::new("Close")
-                        .variant(ButtonVariant::Ghost)
-                        .control_size(ControlSize::Small)
-                        .on_press_tx(|s: &mut AppState, _| {
-                            s.dispatch(Action::Shell(ShellAction::SetQuickChatOpen(false)));
-                        })
-                        .build(k),
-                ),
-        )
-        .child(el().w_full().h(1.0).fill(t.border_muted))
-        .child(
-            el().grow(1.0)
-                .shrink()
-                .min_h(0.0)
-                .w_full()
-                .child(chat_content),
-        );
-
-    Some(
-        el().key("inline-quick-chat-backdrop")
-            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .fill(t.scrim)
-            .center()
-            .padding(24.0)
-            .modal(true, |s: &mut AppState| {
-                s.dispatch(Action::Shell(ShellAction::SetQuickChatOpen(false)));
-            })
-            .child(sheet),
+    rune_kit::root(
+        frame,
+        super::overlays::build_overlays(s, k, t, chat_subview.overlays),
     )
 }

@@ -3,11 +3,22 @@
 use std::collections::{HashMap, HashSet};
 
 use rune::{Key, KeyEvent, PointerPress, TextEdit, Tx};
-use rune_kit::shell::Reorder;
+use rune_kit::shell::{PaneState, Reorder};
 
 use crate::actions::{Action, ChatAction, NavAction, ShellAction};
 use crate::router::ViewId;
-use crate::state::AppState;
+use crate::state::{AppState, WindowMode};
+
+/// Active context menu target for a workspace file explorer row.
+#[derive(Clone, Debug)]
+pub struct ExplorerContextMenu {
+    pub workspace_id: String,
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    /// Pointer coordinates when triggered via secondary press (`None` when anchored to the row `...` button).
+    pub point: Option<PointerPress>,
+}
 
 /// Ephemeral UI state owned by `views/shell` (wired onto `AppState` when Step 2 integrates it).
 #[derive(Clone)]
@@ -46,6 +57,13 @@ pub struct ShellUiState {
     pub left_overlay_open: bool,
     pub right_overlay_open: bool,
     pub inline_toast_claims: HashMap<String, usize>,
+    pub renaming_file_key: Option<(String, String)>,
+    pub renaming_file_edit: TextEdit,
+    pub renaming_file_error: Option<String>,
+    pub file_context_menu: Option<ExplorerContextMenu>,
+    pub canvas_pane: PaneState,
+    pub canvas_overlay_dismissed_key: Option<String>,
+    pub last_canvas_key: Option<String>,
 }
 
 impl Default for ShellUiState {
@@ -85,7 +103,47 @@ impl Default for ShellUiState {
             left_overlay_open: false,
             right_overlay_open: false,
             inline_toast_claims: HashMap::new(),
+            renaming_file_key: None,
+            renaming_file_edit: TextEdit::new(""),
+            renaming_file_error: None,
+            file_context_menu: None,
+            canvas_pane: PaneState::new(480.0).range(320.0, 900.0),
+            canvas_overlay_dismissed_key: None,
+            last_canvas_key: None,
         }
+    }
+}
+
+/// Returns a stable key for the active Canvas session when Canvas handles the right rail.
+pub(crate) fn active_canvas_target_key(s: &AppState) -> Option<String> {
+    if let Some(ref fx) = s.chat_ui.canvas.fixture {
+        return Some(format!("fixture:{}:{}", fx.workspace_id, fx.path));
+    }
+    if !s.feature_flags.get("canvas").copied().unwrap_or(false) {
+        return None;
+    }
+    let preview = s.active_file_preview.as_ref()?;
+    if preview.is_binary {
+        return None;
+    }
+    crate::views::chat::canvas::classify_canvas_path(&preview.path)?;
+    Some(format!("preview:{}:{}", preview.workspace_id, preview.path))
+}
+
+/// True when the active right rail (`Context`, `Task`, or `Canvas`) renders as an overlay drawer.
+pub(crate) fn right_rail_uses_overlay(s: &AppState) -> bool {
+    let uses_wide_overlay = active_canvas_target_key(s).is_some() || s.route().view == ViewId::Task;
+    s.shell_ui.viewport_width < super::helpers::NARROW_BREAKPOINT
+        || (uses_wide_overlay && s.shell_ui.viewport_width < super::helpers::FULL_BREAKPOINT)
+}
+
+/// True when the compact/narrow right overlay drawer should be visible.
+pub(crate) fn is_right_overlay_visible(s: &AppState) -> bool {
+    if let Some(key) = active_canvas_target_key(s) {
+        s.shell_ui.right_overlay_open
+            || s.shell_ui.canvas_overlay_dismissed_key.as_deref() != Some(key.as_str())
+    } else {
+        s.shell_ui.right_overlay_open
     }
 }
 
@@ -103,7 +161,7 @@ impl std::fmt::Debug for ShellUiState {
 }
 
 /// Global keyboard dispatcher for shell shortcuts (`Cmd/Ctrl+K`, `Cmd/Ctrl+Shift+B`, `Cmd/Ctrl+.`, `Escape`).
-pub fn handle_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
+pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if rune_kit::shell::is_sidebar_toggle(ev)
         || (ev.is_command('b') && !ev.mods.shift && !ev.mods.alt)
     {
@@ -204,14 +262,35 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     }
 
     if ev.is_command('i') && ev.mods.alt {
-        if s.shell_ui.viewport_width < super::helpers::NARROW_BREAKPOINT {
-            s.shell_ui.right_overlay_open = !s.shell_ui.right_overlay_open;
-            if s.shell_ui.right_overlay_open {
+        if right_rail_uses_overlay(s) {
+            let next_open = !is_right_overlay_visible(s);
+            s.shell_ui.right_overlay_open = next_open;
+            if next_open {
                 s.shell_ui.left_overlay_open = false;
+                s.shell_ui.canvas_overlay_dismissed_key = None;
+            } else {
+                s.shell_ui.canvas_overlay_dismissed_key = active_canvas_target_key(s);
             }
+        } else if active_canvas_target_key(s).is_some() {
+            s.shell_ui.canvas_pane.toggle();
         } else {
             s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
         }
+        return true;
+    }
+
+    if (ev.is_command('=') || ev.is_command('+')) && !ev.mods.alt {
+        s.dispatch(Action::Shell(ShellAction::ZoomIn));
+        return true;
+    }
+
+    if ev.is_command('-') && !ev.mods.alt {
+        s.dispatch(Action::Shell(ShellAction::ZoomOut));
+        return true;
+    }
+
+    if ev.is_command('0') && !ev.mods.alt && !ev.mods.shift {
+        s.dispatch(Action::Shell(ShellAction::ResetZoom));
         return true;
     }
 
@@ -241,7 +320,14 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     }
 
     if ev.key == Key::Escape {
-        return handle_escape(s);
+        if handle_escape(s) {
+            return true;
+        }
+        if matches!(s.window_mode, WindowMode::QuickChat | WindowMode::Utility) {
+            tx.close_window();
+            return true;
+        }
+        return false;
     }
 
     false
@@ -268,6 +354,10 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         s.shell_ui.context_menu_point = None;
         return true;
     }
+    if s.shell_ui.file_context_menu.is_some() {
+        s.shell_ui.file_context_menu = None;
+        return true;
+    }
     if s.shell_ui.usage_popover_open {
         s.shell_ui.usage_popover_open = false;
         return true;
@@ -292,6 +382,11 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         s.shell_ui.renaming_thread_id = None;
         return true;
     }
+    if s.shell_ui.renaming_file_key.is_some() {
+        s.shell_ui.renaming_file_key = None;
+        s.shell_ui.renaming_file_error = None;
+        return true;
+    }
     if s.pending_confirm_dialog.is_some() {
         if let Some(req) = s.pending_confirm_dialog.clone() {
             s.dispatch(Action::Shell(ShellAction::ResolveConfirmDialog {
@@ -313,9 +408,19 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         s.shell_ui.onboarding_confirm_discard = false;
         return true;
     }
-    if s.shell_ui.left_overlay_open || s.shell_ui.right_overlay_open {
+    if s.shell_ui.left_overlay_open
+        || s.shell_ui.right_overlay_open
+        || (right_rail_uses_overlay(s) && is_right_overlay_visible(s))
+    {
         s.shell_ui.left_overlay_open = false;
         s.shell_ui.right_overlay_open = false;
+        if let Some(key) = active_canvas_target_key(s) {
+            s.shell_ui.canvas_overlay_dismissed_key = Some(key);
+        }
+        return true;
+    }
+    if s.chat_ui.canvas.maximized {
+        s.chat_ui.canvas.maximized = false;
         return true;
     }
     if s.active_file_preview.is_some() {
@@ -421,5 +526,74 @@ mod tests {
         assert!(!s.shell_ui.right_overlay_open);
         assert!(handle_key(&mut s, &cmd_b, &mut tx));
         assert!(!s.shell_ui.left_overlay_open);
+    }
+
+    #[test]
+    fn zoom_keyboard_shortcuts_adjust_and_reset_ui_scale() {
+        let mut s = AppState::default();
+        let initial = s.ui_scale;
+        let mut tx = Tx::default();
+        let cmd_mods = rune::Mods {
+            cmd: true,
+            ..Default::default()
+        };
+
+        let zoom_eq = KeyEvent {
+            key: Key::Command('='),
+            mods: cmd_mods,
+        };
+        assert!(handle_key(&mut s, &zoom_eq, &mut tx));
+        assert!(s.ui_scale > initial);
+
+        let after_eq = s.ui_scale;
+        let zoom_plus = KeyEvent {
+            key: Key::Command('+'),
+            mods: rune::Mods {
+                cmd: true,
+                shift: true,
+                ..Default::default()
+            },
+        };
+        assert!(handle_key(&mut s, &zoom_plus, &mut tx));
+        assert!(s.ui_scale > after_eq);
+
+        let zoom_minus = KeyEvent {
+            key: Key::Command('-'),
+            mods: cmd_mods,
+        };
+        assert!(handle_key(&mut s, &zoom_minus, &mut tx));
+        assert!((s.ui_scale - after_eq).abs() < 0.001);
+
+        let zoom_zero = KeyEvent {
+            key: Key::Command('0'),
+            mods: cmd_mods,
+        };
+        assert!(handle_key(&mut s, &zoom_zero, &mut tx));
+        assert!((s.ui_scale - crate::state::DEFAULT_UI_SCALE).abs() < 0.001);
+    }
+
+    #[test]
+    fn escape_dismisses_compact_canvas_overlay_before_closing_preview() {
+        let mut s = AppState::default();
+        s.shell_ui.viewport_width = 900.0;
+        s.feature_flags.insert("canvas".into(), true);
+        s.active_file_preview = Some(crate::state::FilePreviewState {
+            workspace_id: "ws-1".into(),
+            path: "/tmp/ws-1/notes.md".into(),
+            title: "notes.md".into(),
+            content: Some("# Hello".into()),
+            is_markdown: true,
+            ..Default::default()
+        });
+
+        assert!(right_rail_uses_overlay(&s));
+        assert!(is_right_overlay_visible(&s));
+
+        assert!(handle_escape(&mut s));
+        assert!(!is_right_overlay_visible(&s));
+        assert!(s.active_file_preview.is_some());
+
+        assert!(handle_escape(&mut s));
+        assert!(s.active_file_preview.is_none());
     }
 }

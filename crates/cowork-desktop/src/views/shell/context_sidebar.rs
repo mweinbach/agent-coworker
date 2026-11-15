@@ -3,10 +3,10 @@
 //! Ported from `apps/desktop/src/ui/ContextSidebar.tsx`, `WorkflowRunsPanel.tsx`, and
 //! workspace file explorer integration.
 
-use rune::{El, ScrollSpec, col, el, row, text};
+use rune::{El, Key, ScrollSpec, col, el, row, text, text_input};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Divider, IconButton,
-    IconButtonVariant, Kit, glyphs,
+    IconButtonVariant, Kit, Menu, MenuItem, glyphs,
 };
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
@@ -14,6 +14,7 @@ use crate::state::{AppState, ThreadRuntime};
 use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{format_bytes, format_cost_usd, format_tokens};
 use crate::views::shell::icons;
+use crate::views::shell::state::ExplorerContextMenu;
 
 /// Closes the inline right context sidebar and any narrow-viewport overlay drawer.
 fn close_context_inspector(s: &mut AppState) {
@@ -31,7 +32,7 @@ fn open_agent_run_from_context(s: &mut AppState, agent_id: String, title: String
 }
 
 /// Renders the right inspector sidebar panel for the active chat or task route.
-pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
+pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
     let header = row()
         .key("context-sidebar-header")
         .w_full()
@@ -69,7 +70,7 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
         sections.push(build_workflow_runs_card(s, k));
     }
 
-    sections.push(build_workspace_files_card(s, k, t));
+    sections.push(build_workspace_files_card(s, k, t, layer));
 
     if sections.is_empty() {
         sections.push(
@@ -347,6 +348,283 @@ fn lookup_explorer_entries<'a>(
         .map(Vec::as_slice)
 }
 
+pub(crate) fn validate_explorer_rename(
+    original_name: &str,
+    candidate: &str,
+) -> Result<Option<String>, &'static str> {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return Err("Entry name cannot be empty.");
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err("Invalid entry name.");
+    }
+    if candidate.contains('/') || candidate.contains('\\') || candidate.contains('\0') {
+        return Err("Name cannot contain path separators.");
+    }
+    if trimmed == original_name {
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+pub(crate) fn start_explorer_rename(
+    s: &mut AppState,
+    workspace_id: String,
+    path: String,
+    current_name: String,
+) {
+    s.shell_ui.file_context_menu = None;
+    s.shell_ui.renaming_file_error = None;
+    s.shell_ui.renaming_file_key = Some((workspace_id, path));
+    s.shell_ui.renaming_file_edit.replace_text(&current_name);
+    s.shell_ui.renaming_file_edit.focused = true;
+}
+
+pub(crate) fn cancel_explorer_rename(s: &mut AppState) {
+    s.shell_ui.renaming_file_key = None;
+    s.shell_ui.renaming_file_error = None;
+}
+
+pub(crate) fn commit_explorer_rename(
+    s: &mut AppState,
+    workspace_id: &str,
+    path: &str,
+    original_name: &str,
+) {
+    match validate_explorer_rename(original_name, &s.shell_ui.renaming_file_edit.text) {
+        Err(message) => {
+            s.shell_ui.renaming_file_error = Some(message.to_string());
+        }
+        Ok(None) => {
+            cancel_explorer_rename(s);
+        }
+        Ok(Some(new_name)) => {
+            s.dispatch(Action::Native(NativeAction::RenameWorkspaceEntry {
+                workspace_id: workspace_id.to_string(),
+                path: path.to_string(),
+                new_name,
+            }));
+            cancel_explorer_rename(s);
+        }
+    }
+}
+
+fn open_or_toggle_explorer_entry(s: &mut AppState, ws_id: &str, path: &str, is_dir: bool) {
+    if is_dir {
+        let dir_key = explorer_dir_state_key(ws_id, path);
+        if !s.explorer_expanded_dirs.remove(&dir_key) {
+            s.explorer_expanded_dirs.insert(dir_key);
+            s.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
+                workspace_id: ws_id.to_string(),
+                dir: path.to_string(),
+            }));
+        }
+    } else {
+        s.shell_ui.canvas_overlay_dismissed_key = None;
+        s.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: ws_id.to_string(),
+            path: path.to_string(),
+        }));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_explorer_rename_row(
+    s: &AppState,
+    ws_id: &str,
+    entry: &crate::state::WorkspaceFileEntry,
+    indent: f32,
+    leading: El,
+    file_glyph: &'static rune::Icon,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    let ws_submit = ws_id.to_owned();
+    let path_submit = entry.path.clone();
+    let name_submit = entry.name.clone();
+    let ws_save = ws_id.to_owned();
+    let path_save = entry.path.clone();
+    let name_save = entry.name.clone();
+    let has_err = s.shell_ui.renaming_file_error.is_some();
+
+    let input_box = el()
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .h(22.0)
+        .px(6.0)
+        .radius(k.radius.sm)
+        .fill(t.input_bg)
+        .border(1.0, if has_err { t.danger } else { t.border_strong })
+        .center_y()
+        .child(
+            text_input(&s.shell_ui.renaming_file_edit, k.ty.small)
+                .single_line()
+                .key(format!("ws-file-rename-input-{}", entry.path))
+                .label(format!("Rename {}", entry.name))
+                .focus_selected(true)
+                .focus_return(format!("ws-file-{}", entry.path))
+                .w_full()
+                .color(k.c.text_base)
+                .caret(k.c.text_base, k.selection())
+                .on_edit(|s: &mut AppState| &mut s.shell_ui.renaming_file_edit)
+                .on_input_change(|s: &mut AppState, _| {
+                    s.shell_ui.renaming_file_error = None;
+                })
+                .on_submit(move |s: &mut AppState, _| {
+                    commit_explorer_rename(s, &ws_submit, &path_submit, &name_submit);
+                })
+                .on_input_key(|s: &mut AppState, ev, _| {
+                    if ev.key == Key::Escape {
+                        cancel_explorer_rename(s);
+                        return true;
+                    }
+                    false
+                }),
+        );
+
+    let save_btn = IconButton::new(&glyphs::CHECK)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .help("Save name")
+        .on_press_tx(move |s: &mut AppState, _| {
+            commit_explorer_rename(s, &ws_save, &path_save, &name_save);
+        })
+        .build(k)
+        .key(format!("ws-file-rename-save-{}", entry.path));
+
+    let cancel_btn = IconButton::new(&glyphs::CLOSE)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .help("Cancel rename")
+        .on_press_tx(|s: &mut AppState, _| {
+            cancel_explorer_rename(s);
+        })
+        .build(k)
+        .key(format!("ws-file-rename-cancel-{}", entry.path));
+
+    let edit_row = row()
+        .key(format!("ws-file-rename-{}", entry.path))
+        .w_full()
+        .h(28.0)
+        .pl(indent)
+        .pr(4.0)
+        .gap(4.0)
+        .radius(k.radius.sm)
+        .center_y()
+        .fill(k.c.hover)
+        .child(leading)
+        .child(rune::icon(file_glyph, 14.0).color(k.c.icon_muted))
+        .child(input_box)
+        .child(save_btn)
+        .child(cancel_btn);
+
+    if let Some(err) = s.shell_ui.renaming_file_error.as_deref() {
+        col().w_full().gap(2.0).child(edit_row).child(
+            el().w_full().pl(indent + 32.0).pr(6.0).child(
+                text(err.to_owned())
+                    .key(format!("ws-file-rename-error-{}", entry.path))
+                    .font(k.ty.small)
+                    .color(t.danger)
+                    .wrap(),
+            ),
+        )
+    } else {
+        edit_row
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_explorer_context_menu(
+    menu: &ExplorerContextMenu,
+    expanded: bool,
+    trigger: Option<El>,
+    k: &Kit,
+    layer: &mut Vec<El>,
+) -> Option<El> {
+    let ws_open = menu.workspace_id.clone();
+    let path_open = menu.path.clone();
+    let is_dir = menu.is_dir;
+
+    let ws_rename = menu.workspace_id.clone();
+    let path_rename = menu.path.clone();
+    let name_rename = menu.name.clone();
+
+    let path_reveal = menu.path.clone();
+    let path_copy = menu.path.clone();
+    let path_trash = menu.path.clone();
+
+    let open_label = if is_dir {
+        if expanded {
+            "Collapse folder"
+        } else {
+            "Expand folder"
+        }
+    } else {
+        "Open file"
+    };
+
+    let mut builder = Menu::new(format!("ws-file-ctx-{}", menu.path))
+        .standard()
+        .open(true)
+        .on_close(|s: &mut AppState| {
+            s.shell_ui.file_context_menu = None;
+        });
+
+    if let Some(trig) = trigger {
+        builder = builder.trigger(trig);
+    } else if let Some(pt) = menu.point {
+        builder = builder.at(pt.x, pt.y);
+    }
+
+    let menu_el =
+        builder
+            .item(
+                MenuItem::new(open_label).on_select(move |s: &mut AppState| {
+                    s.shell_ui.file_context_menu = None;
+                    open_or_toggle_explorer_entry(s, &ws_open, &path_open, is_dir);
+                }),
+            )
+            .item(MenuItem::new("Rename").icon(&icons::PENCIL).on_select(
+                move |s: &mut AppState| {
+                    start_explorer_rename(
+                        s,
+                        ws_rename.clone(),
+                        path_rename.clone(),
+                        name_rename.clone(),
+                    );
+                },
+            ))
+            .separator()
+            .item(
+                MenuItem::new("Reveal in File Manager").on_select(move |s: &mut AppState| {
+                    s.shell_ui.file_context_menu = None;
+                    s.dispatch(Action::Native(NativeAction::RevealInOs(
+                        path_reveal.clone(),
+                    )));
+                }),
+            )
+            .item(MenuItem::new("Copy path").icon(&glyphs::COPY).on_select(
+                move |s: &mut AppState| {
+                    s.shell_ui.file_context_menu = None;
+                    s.dispatch(Action::Native(NativeAction::CopyText(path_copy.clone())));
+                },
+            ))
+            .separator()
+            .item(
+                MenuItem::new("Move to Trash")
+                    .danger(true)
+                    .on_select(move |s: &mut AppState| {
+                        s.shell_ui.file_context_menu = None;
+                        s.dispatch(Action::Native(NativeAction::TrashPath(path_trash.clone())));
+                    }),
+            )
+            .build(k, layer);
+
+    menu.point.is_none().then_some(menu_el)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_explorer_tree(
     rows: &mut Vec<El>,
@@ -357,6 +635,7 @@ fn push_explorer_tree(
     budget: &mut usize,
     k: &Kit,
     t: &ThemeTokens,
+    layer: &mut Vec<El>,
 ) {
     if depth >= 12 || *budget == 0 {
         return;
@@ -394,54 +673,103 @@ fn push_explorer_tree(
             el().w(12.0).h(12.0)
         };
 
-        let mut item = row()
-            .key(format!("ws-file-{}", entry.path))
-            .w_full()
-            .h(26.0)
-            .pl(indent)
-            .pr(6.0)
-            .gap(6.0)
-            .radius(k.radius.sm)
-            .center_y()
-            .hover(k.c.hover)
-            .on_press_tx(move |s: &mut AppState, _| {
-                if is_dir {
-                    if !s.explorer_expanded_dirs.remove(&dir_key) {
-                        s.explorer_expanded_dirs.insert(dir_key.clone());
-                        s.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
-                            workspace_id: ws_id_owned.clone(),
-                            dir: path.clone(),
-                        }));
-                    }
+        let is_renaming = s
+            .shell_ui
+            .renaming_file_key
+            .as_ref()
+            .is_some_and(|(w, p)| w == ws_id && p == &entry.path);
+
+        if is_renaming {
+            rows.push(build_explorer_rename_row(
+                s, ws_id, entry, indent, leading, file_glyph, k, t,
+            ));
+        } else {
+            let ws_ctx = ws_id.to_owned();
+            let path_ctx = entry.path.clone();
+            let name_ctx = entry.name.clone();
+            let ws_btn = ws_id.to_owned();
+            let path_btn = entry.path.clone();
+            let name_btn = entry.name.clone();
+
+            let mut item = row()
+                .key(format!("ws-file-{}", entry.path))
+                .w_full()
+                .h(26.0)
+                .pl(indent)
+                .pr(4.0)
+                .gap(6.0)
+                .radius(k.radius.sm)
+                .center_y()
+                .hover(k.c.hover)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    open_or_toggle_explorer_entry(s, &ws_id_owned, &path, is_dir);
+                })
+                .on_secondary_press(move |s: &mut AppState, pt, _| {
+                    s.shell_ui.file_context_menu = Some(ExplorerContextMenu {
+                        workspace_id: ws_ctx.clone(),
+                        path: path_ctx.clone(),
+                        name: name_ctx.clone(),
+                        is_dir,
+                        point: Some(pt),
+                    });
+                })
+                .child(leading)
+                .child(rune::icon(file_glyph, 14.0).color(k.c.icon_muted))
+                .child(
+                    text(entry.name.clone())
+                        .font(k.ty.small)
+                        .color(k.c.text_base)
+                        .truncate()
+                        .grow(1.0)
+                        .shrink(),
+                );
+            if let Some(git_st) = &entry.git_status {
+                item = item.child(text(git_st.clone()).font(k.ty.small_medium).color(t.accent));
+            } else if let Some(size) = entry.size_bytes
+                && !entry.is_dir
+            {
+                item = item.child(
+                    text(format_bytes(size))
+                        .font(k.ty.small)
+                        .color(k.c.text_faint),
+                );
+            }
+
+            let actions_btn = IconButton::new(&icons::MORE_HORIZONTAL)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .help("File actions")
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.shell_ui.file_context_menu = Some(ExplorerContextMenu {
+                        workspace_id: ws_btn.clone(),
+                        path: path_btn.clone(),
+                        name: name_btn.clone(),
+                        is_dir,
+                        point: None,
+                    });
+                })
+                .build(k)
+                .key(format!("ws-file-actions-{}", entry.path));
+
+            let active_menu = s
+                .shell_ui
+                .file_context_menu
+                .as_ref()
+                .filter(|m| m.workspace_id == ws_id && m.path == entry.path);
+            let trailing_control = if let Some(menu) = active_menu {
+                if menu.point.is_none() {
+                    build_explorer_context_menu(menu, expanded, Some(actions_btn.clone()), k, layer)
+                        .unwrap_or(actions_btn)
                 } else {
-                    s.dispatch(Action::Native(NativeAction::LoadFilePreview {
-                        workspace_id: ws_id_owned.clone(),
-                        path: path.clone(),
-                    }));
+                    let _ = build_explorer_context_menu(menu, expanded, None, k, layer);
+                    actions_btn
                 }
-            })
-            .child(leading)
-            .child(rune::icon(file_glyph, 14.0).color(k.c.icon_muted))
-            .child(
-                text(entry.name.clone())
-                    .font(k.ty.small)
-                    .color(k.c.text_base)
-                    .truncate()
-                    .grow(1.0)
-                    .shrink(),
-            );
-        if let Some(git_st) = &entry.git_status {
-            item = item.child(text(git_st.clone()).font(k.ty.small_medium).color(t.accent));
-        } else if let Some(size) = entry.size_bytes
-            && !entry.is_dir
-        {
-            item = item.child(
-                text(format_bytes(size))
-                    .font(k.ty.small)
-                    .color(k.c.text_faint),
-            );
+            } else {
+                actions_btn
+            };
+
+            rows.push(item.child(trailing_control));
         }
-        rows.push(item);
 
         if expanded {
             let child_indent = 20.0 + (depth as f32) * 14.0;
@@ -461,7 +789,7 @@ fn push_explorer_tree(
                     }
                 }
                 Some(_) => {
-                    push_explorer_tree(rows, s, ws_id, &entry.path, depth + 1, budget, k, t);
+                    push_explorer_tree(rows, s, ws_id, &entry.path, depth + 1, budget, k, t, layer);
                 }
                 None => {
                     if *budget > 0 {
@@ -482,7 +810,7 @@ fn push_explorer_tree(
     }
 }
 
-fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
+fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
     let Some(ws) = s.active_workspace() else {
         return Card::new()
             .title("Workspace files", Some(&icons::FOLDER))
@@ -528,7 +856,7 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
         Some(_) => {
             let mut rows = Vec::new();
             let mut budget = 120usize;
-            push_explorer_tree(&mut rows, s, &ws.id, ".", 0, &mut budget, k, t);
+            push_explorer_tree(&mut rows, s, &ws.id, ".", 0, &mut budget, k, t, layer);
             col().w_full().gap(2.0).children(rows)
         }
     };
@@ -581,5 +909,58 @@ mod tests {
         assert!(!s.context_sidebar.is_open());
         assert!(!s.shell_ui.right_overlay_open);
         assert!(s.agent_viewer.is_some());
+    }
+
+    #[test]
+    fn explorer_rename_validation_and_escape_lifecycle() {
+        assert!(validate_explorer_rename("notes.md", "   ").is_err());
+        assert!(validate_explorer_rename("notes.md", ".").is_err());
+        assert!(validate_explorer_rename("notes.md", "..").is_err());
+        assert!(validate_explorer_rename("notes.md", "sub/notes.md").is_err());
+        assert!(validate_explorer_rename("notes.md", r"sub\notes.md").is_err());
+        assert!(validate_explorer_rename("notes.md", "bad\0name").is_err());
+        assert_eq!(validate_explorer_rename("notes.md", " notes.md "), Ok(None));
+        assert_eq!(
+            validate_explorer_rename("notes.md", "Notes.md"),
+            Ok(Some("Notes.md".to_string()))
+        );
+        assert_eq!(
+            validate_explorer_rename("notes.md", " summary.md "),
+            Ok(Some("summary.md".to_string()))
+        );
+
+        let mut s = AppState::default();
+        start_explorer_rename(
+            &mut s,
+            "ws-1".into(),
+            "/tmp/ws-1/notes.md".into(),
+            "notes.md".into(),
+        );
+        assert_eq!(
+            s.shell_ui.renaming_file_key,
+            Some(("ws-1".into(), "/tmp/ws-1/notes.md".into()))
+        );
+        assert_eq!(s.shell_ui.renaming_file_edit.text, "notes.md");
+        assert!(s.shell_ui.renaming_file_edit.focused);
+
+        s.shell_ui.renaming_file_edit.replace_text("bad/name");
+        commit_explorer_rename(&mut s, "ws-1", "/tmp/ws-1/notes.md", "notes.md");
+        assert!(s.shell_ui.renaming_file_key.is_some());
+        assert!(s.shell_ui.renaming_file_error.is_some());
+
+        assert!(crate::views::shell::state::handle_escape(&mut s));
+        assert!(s.shell_ui.renaming_file_key.is_none());
+        assert!(s.shell_ui.renaming_file_error.is_none());
+
+        start_explorer_rename(
+            &mut s,
+            "ws-1".into(),
+            "/tmp/ws-1/notes.md".into(),
+            "notes.md".into(),
+        );
+        s.shell_ui.renaming_file_edit.replace_text(" summary.md ");
+        commit_explorer_rename(&mut s, "ws-1", "/tmp/ws-1/notes.md", "notes.md");
+        assert!(s.shell_ui.renaming_file_key.is_none());
+        assert!(s.shell_ui.renaming_file_error.is_none());
     }
 }

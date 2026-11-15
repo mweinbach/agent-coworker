@@ -139,3 +139,27 @@ pub static CHEVRON_RIGHT: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M6.5 5L9.5 8L6.5 11" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
+
+pub static MORE_HORIZONTAL: Icon = Icon {
+    name: "cowork-more-horizontal",
+    view: 16.0,
+    body: r#"<circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/>"#,
+};
+
+pub static PENCIL: Icon = Icon {
+    name: "cowork-pencil",
+    view: 16.0,
+    body: r#"<path d="M10.8 2.8L13.2 5.2L5.6 12.8L2.6 13.4L3.2 10.4L10.8 2.8Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
+};
+
+pub static ZOOM_IN: Icon = Icon {
+    name: "cowork-zoom-in",
+    view: 16.0,
+    body: r#"<circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M10.3 10.3L13.5 13.5M7 5V9M5 7H9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
+};
+
+pub static ZOOM_OUT: Icon = Icon {
+    name: "cowork-zoom-out",
+    view: 16.0,
+    body: r#"<circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M10.3 10.3L13.5 13.5M5 7H9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
+};

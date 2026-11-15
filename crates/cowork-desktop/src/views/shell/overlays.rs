@@ -46,25 +46,21 @@ pub fn build_overlays(
         subview_overlays.push(onboarding);
     }
 
-    if let Some(lm) = build_lmstudio_start_modal(s, k, t) {
-        subview_overlays.push(lm);
-    }
-
-    if let Some(ext) = build_external_url_dialog(s.pending_external_url.as_deref(), k, t) {
-        subview_overlays.push(ext);
-    }
-
-    if let Some(confirm) = build_confirm_dialog(s.pending_confirm_dialog.as_ref(), k, t) {
-        subview_overlays.push(confirm);
-    }
-
-    if let Some(delete_dialog) = build_delete_thread_confirm_dialog(s, k, t) {
-        subview_overlays.push(delete_dialog);
-    }
-
-    if let Some(run_dialog) = build_workflow_run_detail_dialog(s, k, t) {
-        subview_overlays.push(run_dialog);
-    }
+    push_lmstudio_start_modal(s, k, t, &mut subview_overlays);
+    push_external_url_dialog(
+        s.pending_external_url.as_deref(),
+        k,
+        t,
+        &mut subview_overlays,
+    );
+    push_confirm_dialog(
+        s.pending_confirm_dialog.as_ref(),
+        k,
+        t,
+        &mut subview_overlays,
+    );
+    push_delete_thread_confirm_dialog(s, k, t, &mut subview_overlays);
+    push_workflow_run_detail_dialog(s, k, t, &mut subview_overlays);
 
     if let Some(toasts) = build_toast_region(s, k, t) {
         subview_overlays.push(toasts);
@@ -136,9 +132,10 @@ fn padded_dialog_body(desc: Option<&str>, content: El, t: &ThemeTokens) -> El {
     wrap.child(content)
 }
 
-fn build_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens) -> Option<El> {
-    let url = url?;
-    let mut overlays = Vec::new();
+fn push_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
+    let Some(url) = url else {
+        return;
+    };
     let domain = extract_external_url_domain(url);
     let desc = format!("Review the destination domain ({domain}) before opening in your browser.");
 
@@ -189,18 +186,18 @@ fn build_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens) -> Opt
                 ),
             t,
         ))
-        .build(k, &mut overlays);
-
-    overlays.into_iter().next()
+        .build(k, layer);
 }
 
-fn build_confirm_dialog(
+fn push_confirm_dialog(
     pending: Option<&ConfirmDialogRequest>,
     k: &Kit,
     t: &ThemeTokens,
-) -> Option<El> {
-    let pending = pending?;
-    let mut overlays = Vec::new();
+    layer: &mut Vec<El>,
+) {
+    let Some(pending) = pending else {
+        return;
+    };
     let confirm_variant = if pending.destructive {
         ButtonVariant::Danger
     } else {
@@ -264,14 +261,13 @@ fn build_confirm_dialog(
                 ),
             t,
         ))
-        .build(k, &mut overlays);
-    overlays.into_iter().next()
+        .build(k, layer);
 }
 
-fn build_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
-    let modal = s.lmstudio_start_modal.as_ref()?;
-
-    let mut overlays = Vec::new();
+fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
+    let Some(modal) = s.lmstudio_start_modal.as_ref() else {
+        return;
+    };
     let desc = match modal.base_url.as_deref() {
         Some(url) if !url.is_empty() => format!(
             "LM Studio local inference at {url} is configured, but the local server is not running."
@@ -356,9 +352,7 @@ fn build_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<
             s.dispatch(Action::Shell(ShellAction::DismissLmStudioStartModal));
         })
         .child(padded_dialog_body(Some(&desc), body, t))
-        .build(k, &mut overlays);
-
-    overlays.into_iter().next()
+        .build(k, layer);
 }
 
 pub(crate) fn is_onboarding_visible(s: &AppState) -> bool {
@@ -1009,8 +1003,10 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
     )
 }
 
-fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
-    let thread_id = s.shell_ui.pending_delete_thread_id.as_deref()?;
+fn push_delete_thread_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
+    let Some(thread_id) = s.shell_ui.pending_delete_thread_id.as_deref() else {
+        return;
+    };
     let title = s
         .threads
         .iter()
@@ -1047,7 +1043,6 @@ fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) ->
                 .build(k),
         );
 
-    let mut overlays = Vec::new();
     Dialog::new("delete-thread-dialog", "Delete chat permanently?")
         .open(true)
         .width(420.0)
@@ -1057,9 +1052,7 @@ fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) ->
             s.shell_ui.pending_delete_thread_id = None;
         })
         .child(padded_dialog_body(Some(&desc), footer, t))
-        .build(k, &mut overlays);
-
-    overlays.into_iter().next()
+        .build(k, layer);
 }
 
 fn find_workflow_run<'a>(s: &'a AppState, run_id: &str) -> Option<&'a WorkflowRunView> {
@@ -1085,9 +1078,13 @@ fn format_run_duration(started_at_ms: i64, finished_at_ms: Option<i64>) -> Optio
     }
 }
 
-fn build_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
-    let run_id = s.shell_ui.selected_workflow_run_id.as_deref()?;
-    let run = find_workflow_run(s, run_id)?;
+fn push_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
+    let Some(run_id) = s.shell_ui.selected_workflow_run_id.as_deref() else {
+        return;
+    };
+    let Some(run) = find_workflow_run(s, run_id) else {
+        return;
+    };
     let started_rel = helpers::format_relative_age(run.started_at, s.now_secs);
     let duration = format_run_duration(run.started_at, run.finished_at);
 
@@ -1147,7 +1144,6 @@ fn build_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> O
             ),
         );
 
-    let mut overlays = Vec::new();
     Dialog::new("workflow-run-detail-dialog", run.workflow_name.as_str())
         .open(true)
         .width(500.0)
@@ -1161,9 +1157,7 @@ fn build_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> O
             body,
             t,
         ))
-        .build(k, &mut overlays);
-
-    overlays.into_iter().next()
+        .build(k, layer);
 }
 
 #[cfg(test)]

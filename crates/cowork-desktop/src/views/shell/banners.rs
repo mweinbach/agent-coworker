@@ -695,6 +695,8 @@ fn build_inline_file_preview(
             .child(text(err).font(t.body).color(t.danger).wrap())
     } else if let Some(spreadsheet) = preview.spreadsheet.as_ref() {
         crate::views::preview::render_spreadsheet_preview(s, preview, spreadsheet, k, t)
+    } else if let Some(presentation) = preview.presentation.as_deref() {
+        crate::views::preview::render_presentation_preview(s, preview, presentation, k, t)
     } else if preview.is_binary {
         el().w_full().h_full().center().padding(16.0).child(
             text("Binary file preview is not supported inline. Use Open in default app.")

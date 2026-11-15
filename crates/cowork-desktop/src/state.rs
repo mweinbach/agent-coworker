@@ -11044,8 +11044,11 @@ mod tests {
                 pending_interactions: vec![ChatInteraction::UserInput {
                     request_id: req_id.clone(),
                     item_id: "item-ask-1".to_string(),
-                    question: "Pick one".to_string(),
-                    options: vec!["A".to_string(), "B".to_string()],
+                    questions: json!([{
+                        "id": "q1",
+                        "question": "Pick one",
+                        "options": ["A", "B"],
+                    }]),
                 }],
                 ..Default::default()
             },
@@ -11054,10 +11057,10 @@ mod tests {
             .chat_ui
             .ask_active_question_idx
             .insert("ask-req-1".to_string(), 1);
-        state
-            .chat_ui
-            .ask_text_edits
-            .insert("ask-req-1:q1".to_string(), "custom draft".to_string());
+        state.chat_ui.ask_text_edits.insert(
+            "ask-req-1:q1".to_string(),
+            rune::TextEdit::new("custom draft"),
+        );
         state
             .chat_ui
             .ask_selected_options
@@ -11078,7 +11081,7 @@ mod tests {
                 .chat_ui
                 .ask_text_edits
                 .get("ask-req-1:q1")
-                .map(String::as_str),
+                .map(|te| te.text.as_str()),
             Some("custom draft")
         );
 
@@ -11089,19 +11092,17 @@ mod tests {
             error: None,
         });
         assert!(
-            state
+            !state
                 .chat_ui
                 .ask_active_question_idx
-                .get("ask-req-1")
-                .is_none()
+                .contains_key("ask-req-1")
         );
-        assert!(state.chat_ui.ask_text_edits.get("ask-req-1:q1").is_none());
+        assert!(!state.chat_ui.ask_text_edits.contains_key("ask-req-1:q1"));
         assert!(
-            state
+            !state
                 .chat_ui
                 .ask_selected_options
-                .get("ask-req-1:q1")
-                .is_none()
+                .contains_key("ask-req-1:q1")
         );
     }
 }

@@ -6,6 +6,8 @@
 pub mod attachments;
 pub mod components;
 pub mod composer;
+pub mod feed;
+pub mod feed_row;
 pub mod icons;
 pub mod landing;
 pub mod markdown;
@@ -14,12 +16,17 @@ pub mod state;
 
 pub use state::ChatUiState;
 
-use rune::{Cx, col, el, text};
+use rune::{Cx, col};
 use rune_kit::Kit;
 
-use crate::state::AppState;
+use crate::state::{AppState, ServerLifecycleState, ThreadStatus};
 use crate::theme;
 use crate::views::SubviewOutput;
+
+use self::components::{locked_task_bar, read_only_notice_bar};
+use self::feed::{ChatFeedProps, build_chat_feed};
+use self::feed_row::render_active_feed_popovers;
+use self::model::workspace_is_reconnecting;
 
 /// Renders the active chat landing view or thread transcript + composer + chat overlays.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
@@ -33,29 +40,69 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
     let mut overlays = Vec::new();
     let content = if let Some(thread) = s.active_thread() {
         let rt = s.active_thread_runtime();
-        let feed_count = rt.map(|r| r.feed.len()).unwrap_or(0);
-        let placeholder_feed = col()
-            .key("chat-feed-placeholder")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .items_center()
-            .justify_center()
-            .padding(24.0)
-            .child(
-                text(format!("{} ({feed_count} feed items)", thread.title))
-                    .font(k.ty.ui)
-                    .color(t.text_muted),
-            );
-        let dock = composer::build_composer(s, k, &t, &mut overlays, false);
+        let ws = s.workspaces.iter().find(|w| w.id == thread.workspace_id);
+        let ws_rt = s.workspace_runtime_by_id.get(&thread.workspace_id);
+        let disconnected = thread.status == ThreadStatus::Disconnected
+            || ws_rt
+                .is_some_and(|w| !matches!(w.server_state, ServerLifecycleState::Running { .. }));
+        let reconnecting = workspace_is_reconnecting(ws_rt);
+        let thread_busy = rt.is_some_and(|r| r.streaming || r.active_turn_id.is_some());
 
-        col()
-            .key("chat-view")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .child(el().w_full().grow(1.0).min_h(0.0).child(placeholder_feed))
-            .child(dock)
+        let mut root = col().key("chat-view").w_full().grow(1.0).min_h(0.0);
+
+        if let Some(notice) = rt.and_then(|r| r.read_only_notice.as_ref()) {
+            root = root.child(read_only_notice_bar(
+                k,
+                &t,
+                &notice.title,
+                &notice.detail,
+                None,
+            ));
+        }
+
+        let feed_el = build_chat_feed(
+            s,
+            k,
+            &t,
+            &ChatFeedProps {
+                thread_key: &thread.id,
+                raw_feed: rt.map(|r| r.feed.as_slice()).unwrap_or(&[]),
+                thread_busy,
+                hydrating: rt.is_some_and(|r| r.hydrating),
+                transcript_only: rt.is_some_and(|r| r.transcript_only),
+                disconnected,
+                reconnecting,
+                pending_interactions: rt.map(|r| r.pending_interactions.as_slice()).unwrap_or(&[]),
+                interaction_errors: rt
+                    .map(|r| &r.interaction_errors)
+                    .unwrap_or(&EMPTY_INTERACTION_ERRORS),
+                agents: rt.map(|r| r.agents.as_slice()).unwrap_or(&[]),
+                workspace_id: Some(thread.workspace_id.as_str()),
+                workspace_path: ws.map(|w| w.path.as_str()),
+                external_cache: None,
+                is_agent_viewer: false,
+                scroll_area_key: "chat-feed-area",
+                viewport_key: "chat-feed-scroll",
+                frame_key: "chat-feed-frame",
+            },
+        );
+        root = root.child(feed_el);
+
+        if let Some(lock) = rt
+            .and_then(|r| r.source_task.as_ref())
+            .filter(|l| l.read_only)
+        {
+            root = root.child(locked_task_bar(
+                k,
+                &t,
+                lock.task_id.clone(),
+                lock.task_title.clone(),
+            ));
+        } else {
+            root = root.child(composer::build_composer(s, k, &t, &mut overlays, false));
+        }
+
+        root
     } else {
         col()
             .key("chat-view")
@@ -65,5 +112,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .child(landing::build_landing_view(s, k, &t, &mut overlays))
     };
 
+    render_active_feed_popovers(s, k, &t, &mut overlays);
+
     SubviewOutput { content, overlays }
 }
+
+static EMPTY_INTERACTION_ERRORS: std::sync::LazyLock<std::collections::HashMap<String, String>> =
+    std::sync::LazyLock::new(std::collections::HashMap::new);

@@ -511,7 +511,7 @@ pub fn desktop_markdown(
     md.build(k)
 }
 
-fn is_allowed_external_url(raw: &str) -> bool {
+pub(super) fn is_allowed_external_url(raw: &str) -> bool {
     url::Url::parse(raw.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "mailto"))
 }
 

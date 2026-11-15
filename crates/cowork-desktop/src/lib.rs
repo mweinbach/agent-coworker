@@ -719,9 +719,11 @@ pub fn run() {
         .try_init()
         .ok();
 
+    let main_titlebar_h = rune_kit::shell::TOOLBAR_HEIGHT;
+    let main_tl_y = ((main_titlebar_h - 14.0) / 2.0).max(0.0).round();
     let mut app = App::new(app_spec())
         .modifier_keys()
-        .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
+        .titlebar(Titlebar::new(main_titlebar_h).traffic_lights(16.0, main_tl_y))
         .keep_running()
         .turn_scope(enter_shared_turn, leave_shared_turn);
 

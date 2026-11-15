@@ -43,10 +43,10 @@ use std::time::{Duration, Instant};
 
 use cowork_config::canonicalize_sync;
 use rune::{App, AppHandle};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
-use crate::actions::{NativeCommand, StoreEvent};
+use crate::actions::{NativeCommand, StoreEvent, TranscriptLogEntry};
 use crate::state::{
     AppState, DiagnosticsBundleState, NotificationTone, PersistedDesktopState,
     PrivacyTelemetrySettings,
@@ -55,13 +55,14 @@ use appearance::{AppearancePreferences, detect_system_dark};
 use apply_desktop_state::apply_desktop_state;
 use crash_reporting::CrashReportingService;
 use diagnostics::{CreatedDiagnosticsBundle, DiagnosticsService, UploadedDiagnosticsBundle};
-use explorer::list_workspace_directory;
+use explorer::{list_workspace_directory, rename_workspace_entry};
+use file_entry_rename::FileEntryRenamer;
 use file_preview_read::{DEFAULT_PREVIEW_MAX_BYTES, load_file_preview_state};
 use local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger, strip_url_secrets};
 use notifications::DesktopNotificationService;
 use persistence::{
-    PersistenceService, TranscriptWriteBuffer, read_user_data_override_env,
-    resolve_legacy_user_data_dir, resolve_user_data_dir,
+    PersistenceService, TranscriptDirection, TranscriptEvent, TranscriptWriteBuffer,
+    read_user_data_override_env, resolve_legacy_user_data_dir, resolve_user_data_dir,
 };
 use product_analytics::{ProductAnalyticsService, read_persisted_product_analytics_state};
 use remote_access::RemoteAccessBridge;
@@ -443,6 +444,7 @@ struct NativeWorkerContext {
     appearance: AppearancePreferences,
     roots: Arc<Mutex<WorkspaceRootsController>>,
     uploads: Arc<Mutex<AuthorizedUploadRegistry>>,
+    renamer: FileEntryRenamer,
     server_manager: ServerManager,
     remote_access: RemoteAccessBridge,
     watcher: WorkspaceDirectoryWatcher,
@@ -462,10 +464,18 @@ struct NativeWorkerContext {
 impl NativeWorkerContext {
     fn initialize(emit: Arc<dyn Fn(StoreEvent) + Send + Sync>) -> Self {
         let env = cowork_config::env_map_from_process();
-        let is_packaged = is_packaged_build();
-        let has_override = read_user_data_override_env(&env).is_some();
-        let user_data_dir = resolve_desktop_user_data_dir(is_packaged, &env);
-        let legacy_dir = resolve_legacy_user_data_dir(&env);
+        Self::initialize_with_env(emit, is_packaged_build(), &env, true)
+    }
+
+    fn initialize_with_env(
+        emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
+        is_packaged: bool,
+        env: &HashMap<String, String>,
+        register_globals: bool,
+    ) -> Self {
+        let has_override = read_user_data_override_env(env).is_some();
+        let user_data_dir = resolve_desktop_user_data_dir(is_packaged, env);
+        let legacy_dir = resolve_legacy_user_data_dir(env);
 
         let logger = Arc::new(LocalLogger::new(&user_data_dir));
         let persistence = Arc::new(PersistenceService::new(
@@ -474,7 +484,11 @@ impl NativeWorkerContext {
             has_override,
             Some(logger.clone()),
         ));
-        let window_state = shared_window_state_store().clone();
+        let window_state = if register_globals {
+            shared_window_state_store().clone()
+        } else {
+            WindowStateStore::new(&user_data_dir)
+        };
         let appearance = AppearancePreferences::new(&user_data_dir);
         let roots = Arc::new(Mutex::new(WorkspaceRootsController::new()));
         let uploads = Arc::new(Mutex::new(AuthorizedUploadRegistry::new()));
@@ -498,22 +512,24 @@ impl NativeWorkerContext {
             .map(read_persisted_product_analytics_state);
 
         let crash_reporting =
-            CrashReportingService::new(is_packaged, initial_roots, &initial_privacy, &env);
-        crash_reporting.install_panic_hook();
+            CrashReportingService::new(is_packaged, initial_roots, &initial_privacy, env);
+        if register_globals {
+            crash_reporting.install_panic_hook();
+        }
 
         let product_analytics = ProductAnalyticsService::new(
             is_packaged,
             &initial_privacy,
             initial_analytics,
             Some(persistence.as_ref()),
-            &env,
+            env,
         );
 
         let current_exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
         let cwd = std::env::current_dir().ok();
-        let repo_root = resolve_dev_repo_root(&env, current_exe_dir.as_deref(), cwd.as_deref());
+        let repo_root = resolve_dev_repo_root(env, current_exe_dir.as_deref(), cwd.as_deref());
         let resources_dir = current_exe_dir.as_ref().and_then(|dir| {
             #[cfg(target_os = "macos")]
             {
@@ -562,7 +578,9 @@ impl NativeWorkerContext {
         .with_analytics(product_analytics.clone());
         let transcript_buffer =
             TranscriptWriteBuffer::new(persistence.clone(), Some(logger.clone()));
-        set_shared_analytics(Some(product_analytics.clone()));
+        if register_globals {
+            set_shared_analytics(Some(product_analytics.clone()));
+        }
 
         Self {
             is_packaged,
@@ -573,6 +591,7 @@ impl NativeWorkerContext {
             appearance,
             roots,
             uploads,
+            renamer: FileEntryRenamer::new(),
             server_manager,
             remote_access,
             watcher: WorkspaceDirectoryWatcher::new(),
@@ -603,6 +622,7 @@ impl NativeWorkerContext {
                 let mut core = persistence::core_state_from_document(&doc);
                 core.feature_flags =
                     resolve_effective_feature_flags(&core.feature_flags, &env, self.is_packaged);
+                core.product_analytics = self.product_analytics_value().or(core.product_analytics);
                 self.sync_runtime_caches(&core);
                 apply_desktop_state(
                     &core,
@@ -625,7 +645,7 @@ impl NativeWorkerContext {
                     "failed to load persisted state",
                     Some(&meta),
                 );
-                let core = PersistedDesktopState {
+                let mut core = PersistedDesktopState {
                     feature_flags: resolve_effective_feature_flags(
                         &HashMap::new(),
                         &env,
@@ -633,6 +653,7 @@ impl NativeWorkerContext {
                     ),
                     ..PersistedDesktopState::default()
                 };
+                core.product_analytics = self.product_analytics_value();
                 self.sync_runtime_caches(&core);
                 core
             }
@@ -640,6 +661,15 @@ impl NativeWorkerContext {
     }
 
     fn sync_runtime_caches(&mut self, state: &PersistedDesktopState) {
+        let env = cowork_config::env_map_from_process();
+        self.sync_runtime_caches_with_env(state, &env);
+    }
+
+    fn sync_runtime_caches_with_env(
+        &mut self,
+        state: &PersistedDesktopState,
+        env: &HashMap<String, String>,
+    ) {
         self.last_feature_flags = state.feature_flags.clone();
         self.last_privacy = Some(state.settings.privacy_telemetry.clone());
         self.show_hidden_files
@@ -661,17 +691,68 @@ impl NativeWorkerContext {
             state.active_workspace_id.as_deref(),
             &ws_targets,
         );
-        self.sync_telemetry_services(&state.settings.privacy_telemetry);
+        self.sync_telemetry_services_with_env(&state.settings.privacy_telemetry, env);
     }
 
-    fn sync_telemetry_services(&self, privacy: &PrivacyTelemetrySettings) {
-        let env = cowork_config::env_map_from_process();
+    fn product_analytics_value(&self) -> Option<Value> {
+        let state = self.product_analytics.persisted_state();
+        if state.anonymous_installation_id.is_none() && state.last_app_version.is_none() {
+            return None;
+        }
+        serde_json::to_value(&state).ok().filter(|v| v.is_object())
+    }
+
+    fn sync_telemetry_services_with_env(
+        &self,
+        privacy: &PrivacyTelemetrySettings,
+        env: &HashMap<String, String>,
+    ) {
         let approved = self.approved_roots_snapshot();
-        self.crash_reporting.reconfigure(privacy, approved, &env);
+        self.crash_reporting.reconfigure(privacy, approved, env);
+        let before = self.product_analytics.persisted_state();
         self.product_analytics
-            .reconfigure(privacy, Some(self.persistence.as_ref()), &env);
+            .reconfigure(privacy, Some(self.persistence.as_ref()), env);
+        let after = self.product_analytics.persisted_state();
         self.server_manager
-            .set_product_analytics_state(self.product_analytics.persisted_state());
+            .set_product_analytics_state(after.clone());
+        if after != before {
+            (self.emit)(StoreEvent::ProductAnalyticsStateUpdated(
+                self.product_analytics_value(),
+            ));
+        }
+    }
+
+    fn save_persisted_state_with_env(
+        &mut self,
+        snapshot: &PersistedDesktopState,
+        env: &HashMap<String, String>,
+    ) -> PersistedDesktopState {
+        // Persist user/core state first (keeping the live analytics IDs if the UI snapshot is older),
+        // then reconfigure telemetry services so newly generated `anonymousInstallationId` values
+        // written by `reconfigure` are never clobbered by the pre-reconfigure snapshot.
+        let mut snapshot_to_save = snapshot.clone();
+        if let Some(current_analytics) = self.product_analytics_value() {
+            snapshot_to_save.product_analytics = Some(current_analytics);
+        }
+        if let Err(err) = self
+            .persistence
+            .merge_and_save_core_snapshot(&snapshot_to_save)
+        {
+            let meta = json!({ "error": err.to_string() });
+            self.logger.write(
+                LocalLogFileName::Server,
+                LocalLogLevel::Error,
+                "persistence",
+                "failed to persist desktop snapshot",
+                Some(&meta),
+            );
+        }
+
+        let mut runtime_snapshot = snapshot.clone();
+        runtime_snapshot.feature_flags =
+            resolve_effective_feature_flags(&snapshot.feature_flags, env, self.is_packaged);
+        self.sync_runtime_caches_with_env(&runtime_snapshot, env);
+        runtime_snapshot
     }
 
     fn server_feature_flags(&self) -> WorkspaceServerFeatureFlags {
@@ -679,13 +760,17 @@ impl NativeWorkerContext {
     }
 
     fn compute_telemetry_status(&self) -> Value {
+        let env = cowork_config::env_map_from_process();
+        self.compute_telemetry_status_with_env(&env)
+    }
+
+    fn compute_telemetry_status_with_env(&self, env: &HashMap<String, String>) -> Value {
         let mut snapshot = PersistedDesktopState::default();
         if let Some(ref privacy) = self.last_privacy {
             snapshot.settings.privacy_telemetry = privacy.clone();
         }
         let raw_doc = self.persistence.load_state_value().ok();
-        let env = cowork_config::env_map_from_process();
-        resolve_desktop_telemetry_status(&snapshot, raw_doc.as_ref(), &env, self.is_packaged)
+        resolve_desktop_telemetry_status(&snapshot, raw_doc.as_ref(), env, self.is_packaged)
     }
 
     fn authorize_explorer_workspace_root(
@@ -937,24 +1022,7 @@ impl NativeWorkerContext {
             }
             NativeCommand::SavePersistedState(snapshot) => {
                 let env = cowork_config::env_map_from_process();
-                let mut runtime_snapshot = (*snapshot).clone();
-                runtime_snapshot.feature_flags = resolve_effective_feature_flags(
-                    &snapshot.feature_flags,
-                    &env,
-                    self.is_packaged,
-                );
-                self.sync_runtime_caches(&runtime_snapshot);
-
-                if let Err(err) = self.persistence.merge_and_save_core_snapshot(&snapshot) {
-                    let meta = json!({ "error": err.to_string() });
-                    self.logger.write(
-                        LocalLogFileName::Server,
-                        LocalLogLevel::Error,
-                        "persistence",
-                        "failed to persist desktop snapshot",
-                        Some(&meta),
-                    );
-                }
+                let runtime_snapshot = self.save_persisted_state_with_env(&snapshot, &env);
                 apply_desktop_state(
                     &runtime_snapshot,
                     &self.roots,
@@ -966,7 +1034,7 @@ impl NativeWorkerContext {
                     self.is_packaged,
                 );
                 (self.emit)(StoreEvent::TelemetryStatusChanged(
-                    self.compute_telemetry_status(),
+                    self.compute_telemetry_status_with_env(&env),
                 ));
             }
             NativeCommand::PickFolder { request_id } => {
@@ -1152,31 +1220,11 @@ impl NativeWorkerContext {
             }
             NativeCommand::OpenInDefaultApp { path, confirmed } => {
                 let roots = self.approved_roots_snapshot();
-                match open_in_default_app(&roots, Path::new(&path), confirmed) {
-                    Ok(OpenInDefaultAppOutcome::Opened) => {}
-                    Ok(OpenInDefaultAppOutcome::ConfirmationRequired {
-                        path: safe_path,
-                        reason,
-                    }) => {
-                        let meta = json!({
-                            "fileName": safe_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                            "reason": reason,
-                        });
-                        self.logger.warn(
-                            "security",
-                            "blocked opening launchable file in default app without explicit confirmation",
-                            Some(&meta),
-                        );
-                    }
-                    Err(err) => {
-                        let meta = json!({ "error": err.to_string() });
-                        self.logger.warn(
-                            "shell",
-                            "failed to open path in default app",
-                            Some(&meta),
-                        );
-                    }
-                }
+                handle_open_in_default_app_result(
+                    open_in_default_app(&roots, Path::new(&path), confirmed),
+                    &self.logger,
+                    self.emit.as_ref(),
+                );
             }
             NativeCommand::TrashPath(path) => {
                 let roots = self.approved_roots_snapshot();
@@ -1431,12 +1479,105 @@ impl NativeWorkerContext {
                     }
                 });
             }
-            NativeCommand::RenameWorkspaceEntry { .. }
-            | NativeCommand::ResolveWindowClose { .. }
-            | NativeCommand::ReadLocalTranscript { .. }
-            | NativeCommand::AppendTranscriptEvent(_)
-            | NativeCommand::TrackAnalyticsEvent { .. }
-            | NativeCommand::Shutdown => {}
+            NativeCommand::RenameWorkspaceEntry {
+                request_id: _,
+                workspace_id,
+                workspace_root,
+                path,
+                new_name,
+            } => {
+                let authorized_root =
+                    match self.authorize_explorer_workspace_root(&workspace_id, &workspace_root) {
+                        Ok(valid) => valid,
+                        Err(err) => {
+                            let meta = json!({ "workspaceId": workspace_id, "error": err });
+                            self.logger.warn(
+                                "explorer",
+                                "blocked entry rename for unauthorized workspace",
+                                Some(&meta),
+                            );
+                            (self.emit)(StoreEvent::WorkspaceEntryRenameFailed {
+                                workspace_id,
+                                path,
+                                error: err,
+                            });
+                            return;
+                        }
+                    };
+                let renamer = self.renamer.clone();
+                let show_hidden = self.show_hidden_files.load(Ordering::Acquire);
+                let emit = self.emit.clone();
+                let logger = self.logger.clone();
+                tokio::spawn(async move {
+                    execute_rename_workspace_entry(
+                        &renamer,
+                        authorized_root,
+                        workspace_id,
+                        path,
+                        new_name,
+                        show_hidden,
+                        logger,
+                        emit,
+                    )
+                    .await;
+                });
+            }
+            NativeCommand::ResolveWindowClose {
+                window_id,
+                request_id,
+                confirmed,
+            } => {
+                resolve_window_close_dialog(&window_id, &request_id, confirmed);
+            }
+            NativeCommand::ReadLocalTranscript {
+                request_id,
+                thread_id,
+                candidate_ids,
+            } => {
+                let persistence = self.persistence.clone();
+                let transcript_buffer = self.transcript_buffer.clone();
+                let emit = self.emit.clone();
+                let tid = thread_id.clone();
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        let _ = transcript_buffer.flush();
+                        persistence
+                            .read_transcript_with_candidates(&tid, &candidate_ids)
+                            .map(|events| {
+                                events
+                                    .into_iter()
+                                    .map(transcript_event_to_log_entry)
+                                    .collect()
+                            })
+                            .map_err(|err| err.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|err| Err(format!("Transcript reader panicked: {err}")));
+                    emit(StoreEvent::LocalTranscriptLoaded {
+                        request_id,
+                        thread_id,
+                        result,
+                    });
+                });
+            }
+            NativeCommand::AppendTranscriptEvent(entry) => {
+                match transcript_log_entry_to_event(entry) {
+                    Ok(ev) => self.transcript_buffer.enqueue(ev),
+                    Err(err) => {
+                        let meta = json!({ "error": err });
+                        self.logger.warn(
+                            "persistence",
+                            "dropped invalid local transcript entry",
+                            Some(&meta),
+                        );
+                    }
+                }
+            }
+            NativeCommand::TrackAnalyticsEvent { name, properties } => {
+                let props = json_properties_to_btree(&properties);
+                let _ = self.product_analytics.capture_event(&name, &props);
+            }
+            NativeCommand::Shutdown => {}
         }
     }
 
@@ -1699,6 +1840,155 @@ fn report_diagnostics_error(
     });
 }
 
+fn handle_open_in_default_app_result(
+    outcome: anyhow::Result<OpenInDefaultAppOutcome>,
+    logger: &LocalLogger,
+    emit: &(dyn Fn(StoreEvent) + Send + Sync),
+) {
+    match outcome {
+        Ok(OpenInDefaultAppOutcome::Opened) => {}
+        Ok(OpenInDefaultAppOutcome::ConfirmationRequired {
+            path: safe_path,
+            reason,
+        }) => {
+            let file_name = safe_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("this file")
+                .to_string();
+            let meta = json!({
+                "fileName": file_name,
+                "reason": reason,
+            });
+            logger.warn(
+                "security",
+                "blocked opening launchable file in default app without explicit confirmation",
+                Some(&meta),
+            );
+            emit(StoreEvent::LaunchableFileConfirmRequired {
+                path: safe_path.to_string_lossy().into_owned(),
+                file_name,
+            });
+        }
+        Err(err) => {
+            let msg = err.to_string();
+            let meta = json!({ "error": msg });
+            logger.warn("shell", "failed to open path in default app", Some(&meta));
+            emit(StoreEvent::Toast {
+                key: "open-in-default-app-error".to_string(),
+                title: "Could not open file".to_string(),
+                description: Some(msg),
+                tone: NotificationTone::Error,
+            });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_rename_workspace_entry(
+    renamer: &FileEntryRenamer,
+    authorized_root: PathBuf,
+    workspace_id: String,
+    path: String,
+    new_name: String,
+    show_hidden: bool,
+    logger: Arc<LocalLogger>,
+    emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
+) {
+    let roots = vec![authorized_root.clone()];
+    let source_path = resolve_workspace_scoped_path(&authorized_root, &path);
+    let old_canonical_leaf = source_path
+        .parent()
+        .map(canonicalize_sync)
+        .and_then(|parent| source_path.file_name().map(|name| parent.join(name)))
+        .unwrap_or_else(|| source_path.clone());
+
+    match rename_workspace_entry(renamer, &roots, &source_path, &new_name).await {
+        Ok(new_safe_path) => {
+            emit(StoreEvent::WorkspaceEntryRenamed {
+                workspace_id: workspace_id.clone(),
+                old_path: old_canonical_leaf.to_string_lossy().into_owned(),
+                new_path: new_safe_path.to_string_lossy().into_owned(),
+            });
+            let parent_dir = new_safe_path
+                .parent()
+                .unwrap_or(&authorized_root)
+                .to_path_buf();
+            let dir_str = parent_dir.to_string_lossy().into_owned();
+            let list_roots = roots;
+            let list_dir = parent_dir;
+            let listed = tokio::task::spawn_blocking(move || {
+                list_workspace_directory(&list_roots, &list_dir, show_hidden)
+            })
+            .await;
+            match listed {
+                Ok(Ok(entries)) => emit(StoreEvent::WorkspaceFilesListed {
+                    workspace_id,
+                    dir: dir_str,
+                    entries,
+                }),
+                Ok(Err(err)) => {
+                    let meta = json!({ "workspaceId": workspace_id, "error": err.to_string() });
+                    logger.warn(
+                        "explorer",
+                        "failed to refresh workspace listing after rename",
+                        Some(&meta),
+                    );
+                }
+                Err(err) => {
+                    let meta = json!({ "workspaceId": workspace_id, "error": err.to_string() });
+                    logger.warn("explorer", "rename refresh task panicked", Some(&meta));
+                }
+            }
+        }
+        Err(err) => {
+            let msg = err.to_string();
+            let meta = json!({ "workspaceId": workspace_id, "error": msg });
+            logger.warn("explorer", "failed to rename workspace entry", Some(&meta));
+            emit(StoreEvent::WorkspaceEntryRenameFailed {
+                workspace_id,
+                path,
+                error: msg,
+            });
+        }
+    }
+}
+
+fn transcript_event_to_log_entry(event: TranscriptEvent) -> TranscriptLogEntry {
+    TranscriptLogEntry {
+        ts: event.ts,
+        thread_id: event.thread_id,
+        direction: match event.direction {
+            TranscriptDirection::Server => "server".to_string(),
+            TranscriptDirection::Client => "client".to_string(),
+        },
+        payload: event.payload,
+    }
+}
+
+fn transcript_log_entry_to_event(entry: TranscriptLogEntry) -> Result<TranscriptEvent, String> {
+    let direction = match entry.direction.trim() {
+        "server" => TranscriptDirection::Server,
+        "client" => TranscriptDirection::Client,
+        other => return Err(format!("Unsupported transcript direction: {other}")),
+    };
+    Ok(TranscriptEvent {
+        ts: entry.ts,
+        thread_id: entry.thread_id,
+        direction,
+        payload: entry.payload,
+        extra: Map::new(),
+    })
+}
+
+fn json_properties_to_btree(value: &Value) -> BTreeMap<String, Value> {
+    let Some(obj) = value.as_object() else {
+        return BTreeMap::new();
+    };
+    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1761,5 +2051,222 @@ mod tests {
         assert!(!after_err.uploaded);
         assert_eq!(after_err.upload_message.as_deref(), Some("HTTP 502"));
         assert_eq!(after_err.created_at, "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn launchable_open_outcome_emits_confirmation_and_error_toast() {
+        let tmp = tempfile::tempdir().unwrap();
+        let logger = LocalLogger::new(tmp.path());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let emit = move |ev: StoreEvent| {
+            captured.lock().unwrap().push(ev);
+        };
+
+        let script = tmp.path().join("deploy.command");
+        handle_open_in_default_app_result(
+            Ok(OpenInDefaultAppOutcome::ConfirmationRequired {
+                path: script.clone(),
+                reason: "Executable shell command".to_string(),
+            }),
+            &logger,
+            &emit,
+        );
+        handle_open_in_default_app_result(
+            Err(anyhow::anyhow!("Path outside allowed workspace roots")),
+            &logger,
+            &emit,
+        );
+
+        let recorded = events.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        assert!(matches!(
+            &recorded[0],
+            StoreEvent::LaunchableFileConfirmRequired { path, file_name }
+                if path == &script.to_string_lossy() && file_name == "deploy.command"
+        ));
+        assert!(matches!(
+            &recorded[1],
+            StoreEvent::Toast { key, tone: NotificationTone::Error, .. }
+                if key == "open-in-default-app-error"
+        ));
+    }
+
+    #[test]
+    fn rename_helper_emits_renamed_listing_and_failure_without_clobbering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        let old_file = ws.join("src").join("before.txt");
+        let conflict_file = ws.join("src").join("taken.txt");
+        std::fs::write(&old_file, "hello").unwrap();
+        std::fs::write(&conflict_file, "existing").unwrap();
+
+        let canon_ws = canonicalize_sync(&ws);
+        let logger = Arc::new(LocalLogger::new(tmp.path()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let emit: Arc<dyn Fn(StoreEvent) + Send + Sync> = Arc::new(move |ev| {
+            captured.lock().unwrap().push(ev);
+        });
+        let renamer = FileEntryRenamer::new();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            execute_rename_workspace_entry(
+                &renamer,
+                canon_ws.clone(),
+                "ws-1".to_string(),
+                "src/before.txt".to_string(),
+                "after.txt".to_string(),
+                false,
+                logger.clone(),
+                emit.clone(),
+            )
+            .await;
+
+            execute_rename_workspace_entry(
+                &renamer,
+                canon_ws.clone(),
+                "ws-1".to_string(),
+                "src/after.txt".to_string(),
+                "taken.txt".to_string(),
+                false,
+                logger,
+                emit,
+            )
+            .await;
+        });
+
+        let recorded = events.lock().unwrap();
+        assert!(matches!(
+            &recorded[0],
+            StoreEvent::WorkspaceEntryRenamed { workspace_id, old_path, new_path }
+                if workspace_id == "ws-1"
+                    && old_path.ends_with("src/before.txt")
+                    && new_path.ends_with("src/after.txt")
+        ));
+        assert!(matches!(
+            &recorded[1],
+            StoreEvent::WorkspaceFilesListed { workspace_id, entries, .. }
+                if workspace_id == "ws-1"
+                    && entries.iter().any(|e| e.name == "after.txt")
+                    && !entries.iter().any(|e| e.name == "before.txt")
+        ));
+        assert!(matches!(
+            &recorded[2],
+            StoreEvent::WorkspaceEntryRenameFailed { workspace_id, path, .. }
+                if workspace_id == "ws-1" && path == "src/after.txt"
+        ));
+    }
+
+    #[test]
+    fn transcript_entry_conversion_and_analytics_property_extraction() {
+        let ok = transcript_log_entry_to_event(TranscriptLogEntry {
+            ts: "2026-01-01T00:00:01.000Z".into(),
+            thread_id: "thread-1".into(),
+            direction: "client".into(),
+            payload: json!({ "text": "hi" }),
+        })
+        .unwrap();
+        let back = transcript_event_to_log_entry(ok);
+        assert_eq!(back.direction, "client");
+        assert_eq!(back.thread_id, "thread-1");
+
+        assert!(
+            transcript_log_entry_to_event(TranscriptLogEntry {
+                ts: "2026-01-01T00:00:01.000Z".into(),
+                thread_id: "thread-1".into(),
+                direction: "bogus".into(),
+                payload: json!({}),
+            })
+            .is_err()
+        );
+
+        let btree = json_properties_to_btree(&json!({
+            "workspaceCount": 2,
+            "eventSource": "renderer",
+        }));
+        assert_eq!(btree.get("workspaceCount"), Some(&json!(2)));
+        assert_eq!(btree.get("eventSource"), Some(&json!("renderer")));
+        assert!(json_properties_to_btree(&json!("not-an-object")).is_empty());
+    }
+
+    #[test]
+    fn save_persisted_state_preserves_newly_generated_product_analytics_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user_data_dir = tmp.path().join("Cowork");
+        let mut env = HashMap::new();
+        env.insert(
+            "HOME".to_string(),
+            tmp.path().join("home").to_string_lossy().to_string(),
+        );
+        env.insert(
+            "COWORK_USER_DATA_DIR".to_string(),
+            user_data_dir.to_string_lossy().to_string(),
+        );
+
+        let persistence = PersistenceService::new(user_data_dir, None, true, None);
+        let stale_analytics = json!({ "lastAppVersion": "0.9.0" });
+        persistence
+            .merge_and_save_core_snapshot(&PersistedDesktopState {
+                product_analytics: Some(stale_analytics.clone()),
+                ..PersistedDesktopState::default()
+            })
+            .unwrap();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let emit: Arc<dyn Fn(StoreEvent) + Send + Sync> = Arc::new(move |ev| {
+            captured.lock().unwrap().push(ev);
+        });
+        let mut ctx = NativeWorkerContext::initialize_with_env(emit, false, &env, false);
+
+        // Saving while opting in triggers `reconfigure` to mint `anonymousInstallationId` on disk;
+        // the save path must not overwrite disk state with the pre-reconfigure snapshot.
+        let mut opt_in_snapshot = PersistedDesktopState {
+            product_analytics: Some(stale_analytics.clone()),
+            ..PersistedDesktopState::default()
+        };
+        opt_in_snapshot
+            .settings
+            .privacy_telemetry
+            .product_analytics_enabled = true;
+        ctx.save_persisted_state_with_env(&opt_in_snapshot, &env);
+
+        let disk_after_first = ctx.persistence.load_core_state().unwrap();
+        let generated_id = disk_after_first
+            .product_analytics
+            .as_ref()
+            .and_then(|v| v.get("anonymousInstallationId"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .expect("expected generated anonymousInstallationId on disk");
+        assert!(generated_id.starts_with("anon_"));
+
+        let recorded = events.lock().unwrap();
+        assert!(recorded.iter().any(|ev| matches!(
+            ev,
+            StoreEvent::ProductAnalyticsStateUpdated(Some(v))
+                if v.get("anonymousInstallationId").and_then(Value::as_str)
+                    == Some(generated_id.as_str())
+        )));
+        drop(recorded);
+
+        // Even if a subsequent save arrives carrying the older snapshot before UI applies the
+        // `ProductAnalyticsStateUpdated` event, the generated installation ID stays preserved.
+        ctx.save_persisted_state_with_env(&opt_in_snapshot, &env);
+        let disk_after_second = ctx.persistence.load_core_state().unwrap();
+        assert_eq!(
+            disk_after_second
+                .product_analytics
+                .as_ref()
+                .and_then(|v| v.get("anonymousInstallationId"))
+                .and_then(Value::as_str),
+            Some(generated_id.as_str())
+        );
     }
 }

@@ -858,6 +858,11 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
         }
     }
 
+    out.product_analytics = obj
+        .get("productAnalytics")
+        .filter(|v| v.is_object())
+        .cloned();
+
     out
 }
 
@@ -1057,6 +1062,14 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         "desktopFeatureFlagOverrides".to_string(),
         Value::Object(flags),
     );
+
+    if let Some(pa) = snapshot
+        .product_analytics
+        .as_ref()
+        .filter(|v| v.is_object())
+    {
+        doc.insert("productAnalytics".to_string(), pa.clone());
+    }
 
     Value::Object(doc)
 }
@@ -2114,10 +2127,44 @@ mod tests {
                     extra: Map::new(),
                 });
             }
-            tokio::time::sleep(TRANSCRIPT_BATCH_DEBOUNCE + Duration::from_millis(120)).await;
+            assert_eq!(buffer.pending_len(), 3);
+            tokio::time::sleep(TRANSCRIPT_BATCH_DEBOUNCE).await;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while (buffer.pending_len() > 0
+                || service.read_transcript("t-async").unwrap().len() < 3)
+                && tokio::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
             assert_eq!(buffer.pending_len(), 0);
         });
         let events = service.read_transcript("t-async").unwrap();
         assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn roundtrips_and_preserves_product_analytics_state_on_core_save() {
+        let tmp = tempdir().unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+        let analytics = json!({
+            "anonymousInstallationId": "anon_0123456789abcdef0123456789abcdef",
+            "lastAppVersion": "0.9.0",
+        });
+
+        let snapshot = PersistedDesktopState {
+            product_analytics: Some(analytics.clone()),
+            ..PersistedDesktopState::default()
+        };
+        service.merge_and_save_core_snapshot(&snapshot).unwrap();
+
+        let loaded = service.load_core_state().unwrap();
+        assert_eq!(loaded.product_analytics, Some(analytics.clone()));
+
+        // Saving a snapshot with `product_analytics: None` preserves the persisted ID on disk.
+        service
+            .merge_and_save_core_snapshot(&PersistedDesktopState::default())
+            .unwrap();
+        let preserved = service.load_core_state().unwrap();
+        assert_eq!(preserved.product_analytics, Some(analytics));
     }
 }

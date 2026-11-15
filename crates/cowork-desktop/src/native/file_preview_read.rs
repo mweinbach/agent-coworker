@@ -108,7 +108,7 @@ pub fn classify_file_preview_kind(file_path: &Path) -> FilePreviewKind {
         ".docx" => FilePreviewKind::Docx,
         ".doc" | ".odt" | ".rtf" => FilePreviewKind::Unsupported,
         ".csv" => FilePreviewKind::Csv,
-        ".xlsx" | ".xls" | ".xlsm" | ".ods" => FilePreviewKind::Xlsx,
+        ".xlsx" | ".xls" | ".xlsm" | ".xlsb" | ".ods" => FilePreviewKind::Xlsx,
         ".pptx" | ".ppt" | ".odp" => FilePreviewKind::Pptx,
         ".png" | ".jpg" | ".jpeg" | ".webp" | ".gif" | ".bmp" | ".ico" | ".avif" | ".svg" => {
             FilePreviewKind::Image
@@ -127,8 +127,8 @@ pub fn classify_file_preview_kind(file_path: &Path) -> FilePreviewKind {
 pub fn is_web_only_rich_document(kind: FilePreviewKind) -> bool {
     matches!(
         kind,
-        FilePreviewKind::Docx | FilePreviewKind::Xlsx | FilePreviewKind::Pptx
-    ) || matches!(kind, FilePreviewKind::Unsupported)
+        FilePreviewKind::Docx | FilePreviewKind::Pptx | FilePreviewKind::Unsupported
+    )
 }
 
 pub fn mime_for_preview_kind(kind: FilePreviewKind, ext: &str) -> &'static str {
@@ -291,8 +291,9 @@ fn decode_utf8_preview(bytes: &[u8], truncated: bool) -> Option<String> {
 }
 
 /// Validates workspace path containment and builds a native [`FilePreviewState`].
-/// Rich web-only document formats (`.xlsx`, `.pptx`, `.docx`, `.doc`, etc.) return a clean
-/// "open in default app" fallback instead of attempting in-app Univer/HTML viewers.
+/// Decodes spreadsheet formats (`.csv`, `.xlsx`, `.xlsm`, `.xls`, `.xlsb`, `.ods`) into inline
+/// preview grids, while rich web-only document formats (`.pptx`, `.docx`, `.doc`, etc.) return a
+/// clean "open in default app" fallback.
 pub fn load_file_preview_state(
     workspace_roots: &[PathBuf],
     workspace_id: &str,
@@ -306,6 +307,57 @@ pub fn load_file_preview_state(
         .unwrap_or("File preview")
         .to_string();
     let kind = classify_file_preview_kind(&safe_path);
+
+    if matches!(kind, FilePreviewKind::Csv | FilePreviewKind::Xlsx) {
+        let read = read_authorized_preview_bytes(workspace_roots, &safe_path, max_bytes)?;
+        let raw_text = if kind == FilePreviewKind::Csv {
+            decode_utf8_preview(&read.bytes, read.truncated)
+        } else {
+            None
+        };
+        let path_str = read.safe_path.to_string_lossy().into_owned();
+        return match crate::views::preview::decode_spreadsheet_preview(
+            &read.safe_path,
+            &read.bytes,
+            read.truncated,
+        ) {
+            Ok(spreadsheet) => {
+                let truncated = read.truncated
+                    || spreadsheet.sheets_truncated
+                    || spreadsheet.sheets.iter().any(|s| s.is_truncated());
+                Ok(FilePreviewState {
+                    workspace_id: workspace_id.to_string(),
+                    path: path_str,
+                    title,
+                    content: raw_text,
+                    is_binary: kind == FilePreviewKind::Xlsx,
+                    is_markdown: false,
+                    truncated,
+                    error: None,
+                    spreadsheet: Some(spreadsheet),
+                })
+            }
+            Err(err) => {
+                let is_binary = kind == FilePreviewKind::Xlsx || raw_text.is_none();
+                let message = if err.contains("default app") {
+                    err
+                } else {
+                    format!("{err} Open it in your default app instead.")
+                };
+                Ok(FilePreviewState {
+                    workspace_id: workspace_id.to_string(),
+                    path: path_str,
+                    title,
+                    content: raw_text,
+                    is_binary,
+                    is_markdown: false,
+                    truncated: read.truncated,
+                    error: Some(message),
+                    spreadsheet: None,
+                })
+            }
+        };
+    }
 
     if is_web_only_rich_document(kind) {
         let _ = open_authorized_file(&safe_path, &safe_path)?;
@@ -426,13 +478,14 @@ mod tests {
     #[test]
     fn rich_documents_return_open_in_default_app_fallback() {
         let tmp = tempdir().unwrap();
-        let sheet = tmp.path().join("budget.xlsx");
-        fs::write(&sheet, b"PK\x03\x04dummy-xlsx").unwrap();
+        let slides = tmp.path().join("deck.pptx");
+        fs::write(&slides, b"PK\x03\x04dummy-pptx").unwrap();
         let root = vec![tmp.path().to_path_buf()];
 
-        let preview = load_file_preview_state(&root, "ws-1", &sheet, 1024).unwrap();
+        let preview = load_file_preview_state(&root, "ws-1", &slides, 1024).unwrap();
         assert!(preview.is_binary);
         assert!(preview.content.is_none());
+        assert!(preview.spreadsheet.is_none());
         assert!(
             preview
                 .error
@@ -440,6 +493,37 @@ mod tests {
                 .unwrap_or_default()
                 .contains("default app")
         );
+
+        let corrupt_sheet = tmp.path().join("broken.xlsx");
+        fs::write(&corrupt_sheet, b"not-a-valid-zip").unwrap();
+        let sheet_fallback = load_file_preview_state(&root, "ws-1", &corrupt_sheet, 1024).unwrap();
+        assert!(sheet_fallback.is_binary);
+        assert!(sheet_fallback.spreadsheet.is_none());
+        assert!(
+            sheet_fallback
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("default app")
+        );
+    }
+
+    #[test]
+    fn loads_csv_spreadsheet_preview_and_preserves_raw_content() {
+        let tmp = tempdir().unwrap();
+        let csv_path = tmp.path().join("budget.csv");
+        let csv_body = "Item,Amount\nCompute,120.50\nStorage,45\n";
+        fs::write(&csv_path, csv_body).unwrap();
+        let root = vec![tmp.path().to_path_buf()];
+
+        let preview = load_file_preview_state(&root, "ws-1", &csv_path, 4096).unwrap();
+        assert!(!preview.is_binary);
+        assert!(preview.error.is_none());
+        assert_eq!(preview.content.as_deref(), Some(csv_body));
+        let sp = preview.spreadsheet.expect("spreadsheet grid should decode");
+        assert_eq!(sp.format, "CSV");
+        assert_eq!(sp.sheets.len(), 1);
+        assert_eq!(sp.sheets[0].rows[1], vec!["Compute", "120.50"]);
     }
 
     #[test]

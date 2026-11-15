@@ -336,6 +336,9 @@ fn build_task_create_card(
                             review_required: Some(true),
                             provider: None,
                             model: None,
+                            idempotency_key: None,
+                            requirements: Vec::new(),
+                            work_items: Vec::new(),
                         }));
                     })
                     .build(k),

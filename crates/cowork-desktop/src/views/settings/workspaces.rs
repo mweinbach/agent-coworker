@@ -3,9 +3,7 @@
 //! Ported from `apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx` (`surface="defaults"`).
 
 use rune::{El, col, row, text};
-use rune_kit::{
-    Button, ButtonVariant, Checkbox, ControlSize, Kit, Select, SelectAppearance, Switch,
-};
+use rune_kit::{Button, ButtonVariant, Checkbox, ControlSize, Kit, Select, SelectAppearance};
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NativeAction, NavAction, SettingsAction};
@@ -15,7 +13,7 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, confirm_dialog,
-    management_targets, settings_page, status_pill, update_desktop_settings,
+    management_targets, mini_switch, settings_page, status_pill, update_desktop_settings,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::sort_and_filter_providers;
@@ -297,19 +295,18 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .description(
             "Allow configured MCP servers. In ChatGPT Subscription/Codex hybrid mode, Cowork exposes these as dynamic tools while Codex keeps local shell, files, and web native.",
         )
-        .control(
-            Switch::new(enable_mcp)
-                .label("Enable MCP tools")
-                .hide_label()
-                .control_size(ControlSize::Mini)
-                .on_toggle(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
-                        workspace_id: ws_id_mcp.clone(),
-                        defaults: json!({ "defaultEnableMcp": !enable_mcp }),
-                    }));
-                })
-                .build(k),
-        );
+        .control(mini_switch(
+            enable_mcp,
+            "Enable MCP tools",
+            false,
+            move |s: &mut AppState| {
+                s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                    workspace_id: ws_id_mcp.clone(),
+                    defaults: json!({ "defaultEnableMcp": !enable_mcp }),
+                }));
+            },
+            k,
+        ));
 
     let ws_id_yolo = ws_id.clone();
     let yolo = ws.yolo;
@@ -318,16 +315,15 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             "Never ask for approval and run shell commands outside the OS sandbox with full file and network access.",
         )
         .danger(yolo)
-        .control(
-            Switch::new(yolo)
-                .label("YOLO mode")
-                .hide_label()
-                .control_size(ControlSize::Mini)
-                .on_toggle(move |s: &mut AppState| {
-                    s.settings_ui.workspace_yolo_confirm = Some((ws_id_yolo.clone(), !yolo));
-                })
-                .build(k),
-        );
+        .control(mini_switch(
+            yolo,
+            "YOLO mode",
+            false,
+            move |s: &mut AppState| {
+                s.settings_ui.workspace_yolo_confirm = Some((ws_id_yolo.clone(), !yolo));
+            },
+            k,
+        ));
 
     sections.push(
         Section::new()
@@ -345,21 +341,20 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .description(
             "Keep non-core and MCP tool schemas out of the initial prompt and load them on demand when needed.",
         )
-        .control(
-            Switch::new(tc.deferred_tool_search)
-                .label("Enable deferred tool search")
-                .hide_label()
-                .control_size(ControlSize::Mini)
-                .on_toggle(move |s: &mut AppState| {
-                    let mut next = tc_dts.clone();
-                    next.deferred_tool_search = !next.deferred_tool_search;
-                    s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
-                        workspace_id: ws_id_dts.clone(),
-                        defaults: build_tool_calling_patch(&next),
-                    }));
-                })
-                .build(k),
-        );
+        .control(mini_switch(
+            tc.deferred_tool_search,
+            "Enable deferred tool search",
+            false,
+            move |s: &mut AppState| {
+                let mut next = tc_dts.clone();
+                next.deferred_tool_search = !next.deferred_tool_search;
+                s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                    workspace_id: ws_id_dts.clone(),
+                    defaults: build_tool_calling_patch(&next),
+                }));
+            },
+            k,
+        ));
 
     let ws_id_ptc = ws_id.clone();
     let tc_ptc = tc.clone();
@@ -367,21 +362,20 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .description(
             "Allow the model to orchestrate multi-step tool pipelines in code instead of sequential round-trips.",
         )
-        .control(
-            Switch::new(tc.code_mode)
-                .label("Enable programmatic tool calling")
-                .hide_label()
-                .control_size(ControlSize::Mini)
-                .on_toggle(move |s: &mut AppState| {
-                    let mut next = tc_ptc.clone();
-                    next.code_mode = !next.code_mode;
-                    s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
-                        workspace_id: ws_id_ptc.clone(),
-                        defaults: build_tool_calling_patch(&next),
-                    }));
-                })
-                .build(k),
-        );
+        .control(mini_switch(
+            tc.code_mode,
+            "Enable programmatic tool calling",
+            false,
+            move |s: &mut AppState| {
+                let mut next = tc_ptc.clone();
+                next.code_mode = !next.code_mode;
+                s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                    workspace_id: ws_id_ptc.clone(),
+                    defaults: build_tool_calling_patch(&next),
+                }));
+            },
+            k,
+        ));
 
     let strategy_labels = [
         "Auto (recommended)",
@@ -500,23 +494,22 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .description(
                 "When enabled, each folder or one-off chat can keep different provider, model, and behavior settings.",
             )
-            .control(
-                Switch::new(per_ws)
-                    .label("Configure settings per folder or chat")
-                    .hide_label()
-                    .control_size(ControlSize::Mini)
-                    .on_toggle(move |s: &mut AppState| {
-                        let currently_on = s.desktop_settings.per_workspace_settings;
-                        if currently_on && active_ws_count > 1 {
-                            s.settings_ui.workspace_share_confirm_open = true;
-                        } else {
-                            update_desktop_settings(s, |next| {
-                                next.per_workspace_settings = !currently_on;
-                            });
-                        }
-                    })
-                    .build(k),
-            );
+            .control(mini_switch(
+                per_ws,
+                "Configure settings per folder or chat",
+                false,
+                move |s: &mut AppState| {
+                    let currently_on = s.desktop_settings.per_workspace_settings;
+                    if currently_on && active_ws_count > 1 {
+                        s.settings_ui.workspace_share_confirm_open = true;
+                    } else {
+                        update_desktop_settings(s, |next| {
+                            next.per_workspace_settings = !currently_on;
+                        });
+                    }
+                },
+                k,
+            ));
         adv_section = adv_section.child(per_ws_row.build(k, t));
 
         if workspace_lifecycle_enabled && !ws.one_off_chat {
@@ -898,7 +891,7 @@ pub fn models_defaults_sections(
                 .grow(1.0)
                 .min_w(220.0)
                 .gap(6.0)
-                .child(text("Provider").font(k.ty.body_medium).color(t.text_base))
+                .child(text("Provider").font(k.ty.ui_medium).color(t.text_base))
                 .child(prov_select),
         )
         .child(
@@ -908,7 +901,7 @@ pub fn models_defaults_sections(
                 .gap(6.0)
                 .child(
                     text("Default model")
-                        .font(k.ty.body_medium)
+                        .font(k.ty.ui_medium)
                         .color(t.text_base),
                 )
                 .child(model_select),
@@ -1020,7 +1013,7 @@ pub fn models_defaults_sections(
             .gap(6.0)
             .child(
                 text("Preferred subagent model")
-                    .font(k.ty.body_medium)
+                    .font(k.ty.ui_medium)
                     .color(t.text_base),
             )
             .child(child_select)
@@ -1074,7 +1067,7 @@ pub fn models_defaults_sections(
             .gap(6.0)
             .child(
                 text("Allowed subagent models")
-                    .font(k.ty.body_medium)
+                    .font(k.ty.ui_medium)
                     .color(t.text_base),
             )
             .child(row().w_full().flex_wrap().gap(8.0).children(checks))
@@ -1096,12 +1089,12 @@ pub fn models_defaults_sections(
                         .grow(1.0)
                         .min_w(0.0)
                         .gap(4.0)
-                        .child(text("Subagents").font(k.ty.body_medium).color(t.text_base))
+                        .child(text("Subagents").font(k.ty.ui_medium).color(t.text_base))
                         .child(
                             text(
                                 "Subagents are helpers Cowork runs alongside your chat to work on tasks in parallel. Choose where their models come from.",
                             )
-                            .font(k.ty.text_xsmall)
+                            .font(k.ty.small)
                             .color(t.text_muted)
                             .wrap(),
                         ),
@@ -1130,7 +1123,7 @@ pub fn models_defaults_sections(
                         .gap(6.0)
                         .child(
                             text("Model source")
-                                .font(k.ty.body_medium)
+                                .font(k.ty.ui_medium)
                                 .color(t.text_base),
                         )
                         .child(source_select),

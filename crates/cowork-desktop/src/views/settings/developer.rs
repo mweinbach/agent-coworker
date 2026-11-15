@@ -1,9 +1,7 @@
 //! Developer & Diagnostics settings page (`apps/desktop/src/ui/settings/pages/DeveloperPage.tsx`).
 
 use rune::{El, TextEdit, col, el, row, text};
-use rune_kit::{
-    Button, ButtonVariant, ControlSize, Kit, Select, SelectAppearance, Switch, TextInput,
-};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Select, SelectAppearance, TextInput};
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NativeAction, SettingsAction};
@@ -12,7 +10,7 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, Section, SettingsRow, StatusTone, confirm_dialog, management_targets,
-    operation_banner, settings_page, status_pill, update_desktop_settings,
+    mini_switch, operation_banner, settings_page, status_pill, update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -419,17 +417,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .child(
             SettingsRow::new("Show hidden files")
                 .description("Display dotfiles and other hidden system files.")
-                .control(
-                    Switch::new(s.desktop_settings.show_hidden_files)
-                        .label("Show hidden files")
-                        .hide_label()
-                        .on_toggle(|s: &mut AppState| {
-                            update_desktop_settings(s, |next| {
-                                next.show_hidden_files = !next.show_hidden_files;
-                            });
-                        })
-                        .build(k),
-                )
+                .control(mini_switch(
+                    s.desktop_settings.show_hidden_files,
+                    "Show hidden files",
+                    false,
+                    |s: &mut AppState| {
+                        update_desktop_settings(s, |next| {
+                            next.show_hidden_files = !next.show_hidden_files;
+                        });
+                    },
+                    k,
+                ))
                 .build(k, t),
         );
 
@@ -440,17 +438,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .child(
             SettingsRow::new("Developer mode")
                 .description("Show internal system notices in the chat feed.")
-                .control(
-                    Switch::new(s.desktop_settings.developer_mode)
-                        .label("Developer mode")
-                        .hide_label()
-                        .on_toggle(|s: &mut AppState| {
-                            update_desktop_settings(s, |next| {
-                                next.developer_mode = !next.developer_mode;
-                            });
-                        })
-                        .build(k),
-                )
+                .control(mini_switch(
+                    s.desktop_settings.developer_mode,
+                    "Developer mode",
+                    false,
+                    |s: &mut AppState| {
+                        update_desktop_settings(s, |next| {
+                            next.developer_mode = !next.developer_mode;
+                        });
+                    },
+                    k,
+                ))
                 .build(k, t),
         )
         .child(
@@ -568,29 +566,29 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .description(
                         "When enabled, oversized tool results are saved to disk instead of filling chat history.",
                     )
-                    .control(
-                        Switch::new(overflow_enabled)
-                            .label("Save oversized tool output to scratch files")
-                            .hide_label()
-                            .on_toggle(move |s: &mut AppState| {
-                                let defaults = if overflow_enabled {
-                                    json!({ "defaultToolOutputOverflowChars": Value::Null })
-                                } else if inherited_is_null {
-                                    json!({ "defaultToolOutputOverflowChars": DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS })
-                                } else {
-                                    json!({ "clearDefaultToolOutputOverflowChars": true })
-                                };
-                                s.settings_ui.developer_overflow_threshold_edit = TextEdit::new("");
-                                s.settings_ui.developer_overflow_threshold_synced = None;
-                                s.dispatch(Action::Settings(
-                                    SettingsAction::UpdateWorkspaceDefaults {
-                                        workspace_id: ws_toggle.clone(),
-                                        defaults,
-                                    },
-                                ));
-                            })
-                            .build(k),
-                    )
+                    .control(mini_switch(
+                        overflow_enabled,
+                        "Save oversized tool output to scratch files",
+                        false,
+                        move |s: &mut AppState| {
+                            let defaults = if overflow_enabled {
+                                json!({ "defaultToolOutputOverflowChars": Value::Null })
+                            } else if inherited_is_null {
+                                json!({ "defaultToolOutputOverflowChars": DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS })
+                            } else {
+                                json!({ "clearDefaultToolOutputOverflowChars": true })
+                            };
+                            s.settings_ui.developer_overflow_threshold_edit = TextEdit::new("");
+                            s.settings_ui.developer_overflow_threshold_synced = None;
+                            s.dispatch(Action::Settings(
+                                SettingsAction::UpdateWorkspaceDefaults {
+                                    workspace_id: ws_toggle.clone(),
+                                    defaults,
+                                },
+                            ));
+                        },
+                        k,
+                    ))
                     .build(k, t),
             );
 
@@ -697,15 +695,14 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
             let mut threshold_body = col().w_full().gap(8.0).child(input_el);
             if let Some(err) = error_msg {
-                threshold_body =
-                    threshold_body.child(text(err).font(k.ty.text_xsmall).color(t.danger));
+                threshold_body = threshold_body.child(text(err).font(k.ty.small).color(t.danger));
             } else {
                 threshold_body = threshold_body.child(
                     text(format!(
                         "Active threshold: {persisted_threshold} characters (stored under {}/.ModelScratchpad). Set to 0 to spill immediately.",
                         target.path
                     ))
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted)
                     .wrap(),
                 );

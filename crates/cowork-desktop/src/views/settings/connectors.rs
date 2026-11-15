@@ -1,7 +1,7 @@
 //! OpenAI native ChatGPT connectors tab (`apps/desktop/src/ui/settings/pages/OpenAiNativeConnectorsPage.tsx`).
 
 use rune::{El, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch, TextInput};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::Value;
 
 use crate::actions::{Action, SettingsAction, ShellAction};
@@ -9,7 +9,8 @@ use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
-    EmptyState, EntityIconSize, Section, StatusTone, entity_icon, status_pill,
+    EmptyState, EntityIconSize, Section, StatusTone, entity_icon, mini_switch, search_input,
+    status_pill,
 };
 
 /// Normalized connector record parsed from `AppState::openai_native_connectors`.
@@ -227,13 +228,17 @@ pub fn view_tab(s: &AppState, workspace_id: Option<&str>, k: &Kit, t: &ThemeToke
         .gap(12.0)
         .px(16.0)
         .py(12.0)
-        .child(
-            TextInput::new(&s.settings_ui.connectors_search_edit)
-                .placeholder("Search connectors by name, id, or description")
-                .width(Some(340.0))
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.connectors_search_edit)
-                .build(k),
-        )
+        .child(search_input(
+            &s.settings_ui.connectors_search_edit,
+            "Search connectors",
+            "Search connectors by name, id, or description",
+            Some(340.0),
+            |s: &mut AppState| &mut s.settings_ui.connectors_search_edit,
+            |s: &mut AppState, _tx| {
+                s.settings_ui.connectors_search_edit = rune::TextEdit::new("");
+            },
+            k,
+        ))
         .child(
             row()
                 .items_center()
@@ -241,20 +246,19 @@ pub fn view_tab(s: &AppState, workspace_id: Option<&str>, k: &Kit, t: &ThemeToke
                 .shrink()
                 .child(
                     text("Enabled only")
-                        .font(k.ty.text_xsmall_medium)
+                        .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
-                .child(
-                    Switch::new(s.settings_ui.connectors_enabled_only)
-                        .label("Show enabled connectors only")
-                        .hide_label()
-                        .control_size(ControlSize::Mini)
-                        .on_toggle(|s: &mut AppState| {
-                            s.settings_ui.connectors_enabled_only =
-                                !s.settings_ui.connectors_enabled_only;
-                        })
-                        .build(k),
-                ),
+                .child(mini_switch(
+                    s.settings_ui.connectors_enabled_only,
+                    "Show enabled connectors only",
+                    false,
+                    |s: &mut AppState| {
+                        s.settings_ui.connectors_enabled_only =
+                            !s.settings_ui.connectors_enabled_only;
+                    },
+                    k,
+                )),
         );
     section = section.child(filter_bar);
 
@@ -293,7 +297,7 @@ fn render_connector_row(
     let mut badges = row()
         .items_center()
         .gap(8.0)
-        .child(text(&item.name).font(k.ty.body_medium).color(t.text_base));
+        .child(text(&item.name).font(k.ty.ui_medium).color(t.text_base));
     if item.is_workspace_connector {
         badges = badges.child(status_pill("Workspace", StatusTone::Neutral, k, t));
     }
@@ -317,10 +321,10 @@ fn render_connector_row(
         .min_w(0.0)
         .gap(4.0)
         .child(badges)
-        .child(text(&item.id).font(k.ty.text_xsmall).color(t.text_muted));
+        .child(text(&item.id).font(k.ty.small).color(t.text_muted));
 
     if let Some(desc) = item.description.as_deref() {
-        meta_col = meta_col.child(text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap());
+        meta_col = meta_col.child(text(desc).font(k.ty.small).color(t.text_muted).wrap());
     }
 
     if let Some(url) = item.install_url.as_deref() {
@@ -344,12 +348,11 @@ fn render_connector_row(
     let ws_toggle = ws_id.to_string();
     let conn_id = item.id.clone();
     let next_enabled = !item.is_enabled;
-    let switch_el = Switch::new(item.is_enabled)
-        .label(format!("Enable {}", item.name))
-        .hide_label()
-        .control_size(ControlSize::Mini)
-        .disabled(!item.is_accessible)
-        .on_toggle(move |s: &mut AppState| {
+    let switch_el = mini_switch(
+        item.is_enabled,
+        format!("Enable {}", item.name),
+        !item.is_accessible,
+        move |s: &mut AppState| {
             s.dispatch(Action::Settings(
                 SettingsAction::SetOpenAiNativeConnectorEnabled {
                     workspace_id: ws_toggle.clone(),
@@ -357,8 +360,9 @@ fn render_connector_row(
                     enabled: next_enabled,
                 },
             ));
-        })
-        .build(k);
+        },
+        k,
+    );
 
     row()
         .w_full()

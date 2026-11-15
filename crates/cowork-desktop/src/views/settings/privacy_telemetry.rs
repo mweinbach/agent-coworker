@@ -1,7 +1,7 @@
 //! Privacy & Telemetry settings page (`apps/desktop/src/ui/settings/pages/PrivacyTelemetryPage.tsx`).
 
 use rune::{El, row};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::Value;
 
 use crate::actions::{Action, SettingsAction};
@@ -9,7 +9,7 @@ use crate::state::{AppState, PrivacyTelemetrySettings};
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, Section, SettingsRow, StatusTone, callout_banner, confirm_dialog,
-    settings_page, status_pill,
+    mini_switch, settings_page, status_pill,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -115,17 +115,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         k,
                         t,
                     ))
-                    .child(
-                        Switch::new(pt.crash_reports_enabled)
-                            .label("Crash reports")
-                            .hide_label()
-                            .on_toggle(|s: &mut AppState| {
-                                dispatch_privacy_patch(s, |p| {
-                                    p.crash_reports_enabled = !p.crash_reports_enabled;
-                                });
-                            })
-                            .build(k),
-                    ),
+                    .child(mini_switch(
+                        pt.crash_reports_enabled,
+                        "Crash reports",
+                        false,
+                        |s: &mut AppState| {
+                            dispatch_privacy_patch(s, |p| {
+                                p.crash_reports_enabled = !p.crash_reports_enabled;
+                            });
+                        },
+                        k,
+                    )),
             )
             .build(k, t),
     );
@@ -153,17 +153,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         k,
                         t,
                     ))
-                    .child(
-                        Switch::new(pt.product_analytics_enabled)
-                            .label("Product analytics")
-                            .hide_label()
-                            .on_toggle(|s: &mut AppState| {
-                                dispatch_privacy_patch(s, |p| {
-                                    p.product_analytics_enabled = !p.product_analytics_enabled;
-                                });
-                            })
-                            .build(k),
-                    ),
+                    .child(mini_switch(
+                        pt.product_analytics_enabled,
+                        "Product analytics",
+                        false,
+                        |s: &mut AppState| {
+                            dispatch_privacy_patch(s, |p| {
+                                p.product_analytics_enabled = !p.product_analytics_enabled;
+                            });
+                        },
+                        k,
+                    )),
             )
             .build(k, t),
     );
@@ -195,17 +195,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         k,
                         t,
                     ))
-                    .child(
-                        Switch::new(pt.ai_trace_telemetry_enabled)
-                            .label("AI trace metadata")
-                            .hide_label()
-                            .on_toggle(|s: &mut AppState| {
-                                dispatch_privacy_patch(s, |p| {
-                                    p.ai_trace_telemetry_enabled = !p.ai_trace_telemetry_enabled;
-                                });
-                            })
-                            .build(k),
-                    ),
+                    .child(mini_switch(
+                        pt.ai_trace_telemetry_enabled,
+                        "AI trace metadata",
+                        false,
+                        |s: &mut AppState| {
+                            dispatch_privacy_patch(s, |p| {
+                                p.ai_trace_telemetry_enabled = !p.ai_trace_telemetry_enabled;
+                            });
+                        },
+                        k,
+                    )),
             )
             .build(k, t),
     );
@@ -228,29 +228,28 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .items_center()
                 .gap(8.0)
                 .child(status_pill(payload_label, payload_tone, k, t))
-                .child(
-                    Switch::new(pt.ai_trace_payloads_enabled)
-                        .label("AI trace payloads")
-                        .hide_label()
-                        .disabled(!pt.ai_trace_telemetry_enabled)
-                        .on_toggle(|s: &mut AppState| {
-                            if s.desktop_settings
-                                .privacy_telemetry
-                                .ai_trace_payloads_enabled
-                            {
-                                dispatch_privacy_patch(s, |p| {
-                                    p.ai_trace_payloads_enabled = false;
-                                });
-                            } else if s
-                                .desktop_settings
-                                .privacy_telemetry
-                                .ai_trace_telemetry_enabled
-                            {
-                                s.settings_ui.privacy_trace_payloads_confirm_open = true;
-                            }
-                        })
-                        .build(k),
-                ),
+                .child(mini_switch(
+                    pt.ai_trace_payloads_enabled,
+                    "AI trace payloads",
+                    !pt.ai_trace_telemetry_enabled,
+                    |s: &mut AppState| {
+                        if s.desktop_settings
+                            .privacy_telemetry
+                            .ai_trace_payloads_enabled
+                        {
+                            dispatch_privacy_patch(s, |p| {
+                                p.ai_trace_payloads_enabled = false;
+                            });
+                        } else if s
+                            .desktop_settings
+                            .privacy_telemetry
+                            .ai_trace_telemetry_enabled
+                        {
+                            s.settings_ui.privacy_trace_payloads_confirm_open = true;
+                        }
+                    },
+                    k,
+                )),
         );
     let payloads_row = if !pt.ai_trace_payloads_enabled && pt.ai_trace_telemetry_enabled {
         payloads_row
@@ -283,17 +282,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         k,
                         t,
                     ))
-                    .child(
-                        Switch::new(pt.diagnostics_upload_enabled)
-                            .label("Diagnostics bundle uploads")
-                            .hide_label()
-                            .on_toggle(|s: &mut AppState| {
-                                dispatch_privacy_patch(s, |p| {
-                                    p.diagnostics_upload_enabled = !p.diagnostics_upload_enabled;
-                                });
-                            })
-                            .build(k),
-                    ),
+                    .child(mini_switch(
+                        pt.diagnostics_upload_enabled,
+                        "Diagnostics bundle uploads",
+                        false,
+                        |s: &mut AppState| {
+                            dispatch_privacy_patch(s, |p| {
+                                p.diagnostics_upload_enabled = !p.diagnostics_upload_enabled;
+                            });
+                        },
+                        k,
+                    )),
             )
             .build(k, t),
     );
@@ -321,17 +320,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         k,
                         t,
                     ))
-                    .child(
-                        Switch::new(pt.cloud_sync_enabled)
-                            .label("Cloud preferences sync")
-                            .hide_label()
-                            .on_toggle(|s: &mut AppState| {
-                                dispatch_privacy_patch(s, |p| {
-                                    p.cloud_sync_enabled = !p.cloud_sync_enabled;
-                                });
-                            })
-                            .build(k),
-                    ),
+                    .child(mini_switch(
+                        pt.cloud_sync_enabled,
+                        "Cloud preferences sync",
+                        false,
+                        |s: &mut AppState| {
+                            dispatch_privacy_patch(s, |p| {
+                                p.cloud_sync_enabled = !p.cloud_sync_enabled;
+                            });
+                        },
+                        k,
+                    )),
             )
             .build(k, t),
     );

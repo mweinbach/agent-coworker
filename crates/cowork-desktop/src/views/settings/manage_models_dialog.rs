@@ -10,7 +10,7 @@ use crate::actions::{Action, SettingsAction};
 use crate::state::{AppState, ProviderModelSummary, ProviderSummary};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
-use crate::views::settings::primitives::{StatusTone, status_pill};
+use crate::views::settings::primitives::{StatusTone, search_input, status_pill};
 use crate::views::settings::providers_utils::model_display_name;
 
 /// Filters a provider's model list by case-insensitive ID or display name query.
@@ -68,19 +68,22 @@ pub fn push_overlay(
     let visible_models = filter_provider_models(all_models, &s.settings_ui.models_search_edit.text);
     let can_mutate = active_ws_id.is_some();
 
-    let mut search_bar = row().w_full().items_center().flex_wrap().gap(8.0).child(
-        TextInput::new(&s.settings_ui.models_search_edit)
-            .label(format!("Search {provider_label} models"))
-            .placeholder("Search models...")
-            .leading_icon(&icons::SEARCH)
-            .clear_button()
-            .width(Some(240.0))
-            .on_edit(|s: &mut AppState| &mut s.settings_ui.models_search_edit)
-            .on_action(|s: &mut AppState, _tx| {
+    let mut search_bar = row()
+        .w_full()
+        .items_center()
+        .flex_wrap()
+        .gap(8.0)
+        .child(search_input(
+            &s.settings_ui.models_search_edit,
+            format!("Search {provider_label} models"),
+            "Search models...",
+            Some(240.0),
+            |s: &mut AppState| &mut s.settings_ui.models_search_edit,
+            |s: &mut AppState, _tx| {
                 s.settings_ui.models_search_edit = rune::TextEdit::new("");
-            })
-            .build(k),
-    );
+            },
+            k,
+        ));
 
     if let Some(ws_id) = active_ws_id {
         let enable_ids: Vec<String> = visible_models
@@ -164,12 +167,10 @@ pub fn push_overlay(
             "No models match your search."
         };
         list_col = list_col.child(
-            el().w_full().py(24.0).center().child(
-                text(empty_msg)
-                    .font(k.ty.text_small)
-                    .color(t.text_muted)
-                    .wrap(),
-            ),
+            el().w_full()
+                .py(24.0)
+                .center()
+                .child(text(empty_msg).font(k.ty.small).color(t.text_muted).wrap()),
         );
     } else {
         for model in visible_models {
@@ -181,7 +182,7 @@ pub fn push_overlay(
             let label_text = model_display_name(model);
             let mut label_col = col().grow(1.0).min_w(0.0).gap(1.0).child(
                 text(label_text)
-                    .font(k.ty.text_small)
+                    .font(k.ty.ui_medium)
                     .color(t.text_base)
                     .truncate(),
             );
@@ -202,7 +203,7 @@ pub fn push_overlay(
                 .gap(10.0)
                 .px(10.0)
                 .py(7.0)
-                .radius(8.0)
+                .radius(k.radius.md)
                 .hover(t.hover)
                 .child(
                     Checkbox::new(model.enabled)
@@ -270,7 +271,7 @@ pub fn push_overlay(
         "{enabled_count} of {} enabled. Enabled models appear in model pickers; disabling never blocks a model that is already selected.",
         all_models.len()
     ))
-    .font(k.ty.text_small)
+    .font(k.ty.ui)
     .color(t.text_muted)
     .wrap();
 
@@ -285,7 +286,7 @@ pub fn push_overlay(
         .child(
             el().w_full()
                 .h(280.0)
-                .radius(8.0)
+                .radius(k.radius.lg)
                 .fill(t.panel_bg)
                 .border(1.0, t.border_muted)
                 .px(6.0)

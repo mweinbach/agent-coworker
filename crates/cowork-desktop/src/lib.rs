@@ -120,6 +120,18 @@ fn apply_scene_env_overrides(state: &mut AppState) {
     {
         state.desktop_settings.accent_palette = palette;
     }
+    if let Ok(raw) = std::env::var("COWORK_MENU_BAR_PLATFORM")
+        && let Some(platform) = state::DesktopPlatformOverride::parse(&raw)
+    {
+        state.menu_platform_override = Some(platform);
+    }
+    if let Ok(raw) = std::env::var("COWORK_SHOW_MENU_BAR") {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "0" | "false" | "off" => state.desktop_settings.show_menu_bar = false,
+            "1" | "true" | "on" => state.desktop_settings.show_menu_bar = true,
+            _ => {}
+        }
+    }
 }
 
 fn scene_default(state: &mut AppState) {
@@ -480,6 +492,9 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
         changed |= state.drain_events();
         changed |= state.reconcile_rekeyed_thread_ids();
     }
+    if let Some(cmd_id) = state.pending_menu_command.take() {
+        changed |= state.dispatch_menu_command_with_tx(tx, &cmd_id);
+    }
     if !state.scene_mode {
         let mode = state.window_mode;
         let sync_repaint = WINDOW_HUB.with(|cell| {
@@ -540,6 +555,21 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                             true,
                         );
                     }
+                    WindowCommand::MinimizeMain => {
+                        tx.minimize();
+                    }
+                    WindowCommand::ToggleMaximizeMain => {
+                        tx.toggle_maximized();
+                    }
+                    WindowCommand::ToggleFullScreenMain => {
+                        tx.toggle_full_screen();
+                    }
+                    WindowCommand::CloseMain => {
+                        tx.close_window();
+                    }
+                    WindowCommand::QuitApp => {
+                        tx.quit();
+                    }
                     WindowCommand::FocusMain {
                         open_new_chat_workspace,
                         open_thread_id,
@@ -568,7 +598,47 @@ fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         state.dispatch(Action::Shell(ShellAction::ToggleSidebar));
         return true;
     }
-    views::shell::handle_key(state, ev, tx)
+    views::shell::handle_key(state, ev, tx) || handle_global_menu_shortcut(state, ev, tx)
+}
+
+/// Handles global menu bar accelerators that sit outside view-local handlers
+/// (Skills `Cmd/Ctrl+Shift+K`, fullscreen `F11` / macOS `Ctrl+Cmd+F`, and non-macOS close/quit).
+pub fn handle_global_menu_shortcut(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    let platform = state.effective_desktop_platform();
+    let overlay_open = state.command_palette_open
+        || state.shell_ui.search_overlay_open
+        || state.pending_confirm_dialog.is_some()
+        || state.pending_external_url.is_some()
+        || state.lmstudio_start_modal.is_some()
+        || state.agent_viewer.is_some();
+
+    if !overlay_open && ev.is_command('k') && ev.mods.shift && !ev.mods.alt {
+        return state.dispatch_menu_command_with_tx(tx, "file.open_skills");
+    }
+
+    let is_fullscreen = if platform.is_macos() {
+        ev.is_command('f') && ev.mods.ctrl && ev.mods.cmd && !ev.mods.alt && !ev.mods.shift
+    } else {
+        matches!(ev.key, rune::Key::Function(11))
+            && !ev.mods.cmd
+            && !ev.mods.ctrl
+            && !ev.mods.alt
+            && !ev.mods.shift
+    };
+    if is_fullscreen {
+        return state.dispatch_menu_command_with_tx(tx, "view.toggle_fullscreen");
+    }
+
+    if !platform.is_macos() && !overlay_open && !ev.mods.shift && !ev.mods.alt {
+        if ev.is_command('w') {
+            return state.dispatch_menu_command_with_tx(tx, "file.close_window");
+        }
+        if platform.is_linux() && ev.is_command('q') {
+            return state.dispatch_menu_command_with_tx(tx, "app.quit");
+        }
+    }
+
+    false
 }
 
 fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
@@ -645,6 +715,7 @@ pub fn run() {
         .ok();
 
     let mut app = App::new(app_spec())
+        .modifier_keys()
         .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
         .keep_running()
         .turn_scope(enter_shared_turn, leave_shared_turn);
@@ -684,4 +755,62 @@ pub fn run() {
     });
 
     native::configure_app(app).run();
+}
+
+#[cfg(test)]
+mod menu_shortcut_tests {
+    use super::*;
+    use rune::{Key, Mods};
+
+    #[test]
+    fn global_menu_shortcuts_route_skills_and_platform_fullscreen_cleanly() {
+        let mut s = AppState::default();
+        let mut tx = Tx::default();
+
+        // Cmd+Shift+K opens Tool Access / Skills.
+        let cmd_shift_k = KeyEvent {
+            key: Key::Command('k'),
+            mods: Mods {
+                cmd: true,
+                shift: true,
+                ..Default::default()
+            },
+        };
+        assert!(handle_global_menu_shortcut(&mut s, &cmd_shift_k, &mut tx));
+        assert_eq!(s.route().view, ViewId::Settings);
+        assert_eq!(s.route().settings_page, SettingsPageId::ToolAccess);
+
+        // Plain Ctrl+F on Linux/Windows must not trigger macOS Ctrl+Cmd+F fullscreen.
+        s.menu_platform_override = Some(state::DesktopPlatformOverride::Linux);
+        let linux_ctrl_f = KeyEvent {
+            key: Key::Command('f'),
+            mods: Mods {
+                cmd: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        };
+        assert!(!handle_global_menu_shortcut(&mut s, &linux_ctrl_f, &mut tx));
+
+        // F11 toggles fullscreen on Linux/Windows.
+        let f11 = KeyEvent::from(Key::Function(11));
+        assert!(handle_global_menu_shortcut(&mut s, &f11, &mut tx));
+
+        // Ctrl+Cmd+F toggles fullscreen on macOS.
+        s.menu_platform_override = Some(state::DesktopPlatformOverride::MacOs);
+        let mac_fullscreen = KeyEvent {
+            key: Key::Command('f'),
+            mods: Mods {
+                cmd: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        };
+        assert!(handle_global_menu_shortcut(
+            &mut s,
+            &mac_fullscreen,
+            &mut tx
+        ));
+        assert!(!handle_global_menu_shortcut(&mut s, &f11, &mut tx));
+    }
 }

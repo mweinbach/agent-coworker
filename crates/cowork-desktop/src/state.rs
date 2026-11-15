@@ -72,6 +72,48 @@ impl WindowMode {
     }
 }
 
+/// Target desktop platform override used by scenes/tests to preview Linux, Windows, or macOS chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopPlatformOverride {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+impl DesktopPlatformOverride {
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "macos" | "mac" | "darwin" => Some(Self::MacOs),
+            "windows" | "win" | "win32" => Some(Self::Windows),
+            "linux" | "x11" | "wayland" => Some(Self::Linux),
+            _ => None,
+        }
+    }
+
+    pub const fn is_macos(self) -> bool {
+        matches!(self, Self::MacOs)
+    }
+
+    pub const fn is_windows(self) -> bool {
+        matches!(self, Self::Windows)
+    }
+
+    pub const fn is_linux(self) -> bool {
+        matches!(self, Self::Linux)
+    }
+}
+
 /// Current wall-clock Unix epoch timestamp in seconds (fractional).
 pub fn wall_clock_epoch_secs() -> f64 {
     std::time::SystemTime::now()
@@ -106,6 +148,11 @@ pub enum WindowCommand {
     ToggleQuickChat,
     OpenUtility,
     ToggleUtility,
+    MinimizeMain,
+    ToggleMaximizeMain,
+    ToggleFullScreenMain,
+    CloseMain,
+    QuitApp,
     FocusMain {
         open_new_chat_workspace: Option<String>,
         open_thread_id: Option<String>,
@@ -1399,6 +1446,8 @@ pub struct DesktopSettings {
     pub quick_chat_icon_enabled: bool,
     pub quick_chat_shortcut_enabled: bool,
     pub quick_chat_shortcut: String,
+    #[serde(default = "default_true_bool")]
+    pub show_menu_bar: bool,
     pub archived_chats_auto_delete_days: u32,
     pub sidebar_section_order: Vec<SidebarSectionKey>,
     pub privacy_telemetry: PrivacyTelemetrySettings,
@@ -1419,6 +1468,7 @@ impl Default for DesktopSettings {
             quick_chat_icon_enabled: true,
             quick_chat_shortcut_enabled: true,
             quick_chat_shortcut: "CommandOrControl+Shift+Space".to_string(),
+            show_menu_bar: true,
             archived_chats_auto_delete_days: 30,
             sidebar_section_order: vec![
                 SidebarSectionKey::Pinned,
@@ -1658,6 +1708,10 @@ pub struct AppState {
     pub native_ready: bool,
     pub is_packaged: bool,
     pub system_dark_override: Option<bool>,
+    /// Optional platform override used by scenes/tests to preview Linux/Windows/macOS chrome.
+    pub menu_platform_override: Option<DesktopPlatformOverride>,
+    /// Deferred menu command ID dispatched on the next `poll_app` after popup/modal focus returns.
+    pub pending_menu_command: Option<String>,
     /// True when started under a static Rune `--scene`; prevents `NativeReady` from overwriting scene state.
     pub scene_mode: bool,
     /// Wall-clock Unix epoch seconds for timestamps, relative age labels, and timers.
@@ -1792,6 +1846,8 @@ impl Default for AppState {
             native_ready: false,
             is_packaged: false,
             system_dark_override: None,
+            menu_platform_override: None,
+            pending_menu_command: None,
             scene_mode: false,
             now_secs: 0.0,
             app_elapsed_secs: 0.0,
@@ -2306,6 +2362,198 @@ impl AppState {
 
     pub fn reset_zoom(&mut self) {
         self.ui_scale = DEFAULT_UI_SCALE;
+    }
+
+    pub fn effective_desktop_platform(&self) -> DesktopPlatformOverride {
+        self.menu_platform_override
+            .unwrap_or_else(DesktopPlatformOverride::current)
+    }
+
+    /// Queues a menu command ID to run on the next `poll_app` tick (once modal focus returns).
+    pub fn queue_menu_command(&mut self, tx: &mut rune::Tx, command_id: impl Into<String>) {
+        self.pending_menu_command = Some(command_id.into());
+        tx.wake_after(std::time::Duration::ZERO);
+    }
+
+    fn dispatch_menu_window_or_tx(&mut self, tx: Option<&mut rune::Tx>, command_id: &str) -> bool {
+        match command_id {
+            "app.quit" | "file.quit" | "quit" => {
+                if let Some(tx) = tx {
+                    tx.quit();
+                } else {
+                    self.send_window(WindowCommand::QuitApp);
+                }
+                true
+            }
+            "file.close_window" | "window.close" | "close_window" => {
+                if let Some(tx) = tx {
+                    tx.close_window();
+                } else {
+                    self.send_window(WindowCommand::CloseMain);
+                }
+                true
+            }
+            "window.minimize" | "minimize" => {
+                if let Some(tx) = tx {
+                    tx.minimize();
+                } else {
+                    self.send_window(WindowCommand::MinimizeMain);
+                }
+                true
+            }
+            "window.zoom" | "window.maximize" | "zoom_window" | "maximize" => {
+                if let Some(tx) = tx {
+                    tx.toggle_maximized();
+                } else {
+                    self.send_window(WindowCommand::ToggleMaximizeMain);
+                }
+                true
+            }
+            "view.toggle_fullscreen" | "toggle_fullscreen" | "window.toggle_fullscreen" => {
+                if let Some(tx) = tx {
+                    tx.toggle_full_screen();
+                } else {
+                    self.send_window(WindowCommand::ToggleFullScreenMain);
+                }
+                true
+            }
+            "edit.undo" | "undo" => {
+                let Some(tx) = tx else { return false };
+                tx.send_key(rune::KeyEvent {
+                    key: rune::Key::Command('z'),
+                    mods: rune::Mods {
+                        cmd: true,
+                        ..Default::default()
+                    },
+                });
+                true
+            }
+            "edit.redo" | "redo" => {
+                let Some(tx) = tx else { return false };
+                tx.send_key(rune::KeyEvent {
+                    key: rune::Key::Command('z'),
+                    mods: rune::Mods {
+                        cmd: true,
+                        shift: true,
+                        ..Default::default()
+                    },
+                });
+                true
+            }
+            "edit.cut" | "cut" => {
+                let Some(tx) = tx else { return false };
+                tx.send_key(rune::KeyEvent {
+                    key: rune::Key::Command('x'),
+                    mods: rune::Mods {
+                        cmd: true,
+                        ..Default::default()
+                    },
+                });
+                true
+            }
+            "edit.copy" | "copy" => {
+                let Some(tx) = tx else { return false };
+                tx.send_key(rune::KeyEvent {
+                    key: rune::Key::Command('c'),
+                    mods: rune::Mods {
+                        cmd: true,
+                        ..Default::default()
+                    },
+                });
+                true
+            }
+            "edit.paste" | "paste" => {
+                let Some(tx) = tx else { return false };
+                tx.request_paste();
+                true
+            }
+            "edit.delete" | "delete" => {
+                let Some(tx) = tx else { return false };
+                tx.send_key(rune::KeyEvent {
+                    key: rune::Key::Delete,
+                    mods: rune::Mods::default(),
+                });
+                true
+            }
+            "edit.select_all" | "select_all" => {
+                let Some(tx) = tx else { return false };
+                tx.send_key(rune::KeyEvent {
+                    key: rune::Key::Command('a'),
+                    mods: rune::Mods {
+                        cmd: true,
+                        ..Default::default()
+                    },
+                });
+                true
+            }
+            "help.github" | "open_github" => {
+                const URL: &str = "https://github.com/mweinbach/agent-coworker";
+                if let Some(tx) = tx {
+                    if tx.open_url(URL).is_err() {
+                        self.send_native(NativeCommand::OpenExternalUrl(URL.to_string()));
+                    }
+                } else {
+                    self.send_native(NativeCommand::OpenExternalUrl(URL.to_string()));
+                }
+                true
+            }
+            "app.about" | "help.about" | "about" => {
+                self.dispatch(Action::Shell(ShellAction::OpenAbout));
+                true
+            }
+            "view.toggle_show_menu_bar" => {
+                self.dispatch(Action::Shell(ShellAction::ToggleShowMenuBar));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Executes an application or in-window menu command with access to Rune's `&mut Tx`.
+    pub fn dispatch_menu_command_with_tx(&mut self, tx: &mut rune::Tx, command_id: &str) -> bool {
+        if let Some(legacy_id) = match command_id {
+            "file.new_chat" | "new_chat" => Some("new_chat"),
+            "file.open_quick_chat" | "open_quick_chat" => Some("open_quick_chat"),
+            "file.open_skills" | "open_skills" => Some("open_skills"),
+            "file.open_command_palette" | "command_palette" => Some("command_palette"),
+            "file.open_settings" | "app.settings" | "settings" => Some("settings"),
+            "file.open_workspaces_settings" | "open_workspaces_settings" => {
+                Some("open_workspaces_settings")
+            }
+            "view.toggle_sidebar" | "toggle_sidebar" => Some("toggle_sidebar"),
+            "view.zoom_in" | "zoom_in" => Some("zoom_in"),
+            "view.zoom_out" | "zoom_out" => Some("zoom_out"),
+            "view.reset_zoom" | "reset_zoom" => Some("reset_zoom"),
+            "help.updates" | "open_updates" => Some("open_updates"),
+            "open_utility" => Some("open_utility"),
+            "tray_click" | "toggle_utility" => Some("tray_click"),
+            _ => None,
+        } {
+            self.apply_store_event(StoreEvent::MenuInvoked(legacy_id.to_string()));
+            return true;
+        }
+        self.dispatch_menu_window_or_tx(Some(tx), command_id)
+    }
+
+    fn dispatch_unhandled_menu_event(&mut self, command_id: &str) {
+        let normalized = match command_id {
+            "file.new_chat" => Some("new_chat"),
+            "file.open_skills" => Some("open_skills"),
+            "file.open_command_palette" => Some("command_palette"),
+            "file.open_settings" | "app.settings" => Some("settings"),
+            "file.open_workspaces_settings" => Some("open_workspaces_settings"),
+            "view.toggle_sidebar" => Some("toggle_sidebar"),
+            "view.zoom_in" => Some("zoom_in"),
+            "view.zoom_out" => Some("zoom_out"),
+            "view.reset_zoom" => Some("reset_zoom"),
+            "help.updates" => Some("open_updates"),
+            _ => None,
+        };
+        if let Some(legacy_id) = normalized {
+            self.apply_store_event(StoreEvent::MenuInvoked(legacy_id.to_string()));
+            return;
+        }
+        let _ = self.dispatch_menu_window_or_tx(None, command_id);
     }
 
     /// Wall-clock Unix epoch milliseconds (`now_secs` when initialized, else system clock).
@@ -4040,7 +4288,9 @@ impl AppState {
                 "tray_click" | "toggle_utility" => {
                     self.dispatch(Action::Shell(ShellAction::ToggleUtilityWindow));
                 }
-                _ => {}
+                _ => {
+                    self.dispatch_unhandled_menu_event(&command_id);
+                }
             },
             StoreEvent::QuickChatToggled => {
                 self.dispatch(Action::Shell(ShellAction::ToggleQuickChatWindow));
@@ -4615,6 +4865,23 @@ impl AppState {
             ShellAction::ToggleUtilityWindow => {
                 self.send_window(WindowCommand::ToggleUtility);
             }
+            ShellAction::SetShowMenuBar(show) => {
+                self.desktop_settings.show_menu_bar = show;
+                self.persist_state();
+            }
+            ShellAction::ToggleShowMenuBar => {
+                self.desktop_settings.show_menu_bar = !self.desktop_settings.show_menu_bar;
+                self.persist_state();
+            }
+            ShellAction::OpenAbout => {
+                let version = crate::native::resolve_desktop_app_version();
+                self.dispatch(Action::Shell(ShellAction::PushToast {
+                    key: "app-about".to_string(),
+                    title: "Cowork Desktop".to_string(),
+                    description: Some(format!("Version {version}")),
+                    tone: NotificationTone::Info,
+                }));
+            }
             ShellAction::FocusMainWindow {
                 open_new_chat_workspace,
                 open_thread_id,
@@ -4673,6 +4940,10 @@ impl AppState {
         std::mem::swap(&mut self.settings_ui, &mut other.settings_ui);
         std::mem::swap(&mut self.shell_ui, &mut other.shell_ui);
         std::mem::swap(&mut self.scene_mode, &mut other.scene_mode);
+        std::mem::swap(
+            &mut self.pending_menu_command,
+            &mut other.pending_menu_command,
+        );
         std::mem::swap(&mut self.now_secs, &mut other.now_secs);
         std::mem::swap(&mut self.app_elapsed_secs, &mut other.app_elapsed_secs);
     }
@@ -16339,6 +16610,52 @@ mod tests {
                 .workspace_runtime_by_id
                 .get("ws-1")
                 .is_none_or(|rt| rt.last_error.is_none())
+        );
+    }
+
+    #[test]
+    fn show_menu_bar_defaults_true_and_menu_tx_dispatch_handles_core_commands() {
+        assert!(DesktopSettings::default().show_menu_bar);
+
+        let mut legacy_json =
+            serde_json::to_value(DesktopSettings::default()).expect("serialize DesktopSettings");
+        legacy_json
+            .as_object_mut()
+            .expect("object")
+            .remove("showMenuBar");
+        let legacy: DesktopSettings =
+            serde_json::from_value(legacy_json).expect("legacy without showMenuBar");
+        assert!(legacy.show_menu_bar);
+
+        let mut s = AppState::default();
+        let mut tx = rune::Tx::default();
+
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "view.toggle_show_menu_bar"));
+        assert!(!s.desktop_settings.show_menu_bar);
+        s.dispatch(Action::Shell(ShellAction::SetShowMenuBar(true)));
+        assert!(s.desktop_settings.show_menu_bar);
+
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "file.open_skills"));
+        assert_eq!(s.route().view, ViewId::Settings);
+        assert_eq!(s.route().settings_page, SettingsPageId::ToolAccess);
+
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "app.about"));
+        assert!(s.toasts.iter().any(|t| t.key == "app-about"));
+
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "help.github"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "edit.paste"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "edit.copy"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "view.toggle_fullscreen"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "window.minimize"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "window.zoom"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "file.close_window"));
+        assert!(s.dispatch_menu_command_with_tx(&mut tx, "app.quit"));
+        assert!(!s.dispatch_menu_command_with_tx(&mut tx, "unknown.command"));
+
+        s.queue_menu_command(&mut tx, "view.toggle_show_menu_bar");
+        assert_eq!(
+            s.pending_menu_command.as_deref(),
+            Some("view.toggle_show_menu_bar")
         );
     }
 }

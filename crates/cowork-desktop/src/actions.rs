@@ -118,6 +118,9 @@ pub enum ShellAction {
     ToggleQuickChatWindow,
     OpenUtilityWindow,
     ToggleUtilityWindow,
+    SetShowMenuBar(bool),
+    ToggleShowMenuBar,
+    OpenAbout,
     FocusMainWindow {
         open_new_chat_workspace: Option<String>,
         open_thread_id: Option<String>,

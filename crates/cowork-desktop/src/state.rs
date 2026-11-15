@@ -703,6 +703,8 @@ pub struct FilePreviewState {
     pub is_markdown: bool,
     pub truncated: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub spreadsheet: Option<crate::views::preview::SpreadsheetPreviewData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1558,6 +1560,7 @@ pub struct AppState {
     pub pending_external_url: Option<String>,
     pub pending_confirm_dialog: Option<ConfirmDialogRequest>,
     pub active_file_preview: Option<FilePreviewState>,
+    pub preview_ui: crate::views::preview::PreviewUiState,
     pub toasts: Vec<NotificationRecord>,
     pub operations_by_key: HashMap<String, OperationState>,
     pub tasks: Vec<TaskSummaryView>,
@@ -1682,6 +1685,7 @@ impl Default for AppState {
             pending_external_url: None,
             pending_confirm_dialog: None,
             active_file_preview: None,
+            preview_ui: crate::views::preview::PreviewUiState::default(),
             toasts: Vec::new(),
             operations_by_key: HashMap::new(),
             tasks: Vec::new(),
@@ -2244,10 +2248,21 @@ impl AppState {
         false
     }
 
+    pub(crate) fn sync_preview_ui(&mut self) {
+        let preview_path = self.active_file_preview.as_ref().map(|p| p.path.as_str());
+        let spreadsheet = self
+            .active_file_preview
+            .as_ref()
+            .and_then(|p| p.spreadsheet.as_ref());
+        self.preview_ui
+            .sync_for_preview_data(preview_path, spreadsheet);
+    }
+
     fn open_canvas_document(&mut self, workspace_id: String, path: String) {
         let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
         self.close_canvas_document();
         self.active_file_preview = None;
+        self.sync_preview_ui();
         self.context_sidebar.set_open(true);
         self.canvas_generation_seq += 1;
         let generation = self.canvas_generation_seq;
@@ -3397,16 +3412,19 @@ impl AppState {
                     self.sync_active_explorer_dir();
                 }
             }
-            StoreEvent::FilePreviewLoaded { path, result, .. } => match result {
-                Ok(preview) => self.active_file_preview = Some(preview),
-                Err(err) => {
-                    if let Some(ref mut preview) = self.active_file_preview
-                        && preview.path == path
-                    {
-                        preview.error = Some(err);
+            StoreEvent::FilePreviewLoaded { path, result, .. } => {
+                match result {
+                    Ok(preview) => self.active_file_preview = Some(preview),
+                    Err(err) => {
+                        if let Some(ref mut preview) = self.active_file_preview
+                            && preview.path == path
+                        {
+                            preview.error = Some(err);
+                        }
                     }
                 }
-            },
+                self.sync_preview_ui();
+            }
             StoreEvent::ImageBytesLoaded {
                 request_id,
                 mime_type,
@@ -3684,12 +3702,17 @@ impl AppState {
                     }
                 }
                 self.sync_active_explorer_dir();
+                let mut renamed_preview = false;
                 if let Some(ref mut preview) = self.active_file_preview
                     && preview.workspace_id == workspace_id
                     && (preview.path == old_path || preview.path == norm_old)
                 {
                     preview.path = new_path.clone();
                     preview.title = new_name;
+                    renamed_preview = true;
+                }
+                if renamed_preview {
+                    self.sync_preview_ui();
                 }
                 if let Some(ref mut doc) = self.canvas_document
                     && doc.workspace_id == workspace_id
@@ -3989,9 +4012,11 @@ impl AppState {
             }
             ShellAction::OpenFilePreview(preview) => {
                 self.active_file_preview = Some(preview);
+                self.sync_preview_ui();
             }
             ShellAction::CloseFilePreview => {
                 self.active_file_preview = None;
+                self.sync_preview_ui();
             }
             ShellAction::SetLandingWorkspace(ws_id) => {
                 self.landing_workspace_id = ws_id;

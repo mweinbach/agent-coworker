@@ -8,6 +8,7 @@
 use rune::El;
 
 pub mod chat;
+pub mod preview;
 pub mod settings;
 pub mod shell;
 

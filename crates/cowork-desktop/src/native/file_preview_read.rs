@@ -326,6 +326,7 @@ pub fn load_file_preview_state(
             error: Some(format!(
                 "Rich preview for {label} documents is not available in the native app yet. Open it in your default app instead."
             )),
+            spreadsheet: None,
         });
     }
 
@@ -341,6 +342,7 @@ pub fn load_file_preview_state(
             is_markdown: false,
             truncated: meta.len() > max_bytes as u64,
             error: Some("Previewing media/PDF files inline is unavailable here. Open it in your default app instead.".to_string()),
+            spreadsheet: None,
         });
     }
 
@@ -355,6 +357,7 @@ pub fn load_file_preview_state(
             is_markdown: kind == FilePreviewKind::Markdown,
             truncated: capped.truncated,
             error: None,
+            spreadsheet: None,
         })
     } else {
         Ok(FilePreviewState {
@@ -366,6 +369,7 @@ pub fn load_file_preview_state(
             is_markdown: false,
             truncated: capped.truncated,
             error: None,
+            spreadsheet: None,
         })
     }
 }

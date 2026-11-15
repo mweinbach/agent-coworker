@@ -581,6 +581,24 @@ impl PersistenceService {
             Value::Array(filtered_collapsed),
         );
 
+        let mut seen_sections = HashSet::new();
+        let filtered_sections: Vec<Value> = obj
+            .get("collapsedSidebarSections")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| serde_json::from_value::<SidebarSectionKey>(v.clone()).ok())
+                    .filter(|section| seen_sections.insert(*section))
+                    .filter_map(|section| serde_json::to_value(section).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        obj.insert(
+            "collapsedSidebarSections".to_string(),
+            Value::Array(filtered_sections),
+        );
+
         let active_ws = obj
             .get("activeWorkspaceId")
             .and_then(Value::as_str)
@@ -661,6 +679,18 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
             .collect();
     }
 
+    if let Some(arr) = obj
+        .get("collapsedSidebarSections")
+        .and_then(Value::as_array)
+    {
+        let mut seen = HashSet::new();
+        out.collapsed_sidebar_sections = arr
+            .iter()
+            .filter_map(|v| serde_json::from_value::<SidebarSectionKey>(v.clone()).ok())
+            .filter(|section| seen.insert(*section))
+            .collect();
+    }
+
     out.active_workspace_id = obj
         .get("activeWorkspaceId")
         .and_then(Value::as_str)
@@ -737,6 +767,32 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
                 "lastOpenedAt".to_string(),
                 json!(epoch_ms_to_iso(ws.last_opened_at)),
             );
+            map.insert("yolo".to_string(), json!(ws.yolo));
+            map.insert("defaultEnableMcp".to_string(), json!(ws.default_enable_mcp));
+            map.insert(
+                "defaultBackupsEnabled".to_string(),
+                json!(ws.default_backups_enabled),
+            );
+            if let Some(provider) = ws
+                .default_provider
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                map.insert("defaultProvider".to_string(), json!(provider));
+            } else {
+                map.remove("defaultProvider");
+            }
+            if let Some(model) = ws
+                .default_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                map.insert("defaultModel".to_string(), json!(model));
+            } else {
+                map.remove("defaultModel");
+            }
             map.entry("wsProtocol".to_string())
                 .or_insert_with(|| json!("jsonrpc"));
             Value::Object(map)
@@ -763,6 +819,17 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
                 .map(|id| Value::String(id.clone()))
                 .collect(),
         ),
+    );
+    let mut seen_sections = HashSet::new();
+    let collapsed_sections: Vec<Value> = snapshot
+        .collapsed_sidebar_sections
+        .iter()
+        .filter(|section| seen_sections.insert(**section))
+        .filter_map(|section| serde_json::to_value(section).ok())
+        .collect();
+    doc.insert(
+        "collapsedSidebarSections".to_string(),
+        Value::Array(collapsed_sections),
     );
     doc.insert(
         "activeWorkspaceId".to_string(),
@@ -874,6 +941,7 @@ pub fn default_state_document() -> Value {
         "threads": [],
         "workspaceOrder": [],
         "collapsedWorkspaceIds": [],
+        "collapsedSidebarSections": [],
         "activeWorkspaceId": null,
         "activeThreadId": null,
         "developerMode": false,
@@ -1753,5 +1821,61 @@ mod tests {
             .find(|w| w["id"] == "ws-ancestor")
             .unwrap();
         assert_eq!(ancestor["workspaceKind"], "project");
+    }
+
+    #[test]
+    fn roundtrips_collapsed_sidebar_sections_and_workspace_defaults() {
+        let tmp = tempdir().unwrap();
+        let user_data = tmp.path().join("Cowork");
+        let workspace_dir = tmp.path().join("proj");
+        fs::create_dir_all(&workspace_dir).unwrap();
+
+        let service = PersistenceService::new(user_data, None, true, None);
+        let mut ws = WorkspaceRecord::new(
+            "ws-1",
+            "Project One",
+            workspace_dir.to_string_lossy().into_owned(),
+            1_700_000_000_000,
+        );
+        ws.yolo = true;
+        ws.default_enable_mcp = false;
+        ws.default_backups_enabled = true;
+        ws.default_provider = Some("openai".to_string());
+        ws.default_model = Some("gpt-5.4".to_string());
+
+        let snapshot = PersistedDesktopState {
+            workspaces: vec![ws.clone()],
+            workspace_order: vec![ws.id.clone()],
+            collapsed_sidebar_sections: vec![
+                SidebarSectionKey::Tasks,
+                SidebarSectionKey::Chats,
+                SidebarSectionKey::Tasks,
+            ],
+            active_workspace_id: Some(ws.id.clone()),
+            ..PersistedDesktopState::default()
+        };
+
+        service.merge_and_save_core_snapshot(&snapshot).unwrap();
+        let loaded = service.load_core_state().unwrap();
+        assert_eq!(
+            loaded.collapsed_sidebar_sections,
+            vec![SidebarSectionKey::Tasks, SidebarSectionKey::Chats]
+        );
+        assert_eq!(loaded.workspaces.len(), 1);
+        let reloaded_ws = &loaded.workspaces[0];
+        assert!(reloaded_ws.yolo);
+        assert!(!reloaded_ws.default_enable_mcp);
+        assert!(reloaded_ws.default_backups_enabled);
+        assert_eq!(reloaded_ws.default_provider.as_deref(), Some("openai"));
+        assert_eq!(reloaded_ws.default_model.as_deref(), Some("gpt-5.4"));
+
+        // Ensure raw JSON normalization keeps only valid unique SidebarSectionKey entries.
+        let mut doc = service.load_state_value().unwrap();
+        doc["collapsedSidebarSections"] = json!(["pinned", "invalid", "workspaces", "pinned"]);
+        let saved_doc = service.save_state_value(doc).unwrap();
+        assert_eq!(
+            saved_doc["collapsedSidebarSections"],
+            json!(["pinned", "workspaces"])
+        );
     }
 }

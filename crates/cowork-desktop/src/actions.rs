@@ -391,7 +391,7 @@ pub enum SettingsAction {
     },
     RestoreSkillImprovement {
         workspace_id: String,
-        backup_id: String,
+        skill_name: String,
     },
     RefreshPluginsAndSkills {
         workspace_id: String,
@@ -554,6 +554,9 @@ pub enum TaskAction {
         review_required: Option<bool>,
         provider: Option<String>,
         model: Option<String>,
+        idempotency_key: Option<String>,
+        requirements: Vec<Value>,
+        work_items: Vec<Value>,
     },
     UpdateBrief {
         workspace_id: String,
@@ -674,6 +677,7 @@ pub enum NativeCommand {
         phone_id: String,
         permissions: String,
     },
+    ForgetTrustedPhone(String),
     RefreshTelemetryStatus,
     DownloadUpdate,
     ShowDesktopNotification {

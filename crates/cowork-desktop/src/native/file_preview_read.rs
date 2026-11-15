@@ -9,7 +9,6 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, Result, bail};
 use cowork_config::canonicalize_sync;
 
-use super::path_boundary::is_path_equal_or_inside;
 use super::validation::assert_path_within_roots;
 use crate::state::FilePreviewState;
 
@@ -291,17 +290,6 @@ fn decode_utf8_preview(bytes: &[u8], truncated: bool) -> Option<String> {
     }
 }
 
-fn preview_roots_with_chats(roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut combined: Vec<PathBuf> = roots.to_vec();
-    let env = cowork_config::env_map_from_process();
-    let home = cowork_config::resolve_home_dir(&env, cowork_config::host_platform());
-    let chats = cowork_config::get_one_off_chats_root(&home);
-    if !combined.iter().any(|r| is_path_equal_or_inside(r, &chats)) {
-        combined.push(chats);
-    }
-    combined
-}
-
 /// Validates workspace path containment and builds a native [`FilePreviewState`].
 /// Rich web-only document formats (`.xlsx`, `.pptx`, `.docx`, `.doc`, etc.) return a clean
 /// "open in default app" fallback instead of attempting in-app Univer/HTML viewers.
@@ -311,8 +299,7 @@ pub fn load_file_preview_state(
     requested_path: &Path,
     max_bytes: usize,
 ) -> Result<FilePreviewState> {
-    let roots = preview_roots_with_chats(workspace_roots);
-    let safe_path = assert_path_within_roots(&roots, requested_path, "path")?;
+    let safe_path = assert_path_within_roots(workspace_roots, requested_path, "path")?;
     let title = safe_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -441,5 +428,12 @@ mod tests {
             load_file_preview_state(&[ws.path().to_path_buf()], "ws-1", &bin, 1024).unwrap();
         assert!(preview.is_binary);
         assert!(preview.content.is_none());
+
+        // Strict single-workspace isolation: files inside an unauthorized sibling workspace fail closed.
+        let sibling_preview =
+            load_file_preview_state(&[outside.path().to_path_buf()], "ws-2", &bin, 1024)
+                .unwrap_err()
+                .to_string();
+        assert!(sibling_preview.contains("outside allowed workspace roots"));
     }
 }

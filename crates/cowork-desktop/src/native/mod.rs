@@ -17,12 +17,14 @@ pub mod menu;
 pub mod notifications;
 pub mod path_boundary;
 pub mod persistence;
+pub mod remote_access;
 pub mod security;
 pub mod server_manager;
 pub mod server_platform;
 pub mod shell_ops;
 pub mod shutdown;
 pub mod sidecar;
+pub mod telemetry_status;
 pub mod tray;
 pub mod updater;
 pub mod validation;
@@ -33,15 +35,17 @@ pub mod window_state;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
+use cowork_config::canonicalize_sync;
 use rune::{App, AppHandle};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::actions::{NativeCommand, StoreEvent};
-use crate::state::{AppState, PersistedDesktopState};
+use crate::state::{AppState, PersistedDesktopState, PrivacyTelemetrySettings};
 use appearance::{AppearancePreferences, detect_system_dark};
 use apply_desktop_state::apply_desktop_state;
 use diagnostics::DiagnosticsService;
@@ -53,7 +57,11 @@ use persistence::{
     PersistenceService, read_user_data_override_env, resolve_legacy_user_data_dir,
     resolve_user_data_dir,
 };
-use security::{AuthorizedUploadRegistry, WorkspaceRootsController, assert_allowed_external_url};
+use remote_access::RemoteAccessBridge;
+use security::{
+    AuthorizedUploadRegistry, WorkspaceRootsController, assert_allowed_external_url,
+    resolve_effective_feature_flags,
+};
 use server_manager::{
     ServerManager, ServerManagerRuntime, StartWorkspaceServerOptions, WorkspaceServerFeatureFlags,
 };
@@ -63,6 +71,7 @@ use shell_ops::{
 };
 use shutdown::ShutdownCoordinator;
 use sidecar::resolve_dev_repo_root;
+use telemetry_status::resolve_desktop_telemetry_status;
 use tray::QuickChatTrayController;
 use updater::DesktopUpdaterService;
 use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
@@ -185,6 +194,12 @@ pub fn spawn_native_worker(
                     is_packaged,
                     system_dark,
                 });
+                emit(StoreEvent::TelemetryStatusChanged(
+                    runtime_ctx.compute_telemetry_status(),
+                ));
+                emit(StoreEvent::RemoteAccessChanged(
+                    runtime_ctx.remote_access.current_state(),
+                ));
 
                 let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
                 runtime_ctx.window_state.spawn_debounce_loop(shutdown_rx);
@@ -250,14 +265,15 @@ struct NativeWorkerContext {
     roots: Arc<Mutex<WorkspaceRootsController>>,
     uploads: Arc<Mutex<AuthorizedUploadRegistry>>,
     server_manager: ServerManager,
+    remote_access: RemoteAccessBridge,
     watcher: WorkspaceDirectoryWatcher,
     notifications: DesktopNotificationService,
     updater: DesktopUpdaterService,
     diagnostics: DiagnosticsService,
     tray: QuickChatTrayController,
     last_feature_flags: HashMap<String, bool>,
-    last_privacy: Option<crate::state::PrivacyTelemetrySettings>,
-    show_hidden_files: bool,
+    last_privacy: Option<PrivacyTelemetrySettings>,
+    show_hidden_files: Arc<AtomicBool>,
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
 }
 
@@ -326,6 +342,12 @@ impl NativeWorkerContext {
             Arc::new(move || diag_mgr.get_diagnostics()),
         );
         let tray = QuickChatTrayController::new(Some(logger.clone()));
+        let remote_access = RemoteAccessBridge::new(
+            server_manager.clone(),
+            Some(logger.clone()),
+            emit.clone(),
+            false,
+        );
 
         Self {
             is_packaged,
@@ -336,6 +358,7 @@ impl NativeWorkerContext {
             roots,
             uploads,
             server_manager,
+            remote_access,
             watcher: WorkspaceDirectoryWatcher::new(),
             notifications,
             updater,
@@ -343,12 +366,13 @@ impl NativeWorkerContext {
             tray,
             last_feature_flags: HashMap::new(),
             last_privacy: None,
-            show_hidden_files: false,
+            show_hidden_files: Arc::new(AtomicBool::new(false)),
             emit,
         }
     }
 
     fn load_initial_state(&mut self) -> PersistedDesktopState {
+        let env = cowork_config::env_map_from_process();
         match self.persistence.load_state_value() {
             Ok(doc) => {
                 let approved = {
@@ -357,10 +381,10 @@ impl NativeWorkerContext {
                     guard.approved_roots()
                 };
                 self.logger.set_workspace_paths(approved);
-                let core = persistence::core_state_from_document(&doc);
-                self.last_feature_flags = core.feature_flags.clone();
-                self.last_privacy = Some(core.settings.privacy_telemetry.clone());
-                self.show_hidden_files = core.settings.show_hidden_files;
+                let mut core = persistence::core_state_from_document(&doc);
+                core.feature_flags =
+                    resolve_effective_feature_flags(&core.feature_flags, &env, self.is_packaged);
+                self.sync_runtime_caches(&core);
                 apply_desktop_state(
                     &core,
                     &self.roots,
@@ -369,6 +393,7 @@ impl NativeWorkerContext {
                     &self.tray,
                     current_app_handle().as_ref(),
                     false,
+                    self.is_packaged,
                 );
                 core
             }
@@ -381,9 +406,86 @@ impl NativeWorkerContext {
                     "failed to load persisted state",
                     Some(&meta),
                 );
-                PersistedDesktopState::default()
+                let core = PersistedDesktopState {
+                    feature_flags: resolve_effective_feature_flags(
+                        &HashMap::new(),
+                        &env,
+                        self.is_packaged,
+                    ),
+                    ..PersistedDesktopState::default()
+                };
+                self.sync_runtime_caches(&core);
+                core
             }
         }
+    }
+
+    fn sync_runtime_caches(&mut self, state: &PersistedDesktopState) {
+        self.last_feature_flags = state.feature_flags.clone();
+        self.last_privacy = Some(state.settings.privacy_telemetry.clone());
+        self.show_hidden_files
+            .store(state.settings.show_hidden_files, Ordering::Release);
+
+        let remote_available = self
+            .last_feature_flags
+            .get("remoteAccess")
+            .copied()
+            .unwrap_or(false);
+        let ws_targets: Vec<(String, PathBuf, bool)> = state
+            .workspaces
+            .iter()
+            .filter(|w| !w.archived)
+            .map(|w| (w.id.clone(), PathBuf::from(&w.path), w.yolo))
+            .collect();
+        self.remote_access.sync_catalog(
+            remote_available,
+            state.active_workspace_id.as_deref(),
+            &ws_targets,
+        );
+    }
+
+    fn server_feature_flags(&self) -> WorkspaceServerFeatureFlags {
+        WorkspaceServerFeatureFlags::from_feature_flag_map(&self.last_feature_flags)
+    }
+
+    fn compute_telemetry_status(&self) -> Value {
+        let mut snapshot = PersistedDesktopState::default();
+        if let Some(ref privacy) = self.last_privacy {
+            snapshot.settings.privacy_telemetry = privacy.clone();
+        }
+        let raw_doc = self.persistence.load_state_value().ok();
+        let env = cowork_config::env_map_from_process();
+        resolve_desktop_telemetry_status(&snapshot, raw_doc.as_ref(), &env, self.is_packaged)
+    }
+
+    fn authorize_explorer_workspace_root(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Result<PathBuf, String> {
+        let trimmed_root = workspace_root.trim();
+        let candidate = (!trimmed_root.is_empty()).then(|| PathBuf::from(trimmed_root));
+        let mut guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(valid) =
+            guard.resolve_authorized_workspace_root(workspace_id, candidate.as_deref())
+        {
+            return Ok(valid);
+        }
+
+        if let Some(raw_path) = candidate {
+            let env = cowork_config::env_map_from_process();
+            let home = cowork_config::resolve_home_dir(&env, cowork_config::host_platform());
+            let chats_root = cowork_config::get_one_off_chats_root(&home);
+            let lexical = cowork_config::normalize_lexical_path(&raw_path);
+            let chats_lexical = cowork_config::normalize_lexical_path(&chats_root);
+            if cowork_config::is_inside(&chats_lexical, &lexical) && lexical != chats_lexical {
+                return guard
+                    .approve_one_off_chat_workspace(workspace_id, &raw_path, &chats_root)
+                    .map_err(|err| err.to_string());
+            }
+        }
+
+        Err("Unauthorized workspace root".to_string())
     }
 
     fn approved_roots_snapshot(&self) -> Vec<PathBuf> {
@@ -458,8 +560,9 @@ impl NativeWorkerContext {
 
                 // Watch workspace files to keep explorer listings synchronized on external edits.
                 let emit_watch = self.emit.clone();
-                let roots_for_watch = self.roots.clone();
-                let show_hidden = self.show_hidden_files;
+                let watch_roots = vec![authorized_path.clone()];
+                let watch_root_canonical = canonicalize_sync(&authorized_path);
+                let show_hidden = self.show_hidden_files.clone();
                 let watch_ws_id = workspace_id.clone();
                 let _ = self
                     .watcher
@@ -470,17 +573,20 @@ impl NativeWorkerContext {
                             if batch.kind == WatchChangeKind::Error {
                                 return;
                             }
-                            let approved = roots_for_watch
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .approved_roots();
+                            let include_hidden = show_hidden.load(Ordering::Acquire);
                             for dir in batch.affected_dirs {
                                 if let Ok(entries) =
-                                    list_workspace_directory(&approved, &dir, show_hidden)
+                                    list_workspace_directory(&watch_roots, &dir, include_hidden)
                                 {
+                                    let dir_key = if canonicalize_sync(&dir) == watch_root_canonical
+                                    {
+                                        ".".to_string()
+                                    } else {
+                                        dir.to_string_lossy().into_owned()
+                                    };
                                     emit_watch(StoreEvent::WorkspaceFilesListed {
                                         workspace_id: batch.workspace_id.clone(),
-                                        dir: dir.to_string_lossy().into_owned(),
+                                        dir: dir_key,
                                         entries,
                                     });
                                 }
@@ -490,38 +596,47 @@ impl NativeWorkerContext {
                     .await;
 
                 let mgr = self.server_manager.clone();
+                let remote = self.remote_access.clone();
                 let logger = self.logger.clone();
                 let emit = self.emit.clone();
+                let mobile_h3 = self.remote_access.desired_for_workspace(&workspace_id);
                 let opts = StartWorkspaceServerOptions {
                     workspace_id: workspace_id.clone(),
                     workspace_path: authorized_path,
                     yolo,
                     force_restart: false,
-                    mobile_h3: None,
+                    mobile_h3: Some(mobile_h3),
                     rotate_mobile_h3_tls: false,
-                    feature_flags: WorkspaceServerFeatureFlags::from_feature_flag_map(
-                        &self.last_feature_flags,
-                    ),
+                    feature_flags: self.server_feature_flags(),
                     privacy_telemetry: self.last_privacy.clone(),
                 };
                 tokio::spawn(async move {
-                    if let Err(err) = mgr.start_workspace_server(opts).await {
-                        let meta = json!({
-                            "workspaceId": workspace_id,
-                            "error": err,
-                        });
-                        logger.write(
-                            LocalLogFileName::Server,
-                            LocalLogLevel::Error,
-                            "server-manager",
-                            "failed to start workspace server",
-                            Some(&meta),
-                        );
-                        emit(StoreEvent::ServerExited {
-                            workspace_id,
-                            code: None,
-                            message: Some(err),
-                        });
+                    match mgr.start_workspace_server(opts).await {
+                        Ok(started) => {
+                            remote.on_server_started(
+                                &started.workspace_id,
+                                started.mobile_h3.as_ref(),
+                            );
+                        }
+                        Err(err) => {
+                            let meta = json!({
+                                "workspaceId": workspace_id,
+                                "error": err,
+                            });
+                            logger.write(
+                                LocalLogFileName::Server,
+                                LocalLogLevel::Error,
+                                "server-manager",
+                                "failed to start workspace server",
+                                Some(&meta),
+                            );
+                            remote.on_server_exited(&workspace_id);
+                            emit(StoreEvent::ServerExited {
+                                workspace_id,
+                                code: None,
+                                message: Some(err),
+                            });
+                        }
                     }
                 });
             }
@@ -552,11 +667,17 @@ impl NativeWorkerContext {
                         Some(&meta),
                     );
                 }
+                self.remote_access.on_server_exited(&workspace_id);
             }
             NativeCommand::SavePersistedState(snapshot) => {
-                self.last_feature_flags = snapshot.feature_flags.clone();
-                self.last_privacy = Some(snapshot.settings.privacy_telemetry.clone());
-                self.show_hidden_files = snapshot.settings.show_hidden_files;
+                let env = cowork_config::env_map_from_process();
+                let mut runtime_snapshot = (*snapshot).clone();
+                runtime_snapshot.feature_flags = resolve_effective_feature_flags(
+                    &snapshot.feature_flags,
+                    &env,
+                    self.is_packaged,
+                );
+                self.sync_runtime_caches(&runtime_snapshot);
 
                 if let Err(err) = self.persistence.merge_and_save_core_snapshot(&snapshot) {
                     let meta = json!({ "error": err.to_string() });
@@ -569,14 +690,18 @@ impl NativeWorkerContext {
                     );
                 }
                 apply_desktop_state(
-                    &snapshot,
+                    &runtime_snapshot,
                     &self.roots,
                     &self.logger,
                     &self.appearance,
                     &self.tray,
                     current_app_handle().as_ref(),
                     true,
+                    self.is_packaged,
                 );
+                (self.emit)(StoreEvent::TelemetryStatusChanged(
+                    self.compute_telemetry_status(),
+                ));
             }
             NativeCommand::PickFolder { request_id } => {
                 self.dispatch_pick_folder(request_id);
@@ -594,22 +719,26 @@ impl NativeWorkerContext {
                 dir,
                 show_hidden,
             } => {
-                let roots = {
-                    let guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
-                    let candidate =
-                        (!workspace_root.trim().is_empty()).then(|| PathBuf::from(&workspace_root));
-                    match guard
-                        .resolve_authorized_workspace_root(&workspace_id, candidate.as_deref())
-                    {
-                        Ok(valid) => vec![valid],
-                        Err(_) => guard.approved_roots(),
-                    }
-                };
-                let target_dir = if dir.trim().is_empty() {
-                    PathBuf::from(&workspace_root)
-                } else {
-                    PathBuf::from(&dir)
-                };
+                let authorized_root =
+                    match self.authorize_explorer_workspace_root(&workspace_id, &workspace_root) {
+                        Ok(valid) => valid,
+                        Err(err) => {
+                            let meta = json!({ "workspaceId": workspace_id, "error": err });
+                            self.logger.warn(
+                                "explorer",
+                                "blocked directory listing for unauthorized workspace",
+                                Some(&meta),
+                            );
+                            (self.emit)(StoreEvent::WorkspaceFilesListed {
+                                workspace_id,
+                                dir,
+                                entries: Vec::new(),
+                            });
+                            return;
+                        }
+                    };
+                let target_dir = resolve_workspace_scoped_path(&authorized_root, &dir);
+                let roots = vec![authorized_root];
                 let emit = self.emit.clone();
                 let logger = self.logger.clone();
                 let dir_str = dir;
@@ -650,26 +779,34 @@ impl NativeWorkerContext {
                 workspace_root,
                 path,
             } => {
-                let roots = {
-                    let guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
-                    let candidate =
-                        (!workspace_root.trim().is_empty()).then(|| PathBuf::from(&workspace_root));
-                    match guard
-                        .resolve_authorized_workspace_root(&workspace_id, candidate.as_deref())
-                    {
-                        Ok(valid) => vec![valid],
-                        Err(_) => guard.approved_roots(),
-                    }
-                };
+                let authorized_root =
+                    match self.authorize_explorer_workspace_root(&workspace_id, &workspace_root) {
+                        Ok(valid) => valid,
+                        Err(err) => {
+                            let meta = json!({ "workspaceId": workspace_id, "error": err });
+                            self.logger.warn(
+                                "explorer",
+                                "blocked file preview for unauthorized workspace",
+                                Some(&meta),
+                            );
+                            (self.emit)(StoreEvent::FilePreviewLoaded {
+                                workspace_id,
+                                path,
+                                result: Err(err),
+                            });
+                            return;
+                        }
+                    };
+                let target_path = resolve_workspace_scoped_path(&authorized_root, &path);
+                let roots = vec![authorized_root];
                 let emit = self.emit.clone();
                 let ws_id = workspace_id.clone();
-                let path_clone = path.clone();
                 tokio::spawn(async move {
                     let res = tokio::task::spawn_blocking(move || {
                         load_file_preview_state(
                             &roots,
                             &ws_id,
-                            Path::new(&path_clone),
+                            &target_path,
                             DEFAULT_PREVIEW_MAX_BYTES,
                         )
                     })
@@ -836,15 +973,52 @@ impl NativeWorkerContext {
             NativeCommand::CheckForUpdates => {
                 self.updater.check_for_updates();
             }
+            NativeCommand::DownloadUpdate => {
+                self.updater.download_update();
+            }
             NativeCommand::QuitAndInstallUpdate => {
                 self.updater.quit_and_install();
             }
-            NativeCommand::CopyText(_)
-            | NativeCommand::SetRemoteAccessEnabled(_)
-            | NativeCommand::RotateRemoteAccessSession
-            | NativeCommand::UpdateTrustedPhonePermissions { .. }
-            | NativeCommand::RefreshTelemetryStatus
-            | NativeCommand::DownloadUpdate => {}
+            NativeCommand::CopyText(text) => {
+                if let Some(handle) = current_app_handle() {
+                    handle.update(move |_state, tx| {
+                        tx.copy(&text);
+                    });
+                }
+            }
+            NativeCommand::RefreshTelemetryStatus => {
+                (self.emit)(StoreEvent::TelemetryStatusChanged(
+                    self.compute_telemetry_status(),
+                ));
+            }
+            NativeCommand::SetRemoteAccessEnabled(enabled) => {
+                let remote = self.remote_access.clone();
+                let flags = self.server_feature_flags();
+                let privacy = self.last_privacy.clone();
+                tokio::spawn(async move {
+                    remote.set_enabled(enabled, flags, privacy).await;
+                });
+            }
+            NativeCommand::RotateRemoteAccessSession => {
+                let remote = self.remote_access.clone();
+                let flags = self.server_feature_flags();
+                let privacy = self.last_privacy.clone();
+                tokio::spawn(async move {
+                    remote.rotate_session(flags, privacy).await;
+                });
+            }
+            NativeCommand::UpdateTrustedPhonePermissions {
+                phone_id,
+                permissions,
+            } => {
+                let remote = self.remote_access.clone();
+                tokio::spawn(async move {
+                    remote
+                        .update_trusted_phone_permissions(&phone_id, &permissions)
+                        .await;
+                });
+            }
+            NativeCommand::ForgetTrustedPhone(_) => {}
             NativeCommand::Shutdown => {}
         }
     }
@@ -899,6 +1073,9 @@ impl NativeWorkerContext {
                 let paths = match result.ok().flatten() {
                     Some(p) => {
                         let mut reg = uploads_inner.lock().unwrap_or_else(|e| e.into_inner());
+                        // Native Rune feeds picked paths directly into in-process `ingest_composer_paths`
+                        // (no IPC upload boundary), so `authorize_file` enforces regular-file, non-symlink,
+                        // and 100 MiB validation before forwarding the selected path.
                         match reg.authorize_file(&p) {
                             Ok(_token) => vec![p],
                             Err(err) => {
@@ -952,4 +1129,38 @@ fn is_packaged_build() -> bool {
         return true;
     }
     false
+}
+
+/// Resolves an explorer/preview request path (`"."`, `""`, relative, or absolute) against `authorized_root`.
+fn resolve_workspace_scoped_path(authorized_root: &Path, raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return authorized_root.to_path_buf();
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        authorized_root.join(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_workspace_scoped_paths_with_dot_and_relative_anchoring() {
+        let root = Path::new("/tmp/cowork/proj-a");
+        assert_eq!(resolve_workspace_scoped_path(root, "."), root);
+        assert_eq!(resolve_workspace_scoped_path(root, ""), root);
+        assert_eq!(
+            resolve_workspace_scoped_path(root, "src/lib.rs"),
+            root.join("src/lib.rs")
+        );
+        assert_eq!(
+            resolve_workspace_scoped_path(root, "/tmp/cowork/proj-a/README.md"),
+            Path::new("/tmp/cowork/proj-a/README.md")
+        );
+    }
 }

@@ -482,6 +482,7 @@ pub fn should_reuse_existing_workspace_server(
 
 struct RunningServerHandle {
     instance_id: u64,
+    workspace_path: PathBuf,
     stdin: Mutex<Option<ChildStdin>>,
     kill_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     ws_url: String,
@@ -489,6 +490,7 @@ struct RunningServerHandle {
     browser_access_token: Option<String>,
     yolo: bool,
     has_mobile_h3: bool,
+    mobile_h3: Mutex<Option<Value>>,
     feature_flag_fingerprint: String,
     suppressed_exit: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
@@ -645,21 +647,28 @@ impl ServerManager {
 
         if let Some(existing) = existing_opt {
             if !existing.exited.load(Ordering::Acquire) {
-                if should_reuse_existing_workspace_server(
-                    opts.force_restart,
-                    opts.mobile_h3,
-                    opts.yolo,
-                    &opts.feature_flags,
-                    existing.has_mobile_h3,
-                    existing.yolo,
-                    &existing.feature_flag_fingerprint,
-                ) {
+                if !opts.rotate_mobile_h3_tls
+                    && should_reuse_existing_workspace_server(
+                        opts.force_restart,
+                        opts.mobile_h3,
+                        opts.yolo,
+                        &opts.feature_flags,
+                        existing.has_mobile_h3,
+                        existing.yolo,
+                        &existing.feature_flag_fingerprint,
+                    )
+                {
+                    let mobile_h3 = existing
+                        .mobile_h3
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
                     return Ok(StartedWorkspaceServer {
                         workspace_id: opts.workspace_id.clone(),
                         ws_url: existing.ws_url.clone(),
                         port: existing.port,
                         browser_access_token: existing.browser_access_token.clone(),
-                        mobile_h3: None,
+                        mobile_h3,
                     });
                 }
 
@@ -883,6 +892,7 @@ impl ServerManager {
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let handle = Arc::new(RunningServerHandle {
             instance_id,
+            workspace_path: opts.workspace_path.clone(),
             stdin: Mutex::new(stdin),
             kill_tx: Mutex::new(Some(kill_tx)),
             ws_url: authed_ws_url.clone(),
@@ -890,6 +900,7 @@ impl ServerManager {
             browser_access_token: token.clone(),
             yolo: opts.yolo,
             has_mobile_h3: mobile_h3_val.is_some(),
+            mobile_h3: Mutex::new(mobile_h3_val.clone()),
             feature_flag_fingerprint: opts.feature_flags.fingerprint(),
             suppressed_exit: Arc::new(AtomicBool::new(false)),
             exited: Arc::new(AtomicBool::new(false)),
@@ -1289,6 +1300,162 @@ impl ServerManager {
         ServerManagerDiagnostics { workspaces }
     }
 
+    /// Returns a currently running workspace target `(workspace_id, workspace_path, yolo)`,
+    /// preferring `preferred_workspace_id` when live, or falling back to the newest running server.
+    pub fn preferred_workspace_target(
+        &self,
+        preferred_workspace_id: Option<&str>,
+    ) -> Option<(String, PathBuf, bool)> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(preferred) = preferred_workspace_id
+            && let Some(handle) = state.servers.get(preferred)
+            && !handle.exited.load(Ordering::Acquire)
+        {
+            return Some((
+                preferred.to_string(),
+                handle.workspace_path.clone(),
+                handle.yolo,
+            ));
+        }
+
+        state
+            .servers
+            .iter()
+            .filter(|(_, h)| !h.exited.load(Ordering::Acquire))
+            .max_by_key(|(_, h)| h.instance_id)
+            .map(|(id, h)| (id.clone(), h.workspace_path.clone(), h.yolo))
+    }
+
+    /// Updates a paired phone's permissions via `PATCH /mobile-h3/trusted/<id>/permissions`
+    /// and returns the refreshed `mobileH3` snapshot cached on the running workspace server.
+    pub async fn update_mobile_h3_trusted_device_permissions(
+        &self,
+        workspace_id: &str,
+        device_id: &str,
+        permissions: Value,
+    ) -> Result<Option<Value>, String> {
+        let trimmed_id = device_id.trim();
+        if trimmed_id.is_empty() {
+            return Err("Trusted phone identifier is empty.".into());
+        }
+
+        let handle = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.servers.get(workspace_id).cloned()
+        }
+        .ok_or_else(|| "Workspace server is not running.".to_string())?;
+
+        if handle.exited.load(Ordering::Acquire) {
+            return Err("Workspace server has exited.".into());
+        }
+
+        let admin_token = {
+            let guard = handle.mobile_h3.lock().unwrap_or_else(|e| e.into_inner());
+            guard
+                .as_ref()
+                .and_then(|v| v.get("adminToken"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+        }
+        .ok_or_else(|| {
+            "Remote access admin token is unavailable; restart Remote Access and try again."
+                .to_string()
+        })?;
+
+        let base_http = to_http_server_request_url(&handle.ws_url, "/")?;
+        let mut patch_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
+        patch_url.set_query(None);
+        {
+            let mut segs = patch_url
+                .path_segments_mut()
+                .map_err(|()| "Invalid workspace HTTP URL".to_string())?;
+            segs.clear();
+            segs.push("mobile-h3");
+            segs.push("trusted");
+            segs.push(trimmed_id);
+            segs.push("permissions");
+        }
+
+        let mut list_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
+        list_url.set_query(None);
+        list_url.set_path("/mobile-h3/trusted");
+
+        let body_bytes = serde_json::to_vec(&json!({ "permissions": permissions }))
+            .map_err(|e| e.to_string())?;
+        let resp = self
+            .http_client
+            .patch(patch_url)
+            .bearer_auth(&admin_token)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body_bytes)
+            .send()
+            .await
+            .map_err(|err| format!("Failed updating phone permissions: {err}"))?;
+
+        let status = resp.status();
+        let resp_bytes = resp
+            .bytes()
+            .await
+            .map_err(|err| format!("Failed reading permissions response: {err}"))?;
+        let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok();
+
+        if !status.is_success() {
+            let detail = resp_json
+                .as_ref()
+                .and_then(|v| v.get("error"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
+            return Err(detail);
+        }
+
+        // Refresh full trusted device list from GET /mobile-h3/trusted when available.
+        let refreshed_list = match self
+            .http_client
+            .get(list_url)
+            .bearer_auth(&admin_token)
+            .send()
+            .await
+        {
+            Ok(list_resp) if list_resp.status().is_success() => list_resp
+                .bytes()
+                .await
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .and_then(|v| v.get("trustedDevices").and_then(Value::as_array).cloned()),
+            _ => None,
+        };
+
+        let updated_device = resp_json.and_then(|v| v.get("trustedDevice").cloned());
+        let mut h3_guard = handle.mobile_h3.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(Value::Object(map)) = h3_guard.as_mut() {
+            if let Some(list) = refreshed_list {
+                map.insert("trustedDevices".to_string(), Value::Array(list));
+            } else if let Some(dev) = updated_device
+                && let Some(dev_id) = dev.get("deviceId").and_then(Value::as_str)
+            {
+                let mut devices = map
+                    .get("trustedDevices")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(slot) = devices
+                    .iter_mut()
+                    .find(|d| d.get("deviceId").and_then(Value::as_str) == Some(dev_id))
+                {
+                    *slot = dev.clone();
+                } else {
+                    devices.push(dev.clone());
+                }
+                map.insert("trustedDevices".to_string(), Value::Array(devices));
+                map.insert("trustedDevice".to_string(), dev);
+            }
+        }
+        Ok(h3_guard.clone())
+    }
+
     async fn graceful_kill_handle(handle: &RunningServerHandle) {
         // Close private stdin pipe first so cowork-server shuts down cooperatively on EOF.
         {
@@ -1511,5 +1678,128 @@ mod tests {
         assert!(!should_reuse_existing_workspace_server(
             false, None, false, &f2, false, false, &fp
         ));
+    }
+
+    #[tokio::test]
+    async fn patches_mobile_h3_permissions_with_bearer_admin_token() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            for idx in 0..2 {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf)
+                    .await
+                    .unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let req_lower = req.to_ascii_lowercase();
+                assert!(req_lower.contains("authorization: bearer adm-secret"));
+                assert!(!req.contains("coworkBrowserToken"));
+
+                if idx == 0 {
+                    assert!(req.starts_with("PATCH /mobile-h3/trusted/dev%2F1+2/permissions "));
+                    let body = json!({
+                        "trustedDevice": {
+                            "deviceId": "dev/1+2",
+                            "displayName": "iPhone",
+                            "lastPairedAt": "2026-01-01T00:00:00Z",
+                            "permissions": { "turns": true, "backups": false }
+                        }
+                    })
+                    .to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    sock.write_all(resp.as_bytes()).await.unwrap();
+                } else {
+                    assert!(req.starts_with("GET /mobile-h3/trusted "));
+                    let body = json!({
+                        "trustedDevices": [{
+                            "deviceId": "dev/1+2",
+                            "displayName": "iPhone",
+                            "lastPairedAt": "2026-01-01T00:00:00Z",
+                            "permissions": { "turns": true, "backups": false }
+                        }]
+                    })
+                    .to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    sock.write_all(resp.as_bytes()).await.unwrap();
+                }
+            }
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = ServerManager::new(
+            ServerManagerRuntime {
+                user_data_dir: tmp.path().to_path_buf(),
+                resources_dir: None,
+                current_exe_dir: None,
+                repo_root: None,
+                is_packaged: false,
+            },
+            None,
+            None,
+        );
+
+        let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
+        let handle = Arc::new(RunningServerHandle {
+            instance_id: 1,
+            workspace_path: tmp.path().to_path_buf(),
+            stdin: Mutex::new(None),
+            kill_tx: Mutex::new(Some(kill_tx)),
+            ws_url: format!(
+                "ws://127.0.0.1:{}/ws?coworkBrowserToken=tok-ws",
+                addr.port()
+            ),
+            port: addr.port(),
+            browser_access_token: Some("tok-ws".into()),
+            yolo: false,
+            has_mobile_h3: true,
+            mobile_h3: Mutex::new(Some(json!({
+                "url": "https://relay.example",
+                "ticket": "cowork://pair/123",
+                "adminToken": "adm-secret",
+                "trustedDevices": []
+            }))),
+            feature_flag_fingerprint: WorkspaceServerFeatureFlags::default().fingerprint(),
+            suppressed_exit: Arc::new(AtomicBool::new(false)),
+            exited: Arc::new(AtomicBool::new(false)),
+            exited_notify: Arc::new(Notify::new()),
+        });
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.servers.insert("ws-1".to_string(), handle);
+        }
+
+        assert_eq!(
+            manager
+                .preferred_workspace_target(Some("ws-1"))
+                .map(|(id, _, _)| id),
+            Some("ws-1".to_string())
+        );
+
+        let updated = manager
+            .update_mobile_h3_trusted_device_permissions(
+                "ws-1",
+                "dev/1+2",
+                json!({ "turns": true, "backups": false }),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated["trustedDevices"][0]["permissions"]["turns"],
+            json!(true)
+        );
+        server_task.await.unwrap();
     }
 }

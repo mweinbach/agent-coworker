@@ -112,7 +112,7 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>
 fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
     let new_chat = SidebarRow::new("New chat")
         .icon(&icons::PLUS)
-        .detail("⌘N")
+        .detail(crate::shortcut_label("Cmd+N"))
         .height(30.0)
         .on_select(|s: &mut AppState, _| {
             let ws = s.active_workspace_id.clone();
@@ -125,7 +125,7 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
 
     let command_palette = SidebarRow::new("Search & commands")
         .icon(&icons::SEARCH)
-        .detail("⌘K")
+        .detail(crate::shortcut_label("Cmd+K"))
         .height(30.0)
         .on_select(|s: &mut AppState, _| {
             super::palette::open_command_palette(s);
@@ -232,7 +232,7 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
                     .variant(IconButtonVariant::GhostMuted)
                     .control_size(ControlSize::Small)
                     .help("Open full search")
-                    .shortcut("⌘⇧F")
+                    .shortcut(crate::shortcut_label("Cmd+Shift+F"))
                     .on_press_tx(|s: &mut AppState, _| {
                         s.shell_ui.search_overlay_open = true;
                         s.shell_ui.search_selected = 0;

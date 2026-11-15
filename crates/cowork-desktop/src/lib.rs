@@ -13,6 +13,10 @@ pub mod theme;
 pub mod views;
 pub mod ws;
 
+pub use native::menu::{
+    ApplicationMenu, ApplicationMenuEntry, ApplicationMenuItem, MenuPlatform, MenuRole,
+    build_application_menu, build_application_menu_for_platform, dispatch_menu_command_with_tx,
+};
 pub use shortcuts::{is_apple_platform, shortcut_label, shortcut_label_for_platform};
 
 use std::cell::RefCell;
@@ -493,7 +497,7 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
         changed |= state.reconcile_rekeyed_thread_ids();
     }
     if let Some(cmd_id) = state.pending_menu_command.take() {
-        changed |= state.dispatch_menu_command_with_tx(tx, &cmd_id);
+        changed |= native::menu::dispatch_menu_command_with_tx(state, tx, &cmd_id);
     }
     if !state.scene_mode {
         let mode = state.window_mode;
@@ -585,6 +589,7 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                     }
                 }
             }
+            native::menu::sync_application_menu(state);
         }
         if let Some(delay) = state.next_canvas_wake_delay_secs() {
             tx.wake_at(state.app_elapsed_secs + delay);
@@ -613,7 +618,7 @@ pub fn handle_global_menu_shortcut(state: &mut AppState, ev: &KeyEvent, tx: &mut
         || state.agent_viewer.is_some();
 
     if !overlay_open && ev.is_command('k') && ev.mods.shift && !ev.mods.alt {
-        return state.dispatch_menu_command_with_tx(tx, "file.open_skills");
+        return native::menu::dispatch_menu_command_with_tx(state, tx, "file.open_skills");
     }
 
     let is_fullscreen = if platform.is_macos() {
@@ -626,15 +631,15 @@ pub fn handle_global_menu_shortcut(state: &mut AppState, ev: &KeyEvent, tx: &mut
             && !ev.mods.shift
     };
     if is_fullscreen {
-        return state.dispatch_menu_command_with_tx(tx, "view.toggle_fullscreen");
+        return native::menu::dispatch_menu_command_with_tx(state, tx, "view.toggle_fullscreen");
     }
 
     if !platform.is_macos() && !overlay_open && !ev.mods.shift && !ev.mods.alt {
         if ev.is_command('w') {
-            return state.dispatch_menu_command_with_tx(tx, "file.close_window");
+            return native::menu::dispatch_menu_command_with_tx(state, tx, "file.close_window");
         }
         if platform.is_linux() && ev.is_command('q') {
-            return state.dispatch_menu_command_with_tx(tx, "app.quit");
+            return native::menu::dispatch_menu_command_with_tx(state, tx, "app.quit");
         }
     }
 

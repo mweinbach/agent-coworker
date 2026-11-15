@@ -1734,12 +1734,14 @@ mod tests {
                 client_message_id: None,
                 attachments: vec![],
                 references: vec![],
+                citations: vec![],
                 streaming: false,
                 timestamp_ms: 100,
             },
             FeedItem::Reasoning {
                 id: "r1".into(),
                 content: "**Scanning files**\nChecking crate layout".into(),
+                mode: "reasoning".into(),
                 streaming: false,
                 timestamp_ms: 200,
             },
@@ -1750,12 +1752,14 @@ mod tests {
                 client_message_id: None,
                 attachments: vec![],
                 references: vec![],
+                citations: vec![],
                 streaming: false,
                 timestamp_ms: 250,
             },
             FeedItem::Tool {
                 id: "t1".into(),
                 tool_name: "read".into(),
+                title: None,
                 call_id: None,
                 status: ToolRunStatus::Completed,
                 input: json!({ "path": "Cargo.toml" }),
@@ -1764,6 +1768,8 @@ mod tests {
                 diff: None,
                 streaming: false,
                 timestamp_ms: 300,
+                completed_at_ms: Some(310),
+                output_truncated: false,
             },
             FeedItem::Message {
                 id: "a2".into(),
@@ -1772,6 +1778,7 @@ mod tests {
                 client_message_id: None,
                 attachments: vec![],
                 references: vec![],
+                citations: vec![],
                 streaming: false,
                 timestamp_ms: 400,
             },
@@ -1812,6 +1819,7 @@ mod tests {
             description: "Review a pull request".into(),
             scope: "project".into(),
             enabled: true,
+            ..Default::default()
         }];
         let plugins = vec![
             PluginSummary {
@@ -1819,12 +1827,14 @@ mod tests {
                 name: "review-pr".into(),
                 version: None,
                 enabled: true,
+                ..Default::default()
             },
             PluginSummary {
                 id: "p2".into(),
                 name: "github".into(),
                 version: Some("1.0".into()),
                 enabled: true,
+                ..Default::default()
             },
         ];
         let catalog = build_mention_catalog(&skills, &plugins);

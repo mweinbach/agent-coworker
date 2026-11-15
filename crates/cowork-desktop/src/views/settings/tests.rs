@@ -50,47 +50,49 @@ fn resolve_active_page_normalizes_legacy_and_gated_routes() {
 
 #[test]
 fn management_targets_collapse_one_off_chats() {
-    let state = AppState {
-        workspaces: vec![
-            WorkspaceRecord {
-                id: "chat-1".to_string(),
-                name: "Ad-hoc 1".to_string(),
-                path: "/tmp/c1".to_string(),
-                one_off_chat: true,
-                archived: false,
-                created_at: 1,
-                last_opened_at: 1,
-            },
-            WorkspaceRecord {
-                id: "ws-1".to_string(),
-                name: "Project Alpha".to_string(),
-                path: "/tmp/alpha".to_string(),
-                one_off_chat: false,
-                archived: false,
-                created_at: 2,
-                last_opened_at: 2,
-            },
-            WorkspaceRecord {
-                id: "chat-2".to_string(),
-                name: "Ad-hoc 2".to_string(),
-                path: "/tmp/c2".to_string(),
-                one_off_chat: true,
-                archived: false,
-                created_at: 3,
-                last_opened_at: 3,
-            },
-            WorkspaceRecord {
-                id: "ws-arch".to_string(),
-                name: "Archived".to_string(),
-                path: "/tmp/arch".to_string(),
-                one_off_chat: false,
-                archived: true,
-                created_at: 4,
-                last_opened_at: 4,
-            },
-        ],
-        ..Default::default()
-    };
+    let mut state = AppState::default();
+    state.workspaces = vec![
+        WorkspaceRecord {
+            id: "chat-1".to_string(),
+            name: "Ad-hoc 1".to_string(),
+            path: "/tmp/c1".to_string(),
+            one_off_chat: true,
+            archived: false,
+            created_at: 1,
+            last_opened_at: 1,
+            ..Default::default()
+        },
+        WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Project Alpha".to_string(),
+            path: "/tmp/alpha".to_string(),
+            one_off_chat: false,
+            archived: false,
+            created_at: 2,
+            last_opened_at: 2,
+            ..Default::default()
+        },
+        WorkspaceRecord {
+            id: "chat-2".to_string(),
+            name: "Ad-hoc 2".to_string(),
+            path: "/tmp/c2".to_string(),
+            one_off_chat: true,
+            archived: false,
+            created_at: 3,
+            last_opened_at: 3,
+            ..Default::default()
+        },
+        WorkspaceRecord {
+            id: "ws-arch".to_string(),
+            name: "Archived".to_string(),
+            path: "/tmp/arch".to_string(),
+            one_off_chat: false,
+            archived: true,
+            created_at: 4,
+            last_opened_at: 4,
+            ..Default::default()
+        },
+    ];
 
     let targets = management_targets(&state);
     assert_eq!(targets.len(), 2);

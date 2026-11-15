@@ -148,10 +148,15 @@ pub fn classify_canvas_path(path: &str) -> Option<CanvasFileKind> {
                 | "zsh"
                 | "fish"
                 | "ps1"
+                | "bat"
+                | "cmd"
                 | "sql"
                 | "graphql"
                 | "gql"
                 | "proto"
+                | "php"
+                | "vue"
+                | "svelte"
                 | "env"
                 | "ini"
                 | "conf"
@@ -1870,6 +1875,20 @@ mod tests {
             classify_canvas_path("/w/Dockerfile"),
             Some(CanvasFileKind::Text)
         );
+        for p in [
+            "/w/setup.bat",
+            "/w/build.cmd",
+            "/w/index.php",
+            "/w/App.vue",
+            "/w/Page.svelte",
+            "/w/.gitignore",
+        ] {
+            assert_eq!(
+                classify_canvas_path(p),
+                Some(CanvasFileKind::Text),
+                "expected text Canvas kind for {p}"
+            );
+        }
 
         // Spreadsheets belong to views/preview/, office/media stay on FilePreview.
         assert_eq!(classify_canvas_path("/w/data.csv"), None);

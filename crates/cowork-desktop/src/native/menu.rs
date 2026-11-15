@@ -885,6 +885,9 @@ fn build_macos_menu_items(state: &AppState) -> Vec<MenuItem<AppState>> {
                     let mut native_item = MenuItem::new(item.label, action)
                         .id(item.id)
                         .enabled(item.enabled);
+                    if item.id == "window.zoom" {
+                        native_item = native_item.after("performMiniaturize:");
+                    }
                     if let Some(title) = target_menu {
                         native_item = native_item.menu(title);
                     }
@@ -920,10 +923,10 @@ pub fn install_application_menus(app: App<AppState>) -> App<AppState> {
 }
 
 /// Refreshes native macOS menu `enabled` / `checked` state via `AppHandle::set_menu` when
-/// relevant `AppState` fields change. No-op on non-macOS, headless `--scene` runs, or unchanged
-/// snapshots.
+/// relevant `AppState` fields change. No-op on non-macOS, headless `--scene` runs, secondary
+/// windows (`window_mode != WindowMode::Main`), or unchanged snapshots.
 pub fn sync_application_menu(state: &AppState) {
-    if !cfg!(target_os = "macos") || state.scene_mode {
+    if !cfg!(target_os = "macos") || state.scene_mode || state.window_mode != WindowMode::Main {
         return;
     }
 

@@ -235,11 +235,11 @@ impl ThreadEmitGate {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
-    pub(crate) fn finish_journal_write(&self) {
+    pub(crate) fn finish_journal_writes(&self, count: usize) {
         if self
             .unpersisted
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
-            == 1
+            .fetch_sub(count, std::sync::atomic::Ordering::SeqCst)
+            == count
         {
             self.persisted.notify_waiters();
         }
@@ -1259,7 +1259,15 @@ impl ServerRuntimeState {
 
     pub fn build_thread_from_live(&self, live: &LiveSession) -> JsonRpcThread {
         let meta = self.thread_metadata_or_default(&live.id);
-        let effective_seq = live.last_event_seq.max(self.journal_tail_seq(&live.id));
+        Self::live_thread_summary(live, meta, self.journal_tail_seq(&live.id))
+    }
+
+    fn live_thread_summary(
+        live: &LiveSession,
+        meta: PersistedThreadMetadata,
+        journal_tail: u64,
+    ) -> JsonRpcThread {
+        let effective_seq = live.last_event_seq.max(journal_tail);
         JsonRpcThread {
             id: live.id.clone(),
             title: live.title.clone(),
@@ -2524,76 +2532,96 @@ impl ServerRuntimeState {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> (Vec<JsonRpcThread>, usize) {
-        let cwd_str = cwd.to_string_lossy().into_owned();
-        let mut by_id: HashMap<String, JsonRpcThread> = HashMap::new();
+        let mut threads = self.list_root_threads(Some(&cwd.to_string_lossy()));
+        threads.sort_unstable_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let total = threads.len();
+        (
+            threads
+                .into_iter()
+                .skip(offset.unwrap_or(0))
+                .take(limit.unwrap_or(usize::MAX))
+                .collect(),
+            total,
+        )
+    }
 
-        if let Ok(summaries) = self.session_db.list_sessions(Some(&cwd_str)) {
-            for sum in summaries {
-                if self.task_coordinator.is_task_thread(&sum.session_id) {
-                    continue;
-                }
-                let Some(record) = self
-                    .session_db
-                    .get_session_record(&sum.session_id)
-                    .ok()
-                    .flatten()
-                else {
-                    continue;
-                };
-                if record.session_kind != SessionKind::Root
-                    || record.parent_session_id.is_some()
-                    || record.role.is_some()
-                {
-                    continue;
-                }
-                let include = matches!(
-                    record.execution_state,
-                    Some(
-                        cowork_storage::AgentExecutionState::Running
-                            | cowork_storage::AgentExecutionState::PendingInit
-                    )
-                ) || record.message_count > 0
-                    || record.title_source != SessionTitleSource::Default
-                    || record.has_pending_ask
-                    || record.has_pending_approval;
-                if include {
-                    by_id.insert(
-                        record.session_id.clone(),
-                        self.build_thread_from_record(&record),
-                    );
-                }
-            }
-        }
-
+    pub(crate) fn list_root_threads(&self, cwd: Option<&str>) -> Vec<JsonRpcThread> {
+        let mut stored: HashMap<_, _> = self
+            .session_db
+            .list_root_thread_summaries(cwd)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (row.session.session_id.clone(), row))
+            .collect();
+        let mut threads = Vec::with_capacity(stored.len());
         for entry in self.sessions.iter() {
             let live = entry.value().lock();
-            if live.session_kind != SessionKind::Root
+            if cwd.is_some_and(|cwd| live.cwd != cwd)
+                || live.session_kind != SessionKind::Root
                 || live.parent_session_id.is_some()
                 || live.role.is_some()
-                || self.task_coordinator.is_task_thread(&live.id)
             {
                 continue;
             }
-            if live.cwd == cwd_str {
-                let include = live.busy
-                    || live.message_count > 0
-                    || live.title_source != SessionTitleSource::Default
-                    || live.has_pending_ask
-                    || live.has_pending_approval;
-                if include {
-                    by_id.insert(live.id.clone(), self.build_thread_from_live(&live));
-                }
+            if !(live.busy
+                || live.message_count > 0
+                || live.title_source != SessionTitleSource::Default
+                || live.has_pending_ask
+                || live.has_pending_approval)
+            {
+                continue;
+            }
+            if let Some(row) = stored.remove(&live.id) {
+                threads.push(Self::live_thread_summary(
+                    &live,
+                    row.metadata,
+                    row.journal_tail_seq,
+                ));
+            } else if !self.task_coordinator.is_task_thread(&live.id) {
+                // A live thread need not have had a durable session row at the time of the read.
+                threads.push(self.build_thread_from_live(&live));
             }
         }
-
-        let mut threads: Vec<JsonRpcThread> = by_id.into_values().collect();
-        threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        let total = threads.len();
-        let start = offset.unwrap_or(0).min(total);
-        let end = limit
-            .map(|l| start.saturating_add(l).min(total))
-            .unwrap_or(total);
-        (threads[start..end].to_vec(), total)
+        for row in stored.into_values() {
+            let s = row.session;
+            if !(row
+                .execution_state
+                .is_some_and(|state| state.is_transient())
+                || s.message_count > 0
+                || s.title_source != SessionTitleSource::Default
+                || s.has_pending_ask
+                || s.has_pending_approval)
+            {
+                continue;
+            }
+            threads.push(JsonRpcThread {
+                id: s.session_id,
+                title: s.title,
+                preview: row.last_message_preview,
+                model_provider: s.provider.as_str().to_owned(),
+                model: s.model,
+                cwd: row.working_directory,
+                created_at: s.created_at,
+                updated_at: s.updated_at,
+                message_count: s.message_count,
+                last_event_seq: s.last_event_seq.max(row.journal_tail_seq),
+                has_pending_ask: s.has_pending_ask,
+                has_pending_approval: s.has_pending_approval,
+                status: ThreadStatus {
+                    status_type: "notLoaded".to_owned(),
+                },
+                pinned: row.metadata.pinned,
+                pinned_at: row.metadata.pinned_at,
+                archived: row.metadata.archived,
+                archived_at: row.metadata.archived_at,
+                turns: None,
+            });
+        }
+        threads
     }
 
     pub async fn set_thread_pinned(

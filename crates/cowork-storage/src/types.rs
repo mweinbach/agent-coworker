@@ -184,6 +184,17 @@ pub struct PersistedSessionSummary {
     pub has_pending_approval: bool,
 }
 
+/// Root chat fields needed for listing, without loading the transcript or provider state.
+#[derive(Debug)]
+pub struct RootThreadListRow {
+    pub session: PersistedSessionSummary,
+    pub working_directory: String,
+    pub last_message_preview: String,
+    pub execution_state: Option<AgentExecutionState>,
+    pub metadata: PersistedThreadMetadata,
+    pub journal_tail_seq: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedSessionSnapshotData {

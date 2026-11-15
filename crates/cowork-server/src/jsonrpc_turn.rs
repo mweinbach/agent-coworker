@@ -216,16 +216,18 @@ impl ServerHarnessEventSink {
     /// (or the fallback task) marks the write finished once it is durable.
     fn enqueue_journal(&self, entry: ThreadJournalEventInput) {
         self.emit_gate.begin_journal_write();
-        if let Some(tx) = self.journal_tx.lock().as_ref()
-            && tx.send(entry.clone()).is_ok()
-        {
-            return;
-        }
+        let entry = match self.journal_tx.lock().as_ref() {
+            Some(tx) => match tx.send(entry) {
+                Ok(()) => return,
+                Err(err) => err.0,
+            },
+            None => entry,
+        };
         let journal = Arc::clone(&self.runtime.journal);
         let gate = Arc::clone(&self.emit_gate);
         tokio::spawn(async move {
             let _ = journal.enqueue(entry).await;
-            gate.finish_journal_write();
+            gate.finish_journal_writes(1);
         });
     }
 }
@@ -2283,9 +2285,16 @@ impl ServerRuntimeState {
             let journal_for_writer = Arc::clone(&runtime.journal);
             let gate_for_writer = Arc::clone(&sink_impl.emit_gate);
             let journal_writer = tokio::spawn(async move {
-                while let Some(entry) = journal_rx.recv().await {
-                    let _ = journal_for_writer.enqueue(entry).await;
-                    gate_for_writer.finish_journal_write();
+                const MAX_BATCH: usize = 64;
+                loop {
+                    let mut batch = Vec::new();
+                    // recv_many waits for the first entry, not for a full batch.
+                    let count = journal_rx.recv_many(&mut batch, MAX_BATCH).await;
+                    if count == 0 {
+                        break;
+                    }
+                    let _ = journal_for_writer.enqueue_batch(batch).await;
+                    gate_for_writer.finish_journal_writes(count);
                 }
             });
             sink_impl.set_turn_context(&conn_id, &turn_id, journal_tx);

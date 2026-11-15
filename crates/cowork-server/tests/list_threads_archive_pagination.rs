@@ -338,3 +338,39 @@ async fn list_threads_pages_are_consistent_prefixes() {
 
     fx.server.shutdown().await;
 }
+
+#[tokio::test]
+async fn workspace_page_merges_live_and_cold_summaries_without_decoding_transcripts() {
+    let fx = fixture("cowork-list-cold-page-").await;
+    let runtime = fx.server.runtime();
+    let cold_id = &fx.archived[0];
+    {
+        let arc = runtime.get_live_thread(cold_id).unwrap();
+        let mut live = arc.lock();
+        live.subscribers.clear();
+        live.idle_since = Some(std::time::Instant::now());
+    }
+    runtime.evict_idle_sessions(Duration::ZERO);
+    assert!(runtime.get_live_thread(cold_id).is_none());
+    let conn = rusqlite::Connection::open(runtime.session_db.db_path()).unwrap();
+    // A list must not touch the model transcript, even for a thread on the requested page.
+    conn.execute(
+        "UPDATE session_state SET messages_json = 'broken' WHERE session_id = ?1",
+        [cold_id],
+    )
+    .unwrap();
+    conn.execute("UPDATE sessions SET updated_at = '2030', last_message_preview = 'stored preview' WHERE session_id = ?1", [cold_id]).unwrap();
+    let live_id = &fx.active[2];
+    runtime.get_live_thread(live_id).unwrap().lock().updated_at = "2031".into();
+    let (first, total) = runtime.list_workspace_threads(&fx._iso.workspace, None, Some(1));
+    assert_eq!(total, 5);
+    assert_eq!(first[0].id, *live_id);
+    assert_eq!(first[0].status.status_type, "loaded");
+    let (second, total) = runtime.list_workspace_threads(&fx._iso.workspace, Some(1), Some(1));
+    assert_eq!(total, 5);
+    assert_eq!(second[0].id, *cold_id);
+    assert_eq!(second[0].status.status_type, "notLoaded");
+    assert_eq!(second[0].preview, "stored preview");
+    assert!(second[0].archived && second[0].archived_at.is_some());
+    fx.server.shutdown().await;
+}

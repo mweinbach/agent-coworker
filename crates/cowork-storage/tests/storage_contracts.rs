@@ -622,9 +622,9 @@ async fn monotonic_thread_journal_replay_and_snapshot_fallback_on_gap_or_corrupt
         .unwrap();
 
     let journal = ThreadJournal::new(Arc::clone(&db));
-    for idx in 1..=1050 {
-        journal
-            .enqueue(ThreadJournalEventInput {
+    for start in (1..=1050).step_by(64) {
+        let batch = (start..=1050.min(start + 63))
+            .map(|idx| ThreadJournalEventInput {
                 thread_id: "thread-1".to_string(),
                 ts: "2026-04-17T12:00:00.000Z".to_string(),
                 event_type: "item/agentMessage/delta".to_string(),
@@ -633,8 +633,8 @@ async fn monotonic_thread_journal_replay_and_snapshot_fallback_on_gap_or_corrupt
                 request_id: None,
                 payload: json!({ "delta": format!("chunk-{idx}") }),
             })
-            .await
-            .unwrap();
+            .collect();
+        journal.enqueue_batch(batch).await.unwrap();
     }
     journal.wait_for_idle("thread-1").await;
 
@@ -643,6 +643,7 @@ async fn monotonic_thread_journal_replay_and_snapshot_fallback_on_gap_or_corrupt
     assert_eq!(all.len(), 1050);
     for (i, ev) in all.iter().enumerate() {
         assert_eq!(ev.seq, (i + 1) as u64);
+        assert_eq!(ev.payload["delta"], format!("chunk-{}", i + 1));
     }
 
     // Incremental replay after_seq = 1045 returns exact tail 1046..=1050.

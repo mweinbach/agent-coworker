@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1596,67 +1596,6 @@ impl ServerRuntimeState {
         self.broadcast_workspace_list_changed();
         Some(id)
     }
-
-    /// Listable root threads across every workspace (TS `LocalThreadHost.listThreads`
-    /// enumeration). Same root/task/listability rules as [`Self::list_workspace_threads`],
-    /// without its cwd filter.
-    fn list_all_root_threads(&self) -> Vec<JsonRpcThread> {
-        let mut by_id: HashMap<String, JsonRpcThread> = HashMap::new();
-        for summary in self.session_db.list_sessions(None).unwrap_or_default() {
-            if self.task_coordinator.is_task_thread(&summary.session_id) {
-                continue;
-            }
-            let Some(record) = self
-                .session_db
-                .get_session_record(&summary.session_id)
-                .ok()
-                .flatten()
-            else {
-                continue;
-            };
-            if record.session_kind != SessionKind::Root
-                || record.parent_session_id.is_some()
-                || record.role.is_some()
-            {
-                continue;
-            }
-            let include = matches!(
-                record.execution_state,
-                Some(
-                    cowork_storage::AgentExecutionState::Running
-                        | cowork_storage::AgentExecutionState::PendingInit
-                )
-            ) || record.message_count > 0
-                || record.title_source != SessionTitleSource::Default
-                || record.has_pending_ask
-                || record.has_pending_approval;
-            if include {
-                by_id.insert(
-                    record.session_id.clone(),
-                    self.build_thread_from_record(&record),
-                );
-            }
-        }
-        for entry in self.sessions.iter() {
-            let live = entry.value().lock();
-            if live.session_kind != SessionKind::Root
-                || live.parent_session_id.is_some()
-                || live.role.is_some()
-                || self.task_coordinator.is_task_thread(&live.id)
-            {
-                continue;
-            }
-            let include = live.busy
-                || live.message_count > 0
-                || live.title_source != SessionTitleSource::Default
-                || live.has_pending_ask
-                || live.has_pending_approval;
-            if include {
-                by_id.insert(live.id.clone(), self.build_thread_from_live(&live));
-            }
-        }
-        by_id.into_values().collect()
-    }
 }
 
 /// TS `parseThreadModelSelection`: splits a thread model reference into an optional provider
@@ -1847,7 +1786,7 @@ impl ThreadControlBridge for ServerThreadControlBridge {
                     .resolve_workspace_path(Some(raw), "list_threads")?;
                 self.runtime.list_workspace_threads(&cwd, None, None).0
             }
-            None => self.runtime.list_all_root_threads(),
+            None => self.runtime.list_root_threads(None),
         };
         let (workspaces, _) = build_workspace_summaries(
             &self.runtime.working_directory,

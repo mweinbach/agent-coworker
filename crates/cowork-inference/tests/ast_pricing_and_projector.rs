@@ -678,3 +678,48 @@ fn partial_json_parser_and_stream_projector_maintain_occurrence_ids_phases_and_l
         assert!(wire.get("jsonrpc").is_none());
     }
 }
+
+#[test]
+fn tool_previews_coalesce_without_losing_args_at_boundaries() {
+    let mut p = StreamEventProjector::new("thread", ClientCapabilities::default());
+    let delta = |s: &str| StreamEvent::ToolCallDelta {
+        turn_id: "turn".into(),
+        key: "call".into(),
+        name: "write".into(),
+        delta: s.into(),
+    };
+    let first = p.project(&delta(r#"{"text":"start"#));
+    assert_eq!(first[0].params["item"]["args"], json!({"text":"start"}));
+    let part = "x".repeat(32);
+    let mut previews = 0;
+    for _ in 0..2048 {
+        previews += p.project(&delta(&part)).len();
+    }
+    assert!(
+        (1..32).contains(&previews),
+        "{previews} previews for 64 KiB"
+    );
+    let text = format!("start{}", part.repeat(2048));
+    assert!(p.project(&delta("!")).is_empty());
+    let approval = p.project(&StreamEvent::ToolApprovalRequested {
+        turn_id: "turn".into(),
+        key: "call".into(),
+        name: "write".into(),
+        approval: json!({}),
+    });
+    assert_eq!(
+        approval[0].params["item"]["args"]["text"],
+        format!("{text}!")
+    );
+    assert!(p.project(&delta("?")).is_empty());
+    let interrupted = p.project(&StreamEvent::TurnCompleted {
+        turn_id: "turn".into(),
+        status: "interrupted".into(),
+        usage: None,
+    });
+    assert_eq!(interrupted[0].params["item"]["state"], "output-error");
+    assert_eq!(
+        interrupted[0].params["item"]["args"]["text"],
+        format!("{text}!?")
+    );
+}

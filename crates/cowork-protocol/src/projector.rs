@@ -243,11 +243,7 @@ impl ThreadTurnProjector {
                     m.insert("text".to_owned(), Value::String(String::new()));
                     m
                 });
-                let prev = entry
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                entry.insert("text".to_owned(), Value::String(format!("{prev}{delta}")));
+                append_text_delta(entry, delta);
             }
             "item/reasoning/delta" => {
                 let turn_id = payload
@@ -279,15 +275,8 @@ impl ThreadTurnProjector {
                     m.insert("text".to_owned(), Value::String(String::new()));
                     m
                 });
-                let next_text = format!(
-                    "{}{delta}",
-                    entry
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                );
                 entry.insert("mode".to_owned(), Value::String(mode.to_owned()));
-                entry.insert("text".to_owned(), Value::String(next_text));
+                append_text_delta(entry, delta);
             }
             "turn/completed" => {
                 let turn_obj = payload.get("turn").and_then(Value::as_object);
@@ -331,6 +320,14 @@ impl ThreadTurnProjector {
                 }
             })
             .collect()
+    }
+}
+
+fn append_text_delta(item: &mut Map<String, Value>, delta: &str) {
+    if let Some(Value::String(text)) = item.get_mut("text") {
+        text.push_str(delta);
+    } else {
+        item.insert("text".to_owned(), Value::String(delta.to_owned()));
     }
 }
 

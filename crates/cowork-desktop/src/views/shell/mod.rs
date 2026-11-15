@@ -61,10 +61,21 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     let base = if route.view == ViewId::Settings {
         build_settings_frame(s, cx, k, t, subview.content)
     } else {
-        build_workspace_split_frame(s, cx, k, t, subview.content)
+        build_workspace_split_frame(s, cx, k, t, subview.content, &mut subview.overlays)
     };
 
-    rune_kit::root(base, overlays::build_overlays(s, k, t, subview.overlays))
+    rune_kit::root(base, overlays::build_overlays(s, k, t, subview.overlays)).on_layout::<AppState>(
+        |s, rect| {
+            let width = rect[2];
+            if width > 0.0 && (width - s.shell_ui.viewport_width).abs() > 1.0 {
+                s.shell_ui.viewport_width = width;
+                if width >= helpers::NARROW_BREAKPOINT {
+                    s.shell_ui.left_overlay_open = false;
+                    s.shell_ui.right_overlay_open = false;
+                }
+            }
+        },
+    )
 }
 
 fn build_settings_frame(
@@ -127,35 +138,106 @@ fn build_workspace_split_frame(
     k: &Kit,
     t: &ThemeTokens,
     main_subview: El,
+    layer: &mut Vec<El>,
 ) -> El {
-    let sidebar_el = sidebar::build_sidebar(s, k, t);
+    let sidebar_el = sidebar::build_sidebar(s, k, t, layer);
     let inspector_el = context_sidebar::build_context_sidebar(s, k, t);
-    let toolbar = top_bar::build_toolbar(s, cx, k, t);
+    let toolbar = top_bar::build_toolbar(s, cx, k, t, layer);
     let primary_el = banners::build_primary_content(s, k, t, main_subview);
 
-    SplitView::new(primary_el)
-        .sidebar(&s.sidebar, |s: &mut AppState| &mut s.sidebar, sidebar_el)
-        .inspector(
+    let route_view = s.route().view;
+    let right_kind = if route_view == ViewId::Task {
+        helpers::RightRailKind::Task
+    } else {
+        helpers::RightRailKind::Context
+    };
+    let adaptive = helpers::resolve_adaptive_layout(
+        s.shell_ui.viewport_width,
+        s.sidebar.is_open(),
+        s.sidebar.width(),
+        route_view != ViewId::Settings,
+        s.context_sidebar.is_open(),
+        s.context_sidebar.width(),
+        right_kind,
+    );
+
+    let mut split = SplitView::new(primary_el).toolbar(toolbar);
+
+    if adaptive.left_overlay {
+        if s.shell_ui.left_overlay_open {
+            layer.push(
+                col()
+                    .key("adaptive-left-drawer-backdrop")
+                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                    .fill(t.scrim)
+                    .items_start()
+                    .modal(true, |s: &mut AppState| {
+                        s.shell_ui.left_overlay_open = false;
+                    })
+                    .child(
+                        el().key("adaptive-left-drawer-panel")
+                            .w(280.0)
+                            .h_full()
+                            .min_h(0.0)
+                            .pt(cx.titlebar_inset())
+                            .fill(t.popover_bg)
+                            .border(1.0, t.border_strong)
+                            .child(sidebar_el),
+                    ),
+            );
+        }
+    } else {
+        split = split
+            .sidebar(&s.sidebar, |s: &mut AppState| &mut s.sidebar, sidebar_el)
+            .sidebar_padding(12.0, 8.0)
+            .sidebar_toggle(
+                SidebarToggle::new()
+                    .size(ControlSize::Large)
+                    .past_lights(16.0)
+                    .edge(18.0)
+                    .gap(4.0)
+                    .in_header()
+                    .unread(helpers::any_background_unread(s)),
+            )
+            .sidebar_peek(SidebarPeek::new());
+    }
+
+    if adaptive.tier == helpers::AdaptiveTier::Narrow || adaptive.right_overlay {
+        if s.shell_ui.right_overlay_open {
+            layer.push(
+                col()
+                    .key("adaptive-right-drawer-backdrop")
+                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                    .fill(t.scrim)
+                    .items_end()
+                    .modal(true, |s: &mut AppState| {
+                        s.shell_ui.right_overlay_open = false;
+                    })
+                    .child(
+                        el().key("adaptive-right-drawer-panel")
+                            .w(300.0)
+                            .h_full()
+                            .min_h(0.0)
+                            .pt(cx.titlebar_inset())
+                            .fill(t.popover_bg)
+                            .border(1.0, t.border_strong)
+                            .child(inspector_el),
+                    ),
+            );
+        }
+    } else {
+        split = split.inspector(
             &s.context_sidebar,
             |s: &mut AppState| &mut s.context_sidebar,
             inspector_el,
-        )
-        .toolbar(toolbar)
+        );
+    }
+
+    split
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
         .toolbar_in_panel()
-        .sidebar_padding(12.0, 8.0)
-        .sidebar_toggle(
-            SidebarToggle::new()
-                .size(ControlSize::Large)
-                .past_lights(16.0)
-                .edge(18.0)
-                .gap(4.0)
-                .in_header()
-                .unread(helpers::any_background_unread(s)),
-        )
         .pane_motion(PaneMotion::new().spring(Spring::new(0.3, 0.0)))
-        .sidebar_peek(SidebarPeek::new())
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
 }

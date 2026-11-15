@@ -14,7 +14,7 @@ use crate::state::{AppState, FilePreviewState, ServerLifecycleState, WorkspaceRu
 use crate::theme::ThemeTokens;
 use crate::ws::WsConnectionState;
 
-use super::icons;
+use super::{helpers, icons};
 
 /// Wrap the active center subview (`chat::view`, `tasks`, etc.) with workspace
 /// readiness banners, runtime startup/recovery gates, and optional inline file preview.
@@ -66,25 +66,38 @@ pub fn build_primary_content(s: &AppState, k: &Kit, t: &ThemeTokens, main_subvie
     {
         top_banners.push(readiness_banner);
     }
+    if let Some(updater_banner) = build_updater_banner(s, k, t) {
+        top_banners.push(updater_banner);
+    }
 
     let body = if let Some(preview) = s.active_file_preview.as_ref() {
-        row()
-            .key("primary-split-with-preview")
-            .w_full()
-            .h_full()
-            .grow(1.0)
-            .shrink()
-            .min_h(0.0)
-            .child(
-                el().key("primary-subview-pane")
-                    .grow(1.6)
-                    .shrink()
-                    .min_h(0.0)
-                    .h_full()
-                    .child(main_subview),
-            )
-            .child(el().w(1.0).h_full().fill(t.border_muted))
-            .child(build_inline_file_preview(preview, k, t))
+        if s.shell_ui.preview_maximized {
+            el().key("primary-preview-maximized")
+                .w_full()
+                .h_full()
+                .grow(1.0)
+                .shrink()
+                .min_h(0.0)
+                .child(build_inline_file_preview(s, preview, k, t))
+        } else {
+            row()
+                .key("primary-split-with-preview")
+                .w_full()
+                .h_full()
+                .grow(1.0)
+                .shrink()
+                .min_h(0.0)
+                .child(
+                    el().key("primary-subview-pane")
+                        .grow(1.6)
+                        .shrink()
+                        .min_h(0.0)
+                        .h_full()
+                        .child(main_subview),
+                )
+                .child(el().w(1.0).h_full().fill(t.border_muted))
+                .child(build_inline_file_preview(s, preview, k, t))
+        }
     } else {
         el().key("primary-subview-only")
             .w_full()
@@ -422,7 +435,136 @@ fn repair_action_label(action: &CreationRepairAction) -> &'static str {
     }
 }
 
-fn build_inline_file_preview(preview: &FilePreviewState, k: &Kit, t: &ThemeTokens) -> El {
+fn build_updater_banner(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
+    let version = s
+        .updater
+        .available_version
+        .as_deref()
+        .or(s.updater.version.as_deref());
+    match s.updater.status.as_str() {
+        "downloading" => {
+            let mut parts: Vec<String> = Vec::new();
+            match (s.updater.downloaded_bytes, s.updater.total_bytes) {
+                (Some(dl), Some(tot)) if tot > 0 => {
+                    let pct = ((dl as f64 / tot as f64) * 100.0).clamp(0.0, 100.0);
+                    parts.push(format!(
+                        "{} / {} ({pct:.0}%)",
+                        helpers::format_bytes(dl),
+                        helpers::format_bytes(tot)
+                    ));
+                }
+                (Some(dl), _) => parts.push(helpers::format_bytes(dl)),
+                (_, _) => {
+                    if let Some(pct) = s.updater.download_progress {
+                        let norm = if pct <= 1.0 { pct * 100.0 } else { pct };
+                        parts.push(format!("{:.0}%", norm.clamp(0.0, 100.0)));
+                    }
+                }
+            }
+            if let Some(bps) = s.updater.bytes_per_second
+                && bps > 0
+            {
+                parts.push(format!("{}/s", helpers::format_bytes(bps)));
+            }
+
+            let ratio = match (s.updater.downloaded_bytes, s.updater.total_bytes) {
+                (Some(dl), Some(tot)) if tot > 0 => (dl as f32 / tot as f32).clamp(0.0, 1.0),
+                _ => s
+                    .updater
+                    .download_progress
+                    .map(|p| if p <= 1.0 { p } else { p / 100.0 })
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0),
+            };
+            let title = match version {
+                Some(v) => format!("Downloading Cowork {v}..."),
+                None => "Downloading update...".to_owned(),
+            };
+            let detail = if parts.is_empty() {
+                "Fetching release archive in the background.".to_owned()
+            } else {
+                parts.join(" · ")
+            };
+
+            Some(
+                row()
+                    .key("updater-download-banner")
+                    .w_full()
+                    .px(12.0)
+                    .py(8.0)
+                    .radius(8.0)
+                    .fill(t.elevated_bg)
+                    .border(1.0, t.accent)
+                    .gap(10.0)
+                    .center_y()
+                    .child(Spinner::new().size(14.0).color(t.accent).build(k))
+                    .child(
+                        col()
+                            .grow(1.0)
+                            .shrink()
+                            .gap(2.0)
+                            .child(text(title).font(t.label).color(t.text_base))
+                            .child(text(detail).font(t.caption).color(t.text_muted)),
+                    )
+                    .child(
+                        el().w(140.0)
+                            .h(5.0)
+                            .radius(3.0)
+                            .fill(t.border_muted)
+                            .child(el().w(140.0 * ratio).h(5.0).radius(3.0).fill(t.accent)),
+                    ),
+            )
+        }
+        "downloaded" | "ready" => {
+            let title = match version {
+                Some(v) => format!("Update {v} ready to install"),
+                None => "Update ready to install".to_owned(),
+            };
+            Some(
+                row()
+                    .key("updater-ready-banner")
+                    .w_full()
+                    .px(12.0)
+                    .py(8.0)
+                    .radius(8.0)
+                    .fill(t.elevated_bg)
+                    .border(1.0, t.success)
+                    .gap(10.0)
+                    .center_y()
+                    .child(icon(&icons::CHECK_CIRCLE, 15.0).color(t.success))
+                    .child(
+                        col()
+                            .grow(1.0)
+                            .shrink()
+                            .gap(2.0)
+                            .child(text(title).font(t.label).color(t.text_base))
+                            .child(
+                                text("Restart Cowork to finish applying the update.")
+                                    .font(t.caption)
+                                    .color(t.text_muted),
+                            ),
+                    )
+                    .child(
+                        Button::new("Restart & install")
+                            .variant(ButtonVariant::Contrast)
+                            .control_size(ControlSize::Small)
+                            .on_press_tx(|s: &mut AppState, _| {
+                                s.dispatch(Action::Settings(SettingsAction::QuitAndInstallUpdate));
+                            })
+                            .build(k),
+                    ),
+            )
+        }
+        _ => None,
+    }
+}
+
+fn build_inline_file_preview(
+    s: &AppState,
+    preview: &FilePreviewState,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
     let title = if preview.title.is_empty() {
         preview
             .path
@@ -434,6 +576,7 @@ fn build_inline_file_preview(preview: &FilePreviewState, k: &Kit, t: &ThemeToken
     };
     let path_for_reveal = preview.path.clone();
     let path_for_open = preview.path.clone();
+    let maximized = s.shell_ui.preview_maximized;
 
     let mut header = row()
         .key("file-preview-header")
@@ -458,6 +601,15 @@ fn build_inline_file_preview(preview: &FilePreviewState, k: &Kit, t: &ThemeToken
 
     header = header
         .child(spacer())
+        .child(
+            Button::new(if maximized { "Restore" } else { "Maximize" })
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press_tx(|s: &mut AppState, _| {
+                    s.shell_ui.preview_maximized = !s.shell_ui.preview_maximized;
+                })
+                .build(k),
+        )
         .child(
             IconButton::new(&icons::EXTERNAL_LINK)
                 .variant(IconButtonVariant::GhostMuted)
@@ -487,6 +639,7 @@ fn build_inline_file_preview(preview: &FilePreviewState, k: &Kit, t: &ThemeToken
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
                 .on_press_tx(|s: &mut AppState, _| {
+                    s.shell_ui.preview_maximized = false;
                     s.dispatch(Action::Shell(ShellAction::CloseFilePreview));
                 })
                 .build(k),

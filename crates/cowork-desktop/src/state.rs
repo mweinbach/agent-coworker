@@ -2451,6 +2451,9 @@ impl AppState {
                         rt.interaction_errors.insert(req_key.clone(), msg);
                     }
                 }
+                if ok {
+                    self.chat_ui.clear_ask_request_by_key(&req_key);
+                }
             }
             StoreEvent::WsInvalidMessage {
                 workspace_id,
@@ -11028,6 +11031,77 @@ mod tests {
         assert_eq!(
             clear_defaults_req["config"]["clearToolCalling"],
             json!(true)
+        );
+    }
+
+    #[test]
+    fn ws_server_response_result_clears_ask_buffers_only_on_ok() {
+        let mut state = AppState::default();
+        let req_id = JsonRpcLiteId::String("ask-req-1".to_string());
+        state.thread_runtime_by_id.insert(
+            "th-1".to_string(),
+            ThreadRuntime {
+                pending_interactions: vec![ChatInteraction::UserInput {
+                    request_id: req_id.clone(),
+                    item_id: "item-ask-1".to_string(),
+                    question: "Pick one".to_string(),
+                    options: vec!["A".to_string(), "B".to_string()],
+                }],
+                ..Default::default()
+            },
+        );
+        state
+            .chat_ui
+            .ask_active_question_idx
+            .insert("ask-req-1".to_string(), 1);
+        state
+            .chat_ui
+            .ask_text_edits
+            .insert("ask-req-1:q1".to_string(), "custom draft".to_string());
+        state
+            .chat_ui
+            .ask_selected_options
+            .insert("ask-req-1:q1".to_string(), vec!["A".to_string()]);
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: req_id.clone(),
+            ok: false,
+            error: Some("Disconnected".to_string()),
+        });
+        assert_eq!(
+            state.chat_ui.ask_active_question_idx.get("ask-req-1"),
+            Some(&1)
+        );
+        assert_eq!(
+            state
+                .chat_ui
+                .ask_text_edits
+                .get("ask-req-1:q1")
+                .map(String::as_str),
+            Some("custom draft")
+        );
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: req_id,
+            ok: true,
+            error: None,
+        });
+        assert!(
+            state
+                .chat_ui
+                .ask_active_question_idx
+                .get("ask-req-1")
+                .is_none()
+        );
+        assert!(state.chat_ui.ask_text_edits.get("ask-req-1:q1").is_none());
+        assert!(
+            state
+                .chat_ui
+                .ask_selected_options
+                .get("ask-req-1:q1")
+                .is_none()
         );
     }
 }

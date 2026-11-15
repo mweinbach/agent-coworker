@@ -841,10 +841,8 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
         .and_then(Value::as_str)
         .map(ToString::to_string);
 
-    if let Some(onboarding_val) = obj.get("onboarding")
-        && let Ok(parsed) = serde_json::from_value::<OnboardingState>(onboarding_val.clone())
-    {
-        out.onboarding = parsed;
+    if let Some(onboarding_val) = obj.get("onboarding") {
+        out.onboarding = core_onboarding_from_value(onboarding_val);
     }
 
     if let Some(flags) = obj
@@ -919,26 +917,46 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
                 "defaultBackupsEnabled".to_string(),
                 json!(ws.default_backups_enabled),
             );
-            if let Some(provider) = ws
-                .default_provider
-                .as_deref()
-                .map(str::trim)
+            set_or_remove_trimmed_str(&mut map, "defaultProvider", ws.default_provider.as_deref());
+            set_or_remove_trimmed_str(&mut map, "defaultModel", ws.default_model.as_deref());
+            set_or_remove_trimmed_str(
+                &mut map,
+                "defaultPreferredChildModel",
+                ws.default_preferred_child_model.as_deref(),
+            );
+            set_or_remove_trimmed_str(
+                &mut map,
+                "defaultChildModelRoutingMode",
+                ws.default_child_model_routing_mode.as_deref(),
+            );
+            set_or_remove_trimmed_str(
+                &mut map,
+                "defaultPreferredChildModelRef",
+                ws.default_preferred_child_model_ref.as_deref(),
+            );
+            let allowed_refs: Vec<Value> = ws
+                .default_allowed_child_model_refs
+                .iter()
+                .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-            {
-                map.insert("defaultProvider".to_string(), json!(provider));
+                .map(|s| Value::String(s.to_string()))
+                .collect();
+            if allowed_refs.is_empty() {
+                map.remove("defaultAllowedChildModelRefs");
             } else {
-                map.remove("defaultProvider");
+                map.insert(
+                    "defaultAllowedChildModelRefs".to_string(),
+                    Value::Array(allowed_refs),
+                );
             }
-            if let Some(model) = ws
-                .default_model
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                map.insert("defaultModel".to_string(), json!(model));
+            set_or_remove_json_object(&mut map, "providerOptions", ws.provider_options.as_ref());
+            if let Some(ref user_name) = ws.user_name {
+                map.insert("userName".to_string(), Value::String(user_name.clone()));
             } else {
-                map.remove("defaultModel");
+                map.remove("userName");
             }
+            set_or_remove_json_object(&mut map, "userProfile", ws.user_profile.as_ref());
+            sync_workspace_defaults_to_doc(&mut map, &ws.defaults);
             map.entry("wsProtocol".to_string())
                 .or_insert_with(|| json!("jsonrpc"));
             Value::Object(map)
@@ -1049,9 +1067,8 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
     if let Ok(privacy_val) = serde_json::to_value(&snapshot.settings.privacy_telemetry) {
         doc.insert("privacyTelemetrySettings".to_string(), privacy_val);
     }
-    if let Ok(onboarding_val) = serde_json::to_value(&snapshot.onboarding) {
-        doc.insert("onboarding".to_string(), onboarding_val);
-    }
+    let onboarding_doc = onboarding_document_value(&snapshot.onboarding, doc.get("onboarding"));
+    doc.insert("onboarding".to_string(), onboarding_doc);
 
     let flags: Map<String, Value> = snapshot
         .feature_flags
@@ -1539,21 +1556,133 @@ fn sanitize_feature_flags(raw: Option<&Value>) -> Value {
     Value::Object(out)
 }
 
+fn sanitize_onboarding_steps(raw: Option<&Value>) -> Vec<String> {
+    let Some(arr) = raw.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut steps: Vec<String> = arr
+        .iter()
+        .filter_map(|v| non_empty_string(Some(v)))
+        .collect();
+    steps.sort();
+    steps.dedup();
+    steps
+}
+
 fn sanitize_onboarding_value(value: &Value) -> Option<Value> {
     let map = value.as_object()?;
     let status = match map.get("status").and_then(Value::as_str) {
         Some("pending") => "pending",
         Some("dismissed") => "dismissed",
         Some("completed") => "completed",
-        _ => "pending",
+        _ => {
+            if map.get("dismissed").and_then(Value::as_bool) == Some(true) {
+                "dismissed"
+            } else if map.get("completed").and_then(Value::as_bool) == Some(true) {
+                "completed"
+            } else {
+                "pending"
+            }
+        }
     };
     let completed_at = non_empty_string(map.get("completedAt"));
     let dismissed_at = non_empty_string(map.get("dismissedAt"));
-    Some(json!({
+    let mut out = json!({
         "status": status,
         "completedAt": completed_at,
         "dismissedAt": dismissed_at,
-    }))
+    });
+    let steps = sanitize_onboarding_steps(map.get("completedSteps"));
+    if !steps.is_empty()
+        && let Some(obj) = out.as_object_mut()
+    {
+        obj.insert("completedSteps".to_string(), json!(steps));
+    }
+    Some(out)
+}
+
+fn core_onboarding_from_value(value: &Value) -> OnboardingState {
+    let Some(map) = value.as_object() else {
+        return OnboardingState::default();
+    };
+    let completed_steps: HashSet<String> = sanitize_onboarding_steps(map.get("completedSteps"))
+        .into_iter()
+        .collect();
+    match map.get("status").and_then(Value::as_str) {
+        Some("dismissed") => OnboardingState {
+            completed: false,
+            dismissed: true,
+            completed_steps,
+        },
+        Some("completed") => OnboardingState {
+            completed: true,
+            dismissed: false,
+            completed_steps,
+        },
+        Some("pending") => OnboardingState {
+            completed: false,
+            dismissed: false,
+            completed_steps,
+        },
+        _ => OnboardingState {
+            completed: map
+                .get("completed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            dismissed: map
+                .get("dismissed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            completed_steps,
+        },
+    }
+}
+
+fn onboarding_document_value(onboarding: &OnboardingState, existing: Option<&Value>) -> Value {
+    let prev_obj = existing.and_then(Value::as_object);
+    let prev_completed_at = prev_obj.and_then(|m| non_empty_string(m.get("completedAt")));
+    let prev_dismissed_at = prev_obj.and_then(|m| non_empty_string(m.get("dismissedAt")));
+
+    let status = if onboarding.dismissed {
+        "dismissed"
+    } else if onboarding.completed {
+        "completed"
+    } else {
+        "pending"
+    };
+
+    let (completed_at, dismissed_at) = match status {
+        "completed" => (
+            prev_completed_at.or_else(|| Some(epoch_ms_to_iso(now_epoch_ms()))),
+            None,
+        ),
+        "dismissed" => (
+            None,
+            prev_dismissed_at.or_else(|| Some(epoch_ms_to_iso(now_epoch_ms()))),
+        ),
+        _ => (None, None),
+    };
+
+    let mut out = json!({
+        "status": status,
+        "completedAt": completed_at,
+        "dismissedAt": dismissed_at,
+    });
+    let mut steps: Vec<String> = onboarding
+        .completed_steps
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    steps.sort();
+    steps.dedup();
+    if !steps.is_empty()
+        && let Some(obj) = out.as_object_mut()
+    {
+        obj.insert("completedSteps".to_string(), json!(steps));
+    }
+    out
 }
 
 fn preserve_pending_research_draft(sanitized: &mut Value, previous: Option<&Value>) {
@@ -1649,6 +1778,75 @@ fn core_desktop_settings_from_document(obj: &Map<String, Value>) -> DesktopSetti
     settings
 }
 
+const WORKSPACE_DEFAULT_KEY_PAIRS: &[(&str, &str)] = &[
+    ("defaultAdvancedMemory", "advancedMemory"),
+    ("defaultMemoryGenerationModel", "memoryGenerationModel"),
+    ("defaultSkillImprovementEnabled", "skillImprovementEnabled"),
+    ("defaultSkillImprovementModel", "skillImprovementModel"),
+    ("defaultSkillImprovementScope", "skillImprovementScope"),
+    (
+        "defaultSkillImprovementExcludedSkills",
+        "skillImprovementExcludedSkills",
+    ),
+    ("defaultToolOutputOverflowChars", "toolOutputOverflowChars"),
+    (
+        "defaultWorkflowMaxConcurrentAgents",
+        "workflowMaxConcurrentAgents",
+    ),
+    ("defaultToolCalling", "toolCalling"),
+    ("lmStudioEnabled", "lmStudioEnabled"),
+    ("reasoningEffort", "reasoningEffort"),
+];
+
+fn set_or_remove_trimmed_str(map: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+    if let Some(trimmed) = value.map(str::trim).filter(|s| !s.is_empty()) {
+        map.insert(key.to_string(), Value::String(trimmed.to_string()));
+    } else {
+        map.remove(key);
+    }
+}
+
+fn set_or_remove_json_object(map: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    if let Some(obj) = value.filter(|v| v.is_object()) {
+        map.insert(key.to_string(), obj.clone());
+    } else {
+        map.remove(key);
+    }
+}
+
+fn find_workspace_default_value<'a>(
+    map: &'a Map<String, Value>,
+    desktop_key: &str,
+    server_key: &str,
+) -> Option<&'a Value> {
+    map.get(desktop_key)
+        .or_else(|| map.get(server_key))
+        .or_else(|| {
+            (desktop_key == "defaultAdvancedMemory")
+                .then(|| map.get("advancedMemoryEnabled"))
+                .flatten()
+        })
+        .filter(|v| !v.is_null())
+}
+
+fn sync_workspace_defaults_to_doc(map: &mut Map<String, Value>, defaults: &Value) {
+    let defaults_obj = defaults.as_object();
+    for &(desktop_key, server_key) in WORKSPACE_DEFAULT_KEY_PAIRS {
+        let val =
+            defaults_obj.and_then(|d| find_workspace_default_value(d, desktop_key, server_key));
+        if let Some(v) = val {
+            map.insert(desktop_key.to_string(), v.clone());
+        } else {
+            map.remove(desktop_key);
+        }
+    }
+    if let Some(obj) = defaults_obj.filter(|o| !o.is_empty()) {
+        map.insert("defaults".to_string(), Value::Object(obj.clone()));
+    } else {
+        map.remove("defaults");
+    }
+}
+
 fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
     let map = value.as_object()?;
     let id = map.get("id").and_then(Value::as_str)?.to_string();
@@ -1674,12 +1872,49 @@ fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
     ws.yolo = map.get("yolo").and_then(Value::as_bool).unwrap_or(false);
     ws.default_provider = non_empty_string(map.get("defaultProvider"));
     ws.default_model = non_empty_string(map.get("defaultModel"));
+    ws.default_preferred_child_model = non_empty_string(map.get("defaultPreferredChildModel"));
+    ws.default_child_model_routing_mode = non_empty_string(map.get("defaultChildModelRoutingMode"));
+    ws.default_preferred_child_model_ref =
+        non_empty_string(map.get("defaultPreferredChildModelRef"));
+    ws.default_allowed_child_model_refs = map
+        .get("defaultAllowedChildModelRefs")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| non_empty_string(Some(v)))
+                .collect()
+        })
+        .unwrap_or_default();
+    ws.provider_options = map
+        .get("providerOptions")
+        .filter(|v| v.is_object())
+        .cloned();
+    ws.user_name = map
+        .get("userName")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    ws.user_profile = map.get("userProfile").filter(|v| v.is_object()).cloned();
     if let Some(mcp) = map.get("defaultEnableMcp").and_then(Value::as_bool) {
         ws.default_enable_mcp = mcp;
     }
     if let Some(backups) = map.get("defaultBackupsEnabled").and_then(Value::as_bool) {
         ws.default_backups_enabled = backups;
     }
+
+    let mut defaults_map = map
+        .get("defaults")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for &(desktop_key, server_key) in WORKSPACE_DEFAULT_KEY_PAIRS {
+        if !defaults_map.contains_key(desktop_key)
+            && !defaults_map.contains_key(server_key)
+            && let Some(val) = find_workspace_default_value(map, desktop_key, server_key)
+        {
+            defaults_map.insert(desktop_key.to_string(), val.clone());
+        }
+    }
+    ws.defaults = Value::Object(defaults_map);
     Some(ws)
 }
 
@@ -2166,5 +2401,196 @@ mod tests {
             .unwrap();
         let preserved = service.load_core_state().unwrap();
         assert_eq!(preserved.product_analytics, Some(analytics));
+    }
+
+    #[test]
+    fn roundtrips_workspace_profile_provider_options_child_models_and_defaults() {
+        let tmp = tempdir().unwrap();
+        let workspace_dir = tmp.path().join("proj");
+        fs::create_dir_all(&workspace_dir).unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+
+        let mut ws = WorkspaceRecord::new(
+            "ws-profile",
+            "Profile Project",
+            workspace_dir.to_string_lossy().into_owned(),
+            1_700_000_000_000,
+        );
+        ws.user_name = Some("E2E Parity Tester".to_string());
+        ws.user_profile = Some(json!({
+            "work": "Systems engineering",
+            "instructions": "Be concise",
+            "details": "Prefers Rust",
+        }));
+        ws.provider_options = Some(json!({
+            "openai": { "serviceTier": "priority" },
+            "google": { "googleSearch": true },
+        }));
+        ws.default_preferred_child_model = Some("claude-haiku-4-5".to_string());
+        ws.default_child_model_routing_mode = Some("cross-provider-allowlist".to_string());
+        ws.default_preferred_child_model_ref = Some("anthropic:claude-haiku-4-5".to_string());
+        ws.default_allowed_child_model_refs = vec![
+            "anthropic:claude-haiku-4-5".to_string(),
+            "openai:gpt-4.1-mini".to_string(),
+        ];
+        ws.defaults = json!({
+            "defaultAdvancedMemory": true,
+            "advancedMemory": true,
+            "defaultToolOutputOverflowChars": 32768,
+            "toolOutputOverflowChars": 32768,
+            "defaultWorkflowMaxConcurrentAgents": 6,
+            "workflowMaxConcurrentAgents": 6,
+            "lmStudioEnabled": true,
+            "reasoningEffort": "high",
+        });
+
+        let snapshot = PersistedDesktopState {
+            workspaces: vec![ws.clone()],
+            ..PersistedDesktopState::default()
+        };
+        let saved_doc = service.merge_and_save_core_snapshot(&snapshot).unwrap();
+        assert_eq!(saved_doc["workspaces"][0]["userName"], "E2E Parity Tester");
+        assert_eq!(
+            saved_doc["workspaces"][0]["userProfile"]["instructions"],
+            "Be concise"
+        );
+        assert_eq!(
+            saved_doc["workspaces"][0]["defaultPreferredChildModelRef"],
+            "anthropic:claude-haiku-4-5"
+        );
+        assert_eq!(
+            saved_doc["workspaces"][0]["defaultWorkflowMaxConcurrentAgents"],
+            6
+        );
+        assert_eq!(saved_doc["workspaces"][0]["defaultAdvancedMemory"], true);
+
+        let loaded = service.load_core_state().unwrap();
+        let reloaded = &loaded.workspaces[0];
+        assert_eq!(reloaded.user_name.as_deref(), Some("E2E Parity Tester"));
+        assert_eq!(reloaded.user_profile, ws.user_profile);
+        assert_eq!(reloaded.provider_options, ws.provider_options);
+        assert_eq!(
+            reloaded.default_preferred_child_model.as_deref(),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(
+            reloaded.default_child_model_routing_mode.as_deref(),
+            Some("cross-provider-allowlist")
+        );
+        assert_eq!(
+            reloaded.default_preferred_child_model_ref.as_deref(),
+            Some("anthropic:claude-haiku-4-5")
+        );
+        assert_eq!(
+            reloaded.default_allowed_child_model_refs,
+            ws.default_allowed_child_model_refs
+        );
+        assert_eq!(reloaded.defaults["defaultAdvancedMemory"], true);
+        assert_eq!(reloaded.defaults["defaultToolOutputOverflowChars"], 32768);
+        assert_eq!(reloaded.defaults["lmStudioEnabled"], true);
+        assert_eq!(reloaded.defaults["reasoningEffort"], "high");
+
+        // Clearing clearable defaults removes both top-level and nested defaults across restart.
+        let mut cleared_snapshot = loaded;
+        cleared_snapshot.workspaces[0].user_name = None;
+        cleared_snapshot.workspaces[0].provider_options = None;
+        cleared_snapshot.workspaces[0]
+            .default_allowed_child_model_refs
+            .clear();
+        let obj = cleared_snapshot.workspaces[0]
+            .defaults
+            .as_object_mut()
+            .unwrap();
+        obj.remove("defaultToolOutputOverflowChars");
+        obj.remove("toolOutputOverflowChars");
+
+        let after_clear_doc = service
+            .merge_and_save_core_snapshot(&cleared_snapshot)
+            .unwrap();
+        assert!(after_clear_doc["workspaces"][0].get("userName").is_none());
+        assert!(
+            after_clear_doc["workspaces"][0]
+                .get("providerOptions")
+                .is_none()
+        );
+        assert!(
+            after_clear_doc["workspaces"][0]
+                .get("defaultToolOutputOverflowChars")
+                .is_none()
+        );
+        let after_clear = service.load_core_state().unwrap();
+        assert_eq!(after_clear.workspaces[0].user_name, None);
+        assert!(
+            after_clear.workspaces[0]
+                .defaults
+                .get("defaultToolOutputOverflowChars")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn onboarding_dismissed_completed_steps_and_electron_schema_roundtrip() {
+        let tmp = tempdir().unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+
+        // Skipping onboarding persists `status: "dismissed"` and stays dismissed across reload.
+        let skipped = PersistedDesktopState {
+            onboarding: OnboardingState {
+                completed: true,
+                dismissed: true,
+                completed_steps: ["step-1".to_string()].into_iter().collect(),
+            },
+            ..PersistedDesktopState::default()
+        };
+        let saved = service.merge_and_save_core_snapshot(&skipped).unwrap();
+        assert_eq!(saved["onboarding"]["status"], "dismissed");
+        assert!(saved["onboarding"]["dismissedAt"].is_string());
+        assert!(saved["onboarding"]["completedAt"].is_null());
+        assert_eq!(saved["onboarding"]["completedSteps"], json!(["step-1"]));
+
+        let reloaded = service.load_core_state().unwrap();
+        assert!(reloaded.onboarding.dismissed);
+        assert!(!reloaded.onboarding.completed);
+        assert!(reloaded.onboarding.completed_steps.contains("step-1"));
+
+        // Completing onboarding preserves `status: "completed"` and `completedAt`, and resetting clears it.
+        let completed = PersistedDesktopState {
+            onboarding: OnboardingState {
+                completed: true,
+                dismissed: false,
+                completed_steps: ["step-1".to_string(), "step-4".to_string()]
+                    .into_iter()
+                    .collect(),
+            },
+            ..PersistedDesktopState::default()
+        };
+        let saved_done = service.merge_and_save_core_snapshot(&completed).unwrap();
+        assert_eq!(saved_done["onboarding"]["status"], "completed");
+        assert!(saved_done["onboarding"]["completedAt"].is_string());
+        assert!(saved_done["onboarding"]["dismissedAt"].is_null());
+
+        let reloaded_done = service.load_core_state().unwrap();
+        assert!(reloaded_done.onboarding.completed);
+        assert!(!reloaded_done.onboarding.dismissed);
+
+        // Electron state.json written without `completedSteps` still hydrates `completed: true`.
+        let mut electron_doc = service.load_state_value().unwrap();
+        electron_doc["onboarding"] = json!({
+            "status": "completed",
+            "completedAt": "2026-03-10T00:00:00.000Z",
+            "dismissedAt": null,
+        });
+        service.save_state_value(electron_doc).unwrap();
+        let from_electron = service.load_core_state().unwrap();
+        assert!(from_electron.onboarding.completed);
+        assert!(!from_electron.onboarding.dismissed);
+
+        // Restarting onboarding clears completed/dismissed back to pending.
+        let reset_doc = service
+            .merge_and_save_core_snapshot(&PersistedDesktopState::default())
+            .unwrap();
+        assert_eq!(reset_doc["onboarding"]["status"], "pending");
+        assert!(reset_doc["onboarding"]["completedAt"].is_null());
+        assert!(reset_doc["onboarding"]["dismissedAt"].is_null());
     }
 }

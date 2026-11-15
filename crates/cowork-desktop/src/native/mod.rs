@@ -1024,6 +1024,10 @@ impl NativeWorkerContext {
                     remote.forget_trusted_phone(&phone_id).await;
                 });
             }
+            NativeCommand::RevokeAllTrustedPhones
+            | NativeCommand::OpenLogsFolder
+            | NativeCommand::RevealDiagnosticsBundle(_)
+            | NativeCommand::UploadDiagnosticsBundle { .. } => {}
             NativeCommand::Shutdown => {}
         }
     }

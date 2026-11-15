@@ -15,10 +15,10 @@ use serde_json::Value;
 
 use crate::router::{NavigationSnapshot, SettingsPageId, ViewId};
 use crate::state::{
-    ConfirmDialogRequest, DesktopSettings, FilePreviewState, LmStudioStartModalState,
-    NotificationTone, PersistedDesktopState, PrivacyTelemetrySettings, ReasoningEffortValue,
-    RemoteAccessState, SubagentProfile, ThreadBusyPolicy, UpdaterState, WindowMode,
-    WorkspaceFileEntry, WorkspaceRecord,
+    ConfirmDialogRequest, DesktopSettings, DiagnosticsBundleState, FilePreviewState,
+    LmStudioStartModalState, NotificationTone, PersistedDesktopState, PrivacyTelemetrySettings,
+    ReasoningEffortValue, RemoteAccessState, SubagentProfile, ThreadBusyPolicy, UpdaterState,
+    WindowMode, WorkspaceFileEntry, WorkspaceRecord,
 };
 use crate::theme::ThemePreference;
 use crate::ws::{WsConnectionState, WsRpcError};
@@ -285,10 +285,24 @@ pub enum SettingsAction {
         workspace_id: String,
         backup_id: String,
     },
+    RestoreBackupCheckpoint {
+        workspace_id: String,
+        target_session_id: String,
+        checkpoint_id: Option<String>,
+    },
     ForgetTrustedPhone {
         phone_id: String,
     },
+    RevokeAllTrustedPhones,
     ExportDiagnosticsBundle,
+    OpenLogsFolder,
+    RevealDiagnosticsBundle {
+        path: Option<String>,
+    },
+    UploadDiagnosticsBundle {
+        path: Option<String>,
+        confirmed: bool,
+    },
     CompleteProviderAuthCallback {
         workspace_id: String,
         provider: String,
@@ -683,6 +697,7 @@ pub enum NativeCommand {
         permissions: String,
     },
     ForgetTrustedPhone(String),
+    RevokeAllTrustedPhones,
     RefreshTelemetryStatus,
     DownloadUpdate,
     ShowDesktopNotification {
@@ -690,6 +705,12 @@ pub enum NativeCommand {
         body: String,
     },
     ExportDiagnosticsBundle,
+    OpenLogsFolder,
+    RevealDiagnosticsBundle(Option<String>),
+    UploadDiagnosticsBundle {
+        path: Option<String>,
+        confirmed: bool,
+    },
     CheckForUpdates,
     QuitAndInstallUpdate,
     Shutdown,
@@ -771,10 +792,17 @@ pub enum StoreEvent {
         method: String,
         result: Result<Value, WsRpcError>,
     },
+    WsServerResponseResult {
+        workspace_id: String,
+        request_id: JsonRpcLiteId,
+        ok: bool,
+        error: Option<String>,
+    },
     WsInvalidMessage {
         workspace_id: String,
         message: String,
     },
+    DiagnosticsBundleUpdated(Option<DiagnosticsBundleState>),
     UpdaterChanged(UpdaterState),
     RemoteAccessChanged(RemoteAccessState),
     TelemetryStatusChanged(Value),

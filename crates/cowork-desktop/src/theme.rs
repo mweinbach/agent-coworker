@@ -282,6 +282,13 @@ pub fn build_kit(
     kit.c.layer_01 = tok.panel_bg;
     kit.c.layer_02 = tok.elevated_bg;
     kit.c.bg_accent = tok.accent;
+    kit.c.bg_contrast = tok.accent;
+    kit.c.bg_icon_button_contrast = tok.accent;
+    kit.c.text_contrast = tok.primary_fg;
+    kit.c.icon_contrast = tok.primary_fg;
+    kit.c.contrast_hover = tok.primary_fg.alpha(0.10);
+    kit.c.contrast_pressed = tok.primary_fg.alpha(0.20);
+    kit.c.submit_hover = tok.primary_fg.alpha(0.12);
     kit.c.submit_fg = tok.primary_fg;
     kit.c.submit_icon = tok.primary_fg;
     kit.c.text_base = tok.text_base;

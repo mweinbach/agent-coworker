@@ -27,7 +27,7 @@ use cowork_protocol::{
     SessionDeleteParams, SessionModelSetParams, SessionTitleSetParams, ThreadArchivedSetParams,
     ThreadForkParams, ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams,
     ThreadStartParams, TurnAttachmentInputPart, TurnInput, TurnInterruptParams, TurnReference,
-    TurnStartParams, TurnSteerParams,
+    TurnRetrySpec, TurnStartParams, TurnSteerParams,
 };
 use rune::TextEdit;
 use rune_kit::PaneState;
@@ -48,6 +48,9 @@ use crate::ws::{PendingRpcMeta, WsCommand, WsConnectionState, WsRpcError};
 pub const WINDOW_MAIN: &str = "main";
 pub const WINDOW_QUICK_CHAT: &str = "quick-chat";
 pub const WINDOW_UTILITY: &str = "utility";
+
+/// Hidden synthetic prompt used when retrying failed tool calls via `TurnRetrySpec`.
+pub const HIDDEN_RETRY_TURN_PROMPT: &str = "Continue from where the previous turn stopped. Retry the failed step only if it is still necessary, then finish the user's request.";
 
 /// Active window surface mode (Electron multi-window equivalent).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -616,6 +619,20 @@ pub struct FilePreviewState {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderAuthMethodSpec {
+    pub id: String,
+    #[serde(rename = "type", default)]
+    pub method_type: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<String>,
+    #[serde(default)]
+    pub oauth_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderModelSummary {
     pub id: String,
     pub name: String,
@@ -1014,6 +1031,28 @@ pub struct UpdaterState {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DiagnosticsBundleState {
+    pub path: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub upload_configured: bool,
+    #[serde(default)]
+    pub upload_enabled: bool,
+    #[serde(default)]
+    pub uploaded: bool,
+    #[serde(default)]
+    pub diagnostic_id: Option<String>,
+    #[serde(default)]
+    pub upload_url: Option<String>,
+    #[serde(default)]
+    pub upload_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OnboardingState {
     pub completed: bool,
     pub dismissed: bool,
@@ -1240,8 +1279,10 @@ pub struct AppState {
     pub explorer_expanded_dirs: HashSet<String>,
     pub provider_catalog: Vec<ProviderSummary>,
     pub provider_auth_methods: HashMap<String, Vec<String>>,
+    pub provider_auth_method_specs: HashMap<String, Vec<ProviderAuthMethodSpec>>,
     pub default_model_by_provider: HashMap<String, String>,
     pub last_auth_challenge: Option<Value>,
+    pub last_auth_result: Option<Value>,
     pub codex_app_server_status: Option<Value>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub marketplaces: Vec<Value>,
@@ -1259,6 +1300,7 @@ pub struct AppState {
     pub usage_summary: Option<UsageSummary>,
     pub usage_by_thread: HashMap<String, Value>,
     pub runtime_diagnostics: Option<RuntimeDiagnosticsReadResult>,
+    pub diagnostics_bundle: Option<DiagnosticsBundleState>,
     pub libreoffice_check: Option<RuntimeLibreOfficeCheckResult>,
     pub libreoffice_status: Option<Value>,
     pub telemetry_status: Option<Value>,
@@ -1340,8 +1382,10 @@ impl Default for AppState {
             explorer_expanded_dirs: HashSet::new(),
             provider_catalog: Vec::new(),
             provider_auth_methods: HashMap::new(),
+            provider_auth_method_specs: HashMap::new(),
             default_model_by_provider: HashMap::new(),
             last_auth_challenge: None,
+            last_auth_result: None,
             codex_app_server_status: None,
             mcp_servers: Vec::new(),
             marketplaces: Vec::new(),
@@ -1359,6 +1403,7 @@ impl Default for AppState {
             usage_summary: None,
             usage_by_thread: HashMap::new(),
             runtime_diagnostics: None,
+            diagnostics_bundle: None,
             libreoffice_check: None,
             libreoffice_status: None,
             telemetry_status: None,
@@ -1558,6 +1603,106 @@ impl AppState {
                 t.model = Some(m.to_string());
             }
         }
+    }
+
+    fn resolve_provider_oauth_method(&self, provider: &str) -> String {
+        if let Some(specs) = self.provider_auth_method_specs.get(provider)
+            && let Some(m) = specs.iter().find(|m| m.method_type == "oauth")
+        {
+            return m.id.clone();
+        }
+        if let Some(ids) = self.provider_auth_methods.get(provider)
+            && let Some(id) = ids.iter().find(|id| id.contains("oauth"))
+        {
+            return id.clone();
+        }
+        if provider == "codex-cli" {
+            "oauth_cli".to_string()
+        } else {
+            "oauth".to_string()
+        }
+    }
+
+    fn resolve_provider_api_key_method(&self, provider: &str) -> Option<String> {
+        let specs = self.provider_auth_method_specs.get(provider)?;
+        specs
+            .iter()
+            .find(|m| m.method_type == "api" && m.fields.is_empty())
+            .or_else(|| specs.iter().find(|m| m.method_type == "api"))
+            .map(|m| m.id.clone())
+    }
+
+    fn resolve_provider_config_method(&self, provider: &str) -> Result<String, String> {
+        if let Some(specs) = self.provider_auth_method_specs.get(provider)
+            && !specs.is_empty()
+        {
+            if let Some(m) = specs
+                .iter()
+                .find(|m| m.method_type == "api" && !m.fields.is_empty())
+            {
+                return Ok(m.id.clone());
+            }
+            return Err(format!(
+                "Provider \"{provider}\" does not support structured configuration."
+            ));
+        }
+        if let Some(ids) = self.provider_auth_methods.get(provider)
+            && !ids.is_empty()
+        {
+            if let Some(id) = ids
+                .iter()
+                .find(|id| *id != "api_key" && !id.contains("oauth"))
+            {
+                return Ok(id.clone());
+            }
+            return Err(format!(
+                "Provider \"{provider}\" does not support structured configuration."
+            ));
+        }
+        Ok("config".to_string())
+    }
+
+    fn send_interaction_server_response(
+        &mut self,
+        workspace_id: String,
+        thread_id: &str,
+        id: JsonRpcLiteId,
+        result: Value,
+    ) {
+        let req_key = request_id_key(&id);
+        let item_id = self.thread_runtime_by_id.get(thread_id).and_then(|rt| {
+            rt.pending_interactions
+                .iter()
+                .find(|item| interaction_request_id(item) == &id)
+                .map(|item| interaction_item_id(item).to_string())
+        });
+        if self.services.ws_tx.is_some()
+            && !matches!(
+                self.workspace_socket_by_id.get(&workspace_id),
+                Some(WsConnectionState::Connected)
+            )
+        {
+            let rt = self
+                .thread_runtime_by_id
+                .entry(thread_id.to_string())
+                .or_default();
+            rt.interaction_errors.insert(
+                req_key,
+                "The response could not be sent. Reconnect and retry.".to_string(),
+            );
+            return;
+        }
+        if let Some(rt) = self.thread_runtime_by_id.get_mut(thread_id) {
+            rt.interaction_errors.remove(&req_key);
+            if let Some(iid) = item_id {
+                rt.interaction_errors.remove(&iid);
+            }
+        }
+        self.send_ws(WsCommand::SendServerResponse {
+            workspace_id,
+            id,
+            result,
+        });
     }
 
     /// Returns workspaces ordered for display (non-archived, respecting `workspace_order`).
@@ -2074,6 +2219,37 @@ impl AppState {
                 self.pending_rpc_meta.remove(&request_id);
                 self.apply_ws_response(&workspace_id, request_id, &method, result);
             }
+            StoreEvent::WsServerResponseResult {
+                workspace_id: _,
+                request_id,
+                ok,
+                error,
+            } => {
+                let req_key = request_id_key(&request_id);
+                for rt in self.thread_runtime_by_id.values_mut() {
+                    let matched_item_id = rt.pending_interactions.iter().find_map(|item| {
+                        (interaction_request_id(item) == &request_id)
+                            .then(|| interaction_item_id(item).to_string())
+                    });
+                    let had_error = rt.interaction_errors.contains_key(&req_key);
+                    if matched_item_id.is_none() && !had_error {
+                        continue;
+                    }
+                    if ok {
+                        rt.pending_interactions
+                            .retain(|item| interaction_request_id(item) != &request_id);
+                        rt.interaction_errors.remove(&req_key);
+                        if let Some(iid) = matched_item_id {
+                            rt.interaction_errors.remove(&iid);
+                        }
+                    } else {
+                        let msg = error.clone().unwrap_or_else(|| {
+                            "The response could not be sent. Reconnect and retry.".to_string()
+                        });
+                        rt.interaction_errors.insert(req_key.clone(), msg);
+                    }
+                }
+            }
             StoreEvent::WsInvalidMessage {
                 workspace_id,
                 message,
@@ -2083,6 +2259,9 @@ impl AppState {
                     .entry(workspace_id)
                     .or_default();
                 rt.last_error = Some(message);
+            }
+            StoreEvent::DiagnosticsBundleUpdated(bundle) => {
+                self.diagnostics_bundle = bundle;
             }
             StoreEvent::UpdaterChanged(updater) => {
                 self.updater = updater;
@@ -2988,19 +3167,8 @@ impl AppState {
                 id,
                 response,
             } => {
-                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
-                    rt.pending_interactions.retain(|item| match item {
-                        ChatInteraction::CommandApproval { request_id, .. }
-                        | ChatInteraction::FileChangeApproval { request_id, .. }
-                        | ChatInteraction::UserInput { request_id, .. } => request_id != &id,
-                    });
-                }
                 if let Ok(result) = serde_json::to_value(response) {
-                    self.send_ws(WsCommand::SendServerResponse {
-                        workspace_id,
-                        id,
-                        result,
-                    });
+                    self.send_interaction_server_response(workspace_id, &thread_id, id, result);
                 }
             }
             ChatAction::SubmitUserInput {
@@ -3009,18 +3177,8 @@ impl AppState {
                 id,
                 answers,
             } => {
-                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
-                    rt.pending_interactions.retain(|item| match item {
-                        ChatInteraction::UserInput { request_id, .. } => request_id != &id,
-                        _ => true,
-                    });
-                }
                 let result = json!({ "answers": answers });
-                self.send_ws(WsCommand::SendServerResponse {
-                    workspace_id,
-                    id,
-                    result,
-                });
+                self.send_interaction_server_response(workspace_id, &thread_id, id, result);
             }
             ChatAction::OpenAgentViewer { agent_id, title }
             | ChatAction::OpenAgentThread { agent_id, title } => {
@@ -3068,27 +3226,75 @@ impl AppState {
                         };
                         let _ = self.send_ws_typed(&ws_id, "turn/start", &params, false);
                     }
-                } else {
-                    let last_user_text = self.thread_runtime_by_id.get(&thread_id).and_then(|rt| {
-                        rt.feed.iter().rev().find_map(|item| match item {
-                            FeedItem::Message {
-                                role: FeedMessageRole::User,
-                                content,
-                                ..
-                            } => Some(content.clone()),
-                            _ => None,
-                        })
+                } else if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
+                    let supports_retry_lineage = self
+                        .workspace_runtime_by_id
+                        .get(&ws_id)
+                        .and_then(|w| w.capabilities.as_ref())
+                        .and_then(|c| c.get("toolRetryLineage"))
+                        .and_then(Value::as_bool)
+                        != Some(false);
+                    let retry_plan = self.thread_runtime_by_id.get(&thread_id).and_then(|rt| {
+                        let last_user_idx = rt.feed.iter().rposition(|item| {
+                            matches!(
+                                item,
+                                FeedItem::Message {
+                                    role: FeedMessageRole::User,
+                                    content,
+                                    ..
+                                } if content.trim() != HIDDEN_RETRY_TURN_PROMPT
+                            )
+                        });
+                        let tail_start = last_user_idx.map(|i| i + 1).unwrap_or(0);
+                        let failed_tool_ids: Vec<String> = rt.feed[tail_start..]
+                            .iter()
+                            .filter_map(|item| match item {
+                                FeedItem::Tool {
+                                    id,
+                                    status: ToolRunStatus::Failed,
+                                    ..
+                                } => Some(id.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if supports_retry_lineage && !failed_tool_ids.is_empty() {
+                            return Some((
+                                TurnInput::Text(HIDDEN_RETRY_TURN_PROMPT.to_string()),
+                                None,
+                                Some(TurnRetrySpec {
+                                    tool_item_ids: failed_tool_ids,
+                                }),
+                            ));
+                        }
+                        let user_idx = last_user_idx?;
+                        if let FeedItem::Message {
+                            content,
+                            attachments,
+                            references,
+                            ..
+                        } = &rt.feed[user_idx]
+                        {
+                            if content.trim().is_empty() && attachments.is_empty() {
+                                return None;
+                            }
+                            let refs = (!references.is_empty()).then(|| {
+                                references
+                                    .iter()
+                                    .filter_map(|r| serde_json::to_value(r).ok())
+                                    .collect()
+                            });
+                            return Some((build_turn_input(content, attachments), refs, None));
+                        }
+                        None
                     });
-                    if let (Some(ws_id), Some(text)) =
-                        (self.workspace_for_thread(&thread_id), last_user_text)
-                    {
+                    if let Some((input, references, retry)) = retry_plan {
                         let cid = self.next_tag("retry");
                         let params = TurnStartParams {
                             thread_id,
                             client_message_id: Some(cid),
-                            input: TurnInput::Text(text),
-                            references: None,
-                            retry: None,
+                            input,
+                            references,
+                            retry,
                             tools: None,
                         };
                         let _ = self.send_ws_typed(&ws_id, "turn/start", &params, false);
@@ -3480,10 +3686,11 @@ impl AppState {
                 api_key,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let method_id = self.resolve_provider_api_key_method(&provider);
                 let params = ProviderAuthSetApiKeyParams {
                     cwd,
                     provider,
-                    method_id: None,
+                    method_id,
                     api_key,
                 };
                 let _ = self.send_ws_typed(
@@ -3498,12 +3705,7 @@ impl AppState {
                 provider,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let method_id = self
-                    .provider_auth_methods
-                    .get(&provider)
-                    .and_then(|m| m.first())
-                    .cloned()
-                    .unwrap_or_else(|| "oauth".to_string());
+                let method_id = self.resolve_provider_oauth_method(&provider);
                 let params = ProviderAuthAuthorizeParams {
                     cwd,
                     provider,
@@ -3541,6 +3743,18 @@ impl AppState {
                 provider,
                 config,
             } => {
+                let method_id = match self.resolve_provider_config_method(&provider) {
+                    Ok(id) => id,
+                    Err(message) => {
+                        self.last_auth_result = Some(json!({
+                            "ok": false,
+                            "provider": provider,
+                            "message": message.clone(),
+                        }));
+                        self.settings_mutation_error = Some(message);
+                        return;
+                    }
+                };
                 let cwd = self.workspace_path(&workspace_id);
                 let values: HashMap<String, String> = config
                     .as_object()
@@ -3554,12 +3768,6 @@ impl AppState {
                             .collect()
                     })
                     .unwrap_or_default();
-                let method_id = self
-                    .provider_auth_methods
-                    .get(&provider)
-                    .and_then(|m| m.first())
-                    .cloned()
-                    .unwrap_or_else(|| "config".to_string());
                 let params = ProviderAuthSetConfigParams {
                     cwd,
                     provider,
@@ -4319,15 +4527,32 @@ impl AppState {
                 workspace_id,
                 backup_id,
             } => {
-                let cwd = self.workspace_path(&workspace_id);
                 let (target_session_id, checkpoint_id) = match backup_id.split_once("::") {
                     Some((sid, cp)) => (sid.to_string(), Some(cp.to_string())),
                     None => (backup_id, None),
                 };
+                self.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
+                    workspace_id,
+                    target_session_id,
+                    checkpoint_id,
+                }));
+            }
+            SettingsAction::RestoreBackupCheckpoint {
+                workspace_id,
+                target_session_id,
+                checkpoint_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut params = Map::new();
+                params.insert("cwd".to_string(), json!(cwd));
+                params.insert("targetSessionId".to_string(), json!(target_session_id));
+                if let Some(cp) = checkpoint_id.filter(|s| !s.is_empty()) {
+                    params.insert("checkpointId".to_string(), json!(cp));
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/backups/workspace/restore",
-                    json!({ "cwd": cwd, "targetSessionId": target_session_id, "checkpointId": checkpoint_id }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4382,6 +4607,10 @@ impl AppState {
                     .retain(|p| p.id != phone_id);
                 self.send_native(NativeCommand::ForgetTrustedPhone(phone_id));
             }
+            SettingsAction::RevokeAllTrustedPhones => {
+                self.remote_access.trusted_phones.clear();
+                self.send_native(NativeCommand::RevokeAllTrustedPhones);
+            }
             SettingsAction::UpdatePrivacyTelemetry(privacy) => {
                 self.desktop_settings.privacy_telemetry = privacy;
                 self.persist_state();
@@ -4391,6 +4620,22 @@ impl AppState {
             }
             SettingsAction::ExportDiagnosticsBundle => {
                 self.send_native(NativeCommand::ExportDiagnosticsBundle);
+            }
+            SettingsAction::OpenLogsFolder => {
+                self.send_native(NativeCommand::OpenLogsFolder);
+            }
+            SettingsAction::RevealDiagnosticsBundle { path } => {
+                let target =
+                    path.or_else(|| self.diagnostics_bundle.as_ref().map(|b| b.path.clone()));
+                self.send_native(NativeCommand::RevealDiagnosticsBundle(target));
+            }
+            SettingsAction::UploadDiagnosticsBundle { path, confirmed } => {
+                let target =
+                    path.or_else(|| self.diagnostics_bundle.as_ref().map(|b| b.path.clone()));
+                self.send_native(NativeCommand::UploadDiagnosticsBundle {
+                    path: target,
+                    confirmed,
+                });
             }
             SettingsAction::RestartOnboarding => {
                 self.onboarding = OnboardingState::default();
@@ -5222,36 +5467,24 @@ impl AppState {
         let Some(tid) = params.get("threadId").and_then(Value::as_str) else {
             return;
         };
-        let req_id_val = params.get("requestId").cloned();
+        let req_id = params
+            .get("requestId")
+            .and_then(|v| serde_json::from_value::<JsonRpcLiteId>(v.clone()).ok());
         let item_id = params.get("itemId").and_then(Value::as_str);
         if let Some(rt) = self.thread_runtime_by_id.get_mut(tid) {
-            rt.pending_interactions
-                .retain(|interaction| match interaction {
-                    ChatInteraction::CommandApproval {
-                        request_id,
-                        item_id: iid,
-                        ..
-                    }
-                    | ChatInteraction::FileChangeApproval {
-                        request_id,
-                        item_id: iid,
-                        ..
-                    }
-                    | ChatInteraction::UserInput {
-                        request_id,
-                        item_id: iid,
-                        ..
-                    } => {
-                        let id_matches = req_id_val.as_ref().is_some_and(|v| {
-                            serde_json::from_value::<JsonRpcLiteId>(v.clone())
-                                .ok()
-                                .as_ref()
-                                == Some(request_id)
-                        });
-                        let item_matches = item_id.is_some_and(|i| i == iid);
-                        !(id_matches || item_matches)
-                    }
-                });
+            rt.pending_interactions.retain(|interaction| {
+                let id_matches = req_id
+                    .as_ref()
+                    .is_some_and(|id| id == interaction_request_id(interaction));
+                let item_matches = item_id.is_some_and(|i| i == interaction_item_id(interaction));
+                !(id_matches || item_matches)
+            });
+            if let Some(ref id) = req_id {
+                rt.interaction_errors.remove(&request_id_key(id));
+            }
+            if let Some(iid) = item_id {
+                rt.interaction_errors.remove(iid);
+            }
         }
     }
 
@@ -5662,16 +5895,13 @@ impl AppState {
                 if let Some(obj) = target.get("methodsByProvider").and_then(Value::as_object) {
                     for (prov, val) in obj {
                         if let Some(arr) = val.as_array() {
-                            let ids: Vec<String> = arr
+                            let specs: Vec<ProviderAuthMethodSpec> = arr
                                 .iter()
-                                .filter_map(|m| {
-                                    m.get("id")
-                                        .and_then(Value::as_str)
-                                        .or_else(|| m.as_str())
-                                        .map(str::to_string)
-                                })
+                                .filter_map(parse_provider_auth_method_spec)
                                 .collect();
+                            let ids: Vec<String> = specs.iter().map(|m| m.id.clone()).collect();
                             self.provider_auth_methods.insert(prov.clone(), ids);
+                            self.provider_auth_method_specs.insert(prov.clone(), specs);
                         }
                     }
                 }
@@ -5693,6 +5923,17 @@ impl AppState {
             }
             "cowork/provider/auth/authorize" => {
                 self.last_auth_challenge = Some(payload);
+            }
+            "cowork/provider/auth/callback"
+            | "cowork/provider/auth/setApiKey"
+            | "cowork/provider/auth/setConfig" => {
+                let evt = payload.get("event").unwrap_or(&payload);
+                self.last_auth_result = Some(evt.clone());
+                if evt.get("ok").and_then(Value::as_bool) == Some(false)
+                    && let Some(msg) = evt.get("message").and_then(Value::as_str)
+                {
+                    self.settings_mutation_error = Some(msg.to_string());
+                }
             }
             "cowork/provider/codexAppServer/status" | "cowork/provider/codexAppServer/update" => {
                 self.codex_app_server_status = Some(payload);
@@ -6898,6 +7139,75 @@ fn parse_backup_delta(v: &Value) -> Option<BackupDeltaView> {
         files,
         truncated: v.get("truncated").and_then(Value::as_bool).unwrap_or(false),
     })
+}
+
+fn parse_provider_auth_method_spec(v: &Value) -> Option<ProviderAuthMethodSpec> {
+    if let Some(s) = v.as_str() {
+        return (!s.is_empty()).then(|| ProviderAuthMethodSpec {
+            id: s.to_string(),
+            method_type: String::new(),
+            label: None,
+            fields: Vec::new(),
+            oauth_mode: None,
+        });
+    }
+    let id = v.get("id").and_then(Value::as_str)?.to_string();
+    let method_type = v
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let label = v.get("label").and_then(Value::as_str).map(str::to_string);
+    let fields = v
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    f.get("id")
+                        .or_else(|| f.get("key"))
+                        .or_else(|| f.get("name"))
+                        .and_then(Value::as_str)
+                        .or_else(|| f.as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let oauth_mode = v
+        .get("oauthMode")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(ProviderAuthMethodSpec {
+        id,
+        method_type,
+        label,
+        fields,
+        oauth_mode,
+    })
+}
+
+fn interaction_request_id(item: &ChatInteraction) -> &JsonRpcLiteId {
+    match item {
+        ChatInteraction::CommandApproval { request_id, .. }
+        | ChatInteraction::FileChangeApproval { request_id, .. }
+        | ChatInteraction::UserInput { request_id, .. } => request_id,
+    }
+}
+
+fn interaction_item_id(item: &ChatInteraction) -> &str {
+    match item {
+        ChatInteraction::CommandApproval { item_id, .. }
+        | ChatInteraction::FileChangeApproval { item_id, .. }
+        | ChatInteraction::UserInput { item_id, .. } => item_id.as_str(),
+    }
+}
+
+fn request_id_key(id: &JsonRpcLiteId) -> String {
+    match id {
+        JsonRpcLiteId::String(s) => s.clone(),
+        JsonRpcLiteId::Number(n) => n.to_string(),
+    }
 }
 
 fn parse_timestamp_ms(val: Option<&Value>) -> i64 {
@@ -8494,5 +8804,358 @@ mod tests {
             .find(|t| t.id == "th-server-2")
             .expect("expected second server thread");
         assert_eq!(th2.reasoning_effort.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn start_provider_auth_and_set_provider_config_respect_method_specs() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "cowork/provider/authMethods/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "methodsByProvider": {
+                        "anthropic": [
+                            { "id": "api_key", "type": "api", "label": "API key" },
+                            { "id": "claude-oauth", "type": "oauth", "label": "Claude Pro/Max" }
+                        ],
+                        "codex-cli": [
+                            { "id": "oauth_cli", "type": "oauth", "label": "Codex CLI" }
+                        ],
+                        "bedrock": [
+                            {
+                                "id": "aws_profile",
+                                "type": "api",
+                                "label": "AWS Profile",
+                                "fields": [{ "id": "profile", "label": "Profile" }]
+                            }
+                        ]
+                    }
+                }
+            })),
+        });
+
+        state.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+            workspace_id: "ws-1".to_string(),
+            provider: "anthropic".to_string(),
+        }));
+        let auth_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/provider/auth/authorize" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected authorize request for anthropic");
+        assert_eq!(auth_params["methodId"], "claude-oauth");
+
+        state.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+            workspace_id: "ws-1".to_string(),
+            provider: "codex-cli".to_string(),
+        }));
+        let codex_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/provider/auth/authorize" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(codex_params["methodId"], "oauth_cli");
+
+        state.dispatch(Action::Settings(SettingsAction::SetProviderConfig {
+            workspace_id: "ws-1".to_string(),
+            provider: "bedrock".to_string(),
+            config: json!({ "profile": "prod" }),
+        }));
+        let bedrock_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/provider/auth/setConfig" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected setConfig for bedrock");
+        assert_eq!(bedrock_params["methodId"], "aws_profile");
+
+        let before_invalid = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Settings(SettingsAction::SetProviderConfig {
+            workspace_id: "ws-1".to_string(),
+            provider: "anthropic".to_string(),
+            config: json!({ "baseUrl": "https://example.test" }),
+        }));
+        assert_eq!(state.services.emitted_ws_commands.len(), before_invalid);
+        assert_eq!(
+            state.last_auth_result.as_ref().and_then(|r| r.get("ok")),
+            Some(&json!(false))
+        );
+    }
+
+    #[test]
+    fn retry_failed_turn_preserves_attachments_references_and_tool_retry_lineage() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            ..Default::default()
+        });
+        let rt = state
+            .thread_runtime_by_id
+            .entry("th-1".to_string())
+            .or_default();
+        rt.feed.push(FeedItem::Message {
+            id: "u-1".to_string(),
+            role: FeedMessageRole::User,
+            content: "Check attachment and skill".to_string(),
+            client_message_id: Some("cm-1".to_string()),
+            attachments: vec![TurnAttachmentInputPart::UploadedFile {
+                filename: "spec.txt".to_string(),
+                path: "/tmp/demo/spec.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+            }],
+            references: vec![TurnReference {
+                kind: "skill".to_string(),
+                name: "rust-review".to_string(),
+            }],
+            citations: Vec::new(),
+            streaming: false,
+            timestamp_ms: 1,
+        });
+        rt.feed.push(FeedItem::Error {
+            id: "err-1".to_string(),
+            message: "Network timeout".to_string(),
+            code: None,
+            timestamp_ms: 2,
+        });
+
+        state.dispatch(Action::Chat(ChatAction::RetryFailedTurn {
+            thread_id: "th-1".to_string(),
+        }));
+        let retry_full = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "turn/start" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected full-turn retry turn/start");
+        let parts = retry_full["input"].as_array().expect("multipart input");
+        assert!(parts.iter().any(|p| p["type"] == "uploadedFile"));
+        assert_eq!(retry_full["references"][0]["name"], "rust-review");
+        assert!(retry_full["retry"].is_null());
+
+        state
+            .thread_runtime_by_id
+            .get_mut("th-1")
+            .unwrap()
+            .feed
+            .push(FeedItem::Tool {
+                id: "tool-fail-1".to_string(),
+                tool_name: "read_file".to_string(),
+                title: None,
+                call_id: None,
+                status: ToolRunStatus::Failed,
+                input: json!({}),
+                output: None,
+                error: Some("EACCES".to_string()),
+                diff: None,
+                streaming: false,
+                timestamp_ms: 3,
+                completed_at_ms: Some(4),
+                output_truncated: false,
+            });
+        state.dispatch(Action::Chat(ChatAction::RetryFailedTurn {
+            thread_id: "th-1".to_string(),
+        }));
+        let retry_tool = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "turn/start" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected tool-retry turn/start");
+        assert_eq!(retry_tool["input"], HIDDEN_RETRY_TURN_PROMPT);
+        assert_eq!(retry_tool["retry"]["toolItemIds"], json!(["tool-fail-1"]));
+    }
+
+    #[test]
+    fn resolve_server_request_retains_pending_on_failure_and_populates_interaction_errors() {
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::WsServerRequest {
+            workspace_id: "ws-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            method: "item/commandExecution/requestApproval".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "itemId": "cmd-1",
+                "command": "cargo check"
+            }),
+        });
+        assert_eq!(
+            state.thread_runtime_by_id["th-1"]
+                .pending_interactions
+                .len(),
+            1
+        );
+
+        state.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
+            workspace_id: "ws-1".to_string(),
+            thread_id: "th-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            response: cowork_protocol::ServerRequestReceiptResponse::Approval { approved: true },
+        }));
+        assert_eq!(
+            state.thread_runtime_by_id["th-1"]
+                .pending_interactions
+                .len(),
+            1
+        );
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: JsonRpcLiteId::Number(77),
+            ok: false,
+            error: Some("WebSocket write failed".to_string()),
+        });
+        let rt = &state.thread_runtime_by_id["th-1"];
+        assert_eq!(rt.pending_interactions.len(), 1);
+        assert_eq!(
+            rt.interaction_errors.get("77").map(String::as_str),
+            Some("WebSocket write failed")
+        );
+
+        state.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
+            workspace_id: "ws-1".to_string(),
+            thread_id: "th-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            response: cowork_protocol::ServerRequestReceiptResponse::Approval { approved: true },
+        }));
+        assert!(
+            state.thread_runtime_by_id["th-1"]
+                .interaction_errors
+                .is_empty()
+        );
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: JsonRpcLiteId::Number(77),
+            ok: true,
+            error: None,
+        });
+        assert!(
+            state.thread_runtime_by_id["th-1"]
+                .pending_interactions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn restore_backup_checkpoint_and_diagnostics_actions_emit_expected_commands() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
+            workspace_id: "ws-1".to_string(),
+            target_session_id: "sess-1".to_string(),
+            checkpoint_id: None,
+        }));
+        let restore_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/backups/workspace/restore" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(restore_params["targetSessionId"], "sess-1");
+        assert!(restore_params.get("checkpointId").is_none());
+
+        let bundle = DiagnosticsBundleState {
+            path: "/tmp/diag.json".to_string(),
+            created_at: "2026-11-15T00:00:00Z".to_string(),
+            summary: "ok".to_string(),
+            upload_configured: true,
+            upload_enabled: true,
+            ..Default::default()
+        };
+        state.apply_store_event(StoreEvent::DiagnosticsBundleUpdated(Some(bundle.clone())));
+        assert_eq!(state.diagnostics_bundle, Some(bundle));
+
+        state.dispatch(Action::Settings(SettingsAction::OpenLogsFolder));
+        state.dispatch(Action::Settings(SettingsAction::UploadDiagnosticsBundle {
+            path: None,
+            confirmed: true,
+        }));
+        state.dispatch(Action::Settings(SettingsAction::RevokeAllTrustedPhones));
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|c| matches!(c, NativeCommand::OpenLogsFolder))
+        );
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    NativeCommand::UploadDiagnosticsBundle {
+                        path: Some(p),
+                        confirmed: true,
+                    } if p == "/tmp/diag.json"
+                ))
+        );
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|c| matches!(c, NativeCommand::RevokeAllTrustedPhones))
+        );
     }
 }

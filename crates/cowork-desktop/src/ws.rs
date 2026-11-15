@@ -306,8 +306,28 @@ async fn ws_manager_loop(
                 id,
                 result,
             } => {
-                if let Some(tx) = actors.get(&workspace_id) {
-                    let _ = tx.send(WorkspaceActorMsg::SendServerResponse { id, result });
+                let send_err = match actors.get(&workspace_id) {
+                    Some(tx) => tx
+                        .send(WorkspaceActorMsg::SendServerResponse {
+                            id: id.clone(),
+                            result,
+                        })
+                        .is_err(),
+                    None => true,
+                };
+                if send_err {
+                    emit_event(
+                        &event_tx,
+                        &waker,
+                        StoreEvent::WsServerResponseResult {
+                            workspace_id,
+                            request_id: id,
+                            ok: false,
+                            error: Some(
+                                "The response could not be sent. Reconnect and retry.".to_string(),
+                            ),
+                        },
+                    );
                 }
             }
             WsCommand::Shutdown => {
@@ -820,14 +840,52 @@ where
                     }
                     Some(WorkspaceActorMsg::SendServerResponse { id, result }) => {
                         let resp = JsonRpcLiteClientResponse {
-                            id,
+                            id: id.clone(),
                             result: Some(result),
                             error: None,
                         };
-                        if let Ok(txt) = serde_json::to_string(&resp)
-                            && let Err(err) = ws_stream.send(Message::text(txt)).await
-                        {
-                            break format!("WebSocket write failed: {err}");
+                        match serde_json::to_string(&resp) {
+                            Ok(txt) => {
+                                if let Err(err) = ws_stream.send(Message::text(txt)).await {
+                                    emit_event(
+                                        event_tx,
+                                        waker,
+                                        StoreEvent::WsServerResponseResult {
+                                            workspace_id: workspace_id.to_string(),
+                                            request_id: id,
+                                            ok: false,
+                                            error: Some(format!(
+                                                "The response could not be sent: {err}"
+                                            )),
+                                        },
+                                    );
+                                    break format!("WebSocket write failed: {err}");
+                                }
+                                emit_event(
+                                    event_tx,
+                                    waker,
+                                    StoreEvent::WsServerResponseResult {
+                                        workspace_id: workspace_id.to_string(),
+                                        request_id: id,
+                                        ok: true,
+                                        error: None,
+                                    },
+                                );
+                            }
+                            Err(err) => {
+                                emit_event(
+                                    event_tx,
+                                    waker,
+                                    StoreEvent::WsServerResponseResult {
+                                        workspace_id: workspace_id.to_string(),
+                                        request_id: id,
+                                        ok: false,
+                                        error: Some(format!(
+                                            "Failed to serialize response: {err}"
+                                        )),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -1060,9 +1118,19 @@ fn handle_offline_msg(
                 );
             }
         }
-        WorkspaceActorMsg::SendNotification { .. }
-        | WorkspaceActorMsg::SendServerResponse { .. }
-        | WorkspaceActorMsg::Disconnect => {}
+        WorkspaceActorMsg::SendServerResponse { id, .. } => {
+            emit_event(
+                event_tx,
+                waker,
+                StoreEvent::WsServerResponseResult {
+                    workspace_id: workspace_id.to_string(),
+                    request_id: id,
+                    ok: false,
+                    error: Some("The response could not be sent. Reconnect and retry.".to_string()),
+                },
+            );
+        }
+        WorkspaceActorMsg::SendNotification { .. } | WorkspaceActorMsg::Disconnect => {}
     }
 }
 

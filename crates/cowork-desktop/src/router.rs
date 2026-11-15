@@ -357,6 +357,21 @@ impl NavigationHistory {
         self.entries[self.cursor] = next;
     }
 
+    /// Rewrites every history entry pointing at `old_id` (including back/forward entries) to `new_id`.
+    pub fn rekey_thread_id(&mut self, old_id: &str, new_id: &str) -> bool {
+        if old_id == new_id {
+            return false;
+        }
+        let mut changed = false;
+        for entry in &mut self.entries {
+            if entry.active_thread_id.as_deref() == Some(old_id) {
+                entry.active_thread_id = Some(new_id.to_string());
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn go_back(&mut self) -> bool {
         if !self.can_go_back() {
             return false;
@@ -500,5 +515,25 @@ mod tests {
             SettingsPageId::from_route_segment("not-a-page"),
             SettingsPageId::Models
         );
+    }
+
+    #[test]
+    fn rekey_thread_id_updates_current_and_history_entries() {
+        let mut nav = NavigationHistory::new(NavigationSnapshot::default());
+        nav.update(NavigationPatch {
+            view: Some(ViewId::Chat),
+            active_thread_id: Some(Some("__draft-1".to_string())),
+            ..Default::default()
+        });
+        nav.update(NavigationPatch {
+            view: Some(ViewId::Settings),
+            settings_page: Some(SettingsPageId::Models),
+            ..Default::default()
+        });
+        assert!(nav.rekey_thread_id("__draft-1", "srv-1"));
+        assert!(!nav.rekey_thread_id("__draft-1", "srv-1"));
+        assert_eq!(nav.current().active_thread_id.as_deref(), Some("srv-1"));
+        assert!(nav.go_back());
+        assert_eq!(nav.current().active_thread_id.as_deref(), Some("srv-1"));
     }
 }

@@ -441,4 +441,112 @@ fn desktop_starts_workspace_server_lists_threads_and_streams_reply() {
                 .any(|s| s.provider == "openai" && (s.connected || s.healthy))),
         "openai status should report connected with OPENAI_API_KEY"
     );
+    assert!(
+        pump_until(&mut state, Duration::from_secs(10), |s| s
+            .workspace_creation_preflight
+            .as_ref()
+            .is_some_and(|p| p.ready)),
+        "creation preflight should settle to ready once OpenAI provider is active: {:?}",
+        state.workspace_creation_preflight
+    );
+    assert_eq!(
+        state.nav.current().active_thread_id.as_deref(),
+        Some(thread_id.as_str()),
+        "active thread must stay selected after send and reply"
+    );
+
+    // Explicitly shut down cleanly so persisted desktop-state.json + transcripts flush before restart.
+    drop(state);
+
+    let mut restarted = ShutdownGuard::new(AppState::default());
+    let event_tx2 = restarted.services.event_tx.clone();
+    restarted.services.ws_tx = Some(spawn_ws_manager(event_tx2.clone(), None));
+    restarted.services.native_tx = Some(spawn_native_worker(event_tx2, None));
+
+    assert!(
+        pump_until(&mut restarted, Duration::from_secs(10), |s| s.native_ready),
+        "timed out waiting for NativeReady on restart"
+    );
+    assert_eq!(
+        restarted.active_workspace_id.as_deref(),
+        Some(ws_id.as_str()),
+        "restart should restore active workspace"
+    );
+    assert_eq!(
+        restarted.nav.current().active_thread_id.as_deref(),
+        Some(thread_id.as_str()),
+        "restart should reopen persisted activeThreadId instead of landing"
+    );
+    assert!(
+        pump_until(&mut restarted, Duration::from_secs(30), |s| {
+            let Some(rt) = s.thread_runtime_by_id.get(&thread_id) else {
+                return false;
+            };
+            let has_user = rt.feed.iter().any(|item| {
+                matches!(
+                    item,
+                    FeedItem::Message {
+                        role: FeedMessageRole::User,
+                        content,
+                        ..
+                    } if content.contains("Please respond with the E2E greeting.")
+                )
+            });
+            let has_reply = rt.feed.iter().any(|item| {
+                matches!(
+                    item,
+                    FeedItem::Message {
+                        role: FeedMessageRole::Assistant,
+                        content,
+                        ..
+                    } if content.contains(MOCK_REPLY)
+                )
+            });
+            rt.hydrated && !rt.transcript_only && has_user && has_reply
+        }),
+        "restarted app should hydrate restored thread from server: runtime={:?}",
+        restarted.thread_runtime_by_id.get(&thread_id)
+    );
+
+    // Submitting directly from New Chat landing must promote nav from __draft-* to real server thread and stream reply.
+    restarted.dispatch(Action::Navigate(
+        cowork_desktop::actions::NavAction::OpenNewChat {
+            workspace_id: Some(ws_id.clone()),
+        },
+    ));
+    assert!(restarted.nav.current().active_thread_id.is_none());
+    restarted.dispatch(Action::Chat(ChatAction::SendMessage {
+        thread_id: None,
+        text: "Landing E2E prompt.".to_string(),
+        busy_policy: ThreadBusyPolicy::Steer,
+        attachments: Vec::new(),
+        references: Vec::new(),
+    }));
+    assert!(
+        pump_until(&mut restarted, Duration::from_secs(20), |s| {
+            let Some(active_tid) = s.nav.current().active_thread_id.as_deref() else {
+                return false;
+            };
+            if active_tid == thread_id || active_tid.starts_with("__draft-") {
+                return false;
+            }
+            let Some(rt) = s.thread_runtime_by_id.get(active_tid) else {
+                return false;
+            };
+            let has_reply = rt.feed.iter().any(|item| {
+                matches!(
+                    item,
+                    FeedItem::Message {
+                        role: FeedMessageRole::Assistant,
+                        content,
+                        ..
+                    } if content.contains(MOCK_REPLY)
+                )
+            });
+            !rt.streaming && has_reply
+        }),
+        "landing SendMessage should promote active_thread_id and stream reply: nav={:?}, threads={:?}",
+        restarted.nav.current(),
+        restarted.threads
+    );
 }

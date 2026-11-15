@@ -7,10 +7,13 @@
 pub mod actions;
 pub mod native;
 pub mod router;
+pub mod shortcuts;
 pub mod state;
 pub mod theme;
 pub mod views;
 pub mod ws;
+
+pub use shortcuts::{is_apple_platform, shortcut_label, shortcut_label_for_platform};
 
 use std::cell::RefCell;
 
@@ -55,6 +58,9 @@ fn enter_shared_turn(state: &mut AppState) {
             state.swap_shared_core(shared);
         }
     });
+    if state.reconcile_rekeyed_thread_ids() {
+        state.shared_dirty = true;
+    }
 }
 
 fn leave_shared_turn(state: &mut AppState) {
@@ -435,7 +441,13 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
     if !state.scene_mode {
         state.now_secs = state::wall_clock_epoch_secs();
     }
-    let mut changed = state.drain_events();
+    let mut changed = state.reconcile_rekeyed_thread_ids();
+    // Only the primary Main window owns background ws/native event draining in live multi-window mode
+    // so secondary windows never steal WS responses or persist stale Main nav state.
+    if state.scene_mode || state.window_mode == WindowMode::Main {
+        changed |= state.drain_events();
+        changed |= state.reconcile_rekeyed_thread_ids();
+    }
     if !state.scene_mode {
         let mode = state.window_mode;
         let sync_repaint = WINDOW_HUB.with(|cell| {

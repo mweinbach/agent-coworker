@@ -1655,6 +1655,9 @@ pub struct AppState {
     pub(crate) canvas_generation_seq: u64,
     pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) persisted_active_thread_id: Option<String>,
+    pub(crate) rekeyed_thread_ids: HashMap<String, String>,
+    pub(crate) latest_creation_preflight_rpc_id: Option<u64>,
     pub(crate) shared_dirty: bool,
 }
 
@@ -1782,6 +1785,9 @@ impl Default for AppState {
             canvas_generation_seq: 1,
             pending_canvas_rpcs: HashMap::new(),
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
+            persisted_active_thread_id: None,
+            rekeyed_thread_ids: HashMap::new(),
+            latest_creation_preflight_rpc_id: None,
             shared_dirty: false,
         }
     }
@@ -1975,6 +1981,7 @@ impl AppState {
                 t.model = Some(m.to_string());
             }
         }
+        self.refresh_creation_preflight();
     }
 
     fn resolve_provider_oauth_method(&self, provider: &str) -> String {
@@ -3290,11 +3297,64 @@ impl AppState {
                 .entry(new_id.to_string())
                 .or_insert(usage);
         }
-        if self.nav.current().active_thread_id.as_deref() == Some(old_id) {
-            let mut cur = self.nav.current().clone();
-            cur.active_thread_id = Some(new_id.to_string());
-            self.nav.replace_current(cur);
+        if old_id != new_id {
+            self.rekeyed_thread_ids
+                .insert(old_id.to_string(), new_id.to_string());
         }
+        self.nav.rekey_thread_id(old_id, new_id);
+        if self.persisted_active_thread_id.as_deref() == Some(old_id) {
+            self.persisted_active_thread_id = Some(new_id.to_string());
+        }
+    }
+
+    /// Rewrites any stale draft thread IDs held in this window's navigation history
+    /// after another window (or earlier response) rekeyed them to server thread IDs.
+    pub fn reconcile_rekeyed_thread_ids(&mut self) -> bool {
+        if self.rekeyed_thread_ids.is_empty() {
+            return false;
+        }
+        let pairs: Vec<(String, String)> = self
+            .rekeyed_thread_ids
+            .keys()
+            .filter_map(|old_id| {
+                self.resolve_rekeyed_thread_id(old_id)
+                    .map(|new_id| (old_id.clone(), new_id))
+            })
+            .collect();
+        let mut changed = false;
+        for (old_id, new_id) in pairs {
+            if self.nav.rekey_thread_id(&old_id, &new_id) {
+                changed = true;
+            }
+        }
+        if changed
+            && self.window_mode == WindowMode::Main
+            && let Some(cur_tid) = self.nav.current().active_thread_id.clone()
+        {
+            self.persisted_active_thread_id = Some(cur_tid).filter(|tid| {
+                self.threads
+                    .iter()
+                    .find(|t| &t.id == tid)
+                    .is_none_or(|t| !t.draft)
+            });
+        }
+        changed
+    }
+
+    fn resolve_rekeyed_thread_id(&self, start: &str) -> Option<String> {
+        let mut cur = start;
+        let mut resolved = None;
+        for _ in 0..8 {
+            let Some(next) = self.rekeyed_thread_ids.get(cur) else {
+                break;
+            };
+            if next == cur || next == start {
+                break;
+            }
+            cur = next.as_str();
+            resolved = Some(next.clone());
+        }
+        resolved
     }
 
     /// Persists the current `composer_edit` text under `old_key` and loads `new_key`'s draft text.
@@ -3457,15 +3517,39 @@ impl AppState {
                     persisted.collapsed_workspace_ids.into_iter().collect();
                 self.collapsed_sidebar_sections =
                     persisted.collapsed_sidebar_sections.into_iter().collect();
-                self.active_workspace_id = persisted.active_workspace_id;
-                if let Some(thread_id) = persisted.active_thread_id {
+                self.active_workspace_id = persisted
+                    .active_workspace_id
+                    .filter(|id| self.workspaces.iter().any(|w| w.id == *id && !w.archived));
+                let restored_thread = persisted.active_thread_id.and_then(|thread_id| {
+                    if let Some(t) = self.threads.iter().find(|t| t.id == thread_id) {
+                        if t.archived {
+                            None
+                        } else {
+                            Some((t.id.clone(), Some(t.workspace_id.clone())))
+                        }
+                    } else if self.threads.is_empty() && self.active_workspace_id.is_some() {
+                        Some((thread_id, self.active_workspace_id.clone()))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((thread_id, thread_ws_id)) = restored_thread {
+                    if let Some(ws_id) = thread_ws_id
+                        && self.workspaces.iter().any(|w| w.id == ws_id && !w.archived)
+                    {
+                        self.active_workspace_id = Some(ws_id);
+                    }
+                    self.persisted_active_thread_id = Some(thread_id.clone());
                     self.nav.replace_current(NavigationSnapshot {
                         view: ViewId::Chat,
                         settings_page: self.nav.current().settings_page,
                         last_non_settings_view: ViewId::Chat,
-                        active_thread_id: Some(thread_id),
+                        active_thread_id: Some(thread_id.clone()),
                         ..NavigationSnapshot::default()
                     });
+                    self.request_local_transcript(&thread_id);
+                } else {
+                    self.persisted_active_thread_id = None;
                 }
                 let start_ws = self
                     .active_workspace_id
@@ -3516,6 +3600,9 @@ impl AppState {
                 }
                 self.active_workspace_id = Some(workspace_id.clone());
                 self.sync_active_explorer_dir();
+                if !self.scene_mode {
+                    self.persist_state();
+                }
                 self.send_native(NativeCommand::StartWorkspaceServer {
                     workspace_id,
                     path,
@@ -3945,6 +4032,11 @@ impl AppState {
     }
 
     fn reduce_nav(&mut self, action: NavAction) {
+        let prev_tid = self.nav.current().active_thread_id.clone();
+        let prev_ws = self.active_workspace_id.clone();
+        let prev_landing = self.landing_workspace_id.clone();
+        let mut already_persisted = false;
+
         match action {
             NavAction::OpenView(view) => {
                 if view == ViewId::Task {
@@ -3957,11 +4049,15 @@ impl AppState {
                     if let Some(ws_id) = self.active_workspace_id.clone() {
                         self.send_task_ws(&ws_id, "task/list", json!({}));
                     }
+                    self.refresh_creation_preflight();
                 } else {
                     self.nav.update(NavigationPatch {
                         view: Some(view),
                         ..Default::default()
                     });
+                    if view == ViewId::Chat && self.nav.current().active_thread_id.is_none() {
+                        self.refresh_creation_preflight();
+                    }
                 }
             }
             NavAction::OpenThread(thread_id) => {
@@ -3985,10 +4081,14 @@ impl AppState {
                 });
                 let new_key = self.composer_key();
                 self.sync_composer_edit_across_switch(&old_key, &new_key);
+                if !self.scene_mode && self.window_mode == WindowMode::Main {
+                    self.persist_state();
+                    already_persisted = true;
+                }
                 let needs_hydrate = self
                     .thread_runtime_by_id
                     .get(&thread_id)
-                    .is_none_or(|rt| !rt.hydrated && !rt.hydrating);
+                    .is_none_or(|rt| (!rt.hydrated || rt.transcript_only) && !rt.hydrating);
                 if needs_hydrate
                     && self
                         .threads
@@ -4013,6 +4113,7 @@ impl AppState {
                 });
                 let new_key = self.composer_key();
                 self.sync_composer_edit_across_switch(&old_key, &new_key);
+                self.refresh_creation_preflight();
             }
             NavAction::OpenTask(task_id) => {
                 if self
@@ -4067,16 +4168,43 @@ impl AppState {
             NavAction::SelectWorkspace(workspace_id) => {
                 self.active_workspace_id = Some(workspace_id);
                 self.sync_active_explorer_dir();
+                self.refresh_creation_preflight();
             }
             NavAction::GoBack => {
-                self.nav.go_back();
+                let old_key = self.composer_key();
+                if self.nav.go_back() {
+                    let new_key = self.composer_key();
+                    self.sync_composer_edit_across_switch(&old_key, &new_key);
+                    self.refresh_creation_preflight_if_creation_route();
+                }
             }
             NavAction::GoForward => {
-                self.nav.go_forward();
+                let old_key = self.composer_key();
+                if self.nav.go_forward() {
+                    let new_key = self.composer_key();
+                    self.sync_composer_edit_across_switch(&old_key, &new_key);
+                    self.refresh_creation_preflight_if_creation_route();
+                }
             }
             NavAction::Replace(snapshot) => {
+                let old_key = self.composer_key();
                 self.nav.replace_current(snapshot);
+                let new_key = self.composer_key();
+                self.sync_composer_edit_across_switch(&old_key, &new_key);
+                self.refresh_creation_preflight_if_creation_route();
             }
+        }
+
+        if self.active_workspace_id != prev_ws || self.landing_workspace_id != prev_landing {
+            self.shared_dirty = true;
+        }
+        if !already_persisted
+            && !self.scene_mode
+            && self.window_mode == WindowMode::Main
+            && (self.nav.current().active_thread_id != prev_tid
+                || self.active_workspace_id != prev_ws)
+        {
+            self.persist_state();
         }
     }
 
@@ -4112,9 +4240,17 @@ impl AppState {
             }
             ShellAction::ToggleCommandPalette => {
                 self.command_palette_open = !self.command_palette_open;
+                self.command_palette_query.clear();
+                self.command_palette_edit = TextEdit::new("");
+                self.command_palette_edit.focused = self.command_palette_open;
+                self.shell_ui.command_palette_selected = 0;
             }
             ShellAction::SetCommandPaletteOpen(open) => {
                 self.command_palette_open = open;
+                self.command_palette_query.clear();
+                self.command_palette_edit = TextEdit::new("");
+                self.command_palette_edit.focused = open;
+                self.shell_ui.command_palette_selected = 0;
             }
             ShellAction::SetCommandPaletteQuery(query) => {
                 self.command_palette_query = query;
@@ -4171,6 +4307,7 @@ impl AppState {
             }
             ShellAction::SetLandingWorkspace(ws_id) => {
                 self.landing_workspace_id = ws_id;
+                self.refresh_creation_preflight();
             }
             ShellAction::SelectLandingQuickChat => {
                 let existing = self
@@ -4180,6 +4317,7 @@ impl AppState {
                     .map(|w| w.id.clone());
                 self.landing_workspace_id =
                     Some(existing.unwrap_or_else(|| ONE_OFF_LANDING_SENTINEL.to_string()));
+                self.refresh_creation_preflight();
             }
             ShellAction::RequestExternalUrl(url) => {
                 self.pending_external_url = Some(url);
@@ -4651,9 +4789,13 @@ impl AppState {
                 provider,
                 model,
             } => {
+                let is_landing_draft = key == "__new__";
                 let draft = self.composer_drafts.entry(key).or_default();
                 draft.provider = Some(provider);
                 draft.model = Some(model);
+                if is_landing_draft {
+                    self.refresh_creation_preflight();
+                }
             }
             ChatAction::SetComposerDraftEffort { key, effort } => {
                 self.composer_drafts
@@ -5462,6 +5604,92 @@ impl AppState {
         .or_else(|| self.resolve_workspace_display_targets().into_iter().next())
     }
 
+    fn is_workspace_preflight_ready(&self, workspace_id: &str) -> bool {
+        self.is_workspace_ws_connected(workspace_id)
+            || self
+                .workspace_runtime_by_id
+                .get(workspace_id)
+                .is_some_and(|rt| rt.capabilities.is_some())
+    }
+
+    fn resolve_creation_preflight_request(&self) -> Option<(String, CreationPreflightParams)> {
+        let cur = self.nav.current();
+        if cur.view == ViewId::Task && cur.active_task_id.is_none() {
+            let ws = self
+                .active_workspace()
+                .or_else(|| self.resolve_landing_target_workspace())?;
+            let draft = self.composer_drafts.get("__new__");
+            let resolved = self.resolve_submission_model(None, draft, Some(ws));
+            return Some((
+                ws.id.clone(),
+                CreationPreflightParams {
+                    kind: "task".to_string(),
+                    cwd: Some(ws.path.clone()),
+                    provider: resolved.as_ref().map(|(p, _)| p.clone()),
+                    model: resolved.as_ref().map(|(_, m)| m.clone()),
+                },
+            ));
+        }
+
+        let draft = self.composer_drafts.get("__new__");
+        if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
+            let transport_ws = self
+                .resolve_management_workspace_id()
+                .and_then(|id| self.workspaces.iter().find(|w| w.id == id && !w.archived))
+                .filter(|w| self.is_workspace_preflight_ready(&w.id))
+                .or_else(|| {
+                    self.workspaces
+                        .iter()
+                        .find(|w| !w.archived && self.is_workspace_preflight_ready(&w.id))
+                })?;
+            let resolved = self.resolve_submission_model(None, draft, Some(transport_ws));
+            return Some((
+                transport_ws.id.clone(),
+                CreationPreflightParams {
+                    kind: "chat".to_string(),
+                    cwd: None,
+                    provider: resolved.as_ref().map(|(p, _)| p.clone()),
+                    model: resolved.as_ref().map(|(_, m)| m.clone()),
+                },
+            ));
+        }
+
+        let ws = self.resolve_landing_target_workspace()?;
+        let resolved = self.resolve_submission_model(None, draft, Some(ws));
+        Some((
+            ws.id.clone(),
+            CreationPreflightParams {
+                kind: "chat".to_string(),
+                cwd: Some(ws.path.clone()),
+                provider: resolved.as_ref().map(|(p, _)| p.clone()),
+                model: resolved.as_ref().map(|(_, m)| m.clone()),
+            },
+        ))
+    }
+
+    fn refresh_creation_preflight(&mut self) {
+        if self.scene_mode {
+            return;
+        }
+        let Some((ws_id, params)) = self.resolve_creation_preflight_request() else {
+            return;
+        };
+        if !self.is_workspace_preflight_ready(&ws_id) {
+            return;
+        }
+        self.latest_creation_preflight_rpc_id =
+            self.send_ws_typed(&ws_id, "cowork/creation/preflight", &params, true);
+    }
+
+    fn refresh_creation_preflight_if_creation_route(&mut self) {
+        let cur = self.nav.current();
+        if (cur.view == ViewId::Chat && cur.active_thread_id.is_none())
+            || (cur.view == ViewId::Task && cur.active_task_id.is_none())
+        {
+            self.refresh_creation_preflight();
+        }
+    }
+
     /// Resolves `(provider, model)` from draft, thread, workspace, or provider catalog defaults.
     /// Shared by submission flows, `CreateThread`, and `views::chat::composer::resolve_composer_model`.
     pub fn resolve_submission_model(
@@ -5907,6 +6135,8 @@ impl AppState {
                         path,
                         yolo,
                     });
+                } else {
+                    self.refresh_creation_preflight();
                 }
             }
             SettingsAction::UpsertMcpServer {
@@ -7129,18 +7359,25 @@ impl AppState {
         };
         let _ = self.send_ws_typed(workspace_id, "thread/list", &list_params, true);
 
-        let preflight_params = CreationPreflightParams {
-            kind: "chat".to_string(),
-            cwd: cwd.clone(),
-            provider: None,
-            model: None,
-        };
-        let _ = self.send_ws_typed(
-            workspace_id,
-            "cowork/creation/preflight",
-            &preflight_params,
-            true,
-        );
+        self.refresh_creation_preflight();
+        if self.latest_creation_preflight_rpc_id.is_none()
+            && self.workspaces.iter().all(|w| w.id != workspace_id)
+        {
+            let resolved =
+                self.resolve_submission_model(None, self.composer_drafts.get("__new__"), None);
+            let preflight_params = CreationPreflightParams {
+                kind: "chat".to_string(),
+                cwd: cwd.clone(),
+                provider: resolved.as_ref().map(|(p, _)| p.clone()),
+                model: resolved.as_ref().map(|(_, m)| m.clone()),
+            };
+            self.latest_creation_preflight_rpc_id = self.send_ws_typed(
+                workspace_id,
+                "cowork/creation/preflight",
+                &preflight_params,
+                true,
+            );
+        }
 
         let catalog_params = ProviderCatalogReadParams {
             cwd: cwd.clone(),
@@ -7201,11 +7438,24 @@ impl AppState {
 
         if let Some(active_tid) = self.nav.current().active_thread_id.clone()
             && self.workspace_for_thread(&active_tid).as_deref() == Some(workspace_id)
+            && self
+                .threads
+                .iter()
+                .find(|t| t.id == active_tid)
+                .is_none_or(|t| !t.draft)
         {
-            let cmd_params = CommandListParams {
-                thread_id: active_tid,
-            };
-            let _ = self.send_ws_typed(workspace_id, "command/list", &cmd_params, true);
+            if self
+                .thread_runtime_by_id
+                .get(&active_tid)
+                .is_none_or(|rt| (!rt.hydrated || rt.transcript_only) && !rt.hydrating)
+            {
+                self.dispatch(Action::Chat(ChatAction::HydrateThread(active_tid)));
+            } else {
+                let cmd_params = CommandListParams {
+                    thread_id: active_tid,
+                };
+                let _ = self.send_ws_typed(workspace_id, "command/list", &cmd_params, true);
+            }
         }
     }
 
@@ -7442,8 +7692,8 @@ impl AppState {
                     .get("clientMessageId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                if let Some(ref cid) = client_message_id
-                    && let Some(existing) = rt.feed.iter_mut().find(|f| {
+                let matched_existing = if let Some(ref cid) = client_message_id {
+                    rt.feed.iter_mut().find(|f| {
                         matches!(
                             f,
                             FeedItem::Message {
@@ -7452,10 +7702,26 @@ impl AppState {
                             } if ec == cid
                         )
                     })
-                {
+                } else {
+                    let trimmed_incoming = text.trim();
+                    rt.feed.iter_mut().find(|f| {
+                        matches!(
+                            f,
+                            FeedItem::Message {
+                                id,
+                                role: FeedMessageRole::User,
+                                content,
+                                client_message_id: Some(_),
+                                ..
+                            } if id.starts_with("optimistic-") && content.trim() == trimmed_incoming
+                        )
+                    })
+                };
+                if let Some(existing) = matched_existing {
                     if let FeedItem::Message {
                         id,
                         content,
+                        client_message_id: existing_cid,
                         streaming,
                         ..
                     } = existing
@@ -7464,6 +7730,7 @@ impl AppState {
                         if !text.is_empty() {
                             *content = text;
                         }
+                        *existing_cid = None;
                         *streaming = false;
                     }
                     return;
@@ -8246,8 +8513,11 @@ impl AppState {
                 }
             }
             "cowork/creation/preflight" => {
-                if let Ok(preflight) =
-                    serde_json::from_value::<CreationPreflightResult>(payload.clone())
+                if self
+                    .latest_creation_preflight_rpc_id
+                    .is_none_or(|latest| latest == request_id)
+                    && let Ok(preflight) =
+                        serde_json::from_value::<CreationPreflightResult>(payload.clone())
                 {
                     self.workspace_creation_preflight = Some(preflight);
                 }
@@ -8297,6 +8567,23 @@ impl AppState {
                     && let Some(msg) = evt.get("message").and_then(Value::as_str)
                 {
                     self.settings_mutation_error = Some(msg.to_string());
+                } else {
+                    self.dispatch(Action::Settings(SettingsAction::RefreshProviderCatalog {
+                        workspace_id: workspace_id.to_string(),
+                    }));
+                }
+            }
+            "cowork/provider/auth/logout" => {
+                let evt = payload.get("event").unwrap_or(&payload);
+                self.last_auth_result = Some(evt.clone());
+                if evt.get("ok").and_then(Value::as_bool) == Some(false) {
+                    if let Some(msg) = evt.get("message").and_then(Value::as_str) {
+                        self.settings_mutation_error = Some(msg.to_string());
+                    }
+                } else {
+                    self.dispatch(Action::Settings(SettingsAction::RefreshProviderCatalog {
+                        workspace_id: workspace_id.to_string(),
+                    }));
                 }
             }
             "cowork/provider/codexAppServer/status" | "cowork/provider/codexAppServer/update" => {
@@ -8638,6 +8925,35 @@ impl AppState {
         self.archived_threads
             .retain(|a| a.workspace_id != workspace_id);
         self.archived_threads.extend(archived);
+
+        if let Some(active_tid) = self.nav.current().active_thread_id.clone() {
+            if let Some(active_thread) = self.threads.iter().find(|t| t.id == active_tid) {
+                if active_thread.workspace_id == workspace_id
+                    && !active_thread.draft
+                    && !active_thread.archived
+                    && self
+                        .thread_runtime_by_id
+                        .get(&active_tid)
+                        .is_none_or(|rt| (!rt.hydrated || rt.transcript_only) && !rt.hydrating)
+                    && self.is_workspace_ws_connected(workspace_id)
+                {
+                    self.dispatch(Action::Chat(ChatAction::HydrateThread(active_tid)));
+                }
+            } else if self.active_workspace_id.as_deref() == Some(workspace_id)
+                && !self
+                    .pending_draft_threads_by_rpc_id
+                    .values()
+                    .any(|id| id == &active_tid)
+            {
+                let mut cur = self.nav.current().clone();
+                cur.active_thread_id = None;
+                self.nav.replace_current(cur);
+                if self.window_mode == WindowMode::Main {
+                    self.persisted_active_thread_id = None;
+                }
+            }
+        }
+
         if !self.scene_mode {
             self.persist_state();
         }
@@ -8798,7 +9114,11 @@ impl AppState {
                 .iter()
                 .filter_map(parse_snapshot_feed_item)
                 .collect();
-            // Keep any optimistic local user messages whose clientMessageId has not yet landed in snapshot.
+            // Keep only truly unpersisted optimistic local user messages (never re-append confirmed items).
+            let seen_ids: HashSet<String> = next_feed
+                .iter()
+                .map(|item| feed_item_id(item).to_string())
+                .collect();
             let seen_cids: HashSet<String> = next_feed
                 .iter()
                 .filter_map(|item| match item {
@@ -8809,14 +9129,40 @@ impl AppState {
                     _ => None,
                 })
                 .collect();
+            let mut snapshot_user_counts: HashMap<String, usize> = HashMap::new();
+            for item in &next_feed {
+                if let FeedItem::Message {
+                    role: FeedMessageRole::User,
+                    content,
+                    ..
+                } = item
+                {
+                    *snapshot_user_counts
+                        .entry(content.trim().to_string())
+                        .or_insert(0) += 1;
+                }
+            }
+            let mut rt_user_counts: HashMap<String, usize> = HashMap::new();
             for item in &rt.feed {
                 if let FeedItem::Message {
+                    id,
+                    role: FeedMessageRole::User,
+                    content,
                     client_message_id: Some(c),
                     ..
                 } = item
-                    && !seen_cids.contains(c)
                 {
-                    next_feed.push(item.clone());
+                    let trimmed = content.trim().to_string();
+                    let seen_count = rt_user_counts.entry(trimmed.clone()).or_insert(0);
+                    *seen_count += 1;
+                    let snapshot_count = snapshot_user_counts.get(&trimmed).copied().unwrap_or(0);
+                    if id.starts_with("optimistic-")
+                        && !seen_ids.contains(id)
+                        && !seen_cids.contains(c)
+                        && *seen_count > snapshot_count
+                    {
+                        next_feed.push(item.clone());
+                    }
                 }
             }
             rt.feed = next_feed;
@@ -9219,6 +9565,7 @@ impl AppState {
                 .filter_map(|v| parse_provider_summary(v, &connected))
                 .collect();
         }
+        self.refresh_creation_preflight();
     }
 
     fn apply_provider_status_event(&mut self, workspace_id: &str, evt: &Value) {
@@ -9237,6 +9584,7 @@ impl AppState {
                 .or_default()
                 .provider_statuses = statuses;
         }
+        self.refresh_creation_preflight();
     }
 
     fn apply_mcp_validation_event(&mut self, evt: &Value) {
@@ -9370,12 +9718,20 @@ impl AppState {
     }
 
     fn persist_state(&mut self) {
-        let active_thread_id = self.nav.current().active_thread_id.clone().filter(|tid| {
+        let raw_active_tid = if self.window_mode == WindowMode::Main {
+            self.nav.current().active_thread_id.clone()
+        } else {
+            self.persisted_active_thread_id.clone()
+        };
+        let active_thread_id = raw_active_tid.filter(|tid| {
             self.threads
                 .iter()
                 .find(|t| &t.id == tid)
                 .is_none_or(|t| !t.draft)
         });
+        if self.window_mode == WindowMode::Main {
+            self.persisted_active_thread_id = active_thread_id.clone();
+        }
         let snapshot = PersistedDesktopState {
             settings: self.desktop_settings.clone(),
             workspaces: self.workspaces.clone(),
@@ -9563,11 +9919,13 @@ fn extract_item_text(item: &Value) -> String {
 
 fn parse_tool_status(raw: Option<&str>) -> Option<ToolRunStatus> {
     match raw? {
-        "pending" => Some(ToolRunStatus::Pending),
-        "running" | "inProgress" | "in_progress" => Some(ToolRunStatus::Running),
-        "completed" => Some(ToolRunStatus::Completed),
-        "failed" | "error" => Some(ToolRunStatus::Failed),
-        "declined" => Some(ToolRunStatus::Declined),
+        "pending" | "approval-requested" => Some(ToolRunStatus::Pending),
+        "running" | "inProgress" | "in_progress" | "input-streaming" | "input-available" => {
+            Some(ToolRunStatus::Running)
+        }
+        "completed" | "output-available" => Some(ToolRunStatus::Completed),
+        "failed" | "error" | "output-error" => Some(ToolRunStatus::Failed),
+        "declined" | "output-denied" => Some(ToolRunStatus::Declined),
         _ => None,
     }
 }
@@ -10870,30 +11228,80 @@ fn parse_snapshot_feed_item(v: &Value) -> Option<FeedItem> {
             streaming: false,
             timestamp_ms: ts,
         }),
-        "tool" => Some(FeedItem::Tool {
-            id,
-            tool_name: v
-                .get("tool")
-                .or_else(|| v.get("toolName"))
+        "tool" => {
+            let status = parse_tool_status(
+                v.get("status")
+                    .or_else(|| v.get("state"))
+                    .and_then(Value::as_str),
+            )
+            .unwrap_or(ToolRunStatus::Completed);
+            let output = v.get("output").or_else(|| v.get("result")).cloned();
+            let error = v
+                .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("tool")
-                .to_string(),
-            title: v.get("title").and_then(Value::as_str).map(str::to_string),
-            call_id: v.get("callId").and_then(Value::as_str).map(str::to_string),
-            status: parse_tool_status(v.get("status").and_then(Value::as_str))
-                .unwrap_or(ToolRunStatus::Completed),
-            input: v.get("input").cloned().unwrap_or(Value::Null),
-            output: v.get("output").cloned(),
-            error: v.get("error").and_then(Value::as_str).map(str::to_string),
-            diff: v.get("diff").and_then(Value::as_str).map(str::to_string),
-            streaming: false,
-            timestamp_ms: ts,
-            completed_at_ms: v.get("completedAt").map(|c| parse_timestamp_ms(Some(c))),
-            output_truncated: v
+                .map(str::to_string)
+                .or_else(|| {
+                    (status == ToolRunStatus::Failed)
+                        .then(|| {
+                            output.as_ref().and_then(|out| {
+                                out.as_str().map(str::to_string).or_else(|| {
+                                    out.get("error").and_then(Value::as_str).map(str::to_string)
+                                })
+                            })
+                        })
+                        .flatten()
+                });
+            let diff = v
+                .get("diff")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    output
+                        .as_ref()
+                        .and_then(|out| out.get("diff"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+            let output_truncated = v
                 .get("outputTruncated")
                 .and_then(Value::as_bool)
-                .unwrap_or(false),
-        }),
+                .or_else(|| {
+                    output
+                        .as_ref()
+                        .and_then(|out| out.get("outputTruncated"))
+                        .and_then(Value::as_bool)
+                })
+                .unwrap_or(false);
+            Some(FeedItem::Tool {
+                id,
+                tool_name: v
+                    .get("tool")
+                    .or_else(|| v.get("toolName"))
+                    .or_else(|| v.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string(),
+                title: v
+                    .get("title")
+                    .or_else(|| output.as_ref().and_then(|out| out.get("title")))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                call_id: v.get("callId").and_then(Value::as_str).map(str::to_string),
+                status,
+                input: v
+                    .get("input")
+                    .or_else(|| v.get("args"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                output,
+                error,
+                diff,
+                streaming: matches!(status, ToolRunStatus::Running),
+                timestamp_ms: ts,
+                completed_at_ms: v.get("completedAt").map(|c| parse_timestamp_ms(Some(c))),
+                output_truncated,
+            })
+        }
         "error" => Some(FeedItem::Error {
             id,
             message: v
@@ -15036,5 +15444,480 @@ mod tests {
         }));
         assert!(!state.context_sidebar.is_open());
         assert!(!state.shell_ui.right_overlay_open);
+    }
+
+    #[test]
+    fn defect1_multiwindow_draft_rekey_preserves_main_nav_and_restart_hydrates_active_thread() {
+        let mut main_state = AppState::default();
+        let ws = WorkspaceRecord::new("ws-1", "Workspace", "/tmp/ws-1", 1);
+        main_state.workspaces.push(ws.clone());
+        main_state.active_workspace_id = Some("ws-1".to_string());
+        main_state.provider_catalog = vec![ProviderSummary {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            configured: true,
+            models: vec![ProviderModelSummary {
+                id: "gpt-5.4".to_string(),
+                name: "GPT-5.4".to_string(),
+                enabled: true,
+                custom: false,
+                supports_reasoning: true,
+                reasoning_efforts: vec![],
+            }],
+            ..ProviderSummary::default()
+        }];
+        main_state
+            .default_model_by_provider
+            .insert("openai".to_string(), "gpt-5.4".to_string());
+
+        // Main submits from landing -> creates optimistic __draft-1 in Main.nav.
+        main_state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "Hello from landing".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+        let draft_id = main_state
+            .nav
+            .current()
+            .active_thread_id
+            .clone()
+            .expect("draft active_thread_id on Main");
+        assert!(draft_id.starts_with("__draft-"));
+        let start_rpc_id = main_state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "thread/start" => Some(*request_id),
+                _ => None,
+            })
+            .expect("thread/start emitted");
+
+        // Even if another window shares core during thread/start response + persist,
+        // reconciling on Main must promote Main.nav to server id and keep activeThreadId persisted.
+        let mut quick_state = AppState {
+            window_mode: WindowMode::QuickChat,
+            ..Default::default()
+        };
+        main_state.swap_shared_core(&mut quick_state);
+        quick_state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: start_rpc_id,
+            method: "thread/start".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-srv-1",
+                    "title": "New session"
+                }
+            })),
+        });
+        // Secondary window persist must NOT wipe persisted_active_thread_id to None.
+        quick_state.dispatch(Action::Shell(ShellAction::SetTheme(ThemePreference::Dark)));
+        let persisted_after_quick = quick_state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                NativeCommand::SavePersistedState(p) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("SavePersistedState emitted");
+
+        quick_state.swap_shared_core(&mut main_state);
+        assert!(main_state.reconcile_rekeyed_thread_ids());
+        assert_eq!(
+            main_state.nav.current().active_thread_id.as_deref(),
+            Some("th-srv-1")
+        );
+        assert_eq!(
+            main_state.active_thread().map(|t| t.id.as_str()),
+            Some("th-srv-1")
+        );
+
+        // Quick window theme persist kept None until Main persisted, now Main persists th-srv-1.
+        assert_eq!(persisted_after_quick.active_thread_id, None);
+        main_state.dispatch(Action::Navigate(NavAction::OpenNewChat {
+            workspace_id: Some("ws-1".to_string()),
+        }));
+        main_state.dispatch(Action::Navigate(NavAction::OpenThread(
+            "th-srv-1".to_string(),
+        )));
+        let persisted_after_main_open = main_state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                NativeCommand::SavePersistedState(p) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("SavePersistedState after OpenThread");
+        assert_eq!(
+            persisted_after_main_open.active_thread_id.as_deref(),
+            Some("th-srv-1")
+        );
+
+        // Simulated restart restores active_thread_id and triggers thread/hydrate on WsInitialized.
+        let mut restarted = AppState::default();
+        restarted.apply_store_event(StoreEvent::NativeReady {
+            persisted: persisted_after_main_open,
+            is_packaged: false,
+            system_dark: None,
+        });
+        assert_eq!(
+            restarted.nav.current().active_thread_id.as_deref(),
+            Some("th-srv-1")
+        );
+        assert_eq!(restarted.active_workspace_id.as_deref(), Some("ws-1"));
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        restarted.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-1".to_string(),
+            state: WsConnectionState::Connected,
+        });
+        restarted.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-1".to_string(),
+            result: Box::new(init_res),
+        });
+        assert!(restarted.services.emitted_ws_commands.iter().any(|c| {
+            matches!(
+                c,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "thread/hydrate" && params.get("threadId") == Some(&json!("th-srv-1"))
+            )
+        }));
+    }
+
+    #[test]
+    fn defect2_creation_preflight_requeries_on_provider_catalog_model_and_workspace_changes() {
+        let mut state = AppState::default();
+        let mut ws_a = WorkspaceRecord::new("ws-a", "Alpha", "/tmp/alpha", 1);
+        ws_a.default_provider = Some("anthropic".to_string());
+        ws_a.default_model = Some("claude-sonnet-4-5".to_string());
+        let ws_b = WorkspaceRecord::new("ws-b", "Beta", "/tmp/beta", 1);
+        state.workspaces = vec![ws_a, ws_b];
+        state.active_workspace_id = Some("ws-a".to_string());
+
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-a".to_string(),
+            state: WsConnectionState::Connected,
+        });
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-a".to_string(),
+            result: Box::new(init_res),
+        });
+        let first_preflight_id = state.latest_creation_preflight_rpc_id.expect("initial rpc");
+
+        // Catalog update marks OpenAI connected -> automatically re-queries preflight with openai!
+        state.apply_provider_catalog_event(&json!({
+            "connected": ["openai"],
+            "default": { "openai": "gpt-5.4" },
+            "all": [{
+                "id": "openai",
+                "name": "OpenAI",
+                "models": [{ "id": "gpt-5.4", "name": "GPT-5.4", "enabled": true }]
+            }]
+        }));
+        let second_preflight_id = state.latest_creation_preflight_rpc_id.expect("updated rpc");
+        assert!(second_preflight_id > first_preflight_id);
+
+        // Selecting a different model on landing draft re-queries with that model.
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
+            key: "__new__".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+        }));
+        let third_preflight_id = state.latest_creation_preflight_rpc_id.expect("model rpc");
+        assert!(third_preflight_id > second_preflight_id);
+        let third_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/creation/preflight" && *request_id == third_preflight_id => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("third preflight emitted");
+        assert_eq!(third_params.get("provider"), Some(&json!("openai")));
+        assert_eq!(third_params.get("model"), Some(&json!("gpt-5.4")));
+        assert_eq!(third_params.get("kind"), Some(&json!("chat")));
+        assert_eq!(third_params.get("cwd"), Some(&json!("/tmp/alpha")));
+
+        // Stale response from first request must NOT overwrite newer readiness result.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: third_preflight_id,
+            method: "cowork/creation/preflight".to_string(),
+            result: Ok(json!({ "ready": true, "checks": [] })),
+        });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: first_preflight_id,
+            method: "cowork/creation/preflight".to_string(),
+            result: Ok(json!({
+                "ready": false,
+                "checks": [{ "id": "provider_auth", "status": "blocked", "message": "Stale" }]
+            })),
+        });
+        assert!(
+            state
+                .workspace_creation_preflight
+                .as_ref()
+                .is_some_and(|p| p.ready)
+        );
+
+        // Switching to Quick Chat landing and Task creation re-queries with expected params.
+        state.dispatch(Action::Shell(ShellAction::SelectLandingQuickChat));
+        let quick_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/creation/preflight" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("quick preflight");
+        assert!(quick_params.get("cwd").is_none() || quick_params["cwd"].is_null());
+
+        state.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
+        let task_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/creation/preflight" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("task preflight");
+        assert_eq!(task_params.get("kind"), Some(&json!("task")));
+
+        // Successful provider auth mutation triggers catalog + status refresh.
+        let before_cmds = state.services.emitted_ws_commands.len();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 901,
+            method: "cowork/provider/auth/setApiKey".to_string(),
+            result: Ok(json!({ "ok": true })),
+        });
+        assert!(state.services.emitted_ws_commands[before_cmds..]
+            .iter()
+            .any(|c| matches!(c, WsCommand::SendRequest { method, .. } if method == "cowork/provider/catalog/read")));
+    }
+
+    #[test]
+    fn defect4_command_palette_toggle_and_set_open_resets_query_and_selection() {
+        let mut state = AppState {
+            command_palette_query: "stale query".to_string(),
+            command_palette_edit: TextEdit::new("stale query"),
+            ..Default::default()
+        };
+        state.shell_ui.command_palette_selected = 4;
+
+        state.dispatch(Action::Shell(ShellAction::ToggleCommandPalette));
+        assert!(state.command_palette_open);
+        assert!(state.command_palette_query.is_empty());
+        assert!(state.command_palette_edit.text.is_empty());
+        assert!(state.command_palette_edit.focused);
+        assert_eq!(state.shell_ui.command_palette_selected, 0);
+
+        state.command_palette_query = "another".to_string();
+        state.command_palette_edit = TextEdit::new("another");
+        state.shell_ui.command_palette_selected = 2;
+        state.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+        assert!(!state.command_palette_open);
+        assert!(state.command_palette_query.is_empty());
+        assert!(state.command_palette_edit.text.is_empty());
+        assert!(!state.command_palette_edit.focused);
+        assert_eq!(state.shell_ui.command_palette_selected, 0);
+    }
+
+    #[test]
+    fn defect5_live_escalation_hydration_preserves_user_order_and_parses_snapshot_tool_fields() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Bash thread".to_string(),
+            ..ThreadRecord::default()
+        });
+        state.provider_catalog = vec![ProviderSummary {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            configured: true,
+            models: vec![ProviderModelSummary {
+                id: "gpt-5.4".to_string(),
+                name: "GPT-5.4".to_string(),
+                enabled: true,
+                custom: false,
+                supports_reasoning: true,
+                reasoning_efforts: vec![],
+            }],
+            ..ProviderSummary::default()
+        }];
+        state
+            .default_model_by_provider
+            .insert("openai".to_string(), "gpt-5.4".to_string());
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-1".to_string())));
+
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: Some("th-1".to_string()),
+            text: "Run pwd".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+        // Simulate server projector item/started without clientMessageId, followed by tool & snapshot.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/started".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "u-srv-1",
+                    "type": "userMessage",
+                    "content": [{ "type": "text", "text": "Run pwd" }]
+                }
+            }),
+        });
+        state.apply_thread_snapshot_response(
+            "ws-1",
+            &json!({
+                "coworkSnapshot": {
+                    "sessionId": "th-1",
+                    "lastEventSeq": 0,
+                    "feed": [
+                        {
+                            "id": "u-srv-1",
+                            "kind": "message",
+                            "role": "user",
+                            "ts": "2026-11-15T12:00:00Z",
+                            "text": "Run pwd"
+                        },
+                        {
+                            "id": "tool-1",
+                            "kind": "tool",
+                            "ts": "2026-11-15T12:00:01Z",
+                            "name": "bash",
+                            "state": "output-available",
+                            "args": { "command": "pwd" },
+                            "result": { "stdout": "/tmp/demo" }
+                        },
+                        {
+                            "id": "tool-2",
+                            "kind": "tool",
+                            "ts": "2026-11-15T12:00:02Z",
+                            "name": "write_file",
+                            "state": "approval-requested",
+                            "args": { "path": "a.txt" }
+                        },
+                        {
+                            "id": "a-srv-1",
+                            "kind": "message",
+                            "role": "assistant",
+                            "ts": "2026-11-15T12:00:03Z",
+                            "text": "/tmp/demo"
+                        }
+                    ]
+                }
+            }),
+        );
+
+        let feed = &state.thread_runtime_by_id["th-1"].feed;
+        assert_eq!(feed.len(), 4, "confirmed user message must not duplicate");
+        assert!(matches!(
+            &feed[0],
+            FeedItem::Message {
+                role: FeedMessageRole::User,
+                content,
+                ..
+            } if content == "Run pwd"
+        ));
+        assert!(matches!(
+            &feed[1],
+            FeedItem::Tool {
+                tool_name,
+                status: ToolRunStatus::Completed,
+                streaming: false,
+                input,
+                output: Some(out),
+                ..
+            } if tool_name == "bash" && input["command"] == "pwd" && out["stdout"] == "/tmp/demo"
+        ));
+        assert!(matches!(
+            &feed[2],
+            FeedItem::Tool {
+                tool_name,
+                status: ToolRunStatus::Pending,
+                streaming: false,
+                ..
+            } if tool_name == "write_file"
+        ));
+        assert!(matches!(
+            parse_snapshot_feed_item(&json!({
+                "id": "tool-err",
+                "kind": "tool",
+                "name": "bash",
+                "state": "output-error",
+                "args": { "command": "false" },
+                "result": { "error": "exit 1" }
+            })),
+            Some(FeedItem::Tool {
+                status: ToolRunStatus::Failed,
+                error: Some(err),
+                ..
+            }) if err == "exit 1"
+        ));
+        assert!(matches!(
+            parse_snapshot_feed_item(&json!({
+                "id": "tool-den",
+                "kind": "tool",
+                "name": "bash",
+                "state": "output-denied"
+            })),
+            Some(FeedItem::Tool {
+                status: ToolRunStatus::Declined,
+                ..
+            })
+        ));
     }
 }

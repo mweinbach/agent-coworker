@@ -383,8 +383,8 @@ pub fn desktop_markdown(
                 .max_h(420.0)
                 .radius(8.0)
                 .border(1.0, Color::TRANSPARENT);
-            let can_open = frame.src.starts_with(WORKSPACE_FILE_SCHEME)
-                || is_allowed_external_url(frame.src)
+            let can_open = is_allowed_external_url(frame.src)
+                || resolve_safe_workspace_file_link(frame.src, ws_path_img.as_deref()).is_some()
                 || resolve_safe_local_path(frame.src, ws_path_img.as_deref()).is_some();
             if !can_open {
                 return styled;
@@ -515,6 +515,14 @@ fn is_allowed_external_url(raw: &str) -> bool {
     url::Url::parse(raw.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "mailto"))
 }
 
+fn resolve_safe_workspace_file_link(
+    url: &str,
+    workspace_path: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let raw_file = url.strip_prefix(WORKSPACE_FILE_SCHEME)?;
+    resolve_safe_local_path(raw_file, workspace_path)
+}
+
 fn dispatch_link_action(
     s: &mut AppState,
     url: &str,
@@ -532,11 +540,14 @@ fn dispatch_link_action(
         return;
     }
 
-    if let Some(raw_file) = url.strip_prefix(WORKSPACE_FILE_SCHEME) {
-        if let Some(ws_id) = workspace_id {
+    if url.starts_with(WORKSPACE_FILE_SCHEME) {
+        if let (Some(ws_id), Some(safe_path)) = (
+            workspace_id,
+            resolve_safe_workspace_file_link(url, workspace_path),
+        ) {
             s.dispatch(Action::Native(NativeAction::LoadFilePreview {
                 workspace_id: ws_id.to_string(),
-                path: raw_file.to_string(),
+                path: safe_path.to_string_lossy().into_owned(),
             }));
         }
         return;
@@ -698,5 +709,25 @@ mod tests {
         assert!(!is_allowed_external_url("data:image/png;base64,AAAA"));
         assert!(!is_allowed_external_url("file:///etc/passwd"));
         assert!(!is_allowed_external_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn workspace_file_links_require_safe_workspace_containment() {
+        assert_eq!(
+            resolve_safe_workspace_file_link("cowork-file:/repo/src/main.rs", Some("/repo")),
+            Some(std::path::PathBuf::from("/repo/src/main.rs"))
+        );
+        assert_eq!(
+            resolve_safe_workspace_file_link("cowork-file:/etc/passwd", Some("/repo")),
+            None
+        );
+        assert_eq!(
+            resolve_safe_workspace_file_link("cowork-file:../../etc/passwd", Some("/repo")),
+            None
+        );
+        assert_eq!(
+            resolve_safe_workspace_file_link("cowork-file:/repo/src/main.rs", None),
+            None
+        );
     }
 }

@@ -175,6 +175,12 @@ pub(crate) struct PendingCanvasRpc {
     pub target_path: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingPresentationRpc {
+    pub workspace_id: String,
+    pub path: String,
+}
+
 /// Workspace record shown in the sidebar and connected to a local `cowork-server`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -718,6 +724,14 @@ pub struct FilePreviewState {
     pub error: Option<String>,
     #[serde(default)]
     pub spreadsheet: Option<crate::views::preview::SpreadsheetPreviewData>,
+    #[serde(default)]
+    pub presentation: Option<Box<crate::views::preview::PresentationPreviewData>>,
+}
+
+/// Returns `true` for PowerPoint deck paths backed by `cowork/workspace/presentation/preview`.
+pub fn is_presentation_preview_path(path: &str) -> bool {
+    let lower = path.trim().to_ascii_lowercase();
+    lower.ends_with(".pptx") || lower.ends_with(".ppt")
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1656,6 +1670,7 @@ pub struct AppState {
     pub(crate) pending_confirm_dialogs_by_window: HashMap<WindowMode, ConfirmDialogRequest>,
     pub(crate) canvas_generation_seq: u64,
     pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
+    pub(crate) pending_presentation_rpcs: HashMap<u64, PendingPresentationRpc>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) persisted_active_thread_id: Option<String>,
     pub(crate) rekeyed_thread_ids: HashMap<String, String>,
@@ -1786,6 +1801,7 @@ impl Default for AppState {
             pending_confirm_dialogs_by_window: HashMap::new(),
             canvas_generation_seq: 1,
             pending_canvas_rpcs: HashMap::new(),
+            pending_presentation_rpcs: HashMap::new(),
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             persisted_active_thread_id: None,
             rekeyed_thread_ids: HashMap::new(),
@@ -2381,13 +2397,149 @@ impl AppState {
             .active_file_preview
             .as_ref()
             .and_then(|p| p.spreadsheet.as_ref());
+        let presentation = self
+            .active_file_preview
+            .as_ref()
+            .and_then(|p| p.presentation.as_deref());
         self.preview_ui
-            .sync_for_preview_data(preview_path, spreadsheet);
+            .sync_for_all_previews(preview_path, spreadsheet, presentation);
+    }
+
+    fn workspace_paths_match(&self, workspace_id: &str, lhs: &str, rhs: &str) -> bool {
+        if lhs == rhs {
+            return true;
+        }
+        let resolved_lhs = self.resolve_workspace_fs_path(workspace_id, lhs);
+        let resolved_rhs = self.resolve_workspace_fs_path(workspace_id, rhs);
+        if resolved_lhs == resolved_rhs {
+            return true;
+        }
+        match (
+            std::fs::canonicalize(&resolved_lhs),
+            std::fs::canonicalize(&resolved_rhs),
+        ) {
+            (Ok(canon_lhs), Ok(canon_rhs)) => canon_lhs == canon_rhs,
+            _ => false,
+        }
+    }
+
+    fn open_presentation_preview(
+        &mut self,
+        workspace_id: String,
+        workspace_root: String,
+        resolved_path: String,
+    ) {
+        if self.canvas_document.as_ref().is_some_and(|d| !d.dirty()) {
+            self.close_canvas_document();
+        }
+        self.shell_ui.right_overlay_open = false;
+        self.context_sidebar.set_open(false);
+        let title = resolved_path
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&resolved_path)
+            .to_string();
+        self.active_file_preview = Some(FilePreviewState {
+            workspace_id: workspace_id.clone(),
+            path: resolved_path.clone(),
+            title,
+            content: None,
+            is_binary: true,
+            is_markdown: false,
+            truncated: false,
+            error: None,
+            spreadsheet: None,
+            presentation: Some(Box::new(
+                crate::views::preview::PresentationPreviewData::loading(),
+            )),
+        });
+        self.request_presentation_preview(workspace_id, workspace_root, resolved_path);
+    }
+
+    fn request_presentation_preview(
+        &mut self,
+        workspace_id: String,
+        workspace_root: String,
+        resolved_path: String,
+    ) {
+        if let Some(preview) = self.active_file_preview.as_mut()
+            && preview.workspace_id == workspace_id
+            && preview.path == resolved_path
+        {
+            preview.error = None;
+            preview.presentation = Some(Box::new(
+                crate::views::preview::PresentationPreviewData::loading(),
+            ));
+        }
+        self.sync_preview_ui();
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/presentation/preview",
+            json!({
+                "cwd": workspace_root,
+                "path": resolved_path,
+            }),
+            false,
+        );
+        self.pending_presentation_rpcs.clear();
+        self.pending_presentation_rpcs.insert(
+            req_id,
+            PendingPresentationRpc {
+                workspace_id,
+                path: resolved_path,
+            },
+        );
+    }
+
+    fn apply_presentation_preview_response(&mut self, request_id: u64, payload: &Value) {
+        let Some(pending) = self.pending_presentation_rpcs.remove(&request_id) else {
+            return;
+        };
+        let Some(preview) = self.active_file_preview.as_mut() else {
+            return;
+        };
+        if preview.workspace_id != pending.workspace_id
+            || preview.path != pending.path
+            || preview.presentation.is_none()
+        {
+            return;
+        }
+        let parsed = crate::views::preview::PresentationPreviewData::from_rpc_payload(payload);
+        preview.error = None;
+        preview.presentation = Some(Box::new(parsed));
+        self.sync_preview_ui();
+    }
+
+    fn apply_presentation_preview_error(&mut self, request_id: u64, err: &WsRpcError) {
+        let Some(pending) = self.pending_presentation_rpcs.remove(&request_id) else {
+            return;
+        };
+        let Some(preview) = self.active_file_preview.as_mut() else {
+            return;
+        };
+        if preview.workspace_id != pending.workspace_id
+            || preview.path != pending.path
+            || preview.presentation.is_none()
+        {
+            return;
+        }
+        let message = if err.message.trim().is_empty() {
+            "Failed to render PowerPoint deck."
+        } else {
+            err.message.as_str()
+        };
+        preview.error = None;
+        preview.presentation = Some(Box::new(
+            crate::views::preview::PresentationPreviewData::from_error("compile_error", message),
+        ));
+        self.sync_preview_ui();
     }
 
     fn open_canvas_document(&mut self, workspace_id: String, path: String) {
         let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
         self.close_canvas_document();
+        self.pending_presentation_rpcs.clear();
         self.active_file_preview = None;
         self.sync_preview_ui();
         self.context_sidebar.set_open(true);
@@ -2882,6 +3034,26 @@ impl AppState {
     }
 
     fn apply_workspace_file_changed(&mut self, workspace_id: &str, params: &Value) {
+        let Some(changed_path) = params.get("path").and_then(Value::as_str) else {
+            return;
+        };
+
+        if let Some((preview_ws, preview_path, has_pres)) =
+            self.active_file_preview.as_ref().map(|p| {
+                (
+                    p.workspace_id.clone(),
+                    p.path.clone(),
+                    p.presentation.is_some(),
+                )
+            })
+            && has_pres
+            && preview_ws == workspace_id
+            && self.workspace_paths_match(workspace_id, changed_path, &preview_path)
+            && let Some(root) = self.workspace_path(workspace_id)
+        {
+            self.request_presentation_preview(workspace_id.to_string(), root, preview_path);
+        }
+
         let Some(doc) = self.canvas_document.as_ref() else {
             return;
         };
@@ -2893,12 +3065,7 @@ impl AppState {
         {
             return;
         }
-        let Some(changed_path) = params.get("path").and_then(Value::as_str) else {
-            return;
-        };
-        let resolved_changed = self.resolve_workspace_fs_path(workspace_id, changed_path);
-        let path_matches = changed_path == doc.path || resolved_changed == doc.path;
-        if !path_matches {
+        if !self.workspace_paths_match(workspace_id, changed_path, &doc.path) {
             return;
         }
         // Ignore our own save echoes when server broadcasts matching revision.
@@ -4303,10 +4470,12 @@ impl AppState {
                 self.persist_state();
             }
             ShellAction::OpenFilePreview(preview) => {
+                self.pending_presentation_rpcs.clear();
                 self.active_file_preview = Some(preview);
                 self.sync_preview_ui();
             }
             ShellAction::CloseFilePreview => {
+                self.pending_presentation_rpcs.clear();
                 self.active_file_preview = None;
                 self.sync_preview_ui();
             }
@@ -7291,7 +7460,10 @@ impl AppState {
                     let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
                     if self.should_open_in_canvas(&resolved_path) {
                         self.open_canvas_document(workspace_id, resolved_path);
+                    } else if is_presentation_preview_path(&resolved_path) {
+                        self.open_presentation_preview(workspace_id, root, resolved_path);
                     } else {
+                        self.pending_presentation_rpcs.clear();
                         if self.canvas_document.as_ref().is_some_and(|d| !d.dirty()) {
                             self.close_canvas_document();
                         }
@@ -8811,6 +8983,9 @@ impl AppState {
             "cowork/workspace/document/close" => {
                 self.pending_canvas_rpcs.remove(&request_id);
             }
+            "cowork/workspace/presentation/preview" => {
+                self.apply_presentation_preview_response(request_id, &payload);
+            }
             _ => {}
         }
     }
@@ -8822,6 +8997,10 @@ impl AppState {
         method: &str,
         err: WsRpcError,
     ) {
+        if method == "cowork/workspace/presentation/preview" {
+            self.apply_presentation_preview_error(request_id, &err);
+            return;
+        }
         if let Some(draft_id) = self.pending_draft_threads_by_rpc_id.remove(&request_id)
             && let Some(rt) = self.thread_runtime_by_id.get_mut(&draft_id)
         {
@@ -15996,5 +16175,141 @@ mod tests {
                 ..
             } if id.starts_with("optimistic-") && content == "Run pwd"
         ));
+    }
+
+    #[test]
+    fn load_presentation_preview_routes_via_rpc_handles_stale_and_file_changed() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Repo".to_string(),
+            path: "/ws".to_string(),
+            ..Default::default()
+        });
+
+        // 1) Loading a .pptx deck sets loading presentation state and emits JSON-RPC request.
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "slides/deck.pptx".to_string(),
+        }));
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .all(|cmd| !matches!(cmd, NativeCommand::ReadFilePreview { .. })),
+            "presentations must not fall back to native ReadFilePreview"
+        );
+        let (req_1, method_1, params_1) = match state.services.emitted_ws_commands.last() {
+            Some(WsCommand::SendRequest {
+                request_id,
+                method,
+                params,
+                ..
+            }) => (*request_id, method.clone(), params.clone()),
+            other => panic!("expected SendRequest, got {other:?}"),
+        };
+        assert_eq!(method_1, "cowork/workspace/presentation/preview");
+        assert_eq!(
+            params_1,
+            json!({ "cwd": "/ws", "path": "/ws/slides/deck.pptx" })
+        );
+        let preview = state.active_file_preview.as_ref().expect("preview opened");
+        assert_eq!(preview.title, "deck.pptx");
+        assert!(preview.error.is_none());
+        assert!(preview.presentation.as_ref().is_some_and(|p| p.loading));
+
+        // 2) Switching to another .ppt deck before req_1 finishes ignores late req_1 response.
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "/ws/other.ppt".to_string(),
+        }));
+        let req_2 = match state.services.emitted_ws_commands.last() {
+            Some(WsCommand::SendRequest { request_id, .. }) => *request_id,
+            other => panic!("expected second SendRequest, got {other:?}"),
+        };
+        assert_ne!(req_1, req_2);
+
+        state.apply_ws_response(
+            "ws-1",
+            req_1,
+            "cowork/workspace/presentation/preview",
+            Ok(json!({
+                "ok": true,
+                "slides": [{ "slideIndex": 0, "pngBase64": "data:image/png;base64,AAA=" }],
+                "renderingMode": "rendered",
+                "warnings": []
+            })),
+        );
+        let current = state.active_file_preview.as_ref().expect("still active");
+        assert_eq!(current.path, "/ws/other.ppt");
+        assert!(current.presentation.as_ref().is_some_and(|p| p.loading));
+
+        // 3) Valid response for req_2 hydrates presentation slides cleanly.
+        state.apply_ws_response(
+            "ws-1",
+            req_2,
+            "cowork/workspace/presentation/preview",
+            Ok(json!({
+                "ok": true,
+                "slides": [
+                    { "slideIndex": 0, "title": "Intro", "pngBase64": "data:image/png;base64,BBB=" },
+                    { "slideIndex": 1, "title": "End", "pngBase64": "data:image/png;base64,CCC=" }
+                ],
+                "renderingMode": "text",
+                "warnings": ["Text-only fallback"]
+            })),
+        );
+        let current = state.active_file_preview.as_ref().expect("still active");
+        let pres = current.presentation.as_ref().expect("presentation data");
+        assert!(!pres.loading);
+        assert_eq!(pres.slides.len(), 2);
+        assert_eq!(pres.rendering_mode.as_deref(), Some("text"));
+        assert!(current.error.is_none());
+
+        // 4) Matching cowork/workspace/fileChanged re-fetches presentation preview.
+        let before_cmds = state.services.emitted_ws_commands.len();
+        state.apply_workspace_file_changed("ws-1", &json!({ "path": "other.ppt" }));
+        assert_eq!(state.services.emitted_ws_commands.len(), before_cmds + 1);
+        let req_3 = match state.services.emitted_ws_commands.last() {
+            Some(WsCommand::SendRequest {
+                request_id, method, ..
+            }) if method == "cowork/workspace/presentation/preview" => *request_id,
+            other => panic!("expected refresh SendRequest, got {other:?}"),
+        };
+        assert!(
+            state
+                .active_file_preview
+                .as_ref()
+                .and_then(|p| p.presentation.as_ref())
+                .is_some_and(|p| p.loading)
+        );
+
+        // 5) Offline / transport error populates presentation error without workspace/settings noise.
+        state.apply_ws_response(
+            "ws-1",
+            req_3,
+            "cowork/workspace/presentation/preview",
+            Err(WsRpcError {
+                code: -32000,
+                message: "Workspace socket offline".to_string(),
+                data: None,
+            }),
+        );
+        let current = state.active_file_preview.as_ref().expect("preview kept");
+        assert!(current.error.is_none());
+        let pres = current.presentation.as_ref().expect("error presentation");
+        assert!(!pres.loading);
+        assert_eq!(
+            pres.error_message.as_deref(),
+            Some("Workspace socket offline")
+        );
+        assert!(state.settings_mutation_error.is_none());
+        assert!(
+            state
+                .workspace_runtime_by_id
+                .get("ws-1")
+                .is_none_or(|rt| rt.last_error.is_none())
+        );
     }
 }

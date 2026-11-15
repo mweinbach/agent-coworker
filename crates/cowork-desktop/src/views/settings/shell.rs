@@ -1,13 +1,13 @@
 //! Settings navigation shell ported from `apps/desktop/src/ui/settings/SettingsShell.tsx`.
 
-use rune::{Cx, El, Icon, ScrollSpec, Transition, col, el, icon, row, text};
+use rune::{El, Icon, ScrollSpec, Transition, col, text};
 use rune_kit::Kit;
+use rune_kit::shell::{Sidebar, SidebarRow, SidebarSection};
 
 use crate::actions::{Action, NavAction};
 use crate::router::{SettingsPageId, ViewId};
 use crate::state::AppState;
-use crate::theme::{self, ThemeTokens};
-use crate::views::SubviewOutput;
+use crate::theme::ThemeTokens;
 use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::active_workspace_banner_label;
@@ -206,231 +206,106 @@ pub fn resolve_active_page(s: &AppState) -> SettingsPageId {
     }
 }
 
-fn nav_pane(
-    s: &AppState,
-    cx: &mut Cx<AppState>,
-    k: &Kit,
-    t: &ThemeTokens,
-    active_page: SettingsPageId,
-    groups: &[SettingsNavGroup],
-) -> El {
-    let top_pad = cx.titlebar_inset().max(12.0);
-    let back_button = row()
-        .key("settings-back-button")
-        .w_full()
-        .h(36.0)
-        .px(10.0)
-        .radius(6.0)
-        .gap(8.0)
-        .items_center()
-        .hover(t.text_base.alpha(0.05))
-        .press(t.pressed)
-        .role("button")
-        .label("Back to chat")
-        .on_press(|s: &mut AppState| {
+fn nav_pane(k: &Kit, active_page: SettingsPageId, groups: &[SettingsNavGroup]) -> El {
+    let back_button = SidebarRow::new("Back to chat")
+        .icon(&icons::ARROW_LEFT)
+        .height(30.0)
+        .on_select(|s: &mut AppState, _| {
+            s.settings_ui.mobile_nav_open = false;
             s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
         })
-        .child(icon(&icons::ARROW_LEFT, 16.0).color(t.text_muted))
-        .child(text("Back").font(k.ty.body_medium).color(t.text_muted));
+        .build(k)
+        .key("settings-back-button");
 
-    let mut header = col()
-        .w_full()
-        .px(12.0)
-        .pt(top_pad)
-        .pb(10.0)
-        .gap(6.0)
-        .border_sides([0.0, 0.0, 1.0, 0.0], t.border_muted)
-        .child(back_button);
+    let mut sb = Sidebar::new()
+        .label("Settings sections")
+        .inset(8.0)
+        .header_gap(3.0)
+        .header_padding(0.0, 8.0)
+        .row_gap(2.0)
+        .header(back_button);
 
-    if let Some(ws_label) = active_workspace_banner_label(s) {
-        header = header.child(
-            text(ws_label)
-                .px(8.0)
-                .font(k.ty.text_xsmall)
-                .color(t.text_muted)
-                .truncate(),
-        );
-    }
-
-    let mut group_els = Vec::with_capacity(groups.len());
-    for group in groups {
-        let mut items = Vec::with_capacity(group.pages.len());
+    for (idx, group) in groups.iter().enumerate() {
+        let mut sec = SidebarSection::new(group.label).key(format!("settings-nav-group-{idx}"));
         for item in &group.pages {
-            let is_active = item.id == active_page;
             let page_id = item.id;
-            let icon_color = if is_active { t.accent } else { t.text_muted };
-            let text_color = if is_active { t.text_base } else { t.text_muted };
-            let label_font = if is_active {
-                k.ty.body_medium
-            } else {
-                k.ty.ui_medium
-            };
-
-            let mut nav_btn = row()
-                .key(format!("settings-nav-{}", page_key(page_id)))
-                .w_full()
-                .min_h(30.0)
-                .px(10.0)
-                .py(5.0)
-                .radius(8.0)
-                .gap(10.0)
-                .items_center()
-                .role("button")
-                .label(item.label)
-                .on_press(move |s: &mut AppState| {
+            let is_active = page_id == active_page;
+            let nav_row = SidebarRow::new(item.label)
+                .icon(item.icon)
+                .height(30.0)
+                .selected(is_active)
+                .on_select(move |s: &mut AppState, _| {
+                    s.settings_ui.mobile_nav_open = false;
+                    s.settings_ui.open_select_key = None;
                     s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(page_id))));
                 })
-                .child(icon(item.icon, 16.0).color(icon_color))
-                .child(
-                    text(item.label)
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .font(label_font)
-                        .color(text_color)
-                        .truncate(),
-                );
-
-            if is_active {
-                nav_btn = nav_btn.fill(t.accent.alpha(0.12));
-            } else {
-                nav_btn = nav_btn.hover(t.text_base.alpha(0.05)).press(t.pressed);
-            }
-
-            items.push(nav_btn);
+                .build(k)
+                .key(format!("settings-nav-{}", page_key(page_id)));
+            sec = sec.row(nav_row);
         }
-
-        group_els.push(
-            col()
-                .w_full()
-                .min_w(0.0)
-                .gap(2.0)
-                .child(
-                    text(group.label.to_uppercase())
-                        .px(8.0)
-                        .py(4.0)
-                        .font(t.label)
-                        .color(t.text_faint),
-                )
-                .children(items),
-        );
+        sb = sb.section(sec);
     }
 
-    let scroll_nav = k.scroll_bar(
-        col()
-            .grow(1.0)
-            .min_h(0.0)
-            .w_full()
-            .px(10.0)
-            .pt(8.0)
-            .pb(12.0)
-            .gap(10.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .children(group_els),
-    );
-
-    col()
-        .key("settings-nav-rail")
-        .w(theme::layout::SIDEBAR_DEFAULT_WIDTH)
-        .h_full()
-        .min_h(0.0)
-        .shrink()
-        .fill(t.sidebar_bg)
-        .border_sides([0.0, 1.0, 0.0, 0.0], t.border_muted)
-        .child(header)
-        .child(el().grow(1.0).min_h(0.0).w_full().child(scroll_nav))
+    sb.build(k).key("settings-nav-rail")
 }
 
-/// Wraps an active page inside the Settings shell (navigation sidebar + sticky header + scroll body).
-pub fn settings_shell(
+/// Structural pieces of the Settings surface mounted by `views::shell` (or wrapped in `SplitView`
+/// by `views::settings::view` for standalone tests).
+pub struct SettingsLayout {
+    pub sidebar: El,
+    pub title: String,
+    pub workspace_badge: Option<String>,
+    pub header_actions: Vec<El>,
+    pub main: El,
+    pub overlays: Vec<El>,
+}
+
+/// Builds the Settings navigation rail, page description header, and scrollable body.
+pub fn settings_layout(
     s: &AppState,
-    cx: &mut Cx<AppState>,
     k: &Kit,
     t: &ThemeTokens,
     active_page: SettingsPageId,
     content: PageContent,
-) -> SubviewOutput {
+) -> SettingsLayout {
     let remote_access_available = is_flag_enabled(s, "remoteAccess");
     let include_dev = !s.is_packaged;
     let groups = settings_groups(remote_access_available, include_dev);
 
-    let main_bg = t.panel_bg.mix(t.app_bg, 0.12);
     let is_backup_page = active_page == SettingsPageId::Backup;
 
-    let mut header_title_col = col()
-        .grow(1.0)
-        .min_w(0.0)
-        .gap(4.0)
-        .child(
-            text(active_page.title())
-                .font(t.title)
-                .color(t.text_base)
-                .wrap(),
-        )
-        .child(
-            text(active_page.description())
-                .font(k.ty.body)
-                .color(t.text_muted)
-                .max_w(576.0)
-                .wrap(),
-        );
-
+    let mut intro = col().w_full().max_w(1040.0).gap(4.0).child(
+        text(active_page.description())
+            .font(k.ty.small)
+            .color(t.text_muted)
+            .wrap(),
+    );
     if active_page != s.route().settings_page {
-        header_title_col = header_title_col.child(
+        intro = intro.child(
             text(format!(
                 "Redirected from {}",
                 s.route().settings_page.title()
             ))
-            .font(k.ty.text_xsmall)
+            .font(k.ty.small)
             .color(t.text_faint),
         );
     }
 
-    let mut header_row = row()
-        .w_full()
-        .justify_between()
-        .items_start()
-        .gap(16.0)
-        .child(header_title_col);
-
-    if !content.header_actions.is_empty() {
-        header_row = header_row.child(
-            row()
-                .key(format!("settings-header-actions-{}", page_key(active_page)))
-                .shrink()
-                .flex_wrap()
-                .items_center()
-                .justify_end()
-                .gap(8.0)
-                .transition(Transition::none())
-                .children(content.header_actions),
-        );
-    }
-
-    let page_header = el()
-        .key(format!("settings-page-header-{}", page_key(active_page)))
-        .w_full()
-        .px(20.0)
-        .py(16.0)
-        .fill(main_bg)
-        .border_sides([0.0, 0.0, 1.0, 0.0], t.border_muted)
-        .transition(Transition::none())
-        .child(header_row);
-
     // Instant page unmount matches the Electron settings shell and prevents
     // outgoing page text from ghosting underneath the incoming page.
-    let body_area = if is_backup_page {
+    let main = if is_backup_page {
         col()
             .key(format!("settings-page-{}", page_key(active_page)))
             .grow(1.0)
             .min_h(0.0)
             .min_w(0.0)
             .w_full()
-            .px(20.0)
-            .pb(20.0)
+            .px(24.0)
             .pt(16.0)
+            .pb(20.0)
+            .gap(16.0)
             .transition(Transition::none())
+            .child(intro)
             .child(content.body)
     } else {
         let scroll_body = k.scroll_bar(
@@ -439,9 +314,9 @@ pub fn settings_shell(
                 .min_h(0.0)
                 .min_w(0.0)
                 .w_full()
-                .px(20.0)
+                .px(24.0)
                 .pt(16.0)
-                .pb(24.0)
+                .pb(28.0)
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
@@ -449,39 +324,27 @@ pub fn settings_shell(
                     col()
                         .key(format!("settings-page-{}", page_key(active_page)))
                         .w_full()
+                        .gap(16.0)
                         .transition(Transition::none())
+                        .child(intro)
                         .child(content.body),
                 ),
         );
-        el().grow(1.0)
+        rune::el()
+            .key("settings-main-pane")
+            .grow(1.0)
             .min_h(0.0)
             .min_w(0.0)
             .w_full()
             .child(scroll_body)
     };
 
-    let main_pane = col()
-        .key("settings-main-pane")
-        .grow(1.0)
-        .min_w(0.0)
-        .min_h(0.0)
-        .h_full()
-        .fill(main_bg)
-        .child(page_header)
-        .child(body_area);
-
-    let shell_row = row()
-        .key("settings-shell")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .min_w(0.0)
-        .fill(t.app_bg)
-        .child(nav_pane(s, cx, k, t, active_page, &groups))
-        .child(main_pane);
-
-    SubviewOutput {
-        content: shell_row,
+    SettingsLayout {
+        sidebar: nav_pane(k, active_page, &groups),
+        title: active_page.title().to_string(),
+        workspace_badge: active_workspace_banner_label(s),
+        header_actions: content.header_actions,
+        main,
         overlays: content.overlays,
     }
 }

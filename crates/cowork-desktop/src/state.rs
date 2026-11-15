@@ -39,7 +39,6 @@ use crate::actions::{
     Action, ChatAction, NativeAction, NativeCommand, NavAction, SettingsAction, ShellAction,
     SidebarSectionKey, StoreEvent, TaskAction, TranscriptLogEntry,
 };
-use crate::native::file_preview_read::{FilePreviewKind, classify_file_preview_kind};
 use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
 };
@@ -61,6 +60,16 @@ pub enum WindowMode {
     Main,
     QuickChat,
     Utility,
+}
+
+impl WindowMode {
+    pub fn from_window_key(key: &str) -> Self {
+        match key {
+            WINDOW_QUICK_CHAT => Self::QuickChat,
+            WINDOW_UTILITY => Self::Utility,
+            _ => Self::Main,
+        }
+    }
 }
 
 /// In-window confirmation dialog request (replaces Electron `dialog.showMessageBox`).
@@ -154,12 +163,6 @@ pub(crate) struct PendingCanvasRpc {
     pub generation: u64,
     pub edit_revision: u64,
     pub target_path: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PendingMainFocus {
-    pub open_new_chat_workspace: Option<String>,
-    pub open_thread_id: Option<String>,
 }
 
 /// Workspace record shown in the sidebar and connected to a local `cowork-server`.
@@ -1633,10 +1636,12 @@ pub struct AppState {
     pub canvas_document: Option<CanvasDocumentSession>,
     pub product_analytics: Option<Value>,
     pub(crate) pending_launchable_open_path: Option<String>,
+    pub(crate) last_launchable_window: WindowMode,
+    pub(crate) pending_launchable_paths_by_window: HashMap<WindowMode, String>,
+    pub(crate) pending_confirm_dialogs_by_window: HashMap<WindowMode, ConfirmDialogRequest>,
     pub(crate) canvas_generation_seq: u64,
     pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
-    pub(crate) pending_main_focus: Option<PendingMainFocus>,
     pub(crate) shared_dirty: bool,
 }
 
@@ -1757,10 +1762,12 @@ impl Default for AppState {
             canvas_document: None,
             product_analytics: None,
             pending_launchable_open_path: None,
+            last_launchable_window: WindowMode::Main,
+            pending_launchable_paths_by_window: HashMap::new(),
+            pending_confirm_dialogs_by_window: HashMap::new(),
             canvas_generation_seq: 1,
             pending_canvas_rpcs: HashMap::new(),
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
-            pending_main_focus: None,
             shared_dirty: false,
         }
     }
@@ -2123,18 +2130,73 @@ impl AppState {
     }
 
     /// Mirrors Electron `isCanvasSupportedFile` minus spreadsheets/OOXML decks handled natively.
+    /// Returns true when `feature_flags["canvas"]` is enabled AND `path` is a Canvas-editable
+    /// markdown/text/code document (keeping spreadsheets/OOXML decks/PDF/images on native preview).
     pub fn should_open_in_canvas(&self, path: &str) -> bool {
-        self.is_canvas_enabled()
-            && matches!(
-                classify_file_preview_kind(Path::new(path)),
-                FilePreviewKind::Markdown | FilePreviewKind::Text
-            )
+        self.is_canvas_enabled() && crate::views::chat::canvas::is_canvas_document_path(path)
     }
 
     pub fn is_workspace_ws_connected(&self, workspace_id: &str) -> bool {
         self.workspace_socket_by_id
             .get(workspace_id)
             .is_some_and(WsConnectionState::is_connected)
+    }
+
+    /// Window-scoped dirty/busy work check for close guards.
+    ///
+    /// Hide-only secondary windows (`quick-chat`, `utility`) check only work belonging to that
+    /// window surface so active turns or dirty Canvas docs in Main do not block hiding Utility.
+    pub fn has_unsaved_or_busy_work_for(&self, window_key: &str, will_quit: bool) -> bool {
+        if will_quit || window_key == "main" {
+            return self.has_unsaved_or_busy_work();
+        }
+        match window_key {
+            WINDOW_QUICK_CHAT => !self.composer_edit.text.trim().is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Routes a confirmation dialog to a specific OS window mode (immediate if active, else queued).
+    pub fn set_confirm_dialog_for_window(
+        &mut self,
+        target: WindowMode,
+        dialog: ConfirmDialogRequest,
+    ) {
+        if target == self.window_mode {
+            self.pending_confirm_dialog = Some(dialog);
+            return;
+        }
+        self.pending_confirm_dialogs_by_window
+            .insert(target, dialog);
+        self.shared_dirty = true;
+        match target {
+            WindowMode::Main => self.send_window(WindowCommand::FocusMain {
+                open_new_chat_workspace: None,
+                open_thread_id: None,
+            }),
+            WindowMode::QuickChat => self.send_window(WindowCommand::OpenQuickChat),
+            WindowMode::Utility => self.send_window(WindowCommand::OpenUtility),
+        }
+    }
+
+    /// Pulls any queued confirmation dialog/launchable path targeted at the active window mode.
+    pub fn sync_pending_confirm_dialog_for_window(&mut self) -> bool {
+        let Some(dialog) = self
+            .pending_confirm_dialogs_by_window
+            .remove(&self.window_mode)
+        else {
+            return false;
+        };
+        if dialog.id.starts_with("launchable-open:")
+            && let Some(path) = self
+                .pending_launchable_paths_by_window
+                .remove(&self.window_mode)
+        {
+            self.pending_launchable_open_path = Some(path);
+        }
+        self.pending_confirm_dialog = Some(dialog);
+        self.shared_dirty = true;
+        true
     }
 
     /// True when closing the window risks losing unsent drafts, active turns, approvals, or dirty Canvas edits.
@@ -2575,6 +2637,19 @@ impl AppState {
                 }
             }
             "cowork/workspace/document/revision" => {
+                let (dirty, in_flight) = self
+                    .canvas_document
+                    .as_ref()
+                    .map(|d| {
+                        (
+                            d.dirty(),
+                            matches!(
+                                d.status,
+                                CanvasDocumentStatus::Loading | CanvasDocumentStatus::Saving
+                            ),
+                        )
+                    })
+                    .unwrap_or((false, true));
                 if ok {
                     let new_rev = payload.get("revision").and_then(|r| {
                         serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
@@ -2582,6 +2657,9 @@ impl AppState {
                     let Some(new_rev) = new_rev else {
                         return;
                     };
+                    if in_flight {
+                        return;
+                    }
                     let changed = self
                         .canvas_document
                         .as_ref()
@@ -2589,22 +2667,9 @@ impl AppState {
                     if !changed {
                         return;
                     }
-                    let (dirty, in_flight) = self
-                        .canvas_document
-                        .as_ref()
-                        .map(|d| {
-                            (
-                                d.dirty(),
-                                matches!(
-                                    d.status,
-                                    CanvasDocumentStatus::Loading | CanvasDocumentStatus::Saving
-                                ),
-                            )
-                        })
-                        .unwrap_or((false, true));
-                    if !dirty && !in_flight {
+                    if !dirty {
                         self.reload_canvas_document();
-                    } else if dirty && let Some(doc) = self.canvas_document.as_mut() {
+                    } else if let Some(doc) = self.canvas_document.as_mut() {
                         doc.status = CanvasDocumentStatus::Conflict {
                             message: "The file changed on disk while you have unsaved edits."
                                 .to_string(),
@@ -2618,23 +2683,17 @@ impl AppState {
                         .and_then(|e| e.get("kind"))
                         .and_then(Value::as_str)
                         .map(str::to_string);
-                    let message = payload
-                        .get("error")
-                        .and_then(|e| e.get("message"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("Unable to check document revision.")
-                        .to_string();
-                    if let Some(doc) = self.canvas_document.as_mut()
-                        && kind.as_deref() != Some("session_not_found")
-                    {
-                        if doc.dirty() {
-                            doc.status = CanvasDocumentStatus::Conflict {
-                                message,
-                                current_revision: None,
-                            };
-                            doc.dirty_since_secs = None;
-                        } else {
-                            doc.status = CanvasDocumentStatus::LoadError { kind, message };
+                    if kind.as_deref() == Some("session_not_found") && !in_flight {
+                        if !dirty {
+                            self.reload_canvas_document();
+                        } else if let Some(doc) = self.canvas_document.as_mut() {
+                            let message = payload
+                                .get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("Document session expired on server.")
+                                .to_string();
+                            doc.status = CanvasDocumentStatus::SaveError { kind, message };
                         }
                     }
                 }
@@ -2742,13 +2801,14 @@ impl AppState {
         if doc.document_id != pending.document_id || doc.generation != pending.generation {
             return;
         }
-        doc.dirty_since_secs = None;
         if method.ends_with("/save") || method.ends_with("/saveAs") {
+            doc.dirty_since_secs = None;
             doc.status = CanvasDocumentStatus::SaveError {
                 kind: None,
                 message: err.message.clone(),
             };
         } else if method.ends_with("/open") {
+            doc.dirty_since_secs = None;
             doc.status = CanvasDocumentStatus::LoadError {
                 kind: None,
                 message: err.message.clone(),
@@ -3731,9 +3791,9 @@ impl AppState {
                 }));
             }
             StoreEvent::LaunchableFileConfirmRequired { path, file_name } => {
-                self.pending_launchable_open_path = Some(path);
+                let target = self.last_launchable_window;
                 let tag = self.next_tag("launchable");
-                self.pending_confirm_dialog = Some(ConfirmDialogRequest {
+                let req = ConfirmDialogRequest {
                     id: format!("launchable-open:{tag}"),
                     title: "Open file that can run code?".to_string(),
                     message: format!(
@@ -3742,7 +3802,14 @@ impl AppState {
                     confirm_label: "Open Anyway".to_string(),
                     cancel_label: "Cancel".to_string(),
                     destructive: true,
-                });
+                };
+                if target == self.window_mode {
+                    self.pending_launchable_open_path = Some(path);
+                    self.pending_confirm_dialog = Some(req);
+                } else {
+                    self.pending_launchable_paths_by_window.insert(target, path);
+                    self.set_confirm_dialog_for_window(target, req);
+                }
             }
             StoreEvent::ConfirmWindowClose {
                 window_id,
@@ -3750,14 +3817,16 @@ impl AppState {
                 title,
                 message,
             } => {
-                self.pending_confirm_dialog = Some(ConfirmDialogRequest {
+                let target = WindowMode::from_window_key(&window_id);
+                let req = ConfirmDialogRequest {
                     id: format!("window-close:{window_id}:{request_id}"),
                     title,
                     message,
                     confirm_label: "Close Anyway".to_string(),
                     cancel_label: "Keep Open".to_string(),
                     destructive: true,
-                });
+                };
+                self.set_confirm_dialog_for_window(target, req);
             }
             StoreEvent::LocalTranscriptLoaded {
                 thread_id, result, ..
@@ -4150,11 +4219,11 @@ impl AppState {
             } => {
                 if self.window_mode == WindowMode::Main {
                     self.apply_main_focus_nav(open_new_chat_workspace, open_thread_id);
-                } else {
-                    self.pending_main_focus = Some(PendingMainFocus {
-                        open_new_chat_workspace: open_new_chat_workspace.clone(),
-                        open_thread_id: open_thread_id.clone(),
+                    self.send_window(WindowCommand::FocusMain {
+                        open_new_chat_workspace: None,
+                        open_thread_id: None,
                     });
+                } else {
                     self.send_window(WindowCommand::FocusMain {
                         open_new_chat_workspace,
                         open_thread_id,
@@ -4190,19 +4259,19 @@ impl AppState {
         );
         std::mem::swap(&mut self.quick_chat_open, &mut other.quick_chat_open);
         std::mem::swap(&mut self.composer_edit, &mut other.composer_edit);
+        std::mem::swap(
+            &mut self.pending_confirm_dialog,
+            &mut other.pending_confirm_dialog,
+        );
+        std::mem::swap(
+            &mut self.pending_launchable_open_path,
+            &mut other.pending_launchable_open_path,
+        );
         std::mem::swap(&mut self.chat_ui, &mut other.chat_ui);
         std::mem::swap(&mut self.settings_ui, &mut other.settings_ui);
         std::mem::swap(&mut self.shell_ui, &mut other.shell_ui);
         std::mem::swap(&mut self.scene_mode, &mut other.scene_mode);
         std::mem::swap(&mut self.now_secs, &mut other.now_secs);
-    }
-
-    pub fn apply_pending_main_focus(&mut self) -> bool {
-        let Some(focus) = self.pending_main_focus.take() else {
-            return false;
-        };
-        self.apply_main_focus_nav(focus.open_new_chat_workspace, focus.open_thread_id);
-        true
     }
 
     pub fn apply_main_focus_nav(
@@ -6794,6 +6863,7 @@ impl AppState {
                 self.send_native(NativeCommand::RevealInOs(path));
             }
             NativeAction::OpenInDefaultApp(path) => {
+                self.last_launchable_window = self.window_mode;
                 self.send_native(NativeCommand::OpenInDefaultApp {
                     path,
                     confirmed: false,
@@ -13748,23 +13818,284 @@ mod tests {
         assert!((quick_state.ui_scale - 1.1).abs() < 1e-5);
         assert!(main_state.workspaces.is_empty());
 
+        let initial_quick_snap = quick_state.nav.current().clone();
         quick_state.dispatch(Action::Shell(ShellAction::FocusMainWindow {
             open_new_chat_workspace: Some("ws-shared".to_string()),
             open_thread_id: None,
         }));
-        assert!(matches!(
-            quick_state.services.emitted_window_commands.last(),
+        assert_eq!(quick_state.nav.current(), &initial_quick_snap);
+        let focus_target = match quick_state.services.emitted_window_commands.last().cloned() {
             Some(WindowCommand::FocusMain {
-                open_new_chat_workspace: Some(ws),
-                open_thread_id: None,
-            }) if ws == "ws-shared"
-        ));
+                open_new_chat_workspace,
+                open_thread_id,
+            }) => (open_new_chat_workspace, open_thread_id),
+            other => panic!("expected WindowCommand::FocusMain, got {other:?}"),
+        };
+        assert_eq!(focus_target.0.as_deref(), Some("ws-shared"));
+        assert_eq!(focus_target.1, None);
 
         quick_state.swap_shared_core(&mut main_state);
         assert_eq!(main_state.window_mode, WindowMode::Main);
         assert_eq!(main_state.workspaces.len(), 1);
-        assert!(main_state.apply_pending_main_focus());
+        main_state.apply_main_focus_nav(focus_target.0, focus_target.1);
         assert_eq!(main_state.nav.current().view, ViewId::Chat);
+    }
+
+    #[test]
+    fn review127_should_open_in_canvas_matches_markdown_text_config_and_excludes_spreadsheets() {
+        let mut state = AppState::default();
+        assert!(!state.should_open_in_canvas("notes.markdown"));
+
+        state.feature_flags.insert("canvas".to_string(), true);
+        for path in [
+            "notes.markdown",
+            "README.md",
+            ".env",
+            ".gitignore",
+            "Makefile",
+            "src/main.rs",
+        ] {
+            assert!(
+                state.should_open_in_canvas(path),
+                "expected Canvas support for {path}"
+            );
+        }
+        for path in [
+            "budget.xlsx",
+            "sheet.xls",
+            "deck.pptx",
+            "scan.pdf",
+            "img.png",
+        ] {
+            assert!(
+                !state.should_open_in_canvas(path),
+                "expected native preview (not Canvas) for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn review127_canvas_revision_rpc_guards_in_flight_transient_errors_and_session_expiry() {
+        let rev1 = CanvasDocumentRevision {
+            modified_at_ms: 100.0,
+            change_time_ms: 100.0,
+            size: 12,
+            fingerprint: "fp-1".to_string(),
+        };
+        let rev2 = CanvasDocumentRevision {
+            modified_at_ms: 200.0,
+            change_time_ms: 200.0,
+            size: 15,
+            fingerprint: "fp-2".to_string(),
+        };
+        let make_doc =
+            |generation: u64, draft: &str, status: CanvasDocumentStatus| CanvasDocumentSession {
+                workspace_id: "ws-1".to_string(),
+                document_id: "doc-1".to_string(),
+                generation,
+                path: "/tmp/note.md".to_string(),
+                disk_content: "initial".to_string(),
+                draft_content: draft.to_string(),
+                edit_revision: 1,
+                last_saved_edit_revision: 0,
+                truncated: false,
+                revision: Some(rev1.clone()),
+                status,
+                last_saved_at_secs: None,
+                dirty_since_secs: Some(10.0),
+                last_poll_secs: 10.0,
+            };
+
+        // 1. Transport error on `/revision` must preserve dirty_since_secs and Ready status.
+        let mut state = AppState {
+            canvas_document: Some(make_doc(1, "edited", CanvasDocumentStatus::Ready)),
+            ..Default::default()
+        };
+        state.pending_canvas_rpcs.insert(
+            7,
+            PendingCanvasRpc {
+                document_id: "doc-1".to_string(),
+                generation: 1,
+                edit_revision: 1,
+                target_path: None,
+            },
+        );
+        state.apply_canvas_rpc_error(
+            7,
+            "cowork/workspace/document/revision",
+            &WsRpcError {
+                code: -32000,
+                message: "timeout".to_string(),
+                data: None,
+            },
+        );
+        let doc = state.canvas_document.as_ref().expect("doc kept");
+        assert_eq!(doc.dirty_since_secs, Some(10.0));
+        assert_eq!(doc.status, CanvasDocumentStatus::Ready);
+
+        // 2. Transient `ok: false` response on `/revision` leaves doc intact (not LoadError/Conflict).
+        state.apply_canvas_rpc_response(
+            8,
+            "cowork/workspace/document/revision",
+            &json!({
+                "ok": false,
+                "documentId": "doc-1",
+                "generation": 1,
+                "error": { "kind": "io_error", "message": "temporary stat failure" }
+            }),
+        );
+        let doc = state.canvas_document.as_ref().expect("doc kept");
+        assert_eq!(doc.dirty_since_secs, Some(10.0));
+        assert_eq!(doc.status, CanvasDocumentStatus::Ready);
+
+        // 3. `ok: true` with newer revision must be ignored while `Saving` (in_flight guard).
+        state.canvas_document = Some(make_doc(1, "edited", CanvasDocumentStatus::Saving));
+        state.apply_canvas_rpc_response(
+            9,
+            "cowork/workspace/document/revision",
+            &json!({
+                "ok": true,
+                "documentId": "doc-1",
+                "generation": 1,
+                "revision": rev2,
+            }),
+        );
+        assert_eq!(
+            state.canvas_document.as_ref().expect("doc kept").status,
+            CanvasDocumentStatus::Saving
+        );
+
+        // 4. `session_not_found` sets SaveError when dirty, or triggers reload when clean.
+        state.canvas_document = Some(make_doc(1, "edited", CanvasDocumentStatus::Ready));
+        state.apply_canvas_rpc_response(
+            10,
+            "cowork/workspace/document/revision",
+            &json!({
+                "ok": false,
+                "documentId": "doc-1",
+                "generation": 1,
+                "error": { "kind": "session_not_found", "message": "expired" }
+            }),
+        );
+        assert!(matches!(
+            state.canvas_document.as_ref().expect("doc kept").status,
+            CanvasDocumentStatus::SaveError {
+                kind: Some(ref k),
+                ..
+            } if k == "session_not_found"
+        ));
+
+        state.canvas_document = Some(make_doc(1, "initial", CanvasDocumentStatus::Ready));
+        state.apply_canvas_rpc_response(
+            11,
+            "cowork/workspace/document/revision",
+            &json!({
+                "ok": false,
+                "documentId": "doc-1",
+                "generation": 1,
+                "error": { "kind": "session_not_found", "message": "expired" }
+            }),
+        );
+        let reloaded = state.canvas_document.as_ref().expect("doc reloaded");
+        assert!(reloaded.generation > 1);
+        assert_eq!(reloaded.status, CanvasDocumentStatus::Loading);
+    }
+
+    #[test]
+    fn review127_focus_main_window_routes_once_across_quick_chat_and_main() {
+        let mut quick = AppState {
+            window_mode: WindowMode::QuickChat,
+            ..Default::default()
+        };
+        let mut main = AppState {
+            window_mode: WindowMode::Main,
+            ..Default::default()
+        };
+        main.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "One".to_string(),
+            path: "/tmp/one".to_string(),
+            ..Default::default()
+        });
+        main.threads.push(ThreadRecord {
+            id: "t-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Thread".to_string(),
+            ..Default::default()
+        });
+
+        main.swap_shared_core(&mut quick);
+        let snap_before = quick.nav.current().clone();
+        let len_before = quick.nav.len();
+
+        quick.dispatch(Action::Shell(ShellAction::FocusMainWindow {
+            open_new_chat_workspace: None,
+            open_thread_id: Some("t-1".to_string()),
+        }));
+        assert_eq!(quick.nav.current(), &snap_before);
+        assert_eq!(quick.nav.len(), len_before);
+
+        let (ws_id, thread_id) = match quick.services.emitted_window_commands.pop() {
+            Some(WindowCommand::FocusMain {
+                open_new_chat_workspace,
+                open_thread_id,
+            }) => (open_new_chat_workspace, open_thread_id),
+            other => panic!("expected FocusMain, got {other:?}"),
+        };
+
+        quick.swap_shared_core(&mut main);
+        main.apply_main_focus_nav(ws_id, thread_id);
+        assert_eq!(main.nav.current().view, ViewId::Chat);
+        assert_eq!(main.nav.current().active_thread_id.as_deref(), Some("t-1"));
+        assert_eq!(main.active_workspace_id.as_deref(), Some("ws-1"));
+    }
+
+    #[test]
+    fn review127_per_window_confirm_dialogs_and_scoped_close_guards() {
+        let mut main = AppState {
+            window_mode: WindowMode::Main,
+            ..Default::default()
+        };
+        let mut quick = AppState {
+            window_mode: WindowMode::QuickChat,
+            ..Default::default()
+        };
+
+        let quick_dialog = ConfirmDialogRequest {
+            id: "launchable-open:quick".to_string(),
+            title: "Open Script".to_string(),
+            message: "Confirm launch".to_string(),
+            confirm_label: "Open".to_string(),
+            cancel_label: "Cancel".to_string(),
+            destructive: true,
+        };
+        main.set_confirm_dialog_for_window(WindowMode::QuickChat, quick_dialog.clone());
+        assert!(main.pending_confirm_dialog.is_none());
+        assert_eq!(
+            main.services.emitted_window_commands,
+            vec![WindowCommand::OpenQuickChat]
+        );
+
+        main.swap_shared_core(&mut quick);
+        assert!(quick.sync_pending_confirm_dialog_for_window());
+        assert_eq!(quick.pending_confirm_dialog.as_ref(), Some(&quick_dialog));
+        assert!(!quick.sync_pending_confirm_dialog_for_window());
+
+        // Scoped close guard: streaming/dirty Canvas on Main must not block hiding Utility.
+        main.thread_runtime_by_id.insert(
+            "t-busy".to_string(),
+            ThreadRuntime {
+                streaming: true,
+                ..Default::default()
+            },
+        );
+        assert!(!main.has_unsaved_or_busy_work_for(WINDOW_UTILITY, false));
+        assert!(!main.has_unsaved_or_busy_work_for(WINDOW_QUICK_CHAT, false));
+        assert!(main.has_unsaved_or_busy_work_for("main", false));
+        assert!(main.has_unsaved_or_busy_work_for(WINDOW_UTILITY, true));
+
+        quick.composer_edit = TextEdit::new("quick draft");
+        assert!(quick.has_unsaved_or_busy_work_for(WINDOW_QUICK_CHAT, false));
     }
 
     #[test]

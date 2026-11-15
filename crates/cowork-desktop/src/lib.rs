@@ -442,10 +442,10 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
         if sync_repaint {
             changed = true;
         }
+        if state.sync_pending_confirm_dialog_for_window() {
+            changed = true;
+        }
         if mode == WindowMode::Main {
-            if state.apply_pending_main_focus() {
-                changed = true;
-            }
             let (commands, main_handle, quick_chat_handle, utility_handle) =
                 WINDOW_HUB.with(|cell| {
                     let mut hub = cell.borrow_mut();
@@ -480,10 +480,12 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                         open_new_chat_workspace,
                         open_thread_id,
                     } => {
-                        state.apply_main_focus_nav(open_new_chat_workspace, open_thread_id);
-                        changed = true;
+                        if open_new_chat_workspace.is_some() || open_thread_id.is_some() {
+                            state.apply_main_focus_nav(open_new_chat_workspace, open_thread_id);
+                            changed = true;
+                        }
                         if let Some(ref handle) = main_handle {
-                            handle.open();
+                            native::window_lifecycle::reveal_and_activate_main_window(handle);
                             handle.wake();
                         }
                     }

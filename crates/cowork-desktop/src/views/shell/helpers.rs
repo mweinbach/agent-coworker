@@ -278,6 +278,11 @@ pub fn split_workspaces(s: &AppState) -> (Vec<&WorkspaceRecord>, HashSet<&str>, 
     (projects, one_off_ids, primary_one_off_id)
 }
 
+/// Whether durable Tasks surfaces are enabled (`feature_flags["tasks"] == true`, default `false`).
+pub fn tasks_feature_enabled(s: &AppState) -> bool {
+    s.feature_flags.get("tasks").copied().unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,5 +408,21 @@ mod tests {
             Some(RowStatus::Attention)
         ));
         assert_eq!(pending_input_count(&s), 1);
+    }
+
+    #[test]
+    fn tasks_feature_flag_uses_tasks_key_default_false() {
+        let mut s = AppState::default();
+        assert!(!tasks_feature_enabled(&s));
+
+        // Legacy/wrong key must not unlock Tasks.
+        s.feature_flags.insert("tasks_enabled".into(), true);
+        assert!(!tasks_feature_enabled(&s));
+
+        s.feature_flags.insert("tasks".into(), true);
+        assert!(tasks_feature_enabled(&s));
+
+        s.feature_flags.insert("tasks".into(), false);
+        assert!(!tasks_feature_enabled(&s));
     }
 }

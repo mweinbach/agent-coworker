@@ -3,7 +3,7 @@
 //! Ported from `apps/desktop/src/ui/ContextSidebar.tsx`, `WorkflowRunsPanel.tsx`, and
 //! workspace file explorer integration.
 
-use rune::{El, ScrollSpec, col, row, text};
+use rune::{El, ScrollSpec, col, el, row, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Divider, IconButton,
     IconButtonVariant, Kit, glyphs,
@@ -313,6 +313,158 @@ fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
         .key("context-workflow-runs-card")
 }
 
+pub(crate) fn explorer_dir_state_key(workspace_id: &str, dir: &str) -> String {
+    format!("{workspace_id}::{dir}")
+}
+
+fn lookup_explorer_entries<'a>(
+    s: &'a AppState,
+    dir: &str,
+) -> Option<&'a [crate::state::WorkspaceFileEntry]> {
+    s.explorer_entries_by_dir
+        .get(dir)
+        .or_else(|| {
+            dir.strip_prefix("./")
+                .and_then(|trimmed| s.explorer_entries_by_dir.get(trimmed))
+        })
+        .map(Vec::as_slice)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_explorer_tree(
+    rows: &mut Vec<El>,
+    s: &AppState,
+    ws_id: &str,
+    dir: &str,
+    depth: usize,
+    budget: &mut usize,
+    k: &Kit,
+    t: &ThemeTokens,
+) {
+    if depth >= 12 || *budget == 0 {
+        return;
+    }
+    let Some(entries) = lookup_explorer_entries(s, dir) else {
+        return;
+    };
+
+    for entry in entries {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+
+        let indent = 6.0 + (depth as f32) * 14.0;
+        let ws_id_owned = ws_id.to_owned();
+        let path = entry.path.clone();
+        let is_dir = entry.is_dir;
+        let dir_key = explorer_dir_state_key(ws_id, &entry.path);
+        let expanded = is_dir && s.explorer_expanded_dirs.contains(&dir_key);
+        let file_glyph = if is_dir {
+            &glyphs::FOLDER
+        } else {
+            &glyphs::FILE
+        };
+
+        let leading = if is_dir {
+            let chev = if expanded {
+                &glyphs::CHEVRON_DOWN
+            } else {
+                &icons::CHEVRON_RIGHT
+            };
+            rune::icon(chev, 12.0).color(k.c.icon_muted)
+        } else {
+            el().w(12.0).h(12.0)
+        };
+
+        let mut item = row()
+            .key(format!("ws-file-{}", entry.path))
+            .w_full()
+            .h(26.0)
+            .pl(indent)
+            .pr(6.0)
+            .gap(6.0)
+            .radius(k.radius.sm)
+            .center_y()
+            .hover(k.c.hover)
+            .on_press_tx(move |s: &mut AppState, _| {
+                if is_dir {
+                    if !s.explorer_expanded_dirs.remove(&dir_key) {
+                        s.explorer_expanded_dirs.insert(dir_key.clone());
+                        s.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
+                            workspace_id: ws_id_owned.clone(),
+                            dir: path.clone(),
+                        }));
+                    }
+                } else {
+                    s.dispatch(Action::Native(NativeAction::LoadFilePreview {
+                        workspace_id: ws_id_owned.clone(),
+                        path: path.clone(),
+                    }));
+                }
+            })
+            .child(leading)
+            .child(rune::icon(file_glyph, 14.0).color(k.c.icon_muted))
+            .child(
+                text(entry.name.clone())
+                    .font(k.ty.small)
+                    .color(k.c.text_base)
+                    .truncate()
+                    .grow(1.0)
+                    .shrink(),
+            );
+        if let Some(git_st) = &entry.git_status {
+            item = item.child(text(git_st.clone()).font(k.ty.small_medium).color(t.accent));
+        } else if let Some(size) = entry.size_bytes
+            && !entry.is_dir
+        {
+            item = item.child(
+                text(format_bytes(size))
+                    .font(k.ty.small)
+                    .color(k.c.text_faint),
+            );
+        }
+        rows.push(item);
+
+        if expanded {
+            let child_indent = 20.0 + (depth as f32) * 14.0;
+            match lookup_explorer_entries(s, &entry.path) {
+                Some([]) => {
+                    if *budget > 0 {
+                        *budget -= 1;
+                        rows.push(
+                            row()
+                                .key(format!("ws-dir-empty-{}", entry.path))
+                                .w_full()
+                                .h(22.0)
+                                .pl(child_indent)
+                                .center_y()
+                                .child(text("Empty folder").font(k.ty.small).color(k.c.text_faint)),
+                        );
+                    }
+                }
+                Some(_) => {
+                    push_explorer_tree(rows, s, ws_id, &entry.path, depth + 1, budget, k, t);
+                }
+                None => {
+                    if *budget > 0 {
+                        *budget -= 1;
+                        rows.push(
+                            row()
+                                .key(format!("ws-dir-loading-{}", entry.path))
+                                .w_full()
+                                .h(22.0)
+                                .pl(child_indent)
+                                .center_y()
+                                .child(text("Loading…").font(k.ty.small).color(k.c.text_faint)),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
     let Some(ws) = s.active_workspace() else {
         return Card::new()
@@ -332,76 +484,36 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
                 workspace_id: ws_id_refresh.clone(),
                 dir: ".".to_string(),
             }));
+            let prefix = format!("{ws_id_refresh}::");
+            let expanded: Vec<String> = s
+                .explorer_expanded_dirs
+                .iter()
+                .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
+                .collect();
+            for dir in expanded {
+                s.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
+                    workspace_id: ws_id_refresh.clone(),
+                    dir,
+                }));
+            }
         })
         .build(k)
         .key("context-files-refresh");
 
-    let entries = s
-        .explorer_entries_by_dir
-        .get(".")
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-
-    let body = if entries.is_empty() {
-        text("Click refresh to browse workspace files.")
+    let root_entries = lookup_explorer_entries(s, ".");
+    let body = match root_entries {
+        None => text("Click refresh to browse workspace files.")
             .font(k.ty.small)
-            .color(k.c.text_muted)
-    } else {
-        let mut rows = col().w_full().gap(2.0);
-        for entry in entries.iter().take(40) {
-            let ws_id = ws.id.clone();
-            let path = entry.path.clone();
-            let is_dir = entry.is_dir;
-            let file_glyph = if is_dir {
-                &glyphs::FOLDER
-            } else {
-                &glyphs::FILE
-            };
-            let mut item = row()
-                .key(format!("ws-file-{}", entry.path))
-                .w_full()
-                .h(26.0)
-                .px(6.0)
-                .gap(6.0)
-                .radius(k.radius.sm)
-                .center_y()
-                .hover(k.c.hover)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    if is_dir {
-                        s.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
-                            workspace_id: ws_id.clone(),
-                            dir: path.clone(),
-                        }));
-                    } else {
-                        s.dispatch(Action::Native(NativeAction::LoadFilePreview {
-                            workspace_id: ws_id.clone(),
-                            path: path.clone(),
-                        }));
-                    }
-                })
-                .child(rune::icon(file_glyph, 14.0).color(k.c.icon_muted))
-                .child(
-                    text(entry.name.clone())
-                        .font(k.ty.small)
-                        .color(k.c.text_base)
-                        .truncate()
-                        .grow(1.0)
-                        .shrink(),
-                );
-            if let Some(git_st) = &entry.git_status {
-                item = item.child(text(git_st.clone()).font(k.ty.small_medium).color(t.accent));
-            } else if let Some(size) = entry.size_bytes
-                && !entry.is_dir
-            {
-                item = item.child(
-                    text(format_bytes(size))
-                        .font(k.ty.small)
-                        .color(k.c.text_faint),
-                );
-            }
-            rows = rows.child(item);
+            .color(k.c.text_muted),
+        Some([]) => text("Workspace folder is empty.")
+            .font(k.ty.small)
+            .color(k.c.text_muted),
+        Some(_) => {
+            let mut rows = Vec::new();
+            let mut budget = 120usize;
+            push_explorer_tree(&mut rows, s, &ws.id, ".", 0, &mut budget, k, t);
+            col().w_full().gap(2.0).children(rows)
         }
-        rows
     };
 
     Card::new()
@@ -410,4 +522,30 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
         .child(body)
         .build(k)
         .key("context-files-card")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::WorkspaceFileEntry;
+
+    #[test]
+    fn explorer_lookup_handles_dot_slash_and_workspace_scoping() {
+        let mut s = AppState::default();
+        s.explorer_entries_by_dir.insert(
+            "src".into(),
+            vec![WorkspaceFileEntry {
+                name: "main.rs".into(),
+                path: "src/main.rs".into(),
+                is_dir: false,
+                size_bytes: Some(128),
+                git_status: None,
+            }],
+        );
+        assert!(lookup_explorer_entries(&s, "./src").is_some());
+        assert_ne!(
+            explorer_dir_state_key("ws-1", "src"),
+            explorer_dir_state_key("ws-2", "src")
+        );
+    }
 }

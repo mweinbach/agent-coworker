@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::actions::{Action, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
-use crate::state::{AppState, PluginSummary, ProviderStatusSummary, SkillSummary, WorkspaceRecord};
+use crate::state::{AppState, PluginSummary, ProviderStatusSummary, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
@@ -248,10 +248,214 @@ fn workspace_provider_statuses<'a>(
 fn skill_scope_label(scope: &str) -> &'static str {
     match scope {
         "project" | "workspace" => "Workspace",
-        "user" | "global" => "Library",
+        "global" => "Cowork Library",
+        "user" => "User",
         "built-in" | "builtin" => "Built-in",
-        _ => "Shadowed",
+        _ => "Other",
     }
+}
+
+/// View model representing a single non-plugin skill row or installation in the Skills tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SkillRowEntry {
+    pub key: String,
+    pub installation_id: Option<String>,
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub scope: String,
+    pub state: String,
+    pub enabled: bool,
+    pub writable: bool,
+    pub plugin_owned: bool,
+    pub update_available: bool,
+    pub icon: Option<String>,
+    pub source: Option<String>,
+    pub diagnostics: Vec<String>,
+    pub shadowed_by_scope: Option<String>,
+}
+
+impl SkillRowEntry {
+    pub fn can_delete(&self) -> bool {
+        self.writable
+            && !self.plugin_owned
+            && !matches!(self.scope.as_str(), "built-in" | "builtin")
+    }
+
+    pub fn can_toggle(&self) -> bool {
+        self.writable && !self.plugin_owned
+    }
+}
+
+/// Collects skill rows preferring `AppState::skill_installations` (preserving disabled and
+/// shadowed skills and excluding plugin-owned entries) and falling back to `AppState::skills`
+/// only when no installation catalog is loaded yet.
+pub(crate) fn collect_visible_skill_rows(s: &AppState) -> Vec<SkillRowEntry> {
+    let mut rows: Vec<SkillRowEntry> = if !s.skill_installations.is_empty() {
+        s.skill_installations
+            .iter()
+            .filter_map(|inst| {
+                // Plugin-owned skill installations are managed inside the Plugin detail dialog.
+                if inst.get("plugin").is_some_and(|p| !p.is_null()) {
+                    return None;
+                }
+                let name = inst
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())?
+                    .to_string();
+                let display_name = inst
+                    .pointer("/interface/displayName")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or(&name)
+                    .to_string();
+                let description = inst
+                    .pointer("/interface/shortDescription")
+                    .and_then(Value::as_str)
+                    .or_else(|| inst.get("description").and_then(Value::as_str))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let scope = inst
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("project")
+                    .to_string();
+                let enabled = inst.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+                let writable = inst
+                    .get("writable")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let state = inst
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        if enabled {
+                            "effective".to_string()
+                        } else {
+                            "disabled".to_string()
+                        }
+                    });
+                let installation_id = inst
+                    .get("installationId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string);
+                let icon = inst
+                    .pointer("/interface/iconSmall")
+                    .or_else(|| inst.pointer("/interface/iconLarge"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let source = inst
+                    .pointer("/origin/repo")
+                    .or_else(|| inst.pointer("/origin/url"))
+                    .or_else(|| inst.pointer("/origin/sourcePath"))
+                    .or_else(|| inst.pointer("/origin/kind"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string);
+                let diagnostics = inst
+                    .get("diagnostics")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|d| d.get("message").and_then(Value::as_str))
+                            .map(str::trim)
+                            .filter(|m| !m.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let shadowed_by_scope = inst
+                    .get("shadowedByScope")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string);
+                let update_available = inst
+                    .get("updateAvailable")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let key = installation_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{scope}:{name}"));
+
+                Some(SkillRowEntry {
+                    key,
+                    installation_id,
+                    name,
+                    display_name,
+                    description,
+                    scope,
+                    state,
+                    enabled,
+                    writable,
+                    plugin_owned: false,
+                    update_available,
+                    icon,
+                    source,
+                    diagnostics,
+                    shadowed_by_scope,
+                })
+            })
+            .collect()
+    } else {
+        s.skills
+            .iter()
+            .filter(|sk| sk.source.as_deref() != Some("plugin"))
+            .map(|sk| {
+                let installation_id = sk
+                    .installation_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string);
+                let key = installation_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:{}", sk.scope, sk.name));
+                let writable = !matches!(sk.scope.as_str(), "built-in" | "builtin")
+                    && sk.source.as_deref() != Some("built-in");
+                SkillRowEntry {
+                    key,
+                    installation_id,
+                    name: sk.name.clone(),
+                    display_name: sk.name.clone(),
+                    description: sk.description.clone(),
+                    scope: sk.scope.clone(),
+                    state: if sk.enabled {
+                        "effective".to_string()
+                    } else {
+                        "disabled".to_string()
+                    },
+                    enabled: sk.enabled,
+                    writable,
+                    plugin_owned: false,
+                    update_available: sk.update_available,
+                    icon: sk.icon.clone(),
+                    source: sk.source.clone(),
+                    diagnostics: sk.error.iter().cloned().collect(),
+                    shadowed_by_scope: None,
+                }
+            })
+            .collect()
+    };
+
+    rows.sort_by(|left, right| {
+        let left_active = usize::from(left.state != "effective");
+        let right_active = usize::from(right.state != "effective");
+        left_active
+            .cmp(&right_active)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.scope.cmp(&right.scope))
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    rows
 }
 
 /// Renders `SettingsPageId::ToolAccess` (`Tool Access`).
@@ -1157,17 +1361,16 @@ fn skills_tab_view(
         .text
         .trim()
         .to_ascii_lowercase();
-    let mut skills: Vec<&SkillSummary> = s.skills.iter().collect();
-    skills.sort_by_key(|sk| sk.name.to_lowercase());
+    let skills = collect_visible_skill_rows(s);
 
-    let visible: Vec<&SkillSummary> = skills
+    let visible: Vec<&SkillRowEntry> = skills
         .iter()
-        .copied()
         .filter(|sk| {
             if query.is_empty() {
                 true
             } else {
-                sk.name.to_ascii_lowercase().contains(&query)
+                sk.display_name.to_ascii_lowercase().contains(&query)
+                    || sk.name.to_ascii_lowercase().contains(&query)
                     || sk.description.to_ascii_lowercase().contains(&query)
             }
         })
@@ -1486,43 +1689,46 @@ fn skills_tab_view(
     stack.child(mkt_section.build(k, t))
 }
 
-fn find_skill_installation_id(s: &AppState, name: &str, scope: &str) -> Option<String> {
-    s.skill_installations
-        .iter()
-        .find(|inst| {
-            inst.get("name").and_then(Value::as_str) == Some(name)
-                && inst.get("scope").and_then(Value::as_str) == Some(scope)
-        })
-        .or_else(|| {
-            s.skill_installations
-                .iter()
-                .find(|inst| inst.get("name").and_then(Value::as_str) == Some(name))
-        })
-        .and_then(|inst| inst.get("installationId").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-}
-
-fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &ThemeTokens) -> El {
+fn render_skill_row(s: &AppState, sk: &SkillRowEntry, ws_id: &str, k: &Kit, t: &ThemeTokens) -> El {
     let mut header = row()
         .items_center()
         .gap(8.0)
-        .child(text(&sk.name).font(k.ty.body_medium).color(t.text_base))
+        .child(
+            text(&sk.display_name)
+                .font(k.ty.body_medium)
+                .color(t.text_base),
+        )
         .child(status_pill(
             skill_scope_label(&sk.scope),
             StatusTone::Neutral,
             k,
             t,
         ));
-    if !sk.enabled {
-        header = header.child(status_pill("Disabled", StatusTone::Neutral, k, t));
+    if !sk.writable {
+        header = header.child(status_pill("Read-only", StatusTone::Neutral, k, t));
+    }
+    match sk.state.as_str() {
+        "effective" => {
+            if !sk.enabled {
+                header = header.child(status_pill("Disabled", StatusTone::Neutral, k, t));
+            }
+        }
+        "disabled" => {
+            header = header.child(status_pill("Disabled", StatusTone::Neutral, k, t));
+        }
+        "shadowed" => {
+            header = header.child(status_pill("Shadowed", StatusTone::Neutral, k, t));
+        }
+        "invalid" => {
+            header = header.child(status_pill("Invalid", StatusTone::Danger, k, t));
+        }
+        _ => {}
     }
     if sk.update_available {
         header = header.child(status_pill("Update available", StatusTone::Warning, k, t));
     }
 
-    let skill_select = sk.name.clone();
+    let skill_select = sk.key.clone();
     let mut info = col()
         .grow(1.0)
         .min_w(0.0)
@@ -1530,7 +1736,7 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
         .radius(6.0)
         .hover(t.hover)
         .role("button")
-        .label(format!("Inspect skill {}", sk.name))
+        .label(format!("Inspect skill {}", sk.display_name))
         .on_press(move |s: &mut AppState| {
             s.settings_ui.selected_skill_id = Some(skill_select.clone());
         })
@@ -1546,13 +1752,14 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
 
     let ws_toggle = ws_id.to_string();
     let name_toggle = sk.name.clone();
-    let inst_id = find_skill_installation_id(s, &sk.name, &sk.scope);
+    let inst_id = sk.installation_id.clone();
     let inst_id_toggle = inst_id.clone();
     let next_enabled = !sk.enabled;
-    let is_builtin = sk.scope == "built-in";
+    let can_toggle = sk.can_toggle();
 
     let mut actions = row().items_center().gap(8.0).shrink();
-    if sk.update_available
+    if sk.can_delete()
+        && sk.update_available
         && let Some(inst_upd) = inst_id.clone()
     {
         let ws_upd = ws_id.to_string();
@@ -1573,8 +1780,9 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
     actions = actions
         .child(
             Switch::new(sk.enabled)
-                .label(format!("Enable {}", sk.name))
+                .label(format!("Enable {}", sk.display_name))
                 .hide_label()
+                .disabled(!can_toggle)
                 .control_size(ControlSize::Mini)
                 .on_toggle(move |s: &mut AppState| {
                     if let Some(id) = inst_id_toggle.as_ref() {
@@ -1600,15 +1808,15 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
                 .on_press({
-                    let sk_name = sk.name.clone();
+                    let sk_key = sk.key.clone();
                     move |s: &mut AppState| {
-                        s.settings_ui.selected_skill_id = Some(sk_name.clone());
+                        s.settings_ui.selected_skill_id = Some(sk_key.clone());
                     }
                 })
                 .build(k),
         );
 
-    if !is_builtin {
+    if sk.can_delete() {
         let sk_del = sk.name.clone();
         let inst_del = inst_id;
         actions = actions.child(
@@ -1644,7 +1852,7 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
                 .child(entity_icon(
                     s,
                     sk.icon.as_deref(),
-                    &sk.name,
+                    &sk.display_name,
                     EntityIconSize::Md,
                     k,
                     t,
@@ -1757,18 +1965,35 @@ fn append_skill_detail_dialog(
     t: &ThemeTokens,
     overlays: &mut Vec<El>,
 ) {
-    let Some(name) = s.settings_ui.selected_skill_id.as_deref() else {
+    let Some(selected_key) = s.settings_ui.selected_skill_id.as_deref() else {
         return;
     };
-    let Some(sk) = s.skills.iter().find(|entry| entry.name == name) else {
+    let rows = collect_visible_skill_rows(s);
+    let Some(sk) = rows
+        .iter()
+        .find(|entry| entry.key == selected_key || entry.name == selected_key)
+    else {
         return;
     };
 
     let ws_toggle = ws_id.to_string();
     let sk_toggle = sk.name.clone();
     let next_enabled = !sk.enabled;
-    let is_builtin = sk.scope == "built-in";
+    let can_delete = sk.can_delete();
+    let can_toggle = sk.can_toggle();
     let sk_del = sk.name.clone();
+    let state_label = match sk.state.as_str() {
+        "effective" => "Active",
+        "disabled" => "Disabled",
+        "shadowed" => "Shadowed",
+        "invalid" => "Invalid",
+        other => other,
+    };
+    let state_tone = match sk.state.as_str() {
+        "effective" => StatusTone::Success,
+        "invalid" => StatusTone::Danger,
+        _ => StatusTone::Neutral,
+    };
 
     let mut content = col().w_full().min_w(0.0).px(16.0).pb(16.0).gap(12.0).child(
         row()
@@ -1777,7 +2002,7 @@ fn append_skill_detail_dialog(
             .child(entity_icon(
                 s,
                 sk.icon.as_deref(),
-                &sk.name,
+                &sk.display_name,
                 EntityIconSize::Lg,
                 k,
                 t,
@@ -1787,7 +2012,11 @@ fn append_skill_detail_dialog(
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(4.0)
-                    .child(text(&sk.name).font(k.ty.body_medium).color(t.text_base))
+                    .child(
+                        text(&sk.display_name)
+                            .font(k.ty.body_medium)
+                            .color(t.text_base),
+                    )
                     .child(
                         row()
                             .items_center()
@@ -1798,13 +2027,10 @@ fn append_skill_detail_dialog(
                                 k,
                                 t,
                             ))
+                            .child(status_pill(state_label, state_tone, k, t))
                             .child(status_pill(
-                                if sk.enabled { "Enabled" } else { "Disabled" },
-                                if sk.enabled {
-                                    StatusTone::Success
-                                } else {
-                                    StatusTone::Neutral
-                                },
+                                if sk.writable { "Writable" } else { "Read-only" },
+                                StatusTone::Neutral,
                                 k,
                                 t,
                             )),
@@ -1820,6 +2046,20 @@ fn append_skill_detail_dialog(
                 .wrap(),
         );
     }
+    if let Some(shadowed_by) = sk.shadowed_by_scope.as_deref() {
+        content = content.child(callout_banner(
+            StatusTone::Warning,
+            format!(
+                "Shadowed by a higher-precedence {} installation.",
+                skill_scope_label(shadowed_by)
+            ),
+            k,
+            t,
+        ));
+    }
+    for diag in &sk.diagnostics {
+        content = content.child(callout_banner(StatusTone::Danger, diag, k, t));
+    }
     if let Some(src) = sk.source.as_deref().filter(|v| !v.trim().is_empty()) {
         content = content.child(
             text(format!("Source: {src}"))
@@ -1829,14 +2069,14 @@ fn append_skill_detail_dialog(
         );
     }
 
-    let inst_detail_id = find_skill_installation_id(s, &sk.name, &sk.scope);
+    let inst_detail_id = sk.installation_id.clone();
     let mut footer = row()
         .w_full()
         .justify_between()
         .items_center()
         .gap(8.0)
         .pt(6.0);
-    if !is_builtin {
+    if can_delete {
         let inst_del = inst_detail_id.clone();
         footer = footer.child(
             Button::new("Delete")
@@ -1857,43 +2097,60 @@ fn append_skill_detail_dialog(
         footer = footer.child(el());
     }
     let inst_toggle = inst_detail_id;
-    footer = footer.child(
-        row()
-            .items_center()
-            .gap(8.0)
-            .child(
-                Button::new(if sk.enabled { "Disable" } else { "Enable" })
-                    .variant(ButtonVariant::Contrast)
-                    .control_size(ControlSize::Regular)
-                    .on_press(move |s: &mut AppState| {
-                        if let Some(id) = inst_toggle.as_ref() {
-                            s.dispatch(Action::Settings(
-                                SettingsAction::SetSkillInstallationEnabled {
-                                    workspace_id: ws_toggle.clone(),
-                                    installation_id: id.clone(),
-                                    enabled: next_enabled,
-                                },
-                            ));
-                        } else {
-                            s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+    let mut right_actions = row().items_center().gap(8.0);
+    if can_delete
+        && sk.update_available
+        && let Some(inst_upd) = inst_toggle.clone()
+    {
+        let ws_upd = ws_id.to_string();
+        right_actions = right_actions.child(
+            Button::new("Update")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::UpdateSkillInstallation {
+                        workspace_id: ws_upd.clone(),
+                        installation_id: inst_upd.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+    if can_toggle {
+        right_actions = right_actions.child(
+            Button::new(if sk.enabled { "Disable" } else { "Enable" })
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    if let Some(id) = inst_toggle.as_ref() {
+                        s.dispatch(Action::Settings(
+                            SettingsAction::SetSkillInstallationEnabled {
                                 workspace_id: ws_toggle.clone(),
-                                name: sk_toggle.clone(),
+                                installation_id: id.clone(),
                                 enabled: next_enabled,
-                            }));
-                        }
-                    })
-                    .build(k),
-            )
-            .child(
-                Button::new("Close")
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Regular)
-                    .on_press(|s: &mut AppState| {
-                        s.settings_ui.selected_skill_id = None;
-                    })
-                    .build(k),
-            ),
+                            },
+                        ));
+                    } else {
+                        s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+                            workspace_id: ws_toggle.clone(),
+                            name: sk_toggle.clone(),
+                            enabled: next_enabled,
+                        }));
+                    }
+                })
+                .build(k),
+        );
+    }
+    right_actions = right_actions.child(
+        Button::new("Close")
+            .variant(ButtonVariant::Outline)
+            .control_size(ControlSize::Regular)
+            .on_press(|s: &mut AppState| {
+                s.settings_ui.selected_skill_id = None;
+            })
+            .build(k),
     );
+    footer = footer.child(right_actions);
     content = content.child(footer);
 
     Dialog::new("skill-detail-dialog", "Skill details")

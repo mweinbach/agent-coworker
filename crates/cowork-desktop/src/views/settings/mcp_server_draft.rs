@@ -34,6 +34,40 @@ impl Default for McpDraftInput {
     }
 }
 
+/// Optional authentication and runtime behavior fields on an MCP server draft.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServerDraftExtras {
+    pub cwd: String,
+    pub icon: String,
+    pub required: bool,
+    pub retries: String,
+    pub auth_type: String,
+    pub header_name: String,
+    pub prefix: String,
+    pub key_id: String,
+    pub oauth_scope: String,
+    pub oauth_resource: String,
+    pub oauth_mode: String,
+}
+
+impl Default for McpServerDraftExtras {
+    fn default() -> Self {
+        Self {
+            cwd: String::new(),
+            icon: String::new(),
+            required: false,
+            retries: String::new(),
+            auth_type: "none".to_string(),
+            header_name: String::new(),
+            prefix: String::new(),
+            key_id: String::new(),
+            oauth_scope: String::new(),
+            oauth_resource: String::new(),
+            oauth_mode: "auto".to_string(),
+        }
+    }
+}
+
 /// Validation failure mapped to a specific field in the MCP editor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpDraftValidationError {
@@ -213,6 +247,17 @@ pub fn format_args_line(args: &[String]) -> String {
 pub fn build_mcp_server_config(
     draft: &McpDraftInput,
 ) -> Result<(String, Value), McpDraftValidationError> {
+    build_mcp_server_config_with_extras(draft, &McpServerDraftExtras::default(), None)
+}
+
+/// Validates and builds a protocol-compliant `McpServerConfig` JSON value including
+/// authentication, working directory, icon, retry, and required flags while preserving
+/// existing config fields when editing.
+pub fn build_mcp_server_config_with_extras(
+    draft: &McpDraftInput,
+    extras: &McpServerDraftExtras,
+    base_config: Option<&Value>,
+) -> Result<(String, Value), McpDraftValidationError> {
     let name = draft.name.trim().to_string();
     if name.is_empty() {
         return Err(McpDraftValidationError {
@@ -229,6 +274,19 @@ pub fn build_mcp_server_config(
             message: "Server name may contain only letters, digits, '.', '_', or '-'.".to_string(),
         });
     }
+
+    let retries_trimmed = extras.retries.trim();
+    let retries: Option<u32> = if retries_trimmed.is_empty() {
+        None
+    } else {
+        let parsed = retries_trimmed
+            .parse::<u32>()
+            .map_err(|_| McpDraftValidationError {
+                field: "retries",
+                message: "Retries must be a non-negative integer.".to_string(),
+            })?;
+        Some(parsed)
+    };
 
     let kind = match draft.transport.trim().to_ascii_lowercase().as_str() {
         "http" | "streamable-http" | "streamable_http" => "http",
@@ -251,6 +309,10 @@ pub fn build_mcp_server_config(
         obj.insert("command".to_string(), json!(command));
         if !args.is_empty() {
             obj.insert("args".to_string(), json!(args));
+        }
+        let cwd = extras.cwd.trim();
+        if !cwd.is_empty() {
+            obj.insert("cwd".to_string(), json!(cwd));
         }
         if !env.is_empty() {
             obj.insert("env".to_string(), json!(env));
@@ -280,12 +342,167 @@ pub fn build_mcp_server_config(
         Value::Object(obj)
     };
 
-    let config = json!({
-        "name": name,
-        "transport": transport,
-        "enabled": draft.enabled,
-    });
-    Ok((name, config))
+    let mut cfg = Map::new();
+    cfg.insert("name".to_string(), json!(name));
+    cfg.insert("transport".to_string(), transport);
+    cfg.insert("enabled".to_string(), json!(draft.enabled));
+    if extras.required {
+        cfg.insert("required".to_string(), json!(true));
+    }
+    if let Some(r) = retries {
+        cfg.insert("retries".to_string(), json!(r));
+    }
+    let icon = extras.icon.trim();
+    if !icon.is_empty() {
+        cfg.insert("icon".to_string(), json!(icon));
+    }
+
+    let auth_kind = extras.auth_type.trim().to_ascii_lowercase();
+    let existing_auth = base_config
+        .and_then(|b| b.get("auth").or_else(|| b.pointer("/transport/auth")))
+        .filter(|v| !v.is_null());
+
+    let auth_value: Option<Value> = match auth_kind.as_str() {
+        "api_key" => {
+            let mut auth = Map::new();
+            auth.insert("type".to_string(), json!("api_key"));
+            if !extras.header_name.trim().is_empty() {
+                auth.insert("headerName".to_string(), json!(extras.header_name.trim()));
+            }
+            if !extras.prefix.trim().is_empty() {
+                auth.insert("prefix".to_string(), json!(extras.prefix.trim()));
+            }
+            if !extras.key_id.trim().is_empty() {
+                auth.insert("keyId".to_string(), json!(extras.key_id.trim()));
+            }
+            Some(Value::Object(auth))
+        }
+        "oauth" => {
+            let mut auth = Map::new();
+            auth.insert("type".to_string(), json!("oauth"));
+            if !extras.oauth_scope.trim().is_empty() {
+                auth.insert("scope".to_string(), json!(extras.oauth_scope.trim()));
+            }
+            if !extras.oauth_resource.trim().is_empty() {
+                auth.insert("resource".to_string(), json!(extras.oauth_resource.trim()));
+            }
+            let mode = if extras.oauth_mode.trim().eq_ignore_ascii_case("code") {
+                "code"
+            } else {
+                "auto"
+            };
+            auth.insert("oauthMode".to_string(), json!(mode));
+            Some(Value::Object(auth))
+        }
+        _ => {
+            if kind == "stdio" {
+                existing_auth.cloned()
+            } else if existing_auth.is_some() {
+                Some(json!({ "type": "none" }))
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(auth) = auth_value {
+        cfg.insert("auth".to_string(), auth);
+    }
+
+    Ok((name, Value::Object(cfg)))
+}
+
+/// Hydrates optional authentication and runtime extras from an `McpServerSummary`.
+pub fn draft_extras_from_summary(summary: &McpServerSummary) -> McpServerDraftExtras {
+    let transport_obj = summary.config.get("transport").unwrap_or(&summary.config);
+    let cwd = transport_obj
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let icon = summary
+        .config
+        .get("icon")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let required = summary
+        .config
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let retries = summary
+        .config
+        .get("retries")
+        .and_then(Value::as_u64)
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+
+    let auth_obj = summary
+        .config
+        .get("auth")
+        .or_else(|| transport_obj.get("auth"));
+    let inferred_mode = summary
+        .auth_status
+        .as_deref()
+        .or_else(|| summary.config.get("authMode").and_then(Value::as_str));
+    let auth_type = match auth_obj
+        .and_then(|a| a.get("type"))
+        .and_then(Value::as_str)
+        .or(inferred_mode)
+    {
+        Some("api_key") => "api_key".to_string(),
+        Some("oauth" | "oauth_pending") => "oauth".to_string(),
+        _ => "none".to_string(),
+    };
+
+    let header_name = auth_obj
+        .and_then(|a| a.get("headerName"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let prefix = auth_obj
+        .and_then(|a| a.get("prefix"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let key_id = auth_obj
+        .and_then(|a| a.get("keyId"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let oauth_scope = auth_obj
+        .and_then(|a| a.get("scope"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let oauth_resource = auth_obj
+        .and_then(|a| a.get("resource"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let oauth_mode = if auth_obj
+        .and_then(|a| a.get("oauthMode"))
+        .and_then(Value::as_str)
+        == Some("code")
+    {
+        "code".to_string()
+    } else {
+        "auto".to_string()
+    };
+
+    McpServerDraftExtras {
+        cwd,
+        icon,
+        required,
+        retries,
+        auth_type,
+        header_name,
+        prefix,
+        key_id,
+        oauth_scope,
+        oauth_resource,
+        oauth_mode,
+    }
 }
 
 /// Hydrates editable draft fields from an existing `McpServerSummary`.

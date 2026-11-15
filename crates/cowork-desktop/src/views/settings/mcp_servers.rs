@@ -13,7 +13,8 @@ use crate::state::{AppState, McpServerSummary};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::mcp_server_draft::{
-    McpDraftInput, build_mcp_server_config, draft_from_summary,
+    McpDraftInput, McpServerDraftExtras, build_mcp_server_config_with_extras,
+    draft_extras_from_summary, draft_from_summary,
 };
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
@@ -32,8 +33,8 @@ fn source_rank(source: Option<&str>) -> u8 {
 
 /// Stable ordering by source (`user`, `workspace`, `plugin`, `system`) then name.
 pub fn compare_mcp_servers(a: &McpServerSummary, b: &McpServerSummary) -> Ordering {
-    source_rank(a.source.as_deref())
-        .cmp(&source_rank(b.source.as_deref()))
+    source_rank(Some(effective_source(a)))
+        .cmp(&source_rank(Some(effective_source(b))))
         .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
 }
 
@@ -57,13 +58,68 @@ pub fn editable_source(source: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// Resolves the authoritative source from `summary.config["source"]` (live catalog entries)
+/// before `summary.source` (which legacy state ingestion may default to `"workspace"`).
+pub fn effective_source(server: &McpServerSummary) -> &str {
+    server
+        .config
+        .get("source")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or(server.source.as_deref())
+        .unwrap_or("workspace")
+}
+
+/// Resolves the MCP transport protocol type from `summary.config` before `summary.transport`.
+pub fn transport_kind_of(server: &McpServerSummary) -> String {
+    let transport_obj = server.config.get("transport").unwrap_or(&server.config);
+    transport_obj
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or(server.transport.as_str())
+        .to_ascii_lowercase()
+}
+
+/// Resolves any server error or failed auth message emitted by the MCP catalog.
+pub fn server_error_message(server: &McpServerSummary) -> Option<&str> {
+    if let Some(err) = server
+        .error
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    {
+        return Some(err);
+    }
+    let auth_mode = server
+        .auth_status
+        .as_deref()
+        .or_else(|| server.config.get("authMode").and_then(Value::as_str));
+    if auth_mode == Some("error") {
+        return server
+            .config
+            .get("authMessage")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                server
+                    .config
+                    .pointer("/authState/message")
+                    .and_then(Value::as_str)
+            })
+            .map(str::trim)
+            .filter(|m| !m.is_empty());
+    }
+    None
+}
+
+fn server_has_error(server: &McpServerSummary) -> bool {
+    server_error_message(server).is_some()
+        || server.auth_status.as_deref() == Some("error")
+        || server.config.get("authMode").and_then(Value::as_str) == Some("error")
+}
+
 /// Stable UI identity key combining source and server name.
 pub fn server_identity_key(server: &McpServerSummary) -> String {
-    format!(
-        "{}:{}",
-        server.source.as_deref().unwrap_or("workspace"),
-        server.name
-    )
+    format!("{}:{}", effective_source(server), server.name)
 }
 
 /// Formats transport command or URL for collapsed/expanded inspection rows.
@@ -138,19 +194,13 @@ pub fn auth_mode_label(server: &McpServerSummary) -> String {
 
 /// True when an OAuth MCP server requires sign-in or re-authorization.
 pub fn server_needs_oauth(server: &McpServerSummary) -> bool {
+    let auth_mode = server
+        .auth_status
+        .as_deref()
+        .or_else(|| server.config.get("authMode").and_then(Value::as_str));
     let is_oauth = server_auth_type(server) == Some("oauth")
-        || matches!(
-            server.auth_status.as_deref(),
-            Some("oauth" | "oauth_pending")
-        );
-    is_oauth
-        && matches!(
-            server
-                .auth_status
-                .as_deref()
-                .or_else(|| server.config.get("authMode").and_then(Value::as_str)),
-            Some("missing" | "oauth_pending" | "error")
-        )
+        || matches!(auth_mode, Some("oauth" | "oauth_pending"));
+    is_oauth && matches!(auth_mode, Some("missing" | "oauth_pending" | "error"))
 }
 
 /// Resets the MCP server editor to a blank create draft.
@@ -158,6 +208,7 @@ pub fn open_create_editor(s: &mut AppState) {
     s.settings_ui.mcp_editor_open = true;
     s.settings_ui.mcp_editing_name = None;
     s.settings_ui.mcp_editing_source = Some("user".to_string());
+    s.settings_ui.mcp_editing_base_config = None;
     s.settings_ui.mcp_transport = "http".to_string();
     s.settings_ui.mcp_enabled = true;
     s.settings_ui.mcp_name_edit = TextEdit::new("");
@@ -166,19 +217,30 @@ pub fn open_create_editor(s: &mut AppState) {
     s.settings_ui.mcp_url_edit = TextEdit::new("");
     s.settings_ui.mcp_env_edit = TextEdit::new("");
     s.settings_ui.mcp_headers_edit = TextEdit::new("");
+    s.settings_ui.mcp_cwd_edit = TextEdit::new("");
+    s.settings_ui.mcp_icon_edit = TextEdit::new("");
+    s.settings_ui.mcp_required = false;
+    s.settings_ui.mcp_retries_edit = TextEdit::new("");
+    s.settings_ui.mcp_auth_type = "none".to_string();
+    s.settings_ui.mcp_auth_header_name_edit = TextEdit::new("");
+    s.settings_ui.mcp_auth_prefix_edit = TextEdit::new("");
+    s.settings_ui.mcp_auth_key_id_edit = TextEdit::new("");
+    s.settings_ui.mcp_oauth_scope_edit = TextEdit::new("");
+    s.settings_ui.mcp_oauth_resource_edit = TextEdit::new("");
+    s.settings_ui.mcp_oauth_mode = "auto".to_string();
     s.settings_ui.mcp_editor_error = None;
     s.settings_ui.mcp_editor_advanced_open = false;
 }
 
 fn open_edit_editor(s: &mut AppState, summary: &McpServerSummary) {
     let draft = draft_from_summary(summary);
+    let extras = draft_extras_from_summary(summary);
+    let source = effective_source(summary);
     s.settings_ui.mcp_editor_open = true;
     s.settings_ui.mcp_editing_name = Some(summary.name.clone());
-    s.settings_ui.mcp_editing_source = Some(
-        editable_source(summary.source.as_deref())
-            .unwrap_or("user")
-            .to_string(),
-    );
+    s.settings_ui.mcp_editing_source =
+        Some(editable_source(Some(source)).unwrap_or("user").to_string());
+    s.settings_ui.mcp_editing_base_config = Some(summary.config.clone());
     s.settings_ui.mcp_transport = draft.transport;
     s.settings_ui.mcp_enabled = draft.enabled;
     s.settings_ui.mcp_name_edit = TextEdit::new(draft.name);
@@ -187,6 +249,17 @@ fn open_edit_editor(s: &mut AppState, summary: &McpServerSummary) {
     s.settings_ui.mcp_url_edit = TextEdit::new(draft.url);
     s.settings_ui.mcp_env_edit = TextEdit::new(draft.env_lines);
     s.settings_ui.mcp_headers_edit = TextEdit::new(draft.header_lines);
+    s.settings_ui.mcp_cwd_edit = TextEdit::new(extras.cwd);
+    s.settings_ui.mcp_icon_edit = TextEdit::new(extras.icon);
+    s.settings_ui.mcp_required = extras.required;
+    s.settings_ui.mcp_retries_edit = TextEdit::new(extras.retries);
+    s.settings_ui.mcp_auth_type = extras.auth_type;
+    s.settings_ui.mcp_auth_header_name_edit = TextEdit::new(extras.header_name);
+    s.settings_ui.mcp_auth_prefix_edit = TextEdit::new(extras.prefix);
+    s.settings_ui.mcp_auth_key_id_edit = TextEdit::new(extras.key_id);
+    s.settings_ui.mcp_oauth_scope_edit = TextEdit::new(extras.oauth_scope);
+    s.settings_ui.mcp_oauth_resource_edit = TextEdit::new(extras.oauth_resource);
+    s.settings_ui.mcp_oauth_mode = extras.oauth_mode;
     s.settings_ui.mcp_editor_error = None;
     s.settings_ui.mcp_editor_advanced_open = false;
 }
@@ -195,6 +268,7 @@ fn close_editor(s: &mut AppState) {
     s.settings_ui.mcp_editor_open = false;
     s.settings_ui.mcp_editing_name = None;
     s.settings_ui.mcp_editing_source = None;
+    s.settings_ui.mcp_editing_base_config = None;
     s.settings_ui.mcp_editor_error = None;
 }
 
@@ -247,7 +321,13 @@ pub fn view_tab(
                 true
             } else {
                 srv.name.to_ascii_lowercase().contains(&query)
-                    || srv.transport.to_ascii_lowercase().contains(&query)
+                    || transport_kind_of(srv).contains(&query)
+                    || format_connection_line(srv)
+                        .to_ascii_lowercase()
+                        .contains(&query)
+                    || source_label(Some(effective_source(srv)))
+                        .to_ascii_lowercase()
+                        .contains(&query)
             }
         })
         .collect();
@@ -329,8 +409,8 @@ fn render_server_row(
 ) -> El {
     let identity = server_identity_key(srv);
     let is_expanded = s.settings_ui.expanded_mcp_servers.contains(&identity);
-    let source_str = srv.source.as_deref().unwrap_or("workspace").to_string();
-    let can_edit = editable_source(srv.source.as_deref()).is_some();
+    let source_str = effective_source(srv).to_string();
+    let can_edit = editable_source(Some(source_str.as_str())).is_some();
     let needs_oauth = server_needs_oauth(srv);
 
     let chevron = if is_expanded {
@@ -372,7 +452,7 @@ fn render_server_row(
                 .min_w(0.0),
         )
         .child(status_pill(
-            source_label(srv.source.as_deref()),
+            source_label(Some(&source_str)),
             StatusTone::Neutral,
             k,
             t,
@@ -384,7 +464,7 @@ fn render_server_row(
     } else if needs_oauth {
         badges_header =
             badges_header.child(status_pill("Sign-in required", StatusTone::Warning, k, t));
-    } else if srv.error.is_some() {
+    } else if server_has_error(srv) {
         badges_header = badges_header.child(status_pill("Error", StatusTone::Danger, k, t));
     } else if srv
         .status
@@ -474,7 +554,7 @@ fn render_server_row(
         .child(kv_line("Connection", &format_connection_line(srv), k, t))
         .child(kv_line("Authentication", &auth_mode_label(srv), k, t));
 
-    if let Some(err) = srv.error.as_deref().filter(|e| !e.trim().is_empty()) {
+    if let Some(err) = server_error_message(srv) {
         details = details.child(callout_banner(StatusTone::Danger, err, k, t));
     }
 
@@ -586,10 +666,25 @@ fn render_server_row(
         );
     }
 
-    if auth_kind == "api_key" || matches!(srv.auth_status.as_deref(), Some("api_key")) {
+    if auth_kind == "api_key"
+        || matches!(
+            srv.auth_status
+                .as_deref()
+                .or_else(|| srv.config.get("authMode").and_then(Value::as_str)),
+            Some("api_key")
+        )
+    {
         let ws_key = ws_id.to_string();
         let name_key = srv.name.clone();
         let src_key = source_str;
+        let id_edit = identity.clone();
+        let id_save = identity;
+        let empty_key_edit = TextEdit::new("");
+        let current_key_edit = s
+            .settings_ui
+            .mcp_api_key_edits
+            .get(&id_edit)
+            .unwrap_or(&empty_key_edit);
         details = details.child(
             row()
                 .w_full()
@@ -597,10 +692,15 @@ fn render_server_row(
                 .gap(8.0)
                 .pt(4.0)
                 .child(
-                    TextInput::new(&s.settings_ui.mcp_api_key_edit)
+                    TextInput::new(current_key_edit)
                         .placeholder("Paste API key...")
                         .width(Some(260.0))
-                        .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_api_key_edit)
+                        .on_edit(move |s: &mut AppState| {
+                            s.settings_ui
+                                .mcp_api_key_edits
+                                .entry(id_edit.clone())
+                                .or_insert_with(|| TextEdit::new(""))
+                        })
                         .build(k),
                 )
                 .child(
@@ -608,7 +708,12 @@ fn render_server_row(
                         .variant(ButtonVariant::Outline)
                         .control_size(ControlSize::Small)
                         .on_press(move |s: &mut AppState| {
-                            let key = s.settings_ui.mcp_api_key_edit.text.trim().to_string();
+                            let key = s
+                                .settings_ui
+                                .mcp_api_key_edits
+                                .get(&id_save)
+                                .map(|e| e.text.trim().to_string())
+                                .unwrap_or_default();
                             if !key.is_empty() {
                                 s.dispatch(Action::Settings(SettingsAction::SetMcpServerApiKey {
                                     workspace_id: ws_key.clone(),
@@ -616,7 +721,7 @@ fn render_server_row(
                                     source: src_key.clone(),
                                     api_key: key,
                                 }));
-                                s.settings_ui.mcp_api_key_edit = TextEdit::new("");
+                                s.settings_ui.mcp_api_key_edits.remove(&id_save);
                             }
                         })
                         .build(k),
@@ -649,6 +754,15 @@ fn kv_line(label: &str, value: &str, k: &Kit, t: &ThemeTokens) -> El {
                 .min_w(0.0)
                 .wrap(),
         )
+}
+
+fn labeled_dialog_field(label: &str, child: El, k: &Kit, t: &ThemeTokens) -> El {
+    col()
+        .w_full()
+        .min_w(0.0)
+        .gap(4.0)
+        .child(text(label).font(k.ty.text_xsmall).color(t.text_muted))
+        .child(child)
 }
 
 fn append_editor_dialog(
@@ -705,43 +819,55 @@ fn append_editor_dialog(
     })
     .build(k);
 
-    let mut fields = col().w_full().min_w(0.0).gap(12.0).child(
+    let mut fields = col().w_full().min_w(0.0).gap(10.0).child(
         text("Configure a remote MCP endpoint or a local command-line connector.")
             .font(k.ty.text_small)
             .color(t.text_muted)
             .wrap(),
     );
     if !is_edit {
-        fields = fields.child(scope_seg);
+        fields = fields.child(labeled_dialog_field("Scope", scope_seg, k, t));
     }
-    fields = fields.child(transport_seg).child(
-        TextInput::new(&s.settings_ui.mcp_name_edit)
-            .label("Name")
-            .placeholder("e.g. github-tools")
-            .width(None)
-            .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_name_edit)
-            .build(k),
-    );
+    fields = fields
+        .child(labeled_dialog_field("Transport", transport_seg, k, t))
+        .child(labeled_dialog_field(
+            "Name",
+            TextInput::new(&s.settings_ui.mcp_name_edit)
+                .label("Name")
+                .placeholder("e.g. github-tools")
+                .width(None)
+                .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_name_edit)
+                .build(k),
+            k,
+            t,
+        ));
 
     if s.settings_ui.mcp_transport == "stdio" {
         fields = fields
-            .child(
+            .child(labeled_dialog_field(
+                "Command",
                 TextInput::new(&s.settings_ui.mcp_command_edit)
                     .label("Command")
                     .placeholder("e.g. npx")
                     .width(None)
                     .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_command_edit)
                     .build(k),
-            )
-            .child(
+                k,
+                t,
+            ))
+            .child(labeled_dialog_field(
+                "Arguments",
                 TextInput::new(&s.settings_ui.mcp_args_edit)
                     .label("Arguments")
                     .placeholder("-y @modelcontextprotocol/server-filesystem .")
                     .width(None)
                     .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_args_edit)
                     .build(k),
-            )
-            .child(
+                k,
+                t,
+            ))
+            .child(labeled_dialog_field(
+                "Environment variables (KEY=VALUE per line)",
                 TextArea::new(&s.settings_ui.mcp_env_edit)
                     .label("Environment variables (KEY=VALUE per line)")
                     .placeholder("API_TOKEN=secret")
@@ -749,18 +875,47 @@ fn append_editor_dialog(
                     .rows(3)
                     .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_env_edit)
                     .build(k),
-            );
+                k,
+                t,
+            ));
     } else {
         fields = fields
-            .child(
+            .child(labeled_dialog_field(
+                "Server URL",
                 TextInput::new(&s.settings_ui.mcp_url_edit)
                     .label("Server URL")
                     .placeholder("https://example.com/mcp")
                     .width(None)
                     .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_url_edit)
                     .build(k),
-            )
-            .child(
+                k,
+                t,
+            ))
+            .child(labeled_dialog_field(
+                "Authentication",
+                {
+                    let auth_idx = match s.settings_ui.mcp_auth_type.as_str() {
+                        "api_key" => 1,
+                        "oauth" => 2,
+                        _ => 0,
+                    };
+                    SegmentedControl::new(&["None", "API key", "OAuth"], Some(auth_idx))
+                        .label("Authentication")
+                        .fit()
+                        .on_pick(|s: &mut AppState, idx, _tx| {
+                            s.settings_ui.mcp_auth_type = match idx {
+                                1 => "api_key".to_string(),
+                                2 => "oauth".to_string(),
+                                _ => "none".to_string(),
+                            };
+                        })
+                        .build(k)
+                },
+                k,
+                t,
+            ))
+            .child(labeled_dialog_field(
+                "HTTP headers (Name: value per line)",
                 TextArea::new(&s.settings_ui.mcp_headers_edit)
                     .label("HTTP headers (Name: value per line)")
                     .placeholder("Authorization: Bearer ...")
@@ -768,7 +923,250 @@ fn append_editor_dialog(
                     .rows(3)
                     .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_headers_edit)
                     .build(k),
+                k,
+                t,
+            ));
+    }
+
+    let adv_open = s.settings_ui.mcp_editor_advanced_open;
+    fields = fields.child(
+        row().w_full().child(
+            Button::new(if adv_open {
+                "Hide advanced"
+            } else {
+                "Advanced"
+            })
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .icon(if adv_open {
+                &icons::CHEVRON_DOWN
+            } else {
+                &icons::CHEVRON_RIGHT
+            })
+            .on_press(|s: &mut AppState| {
+                s.settings_ui.mcp_editor_advanced_open = !s.settings_ui.mcp_editor_advanced_open;
+            })
+            .build(k),
+        ),
+    );
+
+    if adv_open {
+        let mut adv = col().w_full().min_w(0.0).gap(10.0);
+        if s.settings_ui.mcp_transport == "stdio" {
+            adv = adv.child(labeled_dialog_field(
+                "Working directory (optional)",
+                TextInput::new(&s.settings_ui.mcp_cwd_edit)
+                    .label("Working directory (optional)")
+                    .placeholder("/path/to/directory")
+                    .width(None)
+                    .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_cwd_edit)
+                    .build(k),
+                k,
+                t,
+            ));
+        } else if s.settings_ui.mcp_auth_type == "api_key" {
+            adv = adv
+                .child(labeled_dialog_field(
+                    "API key header name (optional)",
+                    TextInput::new(&s.settings_ui.mcp_auth_header_name_edit)
+                        .label("API key header name (optional)")
+                        .placeholder("Authorization")
+                        .width(None)
+                        .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_auth_header_name_edit)
+                        .build(k),
+                    k,
+                    t,
+                ))
+                .child(
+                    row()
+                        .w_full()
+                        .gap(8.0)
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(4.0)
+                                .child(
+                                    text("Prefix (optional)")
+                                        .font(k.ty.text_xsmall)
+                                        .color(t.text_muted),
+                                )
+                                .child(
+                                    TextInput::new(&s.settings_ui.mcp_auth_prefix_edit)
+                                        .label("Prefix (optional)")
+                                        .placeholder("Bearer")
+                                        .width(None)
+                                        .on_edit(|s: &mut AppState| {
+                                            &mut s.settings_ui.mcp_auth_prefix_edit
+                                        })
+                                        .build(k),
+                                ),
+                        )
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(4.0)
+                                .child(
+                                    text("Key ID (optional)")
+                                        .font(k.ty.text_xsmall)
+                                        .color(t.text_muted),
+                                )
+                                .child(
+                                    TextInput::new(&s.settings_ui.mcp_auth_key_id_edit)
+                                        .label("Key ID (optional)")
+                                        .placeholder("default")
+                                        .width(None)
+                                        .on_edit(|s: &mut AppState| {
+                                            &mut s.settings_ui.mcp_auth_key_id_edit
+                                        })
+                                        .build(k),
+                                ),
+                        ),
+                );
+        } else if s.settings_ui.mcp_auth_type == "oauth" {
+            let mode_idx = usize::from(s.settings_ui.mcp_oauth_mode == "code");
+            adv = adv
+                .child(labeled_dialog_field(
+                    "OAuth flow mode",
+                    SegmentedControl::new(&["Automatic", "Paste a code"], Some(mode_idx))
+                        .label("OAuth flow mode")
+                        .fit()
+                        .on_pick(|s: &mut AppState, idx, _tx| {
+                            s.settings_ui.mcp_oauth_mode = if idx == 1 {
+                                "code".to_string()
+                            } else {
+                                "auto".to_string()
+                            };
+                        })
+                        .build(k),
+                    k,
+                    t,
+                ))
+                .child(
+                    row()
+                        .w_full()
+                        .gap(8.0)
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(4.0)
+                                .child(
+                                    text("OAuth scope (optional)")
+                                        .font(k.ty.text_xsmall)
+                                        .color(t.text_muted),
+                                )
+                                .child(
+                                    TextInput::new(&s.settings_ui.mcp_oauth_scope_edit)
+                                        .label("OAuth scope (optional)")
+                                        .placeholder("read write")
+                                        .width(None)
+                                        .on_edit(|s: &mut AppState| {
+                                            &mut s.settings_ui.mcp_oauth_scope_edit
+                                        })
+                                        .build(k),
+                                ),
+                        )
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(4.0)
+                                .child(
+                                    text("OAuth resource (optional)")
+                                        .font(k.ty.text_xsmall)
+                                        .color(t.text_muted),
+                                )
+                                .child(
+                                    TextInput::new(&s.settings_ui.mcp_oauth_resource_edit)
+                                        .label("OAuth resource (optional)")
+                                        .placeholder("https://api.example.com")
+                                        .width(None)
+                                        .on_edit(|s: &mut AppState| {
+                                            &mut s.settings_ui.mcp_oauth_resource_edit
+                                        })
+                                        .build(k),
+                                ),
+                        ),
+                );
+        }
+
+        adv = adv
+            .child(
+                row()
+                    .w_full()
+                    .gap(8.0)
+                    .child(
+                        col()
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .gap(4.0)
+                            .child(
+                                text("Icon URL (optional)")
+                                    .font(k.ty.text_xsmall)
+                                    .color(t.text_muted),
+                            )
+                            .child(
+                                TextInput::new(&s.settings_ui.mcp_icon_edit)
+                                    .label("Icon URL (optional)")
+                                    .placeholder("https://example.com/icon.png")
+                                    .width(None)
+                                    .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_icon_edit)
+                                    .build(k),
+                            ),
+                    )
+                    .child(
+                        col()
+                            .w(110.0)
+                            .gap(4.0)
+                            .child(
+                                text("Retries (optional)")
+                                    .font(k.ty.text_xsmall)
+                                    .color(t.text_muted),
+                            )
+                            .child(
+                                TextInput::new(&s.settings_ui.mcp_retries_edit)
+                                    .label("Retries (optional)")
+                                    .placeholder("3")
+                                    .width(None)
+                                    .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_retries_edit)
+                                    .build(k),
+                            ),
+                    ),
+            )
+            .child(
+                row()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        col()
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .gap(2.0)
+                            .child(text("Required").font(k.ty.text_small).color(t.text_base))
+                            .child(
+                                text(
+                                    "Treat sessions as broken when this connector fails to start.",
+                                )
+                                .font(k.ty.text_xsmall)
+                                .color(t.text_muted)
+                                .wrap(),
+                            ),
+                    )
+                    .child(
+                        Switch::new(s.settings_ui.mcp_required)
+                            .label("Required")
+                            .hide_label()
+                            .control_size(ControlSize::Mini)
+                            .on_toggle(|s: &mut AppState| {
+                                s.settings_ui.mcp_required = !s.settings_ui.mcp_required;
+                            })
+                            .build(k),
+                    ),
             );
+        fields = fields.child(adv);
     }
 
     fields = fields.child(
@@ -831,7 +1229,24 @@ fn append_editor_dialog(
                     env_lines: s.settings_ui.mcp_env_edit.text.clone(),
                     header_lines: s.settings_ui.mcp_headers_edit.text.clone(),
                 };
-                match build_mcp_server_config(&draft) {
+                let extras = McpServerDraftExtras {
+                    cwd: s.settings_ui.mcp_cwd_edit.text.clone(),
+                    icon: s.settings_ui.mcp_icon_edit.text.clone(),
+                    required: s.settings_ui.mcp_required,
+                    retries: s.settings_ui.mcp_retries_edit.text.clone(),
+                    auth_type: s.settings_ui.mcp_auth_type.clone(),
+                    header_name: s.settings_ui.mcp_auth_header_name_edit.text.clone(),
+                    prefix: s.settings_ui.mcp_auth_prefix_edit.text.clone(),
+                    key_id: s.settings_ui.mcp_auth_key_id_edit.text.clone(),
+                    oauth_scope: s.settings_ui.mcp_oauth_scope_edit.text.clone(),
+                    oauth_resource: s.settings_ui.mcp_oauth_resource_edit.text.clone(),
+                    oauth_mode: s.settings_ui.mcp_oauth_mode.clone(),
+                };
+                match build_mcp_server_config_with_extras(
+                    &draft,
+                    &extras,
+                    s.settings_ui.mcp_editing_base_config.as_ref(),
+                ) {
                     Ok((name, config)) => {
                         let source = s
                             .settings_ui
@@ -870,7 +1285,7 @@ fn append_editor_dialog(
             col()
                 .w_full()
                 .min_w(0.0)
-                .max_h(430.0)
+                .max_h(520.0)
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })

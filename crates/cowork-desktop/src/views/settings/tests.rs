@@ -892,3 +892,150 @@ fn slice6_tool_access_mcp_connectors_and_search_helpers() {
     assert_eq!(mkts.len(), 1);
     assert_eq!(mkts[0].display_name, "Acme Catalog");
 }
+
+#[test]
+fn review_90_mcp_preserves_auth_extras_and_skills_catalog_gates_mutations() {
+    use crate::state::{AppState, McpServerSummary};
+    use crate::views::settings::mcp_server_draft::{
+        build_mcp_server_config_with_extras, draft_extras_from_summary, draft_from_summary,
+    };
+    use crate::views::settings::mcp_servers::{
+        effective_source, server_error_message, transport_kind_of,
+    };
+    use crate::views::settings::tool_access::collect_visible_skill_rows;
+
+    let oauth_srv = McpServerSummary {
+        name: "linear".to_string(),
+        enabled: true,
+        transport: "stdio".to_string(),
+        source: Some("workspace".to_string()),
+        config: serde_json::json!({
+            "name": "linear",
+            "source": "user",
+            "icon": "https://linear.app/favicon.ico",
+            "required": true,
+            "retries": 2,
+            "authMode": "error",
+            "authMessage": "OAuth refresh failed",
+            "transport": { "type": "http", "url": "https://mcp.linear.app/mcp" },
+            "auth": {
+                "type": "oauth",
+                "scope": "read write",
+                "resource": "https://api.linear.app",
+                "oauthMode": "code"
+            }
+        }),
+        ..Default::default()
+    };
+    assert_eq!(effective_source(&oauth_srv), "user");
+    assert_eq!(transport_kind_of(&oauth_srv), "http");
+    assert_eq!(
+        server_error_message(&oauth_srv),
+        Some("OAuth refresh failed")
+    );
+
+    let draft = draft_from_summary(&oauth_srv);
+    let extras = draft_extras_from_summary(&oauth_srv);
+    let (_, rebuilt) =
+        build_mcp_server_config_with_extras(&draft, &extras, Some(&oauth_srv.config))
+            .expect("rebuilt oauth mcp config validates");
+    assert_eq!(rebuilt["required"], serde_json::json!(true));
+    assert_eq!(rebuilt["retries"], serde_json::json!(2));
+    assert_eq!(
+        rebuilt["icon"],
+        serde_json::json!("https://linear.app/favicon.ico")
+    );
+    assert_eq!(rebuilt["auth"]["type"], serde_json::json!("oauth"));
+    assert_eq!(rebuilt["auth"]["scope"], serde_json::json!("read write"));
+    assert_eq!(rebuilt["auth"]["oauthMode"], serde_json::json!("code"));
+
+    let stdio_srv = McpServerSummary {
+        name: "local-fs".to_string(),
+        enabled: true,
+        transport: "stdio".to_string(),
+        config: serde_json::json!({
+            "transport": { "type": "stdio", "command": "npx", "cwd": "/tmp/work" }
+        }),
+        ..Default::default()
+    };
+    let stdio_draft = draft_from_summary(&stdio_srv);
+    let stdio_extras = draft_extras_from_summary(&stdio_srv);
+    let (_, stdio_rebuilt) =
+        build_mcp_server_config_with_extras(&stdio_draft, &stdio_extras, Some(&stdio_srv.config))
+            .expect("rebuilt stdio cwd validates");
+    assert_eq!(
+        stdio_rebuilt["transport"]["cwd"],
+        serde_json::json!("/tmp/work")
+    );
+
+    let state = AppState {
+        skill_installations: vec![
+            serde_json::json!({
+                "installationId": "inst-disabled",
+                "name": "disabled-skill",
+                "description": "Kept visible when disabled",
+                "scope": "global",
+                "enabled": false,
+                "writable": true,
+                "state": "disabled"
+            }),
+            serde_json::json!({
+                "installationId": "inst-shadowed",
+                "name": "same-name",
+                "description": "Global copy shadowed by project",
+                "scope": "global",
+                "enabled": true,
+                "writable": true,
+                "state": "shadowed",
+                "shadowedByScope": "project"
+            }),
+            serde_json::json!({
+                "installationId": "inst-project",
+                "name": "same-name",
+                "description": "Project copy",
+                "scope": "project",
+                "enabled": true,
+                "writable": true,
+                "state": "effective"
+            }),
+            serde_json::json!({
+                "installationId": "inst-readonly",
+                "name": "system-skill",
+                "description": "Read-only skill",
+                "scope": "built-in",
+                "enabled": true,
+                "writable": false,
+                "state": "effective"
+            }),
+            serde_json::json!({
+                "installationId": "inst-plugin",
+                "name": "bundled-skill",
+                "description": "Managed by plugin",
+                "scope": "user",
+                "enabled": true,
+                "writable": false,
+                "state": "effective",
+                "plugin": { "pluginId": "p1", "displayName": "My Plugin" }
+            }),
+        ],
+        ..Default::default()
+    };
+
+    let rows = collect_visible_skill_rows(&state);
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|r| r.name != "bundled-skill"));
+    assert!(
+        rows.iter()
+            .any(|r| r.installation_id.as_deref() == Some("inst-disabled") && r.state == "disabled")
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.installation_id.as_deref() == Some("inst-shadowed") && r.state == "shadowed")
+    );
+    let ro = rows
+        .iter()
+        .find(|r| r.installation_id.as_deref() == Some("inst-readonly"))
+        .expect("readonly row present");
+    assert!(!ro.can_toggle());
+    assert!(!ro.can_delete());
+}

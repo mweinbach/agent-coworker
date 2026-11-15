@@ -4,10 +4,11 @@
 //! `settings_ui: SettingsUiState` slot without requiring shared-core edits as
 //! individual settings pages and dialogs evolve.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rune::TextEdit;
 use rune_kit::{ShortcutRecorderState, TreeModel};
+use serde_json::Value;
 
 /// Time filter options on the Usage page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -197,7 +198,19 @@ pub struct SettingsUiState {
     pub mcp_url_edit: TextEdit,
     pub mcp_env_edit: TextEdit,
     pub mcp_headers_edit: TextEdit,
-    pub mcp_api_key_edit: TextEdit,
+    pub mcp_api_key_edits: HashMap<String, TextEdit>,
+    pub mcp_cwd_edit: TextEdit,
+    pub mcp_icon_edit: TextEdit,
+    pub mcp_required: bool,
+    pub mcp_retries_edit: TextEdit,
+    pub mcp_auth_type: String,
+    pub mcp_auth_header_name_edit: TextEdit,
+    pub mcp_auth_prefix_edit: TextEdit,
+    pub mcp_auth_key_id_edit: TextEdit,
+    pub mcp_oauth_scope_edit: TextEdit,
+    pub mcp_oauth_resource_edit: TextEdit,
+    pub mcp_oauth_mode: String,
+    pub mcp_editing_base_config: Option<Value>,
     pub marketplace_dialog_open: bool,
     pub marketplace_url_edit: TextEdit,
     pub install_plugin_open: bool,
@@ -359,7 +372,19 @@ impl Default for SettingsUiState {
             mcp_url_edit: TextEdit::new(""),
             mcp_env_edit: TextEdit::new(""),
             mcp_headers_edit: TextEdit::new(""),
-            mcp_api_key_edit: TextEdit::new(""),
+            mcp_api_key_edits: HashMap::new(),
+            mcp_cwd_edit: TextEdit::new(""),
+            mcp_icon_edit: TextEdit::new(""),
+            mcp_required: false,
+            mcp_retries_edit: TextEdit::new(""),
+            mcp_auth_type: "none".to_string(),
+            mcp_auth_header_name_edit: TextEdit::new(""),
+            mcp_auth_prefix_edit: TextEdit::new(""),
+            mcp_auth_key_id_edit: TextEdit::new(""),
+            mcp_oauth_scope_edit: TextEdit::new(""),
+            mcp_oauth_resource_edit: TextEdit::new(""),
+            mcp_oauth_mode: "auto".to_string(),
+            mcp_editing_base_config: None,
             marketplace_dialog_open: false,
             marketplace_url_edit: TextEdit::new(""),
             install_plugin_open: false,

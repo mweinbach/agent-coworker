@@ -1116,7 +1116,10 @@ fn build_toolbar_row(
                 .control_size(ControlSize::Small)
                 .icon(&icons::SAVE)
                 .disabled(!can_save)
-                .help("Save document (Cmd+S)")
+                .help(format!(
+                    "Save document ({})",
+                    crate::shortcut_label("Cmd+S")
+                ))
                 .on_press(move |s: &mut AppState| {
                     trigger_save(s, &doc_save);
                 })
@@ -1157,14 +1160,15 @@ fn format_icon_btn(
     doc: &ResolvedCanvasDoc,
     key: &'static str,
     glyph: &'static rune::Icon,
-    help: &'static str,
+    help: impl Into<String>,
     kind: MarkdownFormatKind,
 ) -> El {
     let doc_cb = doc.clone();
+    let help = help.into();
     IconButton::new(glyph)
         .variant(IconButtonVariant::Ghost)
         .control_size(ControlSize::Mini)
-        .label(help)
+        .label(help.clone())
         .help(help)
         .on_press_tx(move |s: &mut AppState, tx| {
             apply_canvas_format_action(s, &doc_cb, kind, Some(tx));
@@ -1236,7 +1240,7 @@ fn build_formatting_bar(k: &Kit, t: &ThemeTokens, doc: &ResolvedCanvasDoc) -> El
             doc,
             "canvas-fmt-bold",
             &icons::BOLD,
-            "Bold (Cmd+B)",
+            format!("Bold ({})", crate::shortcut_label("Cmd+B")),
             MarkdownFormatKind::Bold,
         ))
         .child(format_icon_btn(
@@ -1244,7 +1248,7 @@ fn build_formatting_bar(k: &Kit, t: &ThemeTokens, doc: &ResolvedCanvasDoc) -> El
             doc,
             "canvas-fmt-italic",
             &icons::ITALIC,
-            "Italic (Cmd+I)",
+            format!("Italic ({})", crate::shortcut_label("Cmd+I")),
             MarkdownFormatKind::Italic,
         ))
         .child(sep())
@@ -1781,16 +1785,10 @@ fn build_source_tab(
                 .justify_between()
                 .px(2.0)
                 .child(
-                    text(if doc.kind == CanvasFileKind::Markdown && !read_only {
-                        "Cmd+S Save · Cmd+B Bold · Cmd+I Italic".to_string()
-                    } else if read_only {
-                        "Read-only preview".to_string()
-                    } else {
-                        "Cmd+S Save".to_string()
-                    })
-                    .font(k.ty.small)
-                    .color(t.text_faint)
-                    .truncate(),
+                    text(source_shortcut_hint(doc.kind, read_only))
+                        .font(k.ty.small)
+                        .color(t.text_faint)
+                        .truncate(),
                 )
                 .child(
                     text(format!(
@@ -1800,6 +1798,28 @@ fn build_source_tab(
                     .color(t.text_muted),
                 ),
         )
+}
+
+fn source_shortcut_hint_for_platform(
+    kind: CanvasFileKind,
+    read_only: bool,
+    is_macos: bool,
+) -> String {
+    if read_only {
+        return "Read-only preview".to_string();
+    }
+    let save = crate::shortcut_label_for_platform("Cmd+S", is_macos);
+    if kind == CanvasFileKind::Markdown {
+        let bold = crate::shortcut_label_for_platform("Cmd+B", is_macos);
+        let italic = crate::shortcut_label_for_platform("Cmd+I", is_macos);
+        format!("{save} Save · {bold} Bold · {italic} Italic")
+    } else {
+        format!("{save} Save")
+    }
+}
+
+fn source_shortcut_hint(kind: CanvasFileKind, read_only: bool) -> String {
+    source_shortcut_hint_for_platform(kind, read_only, crate::is_apple_platform())
 }
 
 fn handle_source_editor_key(
@@ -2161,6 +2181,26 @@ mod tests {
         assert_eq!(
             visible.text,
             "\u{201C}Old <draft> intro\u{201D}\n\nTighten \"section\" & add KPIs"
+        );
+    }
+
+    #[test]
+    fn canvas_shortcut_hint_adapts_by_platform_and_kind() {
+        assert_eq!(
+            source_shortcut_hint_for_platform(CanvasFileKind::Markdown, false, true),
+            "⌘S Save · ⌘B Bold · ⌘I Italic"
+        );
+        assert_eq!(
+            source_shortcut_hint_for_platform(CanvasFileKind::Markdown, false, false),
+            "Ctrl+S Save · Ctrl+B Bold · Ctrl+I Italic"
+        );
+        assert_eq!(
+            source_shortcut_hint_for_platform(CanvasFileKind::Text, false, false),
+            "Ctrl+S Save"
+        );
+        assert_eq!(
+            source_shortcut_hint_for_platform(CanvasFileKind::Markdown, true, false),
+            "Read-only preview"
         );
     }
 }

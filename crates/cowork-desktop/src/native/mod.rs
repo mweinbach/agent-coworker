@@ -45,10 +45,13 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::actions::{NativeCommand, StoreEvent};
-use crate::state::{AppState, PersistedDesktopState, PrivacyTelemetrySettings};
+use crate::state::{
+    AppState, DiagnosticsBundleState, NotificationTone, PersistedDesktopState,
+    PrivacyTelemetrySettings,
+};
 use appearance::{AppearancePreferences, detect_system_dark};
 use apply_desktop_state::apply_desktop_state;
-use diagnostics::DiagnosticsService;
+use diagnostics::{CreatedDiagnosticsBundle, DiagnosticsService, UploadedDiagnosticsBundle};
 use explorer::list_workspace_directory;
 use file_preview_read::{DEFAULT_PREVIEW_MAX_BYTES, load_file_preview_state};
 use local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger, strip_url_secrets};
@@ -274,6 +277,7 @@ struct NativeWorkerContext {
     last_feature_flags: HashMap<String, bool>,
     last_privacy: Option<PrivacyTelemetrySettings>,
     show_hidden_files: Arc<AtomicBool>,
+    last_diagnostics_bundle: Arc<Mutex<Option<DiagnosticsBundleState>>>,
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
 }
 
@@ -367,6 +371,7 @@ impl NativeWorkerContext {
             last_feature_flags: HashMap::new(),
             last_privacy: None,
             show_hidden_files: Arc::new(AtomicBool::new(false)),
+            last_diagnostics_bundle: Arc::new(Mutex::new(None)),
             emit,
         }
     }
@@ -928,6 +933,8 @@ impl NativeWorkerContext {
                 let diagnostics = self.diagnostics.clone();
                 let logger = self.logger.clone();
                 let notifications = self.notifications.clone();
+                let emit = self.emit.clone();
+                let last_bundle = self.last_diagnostics_bundle.clone();
                 tokio::spawn(async move {
                     let res = tokio::task::spawn_blocking(move || {
                         let created = diagnostics.create_bundle()?;
@@ -937,6 +944,12 @@ impl NativeWorkerContext {
                     .await;
                     match res {
                         Ok(Ok(bundle)) => {
+                            let state = build_diagnostics_bundle_state(&bundle);
+                            {
+                                *last_bundle.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    Some(state.clone());
+                            }
+                            emit(StoreEvent::DiagnosticsBundleUpdated(Some(state)));
                             let msg = format!(
                                 "Diagnostics saved to {}",
                                 bundle
@@ -950,22 +963,42 @@ impl NativeWorkerContext {
                                 "Diagnostics Bundle Created",
                                 &msg,
                             );
+                            emit(StoreEvent::Toast {
+                                key: "diagnostics-bundle-created".to_string(),
+                                title: "Diagnostics Bundle Created".to_string(),
+                                description: Some(msg),
+                                tone: NotificationTone::Success,
+                            });
                         }
                         Ok(Err(err)) => {
-                            let meta = json!({ "error": err.to_string() });
+                            let err_str = err.to_string();
+                            let meta = json!({ "error": err_str });
                             logger.error(
                                 "diagnostics",
                                 "failed to export diagnostics bundle",
                                 Some(&meta),
                             );
+                            emit(StoreEvent::Toast {
+                                key: "diagnostics-bundle-error".to_string(),
+                                title: "Failed to Create Diagnostics Bundle".to_string(),
+                                description: Some(err_str),
+                                tone: NotificationTone::Error,
+                            });
                         }
                         Err(err) => {
-                            let meta = json!({ "error": err.to_string() });
+                            let err_str = err.to_string();
+                            let meta = json!({ "error": err_str });
                             logger.error(
                                 "diagnostics",
                                 "diagnostics export task panicked",
                                 Some(&meta),
                             );
+                            emit(StoreEvent::Toast {
+                                key: "diagnostics-bundle-error".to_string(),
+                                title: "Failed to Create Diagnostics Bundle".to_string(),
+                                description: Some(err_str),
+                                tone: NotificationTone::Error,
+                            });
                         }
                     }
                 });
@@ -1024,10 +1057,119 @@ impl NativeWorkerContext {
                     remote.forget_trusted_phone(&phone_id).await;
                 });
             }
-            NativeCommand::RevokeAllTrustedPhones
-            | NativeCommand::OpenLogsFolder
-            | NativeCommand::RevealDiagnosticsBundle(_)
-            | NativeCommand::UploadDiagnosticsBundle { .. } => {}
+            NativeCommand::RevokeAllTrustedPhones => {
+                let remote = self.remote_access.clone();
+                tokio::spawn(async move {
+                    remote.revoke_all_trusted_phones().await;
+                });
+            }
+            NativeCommand::OpenLogsFolder => {
+                let diagnostics = self.diagnostics.clone();
+                let logger = self.logger.clone();
+                let emit = self.emit.clone();
+                tokio::spawn(async move {
+                    let res =
+                        tokio::task::spawn_blocking(move || diagnostics.open_logs_folder()).await;
+                    let err_msg = match res {
+                        Ok(Ok(())) => return,
+                        Ok(Err(err)) => err.to_string(),
+                        Err(err) => err.to_string(),
+                    };
+                    report_diagnostics_error(
+                        &logger,
+                        emit.as_ref(),
+                        "failed to open logs folder",
+                        "open-logs-folder-error",
+                        "Unable to Open Logs Folder",
+                        err_msg,
+                    );
+                });
+            }
+            NativeCommand::RevealDiagnosticsBundle(path) => {
+                let Some(target) =
+                    resolve_diagnostics_bundle_target(path, &self.last_diagnostics_bundle)
+                else {
+                    emit_missing_bundle_warning(
+                        self.emit.as_ref(),
+                        "Create a diagnostics bundle before revealing it.",
+                    );
+                    return;
+                };
+                let diagnostics = self.diagnostics.clone();
+                let logger = self.logger.clone();
+                let emit = self.emit.clone();
+                tokio::spawn(async move {
+                    let res =
+                        tokio::task::spawn_blocking(move || diagnostics.reveal_bundle(&target))
+                            .await;
+                    let err_msg = match res {
+                        Ok(Ok(())) => return,
+                        Ok(Err(err)) => err.to_string(),
+                        Err(err) => err.to_string(),
+                    };
+                    report_diagnostics_error(
+                        &logger,
+                        emit.as_ref(),
+                        "failed to reveal diagnostics bundle",
+                        "diagnostics-reveal-error",
+                        "Unable to Reveal Diagnostics Bundle",
+                        err_msg,
+                    );
+                });
+            }
+            NativeCommand::UploadDiagnosticsBundle { path, confirmed } => {
+                let Some(target) =
+                    resolve_diagnostics_bundle_target(path, &self.last_diagnostics_bundle)
+                else {
+                    emit_missing_bundle_warning(
+                        self.emit.as_ref(),
+                        "Create a diagnostics bundle before uploading.",
+                    );
+                    return;
+                };
+                let diagnostics = self.diagnostics.clone();
+                let logger = self.logger.clone();
+                let emit = self.emit.clone();
+                let last_bundle = self.last_diagnostics_bundle.clone();
+                tokio::spawn(async move {
+                    match diagnostics.upload_bundle(&target, confirmed).await {
+                        Ok(uploaded) => {
+                            let updated =
+                                merge_uploaded_bundle_state(&target, Ok(&uploaded), &last_bundle);
+                            emit(StoreEvent::DiagnosticsBundleUpdated(Some(updated)));
+                            let tone = if uploaded.uploaded {
+                                NotificationTone::Success
+                            } else {
+                                NotificationTone::Info
+                            };
+                            emit(StoreEvent::Toast {
+                                key: "diagnostics-upload".to_string(),
+                                title: if uploaded.uploaded {
+                                    "Diagnostics Bundle Uploaded".to_string()
+                                } else {
+                                    "Diagnostics Upload Skipped".to_string()
+                                },
+                                description: Some(uploaded.message),
+                                tone,
+                            });
+                        }
+                        Err(err) => {
+                            let err_msg = err.to_string();
+                            let updated =
+                                merge_uploaded_bundle_state(&target, Err(&err_msg), &last_bundle);
+                            emit(StoreEvent::DiagnosticsBundleUpdated(Some(updated)));
+                            report_diagnostics_error(
+                                &logger,
+                                emit.as_ref(),
+                                "failed to upload diagnostics bundle",
+                                "diagnostics-upload-error",
+                                "Diagnostics Upload Failed",
+                                err_msg,
+                            );
+                        }
+                    }
+                });
+            }
             NativeCommand::Shutdown => {}
         }
     }
@@ -1197,6 +1339,100 @@ fn resolve_workspace_scoped_path(authorized_root: &Path, raw: &str) -> PathBuf {
     }
 }
 
+fn build_diagnostics_bundle_state(created: &CreatedDiagnosticsBundle) -> DiagnosticsBundleState {
+    DiagnosticsBundleState {
+        path: created.path.to_string_lossy().into_owned(),
+        created_at: created.created_at.clone(),
+        summary: created.summary.clone(),
+        upload_configured: created.upload_configured,
+        upload_enabled: created.upload_enabled,
+        uploaded: false,
+        diagnostic_id: None,
+        upload_url: None,
+        upload_message: None,
+    }
+}
+
+fn resolve_diagnostics_bundle_target(
+    explicit: Option<String>,
+    cached: &Arc<Mutex<Option<DiagnosticsBundleState>>>,
+) -> Option<PathBuf> {
+    if let Some(raw) = explicit
+        && !raw.trim().is_empty()
+    {
+        return Some(PathBuf::from(raw.trim()));
+    }
+    let guard = cached.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .as_ref()
+        .map(|b| b.path.trim())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+fn merge_uploaded_bundle_state(
+    target: &Path,
+    outcome: Result<&UploadedDiagnosticsBundle, &str>,
+    cached: &Arc<Mutex<Option<DiagnosticsBundleState>>>,
+) -> DiagnosticsBundleState {
+    let mut guard = cached.lock().unwrap_or_else(|e| e.into_inner());
+    let target_canonical = canonicalize_sync(target);
+    let mut state = match guard.as_ref() {
+        Some(existing)
+            if Path::new(&existing.path) == target
+                || canonicalize_sync(Path::new(&existing.path)) == target_canonical =>
+        {
+            existing.clone()
+        }
+        _ => DiagnosticsBundleState {
+            path: target.to_string_lossy().into_owned(),
+            ..DiagnosticsBundleState::default()
+        },
+    };
+    match outcome {
+        Ok(uploaded) => {
+            state.path = uploaded.path.to_string_lossy().into_owned();
+            state.uploaded = uploaded.uploaded;
+            state.diagnostic_id = uploaded.diagnostic_id.clone();
+            state.upload_url = uploaded.url.clone();
+            state.upload_message = Some(uploaded.message.clone());
+        }
+        Err(err) => {
+            state.uploaded = false;
+            state.upload_message = Some(err.to_string());
+        }
+    }
+    *guard = Some(state.clone());
+    state
+}
+
+fn emit_missing_bundle_warning(emit: &(dyn Fn(StoreEvent) + Send + Sync), detail: &str) {
+    emit(StoreEvent::Toast {
+        key: "diagnostics-bundle-missing".to_string(),
+        title: "No Diagnostics Bundle Available".to_string(),
+        description: Some(detail.to_string()),
+        tone: NotificationTone::Warning,
+    });
+}
+
+fn report_diagnostics_error(
+    logger: &LocalLogger,
+    emit: &(dyn Fn(StoreEvent) + Send + Sync),
+    log_msg: &str,
+    toast_key: &str,
+    toast_title: &str,
+    err_str: String,
+) {
+    let meta = json!({ "error": err_str });
+    logger.warn("diagnostics", log_msg, Some(&meta));
+    emit(StoreEvent::Toast {
+        key: toast_key.to_string(),
+        title: toast_title.to_string(),
+        description: Some(err_str),
+        tone: NotificationTone::Error,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1214,5 +1450,50 @@ mod tests {
             resolve_workspace_scoped_path(root, "/tmp/cowork/proj-a/README.md"),
             Path::new("/tmp/cowork/proj-a/README.md")
         );
+    }
+
+    #[test]
+    fn resolves_and_merges_diagnostics_bundle_state_across_export_and_upload() {
+        let cached = Arc::new(Mutex::new(None));
+        assert_eq!(resolve_diagnostics_bundle_target(None, &cached), None);
+        assert_eq!(
+            resolve_diagnostics_bundle_target(Some("  ".to_string()), &cached),
+            None
+        );
+
+        let created = CreatedDiagnosticsBundle {
+            path: PathBuf::from("/tmp/diagnostics/cowork-diagnostics-1.json"),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            summary: "Cowork diagnostics".to_string(),
+            upload_configured: true,
+            upload_enabled: true,
+        };
+        let initial = build_diagnostics_bundle_state(&created);
+        *cached.lock().unwrap() = Some(initial);
+        assert_eq!(
+            resolve_diagnostics_bundle_target(None, &cached),
+            Some(created.path.clone())
+        );
+
+        let uploaded = UploadedDiagnosticsBundle {
+            uploaded: true,
+            path: created.path.clone(),
+            diagnostic_id: Some("diag-42".to_string()),
+            url: Some("https://support.example/diag-42".to_string()),
+            message: "Uploaded".to_string(),
+        };
+        let after_ok = merge_uploaded_bundle_state(&created.path, Ok(&uploaded), &cached);
+        assert!(after_ok.uploaded);
+        assert_eq!(after_ok.summary, "Cowork diagnostics");
+        assert_eq!(after_ok.diagnostic_id.as_deref(), Some("diag-42"));
+        assert_eq!(
+            after_ok.upload_url.as_deref(),
+            Some("https://support.example/diag-42")
+        );
+
+        let after_err = merge_uploaded_bundle_state(&created.path, Err("HTTP 502"), &cached);
+        assert!(!after_err.uploaded);
+        assert_eq!(after_err.upload_message.as_deref(), Some("HTTP 502"));
+        assert_eq!(after_err.created_at, "2026-01-01T00:00:00Z");
     }
 }

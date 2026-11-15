@@ -62,12 +62,83 @@ fn scene_chat(state: &mut AppState) {
 
 fn scene_chat_demo(state: &mut AppState) {
     state.scene_mode = true;
-    state.workspaces.push(state::WorkspaceRecord::new(
+    state.provider_catalog = vec![
+        state::ProviderSummary {
+            id: "anthropic".to_string(),
+            name: "Anthropic".to_string(),
+            configured: true,
+            models: vec![
+                state::ProviderModelSummary {
+                    id: "claude-sonnet-4-5".to_string(),
+                    name: "Claude Sonnet 4.5".to_string(),
+                    enabled: true,
+                    custom: false,
+                    supports_reasoning: true,
+                    reasoning_efforts: vec![
+                        "low".to_string(),
+                        "medium".to_string(),
+                        "high".to_string(),
+                    ],
+                },
+                state::ProviderModelSummary {
+                    id: "claude-haiku-4-5".to_string(),
+                    name: "Claude Haiku 4.5".to_string(),
+                    enabled: true,
+                    custom: false,
+                    supports_reasoning: false,
+                    reasoning_efforts: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        },
+        state::ProviderSummary {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            configured: true,
+            models: vec![state::ProviderModelSummary {
+                id: "gpt-4.1".to_string(),
+                name: "GPT-4.1".to_string(),
+                enabled: true,
+                custom: false,
+                supports_reasoning: false,
+                reasoning_efforts: Vec::new(),
+            }],
+            ..Default::default()
+        },
+    ];
+    let ws_rt = state
+        .workspace_runtime_by_id
+        .entry("ws-demo".to_string())
+        .or_default();
+    ws_rt.server_state = state::ServerLifecycleState::Running {
+        ws_url: "ws://127.0.0.1:7337/ws".to_string(),
+        port: 7337,
+    };
+    ws_rt.provider_statuses = vec![
+        state::ProviderStatusSummary {
+            provider: "anthropic".to_string(),
+            healthy: true,
+            connected: true,
+            auth_method: Some("api_key".to_string()),
+            ..Default::default()
+        },
+        state::ProviderStatusSummary {
+            provider: "openai".to_string(),
+            healthy: true,
+            connected: true,
+            auth_method: Some("api_key".to_string()),
+            ..Default::default()
+        },
+    ];
+    let mut demo_ws = state::WorkspaceRecord::new(
         "ws-demo",
         "Demo Project",
         "/tmp/cowork-demo",
         1_700_000_000_000,
-    ));
+    );
+    demo_ws.default_provider = Some("anthropic".to_string());
+    demo_ws.default_model = Some("claude-sonnet-4-5".to_string());
+    state.workspaces.push(demo_ws);
     state.workspace_order.push("ws-demo".to_string());
     state.active_workspace_id = Some("ws-demo".to_string());
     state.threads.push(state::ThreadRecord {
@@ -147,14 +218,16 @@ fn scene_chat_demo(state: &mut AppState) {
             output: None,
             error: None,
             diff: Some(
-                "--- a/crates/cowork-desktop/src/theme.rs\n\
-                 +++ b/crates/cowork-desktop/src/theme.rs\n\
-                 @@ -282,4 +282,6 @@\n\
-                      kit.c.bg_accent = tok.accent;\n\
-                 +    kit.c.bg_contrast = tok.accent;\n\
-                 +    kit.c.bg_icon_button_contrast = tok.accent;\n\
-                      kit.c.submit_fg = tok.primary_fg;\n"
-                    .to_string(),
+                concat!(
+                    "--- a/crates/cowork-desktop/src/theme.rs\n",
+                    "+++ b/crates/cowork-desktop/src/theme.rs\n",
+                    "@@ -282,2 +282,4 @@\n",
+                    "     kit.c.bg_accent = tok.accent;\n",
+                    "+    kit.c.bg_contrast = tok.accent;\n",
+                    "+    kit.c.bg_icon_button_contrast = tok.accent;\n",
+                    "     kit.c.submit_fg = tok.primary_fg;\n",
+                )
+                .to_string(),
             ),
             streaming: false,
             timestamp_ms: 1_700_000_018_000,

@@ -281,6 +281,43 @@ pub fn execute_window_close_hook(
     }
 }
 
+/// Pure UI action planned after a user resolves a dirty/busy close prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowCloseResolutionAction {
+    Ignore,
+    Quit,
+    HideWindow,
+    CloseCurrentWindow,
+}
+
+/// Resolves an outstanding close prompt and updates `coordinator` before applying the UI action.
+pub fn plan_window_close_resolution(
+    coordinator: &WindowCloseCoordinator,
+    window_key: &str,
+    request_id: &str,
+    confirmed: bool,
+    has_registered_handle: bool,
+    quit_on_main_close: bool,
+) -> WindowCloseResolutionAction {
+    let Some(for_quit) = coordinator.resolve_close(window_key, request_id, confirmed) else {
+        return WindowCloseResolutionAction::Ignore;
+    };
+    if !confirmed {
+        return WindowCloseResolutionAction::Ignore;
+    }
+    if for_quit || (window_key == "main" && quit_on_main_close) {
+        coordinator.clear_window(window_key);
+        WindowCloseResolutionAction::Quit
+    } else if has_registered_handle {
+        // `handle.hide()` skips `on_close`, so clear the one-shot approval here or subsequent
+        // reopen -> dirty close attempts would bypass confirmation.
+        coordinator.clear_window(window_key);
+        WindowCloseResolutionAction::HideWindow
+    } else {
+        WindowCloseResolutionAction::CloseCurrentWindow
+    }
+}
+
 /// Resolves a confirmed or cancelled close dialog on the UI thread when `handle.update(...)` runs.
 pub fn complete_window_close_resolution(
     coordinator: &WindowCloseCoordinator,
@@ -290,21 +327,35 @@ pub fn complete_window_close_resolution(
     tx: &mut rune::Tx,
     flush_bounds: impl FnOnce(),
 ) -> bool {
-    let Some(for_quit) = coordinator.resolve_close(window_key, request_id, confirmed) else {
-        return false;
-    };
-    if !confirmed {
-        return false;
+    let handle = get_window_handle(window_key);
+    let action = plan_window_close_resolution(
+        coordinator,
+        window_key,
+        request_id,
+        confirmed,
+        handle.is_some(),
+        !cfg!(target_os = "macos"),
+    );
+    match action {
+        WindowCloseResolutionAction::Ignore => false,
+        WindowCloseResolutionAction::Quit => {
+            flush_bounds();
+            tx.quit();
+            true
+        }
+        WindowCloseResolutionAction::HideWindow => {
+            flush_bounds();
+            if let Some(handle) = handle {
+                handle.hide();
+            }
+            true
+        }
+        WindowCloseResolutionAction::CloseCurrentWindow => {
+            flush_bounds();
+            tx.close_window();
+            true
+        }
     }
-    flush_bounds();
-    if for_quit || (window_key == "main" && !cfg!(target_os = "macos")) {
-        tx.quit();
-    } else if let Some(handle) = get_window_handle(window_key) {
-        handle.hide();
-    } else {
-        tx.close_window();
-    }
-    true
 }
 
 #[cfg(test)]
@@ -395,5 +446,49 @@ mod tests {
             evaluate_window_close(&coord, "quick-chat", &busy_state, true, true),
             WindowCloseOutcome::AllowHideOnly
         );
+    }
+
+    #[test]
+    fn second_dirty_close_prompts_again_after_approved_hide() {
+        let coord = WindowCloseCoordinator::new();
+        let mut dirty = AppState::default();
+        dirty.composer_edit.text = "unsaved draft".to_string();
+
+        // First dirty close prompts user; approving hide on macOS clears approved_once immediately.
+        let WindowCloseOutcome::PromptUser {
+            request_id: req1, ..
+        } = evaluate_window_close(&coord, "main", &dirty, false, false)
+        else {
+            panic!("expected first close prompt");
+        };
+        assert_eq!(
+            plan_window_close_resolution(&coord, "main", &req1, true, true, false),
+            WindowCloseResolutionAction::HideWindow
+        );
+
+        // After reopening while still dirty, a second close attempt must re-prompt rather than
+        // leaking the previous one-shot approval.
+        let WindowCloseOutcome::PromptUser {
+            request_id: req2, ..
+        } = evaluate_window_close(&coord, "main", &dirty, false, false)
+        else {
+            panic!("expected second close prompt after approved hide");
+        };
+        assert_ne!(req1, req2);
+
+        // When no handle is registered (`tx.close_window()` path), approval stays intact for one
+        // ensuing `on_close` cycle and is consumed when `on_close` runs.
+        assert_eq!(
+            plan_window_close_resolution(&coord, "main", &req2, true, false, false),
+            WindowCloseResolutionAction::CloseCurrentWindow
+        );
+        assert_eq!(
+            evaluate_window_close(&coord, "main", &dirty, false, false),
+            WindowCloseOutcome::AllowHideOnly
+        );
+        assert!(matches!(
+            evaluate_window_close(&coord, "main", &dirty, false, false),
+            WindowCloseOutcome::PromptUser { .. }
+        ));
     }
 }

@@ -2,49 +2,139 @@
 //!
 //! Ported from `apps/desktop/src/ui/settings/` and `apps/desktop/src/ui/settings/pages/`.
 
-use rune::{Cx, col, row, text};
-use rune_kit::{Button, ButtonVariant, Kit};
+pub mod experiments;
+pub mod icons;
+pub mod primitives;
+pub mod privacy_telemetry;
+pub mod shell;
+pub mod state;
+pub mod updates;
 
-use crate::actions::{Action, NavAction};
-use crate::router::ViewId;
+#[cfg(test)]
+mod tests;
+
+pub use state::SettingsUiState;
+
+use rune::{Cx, el, icon};
+use rune_kit::Kit;
+
+use crate::actions::{Action, SettingsAction};
+use crate::router::SettingsPageId;
 use crate::state::AppState;
+use crate::theme::{self, ThemeTokens};
 use crate::views::SubviewOutput;
+use crate::views::settings::primitives::{EmptyState, Section, settings_page};
+use crate::views::settings::shell::{PageContent, resolve_active_page, settings_shell};
+
+fn placeholder_page(s: &AppState, page: SettingsPageId, k: &Kit, t: &ThemeTokens) -> PageContent {
+    let summary = match page {
+        SettingsPageId::Models => {
+            format!("{} providers loaded in catalog.", s.provider_catalog.len())
+        }
+        SettingsPageId::Subagents => {
+            format!("{} subagent profiles configured.", s.subagents.len())
+        }
+        SettingsPageId::ToolAccess => format!(
+            "{} plugins, {} skills, and {} MCP servers available.",
+            s.plugins.len(),
+            s.skills.len(),
+            s.mcp_servers.len()
+        ),
+        SettingsPageId::Defaults => {
+            format!("{} workspaces managed.", s.workspaces.len())
+        }
+        SettingsPageId::ProfileMemory => {
+            format!(
+                "{} workspace memory entries stored.",
+                s.memory_entries.len()
+            )
+        }
+        SettingsPageId::RemoteAccess => format!(
+            "Remote relay {} ({} trusted devices).",
+            if s.remote_access.running {
+                "running"
+            } else {
+                "stopped"
+            },
+            s.remote_access.trusted_phones.len()
+        ),
+        SettingsPageId::Backup => {
+            format!("{} workspace backups indexed.", s.backups.len())
+        }
+        SettingsPageId::Chats => {
+            format!("{} archived threads tracked.", s.archived_threads.len())
+        }
+        SettingsPageId::Usage => match &s.usage_summary {
+            Some(u) => format!(
+                "{} input tokens, {} output tokens (${:.2} estimated).",
+                u.input_tokens, u.output_tokens, u.estimated_cost_usd
+            ),
+            None => "Usage summary will populate once sessions run.".to_string(),
+        },
+        SettingsPageId::Desktop => format!(
+            "Quick Chat shortcut: {} ({})",
+            s.desktop_settings.quick_chat_shortcut,
+            if s.desktop_settings.quick_chat_shortcut_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ),
+        SettingsPageId::Diagnostics => {
+            if let Some(ws_id) = s.resolve_management_workspace_id() {
+                format!("Workspace diagnostics target: {ws_id}.")
+            } else {
+                "Open or select a workspace to inspect runtime diagnostics.".to_string()
+            }
+        }
+        _ => page.description().to_string(),
+    };
+
+    let mut content = EmptyState::new(page.title())
+        .icon(icons::page_icon(page))
+        .description(summary);
+
+    if page == SettingsPageId::Models
+        && let Some(ws_id) = s.resolve_management_workspace_id().map(str::to_string)
+    {
+        content = content.action(
+            rune_kit::Button::new("Refresh providers")
+                .variant(rune_kit::ButtonVariant::Outline)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::RefreshProviderCatalog {
+                        workspace_id: ws_id.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+
+    let _ = icon(icons::page_icon(page), 16.0);
+    PageContent::simple(settings_page(vec![
+        Section::new()
+            .title(page.title())
+            .description(page.description())
+            .child(el().w_full().child(content.build(k, t)))
+            .build(k, t),
+    ]))
+}
 
 /// Renders the full-window Settings shell, navigation rail, and active settings page.
-pub fn view(s: &AppState, _cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
-    let page = s.route().settings_page;
+pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
+    let dark = s.effective_dark(cx.system_dark());
+    let t = theme::tokens(dark);
 
-    let content = col()
-        .key("settings-view")
-        .grow(1.0)
-        .w_full()
-        .h_full()
-        .fill(k.c.page)
-        .padding(24.0)
-        .gap(12.0)
-        .child(
-            row()
-                .w_full()
-                .justify_between()
-                .items_center()
-                .child(
-                    text(page.title())
-                        .font(k.ty.body_medium)
-                        .color(k.c.text_base),
-                )
-                .child(
-                    Button::new("Back to Chat")
-                        .variant(ButtonVariant::Ghost)
-                        .on_press_tx(|s: &mut AppState, _tx| {
-                            s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
-                        })
-                        .build(k),
-                ),
-        )
-        .child(text(page.description()).font(k.ty.ui).color(k.c.text_muted));
+    cx.foreground(t.text_base);
+    cx.focus_ring(2.0, 2.0, t.focus_ring);
+    cx.web_focus();
 
-    SubviewOutput {
-        content,
-        overlays: Vec::new(),
-    }
+    let active_page = resolve_active_page(s);
+    let content = match active_page {
+        SettingsPageId::Experiments => experiments::view(s, k, &t),
+        SettingsPageId::Updates => updates::view(s, k, &t),
+        SettingsPageId::PrivacyTelemetry => privacy_telemetry::view(s, k, &t),
+        other => placeholder_page(s, other, k, &t),
+    };
+
+    settings_shell(s, cx, k, &t, active_page, content)
 }

@@ -61,12 +61,13 @@ pub fn build_landing_view(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut
             col()
                 .w_full()
                 .grow(1.0)
-                .min_h(480.0)
+                .min_h(0.0)
                 .items_center()
-                .justify_center()
                 .px(24.0)
-                .py(32.0)
-                .child(center_col),
+                .py(24.0)
+                .child(rune::el().grow(1.0).min_h(0.0))
+                .child(center_col)
+                .child(rune::el().grow(1.0).min_h(0.0)),
         )
 }
 

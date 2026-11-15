@@ -15,7 +15,8 @@ use crate::theme::ThemeTokens;
 use super::attachments::{decode_image_from_uri, resolve_safe_local_path};
 use super::icons;
 use super::math::{
-    MathBlockSegment, MathChunk, render_display_math_block, render_inline_math_paragraph,
+    MathBlockSegment, MathChunk, MathParagraphKind, markdown_ends_with_list_item,
+    markdown_starts_with_list_item, render_display_math_block, render_inline_math_paragraph,
     render_streaming_math_block, split_inline_math_chunks, split_math_blocks,
 };
 use super::model::display_domain;
@@ -322,26 +323,48 @@ pub fn desktop_markdown(
                 );
             };
             let mut children = Vec::new();
+            let block_gap = if compact { 6.0 } else { 10.0 };
+            let mut prev_ended_list = false;
+            let mut push_child = |el: El, starts_list: bool, ends_list: bool| {
+                let el = if children.is_empty() {
+                    el
+                } else if prev_ended_list && starts_list {
+                    el.mt(4.0)
+                } else {
+                    el.mt(block_gap)
+                };
+                children.push(el);
+                prev_ended_list = ends_list;
+            };
+
             for (b_idx, block) in block_segments.into_iter().enumerate() {
                 match block {
                     MathBlockSegment::DisplayMath(tex) => {
-                        children.push(render_display_math_block(
-                            k,
-                            t,
-                            &tex,
-                            compact,
-                            hooks.math_scale,
-                            hooks.math_waker.as_ref(),
-                            &format!("{key_prefix}:math:{b_idx}"),
-                        ));
+                        push_child(
+                            render_display_math_block(
+                                k,
+                                t,
+                                &tex,
+                                compact,
+                                hooks.math_scale,
+                                hooks.math_waker.as_ref(),
+                                &format!("{key_prefix}:math:{b_idx}"),
+                            ),
+                            false,
+                            false,
+                        );
                     }
                     MathBlockSegment::StreamingMath(tex) => {
-                        children.push(render_streaming_math_block(
-                            k,
-                            t,
-                            &tex,
-                            &format!("{key_prefix}:smath:{b_idx}"),
-                        ));
+                        push_child(
+                            render_streaming_math_block(
+                                k,
+                                t,
+                                &tex,
+                                &format!("{key_prefix}:smath:{b_idx}"),
+                            ),
+                            false,
+                            false,
+                        );
                     }
                     MathBlockSegment::Markdown(md_chunk) => {
                         for (c_idx, chunk) in split_inline_math_chunks(&md_chunk, streaming)
@@ -353,11 +376,40 @@ pub fn desktop_markdown(
                                     if sub_md.trim().is_empty() {
                                         continue;
                                     }
-                                    children.push(desktop_markdown_chunk(
+                                    let starts_list = markdown_starts_with_list_item(&sub_md);
+                                    let ends_list = markdown_ends_with_list_item(&sub_md);
+                                    push_child(
+                                        desktop_markdown_chunk(
+                                            k,
+                                            t,
+                                            sub_md,
+                                            &format!("{key_prefix}:mc:{b_idx}:{c_idx}"),
+                                            compact,
+                                            streaming,
+                                            reduce_motion,
+                                            workspace_id,
+                                            workspace_path,
+                                            citations,
+                                            external_cache.clone(),
+                                            &hooks,
+                                        ),
+                                        starts_list,
+                                        ends_list,
+                                    );
+                                }
+                                MathChunk::IndentedMarkdown {
+                                    indent_level,
+                                    markdown: sub_md,
+                                    ..
+                                } => {
+                                    if sub_md.trim().is_empty() {
+                                        continue;
+                                    }
+                                    let chunk_el = desktop_markdown_chunk(
                                         k,
                                         t,
                                         sub_md,
-                                        &format!("{key_prefix}:mc:{b_idx}:{c_idx}"),
+                                        &format!("{key_prefix}:imc:{b_idx}:{c_idx}"),
                                         compact,
                                         streaming,
                                         reduce_motion,
@@ -366,20 +418,35 @@ pub fn desktop_markdown(
                                         citations,
                                         external_cache.clone(),
                                         &hooks,
-                                    ));
+                                    );
+                                    push_child(
+                                        col()
+                                            .key(format!("{key_prefix}:imw:{b_idx}:{c_idx}"))
+                                            .w_full()
+                                            .pl((indent_level as f32) * 32.0)
+                                            .child(chunk_el),
+                                        true,
+                                        true,
+                                    );
                                 }
                                 MathChunk::InlineMathParagraph { kind, spans } => {
-                                    children.push(render_inline_math_paragraph(
-                                        k,
-                                        t,
-                                        &kind,
-                                        &spans,
-                                        compact,
-                                        hooks.math_scale,
-                                        hooks.math_waker.as_ref(),
-                                        &format!("{key_prefix}:imp:{b_idx}:{c_idx}"),
-                                        &on_link,
-                                    ));
+                                    let is_list =
+                                        matches!(kind, MathParagraphKind::ListItem { .. });
+                                    push_child(
+                                        render_inline_math_paragraph(
+                                            k,
+                                            t,
+                                            &kind,
+                                            &spans,
+                                            compact,
+                                            hooks.math_scale,
+                                            hooks.math_waker.as_ref(),
+                                            &format!("{key_prefix}:imp:{b_idx}:{c_idx}"),
+                                            &on_link,
+                                        ),
+                                        is_list,
+                                        is_list,
+                                    );
                                 }
                             }
                         }
@@ -389,7 +456,6 @@ pub fn desktop_markdown(
             return col()
                 .key(format!("{key_prefix}:math-root"))
                 .w_full()
-                .gap(if compact { 6.0 } else { 10.0 })
                 .children(children);
         }
     }

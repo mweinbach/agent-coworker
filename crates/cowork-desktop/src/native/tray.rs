@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(not(target_os = "macos"))]
 use rune::tray::{Tray, TrayError, TrayEvent, TrayIcon, TrayItem, TraySpec};
-use rune::{AppHandle, Shortcut, ShortcutId};
+use rune::{AppHandle, Shortcut, ShortcutError, ShortcutId};
 use serde_json::json;
 
 use crate::actions::StoreEvent;
@@ -82,18 +82,23 @@ fn build_tray_bitmap_rgba(size: usize) -> Vec<u8> {
 
 fn handle_tray_activate(handle: &AppHandle<AppState>) {
     handle.update(|state, _| {
+        state.apply_store_event(StoreEvent::MenuInvoked("tray_click".to_string()));
+    });
+}
+
+fn handle_quick_chat_open(handle: &AppHandle<AppState>) {
+    handle.update(|state, _| {
         super::record_quick_chat_opened(
             state.desktop_settings.quick_chat_icon_enabled,
             state.desktop_settings.quick_chat_shortcut_enabled,
         );
         state.apply_store_event(StoreEvent::QuickChatToggled);
     });
-    reveal_and_activate_main_window(handle);
 }
 
 fn handle_tray_menu_action(handle: &AppHandle<AppState>, id: &str) {
     match id {
-        "quick_chat" => handle_tray_activate(handle),
+        "quick_chat" => handle_quick_chat_open(handle),
         "new_chat" => {
             handle.update(|state, _| {
                 state.apply_store_event(StoreEvent::MenuInvoked("new_chat".to_string()));
@@ -272,10 +277,37 @@ struct TrayControllerInner {
     macos_tray_desired: bool,
     shortcut_id: Option<ShortcutId>,
     registered_accelerator: Option<String>,
+    last_shortcut_error: Option<Option<String>>,
     quick_chat_icon_enabled: bool,
     quick_chat_shortcut_enabled: bool,
     quick_chat_accelerator: String,
     menu_bar_enabled: bool,
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn destroy_macos_tray_on_main_thread() {
+    macos_tray::set_app_handle(None);
+    macos_tray::destroy_tray();
+}
+
+fn format_shortcut_registration_error(raw_accel: &str, err: &ShortcutError) -> String {
+    match err {
+        ShortcutError::Conflict => format!(
+            "Quick Chat shortcut ({raw_accel}) is already in use by the system or another app."
+        ),
+        ShortcutError::PermissionDenied => {
+            format!("Permission denied while registering Quick Chat shortcut ({raw_accel}).")
+        }
+        ShortcutError::Unsupported => {
+            "Global Quick Chat shortcuts are unavailable in this desktop session.".to_string()
+        }
+        ShortcutError::InvalidAccelerator(_) => {
+            format!("Quick Chat shortcut ({raw_accel}) is not supported.")
+        }
+        ShortcutError::NotRunning | ShortcutError::UnknownId | ShortcutError::Backend(_) => {
+            format!("Failed to register Quick Chat shortcut ({raw_accel}): {err}")
+        }
+    }
 }
 
 /// Manages system tray presence and the global Quick Chat shortcut registration.
@@ -283,6 +315,7 @@ struct TrayControllerInner {
 pub struct QuickChatTrayController {
     inner: Arc<Mutex<TrayControllerInner>>,
     logger: Option<Arc<LocalLogger>>,
+    emit: Option<Arc<dyn Fn(StoreEvent) + Send + Sync>>,
     #[cfg(target_os = "macos")]
     macos_desired: Arc<AtomicBool>,
 }
@@ -297,9 +330,15 @@ impl QuickChatTrayController {
                 ..Default::default()
             })),
             logger,
+            emit: None,
             #[cfg(target_os = "macos")]
             macos_desired: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn with_emitter(mut self, emit: Arc<dyn Fn(StoreEvent) + Send + Sync>) -> Self {
+        self.emit = Some(emit);
+        self
     }
 
     pub fn sync_from_settings(
@@ -308,18 +347,39 @@ impl QuickChatTrayController {
         menu_bar_enabled: bool,
         app_handle: Option<&AppHandle<AppState>>,
     ) {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.menu_bar_enabled = menu_bar_enabled;
-        guard.quick_chat_icon_enabled = settings.quick_chat_icon_enabled;
-        guard.quick_chat_shortcut_enabled = settings.quick_chat_shortcut_enabled;
-        guard.quick_chat_accelerator = if settings.quick_chat_shortcut.trim().is_empty() {
-            DEFAULT_QUICK_CHAT_ACCELERATOR.to_string()
-        } else {
-            settings.quick_chat_shortcut.clone()
+        let shortcut_status = {
+            let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            guard.menu_bar_enabled = menu_bar_enabled;
+            guard.quick_chat_icon_enabled = settings.quick_chat_icon_enabled;
+            guard.quick_chat_shortcut_enabled = settings.quick_chat_shortcut_enabled;
+            guard.quick_chat_accelerator = if settings.quick_chat_shortcut.trim().is_empty() {
+                DEFAULT_QUICK_CHAT_ACCELERATOR.to_string()
+            } else {
+                settings.quick_chat_shortcut.clone()
+            };
+
+            self.sync_tray_locked(&mut guard, app_handle);
+            self.sync_shortcut_locked(&mut guard, app_handle)
         };
 
-        self.sync_tray_locked(&mut guard, app_handle);
-        self.sync_shortcut_locked(&mut guard, app_handle);
+        if let (Some(error), Some(emit)) = (shortcut_status, self.emit.as_ref()) {
+            emit(StoreEvent::QuickChatShortcutStatus { error });
+        }
+    }
+
+    /// Re-runs tray and shortcut synchronization once `AppHandle` becomes available after startup.
+    pub fn sync_with_handle_if_needed(&self, app_handle: Option<&AppHandle<AppState>>) {
+        let Some(handle) = app_handle else {
+            return;
+        };
+        let shortcut_status = {
+            let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            self.sync_tray_locked(&mut guard, Some(handle));
+            self.sync_shortcut_locked(&mut guard, Some(handle))
+        };
+        if let (Some(error), Some(emit)) = (shortcut_status, self.emit.as_ref()) {
+            emit(StoreEvent::QuickChatShortcutStatus { error });
+        }
     }
 
     pub fn teardown(&self, app_handle: Option<&AppHandle<AppState>>) {
@@ -333,16 +393,44 @@ impl QuickChatTrayController {
             guard.macos_tray_desired = false;
             self.macos_desired.store(false, Ordering::Release);
             macos_tray::set_app_handle(None);
-            if let Some(handle) = app_handle {
+            if let Some(handle) = app_handle
+                && !rune::quitting()
+            {
                 handle.update(|_state, _tx| {
                     macos_tray::destroy_tray();
                 });
             }
         }
-        if let (Some(id), Some(handle)) = (guard.shortcut_id.take(), app_handle) {
+        if let (Some(id), Some(handle)) = (guard.shortcut_id.take(), app_handle)
+            && !rune::quitting()
+        {
             let _ = handle.unregister_shortcut(id);
         }
         guard.registered_accelerator = None;
+        guard.last_shortcut_error = None;
+    }
+
+    /// Shutdown-safe tray & shortcut teardown called from the background worker during `App::on_quit`.
+    ///
+    /// On macOS/Windows, calling `AppHandle::unregister_shortcut` blocks on `Guard::drain` via the
+    /// main UI thread, which deadlocks `on_quit` -> `ShutdownCoordinator::wait_until_done`. Rune
+    /// releases window-host shortcut guards on exit, and `on_shutdown` destroys the macOS status
+    /// item directly on the main thread.
+    pub fn teardown_for_shutdown(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(not(target_os = "macos"))]
+        {
+            guard.tray = None;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            guard.macos_tray_desired = false;
+            self.macos_desired.store(false, Ordering::Release);
+            macos_tray::set_app_handle(None);
+        }
+        guard.shortcut_id = None;
+        guard.registered_accelerator = None;
+        guard.last_shortcut_error = None;
     }
 
     fn sync_tray_locked(
@@ -435,14 +523,24 @@ impl QuickChatTrayController {
         }
     }
 
+    fn update_shortcut_status(
+        guard: &mut TrayControllerInner,
+        next_error: Option<String>,
+    ) -> Option<Option<String>> {
+        if guard.last_shortcut_error.as_ref() != Some(&next_error) {
+            guard.last_shortcut_error = Some(next_error.clone());
+            Some(next_error)
+        } else {
+            None
+        }
+    }
+
     fn sync_shortcut_locked(
         &self,
         guard: &mut TrayControllerInner,
         app_handle: Option<&AppHandle<AppState>>,
-    ) {
-        let Some(handle) = app_handle else {
-            return;
-        };
+    ) -> Option<Option<String>> {
+        let handle = app_handle?;
 
         let desired = if guard.quick_chat_shortcut_enabled {
             Some(guard.quick_chat_accelerator.clone())
@@ -450,8 +548,8 @@ impl QuickChatTrayController {
             None
         };
 
-        if desired == guard.registered_accelerator {
-            return;
+        if desired == guard.registered_accelerator && desired.is_some() {
+            return Self::update_shortcut_status(guard, None);
         }
 
         if let Some(prev_id) = guard.shortcut_id.take() {
@@ -460,34 +558,47 @@ impl QuickChatTrayController {
         guard.registered_accelerator = None;
 
         let Some(raw_accel) = desired else {
-            return;
+            return Self::update_shortcut_status(guard, None);
         };
         let shortcut = match parse_quick_chat_shortcut(&raw_accel) {
             Ok(sc) => sc,
             Err(err) => {
-                if let Some(logger) = &self.logger {
+                let message = format!("Quick Chat shortcut ({raw_accel}) is invalid: {err}");
+                if guard
+                    .last_shortcut_error
+                    .as_ref()
+                    .and_then(Option::as_deref)
+                    != Some(message.as_str())
+                    && let Some(logger) = &self.logger
+                {
                     let meta = json!({ "accelerator": raw_accel, "error": err });
                     logger.warn("tray", "invalid quick chat global shortcut", Some(&meta));
                 }
-                return;
+                return Self::update_shortcut_status(guard, Some(message));
             }
         };
 
-        let handle_for_cb = handle.clone();
         match handle.register_shortcut(shortcut, move |state: &mut AppState, _tx| {
             super::record_quick_chat_opened(
                 state.desktop_settings.quick_chat_icon_enabled,
                 state.desktop_settings.quick_chat_shortcut_enabled,
             );
             state.apply_store_event(StoreEvent::QuickChatToggled);
-            reveal_and_activate_main_window(&handle_for_cb);
         }) {
             Ok(id) => {
                 guard.shortcut_id = Some(id);
                 guard.registered_accelerator = Some(raw_accel);
+                Self::update_shortcut_status(guard, None)
             }
             Err(err) => {
-                if let Some(logger) = &self.logger {
+                let message = format_shortcut_registration_error(&raw_accel, &err);
+                if guard
+                    .last_shortcut_error
+                    .as_ref()
+                    .and_then(Option::as_deref)
+                    != Some(message.as_str())
+                    && let Some(logger) = &self.logger
+                {
                     let meta = json!({ "accelerator": raw_accel, "error": err.to_string() });
                     logger.warn(
                         "tray",
@@ -495,6 +606,7 @@ impl QuickChatTrayController {
                         Some(&meta),
                     );
                 }
+                Self::update_shortcut_status(guard, Some(message))
             }
         }
     }
@@ -503,12 +615,14 @@ impl QuickChatTrayController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::WindowCommand;
 
     #[test]
     fn parses_electron_and_rune_accelerators() {
         assert!(parse_quick_chat_shortcut(DEFAULT_QUICK_CHAT_ACCELERATOR).is_ok());
         assert!(parse_quick_chat_shortcut("CmdOrCtrl+Shift+Space").is_ok());
         assert!(parse_quick_chat_shortcut("Alt+Space").is_ok());
+        assert!(parse_quick_chat_shortcut("Option+Space").is_ok());
         assert!(parse_quick_chat_shortcut("not-a-valid-key-xyz").is_err());
     }
 
@@ -522,5 +636,59 @@ mod tests {
             assert!(opaque_count > 0);
             assert!(transparent_count > 0);
         }
+    }
+
+    #[test]
+    fn tray_click_toggles_utility_and_quick_chat_toggled_toggles_quick_chat() {
+        let mut state = AppState::default();
+        let (window_tx, mut window_rx) = tokio::sync::mpsc::unbounded_channel();
+        state.services.window_tx = Some(window_tx);
+
+        state.apply_store_event(StoreEvent::MenuInvoked("tray_click".to_string()));
+        assert_eq!(
+            window_rx.try_recv().ok(),
+            Some(WindowCommand::ToggleUtility)
+        );
+
+        state.apply_store_event(StoreEvent::QuickChatToggled);
+        assert_eq!(
+            window_rx.try_recv().ok(),
+            Some(WindowCommand::ToggleQuickChat)
+        );
+    }
+
+    #[test]
+    fn formats_shortcut_registration_errors_and_clears_state_on_shutdown() {
+        let conflict = format_shortcut_registration_error("Option+Space", &ShortcutError::Conflict);
+        assert!(conflict.contains("Option+Space"));
+        assert!(conflict.contains("already in use"));
+
+        let unsupported =
+            format_shortcut_registration_error("Alt+Space", &ShortcutError::Unsupported);
+        assert!(unsupported.contains("unavailable"));
+
+        let controller = QuickChatTrayController::new(None);
+        {
+            let mut guard = controller.inner.lock().unwrap();
+            assert_eq!(
+                QuickChatTrayController::update_shortcut_status(&mut guard, Some(conflict.clone())),
+                Some(Some(conflict.clone()))
+            );
+            assert_eq!(
+                QuickChatTrayController::update_shortcut_status(&mut guard, Some(conflict.clone())),
+                None
+            );
+            assert_eq!(
+                QuickChatTrayController::update_shortcut_status(&mut guard, None),
+                Some(None)
+            );
+            guard.registered_accelerator = Some("Alt+Space".to_string());
+            guard.last_shortcut_error = Some(Some(conflict));
+        }
+        controller.teardown_for_shutdown();
+        let guard = controller.inner.lock().unwrap();
+        assert!(guard.shortcut_id.is_none());
+        assert!(guard.registered_accelerator.is_none());
+        assert!(guard.last_shortcut_error.is_none());
     }
 }

@@ -48,6 +48,7 @@ fn render_offscreen_rgba(rt: &mut Runtime<AppState>, dark: bool) -> Vec<u8> {
     let dh = (SNAP_VIEWPORT.1 * scale) as u32;
     let target = Offscreen::new(&gpu.device, dw, dh);
 
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
     renderer.prepare(
         &gpu.device,
         &gpu.queue,
@@ -1216,12 +1217,16 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
             &rgba,
             2.0,
         );
+        assert!(
+            rt.find("canvas-styling-toggle").is_none()
+                && rt.find("canvas-formatting-bar").is_none(),
+            "Styling toggle and formatting bar must stay hidden in Document tab (dark={dark})"
+        );
         let els = rt.elements();
         for key in [
             "canvas-pane",
             "canvas-header",
             "canvas-toolbar",
-            "canvas-formatting-bar",
             "canvas-document-tab",
             "canvas-prompt-footer",
         ] {
@@ -1237,7 +1242,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         }
     }
 
-    // 320px narrow right-rail bounds check: toolbar wraps cleanly inside 320px.
+    // 320px narrow right-rail bounds check (Document starts without Styling bar; Source tab shows Styling + formatting bar cleanly inside 320px).
     let mut s_narrow = build_populated_thread_state(false);
     s_narrow.feature_flags.insert("canvas".to_string(), true);
     s_narrow.active_file_preview = Some(FilePreviewState {
@@ -1258,10 +1263,18 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         Env::new(true, 1.0),
     );
     rt_narrow.frame(0.0);
+    assert!(
+        rt_narrow.find("canvas-styling-toggle").is_none()
+            && rt_narrow.find("canvas-formatting-bar").is_none(),
+        "narrow Document tab must hide Styling toggle and formatting bar"
+    );
+    click_canvas_key(&mut rt_narrow, "segment1");
+    assert_eq!(rt_narrow.state.chat_ui.canvas.active_tab, CanvasTab::Source);
     for key in [
         "canvas-pane",
         "canvas-header",
         "canvas-toolbar",
+        "canvas-styling-toggle",
         "canvas-formatting-bar",
         "canvas-save-btn",
         "canvas-save-as-btn",
@@ -1991,4 +2004,114 @@ fn canvas_pane_live_persistence_edit_save_conflict_reload_and_close_roundtrip() 
             )),
         "closing Canvas must emit document/close for active generation"
     );
+}
+
+#[test]
+fn renders_latex_math_fixture_light_and_dark_cleanly() {
+    let math_doc = "\
+# Solution Summary $$\\Delta = b^2 - 4ac$$
+
+Inline quadratic $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$ and **mass-energy $$E = mc^2$$** [Derivation](https://example.com/quadratic) with [external notes](https://example.com/notes), literal prices $5 and $10, escaped \\$\\$not_math\\$\\$, and code `$$also_not$$`.
+
+- Subscripts $$a_{ij} + b_{jk}$$ inside a list item.
+
+> Quoted relation: $$\\alpha + \\beta = \\gamma$$
+
+```latex
+$$
+\\text{code block stays verbatim}
+$$
+```
+
+$$
+A = \\begin{pmatrix} \\alpha_{11} & \\alpha_{12} \\\\ \\alpha_{21} & \\alpha_{22} \\end{pmatrix}, \\quad \\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}
+$$
+
+$$
+\\sum_{k=0}^{10} \\binom{10}{k} x^{10-k} y^k = x^{10} + 10x^9y + 45x^8y^2 + 120x^7y^3 + 210x^6y^4 + 252x^5y^5 + 210x^4y^6 + 120x^3y^7 + 45x^2y^8 + 10xy^9 + y^{10}
+$$
+
+Malformed fallback: $$\\frac{1}{$$ and streaming tail: $$x + ";
+
+    for dark in [false, true] {
+        let mut s = build_populated_thread_state(dark);
+        let rt_thread = s.thread_runtime_by_id.get_mut("th-demo").unwrap();
+        rt_thread.streaming = true;
+        rt_thread.feed = vec![
+            FeedItem::Message {
+                id: "msg-math-u".into(),
+                role: FeedMessageRole::User,
+                content: "Show inline $$E = mc^2$$, matrix display math, $5 prices, code, malformed, and streaming fallback.".into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_763_100_000_000,
+            },
+            FeedItem::Message {
+                id: "msg-math-a".into(),
+                role: FeedMessageRole::Assistant,
+                content: math_doc.into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![CitationSource {
+                    label: Some("1".into()),
+                    title: Some("Quadratic Formula Proof".into()),
+                    url: "https://example.com/quadratic".into(),
+                    domain: Some("example.com".into()),
+                    snippet: Some("Standard derivation via completing the square.".into()),
+                    reference_id: None,
+                }],
+                streaming: true,
+                timestamp_ms: 1_763_100_010_000,
+            },
+        ];
+        rt_thread.pending_interactions.clear();
+
+        let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba(&mut rt, dark);
+        assert!(
+            rgba.chunks_exact(4).any(|px| px[..3] != rgba[..3]),
+            "rendered math chat frame must not be blank (dark={dark})"
+        );
+        let label = if dark {
+            "chat-math-dark"
+        } else {
+            "chat-math-light"
+        };
+        maybe_save_snap(label, &rgba, 2.0);
+
+        let els = rt.elements();
+        assert!(
+            els.iter().any(|e| {
+                e.key
+                    .as_deref()
+                    .is_some_and(|k| k.starts_with("msg:msg-math-a:math:") && k.ends_with(":img"))
+            }),
+            "expected rendered display math pixel element for msg-math-a"
+        );
+        assert!(
+            els.iter().any(|e| {
+                e.key
+                    .as_deref()
+                    .is_some_and(|k| k.starts_with("msg:msg-math-a:imp:") && k.contains(":m:"))
+            }),
+            "expected inline math element inside paragraph for msg-math-a"
+        );
+        for e in &els {
+            if let Some(k) = e.key.as_deref()
+                && k.starts_with("msg:msg-math-a")
+            {
+                assert!(
+                    e.rect[0] >= -1.0 && e.rect[0] + e.rect[2] <= SNAP_VIEWPORT.0 + 1.0,
+                    "math element `{k}` rect {:?} overflows viewport width {}",
+                    e.rect,
+                    SNAP_VIEWPORT.0
+                );
+            }
+        }
+    }
 }

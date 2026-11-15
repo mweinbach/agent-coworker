@@ -279,6 +279,8 @@ fn build_assistant_message_row(
                 }
             },
         )),
+        math_waker: s.services.waker.clone(),
+        math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
     };
 
     let md_el = desktop_markdown(

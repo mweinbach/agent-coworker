@@ -906,6 +906,7 @@ pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<Subvi
         .child(build_toolbar_row(s, k, &t, &doc, active_tab, dirty));
 
     if doc.kind == CanvasFileKind::Markdown
+        && active_tab == CanvasTab::Source
         && s.chat_ui.canvas.show_formatting_bar
         && !doc.truncated
         && !matches!(
@@ -1059,7 +1060,7 @@ fn build_toolbar_row(
         .gap(6.0)
         .child(el().key("canvas-view-tabs").child(seg.build(k)));
 
-    if doc.kind == CanvasFileKind::Markdown {
+    if doc.kind == CanvasFileKind::Markdown && active_tab == CanvasTab::Source {
         let formatting_on = s.chat_ui.canvas.show_formatting_bar;
         let doc_fmt = doc.clone();
         left_group = left_group.child(
@@ -1636,6 +1637,8 @@ fn build_document_tab(
                     },
                 )),
                 on_citation_click: None,
+                math_waker: s.services.waker.clone(),
+                math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
             },
         )
     } else {

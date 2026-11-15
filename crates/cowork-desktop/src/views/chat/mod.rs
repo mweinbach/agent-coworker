@@ -16,6 +16,7 @@ pub mod icons;
 pub mod interaction;
 pub mod landing;
 pub mod markdown;
+mod math;
 pub mod model;
 #[cfg(test)]
 mod parity_tests;

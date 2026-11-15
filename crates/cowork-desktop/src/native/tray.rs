@@ -82,6 +82,10 @@ fn build_tray_bitmap_rgba(size: usize) -> Vec<u8> {
 
 fn handle_tray_activate(handle: &AppHandle<AppState>) {
     handle.update(|state, _| {
+        super::record_quick_chat_opened(
+            state.desktop_settings.quick_chat_icon_enabled,
+            state.desktop_settings.quick_chat_shortcut_enabled,
+        );
         state.apply_store_event(StoreEvent::QuickChatToggled);
     });
     reveal_and_activate_main_window(handle);
@@ -471,6 +475,10 @@ impl QuickChatTrayController {
 
         let handle_for_cb = handle.clone();
         match handle.register_shortcut(shortcut, move |state: &mut AppState, _tx| {
+            super::record_quick_chat_opened(
+                state.desktop_settings.quick_chat_icon_enabled,
+                state.desktop_settings.quick_chat_shortcut_enabled,
+            );
             state.apply_store_event(StoreEvent::QuickChatToggled);
             reveal_and_activate_main_window(&handle_for_cb);
         }) {

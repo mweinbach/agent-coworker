@@ -1,18 +1,20 @@
 //! Native mobile H3 Remote Access coordinator matching
 //! `apps/desktop/electron/services/mobileRelayBridge.ts` and `cowork-server`'s `/mobile-h3/*` endpoints.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use chrono::DateTime;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::actions::StoreEvent;
 use crate::state::{PrivacyTelemetrySettings, RemoteAccessState, TrustedPhoneSummary};
 
 use super::local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger};
+use super::product_analytics::ProductAnalyticsService;
 use super::server_manager::{
     ServerManager, StartWorkspaceServerOptions, WorkspaceServerFeatureFlags,
 };
@@ -216,6 +218,7 @@ struct RemoteAccessRuntime {
 pub struct RemoteAccessBridge {
     server_manager: ServerManager,
     logger: Option<Arc<LocalLogger>>,
+    analytics: Option<ProductAnalyticsService>,
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
     state: Arc<Mutex<RemoteAccessRuntime>>,
     mutation_lock: Arc<AsyncMutex<()>>,
@@ -231,6 +234,7 @@ impl RemoteAccessBridge {
         Self {
             server_manager,
             logger,
+            analytics: None,
             emit,
             state: Arc::new(Mutex::new(RemoteAccessRuntime {
                 available,
@@ -242,6 +246,11 @@ impl RemoteAccessBridge {
             })),
             mutation_lock: Arc::new(AsyncMutex::new(())),
         }
+    }
+
+    pub fn with_analytics(mut self, analytics: ProductAnalyticsService) -> Self {
+        self.analytics = Some(analytics);
+        self
     }
 
     pub fn current_state(&self) -> RemoteAccessState {
@@ -475,6 +484,14 @@ impl RemoteAccessBridge {
             guard.active_workspace_id = Some(workspace_id.clone());
         }
 
+        let started_at = Instant::now();
+        if let Some(analytics) = &self.analytics {
+            let mut props = BTreeMap::new();
+            props.insert("status".into(), json!("requested"));
+            props.insert("mobilePairingEnabled".into(), json!(true));
+            analytics.capture_event("mobile_pairing_started", &props);
+        }
+
         let result = self
             .server_manager
             .start_workspace_server(StartWorkspaceServerOptions {
@@ -489,13 +506,31 @@ impl RemoteAccessBridge {
             })
             .await;
 
+        let duration_ms = started_at.elapsed().as_millis() as u64;
         match result {
             Ok(started) => {
                 let next =
                     remote_access_state_from_mobile_h3(true, started.mobile_h3.as_ref(), None);
+                if let Some(analytics) = &self.analytics {
+                    let mut props = BTreeMap::new();
+                    props.insert("durationMs".into(), json!(duration_ms));
+                    props.insert(
+                        "status".into(),
+                        json!(if next.running { "ok" } else { "error" }),
+                    );
+                    props.insert("mobilePairingEnabled".into(), json!(next.running));
+                    analytics.capture_event("mobile_pairing_completed", &props);
+                }
                 self.publish_state(next);
             }
             Err(err) => {
+                if let Some(analytics) = &self.analytics {
+                    let mut props = BTreeMap::new();
+                    props.insert("durationMs".into(), json!(duration_ms));
+                    props.insert("status".into(), json!("error"));
+                    props.insert("mobilePairingEnabled".into(), json!(false));
+                    analytics.capture_event("mobile_pairing_completed", &props);
+                }
                 if let Some(logger) = &self.logger {
                     let meta = serde_json::json!({ "workspaceId": workspace_id, "error": err });
                     logger.write(

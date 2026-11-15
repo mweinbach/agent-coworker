@@ -21,9 +21,14 @@ use tokio::sync::Notify;
 use url::Url;
 use uuid::Uuid;
 
+use super::crash_reporting::build_server_crash_reporting_env;
 use super::local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger, strip_url_secrets};
+use super::product_analytics::{
+    PersistedProductAnalyticsState, build_server_product_analytics_env,
+};
 use super::server_platform::{configure_sidecar_command, terminate_process_tree};
 use super::sidecar::{find_sidecar_launch_command, resolve_builtin_dir_for_sidecar};
+use super::telemetry_status::resolve_telemetry_consent;
 use super::validation::{assert_safe_id, assert_workspace_directory};
 use crate::actions::StoreEvent;
 use crate::state::PrivacyTelemetrySettings;
@@ -319,32 +324,52 @@ pub fn build_server_env(
     rotate_mobile_h3_tls: bool,
     privacy: Option<&PrivacyTelemetrySettings>,
 ) -> HashMap<String, String> {
-    let network_disabled = cowork_config::is_network_telemetry_globally_disabled(parent_env);
+    build_server_env_with_analytics(
+        parent_env,
+        user_data_dir,
+        builtin_dir,
+        is_packaged,
+        feature_flags,
+        rotate_mobile_h3_tls,
+        privacy,
+        None,
+    )
+}
+
+/// Constructs the scrubbed environment passed to a child `cowork-server` process,
+/// including desktop-resolved crash reporting and product analytics configuration.
+#[allow(clippy::too_many_arguments)]
+pub fn build_server_env_with_analytics(
+    parent_env: &HashMap<String, String>,
+    user_data_dir: &Path,
+    builtin_dir: Option<&Path>,
+    is_packaged: bool,
+    feature_flags: &WorkspaceServerFeatureFlags,
+    rotate_mobile_h3_tls: bool,
+    privacy: Option<&PrivacyTelemetrySettings>,
+    product_analytics_state: Option<&PersistedProductAnalyticsState>,
+) -> HashMap<String, String> {
+    let mut telemetry_consent_env = parent_env.clone();
+    for key in TELEMETRY_CONSENT_ENV_KEYS {
+        telemetry_consent_env.remove(*key);
+    }
+
+    let default_privacy = PrivacyTelemetrySettings::default();
+    let base_privacy = privacy.unwrap_or(&default_privacy);
+    let consent = resolve_telemetry_consent(base_privacy, &telemetry_consent_env, is_packaged);
+    let effective_privacy = PrivacyTelemetrySettings {
+        ai_trace_telemetry_enabled: consent.ai_trace_telemetry_enabled,
+        ai_trace_payloads_enabled: consent.ai_trace_payloads_enabled,
+        diagnostics_upload_enabled: consent.diagnostics_upload_enabled,
+        crash_reports_enabled: consent.crash_reports_enabled,
+        product_analytics_enabled: consent.product_analytics_enabled,
+        cloud_sync_enabled: consent.cloud_sync_enabled,
+    };
 
     // Determine effective telemetry toggles without letting inherited env vars override user opt-outs.
     let mut next: HashMap<String, String> = HashMap::new();
-    let allow_ai_trace = !network_disabled
-        && privacy.is_some_and(|p| {
-            serde_json::to_value(p)
-                .ok()
-                .and_then(|v| v.get("aiTraceTelemetryEnabled").and_then(Value::as_bool))
-                .unwrap_or(false)
-        });
-    let allow_ai_payloads = allow_ai_trace
-        && privacy.is_some_and(|p| {
-            serde_json::to_value(p)
-                .ok()
-                .and_then(|v| v.get("aiTracePayloadsEnabled").and_then(Value::as_bool))
-                .unwrap_or(false)
-        });
-    let allow_crash_reports = !network_disabled && privacy.is_some_and(|p| p.crash_reports_enabled);
-    let allow_analytics = !network_disabled
-        && privacy.is_some_and(|p| {
-            serde_json::to_value(p)
-                .ok()
-                .and_then(|v| v.get("productAnalyticsEnabled").and_then(Value::as_bool))
-                .unwrap_or(false)
-        });
+    let allow_ai_trace = consent.ai_trace_telemetry_enabled;
+    let allow_ai_payloads = consent.ai_trace_payloads_enabled;
 
     for (key, value) in parent_env {
         if TELEMETRY_CONSENT_ENV_KEYS.contains(&key.as_str()) {
@@ -444,14 +469,23 @@ pub fn build_server_env(
         next.insert("AGENT_OBSERVABILITY_RECORD_PAYLOADS".into(), "false".into());
     }
 
-    next.insert(
-        "COWORK_CRASH_REPORTS_ENABLED".into(),
-        if allow_crash_reports { "true" } else { "false" }.into(),
-    );
-    next.insert(
-        "COWORK_PRODUCT_ANALYTICS_ENABLED".into(),
-        if allow_analytics { "true" } else { "false" }.into(),
-    );
+    for (k, v) in build_server_crash_reporting_env(
+        &effective_privacy,
+        &telemetry_consent_env,
+        is_packaged,
+        None,
+    ) {
+        next.insert(k, v);
+    }
+    for (k, v) in build_server_product_analytics_env(
+        &effective_privacy,
+        product_analytics_state,
+        &telemetry_consent_env,
+        is_packaged,
+        None,
+    ) {
+        next.insert(k, v);
+    }
 
     next
 }
@@ -505,6 +539,7 @@ struct ManagerState {
     workspace_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     start_counts: HashMap<String, usize>,
     last_exits: HashMap<String, LastChildExitRecord>,
+    product_analytics_state: Option<PersistedProductAnalyticsState>,
 }
 
 impl Default for ManagerState {
@@ -517,6 +552,7 @@ impl Default for ManagerState {
             workspace_locks: HashMap::new(),
             start_counts: HashMap::new(),
             last_exits: HashMap::new(),
+            product_analytics_state: None,
         }
     }
 }
@@ -562,6 +598,12 @@ impl ServerManager {
             state: Arc::new(Mutex::new(ManagerState::default())),
             stop_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Stores resolved desktop analytics metadata (`anonymousInstallationId`) for child server env propagation.
+    pub fn set_product_analytics_state(&self, state: PersistedProductAnalyticsState) {
+        let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        guard.product_analytics_state = Some(state);
     }
 
     fn emit(&self, event: StoreEvent) {
@@ -750,7 +792,11 @@ impl ServerManager {
 
         let mobile_h3 = opts.mobile_h3.unwrap_or(false);
         let spawn_args = build_spawn_args(&workspace_path, opts.yolo, mobile_h3);
-        let env = build_server_env(
+        let analytics_state = {
+            let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            guard.product_analytics_state.clone()
+        };
+        let env = build_server_env_with_analytics(
             &parent_env,
             &self.runtime.user_data_dir,
             builtin_dir.as_deref(),
@@ -758,6 +804,7 @@ impl ServerManager {
             &opts.feature_flags,
             opts.rotate_mobile_h3_tls,
             opts.privacy_telemetry.as_ref(),
+            analytics_state.as_ref(),
         );
 
         let spawn_cwd = if self.runtime.is_packaged {
@@ -1965,5 +2012,105 @@ mod tests {
             .unwrap();
         assert_eq!(after_revoke_all["trustedDevices"], json!([]));
         server_task.await.unwrap();
+    }
+
+    #[test]
+    fn build_server_env_with_analytics_propagates_and_suppresses_telemetry_cleanly() {
+        let mut parent = HashMap::new();
+        parent.insert(
+            "COWORK_SENTRY_DSN".into(),
+            "https://pubkey@sentry.example.com/12".into(),
+        );
+        parent.insert("COWORK_SENTRY_ENVIRONMENT".into(), "beta".into());
+        parent.insert("COWORK_POSTHOG_KEY".into(), "phc_desktop_test".into());
+        parent.insert(
+            "COWORK_POSTHOG_HOST".into(),
+            "https://posthog.example.com/".into(),
+        );
+        parent.insert("COWORK_POSTHOG_ENVIRONMENT".into(), "beta".into());
+        parent.insert("COWORK_CRASH_REPORTS_ENABLED".into(), "true".into());
+        parent.insert("COWORK_PRODUCT_ANALYTICS_ENABLED".into(), "true".into());
+
+        let opted_in = PrivacyTelemetrySettings {
+            crash_reports_enabled: true,
+            product_analytics_enabled: true,
+            ..Default::default()
+        };
+        let analytics_state = PersistedProductAnalyticsState {
+            anonymous_installation_id: Some("anon_0123456789abcdef0123456789abcdef".into()),
+            last_app_version: None,
+        };
+        let built = build_server_env_with_analytics(
+            &parent,
+            Path::new("/tmp/userData"),
+            None,
+            true,
+            &WorkspaceServerFeatureFlags::default(),
+            false,
+            Some(&opted_in),
+            Some(&analytics_state),
+        );
+        assert_eq!(
+            built
+                .get("COWORK_CRASH_REPORTS_ENABLED")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            built.get("COWORK_SENTRY_DSN").map(String::as_str),
+            Some("https://pubkey@sentry.example.com/12")
+        );
+        assert_eq!(
+            built.get("COWORK_SENTRY_ENVIRONMENT").map(String::as_str),
+            Some("beta")
+        );
+        assert_eq!(
+            built
+                .get("COWORK_PRODUCT_ANALYTICS_ENABLED")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            built.get("COWORK_POSTHOG_KEY").map(String::as_str),
+            Some("phc_desktop_test")
+        );
+        assert_eq!(
+            built.get("COWORK_POSTHOG_HOST").map(String::as_str),
+            Some("https://posthog.example.com")
+        );
+        assert_eq!(
+            built
+                .get("COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID")
+                .map(String::as_str),
+            Some("anon_0123456789abcdef0123456789abcdef")
+        );
+
+        let mut killed_parent = parent;
+        killed_parent.insert("COWORK_DISABLE_NETWORK_TELEMETRY".into(), "1".into());
+        let killed = build_server_env_with_analytics(
+            &killed_parent,
+            Path::new("/tmp/userData"),
+            None,
+            true,
+            &WorkspaceServerFeatureFlags::default(),
+            false,
+            Some(&opted_in),
+            Some(&analytics_state),
+        );
+        assert_eq!(
+            killed
+                .get("COWORK_CRASH_REPORTS_ENABLED")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            killed
+                .get("COWORK_PRODUCT_ANALYTICS_ENABLED")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert!(!killed.contains_key("COWORK_SENTRY_DSN"));
+        assert!(!killed.contains_key("COWORK_POSTHOG_KEY"));
+        assert!(!killed.contains_key("COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID"));
     }
 }

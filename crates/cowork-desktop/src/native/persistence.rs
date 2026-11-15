@@ -1179,6 +1179,10 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         json!(snapshot.settings.inject_context),
     );
     ds.insert(
+        "showMenuBar".to_string(),
+        json!(snapshot.settings.show_menu_bar),
+    );
+    ds.insert(
         "quickChat".to_string(),
         json!({
             "iconEnabled": snapshot.settings.quick_chat_icon_enabled,
@@ -1677,6 +1681,14 @@ fn sanitize_desktop_settings(raw: Option<&Value>) -> Value {
                 .unwrap_or(defaults.inject_context)
         ),
     );
+    map.insert(
+        "showMenuBar".to_string(),
+        json!(
+            map.get("showMenuBar")
+                .and_then(Value::as_bool)
+                .unwrap_or(defaults.show_menu_bar)
+        ),
+    );
 
     if let Some(order_val) = map.get("sidebarSectionOrder")
         && let Ok(parsed) = serde_json::from_value::<Vec<SidebarSectionKey>>(order_val.clone())
@@ -1903,6 +1915,9 @@ fn core_desktop_settings_from_document(obj: &Map<String, Value>) -> DesktopSetti
         }
         if let Some(v) = ds.get("injectContext").and_then(Value::as_bool) {
             settings.inject_context = v;
+        }
+        if let Some(v) = ds.get("showMenuBar").and_then(Value::as_bool) {
+            settings.show_menu_bar = v;
         }
         if let Some(qc) = ds.get("quickChat").and_then(Value::as_object) {
             if let Some(v) = qc.get("iconEnabled").and_then(Value::as_bool) {
@@ -3020,5 +3035,39 @@ mod tests {
             service.load_core_state().unwrap().settings.accent_palette,
             AccentPalette::default()
         );
+    }
+
+    #[test]
+    fn desktop_show_menu_bar_persists_sanitizes_and_defaults_to_true() {
+        let tmp = tempdir().unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+
+        // Default / absent showMenuBar defaults to true.
+        assert!(service.load_core_state().unwrap().settings.show_menu_bar);
+
+        // Saving false persists through JSON and reloads as false.
+        let mut snap = service.load_core_state().unwrap();
+        snap.settings.show_menu_bar = false;
+        service.merge_and_save_core_snapshot(&snap).unwrap();
+        let stored = service.load_state_value().unwrap();
+        assert_eq!(stored["desktopSettings"]["showMenuBar"], false);
+        assert!(!service.load_core_state().unwrap().settings.show_menu_bar);
+
+        // Non-boolean values fall back to default true during sanitization.
+        let mut invalid_doc = service.load_state_value().unwrap();
+        invalid_doc["desktopSettings"]["showMenuBar"] = json!("never");
+        let sanitized = service.save_state_value(invalid_doc).unwrap();
+        assert_eq!(sanitized["desktopSettings"]["showMenuBar"], true);
+        assert!(service.load_core_state().unwrap().settings.show_menu_bar);
+
+        // Absent showMenuBar (legacy document) resolves cleanly to true.
+        let mut legacy_doc = service.load_state_value().unwrap();
+        legacy_doc["desktopSettings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("showMenuBar");
+        let saved_legacy = service.save_state_value(legacy_doc).unwrap();
+        assert_eq!(saved_legacy["desktopSettings"]["showMenuBar"], true);
+        assert!(service.load_core_state().unwrap().settings.show_menu_bar);
     }
 }

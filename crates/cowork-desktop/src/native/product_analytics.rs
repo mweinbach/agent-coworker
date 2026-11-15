@@ -21,8 +21,9 @@ use crate::state::PrivacyTelemetrySettings;
 
 use super::persistence::PersistenceService;
 use super::telemetry_status::{
-    build_time_env, build_time_http_url, coalesce_env, is_network_telemetry_globally_disabled,
-    normalize_env_value, normalize_http_url, resolve_telemetry_consent,
+    build_time_env, build_time_http_url, coalesce_env, coalesce_env_or_build,
+    is_network_telemetry_globally_disabled, normalize_env_value, normalize_http_url,
+    resolve_telemetry_consent,
 };
 
 const DEFAULT_POSTHOG_HOST: &str = "https://us.i.posthog.com";
@@ -279,9 +280,13 @@ pub fn resolve_product_analytics_config(
         .unwrap_or_else(|| super::resolve_desktop_app_version().to_string());
     let release = coalesce_env(env, &["COWORK_RELEASE", "COWORK_APP_VERSION"])
         .unwrap_or_else(|| app_version.clone());
-    let env_raw = coalesce_env(
+    let env_raw = coalesce_env_or_build(
         env,
         &["COWORK_POSTHOG_ENVIRONMENT", "COWORK_PRODUCT_ANALYTICS_ENV"],
+        &[
+            option_env!("COWORK_POSTHOG_ENVIRONMENT"),
+            option_env!("COWORK_PRODUCT_ANALYTICS_ENV"),
+        ],
     );
     let environment = normalize_environment(env_raw, env, is_packaged);
     let distinct_id = persisted
@@ -1292,5 +1297,27 @@ mod tests {
         assert!(body_joined.contains(&initial_id));
         assert!(body_joined.contains("\"$geoip_disable\":true"));
         assert!(body_joined.contains("\"$process_person_profile\":false"));
+    }
+
+    #[test]
+    fn runtime_env_overrides_build_time_posthog_environment_fallback() {
+        let mut env = HashMap::new();
+        let fallback_raw = coalesce_env_or_build(
+            &env,
+            &["COWORK_POSTHOG_ENVIRONMENT", "COWORK_PRODUCT_ANALYTICS_ENV"],
+            &[Some("production")],
+        );
+        assert_eq!(
+            normalize_environment(fallback_raw, &env, true),
+            "production"
+        );
+
+        env.insert("COWORK_POSTHOG_ENVIRONMENT".to_string(), "beta".to_string());
+        let override_raw = coalesce_env_or_build(
+            &env,
+            &["COWORK_POSTHOG_ENVIRONMENT", "COWORK_PRODUCT_ANALYTICS_ENV"],
+            &[Some("production")],
+        );
+        assert_eq!(normalize_environment(override_raw, &env, true), "beta");
     }
 }

@@ -44,6 +44,14 @@ pub(crate) fn coalesce_env(env: &HashMap<String, String>, keys: &[&str]) -> Opti
     None
 }
 
+pub(crate) fn coalesce_env_or_build(
+    env: &HashMap<String, String>,
+    keys: &[&str],
+    build_fallbacks: &[Option<&'static str>],
+) -> Option<String> {
+    coalesce_env(env, keys).or_else(|| build_fallbacks.iter().find_map(|raw| build_time_env(*raw)))
+}
+
 pub(crate) fn normalize_http_url(raw: Option<&String>) -> Option<String> {
     let candidate = normalize_env_value(raw)?;
     let parsed = url::Url::parse(&candidate).ok()?;

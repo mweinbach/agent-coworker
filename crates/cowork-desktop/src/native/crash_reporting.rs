@@ -23,8 +23,8 @@ use crate::state::PrivacyTelemetrySettings;
 
 use super::local_logs::{DiagnosticsRedactionContext, redact_diagnostic_text, strip_url_secrets};
 use super::telemetry_status::{
-    build_time_env, coalesce_env, is_network_telemetry_globally_disabled, resolve_packaging_mode,
-    resolve_telemetry_consent,
+    build_time_env, coalesce_env, coalesce_env_or_build, is_network_telemetry_globally_disabled,
+    resolve_packaging_mode, resolve_telemetry_consent,
 };
 
 const MAX_BREADCRUMBS: usize = 50;
@@ -180,16 +180,23 @@ pub fn resolve_crash_reporting_config(
         .as_deref()
         .and_then(|raw| parse_sentry_dsn(raw, &client_header));
 
-    let environment = coalesce_env(env, &["COWORK_SENTRY_ENVIRONMENT", "SENTRY_ENVIRONMENT"])
-        .unwrap_or_else(|| {
-            if env.get("NODE_ENV").map(|v| v.trim()) == Some("test") {
-                "test".to_string()
-            } else if is_packaged {
-                "packaged".to_string()
-            } else {
-                "development".to_string()
-            }
-        });
+    let environment = coalesce_env_or_build(
+        env,
+        &["COWORK_SENTRY_ENVIRONMENT", "SENTRY_ENVIRONMENT"],
+        &[
+            option_env!("COWORK_SENTRY_ENVIRONMENT"),
+            option_env!("SENTRY_ENVIRONMENT"),
+        ],
+    )
+    .unwrap_or_else(|| {
+        if env.get("NODE_ENV").map(|v| v.trim()) == Some("test") {
+            "test".to_string()
+        } else if is_packaged {
+            "packaged".to_string()
+        } else {
+            "development".to_string()
+        }
+    });
 
     CrashReportingConfig {
         consent_enabled: consent.crash_reports_enabled,
@@ -1078,5 +1085,30 @@ mod tests {
         assert!(lower.contains("x-sentry-auth: sentry sentry_version=7, sentry_key=pubkey"));
         assert!(reqs[0].contains("\"type\":\"event\""));
         assert!(reqs[0].contains("opened thread"));
+    }
+
+    #[test]
+    fn runtime_env_overrides_build_time_sentry_environment_fallback() {
+        let mut env = HashMap::new();
+        assert_eq!(
+            coalesce_env_or_build(
+                &env,
+                &["COWORK_SENTRY_ENVIRONMENT", "SENTRY_ENVIRONMENT"],
+                &[Some("production")],
+            )
+            .as_deref(),
+            Some("production")
+        );
+
+        env.insert("COWORK_SENTRY_ENVIRONMENT".to_string(), "beta".to_string());
+        assert_eq!(
+            coalesce_env_or_build(
+                &env,
+                &["COWORK_SENTRY_ENVIRONMENT", "SENTRY_ENVIRONMENT"],
+                &[Some("production")],
+            )
+            .as_deref(),
+            Some("beta")
+        );
     }
 }

@@ -142,23 +142,6 @@ pub fn view_tab(s: &AppState, workspace_id: Option<&str>, k: &Kit, t: &ThemeToke
         "Enable ChatGPT apps from the Codex app-server for the current folder or chat.",
     );
 
-    if let Some(ws_id) = workspace_id {
-        let ws_refresh = ws_id.to_string();
-        section = section.action(
-            Button::new("Refresh")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(
-                        SettingsAction::RefreshOpenAiNativeConnectors {
-                            workspace_id: ws_refresh.clone(),
-                        },
-                    ));
-                })
-                .build(k),
-        );
-    }
-
     let status_bar = row()
         .w_full()
         .items_center()

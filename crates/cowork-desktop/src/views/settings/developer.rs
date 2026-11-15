@@ -196,7 +196,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .or_else(|| s.settings_ui.last_diagnostics_bundle_path.clone());
     let summary_text = build_diagnostic_summary_text(s, &runtime_summary);
     let refresh_ws_id = active_target.map(|target| target.id.clone());
-    let mut diagnostics_actions = row().flex_wrap().gap(8.0).child(
+    let mut diagnostics_actions = row().w_full().min_w(0.0).flex_wrap().gap(8.0).child(
         Button::new("Create Diagnostics Bundle")
             .variant(ButtonVariant::Contrast)
             .icon(&icons::ARCHIVE_RESTORE)
@@ -270,7 +270,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     );
 
     let mut diagnostics_section = Section::new()
-        .title("Diagnostics Bundle")
+        .title("Diagnostics bundle")
         .description("Local logs and redacted technical metadata.")
         .action(status_pill(
             if pt.diagnostics_upload_enabled {
@@ -412,7 +412,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
 
     let file_explorer_section = Section::new()
-        .title("File Explorer")
+        .title("File explorer")
         .description("Configure how files are displayed in the workspace.")
         .child(
             SettingsRow::new("Show hidden files")
@@ -433,7 +433,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let (onboarding_label, onboarding_tone) = format_onboarding_status(s);
     let debugging_section = Section::new()
-        .title("System & Debugging")
+        .title("System & debugging")
         .description("Internal visibility and event tracking.")
         .child(
             SettingsRow::new("Developer mode")
@@ -474,7 +474,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let mut overlays = Vec::new();
     let mut overflow_section = Section::new()
-        .title("Large Tool Output Handling")
+        .title("Large tool output handling")
         .description(
             "Save very large tool output to scratch files instead of keeping all of it inline.",
         );
@@ -707,8 +707,15 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .wrap(),
                 );
             }
-            threshold_body =
-                threshold_body.child(row().gap(8.0).flex_wrap().child(save_btn).child(reset_btn));
+            threshold_body = threshold_body.child(
+                row()
+                    .w_full()
+                    .min_w(0.0)
+                    .gap(8.0)
+                    .flex_wrap()
+                    .child(save_btn)
+                    .child(reset_btn),
+            );
 
             overflow_section = overflow_section.child(
                 SettingsRow::new("Spill after this many characters")

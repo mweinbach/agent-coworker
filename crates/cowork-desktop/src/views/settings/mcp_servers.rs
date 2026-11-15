@@ -294,14 +294,6 @@ pub fn view_tab(
     };
 
     let ws_for_add = ws_id.to_string();
-    let add_btn = Button::new("+ Add connector")
-        .variant(ButtonVariant::Contrast)
-        .control_size(ControlSize::Small)
-        .on_press(|s: &mut AppState| {
-            open_create_editor(s);
-        })
-        .build(k);
-
     let mut servers: Vec<&McpServerSummary> = s.mcp_servers.iter().collect();
     servers.sort_by(|a, b| compare_mcp_servers(a, b));
 
@@ -332,16 +324,29 @@ pub fn view_tab(
 
     let mut section = Section::new()
         .title("Custom connectors")
-        .description("Connect remote HTTP/SSE MCP servers or run local stdio tools.")
-        .action(add_btn);
+        .description("Connect remote HTTP/SSE MCP servers or run local stdio tools.");
+
+    if !servers.is_empty() {
+        section = section.action(
+            Button::new("Add connector")
+                .variant(ButtonVariant::Contrast)
+                .icon(&icons::PLUS)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut AppState| {
+                    open_create_editor(s);
+                })
+                .build(k),
+        );
+    }
 
     if servers.is_empty() {
         let empty = EmptyState::new("No custom connectors configured")
             .icon(&icons::WRENCH)
             .description("Add a hosted remote server URL or a local stdio command.")
             .action(
-                Button::new("+ Add connector")
-                    .variant(ButtonVariant::Outline)
+                Button::new("Add connector")
+                    .variant(ButtonVariant::Contrast)
+                    .icon(&icons::PLUS)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
                         open_create_editor(s);

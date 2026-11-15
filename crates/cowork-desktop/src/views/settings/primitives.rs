@@ -126,6 +126,7 @@ impl Section {
 
         let card = col()
             .w_full()
+            .min_w(0.0)
             .radius(k.radius.lg)
             .clip_rounded(k.radius.lg)
             .fill(t.card_bg)
@@ -226,10 +227,10 @@ impl SettingsRow {
             );
         }
         if let Some(body) = self.body {
-            text_col = text_col.child(el().pt(6.0).w_full().child(body));
+            text_col = text_col.child(el().pt(6.0).w_full().min_w(0.0).child(body));
         }
 
-        let mut line = row().w_full().items_center().gap(12.0);
+        let mut line = row().w_full().min_w(0.0).items_center().gap(12.0);
         if let Some(leading) = self.leading {
             line = line.child(el().shrink().child(leading));
         }
@@ -238,7 +239,13 @@ impl SettingsRow {
             line = line.child(row().shrink().items_center().gap(8.0).child(control));
         }
 
-        let mut wrapper = el().w_full().px(16.0).py(13.0).hover(t.hover).child(line);
+        let mut wrapper = el()
+            .w_full()
+            .min_w(0.0)
+            .px(16.0)
+            .py(13.0)
+            .hover(t.hover)
+            .child(line);
 
         if self.danger {
             wrapper = wrapper.fill(k.alpha(t.danger, 0.08));

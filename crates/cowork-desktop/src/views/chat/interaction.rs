@@ -1,6 +1,6 @@
 //! Pending `ask_user`, command execution approval, and file change approval cards.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use cowork_protocol::{JsonRpcLiteId, ServerRequestReceiptResponse};
@@ -687,9 +687,8 @@ fn build_user_input_card(
                 .role("button")
                 .label(opt_label.clone())
                 .on_press(move |s: &mut AppState| {
+                    prune_resolved_ask_state(s);
                     if is_single_immediate {
-                        s.chat_ui.ask_selected_options.remove(&q_key_cb);
-                        s.chat_ui.ask_text_edits.remove(&q_key_cb);
                         s.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
                             workspace_id: ws_imm.clone(),
                             thread_id: tid_imm.clone(),
@@ -890,12 +889,13 @@ fn build_user_input_card(
 
 fn dispatch_ask_skip(
     s: &mut AppState,
-    req_key: &str,
+    _req_key: &str,
     spec: &AskPromptSpec,
     workspace_id: &str,
     thread_id: &str,
     id: &JsonRpcLiteId,
 ) {
+    prune_resolved_ask_state(s);
     if spec.is_multi_structured {
         let mut answers = HashMap::new();
         for q in &spec.questions {
@@ -904,7 +904,6 @@ fn dispatch_ask_skip(
                 serde_json::json!({ "answers": [ASK_SKIP_TOKEN] }),
             );
         }
-        clear_ask_request_state(s, req_key, spec);
         s.dispatch(Action::Chat(ChatAction::SubmitUserInput {
             workspace_id: workspace_id.to_string(),
             thread_id: thread_id.to_string(),
@@ -912,7 +911,6 @@ fn dispatch_ask_skip(
             answers,
         }));
     } else {
-        clear_ask_request_state(s, req_key, spec);
         s.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
             workspace_id: workspace_id.to_string(),
             thread_id: thread_id.to_string(),
@@ -932,6 +930,7 @@ fn dispatch_ask_submit(
     thread_id: &str,
     id: &JsonRpcLiteId,
 ) -> bool {
+    prune_resolved_ask_state(s);
     if !spec.is_multi_structured {
         let q = &spec.questions[0];
         let q_state_key = format!("{req_key}:{}", q.id);
@@ -962,7 +961,6 @@ fn dispatch_ask_submit(
             return false;
         }
         let answer = vals.join(", ");
-        clear_ask_request_state(s, req_key, spec);
         s.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
             workspace_id: workspace_id.to_string(),
             thread_id: thread_id.to_string(),
@@ -996,7 +994,6 @@ fn dispatch_ask_submit(
         answers.insert(q.id.clone(), serde_json::json!({ "answers": vals }));
     }
 
-    clear_ask_request_state(s, req_key, spec);
     s.dispatch(Action::Chat(ChatAction::SubmitUserInput {
         workspace_id: workspace_id.to_string(),
         thread_id: thread_id.to_string(),
@@ -1006,13 +1003,17 @@ fn dispatch_ask_submit(
     true
 }
 
-fn clear_ask_request_state(s: &mut AppState, req_key: &str, spec: &AskPromptSpec) {
-    s.chat_ui.ask_active_question_idx.remove(req_key);
-    for q in &spec.questions {
-        let key = format!("{req_key}:{}", q.id);
-        s.chat_ui.ask_text_edits.remove(&key);
-        s.chat_ui.ask_selected_options.remove(&key);
-    }
+fn prune_resolved_ask_state(s: &mut AppState) {
+    let active_req_keys: HashSet<String> = s
+        .thread_runtime_by_id
+        .values()
+        .flat_map(|rt| rt.pending_interactions.iter())
+        .filter_map(|item| match item {
+            ChatInteraction::UserInput { request_id, .. } => Some(request_id_key(request_id)),
+            _ => None,
+        })
+        .collect();
+    s.chat_ui.retain_active_ask_requests(&active_req_keys);
 }
 
 fn build_card_header(

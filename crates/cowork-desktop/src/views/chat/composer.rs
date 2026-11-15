@@ -106,20 +106,21 @@ pub fn build_composer(
         && runtime.is_some_and(|rt| rt.read_only_notice.is_some() || rt.source_task.is_some());
     let hydrating = runtime.is_some_and(|rt| rt.hydrating);
     let transcript_only = runtime.is_some_and(|rt| rt.transcript_only);
-    let agent_session = s.agent_viewer.is_some();
+    let file_drop_disabled = input_disabled || (!is_landing && transcript_only);
     let thread_disconnected = disconnected
         || (!hydrating
             && !transcript_only
             && thread.is_some_and(|tr| tr.status != crate::state::ThreadStatus::Active));
     let session_missing = thread.is_some_and(|tr| tr.session_id.is_none());
+    let is_draft = thread.is_some_and(|tr| tr.draft);
+    // Note: `ThreadRuntime` does not carry `session_kind` yet; opening `AgentRunViewer`
+    // inspects a child run without locking the main thread's selectors.
     let non_draft_locked = thread.is_some_and(|tr| !tr.draft)
-        && (streaming
-            || hydrating
-            || transcript_only
-            || thread_disconnected
-            || agent_session
-            || session_missing);
+        && (streaming || hydrating || transcript_only || thread_disconnected || session_missing);
+    let stream_submit_blocked =
+        !is_landing && streaming && !is_draft && (thread_disconnected || session_missing);
     let can_submit = !input_disabled
+        && !stream_submit_blocked
         && composer_can_submit(
             &s.composer_edit.text,
             draft,
@@ -127,7 +128,18 @@ pub fn build_composer(
             usage_hard_cap,
         );
 
-    let input_area = build_composer_input_area(s, k, t, &catalog, is_landing, input_disabled);
+    let status_disconnected = !is_landing && !hydrating && !transcript_only && thread_disconnected;
+    let input_area = build_composer_input_area(
+        s,
+        k,
+        t,
+        &catalog,
+        is_landing,
+        input_disabled,
+        transcript_only,
+        status_disconnected,
+        ws_reconnecting,
+    );
     let attachments_strip = build_draft_attachments_row(s, k, t, &key, draft, input_disabled);
     let footer = build_composer_footer(
         s,
@@ -146,7 +158,7 @@ pub fn build_composer(
             non_draft_locked,
             can_submit,
             usage_hard_cap,
-            disconnected,
+            disconnected: status_disconnected,
             ws_reconnecting,
         },
     );
@@ -156,7 +168,7 @@ pub fn build_composer(
     }
 
     let radius = if is_landing { 22.0 } else { 16.0 };
-    let border_color = if s.chat_ui.composer_drop_hover && !input_disabled {
+    let border_color = if s.chat_ui.composer_drop_hover && !file_drop_disabled {
         t.accent
     } else if s.composer_edit.focused && !input_disabled {
         t.border_strong
@@ -170,7 +182,7 @@ pub fn build_composer(
         .radius(radius)
         .fill(t.input_bg)
         .border(1.0, border_color);
-    if !input_disabled {
+    if !file_drop_disabled {
         card = card
             .on_drop_hover(|s: &mut AppState, over, _| {
                 s.chat_ui.composer_drop_hover = over;
@@ -201,7 +213,8 @@ pub fn build_composer(
     }
     stack = stack.child(card);
     if !is_landing
-        && let Some(hint) = build_composer_status_hint(k, t, runtime, disconnected, ws_reconnecting)
+        && let Some(hint) =
+            build_composer_status_hint(k, t, runtime, status_disconnected, ws_reconnecting)
     {
         stack = stack.child(hint);
     }
@@ -221,6 +234,7 @@ pub fn build_composer(
         .child(col().w_full().max_w(COMPOSER_MAX_WIDTH).child(stack))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_composer_input_area(
     s: &AppState,
     k: &Kit,
@@ -228,11 +242,22 @@ fn build_composer_input_area(
     catalog: &MentionCatalog,
     is_landing: bool,
     input_disabled: bool,
+    transcript_only: bool,
+    disconnected: bool,
+    ws_reconnecting: bool,
 ) -> El {
     let decorations =
         super::components::composer_mention_spans(&s.composer_edit.text, catalog, k, t);
     let placeholder = if input_disabled {
         "Read-only conversation"
+    } else if !is_landing && transcript_only {
+        "Continue in a new thread..."
+    } else if disconnected {
+        if ws_reconnecting {
+            "Reconnecting automatically... Keep writing."
+        } else {
+            "Write a message to reconnect..."
+        }
     } else if is_landing {
         "Ask anything, @ to mention a skill or plugin, / for commands..."
     } else {
@@ -635,7 +660,7 @@ fn build_model_selector(
 
     let model_disabled = ctx.input_disabled || ctx.non_draft_locked;
     let mut trigger = row()
-        .key("composer-model-picker-trigger")
+        .key("composer-model-picker-button")
         .role("combobox")
         .label("Model")
         .disabled(model_disabled)
@@ -1088,6 +1113,9 @@ fn build_composer_status_hint(
 pub fn submit_composer_message(s: &mut AppState) {
     let key = s.composer_key();
     let thread_id = s.nav.current().active_thread_id.clone();
+    let tr_ref = thread_id
+        .as_deref()
+        .and_then(|id| s.threads.iter().find(|t| t.id == id));
     let rt_ref = thread_id
         .as_deref()
         .and_then(|id| s.thread_runtime_by_id.get(id));
@@ -1095,6 +1123,28 @@ pub fn submit_composer_message(s: &mut AppState) {
         return;
     }
     let streaming = rt_ref.is_some_and(|rt| rt.streaming);
+    let hydrating = rt_ref.is_some_and(|rt| rt.hydrating);
+    let transcript_only = rt_ref.is_some_and(|rt| rt.transcript_only);
+    let ws_id = resolve_composer_workspace(s, tr_ref, tr_ref.is_none()).map(|w| w.id.as_str());
+    let sock = ws_id.and_then(|id| s.workspace_socket_by_id.get(id));
+    let sock_disconnected = ws_id.is_some()
+        && !matches!(
+            sock,
+            Some(
+                WsConnectionState::Connected
+                    | WsConnectionState::Connecting
+                    | WsConnectionState::Handshaking
+            )
+        );
+    let thread_disconnected = sock_disconnected
+        || (!hydrating
+            && !transcript_only
+            && tr_ref.is_some_and(|tr| tr.status != crate::state::ThreadStatus::Active));
+    let session_missing = tr_ref.is_some_and(|tr| tr.session_id.is_none());
+    let is_draft = tr_ref.is_some_and(|tr| tr.draft);
+    if tr_ref.is_some() && streaming && !is_draft && (thread_disconnected || session_missing) {
+        return;
+    }
     let attachment_ingesting = rt_ref.is_some_and(|rt| rt.attachment_ingesting);
     let usage_hard_cap = rt_ref.is_some_and(|rt| rt.usage_hard_cap_reached);
 

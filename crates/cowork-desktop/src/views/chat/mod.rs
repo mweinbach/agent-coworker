@@ -45,6 +45,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
         s.desktop_settings.high_contrast,
     );
 
+    let chat_view_width = cx.layout_size("chat-view").map(|[w, _]| w);
     let mut overlays = Vec::new();
     let content = if let Some(thread) = s.active_thread() {
         let rt = s.active_thread_runtime();
@@ -130,10 +131,27 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .key("chat-view")
             .w_full()
             .grow(1.0)
+            .min_w(0.0)
             .min_h(0.0)
             .child(main_col);
-        if let Some(drawer) = build_agent_run_drawer(s, k, &t) {
-            split = split.child(drawer);
+        if let Some(drawer) = build_agent_run_drawer(s, k, &t, chat_view_width) {
+            if chat_view_width.is_some_and(|w| w < 820.0) {
+                split = split.child(
+                    col()
+                        .key("agent-run-viewer-backdrop")
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .fill(t.scrim)
+                        .items_end()
+                        .modal(true, |s: &mut AppState| {
+                            s.dispatch(crate::actions::Action::Chat(
+                                crate::actions::ChatAction::CloseAgentViewer,
+                            ));
+                        })
+                        .child(drawer),
+                );
+            } else {
+                split = split.child(drawer);
+            }
         }
         split
     } else {

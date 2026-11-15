@@ -5,7 +5,7 @@ use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
 use rune::{Cx, El, Env, Runtime, TextEdit, el, row};
 use serde_json::json;
 
-use crate::actions::{Action, NavAction};
+use crate::actions::{Action, NavAction, StoreEvent};
 use crate::state::{
     AgentViewerState, AppState, ChatInteraction, ChatViewReadOnlyNotice, CitationSource,
     ComposerDraft, FeedItem, FeedMessageRole, ONE_OFF_LANDING_SENTINEL, PluginSummary,
@@ -563,7 +563,7 @@ fn non_draft_busy_thread_disables_model_and_reasoning_selectors() {
     let els = rt.elements();
     let model_picker = els
         .iter()
-        .find(|e| e.key.as_deref() == Some("composer-model-picker-trigger"))
+        .find(|e| e.key.as_deref() == Some("composer-model-picker-button"))
         .expect("Model selector trigger must be present in elements");
     assert!(
         !model_picker.focusable,
@@ -826,5 +826,240 @@ fn quick_chat_landing_and_review_55_fixes_hold_in_runtime() {
         interrupt_tid.as_deref(),
         Some("th-demo"),
         "CancelSubagentsDialog must interrupt originating captured thread_id even after switching active thread"
+    );
+}
+
+#[test]
+fn review_72_and_79_ask_preservation_composer_locks_and_overlay_viewer() {
+    // 1) Failed WS send keeps pending Ask card open and preserves selected options & typed text.
+    let mut s_ask = build_populated_thread_state(false);
+    s_ask
+        .thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .pending_interactions = vec![
+        ChatInteraction::UserInput {
+            request_id: JsonRpcLiteId::String("req-keep".into()),
+            item_id: "ask-keep".into(),
+            questions: json!({
+                "id": "frameworks",
+                "question": "Select frameworks",
+                "multiSelect": true,
+                "options": ["Rune", "Taffy"]
+            }),
+        },
+        ChatInteraction::UserInput {
+            request_id: JsonRpcLiteId::String("req-stale".into()),
+            item_id: "ask-stale".into(),
+            questions: json!({
+                "id": "stale_q",
+                "question": "Stale"
+            }),
+        },
+    ];
+    s_ask
+        .chat_ui
+        .ask_text_edits
+        .insert("req-keep:frameworks".into(), TextEdit::new("Custom keep"));
+    s_ask
+        .chat_ui
+        .ask_text_edits
+        .insert("req-stale:stale_q".into(), TextEdit::new("Old answer"));
+
+    let mut rt_ask = Runtime::new(s_ask, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_ask.frame(0.0);
+
+    // Select option 0, mark stale as confirmed before click, then click Send and fail req-keep via WS error.
+    let (ox, oy) = rt_ask
+        .find("ask-opt:req-keep:frameworks:0")
+        .expect("ask option must exist");
+    rt_ask.pointer_move(ox, oy);
+    rt_ask.pointer_down(ox, oy);
+    rt_ask.pointer_up(ox, oy);
+    rt_ask.frame(0.0);
+
+    rt_ask.update(|st, _| {
+        st.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-demo".into(),
+            request_id: JsonRpcLiteId::String("req-stale".into()),
+            ok: true,
+            error: None,
+        });
+    });
+
+    let (sx, sy) = rt_ask
+        .find("ask-send:req-keep")
+        .expect("ask-send must exist");
+    rt_ask.pointer_move(sx, sy);
+    rt_ask.pointer_down(sx, sy);
+    rt_ask.pointer_up(sx, sy);
+    rt_ask.frame(0.0);
+
+    // Simulate WS write failure for req-keep: pending card stays open AND user answers remain intact.
+    rt_ask.update(|st, _| {
+        st.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-demo".into(),
+            request_id: JsonRpcLiteId::String("req-keep".into()),
+            ok: false,
+            error: Some("Socket disconnected".into()),
+        });
+    });
+    assert!(
+        rt_ask
+            .state
+            .chat_ui
+            .ask_selected_options
+            .get("req-keep:frameworks")
+            .is_some_and(|v| v == &vec!["Rune".to_string()]),
+        "selected options must survive failed Ask WS send"
+    );
+    assert_eq!(
+        rt_ask
+            .state
+            .chat_ui
+            .ask_text_edits
+            .get("req-keep:frameworks")
+            .map(|e| e.text.as_str()),
+        Some("Custom keep"),
+        "typed answer must survive failed Ask WS send"
+    );
+    assert!(
+        !rt_ask
+            .state
+            .chat_ui
+            .ask_text_edits
+            .contains_key("req-stale:stale_q"),
+        "confirmed ask state must be pruned once removed from pending_interactions"
+    );
+
+    // 2) Opening AgentRunViewer does NOT lock parent thread model selector; narrow chat_view switches viewer to overlay.
+    let mut s_lock = build_populated_thread_state(false);
+    s_lock.agent_viewer = Some(AgentViewerState {
+        thread_id: "th-demo".into(),
+        agent_id: "agent-sub-1".into(),
+        title: "Verifier".into(),
+    });
+    let mut rt_lock = Runtime::new(s_lock, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_lock.frame(0.0);
+    let model_el = rt_lock
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("composer-model-picker-button"))
+        .expect("model picker must exist");
+    assert!(
+        model_el.focusable,
+        "opening AgentRunViewer inspector must not lock parent thread's model selector"
+    );
+
+    // Narrow viewport (< 820pt) renders AgentRunViewer inside overlay backdrop without shrinking chat-main.
+    let mut rt_narrow = Runtime::new(
+        build_populated_thread_state(false),
+        test_chat_root,
+        (700.0, 820.0),
+        Env::new(true, 1.0),
+    );
+    rt_narrow.update(|st, _| {
+        st.agent_viewer = Some(AgentViewerState {
+            thread_id: "th-demo".into(),
+            agent_id: "agent-sub-1".into(),
+            title: "Verifier".into(),
+        });
+    });
+    rt_narrow.frame(0.0);
+    rt_narrow.frame(0.0);
+    let els_narrow = rt_narrow.elements();
+    assert!(
+        els_narrow
+            .iter()
+            .any(|e| e.key.as_deref() == Some("agent-run-viewer-backdrop")),
+        "AgentRunViewer must render as right overlay when chat-view width < 820pt"
+    );
+    let main_narrow = els_narrow
+        .iter()
+        .find(|e| e.key.as_deref() == Some("chat-main"))
+        .expect("chat-main must exist");
+    assert!(
+        main_narrow.rect[2] >= 690.0,
+        "overlay AgentRunViewer must preserve full chat-main width {}, avoiding 4-pane squeeze",
+        main_narrow.rect[2]
+    );
+
+    // 3) Streaming with missing session blocks submit_composer_message; transcript_only blocks file drop & model selector.
+    let mut s_stream = build_populated_thread_state(false);
+    s_stream.threads[0].session_id = None;
+    s_stream
+        .thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .streaming = true;
+    s_stream.composer_edit = TextEdit::new("Should not steer without session");
+    let cmds_before = s_stream.services.emitted_ws_commands.len();
+    chat::composer::submit_composer_message(&mut s_stream);
+    assert_eq!(
+        s_stream.services.emitted_ws_commands.len(),
+        cmds_before,
+        "submit_composer_message must block steer when streaming lacks active session_id"
+    );
+    assert_eq!(
+        s_stream.composer_edit.text, "Should not steer without session",
+        "blocked steer must keep composer draft untouched"
+    );
+
+    let mut s_to = build_populated_thread_state(false);
+    s_to.thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .transcript_only = true;
+    let mut rt_to = Runtime::new(s_to, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_to.frame(0.0);
+    let to_els = rt_to.elements();
+    let card_to = to_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("chat-composer-card"))
+        .expect("composer card must exist");
+    let model_to = to_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("composer-model-picker-button"))
+        .expect("model picker must exist");
+    assert!(
+        !model_to.focusable,
+        "transcript_only thread must disable model selector"
+    );
+
+    let tmp_drop = std::env::temp_dir().join("cowork_chat_transcript_only_drop_test.txt");
+    std::fs::write(&tmp_drop, b"drop payload").unwrap();
+    let drop_pt = (
+        card_to.rect[0] + card_to.rect[2] * 0.5,
+        card_to.rect[1] + card_to.rect[3] * 0.5,
+    );
+    rt_to.drop_files(vec![tmp_drop.clone()], Some(drop_pt));
+    rt_to.frame(0.0);
+    assert!(
+        rt_to
+            .state
+            .composer_drafts
+            .get("th-demo")
+            .is_none_or(|d| d.attachments.is_empty()),
+        "chat-composer-card must disable file drop on transcript_only threads"
+    );
+
+    // Control: dropping the same file onto an active thread ingests it cleanly.
+    rt_to.update(|st, _| {
+        st.thread_runtime_by_id
+            .get_mut("th-demo")
+            .unwrap()
+            .transcript_only = false;
+    });
+    rt_to.frame(0.0);
+    rt_to.drop_files(vec![tmp_drop.clone()], Some(drop_pt));
+    rt_to.frame(0.0);
+    let _ = std::fs::remove_file(&tmp_drop);
+    assert!(
+        rt_to
+            .state
+            .composer_drafts
+            .get("th-demo")
+            .is_some_and(|d| !d.attachments.is_empty()),
+        "normal active thread must still accept dropped files on composer card"
     );
 }

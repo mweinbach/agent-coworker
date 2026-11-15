@@ -10,6 +10,7 @@ import {
   WIN_SANDBOX_PREBUILT_LOCK_NAME,
   type WinSandboxPrebuiltLock,
 } from "../scripts/winSandboxPrebuilt";
+import { hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/scratchRoots";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
@@ -262,6 +263,51 @@ describe("desktop resource build helpers", () => {
   function prebuiltTest(name: string, fn: () => Promise<void>): void {
     test(name, fn, PREBUILT_TEST_TIMEOUT_MS);
   }
+
+  test.skipIf(hostPlatform() !== "win32")(
+    "extracts a ZIP when the parent module path contains an incompatible archive module",
+    async () => {
+      const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-archive-"));
+      try {
+        const modules = path.join(root, "modules");
+        const moduleDir = path.join(modules, "Microsoft.PowerShell.Archive");
+        await fs.mkdir(moduleDir, { recursive: true });
+        await fs.writeFile(
+          path.join(moduleDir, "Microsoft.PowerShell.Archive.psm1"),
+          "function Expand-Archive { throw 'Incompatible archive module loaded' }\n" +
+            "Export-ModuleMember -Function Expand-Archive\n",
+        );
+
+        const archive = path.join(root, "fixture.zip");
+        const destination = path.join(root, "extracted");
+        await fs.writeFile(archive, buildStoredZipBuffer({ "helper.txt": "fixture contents" }));
+
+        const helperUrl = new URL("../scripts/releaseBuildUtils.ts", import.meta.url).href;
+        const env = Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"),
+        );
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            "--eval",
+            `import { extractZipArchive } from ${JSON.stringify(helperUrl)}; await extractZipArchive(process.argv[1], process.argv[2]);`,
+            "--",
+            archive,
+            destination,
+          ],
+          { env: { ...env, PsModulePath: modules }, stderr: "inherit" },
+        );
+
+        expect(await child.exited).toBe(0);
+        await expect(fs.readFile(path.join(destination, "helper.txt"), "utf8")).resolves.toBe(
+          "fixture contents",
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    PREBUILT_TEST_TIMEOUT_MS,
+  );
 
   function recordingFetch(responder: (url: string) => Response): {
     fetchImpl: typeof fetch;

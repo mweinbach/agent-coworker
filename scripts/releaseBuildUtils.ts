@@ -171,6 +171,10 @@ function psQuoteSingle(value: string): string {
 
 export async function extractZipArchive(archivePath: string, destDir: string): Promise<void> {
   if (process.platform === "win32") {
+    // Let Windows PowerShell rebuild its module path so it uses its own archive module.
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"),
+    );
     const command = `Expand-Archive -Path ${psQuoteSingle(archivePath)} -DestinationPath ${psQuoteSingle(destDir)} -Force`;
     await runCommand(
       [
@@ -182,7 +186,7 @@ export async function extractZipArchive(archivePath: string, destDir: string): P
         "-Command",
         command,
       ],
-      { cwd: path.dirname(destDir) },
+      { cwd: path.dirname(destDir), env },
     );
     return;
   }

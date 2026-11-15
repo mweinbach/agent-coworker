@@ -5423,6 +5423,23 @@ impl AppState {
             &catalog_params,
             true,
         );
+        let status_params = ProviderStatusRefreshParams {
+            cwd: cwd.clone(),
+            refresh_bedrock_discovery: Some(false),
+        };
+        let _ = self.send_ws_typed(
+            workspace_id,
+            "cowork/provider/status/refresh",
+            &status_params,
+            true,
+        );
+        let auth_methods_params = ProviderAuthMethodsReadParams { cwd: cwd.clone() };
+        let _ = self.send_ws_typed(
+            workspace_id,
+            "cowork/provider/authMethods/read",
+            &auth_methods_params,
+            true,
+        );
         let connectors_params = ConnectorsOpenAiNativeListParams { cwd: cwd.clone() };
         let _ = self.send_ws_typed(
             workspace_id,
@@ -6282,6 +6299,12 @@ impl AppState {
             "agent_profiles_catalog" => {
                 self.apply_agent_profiles_catalog_event(evt);
             }
+            "provider_catalog" => {
+                self.apply_provider_catalog_event(evt);
+            }
+            "provider_status" => {
+                self.apply_provider_status_event(workspace_id, evt);
+            }
             "memory_list" => {
                 self.apply_memory_list_event(evt);
             }
@@ -6481,18 +6504,12 @@ impl AppState {
                 let target = payload.get("event").unwrap_or(&payload);
                 self.apply_session_config_event(workspace_id, target);
             }
-            "cowork/provider/catalog/read" => {
-                let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target
-                    .get("providers")
-                    .or_else(|| target.get("catalog"))
-                    .and_then(Value::as_array)
-                {
-                    self.provider_catalog = arr
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<ProviderSummary>(v.clone()).ok())
-                        .collect();
-                }
+            "cowork/provider/catalog/read"
+            | "cowork/provider/customModel/add"
+            | "cowork/provider/customModel/delete"
+            | "cowork/provider/model/setEnabled"
+            | "cowork/provider/model/resetEnabled" => {
+                self.apply_provider_catalog_event(&payload);
             }
             "cowork/provider/authMethods/read" => {
                 let target = payload.get("event").unwrap_or(&payload);
@@ -6511,19 +6528,7 @@ impl AppState {
                 }
             }
             "cowork/provider/status/refresh" => {
-                let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target.get("statuses").and_then(Value::as_array) {
-                    let statuses: Vec<ProviderStatusSummary> = arr
-                        .iter()
-                        .filter_map(|v| {
-                            serde_json::from_value::<ProviderStatusSummary>(v.clone()).ok()
-                        })
-                        .collect();
-                    self.workspace_runtime_by_id
-                        .entry(workspace_id.to_string())
-                        .or_default()
-                        .provider_statuses = statuses;
-                }
+                self.apply_provider_status_event(workspace_id, &payload);
             }
             "cowork/provider/auth/authorize" => {
                 self.last_auth_challenge = Some(payload);
@@ -7358,6 +7363,64 @@ impl AppState {
             || evt.get("userServers").is_some()
         {
             self.mcp_servers = servers;
+        }
+    }
+
+    fn apply_provider_catalog_event(&mut self, evt: &Value) {
+        let target = evt.get("event").unwrap_or(evt);
+        let connected: HashSet<&str> = target
+            .get("connected")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if let Some(defaults) = target.get("default").and_then(Value::as_object) {
+            for (prov, model_val) in defaults {
+                if let Some(model) = model_val.as_str().filter(|m| !m.trim().is_empty()) {
+                    self.default_model_by_provider
+                        .insert(prov.clone(), model.to_string());
+                }
+            }
+        }
+        if let Some(arr) = target
+            .get("all")
+            .or_else(|| target.get("providers"))
+            .or_else(|| target.get("catalog"))
+            .and_then(Value::as_array)
+        {
+            for v in arr {
+                if let (Some(id), Some(def)) = (
+                    v.get("id").and_then(Value::as_str),
+                    v.get("defaultModel")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty()),
+                ) {
+                    self.default_model_by_provider
+                        .entry(id.to_string())
+                        .or_insert_with(|| def.to_string());
+                }
+            }
+            self.provider_catalog = arr
+                .iter()
+                .filter_map(|v| parse_provider_summary(v, &connected))
+                .collect();
+        }
+    }
+
+    fn apply_provider_status_event(&mut self, workspace_id: &str, evt: &Value) {
+        let target = evt.get("event").unwrap_or(evt);
+        if let Some(arr) = target
+            .get("providers")
+            .or_else(|| target.get("statuses"))
+            .and_then(Value::as_array)
+        {
+            let statuses: Vec<ProviderStatusSummary> = arr
+                .iter()
+                .filter_map(parse_provider_status_summary)
+                .collect();
+            self.workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default()
+                .provider_statuses = statuses;
         }
     }
 
@@ -8375,6 +8438,131 @@ fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
         skill_count,
         mcp_count,
         subagent_count,
+    })
+}
+
+fn parse_provider_model_summary(v: &Value) -> Option<ProviderModelSummary> {
+    let id = v.get("id").and_then(Value::as_str)?.to_string();
+    let name = v
+        .get("name")
+        .or_else(|| v.get("displayName"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(&id)
+        .to_string();
+    let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let custom = v
+        .get("custom")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| v.get("origin").and_then(Value::as_str) == Some("custom"));
+    let reasoning_efforts: Vec<String> = v
+        .get("reasoningEfforts")
+        .or_else(|| v.pointer("/reasoning/availableEfforts"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let supports_reasoning = v
+        .get("supportsReasoning")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| v.get("reasoning").is_some() || !reasoning_efforts.is_empty());
+    Some(ProviderModelSummary {
+        id,
+        name,
+        enabled,
+        custom,
+        supports_reasoning,
+        reasoning_efforts,
+    })
+}
+
+fn parse_provider_summary(v: &Value, connected: &HashSet<&str>) -> Option<ProviderSummary> {
+    let id = v.get("id").and_then(Value::as_str)?.to_string();
+    let name = v
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(&id)
+        .to_string();
+    let configured = v
+        .get("configured")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            connected.contains(id.as_str())
+                || v.get("state").and_then(Value::as_str) == Some("ready")
+        });
+    let models = v
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(parse_provider_model_summary)
+                .collect()
+        })
+        .unwrap_or_default();
+    let config = v.get("config").cloned().unwrap_or_else(|| v.clone());
+    let capabilities = v.get("capabilities").cloned().unwrap_or(Value::Null);
+    Some(ProviderSummary {
+        id,
+        name,
+        configured,
+        models,
+        config,
+        capabilities,
+    })
+}
+
+fn parse_provider_status_summary(v: &Value) -> Option<ProviderStatusSummary> {
+    let provider = v.get("provider").and_then(Value::as_str)?.to_string();
+    let authorized = v.get("authorized").and_then(Value::as_bool);
+    let verified = v.get("verified").and_then(Value::as_bool);
+    let healthy = v
+        .get("healthy")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| verified.unwrap_or(false) || authorized.unwrap_or(false));
+    let connected = v
+        .get("connected")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| authorized.unwrap_or(healthy));
+    let auth_method = v
+        .get("authMethod")
+        .or_else(|| v.get("methodId"))
+        .or_else(|| v.get("mode"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let detail = v
+        .get("detail")
+        .or_else(|| v.get("message"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let saved_api_key_mask = v
+        .get("savedApiKeyMask")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("savedApiKeyMasks")
+                .and_then(Value::as_object)
+                .and_then(|m| m.values().find_map(Value::as_str))
+                .map(str::to_string)
+        });
+    let source = v.get("source").and_then(Value::as_str).map(str::to_string);
+    let usage = v.get("usage").cloned();
+    let rate_limits = v.get("rateLimits").cloned();
+    Some(ProviderStatusSummary {
+        provider,
+        healthy,
+        connected,
+        auth_method,
+        detail,
+        saved_api_key_mask,
+        source,
+        usage,
+        rate_limits,
     })
 }
 
@@ -11885,5 +12073,94 @@ mod tests {
         assert_eq!(state.skills[0].source.as_deref(), Some("marketplace"));
         assert_eq!(state.skills[0].version.as_deref(), Some("1.2.0"));
         assert!(!state.skills[0].enabled);
+    }
+
+    #[test]
+    fn provider_catalog_and_status_parse_live_server_payloads() {
+        let mut state = AppState::default();
+        state.apply_ws_response(
+            "ws-1",
+            1,
+            "cowork/provider/catalog/read",
+            Ok(json!({
+                "event": {
+                    "type": "provider_catalog",
+                    "sessionId": "s-1",
+                    "all": [{
+                        "id": "openai",
+                        "name": "OpenAI",
+                        "defaultModel": "gpt-5.4",
+                        "state": "ready",
+                        "models": [{
+                            "id": "gpt-5.4",
+                            "displayName": "GPT-5.4",
+                            "knowledgeCutoff": "2025-03",
+                            "supportsImageInput": true,
+                            "reasoning": {
+                                "defaultEffort": "medium",
+                                "availableEfforts": ["low", "medium", "high"]
+                            }
+                        }]
+                    }],
+                    "default": { "openai": "gpt-5.4" },
+                    "connected": ["openai"]
+                }
+            })),
+        );
+        assert_eq!(state.provider_catalog.len(), 1);
+        assert_eq!(state.provider_catalog[0].id, "openai");
+        assert!(state.provider_catalog[0].configured);
+        assert_eq!(state.provider_catalog[0].models.len(), 1);
+        assert_eq!(state.provider_catalog[0].models[0].name, "GPT-5.4");
+        assert!(state.provider_catalog[0].models[0].enabled);
+        assert!(state.provider_catalog[0].models[0].supports_reasoning);
+        assert_eq!(
+            state.provider_catalog[0].models[0].reasoning_efforts,
+            vec!["low", "medium", "high"]
+        );
+        assert_eq!(
+            state
+                .default_model_by_provider
+                .get("openai")
+                .map(String::as_str),
+            Some("gpt-5.4")
+        );
+
+        state.apply_ws_response(
+            "ws-1",
+            2,
+            "cowork/provider/status/refresh",
+            Ok(json!({
+                "event": {
+                    "type": "provider_status",
+                    "sessionId": "s-1",
+                    "providers": [{
+                        "provider": "openai",
+                        "authorized": true,
+                        "verified": true,
+                        "mode": "api_key",
+                        "account": null,
+                        "message": "Configured via API key",
+                        "checkedAt": "2026-01-01T00:00:00Z",
+                        "methodId": "api_key",
+                        "savedApiKeyMasks": { "apiKey": "sk-...mock" }
+                    }]
+                }
+            })),
+        );
+        let statuses = &state.workspace_runtime_by_id["ws-1"].provider_statuses;
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].provider, "openai");
+        assert!(statuses[0].connected);
+        assert!(statuses[0].healthy);
+        assert_eq!(statuses[0].auth_method.as_deref(), Some("api_key"));
+        assert_eq!(
+            statuses[0].detail.as_deref(),
+            Some("Configured via API key")
+        );
+        assert_eq!(
+            statuses[0].saved_api_key_mask.as_deref(),
+            Some("sk-...mock")
+        );
     }
 }

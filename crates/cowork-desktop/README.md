@@ -70,7 +70,7 @@ All product/session/tool logic lives in `crates/cowork-server` and `crates/cowor
 
 | Area | Owner | Modules |
 | --- | --- | --- |
-| Shared core & integration | `architect` | `Cargo.toml`, `src/main.rs`, `src/lib.rs`, `src/actions.rs`, `src/router.rs`, `src/state.rs`, `src/theme.rs`, `src/ws.rs`, `tests/e2e_roundtrip.rs` |
+| Shared core & integration | `architect` | `Cargo.toml`, `src/main.rs`, `src/lib.rs`, `src/actions.rs`, `src/router.rs`, `src/shortcuts.rs`, `src/state.rs`, `src/theme.rs`, `src/ws.rs`, `tests/e2e_roundtrip.rs` |
 | Chat views | `chat` | `src/views/chat/` — landing, virtualized feed, markdown, activity/tool cards, approvals/questions, composer, attachments, agent run viewer |
 | App shell & overlays | `shell` | `src/views/shell/` — main/quick-chat/utility shells, top bar, sidebar, command palette, search, onboarding, toasts, task views, context inspector, inline preview |
 | Settings | `settings` | `src/views/settings/` — settings shell and pages (`models`, `subagents`, `toolAccess`, `defaults`, `profileMemory`, `remoteAccess`, `backup`, `chats`, `usage`, `privacyTelemetry`, `desktop`, `updates`, `experiments`, `diagnostics`) |

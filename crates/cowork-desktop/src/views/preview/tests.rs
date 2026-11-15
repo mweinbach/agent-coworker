@@ -366,6 +366,8 @@ fn render_offscreen_rgba(rt: &mut Runtime<AppState>, dark: bool) -> Vec<u8> {
     let dh = (PREVIEW_VIEWPORT.1 * scale) as u32;
     let target = Offscreen::new(&gpu.device, dw, dh);
 
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (dw, dh));
     renderer.prepare(
         &gpu.device,
         &gpu.queue,
@@ -434,12 +436,8 @@ fn renders_spreadsheet_table_and_sheet_tabs_headlessly_in_light_and_dark() {
             workspace_id: "ws-1".to_string(),
             path: "/ws/budget.xlsx".to_string(),
             title: "budget.xlsx".to_string(),
-            content: None,
-            is_binary: false,
-            is_markdown: false,
-            truncated: false,
-            error: None,
             spreadsheet: Some(data.clone()),
+            ..Default::default()
         };
         state.active_file_preview = Some(preview);
         state.sync_preview_ui();
@@ -510,11 +508,8 @@ fn renders_csv_preview_with_raw_toggle() {
         path: "/ws/costs.csv".to_string(),
         title: "costs.csv".to_string(),
         content: Some(raw_csv.to_string()),
-        is_binary: false,
-        is_markdown: false,
-        truncated: false,
-        error: None,
         spreadsheet: Some(data),
+        ..Default::default()
     });
     state.sync_preview_ui();
 
@@ -581,12 +576,8 @@ fn wide_and_tall_spreadsheet_preserves_sheet_tabs_without_vertical_overflow() {
         workspace_id: "ws-1".to_string(),
         path: "/ws/wide_and_tall_financial_summary_2026.xlsx".to_string(),
         title: "wide_and_tall_financial_summary_2026.xlsx".to_string(),
-        content: None,
-        is_binary: false,
-        is_markdown: false,
-        truncated: false,
-        error: None,
         spreadsheet: Some(data),
+        ..Default::default()
     });
     state.sync_preview_ui();
 
@@ -610,4 +601,687 @@ fn wide_and_tall_spreadsheet_preserves_sheet_tabs_without_vertical_overflow() {
         tabs_rect[1] + tabs_rect[3] <= PREVIEW_VIEWPORT.1 + 0.5,
         "sheet tabs must stay inside viewport bottom: {tabs_rect:?}"
     );
+}
+
+fn escape_xml_text(raw: &str) -> String {
+    raw.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn encode_svg_slide_data_url(title: &str, subtitle: &str, accent_hex: &str) -> String {
+    use base64::Engine as _;
+
+    let title = escape_xml_text(title);
+    let subtitle = escape_xml_text(subtitle);
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"><rect width="1600" height="900" fill="#ffffff"/><rect x="0" y="0" width="1600" height="36" fill="{accent_hex}"/><text x="96" y="180" font-family="Arial,sans-serif" font-size="64" font-weight="bold" fill="#18181b">{title}</text><text x="96" y="280" font-family="Arial,sans-serif" font-size="34" fill="#52525b">{subtitle}</text><rect x="96" y="360" width="640" height="360" rx="16" fill="#f4f4f5" stroke="#e4e4e7" stroke-width="2"/><rect x="780" y="360" width="720" height="360" rx="16" fill="#f4f4f5" stroke="#e4e4e7" stroke-width="2"/></svg>"##
+    );
+    format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(svg.as_bytes())
+    )
+}
+
+fn encode_png_slide_data_url(width: u32, height: u32, top_rgb: [u8; 3]) -> String {
+    use base64::Engine as _;
+
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            if y < 14 {
+                rgba.extend_from_slice(&[top_rgb[0], top_rgb[1], top_rgb[2], 255]);
+            } else if x > 28 && x < width - 28 && y > 36 && y < height - 24 {
+                rgba.extend_from_slice(&[244, 244, 248, 255]);
+            } else {
+                rgba.extend_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+    }
+    let dir = tempfile::tempdir().expect("tempdir for test png");
+    let file = dir.path().join("slide.png");
+    write_png(&file, width, height, &rgba).expect("write slide png");
+    let png_bytes = std::fs::read(&file).expect("read slide png");
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png_bytes)
+    )
+}
+
+fn encode_server_text_svg_data_url(slide_num: usize, body_lines: &[&str]) -> String {
+    use base64::Engine as _;
+
+    let tspans: String = body_lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| {
+            let dy = if idx == 0 { 0 } else { 38 };
+            format!(
+                r#"<tspan x="80" dy="{dy}">{}</tspan>"#,
+                escape_xml_text(line)
+            )
+        })
+        .collect();
+
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"><rect width="1600" height="900" fill="white"/><text x="80" y="70" font-family="Arial,sans-serif" font-size="24" fill="#666">Slide {slide_num} · Text-only preview</text><text x="80" y="132" font-family="Arial,sans-serif" font-size="30" fill="#202124">{tspans}</text></svg>"##
+    );
+    format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(svg.as_bytes())
+    )
+}
+
+fn sample_presentation_slides() -> Vec<super::state::PresentationSlideData> {
+    use super::state::PresentationSlideData;
+
+    vec![
+        PresentationSlideData {
+            slide_index: 0,
+            slide_id: Some("s1".to_string()),
+            title: Some("Q4 Architecture & Goals".to_string()),
+            png_base64: encode_svg_slide_data_url(
+                "Q4 Architecture & Goals",
+                "Local-first AI coworker on native Rune desktop",
+                "#2563eb",
+            ),
+        },
+        PresentationSlideData {
+            slide_index: 1,
+            slide_id: Some("s2".to_string()),
+            title: Some("Throughput Benchmarks".to_string()),
+            png_base64: encode_png_slide_data_url(320, 180, [16, 185, 129]),
+        },
+        PresentationSlideData {
+            slide_index: 2,
+            slide_id: Some("s3".to_string()),
+            title: Some("Rollout Timeline".to_string()),
+            png_base64: encode_svg_slide_data_url(
+                "Rollout Timeline",
+                "Phase 1 canary • Phase 2 general availability",
+                "#d97706",
+            ),
+        },
+    ]
+}
+
+fn maybe_save_snap_sized(name: &str, size: (f32, f32), rgba: &[u8], scale: f32) {
+    let Ok(dir) = std::env::var("COWORK_PREVIEW_SNAP_DIR") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("create preview snap dir");
+    let dw = (size.0 * scale) as u32;
+    let dh = (size.1 * scale) as u32;
+    write_png(&dir.join(format!("{name}.png")), dw, dh, rgba).expect("write presentation png");
+}
+
+struct HeadlessCanvas {
+    gpu: Gpu,
+    renderer: Renderer,
+    target: Offscreen,
+    dw: u32,
+    dh: u32,
+    clear: [f32; 4],
+}
+
+impl HeadlessCanvas {
+    fn new(size: (f32, f32), scale: f32, dark: bool) -> Self {
+        let gpu = Gpu::headless();
+        let renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        let dw = (size.0 * scale) as u32;
+        let dh = (size.1 * scale) as u32;
+        let target = Offscreen::new(&gpu.device, dw, dh);
+        let tokens = theme::resolve_tokens(dark, false, false);
+        let clear = [
+            tokens.panel_bg.r,
+            tokens.panel_bg.g,
+            tokens.panel_bg.b,
+            tokens.panel_bg.a,
+        ];
+        Self {
+            gpu,
+            renderer,
+            target,
+            dw,
+            dh,
+            clear,
+        }
+    }
+
+    fn draw(&mut self, rt: &mut Runtime<AppState>) -> Vec<u8> {
+        self.renderer
+            .upload_images(&self.gpu.device, &self.gpu.queue, &mut rt.images);
+        self.renderer.prepare_surfaces(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &rt.surfaces,
+            (self.dw, self.dh),
+        );
+        self.renderer.prepare(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut rt.text.atlas,
+            &rt.instances,
+            (self.dw, self.dh),
+        );
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        self.renderer.draw(&mut enc, &self.target.view, self.clear);
+        self.target.copy(&mut enc);
+        self.renderer.submit(&self.gpu.queue, enc);
+        self.target.read(&self.gpu.device)
+    }
+}
+
+fn render_offscreen_rgba_sized(
+    rt: &mut Runtime<AppState>,
+    size: (f32, f32),
+    dark: bool,
+) -> Vec<u8> {
+    let mut canvas = HeadlessCanvas::new(size, rt.env.scale, dark);
+    canvas.draw(rt)
+}
+
+#[test]
+fn presentation_rpc_payload_parses_rendered_text_notice_and_errors() {
+    use super::state::PresentationPreviewData;
+    use serde_json::json;
+
+    let rendered = PresentationPreviewData::from_rpc_payload(&json!({
+        "ok": true,
+        "path": "/ws/deck.pptx",
+        "renderingMode": "rendered",
+        "warnings": [],
+        "slides": [
+            {
+                "slideIndex": 0,
+                "slideId": "1",
+                "title": "Intro",
+                "pngBase64": "data:image/png;base64,AAAA"
+            }
+        ]
+    }));
+    assert!(!rendered.loading);
+    assert!(rendered.error_message.is_none());
+    assert_eq!(rendered.slides.len(), 1);
+    assert_eq!(rendered.slides[0].title.as_deref(), Some("Intro"));
+    assert_eq!(rendered.notice_details(), (false, Vec::new()));
+
+    let text_only = PresentationPreviewData::from_rpc_payload(&json!({
+        "ok": true,
+        "path": "/ws/deck.pptx",
+        "renderingMode": "text",
+        "warnings": [
+            "The verified native presentation renderer is unavailable.",
+            "Text-only preview: images, charts, layout, and original styling are not shown. Long slide text may be shortened."
+        ],
+        "slides": [
+            {
+                "slideIndex": 0,
+                "pngBase64": "data:image/svg+xml;base64,PHN2Zy8+"
+            }
+        ]
+    }));
+    let (is_text, details) = text_only.notice_details();
+    assert!(is_text);
+    assert_eq!(
+        details,
+        vec!["The verified native presentation renderer is unavailable.".to_string()]
+    );
+
+    let err_payload = PresentationPreviewData::from_rpc_payload(&json!({
+        "ok": false,
+        "error": {
+            "kind": "unsupported_format",
+            "message": "Export this legacy .ppt deck to .pptx for a text-only preview."
+        }
+    }));
+    assert_eq!(
+        err_payload.error_kind.as_deref(),
+        Some("unsupported_format")
+    );
+    assert!(
+        err_payload
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains(".pptx")
+    );
+
+    let malformed = PresentationPreviewData::from_rpc_payload(&json!({ "unexpected": 123 }));
+    assert_eq!(malformed.error_kind.as_deref(), Some("compile_error"));
+
+    let svg_sample = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"><rect width="1600" height="900" fill="white"/><text x="80" y="70" font-size="24" fill="#666">Slide 1 &#183; Text &amp; Notes</text><text x="80" y="132" font-size="30" fill="#202124"><tspan x="80" dy="0">First point</tspan><tspan x="80" dy="38">Second point &lt;alpha&gt;</tspan></text></svg>"##;
+    let overlay = super::presentation::extract_svg_text_overlay(svg_sample)
+        .expect("SVG text overlay should extract <text> and <tspan> nodes");
+    assert_eq!(overlay.view_w, 1600.0);
+    assert_eq!(overlay.view_h, 900.0);
+    assert_eq!(overlay.lines.len(), 3);
+    assert_eq!(overlay.lines[0].text, "Slide 1 · Text & Notes");
+    assert_eq!(overlay.lines[1].text, "First point");
+    assert_eq!(overlay.lines[2].text, "Second point <alpha>");
+    assert!(overlay.lines[2].top_vb > overlay.lines[1].top_vb);
+}
+
+#[test]
+fn preview_ui_state_tracks_slide_navigation_layout_and_resets_on_path_change() {
+    use super::state::{PresentationLayoutMode, PresentationPreviewData};
+    use rune::Key;
+
+    let data = PresentationPreviewData {
+        slides: sample_presentation_slides(),
+        ..Default::default()
+    };
+    let mut ui = PreviewUiState::default();
+    ui.sync_for_presentation_data(Some("/ws/deck.pptx"), Some(&data));
+    assert_eq!(ui.active_slide, 0);
+    assert_eq!(ui.presentation_layout, PresentationLayoutMode::Deck);
+
+    assert!(ui.handle_presentation_key(&Key::Right, data.slides.len()));
+    assert_eq!(ui.active_slide, 1);
+    assert!(ui.handle_presentation_key(&Key::End, data.slides.len()));
+    assert_eq!(ui.active_slide, 2);
+    assert!(ui.handle_presentation_key(&Key::Left, data.slides.len()));
+    assert_eq!(ui.active_slide, 1);
+    assert!(ui.handle_presentation_key(&Key::Home, data.slides.len()));
+    assert_eq!(ui.active_slide, 0);
+    ui.prev_slide();
+    assert_eq!(ui.active_slide, 0);
+    ui.set_presentation_layout(PresentationLayoutMode::Grid);
+    assert_eq!(ui.presentation_layout, PresentationLayoutMode::Grid);
+
+    // Same-path refresh preserves active slide if still in range, clamping only if shortened.
+    ui.select_slide(2, data.slides.len());
+    ui.sync_for_presentation_data(Some("/ws/deck.pptx"), Some(&data));
+    assert_eq!(ui.active_slide, 2);
+
+    // Switching files resets slide and returns to Deck mode.
+    ui.sync_for_presentation_data(Some("/ws/other.pptx"), Some(&data));
+    assert_eq!(ui.active_slide, 0);
+    assert_eq!(ui.presentation_layout, PresentationLayoutMode::Deck);
+
+    ui.sync_for_presentation_data(None, None);
+    assert!(ui.active_path.is_empty());
+}
+
+thread_local! {
+    static TEST_PRESENTATION_DATA: std::cell::RefCell<
+        Option<super::state::PresentationPreviewData>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+fn render_test_presentation_root(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
+    let dark = s.effective_dark(cx.system_dark());
+    let (kit, tokens) = theme::build_kit(dark, false, false);
+    cx.foreground(tokens.text_base);
+    cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+    let preview = s.active_file_preview.as_ref().expect("preview present");
+    TEST_PRESENTATION_DATA.with(|slot| {
+        let borrow = slot.borrow();
+        let data = borrow.as_ref().expect("TEST_PRESENTATION_DATA set");
+        rune::el().w_full().h_full().fill(tokens.panel_bg).child(
+            super::presentation::render_presentation_preview(s, preview, data, &kit, &tokens),
+        )
+    })
+}
+
+#[test]
+fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_dark() {
+    use super::state::{PresentationLayoutMode, PresentationPreviewData};
+    use crate::actions::NativeCommand;
+    use rune::{Key, KeyEvent, Mods};
+
+    const PRES_VIEWPORT: (f32, f32) = (760.0, 560.0);
+    const COMPACT_VIEWPORT: (f32, f32) = (440.0, 540.0);
+
+    let slides = sample_presentation_slides();
+    let rendered_data = PresentationPreviewData {
+        slides: slides.clone(),
+        rendering_mode: Some("rendered".to_string()),
+        ..Default::default()
+    };
+    let text_notice_slides = vec![
+        super::state::PresentationSlideData {
+            slide_index: 0,
+            slide_id: Some("t1".to_string()),
+            title: Some("Q4 Roadmap Overview".to_string()),
+            png_base64: encode_server_text_svg_data_url(
+                1,
+                &[
+                    "Q4 Roadmap & Architecture Overview",
+                    "• Native Rune presentation preview powered by cowork/workspace/presentation/preview",
+                    "• High-DPI rasterized LibreOffice slides when runtime is installed",
+                    "• Deterministic text-only SVG fallback with slide & layout warning banner",
+                ],
+            ),
+        },
+        super::state::PresentationSlideData {
+            slide_index: 1,
+            slide_id: Some("t2".to_string()),
+            title: Some("Verification Summary".to_string()),
+            png_base64: encode_server_text_svg_data_url(
+                2,
+                &[
+                    "Verification Summary",
+                    "All headless light/dark snapshots, Deck/Grid toggles, and keyboard shortcuts tested.",
+                ],
+            ),
+        },
+    ];
+    let text_notice_data = PresentationPreviewData {
+        slides: text_notice_slides,
+        rendering_mode: Some("text".to_string()),
+        warnings: vec![
+            "The verified native presentation renderer is unavailable.".to_string(),
+            "Text-only preview: images, charts, layout, and original styling are not shown."
+                .to_string(),
+        ],
+        ..Default::default()
+    };
+    let error_data = PresentationPreviewData::from_error(
+        "unsupported_format",
+        "Export this legacy .ppt deck to .pptx for a text-only preview.",
+    );
+
+    // 1) Deck view in Light and Dark themes + PNG/SVG slide decoding + interactive navigation.
+    for dark in [false, true] {
+        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(rendered_data.clone()));
+        let preview = FilePreviewState {
+            workspace_id: "ws-1".to_string(),
+            path: "/ws/quarterly_review.pptx".to_string(),
+            title: "quarterly_review.pptx".to_string(),
+            is_binary: true,
+            ..Default::default()
+        };
+        let mut state = AppState {
+            scene_mode: true,
+            system_dark_override: Some(dark),
+            active_file_preview: Some(preview),
+            ..Default::default()
+        };
+        state.desktop_settings.theme = if dark {
+            theme::ThemePreference::Dark
+        } else {
+            theme::ThemePreference::Light
+        };
+        state.shell_ui.viewport_width = 1280.0;
+        state
+            .preview_ui
+            .sync_for_presentation_data(Some("/ws/quarterly_review.pptx"), Some(&rendered_data));
+
+        let mut rt = Runtime::new(
+            state,
+            render_test_presentation_root,
+            PRES_VIEWPORT,
+            Env::new(true, 2.0),
+        );
+        rt.frame(0.0);
+
+        let mut canvas = HeadlessCanvas::new(PRES_VIEWPORT, rt.env.scale, dark);
+        let rgba = canvas.draw(&mut rt);
+        assert!(
+            rgba.chunks_exact(4).any(|px| px[..3] != rgba[..3]),
+            "rendered presentation preview must not be blank (dark={dark})"
+        );
+        let snap_name = if dark {
+            "presentation-preview-deck-dark"
+        } else {
+            "presentation-preview-deck-light"
+        };
+        maybe_save_snap_sized(snap_name, PRES_VIEWPORT, &rgba, 2.0);
+
+        let els = rt.elements();
+        for key in [
+            "pptx-preview-root",
+            "pptx-preview-meta",
+            "pptx-layout-deck",
+            "pptx-layout-grid",
+            "pptx-refresh-btn",
+            "pptx-thumb-strip",
+            "pptx-thumb-0",
+            "pptx-thumb-1",
+            "pptx-thumb-2",
+            "pptx-slide-stage",
+            "pptx-active-slide-image",
+            "pptx-nav-bar",
+            "pptx-prev-btn",
+            "pptx-slide-counter",
+            "pptx-next-btn",
+        ] {
+            assert!(
+                els.iter().any(|e| e.key.as_deref() == Some(key)),
+                "expected key `{key}` in Deck presentation preview"
+            );
+        }
+
+        let nav_rect = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("pptx-nav-bar"))
+            .unwrap()
+            .rect;
+        assert!(
+            nav_rect[1] + nav_rect[3] <= PRES_VIEWPORT.1 + 0.5,
+            "pptx-nav-bar must stay within viewport bottom: {nav_rect:?}"
+        );
+
+        if !dark {
+            // Click next -> slide 1 (PNG slide), render grid mode snap, click card 2 -> Deck slide 2.
+            let click_key = |rt: &mut Runtime<AppState>, key: &str| {
+                let rect = rt
+                    .elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(key))
+                    .unwrap_or_else(|| panic!("missing clickable key `{key}`"))
+                    .rect;
+                let cx = rect[0] + rect[2] * 0.5;
+                let cy = rect[1] + rect[3] * 0.5;
+                rt.pointer_down(cx, cy);
+                rt.pointer_up(cx, cy);
+                for _ in 0..30 {
+                    rt.frame(1.0 / 60.0);
+                }
+            };
+
+            click_key(&mut rt, "pptx-next-btn");
+            assert_eq!(rt.state.preview_ui.active_slide, 1);
+
+            click_key(&mut rt, "pptx-layout-grid");
+            assert_eq!(
+                rt.state.preview_ui.presentation_layout,
+                PresentationLayoutMode::Grid
+            );
+            let grid_rgba = canvas.draw(&mut rt);
+            maybe_save_snap_sized(
+                "presentation-preview-grid-light",
+                PRES_VIEWPORT,
+                &grid_rgba,
+                2.0,
+            );
+            assert!(
+                rt.elements()
+                    .iter()
+                    .any(|e| e.key.as_deref() == Some("pptx-grid-card-2"))
+            );
+
+            click_key(&mut rt, "pptx-grid-card-2");
+            assert_eq!(rt.state.preview_ui.active_slide, 2);
+            assert_eq!(
+                rt.state.preview_ui.presentation_layout,
+                PresentationLayoutMode::Deck
+            );
+
+            // Focus root and verify Left / Right / End / Home keyboard navigation.
+            click_key(&mut rt, "pptx-preview-root");
+            rt.key(KeyEvent {
+                key: Key::Left,
+                mods: Mods::default(),
+            });
+            rt.frame(0.02);
+            assert_eq!(rt.state.preview_ui.active_slide, 1);
+            rt.key(KeyEvent {
+                key: Key::Home,
+                mods: Mods::default(),
+            });
+            rt.frame(0.02);
+            assert_eq!(rt.state.preview_ui.active_slide, 0);
+            rt.key(KeyEvent {
+                key: Key::End,
+                mods: Mods::default(),
+            });
+            rt.frame(0.02);
+            assert_eq!(rt.state.preview_ui.active_slide, 2);
+        }
+    }
+
+    // 2) Text-only fallback warning banner in light mode.
+    {
+        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(text_notice_data.clone()));
+        let mut state = AppState {
+            scene_mode: true,
+            system_dark_override: Some(false),
+            active_file_preview: Some(FilePreviewState {
+                workspace_id: "ws-1".to_string(),
+                path: "/ws/text_fallback.pptx".to_string(),
+                title: "text_fallback.pptx".to_string(),
+                is_binary: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        state.desktop_settings.theme = theme::ThemePreference::Light;
+        state.shell_ui.viewport_width = 1280.0;
+        let mut rt = Runtime::new(
+            state,
+            render_test_presentation_root,
+            PRES_VIEWPORT,
+            Env::new(true, 2.0),
+        );
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba_sized(&mut rt, PRES_VIEWPORT, false);
+        maybe_save_snap_sized(
+            "presentation-preview-text-notice-light",
+            PRES_VIEWPORT,
+            &rgba,
+            2.0,
+        );
+        assert!(
+            rt.elements()
+                .iter()
+                .any(|e| e.key.as_deref() == Some("pptx-preview-notice"))
+        );
+    }
+
+    // 3) Compact width (<520pt estimated preview width) in dark mode renders bottom strip cleanly.
+    {
+        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(rendered_data.clone()));
+        let mut state = AppState {
+            scene_mode: true,
+            system_dark_override: Some(true),
+            active_file_preview: Some(FilePreviewState {
+                workspace_id: "ws-1".to_string(),
+                path: "/ws/compact_deck.pptx".to_string(),
+                title: "compact_deck.pptx".to_string(),
+                is_binary: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        state.desktop_settings.theme = theme::ThemePreference::Dark;
+        state.shell_ui.viewport_width = 860.0;
+        let mut rt = Runtime::new(
+            state,
+            render_test_presentation_root,
+            COMPACT_VIEWPORT,
+            Env::new(true, 2.0),
+        );
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba_sized(&mut rt, COMPACT_VIEWPORT, true);
+        maybe_save_snap_sized(
+            "presentation-preview-compact-dark",
+            COMPACT_VIEWPORT,
+            &rgba,
+            2.0,
+        );
+
+        let els = rt.elements();
+        let strip_rect = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("pptx-thumb-strip"))
+            .unwrap()
+            .rect;
+        let stage_rect = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("pptx-slide-stage"))
+            .unwrap()
+            .rect;
+        assert!(
+            strip_rect[1] > stage_rect[1],
+            "compact layout should place thumbnail strip below stage: strip={strip_rect:?}, stage={stage_rect:?}"
+        );
+        assert!(
+            strip_rect[1] + strip_rect[3] <= COMPACT_VIEWPORT.1 + 0.5,
+            "compact thumbnail strip must fit inside viewport: {strip_rect:?}"
+        );
+    }
+
+    // 4) Error fallback card renders cleanly and "Try again" dispatches LoadFilePreview.
+    {
+        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(error_data));
+        let mut state = AppState {
+            scene_mode: true,
+            system_dark_override: Some(false),
+            active_file_preview: Some(FilePreviewState {
+                workspace_id: "ws-1".to_string(),
+                path: "/ws/legacy.ppt".to_string(),
+                title: "legacy.ppt".to_string(),
+                is_binary: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        state.desktop_settings.theme = theme::ThemePreference::Light;
+        state.workspaces.push(crate::state::WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Repo".to_string(),
+            path: "/ws".to_string(),
+            ..Default::default()
+        });
+        state.shell_ui.viewport_width = 1280.0;
+        let mut rt = Runtime::new(
+            state,
+            render_test_presentation_root,
+            PRES_VIEWPORT,
+            Env::new(true, 2.0),
+        );
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba_sized(&mut rt, PRES_VIEWPORT, false);
+        maybe_save_snap_sized(
+            "presentation-preview-error-light",
+            PRES_VIEWPORT,
+            &rgba,
+            2.0,
+        );
+        let retry_rect = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("pptx-retry-btn"))
+            .unwrap()
+            .rect;
+        rt.pointer_down(
+            retry_rect[0] + retry_rect[2] * 0.5,
+            retry_rect[1] + retry_rect[3] * 0.5,
+        );
+        rt.pointer_up(
+            retry_rect[0] + retry_rect[2] * 0.5,
+            retry_rect[1] + retry_rect[3] * 0.5,
+        );
+        rt.frame(0.02);
+        assert!(matches!(
+            rt.state.services.emitted_native_commands.last(),
+            Some(NativeCommand::ReadFilePreview { path, .. }) if path == "/ws/legacy.ppt"
+        ));
+    }
+    TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = None);
 }

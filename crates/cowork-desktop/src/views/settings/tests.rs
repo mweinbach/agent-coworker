@@ -1,11 +1,13 @@
 //! Unit tests for Settings navigation, gating, target resolution, and primitives.
 
-use super::experiments::{KNOWN_FEATURE_FLAGS, resolve_flag_enabled};
+use super::desktop::{DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label};
+use super::experiments::{KNOWN_FEATURE_FLAGS, is_flag_enabled, resolve_flag_enabled};
 use super::primitives::{entity_palette_index, management_targets, name_initials};
 use super::shell::{page_key, resolve_active_page, settings_groups};
+use super::usage::{aggregate_usage, format_estimated_cost, format_token_count};
 use crate::actions::{Action, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
-use crate::state::{AppState, WorkspaceRecord};
+use crate::state::{AppState, ThreadRecord, ThreadRuntime, UsageSummary, WorkspaceRecord};
 
 #[test]
 fn settings_groups_gate_remote_access_and_experiments() {
@@ -130,4 +132,91 @@ fn known_feature_flags_match_expected_defaults_and_keys() {
 
     assert_eq!(page_key(SettingsPageId::Providers), "models");
     assert_eq!(page_key(SettingsPageId::Developer), "diagnostics");
+    assert!(is_flag_enabled(&state, "menuBar"));
+    assert!(is_flag_enabled(&state, "remoteAccess"));
+}
+
+#[test]
+fn desktop_shortcut_formatter_handles_modifiers_and_defaults() {
+    let formatted = format_quick_chat_shortcut_label(DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR);
+    if cfg!(target_os = "macos") {
+        assert_eq!(formatted, "⌘ ⇧ Space");
+    } else {
+        assert_eq!(formatted, "Ctrl+Shift+Space");
+    }
+    assert_eq!(format_quick_chat_shortcut_label(""), "Unset");
+}
+
+#[test]
+fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
+    assert_eq!(format_token_count(850), "850");
+    assert_eq!(format_token_count(1_500), "1.50K");
+    assert_eq!(format_token_count(24_500), "24.5K");
+    assert_eq!(format_token_count(2_500_000), "2.5M");
+    assert_eq!(format_estimated_cost(None), "—");
+    assert_eq!(format_estimated_cost(Some(0.0042)), "$0.0042");
+    assert_eq!(format_estimated_cost(Some(1.5)), "$1.50");
+
+    let mut state = AppState {
+        usage_summary: Some(UsageSummary {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cached_tokens: 200,
+            estimated_cost_usd: 0.12,
+        }),
+        ..Default::default()
+    };
+    let fallback = aggregate_usage(&state);
+    assert!(fallback.has_usage);
+    assert_eq!(fallback.total_tokens(), 1_500);
+    assert_eq!(fallback.total_sessions, 1);
+
+    state.threads.push(ThreadRecord {
+        id: "t1".to_string(),
+        workspace_id: "ws1".to_string(),
+        title: "Build UI".to_string(),
+        provider: Some("anthropic".to_string()),
+        model: Some("claude-sonnet-4-5".to_string()),
+        ..Default::default()
+    });
+    state.threads.push(ThreadRecord {
+        id: "t2".to_string(),
+        workspace_id: "ws1".to_string(),
+        title: "Write tests".to_string(),
+        provider: Some("openai".to_string()),
+        model: Some("gpt-5".to_string()),
+        ..Default::default()
+    });
+    state.thread_runtime_by_id.insert(
+        "t1".to_string(),
+        ThreadRuntime {
+            usage: Some(UsageSummary {
+                input_tokens: 2_000,
+                output_tokens: 1_000,
+                cached_tokens: 300,
+                estimated_cost_usd: 0.25,
+            }),
+            ..Default::default()
+        },
+    );
+    state.thread_runtime_by_id.insert(
+        "t2".to_string(),
+        ThreadRuntime {
+            usage: Some(UsageSummary {
+                input_tokens: 4_000,
+                output_tokens: 2_000,
+                cached_tokens: 0,
+                estimated_cost_usd: 0.50,
+            }),
+            ..Default::default()
+        },
+    );
+
+    let agg = aggregate_usage(&state);
+    assert_eq!(agg.total_sessions, 2);
+    assert_eq!(agg.total_tokens(), 9_000);
+    assert_eq!(agg.providers.len(), 2);
+    assert_eq!(agg.providers[0].provider, "openai");
+    assert_eq!(agg.providers[1].provider, "anthropic");
+    assert_eq!(agg.total_models(), 2);
 }

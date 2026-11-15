@@ -3,23 +3,21 @@
 use rune::{El, row};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
 
-use crate::actions::{Action, SettingsAction};
-use crate::state::{AppState, DesktopSettings, PrivacyTelemetrySettings};
+use crate::state::{AppState, PrivacyTelemetrySettings};
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     Section, SettingsRow, StatusTone, callout_banner, settings_page, status_pill,
+    update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 
 fn dispatch_privacy_patch(s: &mut AppState, mutate: impl FnOnce(&mut PrivacyTelemetrySettings)) {
-    let mut next: DesktopSettings = s.desktop_settings.clone();
-    mutate(&mut next.privacy_telemetry);
-    if !next.privacy_telemetry.ai_trace_telemetry_enabled {
-        next.privacy_telemetry.ai_trace_payloads_enabled = false;
-    }
-    s.dispatch(Action::Settings(SettingsAction::UpdateDesktopSettings(
-        next,
-    )));
+    update_desktop_settings(s, |next| {
+        mutate(&mut next.privacy_telemetry);
+        if !next.privacy_telemetry.ai_trace_telemetry_enabled {
+            next.privacy_telemetry.ai_trace_payloads_enabled = false;
+        }
+    });
 }
 
 /// Renders the Privacy & Telemetry settings page.
@@ -148,11 +146,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .control_size(ControlSize::Regular)
         .disabled(!any_telemetry)
         .on_press(|s: &mut AppState| {
-            let mut next = s.desktop_settings.clone();
-            next.privacy_telemetry = PrivacyTelemetrySettings::default();
-            s.dispatch(Action::Settings(SettingsAction::UpdateDesktopSettings(
-                next,
-            )));
+            update_desktop_settings(s, |next| {
+                next.privacy_telemetry = PrivacyTelemetrySettings::default();
+            });
         })
         .build(k);
 

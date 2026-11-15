@@ -2,6 +2,8 @@
 //!
 //! Ported from `apps/desktop/src/ui/settings/` and `apps/desktop/src/ui/settings/pages/`.
 
+pub mod desktop;
+pub mod developer;
 pub mod experiments;
 pub mod icons;
 pub mod primitives;
@@ -9,6 +11,7 @@ pub mod privacy_telemetry;
 pub mod shell;
 pub mod state;
 pub mod updates;
+pub mod usage;
 
 #[cfg(test)]
 mod tests;
@@ -130,8 +133,11 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
 
     let active_page = resolve_active_page(s);
     let content = match active_page {
+        SettingsPageId::Desktop => desktop::view(s, k, &t),
+        SettingsPageId::Diagnostics => developer::view(s, k, &t),
         SettingsPageId::Experiments => experiments::view(s, k, &t),
         SettingsPageId::Updates => updates::view(s, k, &t),
+        SettingsPageId::Usage => usage::view(s, k, &t),
         SettingsPageId::PrivacyTelemetry => privacy_telemetry::view(s, k, &t),
         other => placeholder_page(s, other, k, &t),
     };

@@ -7,7 +7,8 @@ use base64::Engine;
 use rune::{Color, El, Icon, ImageCache, Pixels, col, el, icon, row, text};
 use rune_kit::Kit;
 
-use crate::state::AppState;
+use crate::actions::{Action, SettingsAction};
+use crate::state::{AppState, DesktopSettings};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 
@@ -660,4 +661,14 @@ pub fn active_workspace_banner_label(s: &AppState) -> Option<String> {
     } else {
         Some(ws.name.clone())
     }
+}
+
+/// Applies a mutation to a cloned `DesktopSettings` and dispatches
+/// `SettingsAction::UpdateDesktopSettings`.
+pub fn update_desktop_settings(s: &mut AppState, mutate: impl FnOnce(&mut DesktopSettings)) {
+    let mut next = s.desktop_settings.clone();
+    mutate(&mut next);
+    s.dispatch(Action::Settings(SettingsAction::UpdateDesktopSettings(
+        next,
+    )));
 }

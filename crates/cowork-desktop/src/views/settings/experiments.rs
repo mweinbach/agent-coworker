@@ -91,6 +91,15 @@ pub fn resolve_flag_enabled(s: &AppState, meta: &FeatureFlagMeta) -> bool {
         .unwrap_or(meta.default_enabled)
 }
 
+/// Resolves whether any desktop feature flag ID is active using `KNOWN_FEATURE_FLAGS` defaults.
+pub fn is_flag_enabled(s: &AppState, flag_id: &str) -> bool {
+    if let Some(meta) = KNOWN_FEATURE_FLAGS.iter().find(|f| f.id == flag_id) {
+        resolve_flag_enabled(s, meta)
+    } else {
+        s.feature_flags.get(flag_id).copied().unwrap_or(false)
+    }
+}
+
 struct FlagRowSpec<'a> {
     id: String,
     label: &'a str,

@@ -1,0 +1,1065 @@
+use std::path::PathBuf;
+
+use cowork_protocol::{CommandInfo, JsonRpcLiteId, TurnAttachmentInputPart};
+use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
+use rune::{Cx, El, Env, Runtime, TextEdit, el, row};
+use serde_json::json;
+
+use crate::actions::{Action, NavAction, StoreEvent};
+use crate::state::{
+    AgentViewerState, AppState, ChatInteraction, ChatViewReadOnlyNotice, CitationSource,
+    ComposerDraft, FeedItem, FeedMessageRole, ONE_OFF_LANDING_SENTINEL, PluginSummary,
+    ProviderModelSummary, ProviderSummary, ServerLifecycleState, SkillSummary, ThreadAgentSummary,
+    ThreadRecord, ThreadRuntime, ThreadStatus, TodoItemView, ToolRunStatus,
+    TranscriptDeliveryFailure, WorkspaceRecord, WorkspaceRuntime,
+};
+use crate::theme::{self, ThemePreference};
+use crate::views::chat;
+use crate::ws::{WsCommand, WsConnectionState};
+
+const SNAP_VIEWPORT: (f32, f32) = (1280.0, 820.0);
+
+fn test_chat_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+    let dark = state.effective_dark(cx.system_dark());
+    let (kit, tokens) = theme::build_kit(
+        dark,
+        state.desktop_settings.reduced_transparency,
+        state.desktop_settings.high_contrast,
+    );
+    cx.foreground(tokens.text_base);
+    cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+    cx.web_focus();
+    let out = chat::view(state, cx, &kit);
+    el().w_full()
+        .h_full()
+        .fill(tokens.panel_bg)
+        .child(rune_kit::root(
+            row().w_full().h_full().child(out.content),
+            out.overlays,
+        ))
+}
+
+fn render_offscreen_rgba(rt: &mut Runtime<AppState>, dark: bool) -> Vec<u8> {
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let scale = rt.env.scale;
+    let dw = (SNAP_VIEWPORT.0 * scale) as u32;
+    let dh = (SNAP_VIEWPORT.1 * scale) as u32;
+    let target = Offscreen::new(&gpu.device, dw, dh);
+
+    renderer.prepare(
+        &gpu.device,
+        &gpu.queue,
+        &mut rt.text.atlas,
+        &rt.instances,
+        (dw, dh),
+    );
+    let tokens = theme::resolve_tokens(dark, false, false);
+    let clear = [
+        tokens.panel_bg.r,
+        tokens.panel_bg.g,
+        tokens.panel_bg.b,
+        tokens.panel_bg.a,
+    ];
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, clear);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    target.read(&gpu.device)
+}
+
+fn maybe_save_snap(name: &str, rgba: &[u8], scale: f32) {
+    let Ok(dir) = std::env::var("COWORK_CHAT_SNAP_DIR") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("create snap dir");
+    let dw = (SNAP_VIEWPORT.0 * scale) as u32;
+    let dh = (SNAP_VIEWPORT.1 * scale) as u32;
+    write_png(&dir.join(format!("{name}.png")), dw, dh, rgba).expect("write parity png");
+}
+
+fn build_populated_thread_state(dark: bool) -> AppState {
+    let mut s = AppState {
+        scene_mode: true,
+        system_dark_override: Some(dark),
+        ..Default::default()
+    };
+    s.desktop_settings.theme = if dark {
+        ThemePreference::Dark
+    } else {
+        ThemePreference::Light
+    };
+
+    let ws_id = "ws-demo".to_string();
+    let mut ws = WorkspaceRecord::new(
+        &ws_id,
+        "agent-coworker",
+        "/tmp/agent-coworker",
+        1_763_000_000_000,
+    );
+    ws.default_provider = Some("openai".into());
+    ws.default_model = Some("gpt-5".into());
+    s.workspaces.push(ws);
+    s.active_workspace_id = Some(ws_id.clone());
+    s.workspace_socket_by_id
+        .insert(ws_id.clone(), WsConnectionState::Connected);
+    s.workspace_runtime_by_id.insert(
+        ws_id.clone(),
+        WorkspaceRuntime {
+            server_state: ServerLifecycleState::Running {
+                ws_url: "ws://127.0.0.1:7337/ws".into(),
+                port: 7337,
+            },
+            ..Default::default()
+        },
+    );
+
+    s.provider_catalog.push(ProviderSummary {
+        id: "openai".into(),
+        name: "OpenAI".into(),
+        configured: true,
+        models: vec![ProviderModelSummary {
+            id: "gpt-5".into(),
+            name: "GPT-5".into(),
+            enabled: true,
+            custom: false,
+            supports_reasoning: true,
+            reasoning_efforts: vec!["low".into(), "medium".into(), "high".into()],
+        }],
+        ..Default::default()
+    });
+    s.skills.push(SkillSummary {
+        name: "code-review".into(),
+        description: "Review diffs for correctness and regressions".into(),
+        scope: "workspace".into(),
+        enabled: true,
+        ..Default::default()
+    });
+    s.plugins.push(PluginSummary {
+        id: "linear".into(),
+        name: "linear".into(),
+        description: "Inspect and update Linear issues".into(),
+        enabled: true,
+        ..Default::default()
+    });
+    s.commands_by_workspace.insert(
+        ws_id.clone(),
+        vec![CommandInfo {
+            name: "review".into(),
+            description: Some("Run repository review checks".into()),
+            source: "workspace".into(),
+            hints: vec![],
+        }],
+    );
+
+    let tid = "th-demo".to_string();
+    s.threads.push(ThreadRecord {
+        id: tid.clone(),
+        workspace_id: ws_id.clone(),
+        title: "Refactor chat diff viewer".into(),
+        status: ThreadStatus::Active,
+        session_id: Some("sess-demo".into()),
+        provider: Some("openai".into()),
+        model: Some("gpt-5".into()),
+        reasoning_effort: Some("medium".into()),
+        updated_at: 1_763_100_050_000,
+        created_at: 1_763_000_000_000,
+        ..Default::default()
+    });
+    s.active_workspace_id = Some(ws_id);
+    s.dispatch(Action::Navigate(NavAction::OpenThread(tid.clone())));
+
+    let diff_patch = "--- a/crates/cowork-desktop/src/views/chat/composer.rs\n+++ b/crates/cowork-desktop/src/views/chat/composer.rs\n@@ -10,4 +10,5 @@\n fn composer_ready() -> bool {\n-    false\n+    true\n }\n";
+    let mut rt = ThreadRuntime {
+        hydrated: true,
+        streaming: false,
+        agents: vec![ThreadAgentSummary {
+            agent_id: "agent-sub-1".into(),
+            name: "verifier".into(),
+            nickname: Some("Verifier".into()),
+            title: Some("Verify diff and citations".into()),
+            role: Some("verifier".into()),
+            depth: 1,
+            status: "completed".into(),
+            model: Some("gpt-5".into()),
+            usage_label: Some("1.2k tok".into()),
+            started_at: Some(1_763_100_001_000),
+            completed_at: Some(1_763_100_008_000),
+            error: None,
+        }],
+        todos: vec![
+            TodoItemView {
+                id: "todo-1".into(),
+                content: "Audit composer disabled states".into(),
+                status: "completed".into(),
+                priority: Some("high".into()),
+            },
+            TodoItemView {
+                id: "todo-2".into(),
+                content: "Verify Rune DiffView unified and split modes".into(),
+                status: "in_progress".into(),
+                priority: Some("medium".into()),
+            },
+        ],
+        feed: vec![
+            FeedItem::Message {
+                id: "msg-u1".into(),
+                role: FeedMessageRole::User,
+                content: "Earlier check yesterday".into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_762_900_000_000,
+            },
+            FeedItem::Message {
+                id: "msg-u2".into(),
+                role: FeedMessageRole::User,
+                content: "Please run @code-review and inspect composer.rs diff".into(),
+                client_message_id: None,
+                attachments: vec![TurnAttachmentInputPart::UploadedFile {
+                    path: "notes/review-checklist.md".into(),
+                    filename: "review-checklist.md".into(),
+                    mime_type: "text/markdown".into(),
+                }],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_763_100_000_000,
+            },
+            FeedItem::Reasoning {
+                id: "reason-1".into(),
+                content: "## Inspection\nChecked `ChatComposer.tsx` model selector lock rules and `Rune` DiffView hunk layout.".into(),
+                mode: "reasoning".into(),
+                streaming: false,
+                timestamp_ms: 1_763_100_002_000,
+            },
+            FeedItem::Tool {
+                id: "tool-1".into(),
+                tool_name: "read_file".into(),
+                title: Some("Read composer.rs".into()),
+                call_id: Some("call-1".into()),
+                status: ToolRunStatus::Completed,
+                input: json!({ "path": "crates/cowork-desktop/src/views/chat/composer.rs" }),
+                output: Some(json!({ "lines": 120 })),
+                error: None,
+                diff: None,
+                streaming: false,
+                timestamp_ms: 1_763_100_004_000,
+                completed_at_ms: Some(1_763_100_005_000),
+                output_truncated: false,
+            },
+            FeedItem::Tool {
+                id: "tool-2".into(),
+                tool_name: "edit_file".into(),
+                title: Some("Update composer_ready".into()),
+                call_id: Some("call-2".into()),
+                status: ToolRunStatus::Completed,
+                input: json!({ "path": "crates/cowork-desktop/src/views/chat/composer.rs" }),
+                output: Some(json!({ "applied": true })),
+                error: None,
+                diff: Some(diff_patch.into()),
+                streaming: false,
+                timestamp_ms: 1_763_100_006_000,
+                completed_at_ms: Some(1_763_100_008_000),
+                output_truncated: false,
+            },
+            FeedItem::Message {
+                id: "msg-a1".into(),
+                role: FeedMessageRole::Assistant,
+                content: "## Summary\nUpdated `composer_ready()` and locked model pickers on active turns.\n\n```rust\nlet locked = thread.is_some_and(|t| !t.draft) && busy;\n```\n\nVerified against [Protocol Docs](https://example.com/protocol).".into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![CitationSource {
+                    label: Some("1".into()),
+                    title: Some("Cowork Protocol Spec".into()),
+                    url: "https://example.com/protocol".into(),
+                    domain: Some("example.com".into()),
+                    snippet: Some("Model selectors lock while a turn streams.".into()),
+                    reference_id: None,
+                }],
+                streaming: false,
+                timestamp_ms: 1_763_100_010_000,
+            },
+        ],
+        pending_interactions: vec![ChatInteraction::CommandApproval {
+            request_id: JsonRpcLiteId::String("req-1".into()),
+            item_id: "item-1".into(),
+            command: Some("cargo test -p cowork-desktop".into()),
+            cwd: Some("/tmp/agent-coworker".into()),
+            reason: Some("Run unit tests after editing composer.rs".into()),
+            risk_code: Some("workspace_command".into()),
+        }],
+        ..Default::default()
+    };
+
+    rt.agent_run_feeds.insert(
+        "agent-sub-1".into(),
+        vec![
+            FeedItem::Tool {
+                id: "sub-tool-1".into(),
+                tool_name: "grep_search".into(),
+                title: Some("Search disabled checks".into()),
+                call_id: None,
+                status: ToolRunStatus::Completed,
+                input: json!({ "query": "modelSelectorDisabled" }),
+                output: Some(json!({ "matches": 2 })),
+                error: None,
+                diff: None,
+                streaming: false,
+                timestamp_ms: 1_763_100_003_000,
+                completed_at_ms: Some(1_763_100_004_000),
+                output_truncated: false,
+            },
+            FeedItem::Message {
+                id: "sub-a1".into(),
+                role: FeedMessageRole::Assistant,
+                content: "Verified all disabled gates match `ChatView.tsx:823`.".into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_763_100_007_000,
+            },
+        ],
+    );
+
+    s.thread_runtime_by_id.insert(tid.clone(), rt);
+    s.composer_edit = TextEdit::new("Follow-up check ready");
+    s.composer_drafts.insert(
+        tid,
+        ComposerDraft {
+            text: "Follow-up check ready".into(),
+            ..Default::default()
+        },
+    );
+    s
+}
+
+#[test]
+fn renders_populated_active_thread_light_and_dark_with_zero_overflows() {
+    for dark in [false, true] {
+        let mut s = build_populated_thread_state(dark);
+        // Expand activity group & edit diff tool card so reasoning/tools/DiffView are visible.
+        s.chat_ui
+            .expanded_activity_groups
+            .insert("activity-reason-1".into(), true);
+        s.chat_ui
+            .expanded_tool_details
+            .insert("tool-2".into(), true);
+        let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba(&mut rt, dark);
+        assert!(
+            rgba.chunks_exact(4).any(|px| px[..3] != rgba[..3]),
+            "rendered chat frame must not be blank (dark={dark})"
+        );
+        let label = if dark {
+            "chat-active-dark"
+        } else {
+            "chat-active-light"
+        };
+        maybe_save_snap(label, &rgba, 2.0);
+
+        let els = rt.elements();
+        for key in [
+            "chat-view",
+            "chat-feed-surface",
+            "chat-composer-dock",
+            "composer-input",
+        ] {
+            let found = els.iter().find(|e| e.key.as_deref() == Some(key));
+            assert!(
+                found.is_some(),
+                "expected element key `{key}` in active thread"
+            );
+            let rect = found.unwrap().rect;
+            assert!(
+                rect[0] >= -1.0 && rect[0] + rect[2] <= SNAP_VIEWPORT.0 + 1.0,
+                "`{key}` x-bounds {rect:?} exceed viewport width {}",
+                SNAP_VIEWPORT.0
+            );
+        }
+    }
+}
+
+#[test]
+fn renders_agent_viewer_drawer_recovery_banner_and_cancel_dialog() {
+    for dark in [false, true] {
+        let mut s = build_populated_thread_state(dark);
+        let tid = "th-demo".to_string();
+        if let Some(tr) = s.thread_runtime_by_id.get_mut(&tid) {
+            tr.streaming = true;
+            tr.agents[0].status = "running".into();
+            tr.agents[0].completed_at = None;
+            tr.transcript_delivery_failure = Some(TranscriptDeliveryFailure {
+                message: "Missed live delta sequence; click Reload to resync.".into(),
+                recoverable: true,
+            });
+            tr.pending_interactions.push(ChatInteraction::UserInput {
+                request_id: JsonRpcLiteId::String("req-ask-1".into()),
+                item_id: "ask-1".into(),
+                questions: json!({
+                    "questions": [{
+                        "id": "q1",
+                        "question": "Which verification scope should run?",
+                        "options": [
+                            { "label": "Fast crate tests", "description": "Run cowork-desktop suite only" },
+                            { "label": "Full workspace", "description": "Run cargo test --workspace" }
+                        ]
+                    }]
+                }),
+            });
+        }
+        s.agent_viewer = Some(AgentViewerState {
+            thread_id: tid.clone(),
+            agent_id: "agent-sub-1".into(),
+            title: "Verifier".into(),
+        });
+        s.chat_ui.cancel_subagents_thread_id = Some(tid);
+        s.chat_ui.cancel_subagents_open = true;
+
+        let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba(&mut rt, dark);
+        let label = if dark {
+            "chat-overlays-dark"
+        } else {
+            "chat-overlays-light"
+        };
+        maybe_save_snap(label, &rgba, 2.0);
+
+        let els = rt.elements();
+        let drawer = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("agent-run-viewer"))
+            .expect("agent-run-viewer must be rendered");
+        assert!(drawer.rect[0] + drawer.rect[2] <= SNAP_VIEWPORT.0 + 1.0);
+        assert!(drawer.rect[0] >= 800.0);
+
+        let feed_surface = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("chat-feed-surface"))
+            .expect("chat-feed-surface must exist");
+        let recovery = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("transcript-delivery-recovery"))
+            .expect("transcript-delivery-recovery must be rendered");
+        let composer = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("chat-composer-dock"))
+            .expect("chat-composer-dock must exist");
+        assert!(
+            recovery.rect[1] >= feed_surface.rect[1] + feed_surface.rect[3] - 1.0,
+            "recovery banner top {} must not overlap feed surface bottom {}",
+            recovery.rect[1],
+            feed_surface.rect[1] + feed_surface.rect[3]
+        );
+        assert!(
+            recovery.rect[1] + recovery.rect[3] <= composer.rect[1] + 1.0,
+            "recovery banner bottom {} must sit above composer top {}",
+            recovery.rect[1] + recovery.rect[3],
+            composer.rect[1]
+        );
+
+        let dialog = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("cancel-subagents-dialog-dialog"))
+            .expect("cancel-subagents-dialog-dialog must be rendered");
+        let dialog_w = dialog.rect[2];
+        assert!(
+            dialog_w <= 461.0,
+            "cancel dialog width {dialog_w} exceeded configured 460pt max"
+        );
+    }
+}
+
+#[test]
+fn interactive_runtime_clicks_and_disabled_gates_work() {
+    // 1) Landing starter prompt click + empty model combobox opens popup.
+    let landing_state = AppState {
+        scene_mode: true,
+        ..Default::default()
+    };
+    let mut rt_landing = Runtime::new(
+        landing_state,
+        test_chat_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 1.0),
+    );
+    rt_landing.frame(0.0);
+
+    let (sx, sy) = rt_landing
+        .find("starter:draft-plan")
+        .expect("starter:draft-plan should exist on landing");
+    rt_landing.pointer_move(sx, sy);
+    rt_landing.pointer_down(sx, sy);
+    rt_landing.pointer_up(sx, sy);
+    rt_landing.frame(0.0);
+    assert!(
+        !rt_landing.state.composer_edit.text.trim().is_empty(),
+        "clicking starter card must populate composer_edit"
+    );
+
+    // 2) CancelSubagentsDialog "Keep subagents" closes modal & queues cancel.
+    let mut active = build_populated_thread_state(false);
+    active.chat_ui.cancel_subagents_open = true;
+    let mut rt_dialog = Runtime::new(active, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_dialog.frame(0.0);
+    rt_dialog.frame(0.3);
+    let (kx, ky) = rt_dialog
+        .find("cancel-subagents-keep")
+        .expect("cancel-subagents-keep button must be clickable");
+    rt_dialog.pointer_move(kx, ky);
+    rt_dialog.pointer_down(kx, ky);
+    rt_dialog.pointer_up(kx, ky);
+    rt_dialog.frame(0.0);
+    assert!(
+        !rt_dialog.state.chat_ui.cancel_subagents_open,
+        "clicking Keep subagents must close dialog"
+    );
+
+    // 3) Read-only notice blocks submit_composer_message and marks controls disabled.
+    let mut ro = build_populated_thread_state(false);
+    ro.thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .read_only_notice = Some(ChatViewReadOnlyNotice {
+        id: None,
+        title: "Archived".into(),
+        detail: "Read-only transcript".into(),
+    });
+    let mut rt_ro = Runtime::new(ro, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_ro.frame(0.0);
+    let els_ro = rt_ro.elements();
+    let input_ro = els_ro
+        .iter()
+        .find(|e| e.key.as_deref() == Some("composer-input"))
+        .expect("composer-input must exist");
+    assert!(
+        !input_ro.focusable,
+        "composer-input must not be focusable/editable on read-only notice"
+    );
+
+    let draft_before = rt_ro.state.composer_drafts.clone();
+    rt_ro.update(|s, _| chat::composer::submit_composer_message(s));
+    assert_eq!(
+        rt_ro.state.composer_drafts, draft_before,
+        "submit_composer_message must be a no-op under read_only_notice"
+    );
+}
+
+#[test]
+fn non_draft_busy_thread_disables_model_and_reasoning_selectors() {
+    let mut s = build_populated_thread_state(false);
+    s.thread_runtime_by_id.get_mut("th-demo").unwrap().streaming = true;
+    let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let els = rt.elements();
+    let model_picker = els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("composer-model-picker-button"))
+        .expect("Model selector trigger must be present in elements");
+    assert!(
+        !model_picker.focusable,
+        "non-draft busy thread must disable Model selector focusability"
+    );
+    let [mx, my] = [
+        model_picker.rect[0] + model_picker.rect[2] * 0.5,
+        model_picker.rect[1] + model_picker.rect[3] * 0.5,
+    ];
+    rt.pointer_move(mx, my);
+    rt.pointer_down(mx, my);
+    rt.pointer_up(mx, my);
+    rt.frame(0.0);
+    assert!(
+        !rt.state.chat_ui.model_combobox.is_open(),
+        "clicking disabled Model selector must not open popup"
+    );
+
+    let reasoning_picker = els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("composer-reasoning-select-trigger"))
+        .expect("Reasoning effort selector trigger must be present in elements");
+    assert!(
+        !reasoning_picker.focusable,
+        "non-draft busy thread must disable Reasoning effort selector focusability"
+    );
+    let [rx, ry] = [
+        reasoning_picker.rect[0] + reasoning_picker.rect[2] * 0.5,
+        reasoning_picker.rect[1] + reasoning_picker.rect[3] * 0.5,
+    ];
+    rt.pointer_move(rx, ry);
+    rt.pointer_down(rx, ry);
+    rt.pointer_up(rx, ry);
+    rt.frame(0.0);
+    assert!(
+        !rt.state.chat_ui.reasoning_open,
+        "clicking disabled Reasoning effort selector must not open menu"
+    );
+}
+
+#[test]
+fn quick_chat_landing_and_review_55_fixes_hold_in_runtime() {
+    // 1) Selecting "Quick chat" from landing target popup keeps workspace lazy via ONE_OFF_LANDING_SENTINEL.
+    let mut s = AppState {
+        scene_mode: true,
+        active_workspace_id: Some("ws-work".into()),
+        workspaces: vec![WorkspaceRecord::new("ws-work", "Work", "/tmp/work", 1)],
+        ..Default::default()
+    };
+    s.workspaces[0].user_name = Some("Max".into());
+    s.desktop_settings.theme = ThemePreference::Light;
+    s.system_dark_override = Some(false);
+
+    let mut rt_landing = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+    rt_landing.frame(0.0);
+    let landing_light_rgba = render_offscreen_rgba(&mut rt_landing, false);
+    maybe_save_snap("chat-landing-light", &landing_light_rgba, 2.0);
+
+    let (tx, ty) = rt_landing
+        .find("landing-target-trigger")
+        .expect("landing-target-trigger must exist");
+    rt_landing.pointer_move(tx, ty);
+    rt_landing.pointer_down(tx, ty);
+    rt_landing.pointer_up(tx, ty);
+    rt_landing.frame(0.0);
+    rt_landing.frame(0.3);
+
+    let (qx, qy) = rt_landing
+        .find("landing-target-menu-option-quick")
+        .expect("Quick chat option must exist in landing target menu");
+    rt_landing.pointer_move(qx, qy);
+    rt_landing.pointer_down(qx, qy);
+    rt_landing.pointer_up(qx, qy);
+    rt_landing.frame(0.0);
+
+    assert_eq!(
+        rt_landing.state.landing_workspace_id.as_deref(),
+        Some(ONE_OFF_LANDING_SENTINEL)
+    );
+    assert_eq!(
+        rt_landing.state.active_workspace_id.as_deref(),
+        Some("ws-work")
+    );
+    assert!(
+        chat::composer::resolve_composer_workspace(&rt_landing.state, None, true).is_none(),
+        "landing sentinel must resolve to Quick chat instead of falling back to active workspace"
+    );
+
+    // Save dark landing snapshot with Quick chat selected.
+    let mut dark_landing = AppState {
+        scene_mode: true,
+        active_workspace_id: Some("ws-work".into()),
+        workspaces: vec![WorkspaceRecord::new("ws-work", "Work", "/tmp/work", 1)],
+        landing_workspace_id: Some(ONE_OFF_LANDING_SENTINEL.into()),
+        system_dark_override: Some(true),
+        ..Default::default()
+    };
+    dark_landing.desktop_settings.theme = ThemePreference::Dark;
+    let mut rt_landing_dark = Runtime::new(
+        dark_landing,
+        test_chat_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt_landing_dark.frame(0.0);
+    let landing_dark_rgba = render_offscreen_rgba(&mut rt_landing_dark, true);
+    maybe_save_snap("chat-landing-dark", &landing_dark_rgba, 2.0);
+
+    // 2) Single-question Ask: `isSecret` uses `.secure()`, and `multiSelect` combines checked + typed text.
+    let mut s_ask = build_populated_thread_state(false);
+    let tid = "th-demo".to_string();
+    s_ask
+        .thread_runtime_by_id
+        .get_mut(&tid)
+        .unwrap()
+        .pending_interactions = vec![
+        ChatInteraction::UserInput {
+            request_id: JsonRpcLiteId::String("req-multi".into()),
+            item_id: "ask-multi".into(),
+            questions: json!({
+                "id": "frameworks",
+                "question": "Select stacks",
+                "multiSelect": true,
+                "options": [
+                    { "label": "Rune" },
+                    { "label": "Ratatui" }
+                ]
+            }),
+        },
+        ChatInteraction::UserInput {
+            request_id: JsonRpcLiteId::String("req-secret".into()),
+            item_id: "ask-secret".into(),
+            questions: json!({
+                "id": "token",
+                "question": "Enter token",
+                "isSecret": true
+            }),
+        },
+    ];
+    s_ask
+        .chat_ui
+        .ask_text_edits
+        .insert("req-multi:frameworks".into(), TextEdit::new("Custom"));
+    s_ask
+        .chat_ui
+        .ask_text_edits
+        .insert("req-secret:token".into(), TextEdit::new("top-secret-token"));
+
+    let mut rt_ask = Runtime::new(s_ask, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_ask.frame(0.0);
+
+    // Click option 0 ("Rune") on the multiSelect card, then click Send -> must include both Rune and Custom.
+    let (ox, oy) = rt_ask
+        .find("ask-opt:req-multi:frameworks:0")
+        .expect("multiSelect option button must exist");
+    rt_ask.pointer_move(ox, oy);
+    rt_ask.pointer_down(ox, oy);
+    rt_ask.pointer_up(ox, oy);
+    rt_ask.frame(0.0);
+
+    let (send_x, send_y) = rt_ask
+        .find("ask-send:req-multi")
+        .expect("Send button for single-question multiSelect must exist");
+    rt_ask.pointer_move(send_x, send_y);
+    rt_ask.pointer_down(send_x, send_y);
+    rt_ask.pointer_up(send_x, send_y);
+    rt_ask.frame(0.0);
+
+    let ask_cmd = rt_ask
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendServerResponse { id, result, .. }
+                if *id == JsonRpcLiteId::String("req-multi".into()) =>
+            {
+                Some(result.clone())
+            }
+            _ => None,
+        })
+        .expect("SendServerResponse for req-multi must be dispatched");
+    assert_eq!(
+        ask_cmd.get("answer").and_then(|v| v.as_str()),
+        Some("Rune, Custom"),
+        "single-question multiSelect must preserve selected checkboxes alongside custom text"
+    );
+
+    // Now req-secret card is top pending interaction: verify its input masks text (`ElementInfo::text == None`).
+    let secret_el = rt_ask
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("ask-input:req-secret:token"))
+        .expect("secret ask input must render");
+    assert!(
+        secret_el.text.is_none() && rt_ask.element_is_secure(&secret_el.path),
+        "isSecret Ask input must mask accessibility text via .secure(), got {:?}",
+        secret_el.text
+    );
+
+    // 3) CancelSubagentsDialog captures originating thread_id even if active thread switches while open.
+    let mut s_stop = build_populated_thread_state(false);
+    let tr_demo = s_stop.thread_runtime_by_id.get_mut("th-demo").unwrap();
+    tr_demo.streaming = true;
+    tr_demo.agents[0].status = "running".into();
+    tr_demo.agents[0].completed_at = None;
+    s_stop.threads.push(ThreadRecord {
+        id: "th-other".into(),
+        workspace_id: "ws-demo".into(),
+        title: "Other thread".into(),
+        status: ThreadStatus::Active,
+        ..Default::default()
+    });
+    s_stop
+        .thread_runtime_by_id
+        .insert("th-other".into(), ThreadRuntime::default());
+
+    let mut rt_stop = Runtime::new(s_stop, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_stop.frame(0.0);
+    let (stop_x, stop_y) = rt_stop
+        .find("composer-stop-btn")
+        .expect("composer-stop-btn must exist on streaming thread");
+    rt_stop.pointer_move(stop_x, stop_y);
+    rt_stop.pointer_down(stop_x, stop_y);
+    rt_stop.pointer_up(stop_x, stop_y);
+    rt_stop.frame(0.0);
+    assert_eq!(
+        rt_stop.state.chat_ui.cancel_subagents_thread_id.as_deref(),
+        Some("th-demo")
+    );
+
+    // Switch active thread while modal remains open; dialog must still interrupt "th-demo".
+    rt_stop.update(|st, _| st.dispatch(Action::Navigate(NavAction::OpenThread("th-other".into()))));
+    rt_stop.frame(0.0);
+    rt_stop.frame(0.3);
+    let (keep_x, keep_y) = rt_stop
+        .find("cancel-subagents-keep")
+        .expect("cancel-subagents-keep must exist after switching thread");
+    rt_stop.pointer_move(keep_x, keep_y);
+    rt_stop.pointer_down(keep_x, keep_y);
+    rt_stop.pointer_up(keep_x, keep_y);
+    rt_stop.frame(0.0);
+
+    assert!(rt_stop.state.chat_ui.cancel_subagents_thread_id.is_none());
+    let interrupt_tid = rt_stop
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendRequest { method, params, .. } if method == "turn/interrupt" => params
+                .get("threadId")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+            _ => None,
+        });
+    assert_eq!(
+        interrupt_tid.as_deref(),
+        Some("th-demo"),
+        "CancelSubagentsDialog must interrupt originating captured thread_id even after switching active thread"
+    );
+}
+
+#[test]
+fn review_72_and_79_ask_preservation_composer_locks_and_overlay_viewer() {
+    // 1) Failed WS send keeps pending Ask card open and preserves selected options & typed text.
+    let mut s_ask = build_populated_thread_state(false);
+    s_ask
+        .thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .pending_interactions = vec![
+        ChatInteraction::UserInput {
+            request_id: JsonRpcLiteId::String("req-keep".into()),
+            item_id: "ask-keep".into(),
+            questions: json!({
+                "id": "frameworks",
+                "question": "Select frameworks",
+                "multiSelect": true,
+                "options": ["Rune", "Taffy"]
+            }),
+        },
+        ChatInteraction::UserInput {
+            request_id: JsonRpcLiteId::String("req-stale".into()),
+            item_id: "ask-stale".into(),
+            questions: json!({
+                "id": "stale_q",
+                "question": "Stale"
+            }),
+        },
+    ];
+    s_ask
+        .chat_ui
+        .ask_text_edits
+        .insert("req-keep:frameworks".into(), TextEdit::new("Custom keep"));
+    s_ask
+        .chat_ui
+        .ask_text_edits
+        .insert("req-stale:stale_q".into(), TextEdit::new("Old answer"));
+
+    let mut rt_ask = Runtime::new(s_ask, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_ask.frame(0.0);
+
+    // Select option 0, mark stale as confirmed before click, then click Send and fail req-keep via WS error.
+    let (ox, oy) = rt_ask
+        .find("ask-opt:req-keep:frameworks:0")
+        .expect("ask option must exist");
+    rt_ask.pointer_move(ox, oy);
+    rt_ask.pointer_down(ox, oy);
+    rt_ask.pointer_up(ox, oy);
+    rt_ask.frame(0.0);
+
+    rt_ask.update(|st, _| {
+        st.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-demo".into(),
+            request_id: JsonRpcLiteId::String("req-stale".into()),
+            ok: true,
+            error: None,
+        });
+    });
+
+    let (sx, sy) = rt_ask
+        .find("ask-send:req-keep")
+        .expect("ask-send must exist");
+    rt_ask.pointer_move(sx, sy);
+    rt_ask.pointer_down(sx, sy);
+    rt_ask.pointer_up(sx, sy);
+    rt_ask.frame(0.0);
+
+    // Simulate WS write failure for req-keep: pending card stays open AND user answers remain intact.
+    rt_ask.update(|st, _| {
+        st.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-demo".into(),
+            request_id: JsonRpcLiteId::String("req-keep".into()),
+            ok: false,
+            error: Some("Socket disconnected".into()),
+        });
+    });
+    assert!(
+        rt_ask
+            .state
+            .chat_ui
+            .ask_selected_options
+            .get("req-keep:frameworks")
+            .is_some_and(|v| v == &vec!["Rune".to_string()]),
+        "selected options must survive failed Ask WS send"
+    );
+    assert_eq!(
+        rt_ask
+            .state
+            .chat_ui
+            .ask_text_edits
+            .get("req-keep:frameworks")
+            .map(|e| e.text.as_str()),
+        Some("Custom keep"),
+        "typed answer must survive failed Ask WS send"
+    );
+    assert!(
+        !rt_ask
+            .state
+            .chat_ui
+            .ask_text_edits
+            .contains_key("req-stale:stale_q"),
+        "confirmed ask state must be pruned once removed from pending_interactions"
+    );
+
+    // 2) Opening AgentRunViewer does NOT lock parent thread model selector; narrow chat_view switches viewer to overlay.
+    let mut s_lock = build_populated_thread_state(false);
+    s_lock.agent_viewer = Some(AgentViewerState {
+        thread_id: "th-demo".into(),
+        agent_id: "agent-sub-1".into(),
+        title: "Verifier".into(),
+    });
+    let mut rt_lock = Runtime::new(s_lock, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_lock.frame(0.0);
+    let model_el = rt_lock
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("composer-model-picker-button"))
+        .expect("model picker must exist");
+    assert!(
+        model_el.focusable,
+        "opening AgentRunViewer inspector must not lock parent thread's model selector"
+    );
+
+    // Narrow viewport (< 820pt) renders AgentRunViewer inside overlay backdrop without shrinking chat-main.
+    let mut rt_narrow = Runtime::new(
+        build_populated_thread_state(false),
+        test_chat_root,
+        (700.0, 820.0),
+        Env::new(true, 1.0),
+    );
+    rt_narrow.update(|st, _| {
+        st.agent_viewer = Some(AgentViewerState {
+            thread_id: "th-demo".into(),
+            agent_id: "agent-sub-1".into(),
+            title: "Verifier".into(),
+        });
+    });
+    rt_narrow.frame(0.0);
+    rt_narrow.frame(0.0);
+    let els_narrow = rt_narrow.elements();
+    assert!(
+        els_narrow
+            .iter()
+            .any(|e| e.key.as_deref() == Some("agent-run-viewer-backdrop")),
+        "AgentRunViewer must render as right overlay when chat-view width < 820pt"
+    );
+    let main_narrow = els_narrow
+        .iter()
+        .find(|e| e.key.as_deref() == Some("chat-main"))
+        .expect("chat-main must exist");
+    assert!(
+        main_narrow.rect[2] >= 690.0,
+        "overlay AgentRunViewer must preserve full chat-main width {}, avoiding 4-pane squeeze",
+        main_narrow.rect[2]
+    );
+
+    // 3) Streaming with missing session blocks submit_composer_message; transcript_only blocks file drop & model selector.
+    let mut s_stream = build_populated_thread_state(false);
+    s_stream.threads[0].session_id = None;
+    s_stream
+        .thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .streaming = true;
+    s_stream.composer_edit = TextEdit::new("Should not steer without session");
+    let cmds_before = s_stream.services.emitted_ws_commands.len();
+    chat::composer::submit_composer_message(&mut s_stream);
+    assert_eq!(
+        s_stream.services.emitted_ws_commands.len(),
+        cmds_before,
+        "submit_composer_message must block steer when streaming lacks active session_id"
+    );
+    assert_eq!(
+        s_stream.composer_edit.text, "Should not steer without session",
+        "blocked steer must keep composer draft untouched"
+    );
+
+    let mut s_to = build_populated_thread_state(false);
+    s_to.thread_runtime_by_id
+        .get_mut("th-demo")
+        .unwrap()
+        .transcript_only = true;
+    let mut rt_to = Runtime::new(s_to, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt_to.frame(0.0);
+    let to_els = rt_to.elements();
+    let card_to = to_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("chat-composer-card"))
+        .expect("composer card must exist");
+    let model_to = to_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("composer-model-picker-button"))
+        .expect("model picker must exist");
+    assert!(
+        !model_to.focusable,
+        "transcript_only thread must disable model selector"
+    );
+
+    let tmp_drop = std::env::temp_dir().join("cowork_chat_transcript_only_drop_test.txt");
+    std::fs::write(&tmp_drop, b"drop payload").unwrap();
+    let drop_pt = (
+        card_to.rect[0] + card_to.rect[2] * 0.5,
+        card_to.rect[1] + card_to.rect[3] * 0.5,
+    );
+    rt_to.drop_files(vec![tmp_drop.clone()], Some(drop_pt));
+    rt_to.frame(0.0);
+    assert!(
+        rt_to
+            .state
+            .composer_drafts
+            .get("th-demo")
+            .is_none_or(|d| d.attachments.is_empty()),
+        "chat-composer-card must disable file drop on transcript_only threads"
+    );
+
+    // Control: dropping the same file onto an active thread ingests it cleanly.
+    rt_to.update(|st, _| {
+        st.thread_runtime_by_id
+            .get_mut("th-demo")
+            .unwrap()
+            .transcript_only = false;
+    });
+    rt_to.frame(0.0);
+    rt_to.drop_files(vec![tmp_drop.clone()], Some(drop_pt));
+    rt_to.frame(0.0);
+    let _ = std::fs::remove_file(&tmp_drop);
+    assert!(
+        rt_to
+            .state
+            .composer_drafts
+            .get("th-demo")
+            .is_some_and(|d| !d.attachments.is_empty()),
+        "normal active thread must still accept dropped files on composer card"
+    );
+}

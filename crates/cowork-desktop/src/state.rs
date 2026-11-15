@@ -688,6 +688,22 @@ pub struct McpServerSummary {
     pub auth_status: Option<String>,
     #[serde(default)]
     pub source: Option<String>,
+    #[serde(default)]
+    pub plugin_id: Option<String>,
+    #[serde(default)]
+    pub plugin_name: Option<String>,
+    #[serde(default)]
+    pub plugin_display_name: Option<String>,
+    #[serde(default)]
+    pub plugin_scope: Option<String>,
+    #[serde(default)]
+    pub auth_mode: Option<String>,
+    #[serde(default)]
+    pub auth_message: Option<String>,
+    #[serde(default)]
+    pub auth_state: Option<Value>,
+    #[serde(default)]
+    pub inherited: bool,
     pub config: Value,
 }
 
@@ -1464,6 +1480,9 @@ pub struct AppState {
     pub last_auth_result: Option<Value>,
     pub codex_app_server_status: Option<Value>,
     pub mcp_servers: Vec<McpServerSummary>,
+    pub mcp_validation_by_server: HashMap<String, Value>,
+    pub mcp_auth_challenge: Option<Value>,
+    pub mcp_auth_result: Option<Value>,
     pub marketplaces: Vec<Value>,
     pub openai_native_connectors: Vec<Value>,
     pub skills: Vec<SkillSummary>,
@@ -1576,6 +1595,9 @@ impl Default for AppState {
             last_auth_result: None,
             codex_app_server_status: None,
             mcp_servers: Vec::new(),
+            mcp_validation_by_server: HashMap::new(),
+            mcp_auth_challenge: None,
+            mcp_auth_result: None,
             marketplaces: Vec::new(),
             openai_native_connectors: Vec::new(),
             skills: Vec::new(),
@@ -2451,6 +2473,9 @@ impl AppState {
                         rt.interaction_errors.insert(req_key.clone(), msg);
                     }
                 }
+                if ok {
+                    self.chat_ui.clear_ask_request_by_key(&req_key);
+                }
             }
             StoreEvent::WsInvalidMessage {
                 workspace_id,
@@ -2651,14 +2676,18 @@ impl AppState {
                 }
             }
             NavAction::OpenSettings(page) => {
+                let canonical = page.map(SettingsPageId::canonical);
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Settings),
-                    settings_page: page.map(SettingsPageId::canonical),
+                    settings_page: canonical,
                     settings_tab: Some(None),
                     settings_section: Some(None),
                     new_provider_intent: Some(false),
                     ..Default::default()
                 });
+                if canonical == Some(SettingsPageId::ToolAccess) {
+                    self.bootstrap_active_workspace_tool_access();
+                }
             }
             NavAction::OpenSettingsIntent {
                 page,
@@ -2666,14 +2695,18 @@ impl AppState {
                 section,
                 new_provider,
             } => {
+                let canonical = page.canonical();
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Settings),
-                    settings_page: Some(page.canonical()),
+                    settings_page: Some(canonical),
                     settings_tab: Some(tab),
                     settings_section: Some(section),
                     new_provider_intent: Some(new_provider),
                     ..Default::default()
                 });
+                if canonical == SettingsPageId::ToolAccess {
+                    self.bootstrap_active_workspace_tool_access();
+                }
             }
             NavAction::SelectWorkspace(workspace_id) => {
                 self.active_workspace_id = Some(workspace_id);
@@ -4305,10 +4338,12 @@ impl AppState {
                 enabled,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let mut params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                params.insert("enabled".to_string(), json!(enabled));
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/setEnabled",
-                    json!({ "cwd": cwd, "name": name, "source": source, "enabled": enabled }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4319,10 +4354,12 @@ impl AppState {
                 api_key,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let mut params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                params.insert("apiKey".to_string(), json!(api_key));
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/auth/setApiKey",
-                    json!({ "cwd": cwd, "name": name, "source": source, "apiKey": api_key }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4332,10 +4369,11 @@ impl AppState {
                 source,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/validate",
-                    json!({ "cwd": cwd, "name": name, "source": source }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4345,10 +4383,11 @@ impl AppState {
                 source,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/auth/authorize",
-                    json!({ "cwd": cwd, "name": name, "source": source }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4359,10 +4398,12 @@ impl AppState {
                 callback_url,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let mut params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                params.insert("code".to_string(), json!(callback_url));
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/auth/callback",
-                    json!({ "cwd": cwd, "name": name, "source": source, "code": callback_url }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4686,7 +4727,13 @@ impl AppState {
                     c.clone(),
                     true,
                 );
-                let _ = self.send_ws_request(&workspace_id, "cowork/marketplaces/read", c, true);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/marketplaces/read",
+                    c.clone(),
+                    true,
+                );
+                let _ = self.send_ws_request(&workspace_id, "cowork/mcp/servers/read", c, true);
             }
             SettingsAction::InstallPlugin {
                 workspace_id,
@@ -5404,6 +5451,7 @@ impl AppState {
             json!({ "cwd": cwd }),
             true,
         );
+        self.bootstrap_tool_access_catalogs(workspace_id);
 
         if let Some(active_tid) = self.nav.current().active_thread_id.clone()
             && self.workspace_for_thread(&active_tid).as_deref() == Some(workspace_id)
@@ -6249,6 +6297,15 @@ impl AppState {
             "mcp_servers" => {
                 self.update_mcp_servers_from_event(evt);
             }
+            "mcp_server_validation" => {
+                self.apply_mcp_validation_event(evt);
+            }
+            "mcp_server_auth_challenge" => {
+                self.apply_mcp_auth_challenge_event(evt);
+            }
+            "mcp_server_auth_result" => {
+                self.apply_mcp_auth_result_event(evt);
+            }
             "session_config" => {
                 self.apply_session_config_event(workspace_id, evt);
             }
@@ -6492,12 +6549,23 @@ impl AppState {
                     self.dispatch(Action::Chat(ChatAction::RetryFailedTurn { thread_id }));
                 }
             }
-            "cowork/mcp/servers/read"
+            "cowork/mcp/list"
+            | "cowork/mcp/servers/read"
             | "cowork/mcp/server/upsert"
             | "cowork/mcp/server/delete"
             | "cowork/mcp/server/setEnabled" => {
                 let evt = payload.get("event").unwrap_or(&payload);
                 self.update_mcp_servers_from_event(evt);
+            }
+            "cowork/mcp/server/validate" => {
+                let evt = payload.get("event").unwrap_or(&payload);
+                self.apply_mcp_validation_event(evt);
+            }
+            "cowork/mcp/server/auth/authorize"
+            | "cowork/mcp/server/auth/callback"
+            | "cowork/mcp/server/auth/setApiKey" => {
+                let evt = payload.get("event").unwrap_or(&payload);
+                self.apply_mcp_auth_event(evt);
             }
             "cowork/agentProfiles/catalog/read"
             | "cowork/agentProfiles/upsert"
@@ -7124,54 +7192,162 @@ impl AppState {
         }
     }
 
-    fn apply_skills_list_event(&mut self, evt: &Value) {
-        if let Some(arr) = evt.get("skills").and_then(Value::as_array) {
-            self.skills = arr.iter().filter_map(parse_skill_summary).collect();
+    fn bootstrap_active_workspace_tool_access(&mut self) {
+        let Some(ws_id) = self.active_workspace_id.clone() else {
+            return;
+        };
+        let is_running = self
+            .workspace_runtime_by_id
+            .get(&ws_id)
+            .is_some_and(|rt| matches!(rt.server_state, ServerLifecycleState::Running { .. }))
+            || self
+                .workspace_socket_by_id
+                .get(&ws_id)
+                .is_some_and(|s| !matches!(s, WsConnectionState::Disconnected));
+        if !is_running {
+            return;
         }
+        self.bootstrap_tool_access_catalogs(&ws_id);
+    }
+
+    fn bootstrap_tool_access_catalogs(&mut self, workspace_id: &str) {
+        let cwd = self.workspace_path(workspace_id);
+        let params = json!({ "cwd": cwd });
+        for method in [
+            "cowork/plugins/catalog/read",
+            "cowork/skills/catalog/read",
+            "cowork/marketplaces/read",
+            "cowork/mcp/servers/read",
+        ] {
+            let _ = self.send_ws_request(workspace_id, method, params.clone(), true);
+        }
+    }
+
+    fn build_mcp_target_params(
+        &self,
+        cwd: Option<&str>,
+        name: &str,
+        source: &str,
+    ) -> serde_json::Map<String, Value> {
+        let mut params = serde_json::Map::new();
+        params.insert("cwd".to_string(), json!(cwd));
+        params.insert("name".to_string(), json!(name));
+        if !source.is_empty() {
+            params.insert("source".to_string(), json!(source));
+        }
+        if let Some(srv) = self.mcp_servers.iter().find(|srv| {
+            srv.name == name && (source.is_empty() || srv.source.as_deref() == Some(source))
+        }) {
+            if let Some(plugin_id) = srv
+                .plugin_id
+                .as_deref()
+                .or_else(|| srv.config.get("pluginId").and_then(Value::as_str))
+                .filter(|s| !s.is_empty())
+            {
+                params.insert("pluginId".to_string(), json!(plugin_id));
+            }
+            if let Some(plugin_scope) = srv
+                .plugin_scope
+                .as_deref()
+                .or_else(|| srv.config.get("pluginScope").and_then(Value::as_str))
+                .filter(|s| !s.is_empty())
+            {
+                params.insert("pluginScope".to_string(), json!(plugin_scope));
+            }
+        }
+        params
+    }
+
+    fn apply_skills_list_event(&mut self, evt: &Value) {
+        let Some(arr) = evt.get("skills").and_then(Value::as_array) else {
+            return;
+        };
+        let updated: Vec<SkillSummary> = arr
+            .iter()
+            .filter_map(|v| {
+                let mut summary = parse_skill_summary(v)?;
+                let has_explicit_scope = v
+                    .get("scope")
+                    .or_else(|| v.get("origin").and_then(|o| o.get("scope")))
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.trim().is_empty());
+                let prev = summary
+                    .id
+                    .as_deref()
+                    .and_then(|id| self.skills.iter().find(|s| s.id.as_deref() == Some(id)))
+                    .or_else(|| self.skills.iter().find(|s| s.name == summary.name));
+                let inst = summary
+                    .installation_id
+                    .as_deref()
+                    .and_then(|iid| {
+                        self.skill_installations
+                            .iter()
+                            .find(|i| i.get("installationId").and_then(Value::as_str) == Some(iid))
+                    })
+                    .or_else(|| {
+                        self.skill_installations.iter().find(|i| {
+                            i.get("name")
+                                .or_else(|| i.get("skillName"))
+                                .and_then(Value::as_str)
+                                == Some(summary.name.as_str())
+                        })
+                    });
+                if summary.installation_id.is_none() {
+                    summary.installation_id =
+                        prev.and_then(|s| s.installation_id.clone()).or_else(|| {
+                            inst.and_then(|i| i.get("installationId"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        });
+                }
+                if !has_explicit_scope {
+                    if let Some(prev_scope) =
+                        prev.map(|s| s.scope.as_str()).filter(|s| !s.is_empty())
+                    {
+                        summary.scope = prev_scope.to_string();
+                    } else if let Some(inst_scope) = inst
+                        .and_then(|i| i.get("scope"))
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        summary.scope = inst_scope.to_string();
+                    }
+                }
+                if summary.source.is_none() {
+                    summary.source = prev.and_then(|s| s.source.clone()).or_else(|| {
+                        inst.and_then(|i| {
+                            i.get("source")
+                                .or_else(|| i.get("origin").and_then(|o| o.get("kind")))
+                        })
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                    });
+                }
+                if summary.version.is_none() {
+                    summary.version = prev.and_then(|s| s.version.clone()).or_else(|| {
+                        inst.and_then(|i| i.get("version"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    });
+                }
+                Some(summary)
+            })
+            .collect();
+        self.skills = updated;
     }
 
     fn update_mcp_servers_from_event(&mut self, evt: &Value) {
         let mut servers = Vec::new();
         for key in ["workspaceServers", "userServers", "servers"] {
+            let default_source = if key == "userServers" {
+                "user"
+            } else {
+                "workspace"
+            };
             if let Some(arr) = evt.get(key).and_then(Value::as_array) {
                 for v in arr {
-                    if let Ok(mut summary) = serde_json::from_value::<McpServerSummary>(v.clone()) {
-                        if summary.source.is_none() {
-                            summary.source = Some(
-                                if key == "userServers" {
-                                    "user"
-                                } else {
-                                    "workspace"
-                                }
-                                .to_string(),
-                            );
-                        }
+                    if let Some(summary) = parse_mcp_server_summary(v, default_source) {
                         servers.push(summary);
-                    } else if let Some(name) = v.get("name").and_then(Value::as_str) {
-                        servers.push(McpServerSummary {
-                            name: name.to_string(),
-                            enabled: v.get("enabled").and_then(Value::as_bool).unwrap_or(true),
-                            transport: v
-                                .get("transport")
-                                .and_then(Value::as_str)
-                                .unwrap_or("stdio")
-                                .to_string(),
-                            status: v.get("status").and_then(Value::as_str).map(str::to_string),
-                            error: v.get("error").and_then(Value::as_str).map(str::to_string),
-                            auth_status: v
-                                .get("authStatus")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            source: Some(
-                                if key == "userServers" {
-                                    "user"
-                                } else {
-                                    "workspace"
-                                }
-                                .to_string(),
-                            ),
-                            config: v.clone(),
-                        });
                     }
                 }
             }
@@ -7179,9 +7355,125 @@ impl AppState {
         if !servers.is_empty()
             || evt.get("servers").is_some()
             || evt.get("workspaceServers").is_some()
+            || evt.get("userServers").is_some()
         {
             self.mcp_servers = servers;
         }
+    }
+
+    fn apply_mcp_validation_event(&mut self, evt: &Value) {
+        let Some(name) = evt.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        let ok = evt.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        let message = evt
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        self.mcp_validation_by_server
+            .insert(name.to_string(), evt.clone());
+        for srv in &mut self.mcp_servers {
+            if srv.name == name {
+                srv.status = Some(if ok { "connected" } else { "error" }.to_string());
+                srv.error = if ok { None } else { message.clone() };
+            }
+        }
+        self.toasts.push(NotificationRecord {
+            key: format!("mcp-validate:{name}"),
+            title: if ok {
+                format!("MCP validation passed: {name}")
+            } else {
+                format!("MCP validation failed: {name}")
+            },
+            description: message,
+            tone: if ok {
+                NotificationTone::Success
+            } else {
+                NotificationTone::Error
+            },
+            created_at_secs: self.now_secs.max(0.0) as u64,
+        });
+    }
+
+    fn apply_mcp_auth_event(&mut self, evt: &Value) {
+        match evt.get("type").and_then(Value::as_str) {
+            Some("mcp_server_auth_challenge") => self.apply_mcp_auth_challenge_event(evt),
+            _ => self.apply_mcp_auth_result_event(evt),
+        }
+    }
+
+    fn apply_mcp_auth_challenge_event(&mut self, evt: &Value) {
+        self.mcp_auth_challenge = Some(evt.clone());
+        let name = evt
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("MCP server");
+        let instructions = evt
+            .pointer("/challenge/instructions")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let url = evt
+            .pointer("/challenge/url")
+            .and_then(Value::as_str)
+            .filter(|u| !u.trim().is_empty());
+        let detail = match (instructions.trim().is_empty(), url) {
+            (false, Some(u)) => Some(format!("{instructions} URL: {u}")),
+            (false, None) => Some(instructions.to_string()),
+            (true, Some(u)) => Some(u.to_string()),
+            (true, None) => None,
+        };
+        self.toasts.push(NotificationRecord {
+            key: format!("mcp-auth-challenge:{name}"),
+            title: format!("MCP auth challenge: {name}"),
+            description: detail,
+            tone: NotificationTone::Info,
+            created_at_secs: self.now_secs.max(0.0) as u64,
+        });
+    }
+
+    fn apply_mcp_auth_result_event(&mut self, evt: &Value) {
+        self.mcp_auth_result = Some(evt.clone());
+        let Some(name) = evt.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        let ok = evt.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        let mode = evt.get("mode").and_then(Value::as_str).map(str::to_string);
+        let message = evt
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        for srv in &mut self.mcp_servers {
+            if srv.name == name {
+                if let Some(m) = mode.clone() {
+                    srv.auth_mode = Some(m.clone());
+                    srv.auth_status = Some(m.clone());
+                    if let Some(obj) = srv.config.as_object_mut() {
+                        obj.insert("authMode".to_string(), json!(m));
+                    }
+                }
+                srv.auth_message = message.clone();
+                srv.error = if ok { None } else { message.clone() };
+            }
+        }
+        self.toasts.push(NotificationRecord {
+            key: format!("mcp-auth-result:{name}"),
+            title: if ok {
+                format!("MCP auth updated: {name}")
+            } else {
+                format!("MCP auth failed: {name}")
+            },
+            description: message,
+            tone: if ok {
+                NotificationTone::Success
+            } else {
+                NotificationTone::Error
+            },
+            created_at_secs: self.now_secs.max(0.0) as u64,
+        });
     }
 
     fn workspace_for_thread(&self, thread_id: &str) -> Option<String> {
@@ -8086,6 +8378,125 @@ fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
     })
 }
 
+fn extract_mcp_transport_kind(v: &Value, config: &Value) -> String {
+    fn from_val(val: &Value) -> Option<&str> {
+        match val {
+            Value::String(s) if !s.trim().is_empty() => Some(s.as_str()),
+            Value::Object(obj) => obj
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty()),
+            _ => None,
+        }
+    }
+    v.get("transport")
+        .and_then(from_val)
+        .or_else(|| config.get("transport").and_then(from_val))
+        .unwrap_or("stdio")
+        .to_string()
+}
+
+fn parse_mcp_server_summary(v: &Value, default_source: &str) -> Option<McpServerSummary> {
+    let explicit_config = v.get("config").filter(|c| c.is_object()).cloned();
+    let config = explicit_config.unwrap_or_else(|| v.clone());
+    let name = v
+        .get("name")
+        .or_else(|| config.get("name"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let enabled = v
+        .get("enabled")
+        .or_else(|| config.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let transport = extract_mcp_transport_kind(v, &config);
+    let source = v
+        .get("source")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(default_source.to_string()));
+    let plugin_id = v
+        .get("pluginId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plugin_name = v
+        .get("pluginName")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plugin_display_name = v
+        .get("pluginDisplayName")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plugin_scope = v
+        .get("pluginScope")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let auth_mode = v
+        .get("authMode")
+        .or_else(|| config.get("authMode"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let auth_state = v.get("authState").cloned();
+    let auth_message = v
+        .get("authMessage")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            auth_state
+                .as_ref()
+                .and_then(|s| s.get("message"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+        });
+    let auth_status = v
+        .get("authStatus")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| auth_mode.clone())
+        .or_else(|| {
+            auth_state
+                .as_ref()
+                .and_then(|s| s.get("status"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let status = v.get("status").and_then(Value::as_str).map(str::to_string);
+    let error = v
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            if auth_mode.as_deref() == Some("error") {
+                auth_message.clone()
+            } else {
+                None
+            }
+        });
+    let inherited = v.get("inherited").and_then(Value::as_bool).unwrap_or(false);
+    Some(McpServerSummary {
+        name,
+        enabled,
+        transport,
+        status,
+        error,
+        auth_status,
+        source,
+        plugin_id,
+        plugin_name,
+        plugin_display_name,
+        plugin_scope,
+        auth_mode,
+        auth_message,
+        auth_state,
+        inherited,
+        config,
+    })
+}
+
 fn parse_skill_summary(v: &Value) -> Option<SkillSummary> {
     let name = v.get("name").and_then(Value::as_str)?.to_string();
     let id = v.get("id").and_then(Value::as_str).map(str::to_string);
@@ -8100,6 +8511,7 @@ fn parse_skill_summary(v: &Value) -> Option<SkillSummary> {
         .to_string();
     let scope = v
         .get("scope")
+        .or_else(|| v.get("origin").and_then(|o| o.get("scope")))
         .and_then(Value::as_str)
         .unwrap_or("workspace")
         .to_string();
@@ -11029,5 +11441,449 @@ mod tests {
             clear_defaults_req["config"]["clearToolCalling"],
             json!(true)
         );
+    }
+
+    #[test]
+    fn ws_server_response_result_clears_ask_buffers_only_on_ok() {
+        let mut state = AppState::default();
+        let req_id = JsonRpcLiteId::String("ask-req-1".to_string());
+        state.thread_runtime_by_id.insert(
+            "th-1".to_string(),
+            ThreadRuntime {
+                pending_interactions: vec![ChatInteraction::UserInput {
+                    request_id: req_id.clone(),
+                    item_id: "item-ask-1".to_string(),
+                    questions: json!([{
+                        "id": "q1",
+                        "question": "Pick one",
+                        "options": ["A", "B"],
+                    }]),
+                }],
+                ..Default::default()
+            },
+        );
+        state
+            .chat_ui
+            .ask_active_question_idx
+            .insert("ask-req-1".to_string(), 1);
+        state.chat_ui.ask_text_edits.insert(
+            "ask-req-1:q1".to_string(),
+            rune::TextEdit::new("custom draft"),
+        );
+        state
+            .chat_ui
+            .ask_selected_options
+            .insert("ask-req-1:q1".to_string(), vec!["A".to_string()]);
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: req_id.clone(),
+            ok: false,
+            error: Some("Disconnected".to_string()),
+        });
+        assert_eq!(
+            state.chat_ui.ask_active_question_idx.get("ask-req-1"),
+            Some(&1)
+        );
+        assert_eq!(
+            state
+                .chat_ui
+                .ask_text_edits
+                .get("ask-req-1:q1")
+                .map(|te| te.text.as_str()),
+            Some("custom draft")
+        );
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: req_id,
+            ok: true,
+            error: None,
+        });
+        assert!(
+            !state
+                .chat_ui
+                .ask_active_question_idx
+                .contains_key("ask-req-1")
+        );
+        assert!(!state.chat_ui.ask_text_edits.contains_key("ask-req-1:q1"));
+        assert!(
+            !state
+                .chat_ui
+                .ask_selected_options
+                .contains_key("ask-req-1:q1")
+        );
+    }
+
+    #[test]
+    fn mcp_server_catalog_entry_preserves_plugin_transport_and_auth() {
+        let mut state = AppState::default();
+        let evt = json!({
+            "type": "mcp_servers",
+            "sessionId": "s-1",
+            "servers": [
+                {
+                    "name": "linear",
+                    "transport": { "type": "http", "url": "https://mcp.linear.app/mcp" },
+                    "enabled": true,
+                    "auth": { "type": "oauth" },
+                    "source": "plugin",
+                    "inherited": false,
+                    "authMode": "oauth_pending",
+                    "authScope": "user",
+                    "authMessage": "Sign in required",
+                    "pluginId": "linear@official",
+                    "pluginName": "linear",
+                    "pluginDisplayName": "Linear",
+                    "pluginScope": "user",
+                    "authState": { "status": "needs_authorization", "message": "Sign in required" }
+                },
+                {
+                    "name": "broken-sse",
+                    "transport": { "type": "sse", "url": "https://example.com/sse" },
+                    "enabled": true,
+                    "source": "user",
+                    "inherited": true,
+                    "authMode": "error",
+                    "authScope": "user",
+                    "authMessage": "Token expired",
+                    "authState": { "status": "expired", "message": "Token expired" }
+                }
+            ]
+        });
+
+        state.reduce_cowork_event("ws-1", &evt, 1);
+        assert_eq!(state.mcp_servers.len(), 2);
+
+        let linear = &state.mcp_servers[0];
+        assert_eq!(linear.name, "linear");
+        assert_eq!(linear.transport, "http");
+        assert_eq!(linear.source.as_deref(), Some("plugin"));
+        assert_eq!(linear.plugin_id.as_deref(), Some("linear@official"));
+        assert_eq!(linear.plugin_scope.as_deref(), Some("user"));
+        assert_eq!(linear.plugin_display_name.as_deref(), Some("Linear"));
+        assert_eq!(linear.auth_mode.as_deref(), Some("oauth_pending"));
+        assert_eq!(linear.auth_status.as_deref(), Some("oauth_pending"));
+        assert_eq!(linear.auth_message.as_deref(), Some("Sign in required"));
+        assert!(!linear.inherited);
+        assert_eq!(
+            linear
+                .config
+                .pointer("/transport/url")
+                .and_then(Value::as_str),
+            Some("https://mcp.linear.app/mcp")
+        );
+
+        let broken = &state.mcp_servers[1];
+        assert_eq!(broken.transport, "sse");
+        assert_eq!(broken.source.as_deref(), Some("user"));
+        assert!(broken.inherited);
+        assert_eq!(broken.error.as_deref(), Some("Token expired"));
+    }
+
+    #[test]
+    fn plugin_mcp_actions_forward_plugin_metadata_and_handle_validation_and_auth() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Demo".to_string(),
+            path: "/tmp/ws-1".to_string(),
+            ..Default::default()
+        });
+        state.active_workspace_id = Some("ws-1".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
+        state.reduce_cowork_event(
+            "ws-1",
+            &json!({
+                "type": "mcp_servers",
+                "servers": [{
+                    "name": "github",
+                    "transport": { "type": "http", "url": "https://api.github.com/mcp" },
+                    "enabled": true,
+                    "source": "plugin",
+                    "inherited": false,
+                    "authMode": "missing",
+                    "authScope": "workspace",
+                    "authMessage": "Sign in",
+                    "pluginId": "github@corp",
+                    "pluginScope": "workspace",
+                    "authState": { "status": "not_configured" }
+                }]
+            }),
+            1,
+        );
+
+        let before = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Settings(SettingsAction::SetMcpServerEnabled {
+            workspace_id: "ws-1".to_string(),
+            name: "github".to_string(),
+            source: "plugin".to_string(),
+            enabled: false,
+        }));
+        state.dispatch(Action::Settings(SettingsAction::SetMcpServerApiKey {
+            workspace_id: "ws-1".to_string(),
+            name: "github".to_string(),
+            source: "plugin".to_string(),
+            api_key: "secret-key".to_string(),
+        }));
+        state.dispatch(Action::Settings(SettingsAction::ValidateMcpServer {
+            workspace_id: "ws-1".to_string(),
+            name: "github".to_string(),
+            source: "plugin".to_string(),
+        }));
+        state.dispatch(Action::Settings(SettingsAction::AuthorizeMcpOAuth {
+            workspace_id: "ws-1".to_string(),
+            name: "github".to_string(),
+            source: "plugin".to_string(),
+        }));
+        state.dispatch(Action::Settings(SettingsAction::CompleteMcpOAuthCallback {
+            workspace_id: "ws-1".to_string(),
+            name: "github".to_string(),
+            source: "plugin".to_string(),
+            callback_url: "code-123".to_string(),
+        }));
+
+        let sent: Vec<(u64, String, Value)> = state.services.emitted_ws_commands[before..]
+            .iter()
+            .filter_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } => Some((*request_id, method.clone(), params.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent.len(), 5);
+        for (req_id, method, params) in &sent {
+            assert_eq!(params["pluginId"], "github@corp", "{method}");
+            assert_eq!(params["pluginScope"], "workspace", "{method}");
+            if method == "cowork/mcp/server/validate" {
+                state.apply_ws_response(
+                    "ws-1",
+                    *req_id,
+                    method,
+                    Ok(json!({
+                        "event": {
+                            "type": "mcp_server_validation",
+                            "name": "github",
+                            "ok": true,
+                            "mode": "http",
+                            "message": "3 tools discovered",
+                            "toolCount": 3
+                        }
+                    })),
+                );
+            } else if method == "cowork/mcp/server/auth/authorize" {
+                state.apply_ws_response(
+                    "ws-1",
+                    *req_id,
+                    method,
+                    Ok(json!({
+                        "event": {
+                            "type": "mcp_server_auth_challenge",
+                            "name": "github",
+                            "challenge": { "method": "manual", "url": "https://github.com/login", "instructions": "Open browser" }
+                        }
+                    })),
+                );
+            } else if method == "cowork/mcp/server/auth/callback" {
+                state.apply_ws_response(
+                    "ws-1",
+                    *req_id,
+                    method,
+                    Ok(json!({
+                        "event": {
+                            "type": "mcp_server_auth_result",
+                            "name": "github",
+                            "ok": true,
+                            "mode": "oauth",
+                            "message": "Connected"
+                        }
+                    })),
+                );
+            }
+        }
+
+        assert_eq!(
+            state
+                .mcp_validation_by_server
+                .get("github")
+                .and_then(|v| v.get("toolCount"))
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(state.mcp_servers[0].status.as_deref(), Some("connected"));
+        assert_eq!(state.mcp_servers[0].auth_status.as_deref(), Some("oauth"));
+        assert_eq!(
+            state
+                .mcp_auth_challenge
+                .as_ref()
+                .and_then(|v| v.pointer("/challenge/url"))
+                .and_then(Value::as_str),
+            Some("https://github.com/login")
+        );
+        assert_eq!(
+            state
+                .mcp_auth_result
+                .as_ref()
+                .and_then(|v| v.get("ok"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        state.apply_ws_response(
+            "ws-1",
+            999,
+            "cowork/mcp/list",
+            Ok(json!({
+                "event": {
+                    "type": "mcp_servers",
+                    "servers": [{
+                        "name": "local-mcp",
+                        "transport": { "type": "stdio", "command": "npx" },
+                        "enabled": true,
+                        "source": "workspace",
+                        "inherited": false,
+                        "authMode": "none",
+                        "authScope": "workspace",
+                        "authMessage": "",
+                        "authState": { "status": "not_configured" }
+                    }]
+                }
+            })),
+        );
+        assert_eq!(state.mcp_servers.len(), 1);
+        assert_eq!(state.mcp_servers[0].name, "local-mcp");
+    }
+
+    #[test]
+    fn tool_access_catalogs_bootstrap_and_skills_list_preserves_metadata() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Demo".to_string(),
+            path: "/tmp/ws-1".to_string(),
+            ..Default::default()
+        });
+        state.active_workspace_id = Some("ws-1".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
+        state.workspace_runtime_by_id.insert(
+            "ws-1".to_string(),
+            WorkspaceRuntime {
+                server_state: ServerLifecycleState::Running {
+                    ws_url: "ws://127.0.0.1:7337/ws".to_string(),
+                    port: 7337,
+                },
+                ..Default::default()
+            },
+        );
+
+        let before_init = state.services.emitted_ws_commands.len();
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-1".to_string(),
+            result: Box::new(init_res),
+        });
+        let init_methods: Vec<String> = state.services.emitted_ws_commands[before_init..]
+            .iter()
+            .filter_map(|cmd| match cmd {
+                WsCommand::SendRequest { method, .. } => Some(method.clone()),
+                _ => None,
+            })
+            .collect();
+        for required in [
+            "cowork/plugins/catalog/read",
+            "cowork/skills/catalog/read",
+            "cowork/marketplaces/read",
+            "cowork/mcp/servers/read",
+        ] {
+            assert!(
+                init_methods.iter().any(|m| m == required),
+                "WsInitialized must bootstrap {required}"
+            );
+        }
+
+        let before_nav = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::ToolAccess,
+        ))));
+        let nav_methods: Vec<String> = state.services.emitted_ws_commands[before_nav..]
+            .iter()
+            .filter_map(|cmd| match cmd {
+                WsCommand::SendRequest { method, .. } => Some(method.clone()),
+                _ => None,
+            })
+            .collect();
+        for required in [
+            "cowork/plugins/catalog/read",
+            "cowork/skills/catalog/read",
+            "cowork/marketplaces/read",
+            "cowork/mcp/servers/read",
+        ] {
+            assert!(
+                nav_methods.iter().any(|m| m == required),
+                "Opening Tool Access must refresh {required}"
+            );
+        }
+
+        state.reduce_cowork_event(
+            "ws-1",
+            &json!({
+                "type": "skills_catalog",
+                "catalog": {
+                    "installations": [{
+                        "installationId": "inst-user-1",
+                        "name": "pdf-reader",
+                        "scope": "user",
+                        "source": "marketplace",
+                        "version": "1.2.0"
+                    }],
+                    "effectiveSkills": [{
+                        "id": "sk-pdf",
+                        "installationId": "inst-user-1",
+                        "name": "pdf-reader",
+                        "description": "Reads PDFs",
+                        "scope": "user",
+                        "enabled": true,
+                        "source": "marketplace",
+                        "version": "1.2.0"
+                    }]
+                }
+            }),
+            1,
+        );
+        state.reduce_cowork_event(
+            "ws-1",
+            &json!({
+                "type": "skills_list",
+                "skills": [{
+                    "name": "pdf-reader",
+                    "description": "Reads PDFs",
+                    "enabled": false
+                }]
+            }),
+            2,
+        );
+        assert_eq!(state.skills.len(), 1);
+        assert_eq!(state.skills[0].scope, "user");
+        assert_eq!(
+            state.skills[0].installation_id.as_deref(),
+            Some("inst-user-1")
+        );
+        assert_eq!(state.skills[0].source.as_deref(), Some("marketplace"));
+        assert_eq!(state.skills[0].version.as_deref(), Some("1.2.0"));
+        assert!(!state.skills[0].enabled);
     }
 }

@@ -8,7 +8,7 @@ use rune_kit::diff::{DiffMode, DiffState, DiffView, FileDiff, LineKind};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::Value;
 
-use crate::actions::{Action, ChatAction};
+use crate::actions::{Action, ChatAction, ShellAction};
 use crate::state::{
     AppState, ChatInteraction, FeedItem, FeedMessageRole, ThreadAgentSummary, ToolRunStatus,
 };
@@ -785,6 +785,7 @@ fn build_tool_card(
                 .control_size(ControlSize::Small)
                 .icon(&icons::BOT)
                 .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(false)));
                     s.dispatch(Action::Chat(ChatAction::OpenAgentViewer {
                         agent_id: open_id.clone(),
                         title: open_title.clone(),

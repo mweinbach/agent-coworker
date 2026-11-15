@@ -79,6 +79,7 @@ pub fn markdown_style(
         .link(t.accent)
         .link_hover(t.accent_hover)
         .inline_code_bg(t.code_bg)
+        .inline_code_pad(1.5)
         .code_block(t.code_bg, t.border)
         .code_block_padding(12.0, 10.0)
         .code_block_font(TextStyle {

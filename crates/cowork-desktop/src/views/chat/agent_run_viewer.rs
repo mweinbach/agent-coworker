@@ -18,7 +18,12 @@ use super::model::is_active_child_agent;
 static EMPTY_ERRORS: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new);
 
 /// Builds the subagent transcript drawer when `AppState::agent_viewer` is active.
-pub fn build_agent_run_drawer(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
+pub fn build_agent_run_drawer(
+    s: &AppState,
+    k: &Kit,
+    t: &ThemeTokens,
+    chat_view_width: Option<f32>,
+) -> Option<El> {
     let viewer = s.agent_viewer.as_ref()?;
     let rt = s.thread_runtime_by_id.get(&viewer.thread_id);
     let agent = rt.and_then(|r| r.agents.iter().find(|a| a.agent_id == viewer.agent_id));
@@ -153,19 +158,28 @@ pub fn build_agent_run_drawer(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<
         )
     };
 
-    Some(
-        col()
-            .key("agent-run-viewer")
-            .w(432.0)
-            .min_w(340.0)
-            .max_w(480.0)
-            .h_full()
-            .min_h(0.0)
-            .fill(t.panel_bg)
-            .border_sides([0.0, 0.0, 0.0, 1.0], t.border_muted)
-            .child(header)
-            .child(body),
-    )
+    let overlay_w = chat_view_width
+        .filter(|&w| w < 820.0)
+        .map(|w| (w - 32.0).clamp(280.0, 432.0));
+
+    let mut drawer = col()
+        .key("agent-run-viewer")
+        .h_full()
+        .min_h(0.0)
+        .fill(if overlay_w.is_some() {
+            t.popover_bg
+        } else {
+            t.panel_bg
+        })
+        .border_sides([0.0, 0.0, 0.0, 1.0], t.border_muted)
+        .child(header)
+        .child(body);
+    drawer = if let Some(w) = overlay_w {
+        drawer.w(w).border(1.0, t.border_strong)
+    } else {
+        drawer.w(432.0).min_w(340.0).max_w(480.0)
+    };
+    Some(drawer)
 }
 
 fn resolve_agent_title(viewer_title: &str, agent: Option<&ThreadAgentSummary>) -> String {

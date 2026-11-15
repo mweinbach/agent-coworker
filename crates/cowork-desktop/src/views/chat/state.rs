@@ -78,6 +78,8 @@ pub struct ChatUiState {
     pub composer_height_override: Option<f32>,
     /// Confirmation modal when stopping a turn that has running subagents.
     pub cancel_subagents_open: bool,
+    /// Originating thread ID captured when opening the cancel-subagents modal.
+    pub cancel_subagents_thread_id: Option<String>,
     /// Number of tail feed items currently rendered per thread key.
     pub feed_visible_count_by_thread: HashMap<String, usize>,
     /// Latest `on_at_bottom` signal per thread key.
@@ -126,6 +128,7 @@ impl Default for ChatUiState {
             landing_target_open: false,
             composer_height_override: None,
             cancel_subagents_open: false,
+            cancel_subagents_thread_id: None,
             feed_visible_count_by_thread: HashMap::new(),
             feed_at_bottom_by_thread: HashMap::new(),
             feed_far_from_bottom_by_thread: HashMap::new(),
@@ -289,5 +292,30 @@ impl ChatUiState {
             .copied()
             .unwrap_or(0);
         recorded.max(total_items.saturating_sub(baseline))
+    }
+
+    /// Clears transient `ask` form buffers and active step for `req_key` after WS confirmation.
+    pub fn clear_ask_request_by_key(&mut self, req_key: &str) {
+        self.ask_active_question_idx.remove(req_key);
+        let prefix = format!("{req_key}:");
+        self.ask_text_edits.retain(|k, _| !k.starts_with(&prefix));
+        self.ask_selected_options
+            .retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// Prunes `ask` form buffers whose request keys are no longer pending on any thread runtime.
+    pub fn retain_active_ask_requests(&mut self, active_req_keys: &HashSet<String>) {
+        self.ask_active_question_idx
+            .retain(|req_key, _| active_req_keys.contains(req_key));
+        self.ask_text_edits.retain(|q_key, _| {
+            active_req_keys
+                .iter()
+                .any(|rk| q_key.starts_with(rk) && q_key.as_bytes().get(rk.len()) == Some(&b':'))
+        });
+        self.ask_selected_options.retain(|q_key, _| {
+            active_req_keys
+                .iter()
+                .any(|rk| q_key.starts_with(rk) && q_key.as_bytes().get(rk.len()) == Some(&b':'))
+        });
     }
 }

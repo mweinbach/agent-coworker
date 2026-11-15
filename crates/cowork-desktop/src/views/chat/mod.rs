@@ -16,6 +16,8 @@ pub mod interaction;
 pub mod landing;
 pub mod markdown;
 pub mod model;
+#[cfg(test)]
+mod parity_tests;
 pub mod state;
 
 pub use state::ChatUiState;
@@ -43,6 +45,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
         s.desktop_settings.high_contrast,
     );
 
+    let chat_view_width = cx.layout_size("chat-view").map(|[w, _]| w);
     let mut overlays = Vec::new();
     let content = if let Some(thread) = s.active_thread() {
         let rt = s.active_thread_runtime();
@@ -98,18 +101,17 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             },
         );
 
-        let mut feed_wrap = col()
+        let feed_wrap = col()
             .key("chat-feed-surface")
             .w_full()
             .grow(1.0)
             .min_h(0.0)
             .child(feed_el);
+        main_col = main_col.child(feed_wrap);
 
         if let Some(failure) = rt.and_then(|r| r.transcript_delivery_failure.as_ref()) {
-            feed_wrap =
-                feed_wrap.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
+            main_col = main_col.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
         }
-        main_col = main_col.child(feed_wrap);
 
         if let Some(lock) = rt
             .and_then(|r| r.source_task.as_ref())
@@ -129,10 +131,27 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .key("chat-view")
             .w_full()
             .grow(1.0)
+            .min_w(0.0)
             .min_h(0.0)
             .child(main_col);
-        if let Some(drawer) = build_agent_run_drawer(s, k, &t) {
-            split = split.child(drawer);
+        if let Some(drawer) = build_agent_run_drawer(s, k, &t, chat_view_width) {
+            if chat_view_width.is_some_and(|w| w < 820.0) {
+                split = split.child(
+                    col()
+                        .key("agent-run-viewer-backdrop")
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .fill(t.scrim)
+                        .items_end()
+                        .modal(true, |s: &mut AppState| {
+                            s.dispatch(crate::actions::Action::Chat(
+                                crate::actions::ChatAction::CloseAgentViewer,
+                            ));
+                        })
+                        .child(drawer),
+                );
+            } else {
+                split = split.child(drawer);
+            }
         }
         split
     } else {

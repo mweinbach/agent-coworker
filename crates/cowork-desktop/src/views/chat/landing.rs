@@ -11,17 +11,21 @@ use super::composer;
 use super::icons;
 use super::model::landing_starter_prompts;
 
-const LANDING_MAX_WIDTH: f32 = 720.0;
+const LANDING_MAX_WIDTH: f32 = 672.0;
 
 /// Renders the new-chat landing experience when no active thread is open.
 pub fn build_landing_view(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut Vec<El>) -> El {
     let selected_ws = composer::resolve_composer_workspace(s, None, true);
     let has_project_ws = selected_ws.is_some_and(|w| !w.one_off_chat);
+    let has_draft_input = !s.composer_edit.text.trim().is_empty()
+        || s.composer_drafts
+            .get(&s.composer_key())
+            .is_some_and(|d| !d.attachments.is_empty());
 
     let greeting = build_greeting_header(s, k, t, selected_ws);
     let target_picker = build_workspace_target_picker(s, k, t, overlays, selected_ws);
     let hero_composer = composer::build_composer(s, k, t, overlays, true);
-    let starters = build_starter_prompts(k, t, has_project_ws);
+    let starters = build_starter_prompts(k, t, has_project_ws, has_draft_input);
 
     let center_col = col()
         .key("new-chat-landing")
@@ -79,7 +83,7 @@ fn build_greeting_header(
 
     let heading = match profile_name {
         Some(name) => format!("How can I help, {name}?"),
-        None => "How can I help today?".to_string(),
+        None => "What should we work on?".to_string(),
     };
 
     let subtitle = match selected_ws {
@@ -160,7 +164,7 @@ fn build_workspace_target_picker(
 
         let quick_selected = selected_ws.is_none_or(|w| w.one_off_chat);
         let mut quick_item = PopupItem::new("quick", "Quick chat")
-            .description("Start without a workspace folder")
+            .description("Start without a folder")
             .leading(icon(&icons::MESSAGE_SQUARE, 14.0).color(t.text_muted));
         if quick_selected {
             quick_item = quick_item.trailing(icon(k.glyph.check, 13.0).color(t.accent));
@@ -169,13 +173,13 @@ fn build_workspace_target_picker(
 
         items.push(
             PopupItem::new("pick", "Add workspace folder...")
-                .description("Browse for a local project directory")
+                .description("Browse local directory")
                 .leading(icon(&icons::EXTERNAL_LINK, 14.0).color(t.accent)),
         );
 
         PopupList::new("landing-target-menu", "landing-target-trigger")
             .anchored("landing-target-trigger", Side::Bottom, Align::Start, 6.0)
-            .width(320.0)
+            .width(400.0)
             .max_height(260.0)
             .open(true)
             .items(items)
@@ -187,12 +191,7 @@ fn build_workspace_target_picker(
                 if choice == "pick" {
                     s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder));
                 } else if choice == "quick" {
-                    let one_off_id = s
-                        .workspaces
-                        .iter()
-                        .find(|w| w.one_off_chat && !w.archived)
-                        .map(|w| w.id.clone());
-                    s.dispatch(Action::Shell(ShellAction::SetLandingWorkspace(one_off_id)));
+                    s.dispatch(Action::Shell(ShellAction::SelectLandingQuickChat));
                 } else if let Some(ws_id) = choice.strip_prefix("ws:") {
                     s.dispatch(Action::Shell(ShellAction::SetLandingWorkspace(Some(
                         ws_id.to_string(),
@@ -205,35 +204,36 @@ fn build_workspace_target_picker(
     trigger
 }
 
-fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool) -> El {
+fn starter_icon(id: &str) -> &'static rune::Icon {
+    match id {
+        "summarize-repo" => &icons::BOOK_OPEN,
+        "explain-folder" => &icons::COMPASS,
+        "find-bugs" => &icons::SCAN_SEARCH,
+        "write-tests" => &icons::CHECKLIST,
+        "draft-plan" => &icons::CHECKLIST,
+        "brainstorm" => &icons::LIGHTBULB,
+        "polish-writing" => &icons::PENCIL,
+        _ => &icons::MESSAGE_SQUARE,
+    }
+}
+
+fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: bool) -> El {
     let prompts = landing_starter_prompts(has_workspace);
     let mut grid = row().w_full().flex_wrap().gap(10.0);
 
     for prompt in prompts {
         let prompt_text = prompt.prompt.to_string();
-        let card = col()
+        let mut card = col()
             .key(format!("starter:{}", prompt.id))
             .grow(1.0)
-            .min_w(210.0)
-            .max_w(355.0)
+            .min_w(260.0)
+            .max_w(331.0)
             .gap(3.0)
             .px(14.0)
             .py(11.0)
             .radius(12.0)
             .fill(k.alpha(t.elevated_bg, 0.45))
-            .hover(t.elevated_bg)
             .border(1.0, t.border_muted)
-            .cursor(Cursor::Pointer)
-            .help("Insert starter prompt")
-            .on_press(move |s: &mut AppState| {
-                let key = s.composer_key();
-                s.composer_edit = TextEdit::new(&prompt_text);
-                s.composer_edit.focused = true;
-                s.dispatch(Action::Chat(ChatAction::SetComposerDraftText {
-                    key,
-                    text: prompt_text.clone(),
-                }));
-            })
             .child(
                 row()
                     .w_full()
@@ -241,10 +241,18 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool) -> El {
                     .justify_between()
                     .gap(6.0)
                     .child(
-                        text(prompt.label)
-                            .font(k.ty.ui_medium)
-                            .color(t.text_base)
-                            .truncate(),
+                        row()
+                            .items_center()
+                            .gap(6.0)
+                            .min_w(0.0)
+                            .grow(1.0)
+                            .child(icon(starter_icon(prompt.id), 13.0).color(t.text_muted))
+                            .child(
+                                text(prompt.label)
+                                    .font(k.ty.ui_medium)
+                                    .color(t.text_base)
+                                    .truncate(),
+                            ),
                     )
                     .child(icon(&icons::ARROW_UP, 12.0).color(t.text_faint)),
             )
@@ -255,8 +263,27 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool) -> El {
                     .truncate(),
             );
 
+        if !hidden {
+            card = card
+                .hover(t.elevated_bg)
+                .cursor(Cursor::Pointer)
+                .help("Insert starter prompt")
+                .on_press(move |s: &mut AppState| {
+                    let key = s.composer_key();
+                    s.composer_edit = TextEdit::new(&prompt_text);
+                    s.composer_edit.focused = true;
+                    s.dispatch(Action::Chat(ChatAction::SetComposerDraftText {
+                        key,
+                        text: prompt_text.clone(),
+                    }));
+                });
+        }
+
         grid = grid.child(card);
     }
 
+    if hidden {
+        grid = grid.layer_opacity(0.0).disabled(true);
+    }
     grid
 }

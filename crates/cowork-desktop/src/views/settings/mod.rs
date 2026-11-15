@@ -123,9 +123,13 @@ fn placeholder_page(s: &AppState, page: SettingsPageId, k: &Kit, t: &ThemeTokens
 }
 
 /// Renders the full-window Settings shell, navigation rail, and active settings page.
-pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
+pub fn view(s: &AppState, cx: &mut Cx<AppState>, _k: &Kit) -> SubviewOutput {
     let dark = s.effective_dark(cx.system_dark());
-    let t = theme::tokens(dark);
+    let (resolved_k, t) = theme::build_kit(
+        dark,
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+    );
 
     cx.foreground(t.text_base);
     cx.focus_ring(2.0, 2.0, t.focus_ring);
@@ -133,14 +137,14 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
 
     let active_page = resolve_active_page(s);
     let content = match active_page {
-        SettingsPageId::Desktop => desktop::view(s, k, &t),
-        SettingsPageId::Diagnostics => developer::view(s, k, &t),
-        SettingsPageId::Experiments => experiments::view(s, k, &t),
-        SettingsPageId::Updates => updates::view(s, k, &t),
-        SettingsPageId::Usage => usage::view(s, k, &t),
-        SettingsPageId::PrivacyTelemetry => privacy_telemetry::view(s, k, &t),
-        other => placeholder_page(s, other, k, &t),
+        SettingsPageId::Desktop => desktop::view(s, &resolved_k, &t),
+        SettingsPageId::Diagnostics => developer::view(s, &resolved_k, &t),
+        SettingsPageId::Experiments => experiments::view(s, &resolved_k, &t),
+        SettingsPageId::Updates => updates::view(s, &resolved_k, &t),
+        SettingsPageId::Usage => usage::view(s, &resolved_k, &t),
+        SettingsPageId::PrivacyTelemetry => privacy_telemetry::view(s, &resolved_k, &t),
+        other => placeholder_page(s, other, &resolved_k, &t),
     };
 
-    settings_shell(s, cx, k, &t, active_page, content)
+    settings_shell(s, cx, &resolved_k, &t, active_page, content)
 }

@@ -85,27 +85,35 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .build(k, t),
     );
 
-    rows.push(
-        SettingsRow::new("AI trace payloads")
-            .description(
-                "Include prompt and tool payload samples in AI traces. Requires AI trace metadata.",
-            )
-            .control(
-                Switch::new(pt.ai_trace_payloads_enabled)
-                    .label("AI trace payloads")
-                    .hide_label()
-                    .disabled(!pt.ai_trace_telemetry_enabled)
-                    .on_toggle(|s: &mut AppState| {
-                        dispatch_privacy_patch(s, |p| {
-                            if p.ai_trace_telemetry_enabled {
-                                p.ai_trace_payloads_enabled = !p.ai_trace_payloads_enabled;
-                            }
-                        });
-                    })
-                    .build(k),
-            )
-            .build(k, t),
-    );
+    // Full-payload capture exposes prompts, tool outputs, commands, logs, and file paths;
+    // require an explicit warning AlertDialog before turning ON (disabled until SettingsUiState
+    // lands, while turning OFF remains one click).
+    let payloads_row = SettingsRow::new("AI trace payloads")
+        .description(
+            "Include prompt and tool payload samples in AI traces. Requires AI trace metadata.",
+        )
+        .control(
+            Switch::new(pt.ai_trace_payloads_enabled)
+                .label("AI trace payloads")
+                .hide_label()
+                .disabled(!pt.ai_trace_telemetry_enabled || !pt.ai_trace_payloads_enabled)
+                .on_toggle(|s: &mut AppState| {
+                    dispatch_privacy_patch(s, |p| {
+                        if p.ai_trace_payloads_enabled {
+                            p.ai_trace_payloads_enabled = false;
+                        }
+                    });
+                })
+                .build(k),
+        );
+    let payloads_row = if !pt.ai_trace_payloads_enabled && pt.ai_trace_telemetry_enabled {
+        payloads_row.meta(
+            "Enabling full-payload traces requires confirmation and activates with runtime dialog state.",
+        )
+    } else {
+        payloads_row
+    };
+    rows.push(payloads_row.build(k, t));
 
     rows.push(
         SettingsRow::new("Diagnostics bundle uploads")

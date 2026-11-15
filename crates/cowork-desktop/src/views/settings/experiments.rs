@@ -21,6 +21,7 @@ pub struct FeatureFlagMeta {
     pub description: &'static str,
     pub default_enabled: bool,
     pub restart_required: bool,
+    pub packaged_forced_off: bool,
 }
 
 /// Canonical feature flags matching `src/shared/featureFlags.ts`.
@@ -31,6 +32,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Show a quick-access Cowork status item in the OS menu bar or tray.",
         default_enabled: true,
         restart_required: false,
+        packaged_forced_off: false,
     },
     FeatureFlagMeta {
         id: "remoteAccess",
@@ -38,6 +40,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Enable phone pairing and relay access while the desktop app is open.",
         default_enabled: false,
         restart_required: true,
+        packaged_forced_off: true,
     },
     FeatureFlagMeta {
         id: "workspacePicker",
@@ -45,6 +48,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Expose the workspace selector control across header and sidebar surfaces.",
         default_enabled: true,
         restart_required: false,
+        packaged_forced_off: false,
     },
     FeatureFlagMeta {
         id: "workspaceLifecycle",
@@ -52,6 +56,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Enable stop, restart, and server process controls for local workspaces.",
         default_enabled: true,
         restart_required: false,
+        packaged_forced_off: false,
     },
     FeatureFlagMeta {
         id: "openAiNativeConnectors",
@@ -59,6 +64,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Enable the OpenAI Native Connectors settings view and Codex apps tooling.",
         default_enabled: false,
         restart_required: true,
+        packaged_forced_off: false,
     },
     FeatureFlagMeta {
         id: "canvas",
@@ -66,6 +72,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Allow interactive workspace canvas artifacts inside threads.",
         default_enabled: false,
         restart_required: false,
+        packaged_forced_off: false,
     },
     FeatureFlagMeta {
         id: "tasks",
@@ -73,6 +80,7 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Show background scheduled tasks navigation and detail views.",
         default_enabled: false,
         restart_required: true,
+        packaged_forced_off: false,
     },
     FeatureFlagMeta {
         id: "workflows",
@@ -80,11 +88,18 @@ pub const KNOWN_FEATURE_FLAGS: &[FeatureFlagMeta] = &[
         description: "Enable multi-step workflow execution and run inspection.",
         default_enabled: false,
         restart_required: true,
+        packaged_forced_off: false,
     },
 ];
 
-/// Resolves whether `flag_id` is currently enabled given `s.feature_flags`.
+/// Resolves whether `flag_id` is currently enabled given `s.feature_flags` and `s.is_packaged`.
 pub fn resolve_flag_enabled(s: &AppState, meta: &FeatureFlagMeta) -> bool {
+    if s.is_packaged {
+        if meta.packaged_forced_off {
+            return false;
+        }
+        return meta.default_enabled;
+    }
     s.feature_flags
         .get(meta.id)
         .copied()
@@ -95,6 +110,8 @@ pub fn resolve_flag_enabled(s: &AppState, meta: &FeatureFlagMeta) -> bool {
 pub fn is_flag_enabled(s: &AppState, flag_id: &str) -> bool {
     if let Some(meta) = KNOWN_FEATURE_FLAGS.iter().find(|f| f.id == flag_id) {
         resolve_flag_enabled(s, meta)
+    } else if s.is_packaged {
+        false
     } else {
         s.feature_flags.get(flag_id).copied().unwrap_or(false)
     }
@@ -107,10 +124,20 @@ struct FlagRowSpec<'a> {
     enabled: bool,
     overridden: bool,
     restart_required: bool,
+    disabled: bool,
+    packaged_forced_off: bool,
 }
 
 fn render_flag_row(spec: FlagRowSpec<'_>, k: &Kit, t: &ThemeTokens) -> El {
     let mut meta_parts: Vec<El> = Vec::new();
+    if spec.packaged_forced_off {
+        meta_parts.push(status_pill(
+            "Disabled in packaged builds",
+            StatusTone::Neutral,
+            k,
+            t,
+        ));
+    }
     if spec.restart_required {
         meta_parts.push(status_pill("Restart required", StatusTone::Warning, k, t));
     }
@@ -123,6 +150,7 @@ fn render_flag_row(spec: FlagRowSpec<'_>, k: &Kit, t: &ThemeTokens) -> El {
     let toggle = Switch::new(enabled)
         .label(spec.label)
         .hide_label()
+        .disabled(spec.disabled)
         .on_toggle(move |s: &mut AppState| {
             let next = !enabled;
             s.dispatch(Action::Settings(SettingsAction::SetFeatureFlag {
@@ -157,8 +185,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let known_rows: Vec<El> = KNOWN_FEATURE_FLAGS
         .iter()
         .map(|meta| {
-            let overridden = s.feature_flags.contains_key(meta.id);
+            let overridden = !s.is_packaged && s.feature_flags.contains_key(meta.id);
             let enabled = resolve_flag_enabled(s, meta);
+            let packaged_forced_off = s.is_packaged && meta.packaged_forced_off;
             render_flag_row(
                 FlagRowSpec {
                     id: meta.id.to_string(),
@@ -167,6 +196,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     enabled,
                     overridden,
                     restart_required: meta.restart_required,
+                    disabled: packaged_forced_off || s.is_packaged,
+                    packaged_forced_off,
                 },
                 k,
                 t,
@@ -191,7 +222,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .build(k, t),
     ];
 
-    if !extra_keys.is_empty() {
+    if !extra_keys.is_empty() && !s.is_packaged {
         let extra_rows: Vec<El> = extra_keys
             .into_iter()
             .map(|key| {
@@ -204,6 +235,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         enabled,
                         overridden: true,
                         restart_required: false,
+                        disabled: false,
+                        packaged_forced_off: false,
                     },
                     k,
                     t,

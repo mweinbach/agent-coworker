@@ -3,13 +3,20 @@
 use rune::{El, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown};
 
-use crate::actions::{Action, SettingsAction};
+use crate::actions::{Action, SettingsAction, ShellAction};
 use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     Section, SettingsRow, StatusTone, callout_banner, settings_page, status_pill,
 };
 use crate::views::settings::shell::PageContent;
+
+/// Restricts release notes markdown links to safe external URL schemes.
+pub fn is_allowed_release_link(raw_url: &str) -> bool {
+    url::Url::parse(raw_url.trim())
+        .map(|parsed| matches!(parsed.scheme(), "http" | "https" | "mailto"))
+        .unwrap_or(false)
+}
 
 fn updater_status_meta(status: &str) -> (&'static str, StatusTone) {
     match status {
@@ -130,11 +137,18 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             Section::new()
                 .title("Release notes")
                 .child(
-                    rune::el()
-                        .w_full()
-                        .px(16.0)
-                        .py(14.0)
-                        .child(Markdown::new(notes).selectable(true).build(k)),
+                    rune::el().w_full().px(16.0).py(14.0).child(
+                        Markdown::new(notes)
+                            .selectable(true)
+                            .on_link(|s: &mut AppState, url| {
+                                if is_allowed_release_link(url) {
+                                    s.dispatch(Action::Shell(ShellAction::RequestExternalUrl(
+                                        url.trim().to_string(),
+                                    )));
+                                }
+                            })
+                            .build(k),
+                    ),
                 )
                 .build(k, t),
         );

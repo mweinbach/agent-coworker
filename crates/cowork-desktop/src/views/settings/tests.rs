@@ -4,6 +4,7 @@ use super::desktop::{DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_
 use super::experiments::{KNOWN_FEATURE_FLAGS, is_flag_enabled, resolve_flag_enabled};
 use super::primitives::{entity_palette_index, management_targets, name_initials};
 use super::shell::{page_key, resolve_active_page, settings_groups};
+use super::updates::is_allowed_release_link;
 use super::usage::{aggregate_usage, format_estimated_cost, format_token_count};
 use crate::actions::{Action, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
@@ -219,4 +220,48 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
     assert_eq!(agg.providers[0].provider, "openai");
     assert_eq!(agg.providers[1].provider, "anthropic");
     assert_eq!(agg.total_models(), 2);
+}
+
+#[test]
+fn packaged_builds_force_remote_access_off_and_ignore_flag_overrides() {
+    let mut state = AppState {
+        is_packaged: true,
+        ..Default::default()
+    };
+    state.feature_flags.insert("remoteAccess".to_string(), true);
+    state
+        .feature_flags
+        .insert("workspacePicker".to_string(), false);
+
+    assert!(!is_flag_enabled(&state, "remoteAccess"));
+    assert!(is_flag_enabled(&state, "workspacePicker"));
+
+    let remote = KNOWN_FEATURE_FLAGS
+        .iter()
+        .find(|flag| flag.id == "remoteAccess")
+        .expect("remoteAccess metadata");
+    assert!(!resolve_flag_enabled(&state, remote));
+
+    state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::RemoteAccess,
+    ))));
+    assert_eq!(resolve_active_page(&state), SettingsPageId::Models);
+    state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Experiments,
+    ))));
+    assert_eq!(resolve_active_page(&state), SettingsPageId::Models);
+}
+
+#[test]
+fn release_link_policy_restricts_to_safe_schemes() {
+    assert!(is_allowed_release_link("https://example.com/releases/v1.0"));
+    assert!(is_allowed_release_link("http://example.com/changelog"));
+    assert!(is_allowed_release_link("mailto:support@example.com"));
+
+    assert!(!is_allowed_release_link("javascript:alert(1)"));
+    assert!(!is_allowed_release_link("file:///etc/passwd"));
+    assert!(!is_allowed_release_link(
+        "data:text/html,<script>alert(1)</script>"
+    ));
+    assert!(!is_allowed_release_link("not a url"));
 }

@@ -27,7 +27,7 @@ use crate::state::{AppState, WindowMode};
 use crate::theme::ThemeTokens;
 use crate::{ApplicationMenu, ApplicationMenuEntry, ApplicationMenuItem, build_application_menu};
 
-use super::helpers::{NARROW_BREAKPOINT, RightRailKind, resolve_adaptive_layout};
+use super::helpers::NARROW_BREAKPOINT;
 use super::state::any_non_menu_overlay_open;
 
 /// Maximum number of top-level menus in non-macOS mode (`File`, `Edit`, `View`, `Window`, `Help`).
@@ -36,8 +36,8 @@ pub const MENU_BAR_COUNT: usize = 5;
 const MENU_STRIP_KEY: &str = "menu-bar-strip";
 const MENU_HAMBURGER_KEY: &str = "menu-bar-hamburger";
 const MENU_DROPDOWN_MODAL_KEY: &str = "menu-bar-dropdown-modal";
+const MENU_FOCUS_BACKDROP_KEY: &str = "menu-bar-focus-backdrop";
 const MENU_BAR_MIN_INLINE_WIDTH: f32 = 520.0;
-const SETTINGS_NAV_WIDTH: f32 = 220.0;
 const WINDOWS_CAPTION_RESERVE_ESTIMATE: f32 = 138.0;
 
 /// Transient state for the Linux/Windows in-window application menu bar.
@@ -164,31 +164,14 @@ pub fn is_compact_menu_bar(
     if vw < NARROW_BREAKPOINT {
         return true;
     }
-    let primary_width = primary_width_override.unwrap_or_else(|| {
-        if s.route().view == ViewId::Settings {
-            (vw - SETTINGS_NAV_WIDTH).max(0.0)
-        } else {
-            let right_kind = if s.canvas_document.is_some() {
-                RightRailKind::Canvas
-            } else if s.active_task.is_some() {
-                RightRailKind::Task
-            } else {
-                RightRailKind::Context
-            };
-            let right_open = s.context_sidebar.is_open() || right_kind != RightRailKind::Context;
-            let layout = resolve_adaptive_layout(
-                vw,
-                s.sidebar.is_open(),
-                s.sidebar.width(),
-                right_kind != RightRailKind::Context || s.context_sidebar.is_open(),
-                right_open,
-                s.context_sidebar.width(),
-                right_kind,
-            );
-            layout.primary_width
-        }
-    });
-    let leading_pad = if s.route().view != ViewId::Settings && !s.sidebar.is_open() {
+    let layout = super::resolve_shell_adaptive_layout(
+        s,
+        super::state::active_canvas_target_key(s).is_some(),
+    );
+    let primary_width = primary_width_override.unwrap_or(layout.primary_width);
+    let sidebar_docked_open =
+        s.route().view != ViewId::Settings && !layout.left_overlay && s.sidebar.is_open();
+    let leading_pad = if s.route().view != ViewId::Settings && !sidebar_docked_open {
         48.0
     } else {
         12.0
@@ -223,6 +206,8 @@ fn capture_focus_before_menu(s: &mut AppState, tx: &Tx) {
 fn restore_saved_focus(s: &mut AppState, tx: &mut Tx) {
     if let Some(key) = s.shell_ui.menu_bar.take_saved_focus() {
         tx.focus(&key, false);
+    } else if tx.focused().is_some_and(|k| k.starts_with("menu-bar-")) {
+        tx.blur();
     }
 }
 
@@ -425,6 +410,10 @@ fn handle_bar_focus_key(
         Key::Escape => {
             dismiss_menu_bar(s, tx, true);
             true
+        }
+        Key::Tab => {
+            dismiss_menu_bar(s, tx, false);
+            false
         }
         Key::Text(_) if !ev.mods.ctrl && !ev.mods.cmd => {
             if let Some(ch) = mnemonic_char_from_event(ev, tx)
@@ -968,6 +957,45 @@ fn build_menu_entry_row(
     }
 }
 
+fn push_top_item_bridges(
+    s: &AppState,
+    menus_len: usize,
+    hover_to_switch: bool,
+    overlays: &mut Vec<El>,
+) {
+    for idx in 0..menus_len.min(MENU_BAR_COUNT) {
+        let rect = s.shell_ui.menu_bar.button_rects[idx];
+        if rect[2] <= 0.0 || rect[3] <= 0.0 {
+            continue;
+        }
+        let mut sensor = el()
+            .key(format!("menu-bar-hover-bridge-{idx}"))
+            .absolute(rect[0], rect[1])
+            .size(rect[2], rect[3])
+            .a11y_hidden()
+            .cursor(Cursor::Pointer)
+            .keeps_text_selection()
+            .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
+                if s.shell_ui.menu_bar.open_menu_idx == Some(idx) {
+                    dismiss_menu_bar(s, tx, true);
+                } else {
+                    let menus = build_application_menu(s);
+                    open_top_menu_dropdown(s, tx, idx, &menus, false, false);
+                }
+            });
+        if hover_to_switch {
+            sensor = sensor.on_hover(move |s: &mut AppState| {
+                if s.shell_ui.menu_bar.open_menu_idx.is_some()
+                    && s.shell_ui.menu_bar.open_menu_idx != Some(idx)
+                {
+                    s.shell_ui.menu_bar.switch_open_menu(idx, None);
+                }
+            });
+        }
+        overlays.push(sensor);
+    }
+}
+
 /// Pushes the active menu dropdown modal overlay (and wide hover-to-switch bar sensors).
 pub fn push_menu_bar_overlay(
     s: &AppState,
@@ -986,7 +1014,9 @@ pub fn push_menu_bar_overlay(
 
     let open_idx = s.shell_ui.menu_bar.open_menu_idx;
     let narrow_open = s.shell_ui.menu_bar.narrow_menu_open;
-    if open_idx.is_none() && !narrow_open {
+    let bar_focused = s.shell_ui.menu_bar.focused_top_idx.is_some();
+    let temp_revealed = s.shell_ui.menu_bar.temp_revealed;
+    if open_idx.is_none() && !narrow_open && !bar_focused && !temp_revealed {
         return;
     }
 
@@ -996,6 +1026,30 @@ pub fn push_menu_bar_overlay(
     }
 
     let compact = narrow_open || is_compact_menu_bar(s, primary_width, chrome_trailing);
+
+    // When `F10` / `Alt`-tap focused or temporarily revealed the inline menu bar without an open
+    // dropdown, mount a non-modal transparent click-outside backdrop so outside clicks dismiss
+    // focus/reveal without trapping Tab or stealing keyboard focus from the strip button, and keep
+    // top-item click bridges above it so clicking `File`..`Help` still opens directly.
+    if open_idx.is_none() && !narrow_open {
+        overlays.push(
+            el().key(MENU_FOCUS_BACKDROP_KEY)
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .a11y_hidden()
+                .keeps_text_selection()
+                .on_press_tx(|s: &mut AppState, tx: &mut Tx| {
+                    dismiss_menu_bar(s, tx, false);
+                    if tx.focused().is_some_and(|k| k.starts_with("menu-bar-")) {
+                        tx.blur();
+                    }
+                }),
+        );
+        if !compact {
+            push_top_item_bridges(s, menus.len(), false, overlays);
+        }
+        return;
+    }
+
     let show_mnemonics = s.shell_ui.menu_bar.show_mnemonics || s.shell_ui.menu_bar.alt_held;
 
     let (anchor_key, card_width, list) = if let Some(idx) = open_idx.filter(|&i| i < menus.len()) {
@@ -1118,35 +1172,7 @@ pub fn push_menu_bar_overlay(
     // Mount transparent hover-to-switch / click-toggle bridges over the inline menu strip buttons
     // AFTER the `.modal_tx` element so Rune's `modal_scope` includes them in allowed hit targets.
     if !compact && open_idx.is_some() {
-        for idx in 0..menus.len().min(MENU_BAR_COUNT) {
-            let rect = s.shell_ui.menu_bar.button_rects[idx];
-            if rect[2] <= 0.0 || rect[3] <= 0.0 {
-                continue;
-            }
-            let sensor = el()
-                .key(format!("menu-bar-hover-bridge-{idx}"))
-                .absolute(rect[0], rect[1])
-                .size(rect[2], rect[3])
-                .a11y_hidden()
-                .cursor(Cursor::Pointer)
-                .keeps_text_selection()
-                .on_hover(move |s: &mut AppState| {
-                    if s.shell_ui.menu_bar.open_menu_idx.is_some()
-                        && s.shell_ui.menu_bar.open_menu_idx != Some(idx)
-                    {
-                        s.shell_ui.menu_bar.switch_open_menu(idx, None);
-                    }
-                })
-                .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
-                    if s.shell_ui.menu_bar.open_menu_idx == Some(idx) {
-                        dismiss_menu_bar(s, tx, true);
-                    } else {
-                        let menus = build_application_menu(s);
-                        open_top_menu_dropdown(s, tx, idx, &menus, false, false);
-                    }
-                });
-            overlays.push(sensor);
-        }
+        push_top_item_bridges(s, menus.len(), true, overlays);
     }
 }
 
@@ -1565,5 +1591,97 @@ mod tests {
         rt.frame(0.016);
         let edit_dump = format!("{:#?}", rt.elements());
         assert!(edit_dump.contains("Ctrl+Y"));
+    }
+
+    #[test]
+    fn f10_bar_focus_dismisses_on_click_outside_and_tab_while_allowing_top_item_click() {
+        // Hidden menu bar: F10 reveals & mounts focus backdrop, clicking outside dismisses & hides.
+        let mut hidden_rt =
+            make_runtime(DesktopPlatformOverride::Linux, (1280.0, 820.0), 0.0, |s| {
+                s.desktop_settings.show_menu_bar = false;
+            });
+        hidden_rt.key(KeyEvent::from(Key::Function(10)));
+        hidden_rt.frame(0.016);
+        assert!(hidden_rt.state.shell_ui.menu_bar.temp_revealed);
+        assert_eq!(hidden_rt.state.shell_ui.menu_bar.focused_top_idx, Some(0));
+        assert!(hidden_rt.state.shell_ui.menu_bar.show_mnemonics);
+        assert!(element_rect(&hidden_rt, MENU_FOCUS_BACKDROP_KEY).is_some());
+        assert!(element_rect(&hidden_rt, MENU_STRIP_KEY).is_some());
+
+        // Clicking into the main pane / composer dismisses temporary reveal, bar focus, and focus ring.
+        hidden_rt.pointer_down(600.0, 750.0);
+        hidden_rt.pointer_up(600.0, 750.0);
+        hidden_rt.frame(0.016);
+        assert!(!hidden_rt.state.shell_ui.menu_bar.temp_revealed);
+        assert_eq!(hidden_rt.state.shell_ui.menu_bar.focused_top_idx, None);
+        assert!(!hidden_rt.state.shell_ui.menu_bar.show_mnemonics);
+        assert!(!hidden_rt.state.shell_ui.menu_bar.is_active());
+        assert!(element_rect(&hidden_rt, MENU_STRIP_KEY).is_none());
+        assert!(element_rect(&hidden_rt, MENU_FOCUS_BACKDROP_KEY).is_none());
+        assert!(!hidden_rt.elements().iter().any(|e| !e.exiting && e.focused));
+
+        // Re-open with F10, then click directly on `Edit` through its top-item bridge -> opens Edit.
+        hidden_rt.key(KeyEvent::from(Key::Function(10)));
+        hidden_rt.frame(0.016);
+        let edit_btn = element_rect(&hidden_rt, &menu_btn_key(1)).expect("Edit button");
+        hidden_rt.pointer_down(edit_btn[0] + 10.0, edit_btn[1] + 10.0);
+        hidden_rt.pointer_up(edit_btn[0] + 10.0, edit_btn[1] + 10.0);
+        hidden_rt.frame(0.016);
+        assert_eq!(hidden_rt.state.shell_ui.menu_bar.open_menu_idx, Some(1));
+        assert!(element_rect(&hidden_rt, MENU_DROPDOWN_MODAL_KEY).is_some());
+
+        // Visible menu bar: F10 -> Tab moves focus out and clears bar focus/mnemonics.
+        let mut visible_rt =
+            make_runtime(DesktopPlatformOverride::Linux, (1280.0, 820.0), 0.0, |_| {});
+        visible_rt.key(KeyEvent::from(Key::Function(10)));
+        visible_rt.frame(0.016);
+        assert_eq!(visible_rt.state.shell_ui.menu_bar.focused_top_idx, Some(0));
+        assert!(
+            visible_rt
+                .elements()
+                .iter()
+                .any(|e| !e.exiting && e.focused && e.key.as_deref() == Some("menu-bar-item-0"))
+        );
+
+        visible_rt.key(KeyEvent::from(Key::Tab));
+        visible_rt.frame(0.016);
+        assert_eq!(visible_rt.state.shell_ui.menu_bar.focused_top_idx, None);
+        assert!(!visible_rt.state.shell_ui.menu_bar.show_mnemonics);
+        assert!(!visible_rt.state.shell_ui.menu_bar.is_active());
+        assert!(element_rect(&visible_rt, MENU_FOCUS_BACKDROP_KEY).is_none());
+        assert!(
+            !visible_rt
+                .elements()
+                .iter()
+                .any(|e| !e.exiting && e.focused && e.key.as_deref() == Some("menu-bar-item-0"))
+        );
+    }
+
+    #[test]
+    fn chat_with_background_active_task_uses_context_rail_width_for_menu_bar() {
+        let mut rt = make_runtime(DesktopPlatformOverride::Linux, (860.0, 820.0), 0.0, |s| {
+            // `ViewId::Chat` with a background `active_task` and collapsed context sidebar:
+            // primary pane stays >= 520px wide (860 - 260 = 600px), so the toolbar stays inline.
+            s.dispatch(Action::Shell(ShellAction::SetSidebarOpen(true)));
+            s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(false)));
+            s.active_task = Some(crate::state::TaskRecordView::default());
+        });
+
+        assert_eq!(rt.state.route().view, ViewId::Chat);
+        assert!(element_rect(&rt, MENU_STRIP_KEY).is_some());
+        assert!(element_rect(&rt, MENU_HAMBURGER_KEY).is_none());
+
+        // Keyboard F10 / Alt+V must match the wide inline strip rather than triggering narrow `"☰"` mode.
+        rt.key(KeyEvent {
+            key: Key::Text("v".to_string()),
+            mods: Mods {
+                alt: true,
+                ..Default::default()
+            },
+        });
+        rt.frame(0.016);
+        assert!(!rt.state.shell_ui.menu_bar.narrow_menu_open);
+        assert_eq!(rt.state.shell_ui.menu_bar.open_menu_idx, Some(2));
+        assert!(element_rect(&rt, MENU_DROPDOWN_MODAL_KEY).is_some());
     }
 }

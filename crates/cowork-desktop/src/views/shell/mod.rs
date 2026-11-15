@@ -125,6 +125,53 @@ fn push_left_drawer_overlay(
     );
 }
 
+/// Resolves adaptive split-shell layout using identical right-rail and pane rules across frame builders and key handlers.
+pub(super) fn resolve_shell_adaptive_layout(
+    s: &AppState,
+    canvas_active: bool,
+) -> helpers::AdaptiveLayout {
+    let route_view = s.route().view;
+    if route_view == ViewId::Settings {
+        return helpers::resolve_adaptive_layout(
+            s.shell_ui.viewport_width,
+            true,
+            s.settings_ui.nav_pane.width(),
+            false,
+            false,
+            0.0,
+            helpers::RightRailKind::Context,
+        );
+    }
+
+    let canvas_maximized = canvas_active && crate::views::chat::is_canvas_maximized(s);
+    let right_kind = if canvas_active {
+        helpers::RightRailKind::Canvas
+    } else if route_view == ViewId::Task {
+        helpers::RightRailKind::Task
+    } else {
+        helpers::RightRailKind::Context
+    };
+    let right_open = if canvas_active {
+        !canvas_maximized && s.shell_ui.canvas_pane.is_open()
+    } else {
+        s.context_sidebar.is_open()
+    };
+    let right_width_pref = if canvas_active {
+        s.shell_ui.canvas_pane.width()
+    } else {
+        s.context_sidebar.width()
+    };
+    helpers::resolve_adaptive_layout(
+        s.shell_ui.viewport_width,
+        s.sidebar.is_open(),
+        s.sidebar.width(),
+        !canvas_maximized,
+        right_open,
+        right_width_pref,
+        right_kind,
+    )
+}
+
 fn build_settings_frame(
     s: &AppState,
     cx: &mut Cx<AppState>,
@@ -136,15 +183,7 @@ fn build_settings_frame(
     let chrome = cx.chrome_insets();
     let leading_lights = chrome.leading.max(cx.titlebar_inset());
     layer.extend(layout.overlays);
-    let adaptive = helpers::resolve_adaptive_layout(
-        s.shell_ui.viewport_width,
-        true,
-        s.settings_ui.nav_pane.width(),
-        false,
-        false,
-        0.0,
-        helpers::RightRailKind::Context,
-    );
+    let adaptive = resolve_shell_adaptive_layout(s, false);
     let narrow = adaptive.left_overlay;
     let toolbar = top_bar::build_settings_toolbar(
         s,
@@ -212,33 +251,7 @@ fn build_workspace_split_frame(
     let canvas_maximized = canvas_active && crate::views::chat::is_canvas_maximized(s);
     layer.extend(canvas_overlays);
 
-    let route_view = s.route().view;
-    let right_kind = if canvas_active {
-        helpers::RightRailKind::Canvas
-    } else if route_view == ViewId::Task {
-        helpers::RightRailKind::Task
-    } else {
-        helpers::RightRailKind::Context
-    };
-    let right_open = if canvas_active {
-        !canvas_maximized && s.shell_ui.canvas_pane.is_open()
-    } else {
-        s.context_sidebar.is_open()
-    };
-    let right_width_pref = if canvas_active {
-        s.shell_ui.canvas_pane.width()
-    } else {
-        s.context_sidebar.width()
-    };
-    let adaptive = helpers::resolve_adaptive_layout(
-        s.shell_ui.viewport_width,
-        s.sidebar.is_open(),
-        s.sidebar.width(),
-        route_view != ViewId::Settings && !canvas_maximized,
-        right_open,
-        right_width_pref,
-        right_kind,
-    );
+    let adaptive = resolve_shell_adaptive_layout(s, canvas_active);
 
     let toolbar = top_bar::build_toolbar(s, cx, k, t, adaptive.primary_width, layer);
     let (primary_el, right_panel_el) = if canvas_maximized {

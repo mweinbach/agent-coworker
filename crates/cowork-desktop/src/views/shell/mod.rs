@@ -286,15 +286,45 @@ mod tests {
     fn test_shell_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
         cx.zoom(state.ui_scale);
         let dark = state.effective_dark(cx.system_dark());
-        let (kit, tokens) = theme::build_kit(
+        let (kit, tokens) = theme::build_kit_with_accent(
             dark,
             state.desktop_settings.reduced_transparency,
             state.desktop_settings.high_contrast,
+            state.desktop_settings.accent_palette,
         );
         cx.foreground(tokens.text_base);
         cx.focus_ring(2.0, 2.5, tokens.focus_ring);
         cx.web_focus();
         view(state, cx, &kit, &tokens)
+    }
+
+    #[test]
+    fn narrow_toolbar_toggle_clears_leading_insets_without_double_padding() {
+        use rune::{Env, Runtime};
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.shell_ui.viewport_width = 640.0;
+
+        let mut rt = Runtime::new(s, test_shell_root, (640.0, 820.0), Env::new(true, 1.0));
+        let mut insets = rune::ChromeInsets::default();
+        insets.leading = 72.0;
+        insets.height = 38.0;
+        rt.set_titlebar_inset(72.0);
+        rt.set_chrome_insets(insets);
+        rt.frame(0.0);
+
+        let (toggle_rect, _) = rt
+            .presented("topbar-narrow-sidebar-toggle")
+            .expect("narrow sidebar toggle should render in narrow shell");
+        assert!(
+            toggle_rect[0] >= 72.0 && toggle_rect[0] <= 112.0,
+            "narrow toggle should clear traffic lights via SplitView titlebar_inset without double-padding, got x={}",
+            toggle_rect[0]
+        );
     }
 
     #[test]

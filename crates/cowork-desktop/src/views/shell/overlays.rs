@@ -1373,7 +1373,12 @@ mod tests {
         let mut rt = Runtime::new(
             s,
             |state: &AppState, cx: &mut rune::Cx<AppState>| {
-                let (k, t) = crate::theme::build_kit(false, false, false);
+                let (k, t) = crate::theme::build_kit_with_accent(
+                    state.effective_dark(cx.system_dark()),
+                    state.desktop_settings.reduced_transparency,
+                    state.desktop_settings.high_contrast,
+                    state.desktop_settings.accent_palette,
+                );
                 crate::views::shell::view(state, cx, &k, &t)
             },
             (1280.0, 820.0),
@@ -1404,7 +1409,12 @@ mod tests {
         let mut rt = Runtime::new(
             s,
             |state: &AppState, cx: &mut rune::Cx<AppState>| {
-                let (k, t) = crate::theme::build_kit(false, false, false);
+                let (k, t) = crate::theme::build_kit_with_accent(
+                    state.effective_dark(cx.system_dark()),
+                    state.desktop_settings.reduced_transparency,
+                    state.desktop_settings.high_contrast,
+                    state.desktop_settings.accent_palette,
+                );
                 crate::views::shell::view(state, cx, &k, &t)
             },
             (1280.0, 820.0),

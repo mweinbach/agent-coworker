@@ -757,11 +757,13 @@ fn build_task_questions_card(
         .gap(12.0)
         .child(header);
 
+    let task_id_ref = task.summary.id.as_str();
     for q in questions {
+        let q_answer_key = task_question_answer_key(task_id_ref, &q.id);
         let selected_opt = s
             .shell_ui
             .task_question_answers
-            .get(&q.id)
+            .get(&q_answer_key)
             .map(String::as_str);
         let mut q_col = col()
             .key(format!("task-q-{}", q.id))
@@ -789,7 +791,7 @@ fn build_task_questions_card(
         if !q.options.is_empty() {
             let mut opts_row = col().w_full().gap(4.0);
             for opt in &q.options {
-                let qid = q.id.clone();
+                let answer_key = q_answer_key.clone();
                 let oid = opt.id.clone();
                 let is_sel = selected_opt == Some(opt.id.as_str());
                 let is_rec = q.recommended_option_id.as_deref() == Some(opt.id.as_str());
@@ -807,9 +809,13 @@ fn build_task_questions_card(
                         })
                         .control_size(ControlSize::Small)
                         .on_press_tx(move |s: &mut AppState, _| {
-                            s.shell_ui
-                                .task_question_answers
-                                .insert(qid.clone(), oid.clone());
+                            if s.shell_ui.task_question_answers.get(&answer_key) == Some(&oid) {
+                                s.shell_ui.task_question_answers.remove(&answer_key);
+                            } else {
+                                s.shell_ui
+                                    .task_question_answers
+                                    .insert(answer_key.clone(), oid.clone());
+                            }
                         })
                         .build(k),
                 );
@@ -820,7 +826,7 @@ fn build_task_questions_card(
     }
 
     let reply_input = TextInput::new(&s.shell_ui.task_question_reply_edit)
-        .placeholder("Optional written reply or clarification...")
+        .placeholder("Optional written reply (used when no option is selected)...")
         .label("Task question reply")
         .width(None)
         .on_edit(|s: &mut AppState| &mut s.shell_ui.task_question_reply_edit)
@@ -847,34 +853,16 @@ fn build_task_questions_card(
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Small)
                 .on_press_tx(move |s: &mut AppState, _| {
-                    let extra_text = s.shell_ui.task_question_reply_edit.text.trim().to_owned();
-                    let mut answers: Vec<TaskQuestionAnswerParam> = Vec::new();
-                    for (qid, default_opt) in &q_ids {
-                        if let Some(chosen) = s.shell_ui.task_question_answers.get(qid) {
-                            answers.push(TaskQuestionAnswerParam {
-                                question_id: qid.clone(),
-                                option_id: Some(chosen.clone()),
-                                text: (!extra_text.is_empty()).then(|| extra_text.clone()),
-                            });
-                        } else if !extra_text.is_empty() {
-                            answers.push(TaskQuestionAnswerParam {
-                                question_id: qid.clone(),
-                                option_id: None,
-                                text: Some(extra_text.clone()),
-                            });
-                        } else if let Some(def) = default_opt {
-                            answers.push(TaskQuestionAnswerParam {
-                                question_id: qid.clone(),
-                                option_id: Some(def.clone()),
-                                text: None,
-                            });
-                        }
-                    }
+                    let answers = resolve_task_question_answers(
+                        &task_id,
+                        &q_ids,
+                        &s.shell_ui.task_question_answers,
+                        &s.shell_ui.task_question_reply_edit.text,
+                    );
                     if answers.is_empty() {
                         return;
                     }
-                    s.shell_ui.task_question_answers.clear();
-                    s.shell_ui.task_question_reply_edit.text.clear();
+                    // Keep selections and draft reply until server updates `active_task` so transient failures preserve input.
                     s.dispatch(Action::Task(TaskAction::ResolveQuestions {
                         workspace_id: ws_id.clone(),
                         task_id: task_id.clone(),
@@ -885,6 +873,44 @@ fn build_task_questions_card(
                 .build(k),
         ),
     )
+}
+
+fn task_question_answer_key(task_id: &str, question_id: &str) -> String {
+    format!("{task_id}:{question_id}")
+}
+
+/// Builds `task/questions/resolve` payloads enforcing the server's 1..=3 limit and mutual exclusion (`optionId` XOR `text`).
+fn resolve_task_question_answers(
+    task_id: &str,
+    q_specs: &[(String, Option<String>)],
+    selected: &std::collections::HashMap<String, String>,
+    reply_text: &str,
+) -> Vec<TaskQuestionAnswerParam> {
+    let trimmed = reply_text.trim();
+    let mut answers = Vec::new();
+    for (qid, default_opt) in q_specs.iter().take(3) {
+        let key = task_question_answer_key(task_id, qid);
+        if let Some(chosen) = selected.get(&key) {
+            answers.push(TaskQuestionAnswerParam {
+                question_id: qid.clone(),
+                option_id: Some(chosen.clone()),
+                text: None,
+            });
+        } else if !trimmed.is_empty() {
+            answers.push(TaskQuestionAnswerParam {
+                question_id: qid.clone(),
+                option_id: None,
+                text: Some(trimmed.to_owned()),
+            });
+        } else if let Some(def) = default_opt {
+            answers.push(TaskQuestionAnswerParam {
+                question_id: qid.clone(),
+                option_id: Some(def.clone()),
+                text: None,
+            });
+        }
+    }
+    answers
 }
 
 fn build_artifact_review_card(task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -> El {
@@ -1518,5 +1544,49 @@ mod tests {
         assert_eq!(arr_items.len(), 1);
         assert_eq!(arr_items[0].id, "q-arr");
         assert_eq!(arr_items[0].question, "Proceed with deployment?");
+    }
+
+    #[test]
+    fn resolve_task_question_answers_enforces_option_or_text_xor_and_task_scope() {
+        let mut selected = std::collections::HashMap::new();
+        selected.insert(task_question_answer_key("task-1", "q-1"), "v2".to_owned());
+        selected.insert(
+            task_question_answer_key("other-task", "q-2"),
+            "wrong-task".to_owned(),
+        );
+
+        let specs = vec![
+            ("q-1".to_owned(), Some("v1".to_owned())),
+            ("q-2".to_owned(), None),
+            ("q-3".to_owned(), Some("def-3".to_owned())),
+            ("q-4".to_owned(), Some("def-4".to_owned())),
+        ];
+
+        // q-1 has an explicit choice alongside freeform text: must send optionId only (not both).
+        // q-2 has no choice and no default: receives trimmed freeform text only.
+        // q-3 has no choice: receives freeform text since typed reply is non-empty.
+        // q-4 is past the server's 3-entry limit.
+        let answers = resolve_task_question_answers("task-1", &specs, &selected, "  Use custom  ");
+        assert_eq!(answers.len(), 3);
+        assert!(
+            answers
+                .iter()
+                .all(|a| a.option_id.is_some() ^ a.text.is_some()),
+            "every answer must set exactly one of option_id or text"
+        );
+        assert_eq!(answers[0].question_id, "q-1");
+        assert_eq!(answers[0].option_id.as_deref(), Some("v2"));
+        assert_eq!(answers[0].text, None);
+
+        assert_eq!(answers[1].question_id, "q-2");
+        assert_eq!(answers[1].option_id, None);
+        assert_eq!(answers[1].text.as_deref(), Some("Use custom"));
+
+        // Without freeform text, falls back to default option when present.
+        let defaults_only = resolve_task_question_answers("task-1", &specs, &selected, "   ");
+        assert_eq!(defaults_only.len(), 2);
+        assert_eq!(defaults_only[1].question_id, "q-3");
+        assert_eq!(defaults_only[1].option_id.as_deref(), Some("def-3"));
+        assert_eq!(defaults_only[1].text, None);
     }
 }

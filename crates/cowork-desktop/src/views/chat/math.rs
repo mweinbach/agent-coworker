@@ -8,14 +8,14 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use katex_native::katex::KatexContext;
 use katex_native::raster::rasterize;
 use katex_native::{Color as KatexColor, Layout as KatexLayout};
-use rune::{Color, Cursor, El, Pixels, Span, TextStyle, Tx, col, el, row, text};
+use rune::{Align, Color, Cursor, El, Pixels, Span, TextStyle, Tx, col, el, row, text};
 use rune_kit::Kit;
 
 use crate::state::AppState;
 use crate::theme::ThemeTokens;
 
 const DISPLAY_EM_PT: f32 = 16.5;
-const INLINE_EM_PT: f32 = 14.0;
+const INLINE_EM_PT: f32 = 15.0;
 const DEFAULT_RENDER_SCALE: f32 = 2.0;
 const MAX_CACHE_ENTRIES: usize = 512;
 
@@ -564,6 +564,12 @@ pub enum MathInlineSpan {
 pub enum MathChunk {
     /// Math-free Markdown chunk (or GFM table with Unicode math fallback) handed straight to `rune_kit::Markdown`.
     Markdown(String),
+    /// Math-free indented list continuation split off after an inline-math list item.
+    IndentedMarkdown {
+        indent_level: usize,
+        base_spaces: usize,
+        markdown: String,
+    },
     /// Single block containing at least one inline math / streaming math run.
     InlineMathParagraph {
         kind: MathParagraphKind,
@@ -611,16 +617,15 @@ fn parse_atx_heading(stripped: &str) -> Option<(u8, &str)> {
     Some((hashes as u8, trimmed))
 }
 
-fn parse_list_prefix(stripped: &str) -> Option<(usize, String, &str)> {
+fn parse_list_prefix_raw(stripped: &str) -> Option<(usize, usize, String, &str)> {
     let leading = stripped.bytes().take_while(|&b| b == b' ').count();
     let rest = &stripped[leading..];
-    let indent_level = leading / 2;
     if let Some(after) = rest
         .strip_prefix("- ")
         .or_else(|| rest.strip_prefix("* "))
         .or_else(|| rest.strip_prefix("+ "))
     {
-        return Some((indent_level, "•".to_string(), after.trim_start()));
+        return Some((leading, 2, "•".to_string(), after.trim_start()));
     }
     let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
     if (1..=9).contains(&digits) {
@@ -630,13 +635,19 @@ fn parse_list_prefix(stripped: &str) -> Option<(usize, String, &str)> {
             .or_else(|| after_digits.strip_prefix(") "))
         {
             return Some((
-                indent_level,
+                leading,
+                digits + 2,
                 format!("{}.", &rest[..digits]),
                 after.trim_start(),
             ));
         }
     }
     None
+}
+
+fn parse_list_prefix(stripped: &str) -> Option<(usize, String, &str)> {
+    let (leading, _, marker, body) = parse_list_prefix_raw(stripped)?;
+    Some((leading / 2, marker, body))
 }
 
 fn is_thematic_break(stripped: &str) -> bool {
@@ -684,6 +695,80 @@ fn push_markdown_chunk(raw: &str, out: &mut Vec<MathChunk>) {
     }
 }
 
+fn strip_leading_spaces(raw: &str, count: usize) -> String {
+    if count == 0 {
+        return raw.to_string();
+    }
+    let mut out = String::with_capacity(raw.len());
+    for line in raw.split_inclusive('\n') {
+        let strip = line.bytes().take(count).take_while(|&b| b == b' ').count();
+        out.push_str(&line[strip..]);
+    }
+    out
+}
+
+fn push_list_markdown_chunk(
+    raw: &str,
+    indent_level: usize,
+    leading_spaces: usize,
+    out: &mut Vec<MathChunk>,
+) {
+    if raw.is_empty() {
+        return;
+    }
+    if indent_level == 0 {
+        push_markdown_chunk(raw, out);
+        return;
+    }
+    match out.last_mut() {
+        Some(MathChunk::Markdown(prev)) => {
+            prev.push_str(raw);
+        }
+        Some(MathChunk::IndentedMarkdown {
+            base_spaces,
+            markdown,
+            ..
+        }) if leading_spaces >= *base_spaces => {
+            markdown.push_str(&strip_leading_spaces(raw, *base_spaces));
+        }
+        _ => {
+            out.push(MathChunk::IndentedMarkdown {
+                indent_level,
+                base_spaces: leading_spaces,
+                markdown: strip_leading_spaces(raw, leading_spaces),
+            });
+        }
+    }
+}
+
+/// Returns whether a Markdown chunk begins immediately with a list item (without a leading blank line).
+pub(super) fn markdown_starts_with_list_item(md: &str) -> bool {
+    md.lines()
+        .next()
+        .is_some_and(|line| parse_list_prefix(trim_line_end(line)).is_some())
+}
+
+/// Returns whether a Markdown chunk ends directly on a list item line (without a trailing blank line).
+pub(super) fn markdown_ends_with_list_item(md: &str) -> bool {
+    let mut in_list = false;
+    let mut ended_blank = false;
+    for line in md.lines() {
+        let s = trim_line_end(line);
+        if is_blank_line(s) {
+            ended_blank = true;
+        } else if parse_list_prefix(s).is_some() {
+            in_list = true;
+            ended_blank = false;
+        } else if in_list && s.starts_with(' ') && parse_fence_opener(s).is_none() {
+            ended_blank = false;
+        } else {
+            in_list = false;
+            ended_blank = false;
+        }
+    }
+    in_list && !ended_blank
+}
+
 /// Splits a non-display-block Markdown chunk into native math-free `Markdown` blocks
 /// and `InlineMathParagraph` blocks for paragraphs/headings/lists/quotes that actually
 /// contain inline `$$...$$` math.
@@ -699,6 +784,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
     let lines: Vec<&str> = normalized.split_inclusive('\n').collect();
     let mut out = Vec::new();
     let mut tracker = CodeBlockTracker::new();
+    let mut list_stack: Vec<usize> = Vec::new();
     let mut idx = 0;
 
     while idx < lines.len() {
@@ -708,6 +794,9 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
         // Code blocks (fenced / indented) stay verbatim in native Markdown.
         let in_code = tracker.step_line(line);
         if in_code {
+            if !tracker.in_indented_code {
+                list_stack.clear();
+            }
             push_markdown_chunk(line, &mut out);
             idx += 1;
             continue;
@@ -720,6 +809,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
         }
 
         if is_thematic_break(stripped) {
+            list_stack.clear();
             push_markdown_chunk(line, &mut out);
             idx += 1;
             continue;
@@ -727,6 +817,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
 
         // Headings: single line block.
         if let Some((level, content)) = parse_atx_heading(stripped) {
+            list_stack.clear();
             if has_inline_math_part(content, streaming) {
                 out.push(MathChunk::InlineMathParagraph {
                     kind: MathParagraphKind::Heading { level },
@@ -744,6 +835,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
             && idx + 1 < lines.len()
             && is_table_separator_line(trim_line_end(lines[idx + 1]))
         {
+            list_stack.clear();
             let start = idx;
             idx += 2;
             while idx < lines.len() {
@@ -765,6 +857,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
 
         // Blockquotes (`>` lines): handle each contiguous quote block.
         if leading_spaces_up_to_3(stripped).is_some_and(|(_, r)| r.starts_with('>')) {
+            list_stack.clear();
             let start = idx;
             let mut inner = String::new();
             while idx < lines.len() {
@@ -798,7 +891,14 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
         }
 
         // List item (`- `, `1. `): collects continuation lines until blank, fence, heading, quote, or new item.
-        if let Some((indent_level, marker, first_body)) = parse_list_prefix(stripped) {
+        if let Some((leading, marker_cols, marker, first_body)) = parse_list_prefix_raw(stripped)
+            && (!list_stack.is_empty() || leading <= 3)
+        {
+            while list_stack.last().is_some_and(|&col| leading < col) {
+                list_stack.pop();
+            }
+            let indent_level = list_stack.len();
+            list_stack.push(leading + marker_cols);
             let start = idx;
             let mut body = first_body.to_string();
             idx += 1;
@@ -829,12 +929,20 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
                     spans: parse_inline_markdown_spans(&body, streaming),
                 });
             } else {
-                push_markdown_chunk(&lines[start..idx].concat(), &mut out);
+                push_list_markdown_chunk(
+                    &lines[start..idx].concat(),
+                    indent_level,
+                    leading,
+                    &mut out,
+                );
             }
             continue;
         }
 
         // Regular paragraph: collects lines until blank or interrupting block construct.
+        if stripped.bytes().take_while(|&b| b == b' ').count() == 0 {
+            list_stack.clear();
+        }
         let start = idx;
         let mut para = stripped.to_string();
         idx += 1;
@@ -866,7 +974,12 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
         }
     }
 
-    out.retain(|chunk| !matches!(chunk, MathChunk::Markdown(md) if md.trim().is_empty()));
+    out.retain(|chunk| match chunk {
+        MathChunk::Markdown(md) | MathChunk::IndentedMarkdown { markdown: md, .. } => {
+            !md.trim().is_empty()
+        }
+        MathChunk::InlineMathParagraph { .. } => true,
+    });
     out
 }
 
@@ -1626,35 +1739,32 @@ pub fn render_inline_math_paragraph<F>(
 where
     F: Fn(&mut AppState, String, &mut Tx) + Clone + 'static,
 {
+    let md_body = if compact {
+        TextStyle {
+            line_height: 19.0,
+            ..k.ty.text_small
+        }
+    } else {
+        TextStyle {
+            line_height: 22.4,
+            ..t.body_lg
+        }
+    };
     let (base_font, em_pt, ink) = match kind {
         MathParagraphKind::Heading { level } => {
             let (style, em) = heading_style(t, *level, compact);
             (style, em, t.text_base)
         }
-        MathParagraphKind::Blockquote => {
-            let style = if compact {
-                TextStyle::new(12.5, 400.0).lh(19.0)
-            } else {
-                t.body
-            };
-            (
-                style,
-                if compact { 13.0 } else { INLINE_EM_PT },
-                t.text_muted,
-            )
-        }
-        MathParagraphKind::Paragraph | MathParagraphKind::ListItem { .. } => {
-            let style = if compact {
-                TextStyle::new(12.5, 400.0).lh(19.0)
-            } else {
-                t.body
-            };
-            (
-                style,
-                if compact { 13.0 } else { INLINE_EM_PT },
-                t.text_base,
-            )
-        }
+        MathParagraphKind::Blockquote => (
+            md_body,
+            if compact { 13.0 } else { INLINE_EM_PT },
+            t.text_muted,
+        ),
+        MathParagraphKind::Paragraph | MathParagraphKind::ListItem { .. } => (
+            md_body,
+            if compact { 13.0 } else { INLINE_EM_PT },
+            t.text_base,
+        ),
     };
 
     let mut flow = row()
@@ -1853,19 +1963,33 @@ where
         MathParagraphKind::ListItem {
             indent_level,
             marker,
-        } => row()
-            .key(key_prefix.to_string())
-            .w_full()
-            .items_start()
-            .pl((*indent_level as f32) * 16.0)
-            .gap(6.0)
-            .child(
-                text(marker.clone())
-                    .font(base_font)
-                    .color(t.text_muted)
-                    .min_w(14.0),
-            )
-            .child(col().grow(1.0).min_w(0.0).child(flow)),
+        } => {
+            // Match `rune_kit::MarkdownStyle::from_kit` list geometry (`list_indent = 32.0`,
+            // centered marker column, zero extra gap) so mixed plain/math list items align.
+            const LIST_INDENT: f32 = 32.0;
+            row()
+                .key(key_prefix.to_string())
+                .role("listitem")
+                .w_full()
+                .items_start()
+                .pl((*indent_level as f32) * LIST_INDENT)
+                .child(
+                    text(marker.clone())
+                        .key(format!("{key_prefix}:marker"))
+                        .font(base_font)
+                        .color(t.text_muted)
+                        .exact_lines()
+                        .w(LIST_INDENT)
+                        .align(Align::Center),
+                )
+                .child(
+                    col()
+                        .key(format!("{key_prefix}:body"))
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .child(flow),
+                )
+        }
         MathParagraphKind::Blockquote => row()
             .key(key_prefix.to_string())
             .w_full()
@@ -2184,5 +2308,41 @@ Result is **$$E = mc^2$$** in `foo_bar` ([spec](cit://1)), price \\$5.
             Some(&waker),
         );
         assert!(matches!(cached, MathRenderOutcome::Ready { .. }));
+    }
+
+    #[test]
+    fn list_chunker_matches_commonmark_nesting_for_two_and_four_space_indents() {
+        let src = "\
+- Top plain
+- Top $$\\alpha$$
+  - Nested 2-space $$\\beta$$
+    - Deep 4-space $$\\gamma$$
+- Top 2
+    - Nested 4-space direct $$\\delta$$
+";
+        let chunks = split_inline_math_chunks(src, false);
+        let levels: Vec<(usize, String)> = chunks
+            .into_iter()
+            .filter_map(|c| match c {
+                MathChunk::InlineMathParagraph {
+                    kind:
+                        MathParagraphKind::ListItem {
+                            indent_level,
+                            marker,
+                        },
+                    ..
+                } => Some((indent_level, marker)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                (0, "•".to_string()),
+                (1, "•".to_string()),
+                (2, "•".to_string()),
+                (1, "•".to_string()),
+            ]
+        );
     }
 }

@@ -2115,3 +2115,204 @@ Malformed fallback: $$\\frac{1}{$$ and streaming tail: $$x + ";
         }
     }
 }
+
+#[test]
+fn mixed_plain_and_inline_math_list_items_align_horizontally() {
+    let list_doc = "\
+- First plain bullet item
+- Second bullet with inline $$\\alpha + \\beta.$$ math
+- Third plain bullet item
+  - Nested plain bullet
+  - Nested inline math bullet $$x_i + y_i$$
+  - Nested trailing bullet
+";
+
+    for dark in [false, true] {
+        let mut s = build_populated_thread_state(dark);
+        let rt_thread = s.thread_runtime_by_id.get_mut("th-demo").unwrap();
+        rt_thread.streaming = false;
+        rt_thread.feed = vec![
+            FeedItem::Message {
+                id: "msg-list-u".into(),
+                role: FeedMessageRole::User,
+                content: "Check mixed bullet alignment.".into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_763_100_000_000,
+            },
+            FeedItem::Message {
+                id: "msg-list-a".into(),
+                role: FeedMessageRole::Assistant,
+                content: list_doc.into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_763_100_010_000,
+            },
+        ];
+        rt_thread.pending_interactions.clear();
+
+        let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba(&mut rt, dark);
+        let label = if dark {
+            "chat-math-list-dark"
+        } else {
+            "chat-math-list-light"
+        };
+        maybe_save_snap(label, &rgba, 2.0);
+
+        let els = rt.elements();
+        let top_plain_body = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("First plain bullet item"))
+            .expect("bullet 1 text");
+        let top_math_body = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Second "))
+            .expect("bullet 2 text");
+        let top_math_marker = els
+            .iter()
+            .find(|e| {
+                e.key
+                    .as_deref()
+                    .is_some_and(|k| k.starts_with("msg:msg-list-a:imp:") && k.ends_with(":marker"))
+            })
+            .expect("bullet 2 marker");
+        let top_plain3_body = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Third plain bullet item"))
+            .expect("bullet 3 text");
+
+        assert!(
+            (top_math_body.rect[0] - top_plain_body.rect[0]).abs() <= 0.5,
+            "inline-math bullet body x={} must align with plain bullet 1 x={}",
+            top_math_body.rect[0],
+            top_plain_body.rect[0]
+        );
+        assert!(
+            (top_math_body.rect[0] - top_plain3_body.rect[0]).abs() <= 0.5,
+            "inline-math bullet body x={} must align with plain bullet 3 x={}",
+            top_math_body.rect[0],
+            top_plain3_body.rect[0]
+        );
+        assert!(
+            (top_math_body.rect[0] - top_math_marker.rect[0] - 32.0).abs() <= 0.5
+                && (top_math_marker.rect[2] - 32.0).abs() <= 0.5,
+            "marker box {:?} must span 32px left of body x={}",
+            top_math_marker.rect,
+            top_math_body.rect[0]
+        );
+
+        let nested_plain_body = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Nested plain bullet"))
+            .expect("nested plain bullet");
+        let nested_math_body = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Nested "))
+            .expect("nested math bullet");
+        assert!(
+            (nested_math_body.rect[0] - nested_plain_body.rect[0]).abs() <= 0.5,
+            "nested inline-math bullet body x={} must align with nested plain bullet x={}",
+            nested_math_body.rect[0],
+            nested_plain_body.rect[0]
+        );
+        assert!(
+            ((nested_math_body.rect[0] - top_math_body.rect[0]) - 32.0).abs() <= 0.5,
+            "nested bullet x={} should be 32px right of top-level x={}",
+            nested_math_body.rect[0],
+            top_math_body.rect[0]
+        );
+        let nested_trailing_body = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Nested trailing bullet"))
+            .expect("nested trailing bullet");
+        assert!(
+            (nested_trailing_body.rect[0] - nested_plain_body.rect[0]).abs() <= 0.5,
+            "nested trailing bullet after inline-math item x={} must stay aligned with nested plain bullet x={}",
+            nested_trailing_body.rect[0],
+            nested_plain_body.rect[0]
+        );
+    }
+}
+
+#[test]
+fn quick_chat_landing_does_not_clip_heading_or_lose_desktop_centering() {
+    fn landing_with_header(s: &AppState, cx: &mut Cx<AppState>) -> El {
+        let dark = s.effective_dark(cx.system_dark());
+        let (kit, tokens) = theme::build_kit(
+            dark,
+            s.desktop_settings.reduced_transparency,
+            s.desktop_settings.high_contrast,
+        );
+        cx.foreground(tokens.text_base);
+        let out = chat::view(s, cx, &kit);
+        rune::col()
+            .w_full()
+            .h_full()
+            .fill(tokens.panel_bg)
+            .child(el().key("quick-chat-header").w_full().h(43.0))
+            .child(out.content)
+    }
+
+    fn landing_state() -> AppState {
+        let mut s = build_populated_thread_state(false);
+        s.dispatch(Action::Navigate(NavAction::OpenNewChat {
+            workspace_id: Some("ws-demo".into()),
+        }));
+        s
+    }
+
+    let mut qc = Runtime::new(
+        landing_state(),
+        landing_with_header,
+        (440.0, 560.0),
+        Env::new(true, 1.0),
+    );
+    qc.frame(0.0);
+    let qc_els = qc.elements();
+    let qc_scroll = qc_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("landing-scroll"))
+        .expect("quick chat landing-scroll");
+    let qc_landing = qc_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("new-chat-landing"))
+        .expect("quick chat new-chat-landing");
+    assert!(
+        qc_landing.rect[1] >= qc_scroll.rect[1],
+        "Quick Chat landing {:?} must not overflow upward past landing-scroll {:?}",
+        qc_landing.rect,
+        qc_scroll.rect
+    );
+
+    let mut desk = Runtime::new(
+        landing_state(),
+        test_chat_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 1.0),
+    );
+    desk.frame(0.0);
+    let desk_els = desk.elements();
+    let desk_scroll = desk_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("landing-scroll"))
+        .expect("desktop landing-scroll");
+    let desk_landing = desk_els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("new-chat-landing"))
+        .expect("desktop new-chat-landing");
+    let top_space = desk_landing.rect[1] - desk_scroll.rect[1];
+    let bottom_space =
+        (desk_scroll.rect[1] + desk_scroll.rect[3]) - (desk_landing.rect[1] + desk_landing.rect[3]);
+    assert!(
+        top_space > 50.0 && (top_space - bottom_space).abs() <= 2.0,
+        "Desktop landing should stay vertically centered inside landing-scroll (top_space={top_space}, bottom_space={bottom_space})"
+    );
+}

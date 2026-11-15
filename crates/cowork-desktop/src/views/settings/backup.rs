@@ -372,10 +372,19 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             },
             move |s| {
                 s.settings_ui.backup_restore_confirm_open = false;
-                s.dispatch(Action::Settings(SettingsAction::RestoreBackup {
-                    workspace_id: ws_restore.clone(),
-                    backup_id: backup_id_restore.clone(),
-                }));
+                let (session_id, cp_opt) = split_backup_id(&backup_id_restore);
+                if let Some(cp_id) = cp_opt {
+                    s.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
+                        workspace_id: ws_restore.clone(),
+                        target_session_id: session_id.to_string(),
+                        checkpoint_id: Some(cp_id.to_string()),
+                    }));
+                } else {
+                    s.dispatch(Action::Settings(SettingsAction::RestoreBackup {
+                        workspace_id: ws_restore.clone(),
+                        backup_id: backup_id_restore.clone(),
+                    }));
+                }
             },
             k,
             &mut overlays,

@@ -157,6 +157,7 @@ pub fn server_needs_oauth(server: &McpServerSummary) -> bool {
 pub fn open_create_editor(s: &mut AppState) {
     s.settings_ui.mcp_editor_open = true;
     s.settings_ui.mcp_editing_name = None;
+    s.settings_ui.mcp_editing_source = Some("user".to_string());
     s.settings_ui.mcp_transport = "http".to_string();
     s.settings_ui.mcp_enabled = true;
     s.settings_ui.mcp_name_edit = TextEdit::new("");
@@ -173,6 +174,11 @@ fn open_edit_editor(s: &mut AppState, summary: &McpServerSummary) {
     let draft = draft_from_summary(summary);
     s.settings_ui.mcp_editor_open = true;
     s.settings_ui.mcp_editing_name = Some(summary.name.clone());
+    s.settings_ui.mcp_editing_source = Some(
+        editable_source(summary.source.as_deref())
+            .unwrap_or("user")
+            .to_string(),
+    );
     s.settings_ui.mcp_transport = draft.transport;
     s.settings_ui.mcp_enabled = draft.enabled;
     s.settings_ui.mcp_name_edit = TextEdit::new(draft.name);
@@ -188,6 +194,7 @@ fn open_edit_editor(s: &mut AppState, summary: &McpServerSummary) {
 fn close_editor(s: &mut AppState) {
     s.settings_ui.mcp_editor_open = false;
     s.settings_ui.mcp_editing_name = None;
+    s.settings_ui.mcp_editing_source = None;
     s.settings_ui.mcp_editor_error = None;
 }
 
@@ -524,12 +531,13 @@ fn render_server_row(
 
     if can_edit {
         let del_name = srv.name.clone();
+        let del_source = source_str.clone();
         actions = actions.child(
             Button::new("Remove")
                 .variant(ButtonVariant::Danger)
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut AppState| {
-                    s.settings_ui.mcp_delete_confirm_name = Some(del_name.clone());
+                    s.settings_ui.mcp_delete_confirm = Some((del_name.clone(), del_source.clone()));
                 })
                 .build(k),
         );
@@ -661,6 +669,21 @@ fn append_editor_dialog(
         "Add connector"
     };
 
+    let scope_idx = usize::from(s.settings_ui.mcp_editing_source.as_deref() == Some("workspace"));
+    let scope_seg = SegmentedControl::new(&["User (all workspaces)", "Workspace"], Some(scope_idx))
+        .label("Connector scope")
+        .fit()
+        .on_pick(|s: &mut AppState, idx, _tx| {
+            if s.settings_ui.mcp_editing_name.is_none() {
+                s.settings_ui.mcp_editing_source = Some(if idx == 1 {
+                    "workspace".to_string()
+                } else {
+                    "user".to_string()
+                });
+            }
+        })
+        .build(k);
+
     let transport_idx = match s.settings_ui.mcp_transport.as_str() {
         "sse" => 1,
         "stdio" => 2,
@@ -682,25 +705,23 @@ fn append_editor_dialog(
     })
     .build(k);
 
-    let mut fields = col()
-        .w_full()
-        .min_w(0.0)
-        .gap(12.0)
-        .child(
-            text("Configure a remote MCP endpoint or a local command-line connector.")
-                .font(k.ty.text_small)
-                .color(t.text_muted)
-                .wrap(),
-        )
-        .child(transport_seg)
-        .child(
-            TextInput::new(&s.settings_ui.mcp_name_edit)
-                .label("Name")
-                .placeholder("e.g. github-tools")
-                .width(None)
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_name_edit)
-                .build(k),
-        );
+    let mut fields = col().w_full().min_w(0.0).gap(12.0).child(
+        text("Configure a remote MCP endpoint or a local command-line connector.")
+            .font(k.ty.text_small)
+            .color(t.text_muted)
+            .wrap(),
+    );
+    if !is_edit {
+        fields = fields.child(scope_seg);
+    }
+    fields = fields.child(transport_seg).child(
+        TextInput::new(&s.settings_ui.mcp_name_edit)
+            .label("Name")
+            .placeholder("e.g. github-tools")
+            .width(None)
+            .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_name_edit)
+            .build(k),
+    );
 
     if s.settings_ui.mcp_transport == "stdio" {
         fields = fields
@@ -812,10 +833,22 @@ fn append_editor_dialog(
                 };
                 match build_mcp_server_config(&draft) {
                     Ok((name, config)) => {
-                        s.dispatch(Action::Settings(SettingsAction::UpsertMcpServer {
+                        let source = s
+                            .settings_ui
+                            .mcp_editing_source
+                            .clone()
+                            .unwrap_or_else(|| "user".to_string());
+                        let previous_name = s
+                            .settings_ui
+                            .mcp_editing_name
+                            .clone()
+                            .filter(|prev| prev != &name);
+                        s.dispatch(Action::Settings(SettingsAction::UpsertScopedMcpServer {
                             workspace_id: ws_save.clone(),
                             name,
-                            config,
+                            source,
+                            previous_name,
+                            server: config,
                         }));
                         close_editor(s);
                     }
@@ -857,11 +890,12 @@ fn append_editor_dialog(
 }
 
 fn append_delete_confirm_dialog(s: &AppState, ws_id: &str, k: &Kit, overlays: &mut Vec<El>) {
-    let Some(name) = s.settings_ui.mcp_delete_confirm_name.as_deref() else {
+    let Some((name, source)) = s.settings_ui.mcp_delete_confirm.as_ref() else {
         return;
     };
     let ws_del = ws_id.to_string();
-    let name_del = name.to_string();
+    let name_del = name.clone();
+    let src_del = source.clone();
     confirm_dialog(
         ConfirmDialogSpec {
             key: "mcp-delete-confirm-dialog",
@@ -873,15 +907,16 @@ fn append_delete_confirm_dialog(s: &AppState, ws_id: &str, k: &Kit, overlays: &m
             danger: true,
             open: true,
         },
+        |s| {
+            s.settings_ui.mcp_delete_confirm = None;
+        },
         move |s| {
-            s.dispatch(Action::Settings(SettingsAction::DeleteMcpServer {
+            s.dispatch(Action::Settings(SettingsAction::DeleteScopedMcpServer {
                 workspace_id: ws_del.clone(),
                 name: name_del.clone(),
+                source: src_del.clone(),
             }));
-            s.settings_ui.mcp_delete_confirm_name = None;
-        },
-        |s| {
-            s.settings_ui.mcp_delete_confirm_name = None;
+            s.settings_ui.mcp_delete_confirm = None;
         },
         k,
         overlays,

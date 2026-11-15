@@ -5,13 +5,13 @@
 
 use rune::{El, ScrollSpec, TextEdit, col, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, Select, SelectAppearance, Switch,
-    TextArea, TextInput,
+    Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, SegmentedControl, Select,
+    SelectAppearance, Switch, TextArea, TextInput,
 };
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NavAction, SettingsAction};
-use crate::state::{AppState, MemoryEntry, WorkspaceRecord};
+use crate::state::{AppState, MemoryEntry, ScopedMemoryEntry, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
@@ -1356,6 +1356,31 @@ fn build_advanced_memory_section(
     section.build(k, t)
 }
 
+fn scoped_memory_entries(s: &AppState) -> Vec<ScopedMemoryEntry> {
+    if !s.scoped_memories.is_empty() {
+        return s.scoped_memories.clone();
+    }
+    s.memory_entries
+        .iter()
+        .map(|entry: &MemoryEntry| ScopedMemoryEntry {
+            id: entry.key.clone(),
+            scope: "workspace".to_string(),
+            content: entry.content.clone(),
+            created_at: None,
+            updated_at: None,
+            updated_at_ms: entry.updated_at,
+        })
+        .collect()
+}
+
+fn memory_scope_label(scope: &str) -> &'static str {
+    if scope == "user" {
+        "Everywhere"
+    } else {
+        "Workspace"
+    }
+}
+
 fn build_legacy_memory_section(
     s: &AppState,
     ws_id: &str,
@@ -1369,24 +1394,74 @@ fn build_legacy_memory_section(
         .text
         .trim()
         .to_ascii_lowercase();
-    let filtered: Vec<&MemoryEntry> = s
-        .memory_entries
-        .iter()
+    let scope_filter = s.settings_ui.memory_scope_filter.as_str();
+    let entries = scoped_memory_entries(s);
+    let mut filtered: Vec<ScopedMemoryEntry> = entries
+        .into_iter()
+        .filter(|entry| {
+            let normalized_scope = if entry.scope == "user" {
+                "user"
+            } else {
+                "workspace"
+            };
+            scope_filter == "all" || normalized_scope == scope_filter
+        })
         .filter(|entry| {
             query.is_empty()
-                || entry.key.to_ascii_lowercase().contains(&query)
+                || entry.id.to_ascii_lowercase().contains(&query)
                 || entry.content.to_ascii_lowercase().contains(&query)
         })
         .collect();
+    filtered.sort_by_key(|e| {
+        (
+            e.id != HOT_MEMORY_ID,
+            e.scope != "user",
+            e.id.to_lowercase(),
+        )
+    });
 
+    let scope_idx = match scope_filter {
+        "workspace" => 1,
+        "user" => 2,
+        _ => 0,
+    };
+    let ws_refresh = ws_id.to_string();
     let header_actions = row()
         .items_center()
+        .flex_wrap()
         .gap(8.0)
+        .child(
+            SegmentedControl::new(&["All", "Workspace", "Everywhere"], Some(scope_idx))
+                .label("Memory scope filter")
+                .fit()
+                .on_pick(|s: &mut AppState, idx, _tx| {
+                    s.settings_ui.memory_scope_filter = match idx {
+                        1 => "workspace",
+                        2 => "user",
+                        _ => "all",
+                    }
+                    .to_string();
+                })
+                .build(k),
+        )
         .child(
             TextInput::new(&s.settings_ui.memory_filter_edit)
                 .placeholder("Filter facts…")
-                .width(Some(180.0))
+                .width(Some(160.0))
                 .on_edit(|s: &mut AppState| &mut s.settings_ui.memory_filter_edit)
+                .build(k),
+        )
+        .child(
+            Button::new("Refresh")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .icon(&icons::REFRESH_CCW)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::ReadMemories {
+                        workspace_id: ws_refresh.clone(),
+                        scope: None,
+                    }));
+                })
                 .build(k),
         )
         .child(
@@ -1396,7 +1471,13 @@ fn build_legacy_memory_section(
                 .icon(&icons::PLUS)
                 .on_press(|s: &mut AppState| {
                     s.settings_ui.memory_editing_key = None;
-                    s.settings_ui.memory_draft_scope = "workspace".to_string();
+                    let default_scope = if s.settings_ui.memory_scope_filter == "user" {
+                        "user"
+                    } else {
+                        "workspace"
+                    };
+                    s.settings_ui.memory_draft_scope = default_scope.to_string();
+                    s.settings_ui.memory_editing_scope = default_scope.to_string();
                     s.settings_ui.memory_key_edit = TextEdit::new("");
                     s.settings_ui.memory_content_edit = TextEdit::new("");
                     s.settings_ui.memory_dialog_open = true;
@@ -1406,7 +1487,7 @@ fn build_legacy_memory_section(
 
     let mut section = Section::new()
         .title("Remembered facts")
-        .description("Facts Cowork keeps in mind across chats for this target.")
+        .description("Facts Cowork keeps in mind for this workspace or across every workspace.")
         .action(header_actions);
 
     if filtered.is_empty() {
@@ -1424,7 +1505,13 @@ fn build_legacy_memory_section(
                     .icon(&icons::PLUS)
                     .on_press(|s: &mut AppState| {
                         s.settings_ui.memory_editing_key = None;
-                        s.settings_ui.memory_draft_scope = "workspace".to_string();
+                        let default_scope = if s.settings_ui.memory_scope_filter == "user" {
+                            "user"
+                        } else {
+                            "workspace"
+                        };
+                        s.settings_ui.memory_draft_scope = default_scope.to_string();
+                        s.settings_ui.memory_editing_scope = default_scope.to_string();
                         s.settings_ui.memory_key_edit = TextEdit::new("");
                         s.settings_ui.memory_content_edit = TextEdit::new("");
                         s.settings_ui.memory_dialog_open = true;
@@ -1435,20 +1522,35 @@ fn build_legacy_memory_section(
         );
     } else {
         for entry in filtered {
-            let title = if entry.key == HOT_MEMORY_ID {
+            let entry_scope = if entry.scope == "user" {
+                "user".to_string()
+            } else {
+                "workspace".to_string()
+            };
+            let title = if entry.id == HOT_MEMORY_ID {
                 "Always include".to_string()
             } else {
-                entry.key.clone()
+                entry.id.clone()
             };
-            let expanded = s.settings_ui.expanded_memory_keys.contains(&entry.key);
-            let key_toggle = entry.key.clone();
-            let key_edit = entry.key.clone();
+            let compound_key = format!("{entry_scope}:{}", entry.id);
+            let expanded = s.settings_ui.expanded_memory_keys.contains(&compound_key);
+            let key_toggle = compound_key.clone();
+            let id_edit = entry.id.clone();
+            let scope_edit = entry_scope.clone();
             let content_edit = entry.content.clone();
-            let key_del = entry.key.clone();
+            let id_del = entry.id.clone();
+            let scope_del = entry_scope.clone();
 
             let updated_label = entry
-                .updated_at
+                .updated_at_ms
                 .map(|ts| format!("Updated {}", format_timestamp_friendly(ts)))
+                .or_else(|| {
+                    entry
+                        .updated_at
+                        .as_deref()
+                        .filter(|u| !u.trim().is_empty())
+                        .map(|u| format!("Updated {u}"))
+                })
                 .unwrap_or_default();
 
             let mut item = col().w_full().px(16.0).py(12.0).gap(8.0).child(
@@ -1458,24 +1560,36 @@ fn build_legacy_memory_section(
                     .justify_between()
                     .gap(12.0)
                     .child(
-                        Button::new(title)
-                            .variant(ButtonVariant::Ghost)
-                            .control_size(ControlSize::Small)
-                            .icon(if expanded {
-                                &icons::CHEVRON_DOWN
-                            } else {
-                                &icons::CHEVRON_RIGHT
-                            })
-                            .on_press(move |s: &mut AppState| {
-                                if s.settings_ui.expanded_memory_keys.contains(&key_toggle) {
-                                    s.settings_ui.expanded_memory_keys.remove(&key_toggle);
-                                } else {
-                                    s.settings_ui
-                                        .expanded_memory_keys
-                                        .insert(key_toggle.clone());
-                                }
-                            })
-                            .build(k),
+                        row()
+                            .items_center()
+                            .gap(8.0)
+                            .child(
+                                Button::new(title)
+                                    .variant(ButtonVariant::Ghost)
+                                    .control_size(ControlSize::Small)
+                                    .icon(if expanded {
+                                        &icons::CHEVRON_DOWN
+                                    } else {
+                                        &icons::CHEVRON_RIGHT
+                                    })
+                                    .on_press(move |s: &mut AppState| {
+                                        if s.settings_ui.expanded_memory_keys.contains(&key_toggle)
+                                        {
+                                            s.settings_ui.expanded_memory_keys.remove(&key_toggle);
+                                        } else {
+                                            s.settings_ui
+                                                .expanded_memory_keys
+                                                .insert(key_toggle.clone());
+                                        }
+                                    })
+                                    .build(k),
+                            )
+                            .child(status_pill(
+                                memory_scope_label(&entry_scope),
+                                StatusTone::Neutral,
+                                k,
+                                t,
+                            )),
                     )
                     .child(
                         text(updated_label)
@@ -1509,9 +1623,11 @@ fn build_legacy_memory_section(
                                     .variant(ButtonVariant::Outline)
                                     .control_size(ControlSize::Small)
                                     .on_press(move |s: &mut AppState| {
-                                        s.settings_ui.memory_editing_key = Some(key_edit.clone());
+                                        s.settings_ui.memory_editing_key = Some(id_edit.clone());
+                                        s.settings_ui.memory_editing_scope = scope_edit.clone();
+                                        s.settings_ui.memory_draft_scope = scope_edit.clone();
                                         s.settings_ui.memory_key_edit =
-                                            TextEdit::new(key_edit.as_str());
+                                            TextEdit::new(id_edit.as_str());
                                         s.settings_ui.memory_content_edit =
                                             TextEdit::new(content_edit.as_str());
                                         s.settings_ui.memory_dialog_open = true;
@@ -1524,8 +1640,8 @@ fn build_legacy_memory_section(
                                     .control_size(ControlSize::Small)
                                     .icon(&icons::TRASH)
                                     .on_press(move |s: &mut AppState| {
-                                        s.settings_ui.memory_delete_confirm_key =
-                                            Some(key_del.clone());
+                                        s.settings_ui.memory_delete_confirm =
+                                            Some((scope_del.clone(), id_del.clone()));
                                     })
                                     .build(k),
                             ),
@@ -1537,8 +1653,45 @@ fn build_legacy_memory_section(
 
     if s.settings_ui.memory_dialog_open {
         let editing = s.settings_ui.memory_editing_key.is_some();
+        let active_scope = if editing {
+            s.settings_ui.memory_editing_scope.clone()
+        } else {
+            s.settings_ui.memory_draft_scope.clone()
+        };
         let can_save = !s.settings_ui.memory_content_edit.text.trim().is_empty();
         let ws_save = ws_id.to_string();
+
+        let scope_options = ["Workspace", "Everywhere"];
+        let scope_open = s.settings_ui.open_select_key.as_deref() == Some("legacy-memory-scope");
+        let scope_select = Select::new("legacy-memory-scope", &scope_options)
+            .appearance(SelectAppearance::Field)
+            .width(180.0)
+            .disabled(editing)
+            .current(Some(memory_scope_label(&active_scope)))
+            .open(scope_open)
+            .on_toggle(|s: &mut AppState| {
+                let open = s.settings_ui.open_select_key.as_deref() == Some("legacy-memory-scope");
+                s.settings_ui.open_select_key = if open {
+                    None
+                } else {
+                    Some("legacy-memory-scope".to_string())
+                };
+            })
+            .on_close(|s: &mut AppState| {
+                if s.settings_ui.open_select_key.as_deref() == Some("legacy-memory-scope") {
+                    s.settings_ui.open_select_key = None;
+                }
+            })
+            .on_choose(|s: &mut AppState, chosen, _tx| {
+                s.settings_ui.open_select_key = None;
+                s.settings_ui.memory_draft_scope = if chosen == "Everywhere" {
+                    "user".to_string()
+                } else {
+                    "workspace".to_string()
+                };
+            })
+            .build(k, overlays);
+
         let footer = row()
             .w_full()
             .justify_end()
@@ -1564,17 +1717,25 @@ fn build_legacy_memory_section(
                 .control_size(ControlSize::Regular)
                 .disabled(!can_save)
                 .on_press(move |s: &mut AppState| {
-                    let key = s.settings_ui.memory_editing_key.clone().unwrap_or_else(|| {
+                    let editing_id = s.settings_ui.memory_editing_key.clone();
+                    let save_scope = if editing_id.is_some() {
+                        s.settings_ui.memory_editing_scope.clone()
+                    } else {
+                        s.settings_ui.memory_draft_scope.clone()
+                    };
+                    let key = editing_id.unwrap_or_else(|| {
                         resolve_draft_memory_id(&s.settings_ui.memory_key_edit.text)
                     });
                     let content = s.settings_ui.memory_content_edit.text.trim().to_string();
                     if content.is_empty() {
                         return;
                     }
-                    s.dispatch(Action::Settings(SettingsAction::UpsertMemory {
+                    s.dispatch(Action::Settings(SettingsAction::UpsertScopedMemory {
                         workspace_id: ws_save.clone(),
-                        key,
+                        scope: save_scope,
+                        id: Some(key),
                         content,
+                        mode: Some("upsert".to_string()),
                     }));
                     s.settings_ui.memory_dialog_open = false;
                     s.settings_ui.memory_editing_key = None;
@@ -1613,6 +1774,13 @@ fn build_legacy_memory_section(
                         col()
                             .w_full()
                             .gap(4.0)
+                            .child(text("Scope").font(k.ty.text_xsmall).color(t.text_muted))
+                            .child(scope_select),
+                    )
+                    .child(
+                        col()
+                            .w_full()
+                            .gap(4.0)
                             .child(text("Title").font(k.ty.text_xsmall).color(t.text_muted))
                             .child(
                                 TextInput::new(&s.settings_ui.memory_key_edit)
@@ -1647,23 +1815,27 @@ fn build_legacy_memory_section(
         .build(k, overlays);
     }
 
-    if let Some(key) = s.settings_ui.memory_delete_confirm_key.clone() {
+    if let Some((del_scope, del_id)) = s.settings_ui.memory_delete_confirm.clone() {
         let ws_del = ws_id.to_string();
         confirm_dialog(
             ConfirmDialogSpec {
                 key: "legacy-memory-delete-confirm",
                 open: true,
                 title: "Delete memory",
-                description: format!("Delete \"{key}\"? This memory will be permanently removed."),
+                description: format!(
+                    "Delete \"{del_id}\" ({})? This memory will be permanently removed.",
+                    memory_scope_label(&del_scope)
+                ),
                 confirm_label: "Delete",
                 danger: true,
             },
-            |s| s.settings_ui.memory_delete_confirm_key = None,
+            |s| s.settings_ui.memory_delete_confirm = None,
             move |s| {
-                s.settings_ui.memory_delete_confirm_key = None;
-                s.dispatch(Action::Settings(SettingsAction::DeleteMemory {
+                s.settings_ui.memory_delete_confirm = None;
+                s.dispatch(Action::Settings(SettingsAction::DeleteScopedMemory {
                     workspace_id: ws_del.clone(),
-                    key: key.clone(),
+                    scope: del_scope.clone(),
+                    id: del_id.clone(),
                 }));
             },
             k,

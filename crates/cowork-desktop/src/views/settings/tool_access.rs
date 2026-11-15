@@ -430,20 +430,47 @@ fn plugins_tab_view(
         })
         .collect();
 
-    let install_btn = Button::new("+ Install plugin")
-        .variant(ButtonVariant::Contrast)
-        .control_size(ControlSize::Small)
-        .on_press(|s: &mut AppState| {
-            s.settings_ui.install_target_edit = TextEdit::new("");
-            s.settings_ui.plugin_install_scope = "user".to_string();
-            s.settings_ui.install_plugin_open = true;
-        })
-        .build(k);
+    let ws_refresh = ws_id.to_string();
+    let header_btns = row()
+        .items_center()
+        .gap(8.0)
+        .child(
+            Button::new("Refresh")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .icon(&icons::REFRESH_CCW)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
+                        workspace_id: ws_refresh.clone(),
+                    }));
+                })
+                .build(k),
+        )
+        .child(
+            Button::new("+ Install plugin")
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut AppState| {
+                    s.settings_ui.install_target_edit = TextEdit::new("");
+                    s.settings_ui.plugin_install_scope = "user".to_string();
+                    s.settings_ui.install_plugin_open = true;
+                })
+                .build(k),
+        );
 
     let mut installed_section = Section::new()
         .title("Installed plugins")
         .description("Toggle plugins on or off or inspect their bundled skills and MCP servers.")
-        .action(install_btn);
+        .action(header_btns);
+
+    if !s.plugin_catalog_warnings.is_empty() {
+        installed_section = installed_section.child(el().px(16.0).pt(12.0).child(callout_banner(
+            StatusTone::Warning,
+            s.plugin_catalog_warnings.join("\n"),
+            k,
+            t,
+        )));
+    }
 
     if plugins.is_empty() {
         installed_section = installed_section.child(
@@ -512,7 +539,140 @@ fn plugins_tab_view(
     append_plugin_detail_dialog(s, ws_id, k, t, overlays);
     append_plugin_delete_confirm(s, ws_id, k, overlays);
 
-    installed_section.build(k, t)
+    let available_entries: Vec<&Value> = s
+        .available_plugins
+        .iter()
+        .filter(|item| item.get("installed").and_then(Value::as_bool) != Some(true))
+        .filter(|item| {
+            if query.is_empty() {
+                true
+            } else {
+                let name = item
+                    .get("displayName")
+                    .or_else(|| item.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let desc = item
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                name.contains(&query) || desc.contains(&query)
+            }
+        })
+        .collect();
+
+    if available_entries.is_empty() {
+        return installed_section.build(k, t);
+    }
+
+    let mut avail_section = Section::new()
+        .title("Available plugins")
+        .description("Marketplace plugins ready to install into your library or active workspace.");
+
+    for item in available_entries {
+        let display_name = item
+            .get("displayName")
+            .or_else(|| item.get("name"))
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("Plugin")
+            .to_string();
+        let desc = item
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let install_source = item
+            .get("installSource")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let marketplace_name = item
+            .get("marketplace")
+            .and_then(|m| {
+                m.get("displayName")
+                    .or_else(|| m.get("name"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_string);
+
+        let mut title_row = row().items_center().gap(8.0).child(
+            text(&display_name)
+                .font(k.ty.body_medium)
+                .color(t.text_base),
+        );
+        if let Some(mkt) = marketplace_name {
+            title_row = title_row.child(status_pill(mkt, StatusTone::Neutral, k, t));
+        }
+
+        let mut info = col().grow(1.0).min_w(0.0).gap(3.0).child(title_row);
+        if !desc.is_empty() {
+            info = info.child(text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap());
+        }
+
+        let action_btn = if let Some(src) = install_source {
+            let ws_inst = ws_id.to_string();
+            Button::new("Install")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut AppState| {
+                    let params = plugin_install_params(&src, "user");
+                    s.dispatch(Action::Settings(SettingsAction::InstallPlugin {
+                        workspace_id: ws_inst.clone(),
+                        params,
+                    }));
+                })
+                .build(k)
+        } else {
+            Button::new("Install…")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut AppState| {
+                    s.settings_ui.install_target_edit = TextEdit::new("");
+                    s.settings_ui.install_plugin_open = true;
+                })
+                .build(k)
+        };
+
+        avail_section = avail_section.child(
+            row()
+                .w_full()
+                .min_w(0.0)
+                .items_center()
+                .justify_between()
+                .gap(12.0)
+                .px(16.0)
+                .py(12.0)
+                .child(
+                    row()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .items_center()
+                        .gap(12.0)
+                        .child(entity_icon(
+                            s,
+                            None,
+                            &display_name,
+                            EntityIconSize::Sm,
+                            k,
+                            t,
+                        ))
+                        .child(info),
+                )
+                .child(action_btn),
+        );
+    }
+
+    col()
+        .w_full()
+        .min_w(0.0)
+        .gap(20.0)
+        .child(installed_section.build(k, t))
+        .child(avail_section.build(k, t))
 }
 
 fn render_plugin_row(
@@ -548,6 +708,7 @@ fn render_plugin_row(
     );
 
     let pid_open = plugin.id.clone();
+    let scope_open = plugin.scope.clone();
     let mut info_col = col()
         .grow(1.0)
         .min_w(0.0)
@@ -558,6 +719,7 @@ fn render_plugin_row(
         .label(format!("Inspect plugin {}", plugin.name))
         .on_press(move |s: &mut AppState| {
             s.settings_ui.selected_plugin_id = Some(pid_open.clone());
+            s.settings_ui.selected_plugin_scope = scope_open.clone();
         })
         .child(header);
     if !plugin.description.trim().is_empty() {
@@ -576,20 +738,23 @@ fn render_plugin_row(
 
     let ws_toggle = ws_id.to_string();
     let pid_toggle = plugin.id.clone();
+    let scope_toggle = plugin.scope.clone();
     let next_enabled = !plugin.enabled;
 
     let mut actions = row().items_center().gap(8.0).shrink();
     if plugin.update_available {
         let ws_upd = ws_id.to_string();
         let pid_upd = plugin.id.clone();
+        let scope_upd = plugin.scope.clone();
         actions = actions.child(
             Button::new("Update")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::UpdatePlugin {
+                    s.dispatch(Action::Settings(SettingsAction::UpdatePluginScoped {
                         workspace_id: ws_upd.clone(),
                         id: pid_upd.clone(),
+                        scope: scope_upd.clone(),
                     }));
                 })
                 .build(k),
@@ -603,9 +768,10 @@ fn render_plugin_row(
                 .hide_label()
                 .control_size(ControlSize::Mini)
                 .on_toggle(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabledScoped {
                         workspace_id: ws_toggle.clone(),
                         id: pid_toggle.clone(),
+                        scope: scope_toggle.clone(),
                         enabled: next_enabled,
                     }));
                 })
@@ -617,8 +783,10 @@ fn render_plugin_row(
                 .control_size(ControlSize::Small)
                 .on_press({
                     let pid = plugin.id.clone();
+                    let pscope = plugin.scope.clone();
                     move |s: &mut AppState| {
                         s.settings_ui.selected_plugin_id = Some(pid.clone());
+                        s.settings_ui.selected_plugin_scope = pscope.clone();
                     }
                 })
                 .build(k),
@@ -762,7 +930,13 @@ fn append_plugin_detail_dialog(
     let Some(plugin_id) = s.settings_ui.selected_plugin_id.as_deref() else {
         return;
     };
-    let Some(plugin) = s.plugins.iter().find(|p| p.id == plugin_id) else {
+    let selected_scope = s.settings_ui.selected_plugin_scope.clone();
+    let Some(plugin) = s
+        .plugins
+        .iter()
+        .find(|p| p.id == plugin_id && (selected_scope.is_none() || p.scope == selected_scope))
+        .or_else(|| s.plugins.iter().find(|p| p.id == plugin_id))
+    else {
         return;
     };
 
@@ -830,8 +1004,10 @@ fn append_plugin_detail_dialog(
 
     let ws_toggle = ws_id.to_string();
     let pid_toggle = plugin.id.clone();
+    let scope_toggle = plugin.scope.clone();
     let next_enabled = !plugin.enabled;
     let pid_delete = plugin.id.clone();
+    let scope_delete = plugin.scope.clone();
 
     let mut footer = row()
         .w_full()
@@ -845,7 +1021,9 @@ fn append_plugin_detail_dialog(
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
                     s.settings_ui.selected_plugin_id = None;
-                    s.settings_ui.plugin_delete_confirm = Some(pid_delete.clone());
+                    s.settings_ui.selected_plugin_scope = None;
+                    s.settings_ui.plugin_delete_confirm_scoped =
+                        Some((pid_delete.clone(), scope_delete.clone()));
                 })
                 .build(k),
         );
@@ -854,14 +1032,16 @@ fn append_plugin_detail_dialog(
     if plugin.update_available {
         let ws_upd = ws_id.to_string();
         let pid_upd = plugin.id.clone();
+        let scope_upd = plugin.scope.clone();
         right_actions = right_actions.child(
             Button::new("Update")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::UpdatePlugin {
+                    s.dispatch(Action::Settings(SettingsAction::UpdatePluginScoped {
                         workspace_id: ws_upd.clone(),
                         id: pid_upd.clone(),
+                        scope: scope_upd.clone(),
                     }));
                 })
                 .build(k),
@@ -873,9 +1053,10 @@ fn append_plugin_detail_dialog(
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabledScoped {
                         workspace_id: ws_toggle.clone(),
                         id: pid_toggle.clone(),
+                        scope: scope_toggle.clone(),
                         enabled: next_enabled,
                     }));
                 })
@@ -887,6 +1068,7 @@ fn append_plugin_detail_dialog(
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     s.settings_ui.selected_plugin_id = None;
+                    s.settings_ui.selected_plugin_scope = None;
                 })
                 .build(k),
         );
@@ -900,23 +1082,26 @@ fn append_plugin_detail_dialog(
         .fit()
         .on_close(|s: &mut AppState| {
             s.settings_ui.selected_plugin_id = None;
+            s.settings_ui.selected_plugin_scope = None;
         })
         .child(content)
         .build(k, overlays);
 }
 
 fn append_plugin_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &mut Vec<El>) {
-    let Some(plugin_id) = s.settings_ui.plugin_delete_confirm.as_deref() else {
+    let Some((plugin_id, plugin_scope)) = s.settings_ui.plugin_delete_confirm_scoped.as_ref()
+    else {
         return;
     };
     let display = s
         .plugins
         .iter()
-        .find(|p| p.id == plugin_id)
+        .find(|p| p.id == *plugin_id)
         .map(|p| p.name.as_str())
-        .unwrap_or(plugin_id);
+        .unwrap_or(plugin_id.as_str());
     let ws_del = ws_id.to_string();
-    let pid_del = plugin_id.to_string();
+    let pid_del = plugin_id.clone();
+    let scope_del = plugin_scope.clone();
     confirm_dialog(
         ConfirmDialogSpec {
             key: "plugin-delete-confirm",
@@ -928,15 +1113,16 @@ fn append_plugin_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &m
             danger: true,
             open: true,
         },
+        |s| {
+            s.settings_ui.plugin_delete_confirm_scoped = None;
+        },
         move |s| {
-            s.dispatch(Action::Settings(SettingsAction::DeletePlugin {
+            s.dispatch(Action::Settings(SettingsAction::DeletePluginScoped {
                 workspace_id: ws_del.clone(),
                 id: pid_del.clone(),
+                scope: scope_del.clone(),
             }));
-            s.settings_ui.plugin_delete_confirm = None;
-        },
-        |s| {
-            s.settings_ui.plugin_delete_confirm = None;
+            s.settings_ui.plugin_delete_confirm_scoped = None;
         },
         k,
         overlays,
@@ -987,20 +1173,38 @@ fn skills_tab_view(
         })
         .collect();
 
-    let install_btn = Button::new("+ Install skill")
-        .variant(ButtonVariant::Contrast)
-        .control_size(ControlSize::Small)
-        .on_press(|s: &mut AppState| {
-            s.settings_ui.install_target_edit = TextEdit::new("");
-            s.settings_ui.skill_install_scope = "global".to_string();
-            s.settings_ui.install_skill_open = true;
-        })
-        .build(k);
+    let ws_refresh = ws_id.to_string();
+    let header_btns = row()
+        .items_center()
+        .gap(8.0)
+        .child(
+            Button::new("Refresh")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .icon(&icons::REFRESH_CCW)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
+                        workspace_id: ws_refresh.clone(),
+                    }));
+                })
+                .build(k),
+        )
+        .child(
+            Button::new("+ Install skill")
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut AppState| {
+                    s.settings_ui.install_target_edit = TextEdit::new("");
+                    s.settings_ui.skill_install_scope = "global".to_string();
+                    s.settings_ui.install_skill_open = true;
+                })
+                .build(k),
+        );
 
     let mut skills_section = Section::new()
         .title("Installed skills")
         .description("Enable, disable, inspect, or remove installed agent skills.")
-        .action(install_btn);
+        .action(header_btns);
 
     if skills.is_empty() {
         skills_section = skills_section.child(
@@ -1145,18 +1349,159 @@ fn skills_tab_view(
         }
     }
 
+    let available_skills: Vec<&Value> = s
+        .available_skills
+        .iter()
+        .filter(|item| item.get("installed").and_then(Value::as_bool) != Some(true))
+        .filter(|item| {
+            if query.is_empty() {
+                true
+            } else {
+                let name = item
+                    .get("displayName")
+                    .or_else(|| item.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let desc = item
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                name.contains(&query) || desc.contains(&query)
+            }
+        })
+        .collect();
+
     append_install_skill_dialog(s, ws_id, k, t, overlays);
     append_skill_detail_dialog(s, ws_id, k, t, overlays);
     append_skill_delete_confirm(s, ws_id, k, overlays);
     append_add_marketplace_dialog(s, ws_id, k, t, overlays);
     append_marketplace_remove_confirm(s, ws_id, k, overlays);
 
-    col()
+    let mut stack = col()
         .w_full()
         .min_w(0.0)
         .gap(20.0)
-        .child(skills_section.build(k, t))
-        .child(mkt_section.build(k, t))
+        .child(skills_section.build(k, t));
+
+    if !available_skills.is_empty() {
+        let mut avail_section = Section::new()
+            .title("Available skills")
+            .description("Marketplace skills ready to install globally or per project.");
+        for item in available_skills {
+            let display_name = item
+                .get("displayName")
+                .or_else(|| item.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("Skill")
+                .to_string();
+            let desc = item
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let install_source = item
+                .get("installSource")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string);
+            let mkt_name = item
+                .get("marketplace")
+                .and_then(|m| {
+                    m.get("displayName")
+                        .or_else(|| m.get("name"))
+                        .and_then(Value::as_str)
+                })
+                .map(str::to_string);
+
+            let mut title_row = row().items_center().gap(8.0).child(
+                text(&display_name)
+                    .font(k.ty.body_medium)
+                    .color(t.text_base),
+            );
+            if let Some(mkt) = mkt_name {
+                title_row = title_row.child(status_pill(mkt, StatusTone::Neutral, k, t));
+            }
+            let mut info = col().grow(1.0).min_w(0.0).gap(3.0).child(title_row);
+            if !desc.is_empty() {
+                info = info.child(text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap());
+            }
+            let install_action = if let Some(src) = install_source {
+                let ws_inst = ws_id.to_string();
+                Button::new("Install")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Small)
+                    .on_press(move |s: &mut AppState| {
+                        let params = skill_install_params(&src, "global");
+                        s.dispatch(Action::Settings(SettingsAction::InstallSkill {
+                            workspace_id: ws_inst.clone(),
+                            params,
+                        }));
+                    })
+                    .build(k)
+            } else {
+                Button::new("Install…")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Small)
+                    .on_press(|s: &mut AppState| {
+                        s.settings_ui.install_target_edit = TextEdit::new("");
+                        s.settings_ui.install_skill_open = true;
+                    })
+                    .build(k)
+            };
+            avail_section = avail_section.child(
+                row()
+                    .w_full()
+                    .min_w(0.0)
+                    .items_center()
+                    .justify_between()
+                    .gap(12.0)
+                    .px(16.0)
+                    .py(12.0)
+                    .child(
+                        row()
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .items_center()
+                            .gap(12.0)
+                            .child(entity_icon(
+                                s,
+                                None,
+                                &display_name,
+                                EntityIconSize::Sm,
+                                k,
+                                t,
+                            ))
+                            .child(info),
+                    )
+                    .child(install_action),
+            );
+        }
+        stack = stack.child(avail_section.build(k, t));
+    }
+
+    stack.child(mkt_section.build(k, t))
+}
+
+fn find_skill_installation_id(s: &AppState, name: &str, scope: &str) -> Option<String> {
+    s.skill_installations
+        .iter()
+        .find(|inst| {
+            inst.get("name").and_then(Value::as_str) == Some(name)
+                && inst.get("scope").and_then(Value::as_str) == Some(scope)
+        })
+        .or_else(|| {
+            s.skill_installations
+                .iter()
+                .find(|inst| inst.get("name").and_then(Value::as_str) == Some(name))
+        })
+        .and_then(|inst| inst.get("installationId").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
 }
 
 fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &ThemeTokens) -> El {
@@ -1201,24 +1546,52 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
 
     let ws_toggle = ws_id.to_string();
     let name_toggle = sk.name.clone();
+    let inst_id = find_skill_installation_id(s, &sk.name, &sk.scope);
+    let inst_id_toggle = inst_id.clone();
     let next_enabled = !sk.enabled;
     let is_builtin = sk.scope == "built-in";
 
-    let mut actions = row()
-        .items_center()
-        .gap(8.0)
-        .shrink()
+    let mut actions = row().items_center().gap(8.0).shrink();
+    if sk.update_available
+        && let Some(inst_upd) = inst_id.clone()
+    {
+        let ws_upd = ws_id.to_string();
+        actions = actions.child(
+            Button::new("Update")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::UpdateSkillInstallation {
+                        workspace_id: ws_upd.clone(),
+                        installation_id: inst_upd.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+
+    actions = actions
         .child(
             Switch::new(sk.enabled)
                 .label(format!("Enable {}", sk.name))
                 .hide_label()
                 .control_size(ControlSize::Mini)
                 .on_toggle(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
-                        workspace_id: ws_toggle.clone(),
-                        name: name_toggle.clone(),
-                        enabled: next_enabled,
-                    }));
+                    if let Some(id) = inst_id_toggle.as_ref() {
+                        s.dispatch(Action::Settings(
+                            SettingsAction::SetSkillInstallationEnabled {
+                                workspace_id: ws_toggle.clone(),
+                                installation_id: id.clone(),
+                                enabled: next_enabled,
+                            },
+                        ));
+                    } else {
+                        s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+                            workspace_id: ws_toggle.clone(),
+                            name: name_toggle.clone(),
+                            enabled: next_enabled,
+                        }));
+                    }
                 })
                 .build(k),
         )
@@ -1237,12 +1610,18 @@ fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &T
 
     if !is_builtin {
         let sk_del = sk.name.clone();
+        let inst_del = inst_id;
         actions = actions.child(
             Button::new("Delete")
                 .variant(ButtonVariant::Danger)
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut AppState| {
-                    s.settings_ui.skill_delete_confirm = Some(sk_del.clone());
+                    if let Some(id) = inst_del.as_ref() {
+                        s.settings_ui.skill_delete_confirm_inst =
+                            Some((id.clone(), sk_del.clone()));
+                    } else {
+                        s.settings_ui.skill_delete_confirm = Some(sk_del.clone());
+                    }
                 })
                 .build(k),
         );
@@ -1450,6 +1829,7 @@ fn append_skill_detail_dialog(
         );
     }
 
+    let inst_detail_id = find_skill_installation_id(s, &sk.name, &sk.scope);
     let mut footer = row()
         .w_full()
         .justify_between()
@@ -1457,19 +1837,26 @@ fn append_skill_detail_dialog(
         .gap(8.0)
         .pt(6.0);
     if !is_builtin {
+        let inst_del = inst_detail_id.clone();
         footer = footer.child(
             Button::new("Delete")
                 .variant(ButtonVariant::Danger)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
                     s.settings_ui.selected_skill_id = None;
-                    s.settings_ui.skill_delete_confirm = Some(sk_del.clone());
+                    if let Some(id) = inst_del.as_ref() {
+                        s.settings_ui.skill_delete_confirm_inst =
+                            Some((id.clone(), sk_del.clone()));
+                    } else {
+                        s.settings_ui.skill_delete_confirm = Some(sk_del.clone());
+                    }
                 })
                 .build(k),
         );
     } else {
         footer = footer.child(el());
     }
+    let inst_toggle = inst_detail_id;
     footer = footer.child(
         row()
             .items_center()
@@ -1479,11 +1866,21 @@ fn append_skill_detail_dialog(
                     .variant(ButtonVariant::Contrast)
                     .control_size(ControlSize::Regular)
                     .on_press(move |s: &mut AppState| {
-                        s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
-                            workspace_id: ws_toggle.clone(),
-                            name: sk_toggle.clone(),
-                            enabled: next_enabled,
-                        }));
+                        if let Some(id) = inst_toggle.as_ref() {
+                            s.dispatch(Action::Settings(
+                                SettingsAction::SetSkillInstallationEnabled {
+                                    workspace_id: ws_toggle.clone(),
+                                    installation_id: id.clone(),
+                                    enabled: next_enabled,
+                                },
+                            ));
+                        } else {
+                            s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+                                workspace_id: ws_toggle.clone(),
+                                name: sk_toggle.clone(),
+                                enabled: next_enabled,
+                            }));
+                        }
                     })
                     .build(k),
             )
@@ -1511,6 +1908,34 @@ fn append_skill_detail_dialog(
 }
 
 fn append_skill_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &mut Vec<El>) {
+    if let Some((inst_id, label)) = s.settings_ui.skill_delete_confirm_inst.clone() {
+        let ws_del = ws_id.to_string();
+        confirm_dialog(
+            ConfirmDialogSpec {
+                key: "skill-delete-confirm",
+                title: "Delete skill",
+                description: format!(
+                    "Delete skill \"{label}\"? This removes it from the active scope."
+                ),
+                confirm_label: "Delete",
+                danger: true,
+                open: true,
+            },
+            |s| {
+                s.settings_ui.skill_delete_confirm_inst = None;
+            },
+            move |s| {
+                s.dispatch(Action::Settings(SettingsAction::DeleteSkillInstallation {
+                    workspace_id: ws_del.clone(),
+                    installation_id: inst_id.clone(),
+                }));
+                s.settings_ui.skill_delete_confirm_inst = None;
+            },
+            k,
+            overlays,
+        );
+        return;
+    }
     let Some(name) = s.settings_ui.skill_delete_confirm.as_deref() else {
         return;
     };
@@ -1525,14 +1950,14 @@ fn append_skill_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &mu
             danger: true,
             open: true,
         },
+        |s| {
+            s.settings_ui.skill_delete_confirm = None;
+        },
         move |s| {
             s.dispatch(Action::Settings(SettingsAction::DeleteSkill {
                 workspace_id: ws_del.clone(),
                 name: sk_del.clone(),
             }));
-            s.settings_ui.skill_delete_confirm = None;
-        },
-        |s| {
             s.settings_ui.skill_delete_confirm = None;
         },
         k,
@@ -1635,14 +2060,14 @@ fn append_marketplace_remove_confirm(s: &AppState, ws_id: &str, k: &Kit, overlay
             danger: true,
             open: true,
         },
+        |s| {
+            s.settings_ui.marketplace_remove_confirm = None;
+        },
         move |s| {
             s.dispatch(Action::Settings(SettingsAction::RemoveMarketplace {
                 workspace_id: ws_rm.clone(),
                 id: id_rm.clone(),
             }));
-            s.settings_ui.marketplace_remove_confirm = None;
-        },
-        |s| {
             s.settings_ui.marketplace_remove_confirm = None;
         },
         k,

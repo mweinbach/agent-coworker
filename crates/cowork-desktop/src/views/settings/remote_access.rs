@@ -478,17 +478,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         },
         |s| {
             s.settings_ui.forget_all_phones_open = false;
-            let ids: Vec<String> = s
-                .remote_access
-                .trusted_phones
-                .iter()
-                .map(|p| p.id.clone())
-                .collect();
-            for phone_id in ids {
-                s.dispatch(Action::Settings(SettingsAction::ForgetTrustedPhone {
-                    phone_id,
-                }));
-            }
+            s.dispatch(Action::Settings(SettingsAction::RevokeAllTrustedPhones));
         },
         k,
         &mut overlays,

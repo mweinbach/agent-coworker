@@ -104,6 +104,7 @@ pub struct SettingsUiState {
     // Diagnostics / Developer page
     pub diagnostics_status_banner: Option<String>,
     pub last_diagnostics_bundle_path: Option<String>,
+    pub diagnostics_upload_confirm_open: bool,
     pub developer_restart_onboarding_confirm_open: bool,
     pub developer_overflow_threshold_edit: TextEdit,
     pub developer_overflow_threshold_workspace: Option<String>,
@@ -254,9 +255,18 @@ pub struct SettingsUiState {
     pub mcp_enabled: bool,
     pub plugin_install_scope: String,
     pub plugin_delete_confirm: Option<String>,
+    pub plugin_delete_confirm_scoped: Option<(String, Option<String>)>,
+    pub selected_plugin_scope: Option<String>,
     pub skill_install_scope: String,
     pub skill_delete_confirm: Option<String>,
+    pub skill_delete_confirm_inst: Option<(String, String)>,
     pub marketplace_remove_confirm: Option<(String, String)>,
+    pub subagent_editing_scope: String,
+    pub subagent_delete_confirm: Option<(String, String)>,
+    pub memory_editing_scope: String,
+    pub memory_delete_confirm: Option<(String, String)>,
+    pub mcp_editing_source: Option<String>,
+    pub mcp_delete_confirm: Option<(String, String)>,
 }
 
 impl Default for SettingsUiState {
@@ -271,6 +281,7 @@ impl Default for SettingsUiState {
             privacy_trace_payloads_confirm_open: false,
             diagnostics_status_banner: None,
             last_diagnostics_bundle_path: None,
+            diagnostics_upload_confirm_open: false,
             developer_restart_onboarding_confirm_open: false,
             developer_overflow_threshold_edit: TextEdit::new(""),
             developer_overflow_threshold_workspace: None,
@@ -402,9 +413,18 @@ impl Default for SettingsUiState {
             mcp_enabled: true,
             plugin_install_scope: "user".to_string(),
             plugin_delete_confirm: None,
+            plugin_delete_confirm_scoped: None,
+            selected_plugin_scope: None,
             skill_install_scope: "global".to_string(),
             skill_delete_confirm: None,
+            skill_delete_confirm_inst: None,
             marketplace_remove_confirm: None,
+            subagent_editing_scope: "workspace".to_string(),
+            subagent_delete_confirm: None,
+            memory_editing_scope: "workspace".to_string(),
+            memory_delete_confirm: None,
+            mcp_editing_source: None,
+            mcp_delete_confirm: None,
         }
     }
 }

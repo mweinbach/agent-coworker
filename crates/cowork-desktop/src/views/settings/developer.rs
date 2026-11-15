@@ -191,6 +191,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         }
     };
 
+    let bundle_state = s.diagnostics_bundle.as_ref();
+    let bundle_path_opt = bundle_state
+        .map(|b| b.path.clone())
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| s.settings_ui.last_diagnostics_bundle_path.clone());
     let summary_text = build_diagnostic_summary_text(s, &runtime_summary);
     let refresh_ws_id = active_target.map(|target| target.id.clone());
     let mut diagnostics_actions = row().flex_wrap().gap(8.0).child(
@@ -204,6 +209,42 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             })
             .build(k),
     );
+    diagnostics_actions = diagnostics_actions.child(
+        Button::new("Open Logs Folder")
+            .variant(ButtonVariant::Outline)
+            .icon(&icons::FOLDER)
+            .control_size(ControlSize::Regular)
+            .on_press(|s: &mut AppState| {
+                s.dispatch(Action::Settings(SettingsAction::OpenLogsFolder));
+            })
+            .build(k),
+    );
+    if let Some(bundle_path) = bundle_path_opt.clone() {
+        let reveal_path = bundle_path.clone();
+        diagnostics_actions = diagnostics_actions.child(
+            Button::new("Reveal Bundle")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::RevealDiagnosticsBundle {
+                        path: Some(reveal_path.clone()),
+                    }));
+                })
+                .build(k),
+        );
+        if bundle_state.is_some_and(|b| b.upload_configured && b.upload_enabled) {
+            diagnostics_actions = diagnostics_actions.child(
+                Button::new("Upload Bundle")
+                    .variant(ButtonVariant::Outline)
+                    .icon(&icons::UPLOAD)
+                    .control_size(ControlSize::Regular)
+                    .on_press(|s: &mut AppState| {
+                        s.settings_ui.diagnostics_upload_confirm_open = true;
+                    })
+                    .build(k),
+            );
+        }
+    }
     if let Some(ws_id) = refresh_ws_id {
         diagnostics_actions = diagnostics_actions.child(
             Button::new("Refresh diagnostics")
@@ -252,13 +293,24 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         diagnostics_section = diagnostics_section.child(el().px(16.0).py(12.0).child(banner));
     }
 
-    let bundle_detail = s
-        .settings_ui
-        .last_diagnostics_bundle_path
-        .clone()
-        .unwrap_or_else(|| {
+    let bundle_detail = match bundle_state {
+        Some(bundle) if !bundle.path.trim().is_empty() => {
+            let mut parts = vec![bundle.path.clone()];
+            if !bundle.summary.trim().is_empty() {
+                parts.push(bundle.summary.clone());
+            }
+            if let Some(diag_id) = bundle.diagnostic_id.as_deref().filter(|id| !id.is_empty()) {
+                parts.push(format!("Diagnostic ID: {diag_id}"));
+            }
+            if let Some(msg) = bundle.upload_message.as_deref().filter(|m| !m.is_empty()) {
+                parts.push(msg.to_string());
+            }
+            parts.join("\n")
+        }
+        _ => bundle_path_opt.clone().unwrap_or_else(|| {
             "No bundle recorded in this session. Use Create Diagnostics Bundle above.".to_string()
-        });
+        }),
+    };
 
     let mut last_bundle_row = SettingsRow::new("Last bundle").description(bundle_detail);
     if let Some(status_msg) = s
@@ -268,6 +320,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .filter(|msg| !msg.trim().is_empty())
     {
         last_bundle_row = last_bundle_row.meta(status_msg);
+    } else if let Some(bundle) = bundle_state {
+        if bundle.uploaded {
+            last_bundle_row = last_bundle_row.meta("Uploaded");
+        } else if !bundle.created_at.trim().is_empty() {
+            last_bundle_row = last_bundle_row.meta(format!("Created {}", bundle.created_at));
+        }
     }
 
     diagnostics_section = diagnostics_section
@@ -672,6 +730,36 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         debugging_section.build(k, t),
         overflow_section.build(k, t),
     ];
+
+    let upload_path = bundle_path_opt;
+    confirm_dialog(
+        ConfirmDialogSpec {
+            key: "developer-diagnostics-upload-confirm",
+            open: s.settings_ui.diagnostics_upload_confirm_open,
+            title: "Upload diagnostics bundle?",
+            description: format!(
+                "Uploads the redacted archive{} to diagnostic storage configured in your privacy preferences.",
+                upload_path
+                    .as_deref()
+                    .map(|p| format!(" ({p})"))
+                    .unwrap_or_default()
+            ),
+            confirm_label: "Upload bundle",
+            danger: false,
+        },
+        |s| {
+            s.settings_ui.diagnostics_upload_confirm_open = false;
+        },
+        move |s| {
+            s.settings_ui.diagnostics_upload_confirm_open = false;
+            s.dispatch(Action::Settings(SettingsAction::UploadDiagnosticsBundle {
+                path: upload_path.clone(),
+                confirmed: true,
+            }));
+        },
+        k,
+        &mut overlays,
+    );
 
     confirm_dialog(
         ConfirmDialogSpec {

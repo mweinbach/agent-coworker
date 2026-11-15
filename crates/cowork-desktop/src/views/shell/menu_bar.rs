@@ -821,7 +821,7 @@ pub fn build_menu_bar_strip(
             .role("menuitem")
             .label(menu.title)
             .expanded(is_open)
-            .focusable(true)
+            .focusable(is_bar_focused)
             .keeps_text_selection()
             .h(26.0)
             .px(8.0)
@@ -1649,12 +1649,27 @@ mod tests {
         assert!(!visible_rt.state.shell_ui.menu_bar.show_mnemonics);
         assert!(!visible_rt.state.shell_ui.menu_bar.is_active());
         assert!(element_rect(&visible_rt, MENU_FOCUS_BACKDROP_KEY).is_none());
-        assert!(
-            !visible_rt
-                .elements()
-                .iter()
-                .any(|e| !e.exiting && e.focused && e.key.as_deref() == Some("menu-bar-item-0"))
-        );
+        assert!(!visible_rt.elements().iter().any(|e| !e.exiting
+            && e.focused
+            && e.key.as_deref().is_some_and(|k| k.starts_with("menu-bar-"))));
+
+        // Shift+Tab from F10 bar focus also exits the entire menu strip cleanly.
+        visible_rt.key(KeyEvent::from(Key::Function(10)));
+        visible_rt.frame(0.016);
+        assert_eq!(visible_rt.state.shell_ui.menu_bar.focused_top_idx, Some(0));
+        visible_rt.key(KeyEvent {
+            key: Key::Tab,
+            mods: Mods {
+                shift: true,
+                ..Default::default()
+            },
+        });
+        visible_rt.frame(0.016);
+        assert_eq!(visible_rt.state.shell_ui.menu_bar.focused_top_idx, None);
+        assert!(!visible_rt.state.shell_ui.menu_bar.show_mnemonics);
+        assert!(!visible_rt.elements().iter().any(|e| !e.exiting
+            && e.focused
+            && e.key.as_deref().is_some_and(|k| k.starts_with("menu-bar-"))));
     }
 
     #[test]

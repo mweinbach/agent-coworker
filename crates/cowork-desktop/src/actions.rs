@@ -15,10 +15,10 @@ use serde_json::Value;
 
 use crate::router::{NavigationSnapshot, SettingsPageId, ViewId};
 use crate::state::{
-    ConfirmDialogRequest, DesktopSettings, DiagnosticsBundleState, FilePreviewState,
-    LmStudioStartModalState, NotificationTone, PersistedDesktopState, PrivacyTelemetrySettings,
-    ReasoningEffortValue, RemoteAccessState, SubagentProfile, ThreadBusyPolicy, UpdaterState,
-    WindowMode, WorkspaceFileEntry, WorkspaceRecord,
+    AgentProfileUpsertInputWire, ConfirmDialogRequest, DesktopSettings, DiagnosticsBundleState,
+    FilePreviewState, LmStudioStartModalState, NotificationTone, PersistedDesktopState,
+    PrivacyTelemetrySettings, ReasoningEffortValue, RemoteAccessState, SubagentProfile,
+    ThreadBusyPolicy, UpdaterState, WindowMode, WorkspaceFileEntry, WorkspaceRecord,
 };
 use crate::theme::ThemePreference;
 use crate::ws::{WsConnectionState, WsRpcError};
@@ -257,6 +257,23 @@ pub enum SettingsAction {
         workspace_id: String,
         id: String,
     },
+    ReadAgentProfilesCatalog {
+        workspace_id: String,
+    },
+    UpsertAgentProfile {
+        workspace_id: String,
+        input: AgentProfileUpsertInputWire,
+    },
+    DeleteAgentProfile {
+        workspace_id: String,
+        scope: String,
+        id: String,
+    },
+    SetAgentProfileWorkspaceAvailability {
+        workspace_id: String,
+        id: String,
+        disabled: bool,
+    },
     UpsertMemory {
         workspace_id: String,
         key: String,
@@ -265,6 +282,22 @@ pub enum SettingsAction {
     DeleteMemory {
         workspace_id: String,
         key: String,
+    },
+    ReadMemories {
+        workspace_id: String,
+        scope: Option<String>,
+    },
+    UpsertScopedMemory {
+        workspace_id: String,
+        scope: String,
+        id: Option<String>,
+        content: String,
+        mode: Option<String>,
+    },
+    DeleteScopedMemory {
+        workspace_id: String,
+        scope: String,
+        id: String,
     },
     SetFeatureFlag {
         flag_id: String,
@@ -389,6 +422,13 @@ pub enum SettingsAction {
         workspace_id: String,
         id: String,
         target_scope: String,
+    },
+    CopyAgentProfileNamed {
+        workspace_id: String,
+        source_ref: String,
+        target_scope: String,
+        target_id: Option<String>,
+        target_display_name: Option<String>,
     },
     UpsertAdvancedMemory {
         workspace_id: String,

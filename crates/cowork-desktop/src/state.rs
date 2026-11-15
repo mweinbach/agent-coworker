@@ -4151,15 +4151,6 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let mut restart_for_yolo = None;
-                let clear_overflow = defaults.as_object().is_some_and(|obj| {
-                    obj.get("clearDefaultToolOutputOverflowChars")
-                        .and_then(Value::as_bool)
-                        == Some(true)
-                        || obj
-                            .get("clearToolOutputOverflowChars")
-                            .and_then(Value::as_bool)
-                            == Some(true)
-                });
                 if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
                     && let Some(obj) = defaults.as_object()
                 {
@@ -4172,7 +4163,7 @@ impl AppState {
                 self.persist_state();
                 let config_map = defaults
                     .as_object()
-                    .map(|obj| build_session_defaults_config_map(obj, clear_overflow))
+                    .map(build_session_defaults_config_map)
                     .filter(|m| !m.is_empty());
                 let params = SessionDefaultsApplyParams {
                     cwd,
@@ -7804,15 +7795,46 @@ fn parse_scoped_memory_entry(v: &Value) -> Option<ScopedMemoryEntry> {
     })
 }
 
+struct ClearableDefaultKey {
+    desktop_key: &'static str,
+    server_key: &'static str,
+    clear_desktop_key: &'static str,
+    clear_server_key: &'static str,
+}
+
+const CLEARABLE_DEFAULT_KEYS: [ClearableDefaultKey; 4] = [
+    ClearableDefaultKey {
+        desktop_key: "defaultToolOutputOverflowChars",
+        server_key: "toolOutputOverflowChars",
+        clear_desktop_key: "clearDefaultToolOutputOverflowChars",
+        clear_server_key: "clearToolOutputOverflowChars",
+    },
+    ClearableDefaultKey {
+        desktop_key: "defaultMemoryGenerationModel",
+        server_key: "memoryGenerationModel",
+        clear_desktop_key: "clearDefaultMemoryGenerationModel",
+        clear_server_key: "clearMemoryGenerationModel",
+    },
+    ClearableDefaultKey {
+        desktop_key: "defaultSkillImprovementModel",
+        server_key: "skillImprovementModel",
+        clear_desktop_key: "clearDefaultSkillImprovementModel",
+        clear_server_key: "clearSkillImprovementModel",
+    },
+    ClearableDefaultKey {
+        desktop_key: "defaultToolCalling",
+        server_key: "toolCalling",
+        clear_desktop_key: "clearDefaultToolCalling",
+        clear_server_key: "clearToolCalling",
+    },
+];
+
+fn should_clear_default(obj: &Map<String, Value>, spec: &ClearableDefaultKey) -> bool {
+    obj.get(spec.clear_desktop_key).and_then(Value::as_bool) == Some(true)
+        || obj.get(spec.clear_server_key).and_then(Value::as_bool) == Some(true)
+}
+
 fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, Value>) {
-    let clear_overflow = obj
-        .get("clearDefaultToolOutputOverflowChars")
-        .and_then(Value::as_bool)
-        == Some(true)
-        || obj
-            .get("clearToolOutputOverflowChars")
-            .and_then(Value::as_bool)
-            == Some(true);
     if !ws.defaults.is_object() {
         ws.defaults = json!({});
     }
@@ -7820,18 +7842,21 @@ fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, V
         for (k, v) in obj {
             dst.insert(k.clone(), v.clone());
         }
-        if clear_overflow {
-            dst.remove("defaultToolOutputOverflowChars");
-            dst.remove("toolOutputOverflowChars");
-            dst.remove("clearDefaultToolOutputOverflowChars");
-            dst.remove("clearToolOutputOverflowChars");
-        } else if let Some(val) = obj
-            .get("defaultToolOutputOverflowChars")
-            .or_else(|| obj.get("toolOutputOverflowChars"))
-        {
-            dst.insert("defaultToolOutputOverflowChars".to_string(), val.clone());
-            dst.remove("clearDefaultToolOutputOverflowChars");
-            dst.remove("clearToolOutputOverflowChars");
+        for spec in &CLEARABLE_DEFAULT_KEYS {
+            if should_clear_default(obj, spec) {
+                dst.remove(spec.desktop_key);
+                dst.remove(spec.server_key);
+                dst.remove(spec.clear_desktop_key);
+                dst.remove(spec.clear_server_key);
+            } else if let Some(val) = obj
+                .get(spec.server_key)
+                .or_else(|| obj.get(spec.desktop_key))
+            {
+                dst.insert(spec.desktop_key.to_string(), val.clone());
+                dst.insert(spec.server_key.to_string(), val.clone());
+                dst.remove(spec.clear_desktop_key);
+                dst.remove(spec.clear_server_key);
+            }
         }
     }
     if let Some(yolo) = obj.get("yolo").and_then(Value::as_bool) {
@@ -7917,17 +7942,21 @@ fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, V
     }
 }
 
-fn build_session_defaults_config_map(
-    raw: &Map<String, Value>,
-    clear_overflow: bool,
-) -> Map<String, Value> {
+fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Value> {
     let mut map = raw.clone();
+    for spec in &CLEARABLE_DEFAULT_KEYS {
+        for (desktop_key, server_key) in [
+            (spec.desktop_key, spec.server_key),
+            (spec.clear_desktop_key, spec.clear_server_key),
+        ] {
+            if let Some(val) = map.remove(desktop_key)
+                && !map.contains_key(server_key)
+            {
+                map.insert(server_key.to_string(), val);
+            }
+        }
+    }
     for (desktop_key, server_key) in [
-        ("defaultToolOutputOverflowChars", "toolOutputOverflowChars"),
-        (
-            "clearDefaultToolOutputOverflowChars",
-            "clearToolOutputOverflowChars",
-        ),
         ("defaultPreferredChildModel", "preferredChildModel"),
         ("defaultChildModelRoutingMode", "childModelRoutingMode"),
         ("defaultPreferredChildModelRef", "preferredChildModelRef"),
@@ -7937,7 +7966,6 @@ fn build_session_defaults_config_map(
             "defaultWorkflowMaxConcurrentAgents",
             "workflowMaxConcurrentAgents",
         ),
-        ("defaultToolCalling", "toolCalling"),
         ("advancedMemoryEnabled", "advancedMemory"),
     ] {
         if let Some(val) = map.remove(desktop_key)
@@ -7946,11 +7974,13 @@ fn build_session_defaults_config_map(
             map.insert(server_key.to_string(), val);
         }
     }
-    if clear_overflow {
-        map.remove("toolOutputOverflowChars");
-        map.insert("clearToolOutputOverflowChars".to_string(), json!(true));
-    } else if map.contains_key("toolOutputOverflowChars") {
-        map.remove("clearToolOutputOverflowChars");
+    for spec in &CLEARABLE_DEFAULT_KEYS {
+        if should_clear_default(raw, spec) {
+            map.remove(spec.server_key);
+            map.insert(spec.clear_server_key.to_string(), json!(true));
+        } else if map.contains_key(spec.server_key) {
+            map.remove(spec.clear_server_key);
+        }
     }
     map
 }
@@ -10922,6 +10952,82 @@ mod tests {
         assert_eq!(
             state.available_skills,
             vec![json!({ "name": "skill-keep" })]
+        );
+
+        // 4. Clearing memory/skill/toolCalling defaults strips both desktop & server keys.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({
+                "memoryGenerationModel": "openai:gpt-4.1-mini",
+                "skillImprovementModel": "anthropic:claude-sonnet-4-5",
+                "defaultToolCalling": { "enabled": true }
+            }),
+        }));
+        {
+            let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+            assert_eq!(ws.defaults["memoryGenerationModel"], "openai:gpt-4.1-mini");
+            assert_eq!(
+                ws.defaults["defaultMemoryGenerationModel"],
+                "openai:gpt-4.1-mini"
+            );
+            assert_eq!(
+                ws.defaults["skillImprovementModel"],
+                "anthropic:claude-sonnet-4-5"
+            );
+            assert_eq!(ws.defaults["toolCalling"]["enabled"], true);
+        }
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({
+                "clearMemoryGenerationModel": true,
+                "clearSkillImprovementModel": true,
+                "clearToolCalling": true
+            }),
+        }));
+        {
+            let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+            for cleared_key in [
+                "memoryGenerationModel",
+                "defaultMemoryGenerationModel",
+                "clearMemoryGenerationModel",
+                "skillImprovementModel",
+                "defaultSkillImprovementModel",
+                "clearSkillImprovementModel",
+                "toolCalling",
+                "defaultToolCalling",
+                "clearToolCalling",
+            ] {
+                assert!(
+                    ws.defaults.get(cleared_key).is_none(),
+                    "expected {cleared_key} cleared from ws.defaults"
+                );
+            }
+        }
+        let clear_defaults_req = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            clear_defaults_req["config"]["clearMemoryGenerationModel"],
+            json!(true)
+        );
+        assert_eq!(
+            clear_defaults_req["config"]["clearSkillImprovementModel"],
+            json!(true)
+        );
+        assert_eq!(
+            clear_defaults_req["config"]["clearToolCalling"],
+            json!(true)
         );
     }
 }

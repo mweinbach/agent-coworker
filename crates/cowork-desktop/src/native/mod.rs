@@ -95,8 +95,11 @@ use window_state::{
 type ShutdownLatch = Arc<(Mutex<bool>, Condvar)>;
 
 const QUIT_SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const QUIT_UPDATE_INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT: Duration = Duration::from_millis(600);
 const BOUNDS_SAMPLE_THROTTLE: Duration = Duration::from_millis(250);
+
+static PENDING_UPDATE_INSTALL_QUIT: AtomicBool = AtomicBool::new(false);
 
 static APP_HANDLE: OnceLock<Mutex<Option<AppHandle<AppState>>>> = OnceLock::new();
 static APP_HANDLE_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
@@ -206,7 +209,16 @@ fn current_app_handle() -> Option<AppHandle<AppState>> {
         .clone()
 }
 
-fn request_app_quit() {
+fn resolve_shutdown_wait_timeout(pending_update_install: bool) -> Duration {
+    if pending_update_install {
+        QUIT_UPDATE_INSTALL_WAIT_TIMEOUT
+    } else {
+        QUIT_SHUTDOWN_WAIT_TIMEOUT
+    }
+}
+
+fn request_app_quit_for_update() {
+    PENDING_UPDATE_INSTALL_QUIT.store(true, Ordering::Release);
     if let Some(app_handle) = current_app_handle() {
         app_handle.quit();
     }
@@ -475,10 +487,12 @@ pub fn on_shutdown(state: &mut AppState) {
     tray::destroy_macos_tray_on_main_thread();
     state.send_native(NativeCommand::Shutdown);
     state.send_ws(crate::ws::WsCommand::Shutdown);
+    let wait_timeout =
+        resolve_shutdown_wait_timeout(PENDING_UPDATE_INSTALL_QUIT.swap(false, Ordering::AcqRel));
     if let Some(tx) = take_worker_cmd_tx() {
         let sent = tx.send(NativeCommand::Shutdown).is_ok();
         if sent && let Some(latch) = current_shutdown_latch() {
-            let _ = ShutdownCoordinator::wait_until_done(&latch, QUIT_SHUTDOWN_WAIT_TIMEOUT);
+            let _ = ShutdownCoordinator::wait_until_done(&latch, wait_timeout);
         }
     }
 }
@@ -598,6 +612,7 @@ impl NativeWorkerContext {
 
         let notifications = DesktopNotificationService::new(Some(logger.clone()));
         let mut updater_cfg = UpdaterConfig::from_build_env(is_packaged);
+        updater_cfg.staging_dir = Some(user_data_dir.join("updates-staging"));
         if let Some(appimage) = env
             .get("APPIMAGE")
             .map(|s| s.trim())
@@ -606,7 +621,8 @@ impl NativeWorkerContext {
             updater_cfg.target.appimage_path = Some(PathBuf::from(appimage));
         }
         if register_globals {
-            updater_cfg.request_quit = Some(Arc::new(request_app_quit));
+            PENDING_UPDATE_INSTALL_QUIT.store(false, Ordering::Release);
+            updater_cfg.request_quit = Some(Arc::new(request_app_quit_for_update));
         }
         let updater =
             DesktopUpdaterService::with_config(updater_cfg, Some(logger.clone()), emit.clone())
@@ -2573,5 +2589,14 @@ mod tests {
             "darwin",
             Some(&mac_exe)
         ));
+    }
+
+    #[test]
+    fn shutdown_wait_timeout_expands_for_pending_update_install() {
+        assert_eq!(
+            resolve_shutdown_wait_timeout(false),
+            Duration::from_secs(15)
+        );
+        assert_eq!(resolve_shutdown_wait_timeout(true), Duration::from_secs(90));
     }
 }

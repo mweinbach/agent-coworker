@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use cowork_config::ensure_private_dir_sync;
 use flate2::read::GzDecoder;
 use minisign_verify::{PublicKey, Signature};
 use reqwest::StatusCode;
@@ -223,6 +224,7 @@ struct RuntimeInner {
     prepared_install: Option<PreparedInstall>,
     notified_version: Option<String>,
     staging_root: Option<PathBuf>,
+    staging_dir_is_ephemeral: bool,
     disposed: bool,
 }
 
@@ -265,6 +267,7 @@ impl DesktopUpdaterService {
                 prepared_install: None,
                 notified_version: None,
                 staging_root: None,
+                staging_dir_is_ephemeral: false,
                 disposed: false,
             })),
             operation_lock: Arc::new(AsyncMutex::new(())),
@@ -325,6 +328,16 @@ impl DesktopUpdaterService {
             return;
         }
 
+        if let Some(staging_dir) = &cfg.staging_dir {
+            let prune_ok = {
+                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                inner.prepared_install.is_none() && inner.state.status != "downloading"
+            };
+            if prune_ok {
+                prune_staging_dir_if_safe(staging_dir);
+            }
+        }
+
         let mut task_guard = self
             .scheduler_task
             .lock()
@@ -362,10 +375,18 @@ impl DesktopUpdaterService {
 
     /// Cancels scheduled checks and prevents new background installs during shutdown.
     pub fn dispose(&self) {
-        {
+        let cleanup_staging = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.disposed = true;
-        }
+            if !self.quit_requested.load(Ordering::Acquire) {
+                inner
+                    .staging_root
+                    .take()
+                    .map(|p| (p, inner.staging_dir_is_ephemeral))
+            } else {
+                None
+            }
+        };
         self.scheduler_stop.notify_waiters();
         if let Some(handle) = self
             .scheduler_task
@@ -374,6 +395,12 @@ impl DesktopUpdaterService {
             .take()
         {
             handle.abort();
+        }
+        if let Some((staging_root, ephemeral)) = cleanup_staging {
+            prune_staging_dir_if_safe(&staging_root);
+            if ephemeral {
+                let _ = fs::remove_dir(&staging_root);
+            }
         }
     }
 
@@ -422,6 +449,15 @@ impl DesktopUpdaterService {
             return self.get_state();
         }
 
+        // Preserve an already-verified download waiting for restart instead of overwriting it
+        // with `"checking"` / `"error"` when offline or during periodic background checks.
+        {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.state.status == "downloaded" && inner.prepared_install.is_some() {
+                return inner.state.clone();
+            }
+        }
+
         let cfg = self
             .config
             .lock()
@@ -440,15 +476,6 @@ impl DesktopUpdaterService {
                 );
             }
             None => return self.set_disabled_state(&cfg, DISABLED_NO_PUBKEY_REASON),
-        };
-
-        let previously_downloaded = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner
-                .prepared_install
-                .as_ref()
-                .map(|p| p.version.clone())
-                .filter(|_| inner.state.status == "downloaded")
         };
 
         self.set_state(UpdaterState {
@@ -472,7 +499,7 @@ impl DesktopUpdaterService {
             }
             Ok(FetchManifestOutcome::NoContent) => {
                 self.track_checked(false, "up-to-date");
-                self.finish_up_to_date(&cfg, previously_downloaded.as_deref())
+                self.finish_up_to_date(&cfg)
             }
             Ok(FetchManifestOutcome::Manifest(manifest)) => {
                 let Some(remote_ver_str) = normalize_version_string(&manifest.version) else {
@@ -509,25 +536,7 @@ impl DesktopUpdaterService {
 
                 if remote_sem <= current_sem {
                     self.track_checked(false, "up-to-date");
-                    return self.finish_up_to_date(&cfg, previously_downloaded.as_deref());
-                }
-
-                if let Some(prev_ver) = previously_downloaded.as_deref()
-                    && let Ok(prev_sem) = parse_semver(prev_ver)
-                    && prev_sem >= remote_sem
-                {
-                    let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(prepared) = &inner.prepared_install {
-                        let restored = downloaded_state(
-                            &cfg,
-                            &prepared.version,
-                            manifest.notes,
-                            inner.state.downloaded_bytes,
-                            inner.state.total_bytes,
-                        );
-                        drop(inner);
-                        return self.set_state(restored);
-                    }
+                    return self.finish_up_to_date(&cfg);
                 }
 
                 let Some(asset) = select_platform_asset(&manifest, &cfg.target) else {
@@ -693,10 +702,32 @@ impl DesktopUpdaterService {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if let Some(custom_handler) = cfg.install_handler {
-            return custom_handler(&prepared);
+        let res = if let Some(custom_handler) = cfg.install_handler {
+            custom_handler(&prepared)
+        } else {
+            execute_platform_install(&prepared, cfg.relaunch_after_install)
+        };
+        if res.is_ok() && prepared.format == "app" {
+            if let Some(parent) = prepared.staged_path.parent()
+                && parent
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| name.starts_with("extracted-"))
+            {
+                let _ = fs::remove_dir_all(parent);
+            }
+            let staging_cleanup = {
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                inner
+                    .staging_root
+                    .take()
+                    .filter(|_| inner.staging_dir_is_ephemeral)
+            };
+            if let Some(ephemeral_dir) = staging_cleanup {
+                let _ = fs::remove_dir_all(ephemeral_dir);
+            }
         }
-        execute_platform_install(&prepared, cfg.relaunch_after_install)
+        res
     }
 
     /// Opens the latest GitHub releases notes page in the user's browser.
@@ -762,25 +793,7 @@ impl DesktopUpdaterService {
         })
     }
 
-    fn finish_up_to_date(
-        &self,
-        cfg: &UpdaterConfig,
-        previously_downloaded: Option<&str>,
-    ) -> UpdaterState {
-        if let Some(_prev) = previously_downloaded {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(prepared) = &inner.prepared_install {
-                let state = downloaded_state(
-                    cfg,
-                    &prepared.version,
-                    inner.state.notes.clone(),
-                    inner.state.downloaded_bytes,
-                    inner.state.total_bytes,
-                );
-                drop(inner);
-                return self.set_state(state);
-            }
-        }
+    fn finish_up_to_date(&self, cfg: &UpdaterConfig) -> UpdaterState {
         self.set_state(UpdaterState {
             status: "up-to-date".to_string(),
             version: Some(cfg.current_version.clone()),
@@ -1062,16 +1075,17 @@ impl DesktopUpdaterService {
     fn ensure_staging_dir(&self, cfg: &UpdaterConfig) -> Result<PathBuf> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = &inner.staging_root {
-            fs::create_dir_all(existing)?;
+            ensure_owned_private_staging_dir(existing)?;
             return Ok(existing.clone());
         }
-        let dir = if let Some(explicit) = &cfg.staging_dir {
-            explicit.clone()
+        let (dir, is_ephemeral) = if let Some(explicit) = &cfg.staging_dir {
+            ensure_owned_private_staging_dir(explicit)?;
+            (explicit.clone(), false)
         } else {
-            std::env::temp_dir().join(format!("cowork-desktop-updates-{}", std::process::id()))
+            (create_ephemeral_staging_dir()?, true)
         };
-        fs::create_dir_all(&dir)?;
         inner.staging_root = Some(dir.clone());
+        inner.staging_dir_is_ephemeral = is_ephemeral;
         Ok(dir)
     }
 
@@ -1151,25 +1165,105 @@ fn compute_initial_state(cfg: &UpdaterConfig) -> UpdaterState {
     }
 }
 
-fn downloaded_state(
-    cfg: &UpdaterConfig,
-    version: &str,
-    notes: Option<String>,
-    downloaded_bytes: Option<u64>,
-    total_bytes: Option<u64>,
-) -> UpdaterState {
-    UpdaterState {
-        status: "downloaded".to_string(),
-        version: Some(version.to_string()),
-        notes,
-        error: None,
-        current_version: cfg.current_version.clone(),
-        available_version: Some(version.to_string()),
-        download_progress: Some(100.0),
-        downloaded_bytes,
-        total_bytes,
-        bytes_per_second: None,
-        packaged: cfg.is_packaged,
+fn ensure_owned_private_staging_dir(dir: &Path) -> Result<()> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                bail!(
+                    "Refusing symlinked update staging directory `{}`",
+                    dir.display()
+                );
+            }
+            if !meta.file_type().is_dir() {
+                bail!(
+                    "Update staging path `{}` is not a directory.",
+                    dir.display()
+                );
+            }
+            verify_dir_owned_by_current_user(dir, &meta)?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    ensure_private_dir_sync(dir)
+        .with_context(|| format!("Failed to prepare private staging dir `{}`", dir.display()))?;
+    let meta = fs::symlink_metadata(dir)?;
+    if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
+        bail!(
+            "Refusing unsafe update staging directory `{}`",
+            dir.display()
+        );
+    }
+    verify_dir_owned_by_current_user(dir, &meta)?;
+    Ok(())
+}
+
+fn verify_dir_owned_by_current_user(_dir: &Path, _meta: &fs::Metadata) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let current_uid = unsafe { libc::geteuid() };
+        if _meta.uid() != current_uid {
+            bail!(
+                "Refusing update staging directory `{}` not owned by current user.",
+                _dir.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn create_ephemeral_staging_dir() -> Result<PathBuf> {
+    let base = std::env::temp_dir();
+    for _ in 0..16 {
+        let candidate = base.join(format!("cowork-desktop-updates-{}", Uuid::new_v4()));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&candidate) {
+            Ok(()) => {
+                let meta = fs::symlink_metadata(&candidate)?;
+                if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
+                    bail!(
+                        "Refusing unsafe ephemeral staging dir `{}`",
+                        candidate.display()
+                    );
+                }
+                verify_dir_owned_by_current_user(&candidate, &meta)?;
+                return Ok(candidate);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    bail!("Failed to allocate unique temporary update staging directory.");
+}
+
+fn prune_staging_dir_if_safe(dir: &Path) {
+    let Ok(meta) = fs::symlink_metadata(dir) else {
+        return;
+    };
+    if meta.file_type().is_symlink()
+        || !meta.file_type().is_dir()
+        || verify_dir_owned_by_current_user(dir, &meta).is_err()
+    {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Ok(entry_meta) = fs::symlink_metadata(&path) {
+            if entry_meta.file_type().is_dir() && !entry_meta.file_type().is_symlink() {
+                let _ = fs::remove_dir_all(&path);
+            } else {
+                let _ = fs::remove_file(&path);
+            }
+        }
     }
 }
 
@@ -3194,6 +3288,157 @@ mod tests {
                     .unwrap(),
                 PathBuf::from("Versions/A")
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn rechecking_while_downloaded_preserves_staged_update_even_when_offline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target_app = tmp.path().join("Cowork.app");
+        fs::create_dir_all(target_app.join("Contents/MacOS")).unwrap();
+        fs::write(target_app.join("Contents/MacOS/cowork-desktop"), b"v1").unwrap();
+
+        let seed = [51u8; 32];
+        let key_id = [6, 6, 6, 6, 6, 6, 6, 6];
+        let pk_b64 = test_minisign::minisign_pubkey_box_b64(&seed, key_id);
+        let tar_gz = build_test_macos_app_tar_gz("Cowork.app", b"v2-offline-safe");
+        let sig_b64 = test_minisign::minisign_sign_payload_b64(&seed, key_id, &tar_gz, true);
+
+        let manifest = serde_json::to_vec(&json!({
+            "version": "2.0.0",
+            "notes": "Staged update notes",
+            "platforms": {
+                "macos-aarch64": { "url": "/bundle.tar.gz", "signature": sig_b64, "format": "app" }
+            }
+        }))
+        .unwrap();
+        let base = spawn_mock_feed_server(BTreeMap::from([
+            (
+                "/latest.json".into(),
+                (200, "application/json".into(), manifest),
+            ),
+            (
+                "/bundle.tar.gz".into(),
+                (200, "application/gzip".into(), tar_gz),
+            ),
+        ]))
+        .await;
+
+        let staging = tmp.path().join("updates-staging");
+        let svc = DesktopUpdaterService::with_config(
+            UpdaterConfig {
+                is_packaged: true,
+                current_version: "1.0.0".into(),
+                feed_url: format!("{base}/latest.json"),
+                pubkey: Some(pk_b64),
+                staging_dir: Some(staging),
+                target: UpdaterTarget {
+                    os: "macos".into(),
+                    arch: "aarch64".into(),
+                    appimage_path: None,
+                    current_exe: None,
+                    install_root_override: Some(target_app),
+                },
+                relaunch_after_install: false,
+                ..UpdaterConfig::default()
+            },
+            None,
+            Arc::new(|_| {}),
+        );
+
+        let downloaded = svc.check_for_updates_async().await;
+        assert_eq!(downloaded.status, "downloaded");
+
+        // Switch feed URL to a dead local port so a network attempt would error if executed.
+        {
+            let mut cfg = svc.config.lock().unwrap();
+            cfg.feed_url = "http://127.0.0.1:1/latest.json".into();
+        }
+        let rechecked = svc.check_for_updates_async().await;
+        assert_eq!(rechecked.status, "downloaded");
+        assert_eq!(rechecked.available_version.as_deref(), Some("2.0.0"));
+        assert_eq!(rechecked.notes.as_deref(), Some("Staged update notes"));
+        assert!(svc.inner.lock().unwrap().prepared_install.is_some());
+    }
+
+    #[test]
+    fn staging_dir_rejects_symlinks_uses_random_ephemeral_and_prunes_leftovers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let seed = [61u8; 32];
+        let pk_b64 = test_minisign::minisign_pubkey_box_b64(&seed, [7; 8]);
+        let emit: Arc<dyn Fn(StoreEvent) + Send + Sync> = Arc::new(|_| {});
+
+        // Ephemeral staging dir when `staging_dir` is `None` must not embed predictable PID.
+        let svc_ephemeral = DesktopUpdaterService::with_config(
+            UpdaterConfig {
+                is_packaged: true,
+                pubkey: Some(pk_b64.clone()),
+                staging_dir: None,
+                ..UpdaterConfig::default()
+            },
+            None,
+            emit.clone(),
+        );
+        let cfg_eph = svc_ephemeral.config.lock().unwrap().clone();
+        let eph_dir = svc_ephemeral.ensure_staging_dir(&cfg_eph).unwrap();
+        assert!(eph_dir.is_dir());
+        assert_ne!(
+            eph_dir.file_name().unwrap().to_string_lossy(),
+            format!("cowork-desktop-updates-{}", std::process::id())
+        );
+        svc_ephemeral.dispose();
+        assert!(!eph_dir.exists());
+
+        // `start()` prunes stale leftovers in private `updates-staging`.
+        let staging = tmp.path().join("updates-staging");
+        fs::create_dir_all(staging.join("extracted-stale")).unwrap();
+        fs::write(staging.join("download-old.part"), b"stale").unwrap();
+        let svc_prune = DesktopUpdaterService::with_config(
+            UpdaterConfig {
+                is_packaged: true,
+                pubkey: Some(pk_b64.clone()),
+                staging_dir: Some(staging.clone()),
+                startup_delay: Duration::from_secs(60),
+                target: UpdaterTarget {
+                    os: "macos".into(),
+                    arch: "aarch64".into(),
+                    appimage_path: None,
+                    current_exe: None,
+                    install_root_override: None,
+                },
+                ..UpdaterConfig::default()
+            },
+            None,
+            emit.clone(),
+        );
+        svc_prune.start();
+        assert!(!staging.join("download-old.part").exists());
+        assert!(!staging.join("extracted-stale").exists());
+        svc_prune.dispose();
+
+        // Symlinked staging directory must be rejected.
+        #[cfg(unix)]
+        {
+            let real_dir = tmp.path().join("real-target");
+            fs::create_dir_all(&real_dir).unwrap();
+            let link_staging = tmp.path().join("symlink-staging");
+            std::os::unix::fs::symlink(&real_dir, &link_staging).unwrap();
+            let svc_sym = DesktopUpdaterService::with_config(
+                UpdaterConfig {
+                    is_packaged: true,
+                    pubkey: Some(pk_b64),
+                    staging_dir: Some(link_staging),
+                    ..UpdaterConfig::default()
+                },
+                None,
+                emit,
+            );
+            let cfg_sym = svc_sym.config.lock().unwrap().clone();
+            let err = svc_sym
+                .ensure_staging_dir(&cfg_sym)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("symlinked"), "unexpected error: {err}");
         }
     }
 }

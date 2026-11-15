@@ -20,7 +20,7 @@ use super::validation::{assert_direction, assert_safe_id, assert_within_transcri
 use crate::actions::SidebarSectionKey;
 use crate::state::{
     DesktopSettings, OnboardingState, PersistedDesktopState, PrivacyTelemetrySettings,
-    WorkspaceRecord,
+    ThreadRecord, ThreadStatus, WorkspaceRecord,
 };
 use crate::theme::ThemePreference;
 
@@ -317,8 +317,8 @@ impl PersistenceService {
     }
 
     /// Merges the UI-owned `PersistedDesktopState` into preserved on-disk `state.json`,
-    /// keeping server-owned fields (`threads`, `providerState`, per-workspace routing,
-    /// `composerDrafts`, `creationDrafts`) intact, then writes atomically with `0o600`.
+    /// keeping task-scoped threads and server-owned fields (`providerState`, per-workspace
+    /// routing, `composerDrafts`, `creationDrafts`) intact, then writes atomically with `0o600`.
     pub fn merge_and_save_core_snapshot(
         &self,
         snapshot: &PersistedDesktopState,
@@ -804,6 +804,21 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
         out.workspaces = arr.iter().filter_map(core_workspace_from_value).collect();
     }
 
+    let workspace_ids: HashSet<&str> = out.workspaces.iter().map(|ws| ws.id.as_str()).collect();
+    if let Some(arr) = obj.get("threads").and_then(Value::as_array) {
+        let mut seen_threads = HashSet::new();
+        out.threads = arr
+            .iter()
+            .filter_map(core_thread_from_value)
+            .filter(|th| {
+                !th.draft
+                    && th.source_task_id.is_none()
+                    && workspace_ids.contains(th.workspace_id.as_str())
+                    && seen_threads.insert(th.id.clone())
+            })
+            .collect();
+    }
+
     if let Some(arr) = obj.get("workspaceOrder").and_then(Value::as_array) {
         out.workspace_order = arr
             .iter()
@@ -964,6 +979,118 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         .collect();
 
     doc.insert("workspaces".to_string(), Value::Array(merged_workspaces));
+
+    let snapshot_workspace_ids: HashSet<&str> = snapshot
+        .workspaces
+        .iter()
+        .map(|ws| ws.id.as_str())
+        .collect();
+    let existing_threads_array = doc
+        .get("threads")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let existing_threads_by_id: HashMap<String, Map<String, Value>> = existing_threads_array
+        .iter()
+        .filter_map(|item| {
+            let map = item.as_object()?;
+            let id = safe_id_from_value(map.get("id"))?;
+            Some((id, map.clone()))
+        })
+        .collect();
+
+    let mut seen_thread_ids = HashSet::new();
+    let mut merged_threads: Vec<Value> = snapshot
+        .threads
+        .iter()
+        .filter(|th| !th.draft && th.source_task_id.is_none())
+        .filter(|th| {
+            assert_safe_id(&th.id, "threadId").is_ok()
+                && assert_safe_id(&th.workspace_id, "workspaceId").is_ok()
+                && snapshot_workspace_ids.contains(th.workspace_id.as_str())
+                && seen_thread_ids.insert(th.id.clone())
+        })
+        .map(|th| {
+            let mut map = existing_threads_by_id
+                .get(&th.id)
+                .cloned()
+                .unwrap_or_default();
+            let title = {
+                let trimmed = th.title.trim();
+                if trimmed.is_empty() {
+                    "New Chat"
+                } else {
+                    trimmed
+                }
+            };
+            map.insert("id".to_string(), json!(th.id));
+            map.insert("workspaceId".to_string(), json!(th.workspace_id));
+            map.insert("title".to_string(), json!(title));
+            map.insert(
+                "status".to_string(),
+                serde_json::to_value(th.status).unwrap_or_else(|_| json!("active")),
+            );
+            map.insert(
+                "sessionId".to_string(),
+                th.session_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map_or(Value::Null, |s| json!(s)),
+            );
+            map.insert("pinned".to_string(), json!(th.pinned));
+            map.insert("archived".to_string(), json!(th.archived));
+            if th.archived {
+                map.entry("archivedAt".to_string())
+                    .or_insert_with(|| json!(epoch_ms_to_iso(th.updated_at)));
+            } else {
+                map.remove("archivedAt");
+            }
+            map.remove("draft");
+            map.remove("updatedAt");
+            map.insert(
+                "createdAt".to_string(),
+                json!(epoch_ms_to_iso(th.created_at)),
+            );
+            map.insert(
+                "lastMessageAt".to_string(),
+                json!(epoch_ms_to_iso(th.updated_at)),
+            );
+            map.insert("lastEventSeq".to_string(), json!(th.last_event_seq));
+            map.entry("messageCount".to_string())
+                .or_insert_with(|| json!(0));
+            set_or_remove_trimmed_str(&mut map, "provider", th.provider.as_deref());
+            if th.provider.is_none() {
+                map.remove("modelProvider");
+            }
+            set_or_remove_trimmed_str(&mut map, "model", th.model.as_deref());
+            set_or_remove_trimmed_str(&mut map, "reasoningEffort", th.reasoning_effort.as_deref());
+            set_or_remove_trimmed_str(&mut map, "preview", th.preview.as_deref());
+            Value::Object(map)
+        })
+        .collect();
+
+    // Preserve Electron/server-owned task threads still anchored to an existing workspace.
+    for existing in existing_threads_array {
+        let Some(map) = existing.as_object() else {
+            continue;
+        };
+        let Some(id) = safe_id_from_value(map.get("id")) else {
+            continue;
+        };
+        let Some(ws_id) = safe_id_from_value(map.get("workspaceId")) else {
+            continue;
+        };
+        let is_task_thread =
+            safe_id_from_value(map.get("taskId").or_else(|| map.get("sourceTaskId"))).is_some();
+        if is_task_thread
+            && snapshot_workspace_ids.contains(ws_id.as_str())
+            && seen_thread_ids.insert(id)
+        {
+            merged_threads.push(Value::Object(map.clone()));
+        }
+    }
+    doc.insert("threads".to_string(), Value::Array(merged_threads));
     doc.insert(
         "workspaceOrder".to_string(),
         Value::Array(
@@ -1415,15 +1542,30 @@ fn sanitize_threads(raw: Option<&Vec<Value>>, workspace_ids: &HashSet<String>) -
         let Some((created_iso, _)) = parse_timestamp_value(map.get("createdAt")) else {
             continue;
         };
-        let Some((last_msg_iso, _)) = parse_timestamp_value(map.get("lastMessageAt")) else {
+        let Some((last_msg_iso, _)) = parse_timestamp_value(
+            map.get("lastMessageAt")
+                .or_else(|| map.get("updatedAt"))
+                .or_else(|| map.get("createdAt")),
+        ) else {
             continue;
         };
+
+        let status = match map.get("status").and_then(Value::as_str).map(str::trim) {
+            Some("disconnected") => "disconnected",
+            _ => "active",
+        };
+        let session_id = non_empty_string(map.get("sessionId"));
 
         map.insert("id".to_string(), json!(id));
         map.insert("workspaceId".to_string(), json!(workspace_id));
         map.insert("title".to_string(), json!(title));
         map.insert("createdAt".to_string(), json!(created_iso));
         map.insert("lastMessageAt".to_string(), json!(last_msg_iso));
+        map.insert("status".to_string(), json!(status));
+        map.insert(
+            "sessionId".to_string(),
+            session_id.map_or(Value::Null, Value::String),
+        );
         map.insert(
             "archived".to_string(),
             json!(
@@ -1916,6 +2058,49 @@ fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
     }
     ws.defaults = Value::Object(defaults_map);
     Some(ws)
+}
+
+fn core_thread_from_value(value: &Value) -> Option<ThreadRecord> {
+    let map = value.as_object()?;
+    let id = safe_id_from_value(map.get("id"))?;
+    let workspace_id = safe_id_from_value(map.get("workspaceId"))?;
+    let title = non_empty_string(map.get("title"))?;
+    let created_at = parse_timestamp_value(map.get("createdAt"))
+        .map(|(_, ms)| ms)
+        .unwrap_or(0);
+    let updated_at = parse_timestamp_value(
+        map.get("lastMessageAt")
+            .or_else(|| map.get("updatedAt"))
+            .or_else(|| map.get("createdAt")),
+    )
+    .map(|(_, ms)| ms)
+    .unwrap_or(created_at);
+    let status = match map.get("status").and_then(Value::as_str).map(str::trim) {
+        Some("disconnected") => ThreadStatus::Disconnected,
+        _ => ThreadStatus::Active,
+    };
+
+    Some(ThreadRecord {
+        id,
+        workspace_id,
+        title,
+        status,
+        session_id: non_empty_string(map.get("sessionId")),
+        pinned: map.get("pinned").and_then(Value::as_bool).unwrap_or(false),
+        archived: map
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        draft: map.get("draft").and_then(Value::as_bool).unwrap_or(false),
+        provider: non_empty_string(map.get("provider").or_else(|| map.get("modelProvider"))),
+        model: non_empty_string(map.get("model")),
+        reasoning_effort: non_empty_string(map.get("reasoningEffort")),
+        preview: non_empty_string(map.get("preview").or_else(|| map.get("lastMessagePreview"))),
+        updated_at,
+        created_at,
+        source_task_id: safe_id_from_value(map.get("sourceTaskId").or_else(|| map.get("taskId"))),
+        last_event_seq: map.get("lastEventSeq").and_then(Value::as_u64).unwrap_or(0),
+    })
 }
 
 fn non_empty_env(env: &HashMap<String, String>, key: &str) -> Option<String> {
@@ -2592,5 +2777,172 @@ mod tests {
         assert_eq!(reset_doc["onboarding"]["status"], "pending");
         assert!(reset_doc["onboarding"]["completedAt"].is_null());
         assert!(reset_doc["onboarding"]["dismissedAt"].is_null());
+    }
+
+    #[test]
+    fn roundtrips_persisted_threads_with_electron_fields_and_filtering() {
+        let tmp = tempdir().unwrap();
+        let ws_a_dir = tmp.path().join("ws-a");
+        let ws_b_dir = tmp.path().join("ws-b");
+        fs::create_dir_all(&ws_a_dir).unwrap();
+        fs::create_dir_all(&ws_b_dir).unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+
+        // Seed Electron-style state.json with extra server/Electron metadata and a task thread.
+        service
+            .save_state_value(json!({
+                "version": 2,
+                "workspaces": [
+                    {
+                        "id": "ws-a",
+                        "name": "Alpha",
+                        "path": ws_a_dir,
+                        "workspaceKind": "project",
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                        "id": "ws-b",
+                        "name": "Beta",
+                        "path": ws_b_dir,
+                        "workspaceKind": "project",
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+                    }
+                ],
+                "threads": [
+                    {
+                        "id": "th-existing",
+                        "workspaceId": "ws-a",
+                        "title": "Existing title",
+                        "titleSource": "manual",
+                        "sessionKind": "root",
+                        "messageCount": 7,
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastMessageAt": "2026-01-02T00:00:00.000Z"
+                    },
+                    {
+                        "id": "th-task",
+                        "workspaceId": "ws-a",
+                        "title": "Task execution",
+                        "taskId": "task-1",
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastMessageAt": "2026-01-02T00:00:00.000Z"
+                    }
+                ]
+            }))
+            .unwrap();
+
+        let ws_a = WorkspaceRecord::new(
+            "ws-a",
+            "Alpha",
+            ws_a_dir.to_string_lossy().into_owned(),
+            1_700_000_000_000,
+        );
+        let ws_b = WorkspaceRecord::new(
+            "ws-b",
+            "Beta",
+            ws_b_dir.to_string_lossy().into_owned(),
+            1_700_000_000_000,
+        );
+
+        let th_existing_updated = ThreadRecord {
+            id: "th-existing".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Renamed chat".to_string(),
+            status: ThreadStatus::Disconnected,
+            session_id: Some("sess-existing".to_string()),
+            pinned: true,
+            archived: false,
+            draft: false,
+            provider: Some("anthropic".to_string()),
+            model: Some("claude-sonnet-4-6".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            preview: Some("Latest summary".to_string()),
+            created_at: 1_700_000_000_000,
+            updated_at: 1_700_000_123_456,
+            source_task_id: None,
+            last_event_seq: 42,
+        };
+        let th_b = ThreadRecord {
+            id: "th-b".to_string(),
+            workspace_id: "ws-b".to_string(),
+            title: "Beta archived".to_string(),
+            status: ThreadStatus::Active,
+            session_id: Some("th-b".to_string()),
+            pinned: false,
+            archived: true,
+            draft: false,
+            provider: None,
+            model: None,
+            reasoning_effort: None,
+            preview: None,
+            created_at: 1_700_000_010_000,
+            updated_at: 1_700_000_050_000,
+            source_task_id: None,
+            last_event_seq: 9,
+        };
+        let th_draft = ThreadRecord {
+            id: "draft-1".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Draft".to_string(),
+            draft: true,
+            ..ThreadRecord::default()
+        };
+        let th_orphan = ThreadRecord {
+            id: "th-orphan".to_string(),
+            workspace_id: "ws-missing".to_string(),
+            title: "Orphan".to_string(),
+            ..ThreadRecord::default()
+        };
+
+        let snapshot = PersistedDesktopState {
+            workspaces: vec![ws_a.clone(), ws_b],
+            threads: vec![
+                th_existing_updated.clone(),
+                th_b.clone(),
+                th_draft,
+                th_orphan,
+            ],
+            active_workspace_id: Some("ws-a".to_string()),
+            active_thread_id: Some("th-existing".to_string()),
+            ..PersistedDesktopState::default()
+        };
+
+        let saved_doc = service.merge_and_save_core_snapshot(&snapshot).unwrap();
+        // 2 persisted chat threads + 1 preserved task thread; draft & orphan excluded.
+        let threads_arr = saved_doc["threads"].as_array().unwrap();
+        assert_eq!(threads_arr.len(), 3);
+        assert_eq!(saved_doc["activeThreadId"], "th-existing");
+        assert_eq!(threads_arr[0]["id"], "th-existing");
+        assert_eq!(threads_arr[0]["titleSource"], "manual");
+        assert_eq!(threads_arr[0]["sessionKind"], "root");
+        assert_eq!(threads_arr[0]["messageCount"], 7);
+        assert_eq!(threads_arr[0]["status"], "disconnected");
+        assert_eq!(threads_arr[0]["pinned"], true);
+        assert!(threads_arr[0]["lastMessageAt"].is_string());
+        assert!(threads_arr[0].get("updatedAt").is_none());
+        assert_eq!(threads_arr[2]["id"], "th-task");
+
+        // Reloading via load_core_state populates non-task, non-draft chat threads losslessly.
+        let reloaded = service.load_core_state().unwrap();
+        assert_eq!(reloaded.active_thread_id.as_deref(), Some("th-existing"));
+        assert_eq!(reloaded.threads, vec![th_existing_updated, th_b]);
+
+        // Removing workspace B drops th-b, while clearing threads removes th-existing too.
+        let pruned_snapshot = PersistedDesktopState {
+            workspaces: vec![ws_a],
+            threads: Vec::new(),
+            active_workspace_id: Some("ws-a".to_string()),
+            active_thread_id: Some("th-existing".to_string()),
+            ..PersistedDesktopState::default()
+        };
+        let after_prune = service
+            .merge_and_save_core_snapshot(&pruned_snapshot)
+            .unwrap();
+        let after_arr = after_prune["threads"].as_array().unwrap();
+        assert_eq!(after_arr.len(), 1);
+        assert_eq!(after_arr[0]["id"], "th-task");
+        assert!(after_prune["activeThreadId"].is_null());
     }
 }

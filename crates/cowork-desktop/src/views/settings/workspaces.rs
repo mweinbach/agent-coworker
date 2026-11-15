@@ -252,6 +252,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 s.settings_ui.open_select_key.as_deref() == Some("behavior-settings-target");
 
             let picker = Select::new("behavior-settings-target", &label_refs)
+                .label("Target workspace or chat")
                 .appearance(SelectAppearance::Field)
                 .width(220.0)
                 .current(current_label.as_deref())
@@ -392,6 +393,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let ws_id_strat = ws_id.clone();
     let tc_strat = tc.clone();
     let strategy_select = Select::new("behavior-tool-calling-strategy", &strategy_labels)
+        .label("Execution strategy")
         .appearance(SelectAppearance::Field)
         .width(230.0)
         .current(Some(strategy_label(&tc.strategy)))
@@ -773,6 +775,7 @@ pub fn models_defaults_sections(
     let ws_prov = ws_id.clone();
     let rm_prov = routing_mode.clone();
     let prov_select = Select::new("models-default-provider", &provider_label_refs)
+        .label("Default chat provider")
         .appearance(SelectAppearance::Field)
         .width(240.0)
         .current(Some(active_provider_entry.name.as_str()))
@@ -842,6 +845,7 @@ pub fn models_defaults_sections(
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| default_model.clone());
     let model_select = Select::new("models-default-model", &model_refs)
+        .label("Default chat model")
         .appearance(SelectAppearance::Field)
         .width(240.0)
         .current((!default_model.is_empty()).then_some(default_model.as_str()))
@@ -926,6 +930,7 @@ pub fn models_defaults_sections(
         .unwrap_or_else(|| default_model.clone());
 
     let source_select = Select::new("models-subagent-source", &source_labels)
+        .label("Subagent model source")
         .appearance(SelectAppearance::Field)
         .width(240.0)
         .current(Some(current_source_label))
@@ -977,6 +982,7 @@ pub fn models_defaults_sections(
         let ws_ch = ws_id.clone();
         let pid_ch = current_provider_id;
         let child_select = Select::new("models-subagent-preferred", &model_refs)
+            .label("Preferred subagent model")
             .appearance(SelectAppearance::Field)
             .width(240.0)
             .current((!cur_child.is_empty()).then_some(cur_child.as_str()))

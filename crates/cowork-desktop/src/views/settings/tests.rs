@@ -1039,3 +1039,105 @@ fn review_90_mcp_preserves_auth_extras_and_skills_catalog_gates_mutations() {
     assert!(!ro.can_toggle());
     assert!(!ro.can_delete());
 }
+
+#[test]
+fn models_page_selects_expose_accessible_names_and_desktop_tray_label_mentions_linux() {
+    use crate::state::{ProviderModelSummary, ProviderSummary};
+
+    fn render_root(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
+        let (kit, _) = crate::theme::build_kit(false, false, false);
+        crate::views::settings::view(s, cx, &kit).content
+    }
+
+    let mut state = AppState {
+        scene_mode: true,
+        active_workspace_id: Some("ws-1".to_string()),
+        ..Default::default()
+    };
+    state.workspaces.push(WorkspaceRecord {
+        id: "ws-1".to_string(),
+        name: "Demo".to_string(),
+        path: "/tmp/demo".to_string(),
+        default_provider: Some("openai".to_string()),
+        default_model: Some("gpt-5.4".to_string()),
+        default_preferred_child_model: Some("gpt-5.4".to_string()),
+        ..Default::default()
+    });
+    state.provider_catalog.push(ProviderSummary {
+        id: "openai".to_string(),
+        name: "OpenAI".to_string(),
+        configured: true,
+        models: vec![ProviderModelSummary {
+            id: "gpt-5.4".to_string(),
+            name: "GPT-5.4".to_string(),
+            enabled: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Models,
+    ))));
+
+    let mut rt = rune::Runtime::new(
+        state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let els = rt.elements();
+    let comboboxes: Vec<_> = els.iter().filter(|e| e.role == "combobox").collect();
+    assert!(
+        comboboxes.len() >= 4,
+        "expected 4 Models dropdown triggers, saw {}",
+        comboboxes.len()
+    );
+    for cb in &comboboxes {
+        assert!(
+            cb.label.as_deref().is_some_and(|l| !l.trim().is_empty()),
+            "every combobox on Settings -> Models must have a non-empty a11y label: {cb:?}"
+        );
+    }
+    for key in [
+        "models-default-provider-trigger",
+        "models-default-model-trigger",
+        "models-subagent-source-trigger",
+        "models-subagent-preferred-trigger",
+    ] {
+        assert!(
+            comboboxes.iter().any(|e| {
+                e.key.as_deref() == Some(key)
+                    && e.label.as_deref().is_some_and(|l| !l.trim().is_empty())
+            }),
+            "expected named combobox `{key}` on Settings -> Models"
+        );
+    }
+
+    let mut desktop_state = AppState {
+        scene_mode: true,
+        ..Default::default()
+    };
+    desktop_state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Desktop,
+    ))));
+    let mut rt_desktop = rune::Runtime::new(
+        desktop_state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_desktop.frame(0.0);
+    assert!(
+        rt_desktop.elements().iter().any(|e| {
+            e.text
+                .as_deref()
+                .is_some_and(|t| t.contains("Windows/Linux system tray"))
+                || e.label
+                    .as_deref()
+                    .is_some_and(|l| l.contains("Windows/Linux system tray"))
+        }),
+        "Settings -> Desktop Quick Chat tray description must mention Windows/Linux system tray"
+    );
+}

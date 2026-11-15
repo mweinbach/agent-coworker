@@ -332,6 +332,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let select_open = s.settings_ui.open_select_key.as_deref() == Some("chats-retention-select");
 
     let retention_select = Select::new("chats-retention-select", &retention_labels)
+        .label("Auto-delete archived chats")
         .appearance(SelectAppearance::Field)
         .width(210.0)
         .current(Some(current_retention.as_str()))

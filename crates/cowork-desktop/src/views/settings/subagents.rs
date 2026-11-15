@@ -538,6 +538,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 s.settings_ui.open_select_key.as_deref() == Some("subagent-workspace-select");
             Some(
                 Select::new("subagent-workspace-select", &label_refs)
+                    .label("Profile workspace")
                     .appearance(SelectAppearance::Field)
                     .width(220.0)
                     .current(Some(ws_name.as_str()))
@@ -862,6 +863,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         let scope_options = ["Global", "Workspace"];
         let scope_open = s.settings_ui.open_select_key.as_deref() == Some("subagent-dialog-scope");
         let scope_select = Select::new("subagent-dialog-scope", &scope_options)
+            .label("Subagent profile scope")
             .appearance(SelectAppearance::Field)
             .width(150.0)
             .disabled(editing_existing)
@@ -895,6 +897,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         let role_open = s.settings_ui.open_select_key.as_deref() == Some("subagent-dialog-role");
         let current_role_label = role_label(&s.settings_ui.subagent_base_role);
         let role_select = Select::new("subagent-dialog-role", &role_labels)
+            .label("Subagent base role")
             .appearance(SelectAppearance::Field)
             .width(160.0)
             .current(Some(current_role_label))
@@ -947,6 +950,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         let model_open = s.settings_ui.open_select_key.as_deref() == Some("subagent-dialog-model");
         let model_pairs = model_options.clone();
         let model_select = Select::new("subagent-dialog-model", &model_label_refs)
+            .label("Subagent model")
             .appearance(SelectAppearance::Field)
             .width(260.0)
             .current(Some(current_model_label))
@@ -1088,6 +1092,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let eff_open =
                 s.settings_ui.open_select_key.as_deref() == Some("subagent-dialog-reasoning");
             let eff_select = Select::new("subagent-dialog-reasoning", &eff_options)
+                .label("Subagent reasoning effort")
                 .appearance(SelectAppearance::Field)
                 .width(150.0)
                 .current(Some(eff_cur))

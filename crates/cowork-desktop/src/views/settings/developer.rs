@@ -513,6 +513,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .map(|entry| (entry.label.clone(), entry.id.clone()))
                     .collect();
                 let select_el = Select::new("dev-overflow-ws", &labels)
+                    .label("Context overflow target workspace")
                     .appearance(SelectAppearance::Field)
                     .width(240.0)
                     .current(Some(target.label.as_str()))

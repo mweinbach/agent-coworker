@@ -50,6 +50,7 @@ pub enum ToolAccessTab {
     McpServers,
     Marketplaces,
     Connectors,
+    Search,
 }
 
 impl ToolAccessTab {
@@ -61,6 +62,18 @@ impl ToolAccessTab {
             ToolAccessTab::McpServers => "mcp",
             ToolAccessTab::Marketplaces => "marketplaces",
             ToolAccessTab::Connectors => "connectors",
+            ToolAccessTab::Search => "search",
+        }
+    }
+
+    /// Parses a SettingsIntent tab slug into a `ToolAccessTab`, honoring feature gating.
+    pub fn from_id(raw: &str, apps_enabled: bool) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "skills" | "marketplaces" => ToolAccessTab::Skills,
+            "mcp" | "mcp-servers" | "connectors-mcp" => ToolAccessTab::McpServers,
+            "connectors" | "apps" if apps_enabled => ToolAccessTab::Connectors,
+            "search" => ToolAccessTab::Search,
+            _ => ToolAccessTab::Plugins,
         }
     }
 }
@@ -227,6 +240,23 @@ pub struct SettingsUiState {
     pub advanced_memory_delete_confirm_slug: Option<String>,
     pub expanded_advanced_memory_slugs: HashSet<String>,
     pub skill_restore_confirm_name: Option<String>,
+
+    // Slice 6 draft/confirm state (Tool Access, MCP Servers, Connectors)
+    pub tool_access_synced_tab: Option<String>,
+    pub connectors_search_edit: TextEdit,
+    pub connectors_enabled_only: bool,
+    pub expanded_mcp_servers: HashSet<String>,
+    pub mcp_delete_confirm_name: Option<String>,
+    pub mcp_oauth_entry_key: Option<String>,
+    pub mcp_oauth_code_edit: TextEdit,
+    pub mcp_editor_error: Option<String>,
+    pub mcp_editor_advanced_open: bool,
+    pub mcp_enabled: bool,
+    pub plugin_install_scope: String,
+    pub plugin_delete_confirm: Option<String>,
+    pub skill_install_scope: String,
+    pub skill_delete_confirm: Option<String>,
+    pub marketplace_remove_confirm: Option<(String, String)>,
 }
 
 impl Default for SettingsUiState {
@@ -360,6 +390,21 @@ impl Default for SettingsUiState {
             advanced_memory_delete_confirm_slug: None,
             expanded_advanced_memory_slugs: HashSet::new(),
             skill_restore_confirm_name: None,
+            tool_access_synced_tab: None,
+            connectors_search_edit: TextEdit::new(""),
+            connectors_enabled_only: false,
+            expanded_mcp_servers: HashSet::new(),
+            mcp_delete_confirm_name: None,
+            mcp_oauth_entry_key: None,
+            mcp_oauth_code_edit: TextEdit::new(""),
+            mcp_editor_error: None,
+            mcp_editor_advanced_open: false,
+            mcp_enabled: true,
+            plugin_install_scope: "user".to_string(),
+            plugin_delete_confirm: None,
+            skill_install_scope: "global".to_string(),
+            skill_delete_confirm: None,
+            marketplace_remove_confirm: None,
         }
     }
 }

@@ -1,0 +1,1991 @@
+//! Tool Access settings page (`apps/desktop/src/ui/settings/pages/ToolAccessPage.tsx`).
+//!
+//! Covers Plugins, Skills & Marketplaces, Custom Connectors (MCP), ChatGPT Apps
+//! (feature-gated `openAiNativeConnectors`), and Search provider configuration.
+
+use rune::{El, TextEdit, col, el, row, text};
+use rune_kit::{
+    Button, ButtonVariant, ControlSize, Dialog, Kit, SegmentedControl, Select, SelectAppearance,
+    Switch, TextArea, TextInput,
+};
+use serde_json::{Value, json};
+
+use crate::actions::{Action, NavAction, SettingsAction};
+use crate::router::SettingsPageId;
+use crate::state::{AppState, PluginSummary, ProviderStatusSummary, SkillSummary, WorkspaceRecord};
+use crate::theme::ThemeTokens;
+use crate::views::settings::primitives::{
+    ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
+    confirm_dialog, entity_icon, settings_page, stat_tile, status_pill,
+};
+use crate::views::settings::providers::is_provider_connected;
+use crate::views::settings::shell::PageContent;
+use crate::views::settings::state::ToolAccessTab;
+use crate::views::settings::{connectors, icons, mcp_servers};
+
+/// Supported workspace search backend identifiers matching `WorkspacesPage.tsx`.
+pub const WEB_SEARCH_BACKENDS: &[(&str, &str)] = &[
+    ("native", "Provider native"),
+    ("exa", "Exa Search"),
+    ("parallel", "Parallel Search"),
+];
+
+/// Supported local search fallback identifiers when `webSearchBackend == "native"`.
+pub const LOCAL_SEARCH_FALLBACKS: &[(&str, &str)] =
+    &[("exa", "Exa Search"), ("parallel", "Parallel Search")];
+
+/// Supported Codex web search mode options.
+pub const CODEX_WEB_SEARCH_MODES: &[&str] = &["disabled", "cached", "live"];
+
+/// Resolves the effective search provider (`"native" | "exa" | "parallel"`) from `providerOptions`.
+pub fn workspace_search_provider(provider_options: Option<&Value>) -> &'static str {
+    let codex_backend = provider_options
+        .and_then(|v| v.pointer("/codex-cli/webSearchBackend"))
+        .and_then(Value::as_str)
+        .unwrap_or("native");
+    let google_native = provider_options
+        .and_then(|v| v.pointer("/google/nativeWebSearch"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    if codex_backend == "native" && !google_native {
+        workspace_local_search_fallback(provider_options)
+    } else {
+        match codex_backend {
+            "exa" => "exa",
+            "parallel" => "parallel",
+            _ => "native",
+        }
+    }
+}
+
+/// Resolves the non-Codex fallback local search provider (`"exa" | "parallel"`).
+pub fn workspace_local_search_fallback(provider_options: Option<&Value>) -> &'static str {
+    match provider_options
+        .and_then(|v| v.pointer("/codex-cli/webSearchFallbackBackend"))
+        .and_then(Value::as_str)
+    {
+        Some("parallel") => "parallel",
+        _ => "exa",
+    }
+}
+
+/// Resolves Codex web search mode (`"disabled" | "cached" | "live"`).
+pub fn workspace_codex_search_mode(provider_options: Option<&Value>) -> &'static str {
+    match provider_options
+        .and_then(|v| v.pointer("/codex-cli/webSearchMode"))
+        .and_then(Value::as_str)
+    {
+        Some("disabled") => "disabled",
+        Some("live") => "live",
+        _ => "cached",
+    }
+}
+
+/// Produces an updated `providerOptions` map for changing search backend while preserving siblings.
+pub fn patch_search_provider(existing: Option<&Value>, backend: &str) -> Value {
+    let normalized = match backend {
+        "exa" => "exa",
+        "parallel" => "parallel",
+        _ => "native",
+    };
+    let mut root = existing
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut codex = root
+        .get("codex-cli")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    codex.insert("webSearchBackend".to_string(), json!(normalized));
+    root.insert("codex-cli".to_string(), Value::Object(codex));
+
+    let mut google = root
+        .get("google")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    google.insert("nativeWebSearch".to_string(), json!(normalized == "native"));
+    root.insert("google".to_string(), Value::Object(google));
+
+    Value::Object(root)
+}
+
+/// Produces an updated `providerOptions` map for changing local fallback provider.
+pub fn patch_local_search_fallback(existing: Option<&Value>, fallback: &str) -> Value {
+    let normalized = if fallback == "parallel" {
+        "parallel"
+    } else {
+        "exa"
+    };
+    patch_codex_option(existing, "webSearchFallbackBackend", json!(normalized))
+}
+
+/// Produces an updated `providerOptions` map for changing Codex web search mode.
+pub fn patch_codex_search_mode(existing: Option<&Value>, mode: &str) -> Value {
+    let normalized = match mode {
+        "disabled" => "disabled",
+        "live" => "live",
+        _ => "cached",
+    };
+    patch_codex_option(existing, "webSearchMode", json!(normalized))
+}
+
+fn patch_codex_option(existing: Option<&Value>, key: &str, value: Value) -> Value {
+    let mut root = existing
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut codex = root
+        .get("codex-cli")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    codex.insert(key.to_string(), value);
+    root.insert("codex-cli".to_string(), Value::Object(codex));
+    Value::Object(root)
+}
+
+/// Builds JSON params for `cowork/plugins/install`.
+pub fn plugin_install_params(source_input: &str, scope: &str) -> Value {
+    let target_scope = if scope == "workspace" {
+        "workspace"
+    } else {
+        "user"
+    };
+    json!({
+        "sourceInput": source_input.trim(),
+        "targetScope": target_scope,
+    })
+}
+
+/// Builds JSON params for `cowork/skills/install`.
+pub fn skill_install_params(source_input: &str, scope: &str) -> Value {
+    let target_scope = if scope == "project" {
+        "project"
+    } else {
+        "global"
+    };
+    json!({
+        "sourceInput": source_input.trim(),
+        "targetScope": target_scope,
+    })
+}
+
+/// Parsed marketplace entry from `AppState::marketplaces`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarketplaceItem {
+    pub id: String,
+    pub display_name: String,
+    pub repo: String,
+    pub plugin_count: Option<u64>,
+    pub skill_count: Option<u64>,
+    pub fetch_error: Option<String>,
+}
+
+/// Parses `AppState::marketplaces` raw JSON objects into typed summaries.
+pub fn parse_marketplaces(raw: &[Value]) -> Vec<MarketplaceItem> {
+    raw.iter()
+        .filter_map(|v| {
+            let id = v.get("id").and_then(Value::as_str)?.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let repo = v
+                .get("repo")
+                .and_then(Value::as_str)
+                .unwrap_or(id)
+                .trim()
+                .to_string();
+            let display_name = v
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&repo)
+                .to_string();
+            Some(MarketplaceItem {
+                id: id.to_string(),
+                display_name,
+                repo,
+                plugin_count: v.get("pluginCount").and_then(Value::as_u64),
+                skill_count: v.get("skillCount").and_then(Value::as_u64),
+                fetch_error: v
+                    .get("fetchError")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+fn resolve_target_workspace(s: &AppState) -> Option<&WorkspaceRecord> {
+    if let Some(id) = s.active_workspace_id.as_deref()
+        && let Some(ws) = s.workspaces.iter().find(|w| w.id == id && !w.archived)
+    {
+        return Some(ws);
+    }
+    s.workspaces
+        .iter()
+        .find(|w| !w.archived && !w.one_off_chat)
+        .or_else(|| s.workspaces.iter().find(|w| !w.archived))
+        .or_else(|| s.workspaces.first())
+}
+
+fn workspace_provider_statuses<'a>(
+    s: &'a AppState,
+    workspace_id: Option<&str>,
+) -> &'a [ProviderStatusSummary] {
+    workspace_id
+        .and_then(|id| s.workspace_runtime_by_id.get(id))
+        .map(|rt| rt.provider_statuses.as_slice())
+        .unwrap_or(&[])
+}
+
+fn skill_scope_label(scope: &str) -> &'static str {
+    match scope {
+        "project" | "workspace" => "Workspace",
+        "user" | "global" => "Library",
+        "built-in" | "builtin" => "Built-in",
+        _ => "Shadowed",
+    }
+}
+
+/// Renders `SettingsPageId::ToolAccess` (`Tool Access`).
+pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
+    let apps_enabled = s
+        .feature_flags
+        .get("openAiNativeConnectors")
+        .copied()
+        .unwrap_or(false);
+
+    let intent_tab = s.nav.current().settings_tab.clone();
+    let effective_tab = if intent_tab.as_deref() != s.settings_ui.tool_access_synced_tab.as_deref()
+    {
+        intent_tab
+            .as_deref()
+            .map(|slug| ToolAccessTab::from_id(slug, apps_enabled))
+            .unwrap_or(s.settings_ui.tool_access_tab)
+    } else if s.settings_ui.tool_access_tab == ToolAccessTab::Connectors && !apps_enabled {
+        ToolAccessTab::Plugins
+    } else if s.settings_ui.tool_access_tab == ToolAccessTab::Marketplaces {
+        ToolAccessTab::Skills
+    } else {
+        s.settings_ui.tool_access_tab
+    };
+
+    let target_ws = resolve_target_workspace(s);
+    let ws_id = target_ws.map(|w| w.id.as_str());
+
+    let mut overlays = Vec::new();
+    let mut children = Vec::new();
+
+    if let Some(err) = s
+        .settings_mutation_error
+        .as_deref()
+        .filter(|e| !e.trim().is_empty())
+    {
+        children.push(
+            row()
+                .w_full()
+                .items_center()
+                .gap(8.0)
+                .child(el().grow(1.0).min_w(0.0).child(callout_banner(
+                    StatusTone::Danger,
+                    err,
+                    k,
+                    t,
+                )))
+                .child(
+                    Button::new("Dismiss")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Small)
+                        .on_press(|s: &mut AppState| {
+                            s.dispatch(Action::Settings(
+                                SettingsAction::DismissSettingsMutationError,
+                            ));
+                        })
+                        .build(k),
+                ),
+        );
+    }
+
+    let mut tabs: Vec<(&'static str, ToolAccessTab)> = vec![
+        ("Plugins", ToolAccessTab::Plugins),
+        ("Skills", ToolAccessTab::Skills),
+        ("Connectors", ToolAccessTab::McpServers),
+    ];
+    if apps_enabled {
+        tabs.push(("Apps", ToolAccessTab::Connectors));
+    }
+    tabs.push(("Search", ToolAccessTab::Search));
+
+    let labels: Vec<&str> = tabs.iter().map(|(lbl, _)| *lbl).collect();
+    let active_idx = tabs
+        .iter()
+        .position(|(_, tab)| *tab == effective_tab)
+        .unwrap_or(0);
+    let tab_targets: Vec<ToolAccessTab> = tabs.iter().map(|(_, tab)| *tab).collect();
+
+    let tab_strip = SegmentedControl::new(&labels, Some(active_idx))
+        .label("Tool access tabs")
+        .fit()
+        .on_pick(move |s: &mut AppState, idx, _tx| {
+            if let Some(&picked) = tab_targets.get(idx) {
+                s.settings_ui.tool_access_tab = picked;
+                s.settings_ui.tool_access_synced_tab = s.nav.current().settings_tab.clone();
+            }
+        })
+        .build(k);
+
+    children.push(tab_strip);
+
+    let tab_body = match effective_tab {
+        ToolAccessTab::Plugins => plugins_tab_view(s, ws_id, k, t, &mut overlays),
+        ToolAccessTab::Skills | ToolAccessTab::Marketplaces => {
+            skills_tab_view(s, ws_id, k, t, &mut overlays)
+        }
+        ToolAccessTab::McpServers => mcp_servers::view_tab(s, ws_id, k, t, &mut overlays),
+        ToolAccessTab::Connectors => connectors::view_tab(s, ws_id, k, t),
+        ToolAccessTab::Search => search_tab_view(s, target_ws, k, t, &mut overlays),
+    };
+    children.push(tab_body);
+
+    let header_actions: Vec<El> = ws_id
+        .map(|id| {
+            let ws_refresh = id.to_string();
+            let on_apps = effective_tab == ToolAccessTab::Connectors;
+            Button::new("Refresh")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
+                        workspace_id: ws_refresh.clone(),
+                    }));
+                    if on_apps {
+                        s.dispatch(Action::Settings(
+                            SettingsAction::RefreshOpenAiNativeConnectors {
+                                workspace_id: ws_refresh.clone(),
+                            },
+                        ));
+                    }
+                })
+                .build(k)
+        })
+        .into_iter()
+        .collect();
+
+    PageContent {
+        header_actions,
+        body: settings_page(children),
+        overlays,
+    }
+}
+
+fn plugins_tab_view(
+    s: &AppState,
+    ws_id: Option<&str>,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) -> El {
+    let Some(ws_id) = ws_id else {
+        return Section::new()
+            .title("Installed plugins")
+            .description("Manage plugin packages providing skills and MCP tools.")
+            .child(
+                el().px(16.0).py(16.0).child(
+                    EmptyState::new("No workspace selected")
+                        .icon(&icons::WRENCH)
+                        .description("Select or add a workspace to manage plugins.")
+                        .build(k, t),
+                ),
+            )
+            .build(k, t);
+    };
+
+    let query = s
+        .settings_ui
+        .tool_search_edit
+        .text
+        .trim()
+        .to_ascii_lowercase();
+    let mut plugins: Vec<&PluginSummary> = s.plugins.iter().collect();
+    plugins.sort_by_key(|p| p.name.to_lowercase());
+
+    let visible: Vec<&PluginSummary> = plugins
+        .iter()
+        .copied()
+        .filter(|p| {
+            if query.is_empty() {
+                true
+            } else {
+                p.name.to_ascii_lowercase().contains(&query)
+                    || p.description.to_ascii_lowercase().contains(&query)
+                    || p.id.to_ascii_lowercase().contains(&query)
+            }
+        })
+        .collect();
+
+    let install_btn = Button::new("+ Install plugin")
+        .variant(ButtonVariant::Contrast)
+        .control_size(ControlSize::Small)
+        .on_press(|s: &mut AppState| {
+            s.settings_ui.install_target_edit = TextEdit::new("");
+            s.settings_ui.plugin_install_scope = "user".to_string();
+            s.settings_ui.install_plugin_open = true;
+        })
+        .build(k);
+
+    let mut installed_section = Section::new()
+        .title("Installed plugins")
+        .description("Toggle plugins on or off or inspect their bundled skills and MCP servers.")
+        .action(install_btn);
+
+    if plugins.is_empty() {
+        installed_section = installed_section.child(
+            el().px(16.0).py(16.0).child(
+                EmptyState::new("No plugins installed")
+                    .icon(&icons::WRENCH)
+                    .description("Install a plugin from a GitHub repository, URL, or local path.")
+                    .action(
+                        Button::new("+ Install plugin")
+                            .variant(ButtonVariant::Outline)
+                            .control_size(ControlSize::Regular)
+                            .on_press(|s: &mut AppState| {
+                                s.settings_ui.install_target_edit = TextEdit::new("");
+                                s.settings_ui.install_plugin_open = true;
+                            })
+                            .build(k),
+                    )
+                    .build(k, t),
+            ),
+        );
+    } else {
+        installed_section = installed_section.child(
+            row()
+                .w_full()
+                .items_center()
+                .gap(12.0)
+                .px(16.0)
+                .py(12.0)
+                .child(
+                    TextInput::new(&s.settings_ui.tool_search_edit)
+                        .placeholder("Search installed plugins...")
+                        .width(Some(300.0))
+                        .on_edit(|s: &mut AppState| &mut s.settings_ui.tool_search_edit)
+                        .build(k),
+                )
+                .child(el().grow(1.0))
+                .child(status_pill(
+                    format!("{} of {}", visible.len(), plugins.len()),
+                    StatusTone::Neutral,
+                    k,
+                    t,
+                )),
+        );
+
+        if visible.is_empty() {
+            installed_section = installed_section.child(
+                el().px(16.0).py(16.0).child(
+                    EmptyState::new("No matching plugins")
+                        .icon(&icons::SEARCH)
+                        .description(format!(
+                            "No plugins matched \"{}\".",
+                            s.settings_ui.tool_search_edit.text.trim()
+                        ))
+                        .build(k, t),
+                ),
+            );
+        } else {
+            for plugin in visible {
+                installed_section =
+                    installed_section.child(render_plugin_row(s, plugin, ws_id, k, t));
+            }
+        }
+    }
+
+    append_install_plugin_dialog(s, ws_id, k, t, overlays);
+    append_plugin_detail_dialog(s, ws_id, k, t, overlays);
+    append_plugin_delete_confirm(s, ws_id, k, overlays);
+
+    installed_section.build(k, t)
+}
+
+fn render_plugin_row(
+    s: &AppState,
+    plugin: &PluginSummary,
+    ws_id: &str,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    let mut header = row()
+        .items_center()
+        .gap(8.0)
+        .child(text(&plugin.name).font(k.ty.body_medium).color(t.text_base));
+    if plugin.update_available {
+        header = header.child(status_pill("Update available", StatusTone::Warning, k, t));
+    }
+    if !plugin.enabled {
+        header = header.child(status_pill("Disabled", StatusTone::Neutral, k, t));
+    }
+
+    let scope_txt = if plugin.scope.as_deref() == Some("workspace") {
+        "Workspace"
+    } else {
+        "Library"
+    };
+    let summary_line = format!(
+        "{} skill{} · {} MCP server{} · {}",
+        plugin.skill_count,
+        if plugin.skill_count == 1 { "" } else { "s" },
+        plugin.mcp_count,
+        if plugin.mcp_count == 1 { "" } else { "s" },
+        scope_txt
+    );
+
+    let pid_open = plugin.id.clone();
+    let mut info_col = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(3.0)
+        .radius(6.0)
+        .hover(t.hover)
+        .role("button")
+        .label(format!("Inspect plugin {}", plugin.name))
+        .on_press(move |s: &mut AppState| {
+            s.settings_ui.selected_plugin_id = Some(pid_open.clone());
+        })
+        .child(header);
+    if !plugin.description.trim().is_empty() {
+        info_col = info_col.child(
+            text(&plugin.description)
+                .font(k.ty.text_xsmall)
+                .color(t.text_muted)
+                .wrap(),
+        );
+    }
+    info_col = info_col.child(
+        text(summary_line)
+            .font(k.ty.text_xsmall)
+            .color(t.text_muted),
+    );
+
+    let ws_toggle = ws_id.to_string();
+    let pid_toggle = plugin.id.clone();
+    let next_enabled = !plugin.enabled;
+
+    let mut actions = row().items_center().gap(8.0).shrink();
+    if plugin.update_available {
+        let ws_upd = ws_id.to_string();
+        let pid_upd = plugin.id.clone();
+        actions = actions.child(
+            Button::new("Update")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::UpdatePlugin {
+                        workspace_id: ws_upd.clone(),
+                        id: pid_upd.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+
+    actions = actions
+        .child(
+            Switch::new(plugin.enabled)
+                .label(format!("Enable {}", plugin.name))
+                .hide_label()
+                .control_size(ControlSize::Mini)
+                .on_toggle(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+                        workspace_id: ws_toggle.clone(),
+                        id: pid_toggle.clone(),
+                        enabled: next_enabled,
+                    }));
+                })
+                .build(k),
+        )
+        .child(
+            Button::new("Details")
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press({
+                    let pid = plugin.id.clone();
+                    move |s: &mut AppState| {
+                        s.settings_ui.selected_plugin_id = Some(pid.clone());
+                    }
+                })
+                .build(k),
+        );
+
+    row()
+        .w_full()
+        .min_w(0.0)
+        .items_center()
+        .justify_between()
+        .gap(12.0)
+        .px(16.0)
+        .py(12.0)
+        .child(
+            row()
+                .grow(1.0)
+                .min_w(0.0)
+                .items_center()
+                .gap(12.0)
+                .child(entity_icon(
+                    s,
+                    plugin.icon.as_deref(),
+                    &plugin.name,
+                    EntityIconSize::Md,
+                    k,
+                    t,
+                ))
+                .child(info_col),
+        )
+        .child(actions)
+}
+
+fn append_install_plugin_dialog(
+    s: &AppState,
+    ws_id: &str,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) {
+    if !s.settings_ui.install_plugin_open {
+        return;
+    }
+
+    let scope_idx = usize::from(s.settings_ui.plugin_install_scope == "workspace");
+    let scope_seg = SegmentedControl::new(
+        &["Library (all projects)", "Workspace only"],
+        Some(scope_idx),
+    )
+    .label("Install plugin scope")
+    .fit()
+    .on_pick(|s: &mut AppState, idx, _tx| {
+        s.settings_ui.plugin_install_scope = if idx == 1 {
+            "workspace".to_string()
+        } else {
+            "user".to_string()
+        };
+    })
+    .build(k);
+
+    let ws_install = ws_id.to_string();
+    let can_install = !s.settings_ui.install_target_edit.text.trim().is_empty();
+
+    let body = col()
+        .w_full()
+        .min_w(0.0)
+        .px(16.0)
+        .pb(16.0)
+        .gap(12.0)
+        .child(
+            text("Install a plugin from a GitHub repo slug, repository URL, or local directory.")
+                .font(k.ty.text_small)
+                .color(t.text_muted)
+                .wrap(),
+        )
+        .child(scope_seg)
+        .child(
+            TextArea::new(&s.settings_ui.install_target_edit)
+                .label("Source")
+                .placeholder("owner/repo or https://github.com/owner/repo")
+                .width(None)
+                .rows(2)
+                .on_edit(|s: &mut AppState| &mut s.settings_ui.install_target_edit)
+                .build(k),
+        )
+        .child(
+            row()
+                .w_full()
+                .justify_end()
+                .gap(8.0)
+                .pt(6.0)
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Regular)
+                        .on_press(|s: &mut AppState| {
+                            s.settings_ui.install_plugin_open = false;
+                        })
+                        .build(k),
+                )
+                .child(
+                    Button::new("Install plugin")
+                        .variant(ButtonVariant::Contrast)
+                        .control_size(ControlSize::Regular)
+                        .disabled(!can_install)
+                        .on_press(move |s: &mut AppState| {
+                            let src = s.settings_ui.install_target_edit.text.trim().to_string();
+                            if !src.is_empty() {
+                                let params = plugin_install_params(
+                                    &src,
+                                    &s.settings_ui.plugin_install_scope,
+                                );
+                                s.dispatch(Action::Settings(SettingsAction::InstallPlugin {
+                                    workspace_id: ws_install.clone(),
+                                    params,
+                                }));
+                                s.settings_ui.install_plugin_open = false;
+                            }
+                        })
+                        .build(k),
+                ),
+        );
+
+    Dialog::new("install-plugin-dialog", "Install plugin")
+        .open(true)
+        .width(480.0)
+        .fit()
+        .on_close(|s: &mut AppState| {
+            s.settings_ui.install_plugin_open = false;
+        })
+        .child(body)
+        .build(k, overlays);
+}
+
+fn append_plugin_detail_dialog(
+    s: &AppState,
+    ws_id: &str,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) {
+    let Some(plugin_id) = s.settings_ui.selected_plugin_id.as_deref() else {
+        return;
+    };
+    let Some(plugin) = s.plugins.iter().find(|p| p.id == plugin_id) else {
+        return;
+    };
+
+    let stats_row = row()
+        .w_full()
+        .gap(10.0)
+        .child(stat_tile(
+            "Skills",
+            plugin.skill_count.to_string(),
+            None,
+            k,
+            t,
+        ))
+        .child(stat_tile(
+            "MCP Servers",
+            plugin.mcp_count.to_string(),
+            None,
+            k,
+            t,
+        ))
+        .child(stat_tile(
+            "Subagents",
+            plugin.subagent_count.to_string(),
+            None,
+            k,
+            t,
+        ));
+
+    let mut content = col().w_full().min_w(0.0).px(16.0).pb(16.0).gap(12.0).child(
+        row()
+            .items_center()
+            .gap(10.0)
+            .child(entity_icon(
+                s,
+                plugin.icon.as_deref(),
+                &plugin.name,
+                EntityIconSize::Lg,
+                k,
+                t,
+            ))
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(2.0)
+                    .child(text(&plugin.name).font(k.ty.body_medium).color(t.text_base))
+                    .child(text(&plugin.id).font(k.ty.text_xsmall).color(t.text_muted)),
+            ),
+    );
+
+    if !plugin.description.trim().is_empty() {
+        content = content.child(
+            text(&plugin.description)
+                .font(k.ty.text_small)
+                .color(t.text_muted)
+                .wrap(),
+        );
+    }
+
+    content = content.child(stats_row);
+
+    if let Some(err) = plugin.error.as_deref().filter(|e| !e.trim().is_empty()) {
+        content = content.child(callout_banner(StatusTone::Danger, err, k, t));
+    }
+
+    let ws_toggle = ws_id.to_string();
+    let pid_toggle = plugin.id.clone();
+    let next_enabled = !plugin.enabled;
+    let pid_delete = plugin.id.clone();
+
+    let mut footer = row()
+        .w_full()
+        .justify_between()
+        .items_center()
+        .gap(8.0)
+        .pt(6.0)
+        .child(
+            Button::new("Remove plugin")
+                .variant(ButtonVariant::Danger)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.settings_ui.selected_plugin_id = None;
+                    s.settings_ui.plugin_delete_confirm = Some(pid_delete.clone());
+                })
+                .build(k),
+        );
+
+    let mut right_actions = row().items_center().gap(8.0);
+    if plugin.update_available {
+        let ws_upd = ws_id.to_string();
+        let pid_upd = plugin.id.clone();
+        right_actions = right_actions.child(
+            Button::new("Update")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::UpdatePlugin {
+                        workspace_id: ws_upd.clone(),
+                        id: pid_upd.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+    right_actions = right_actions
+        .child(
+            Button::new(if plugin.enabled { "Disable" } else { "Enable" })
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+                        workspace_id: ws_toggle.clone(),
+                        id: pid_toggle.clone(),
+                        enabled: next_enabled,
+                    }));
+                })
+                .build(k),
+        )
+        .child(
+            Button::new("Close")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(|s: &mut AppState| {
+                    s.settings_ui.selected_plugin_id = None;
+                })
+                .build(k),
+        );
+    footer = footer.child(right_actions);
+
+    content = content.child(footer);
+
+    Dialog::new("plugin-detail-dialog", "Plugin details")
+        .open(true)
+        .width(500.0)
+        .fit()
+        .on_close(|s: &mut AppState| {
+            s.settings_ui.selected_plugin_id = None;
+        })
+        .child(content)
+        .build(k, overlays);
+}
+
+fn append_plugin_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &mut Vec<El>) {
+    let Some(plugin_id) = s.settings_ui.plugin_delete_confirm.as_deref() else {
+        return;
+    };
+    let display = s
+        .plugins
+        .iter()
+        .find(|p| p.id == plugin_id)
+        .map(|p| p.name.as_str())
+        .unwrap_or(plugin_id);
+    let ws_del = ws_id.to_string();
+    let pid_del = plugin_id.to_string();
+    confirm_dialog(
+        ConfirmDialogSpec {
+            key: "plugin-delete-confirm",
+            title: "Uninstall plugin",
+            description: format!(
+                "Remove plugin \"{display}\"? Skills and MCP tools provided by this plugin will stop working."
+            ),
+            confirm_label: "Uninstall",
+            danger: true,
+            open: true,
+        },
+        move |s| {
+            s.dispatch(Action::Settings(SettingsAction::DeletePlugin {
+                workspace_id: ws_del.clone(),
+                id: pid_del.clone(),
+            }));
+            s.settings_ui.plugin_delete_confirm = None;
+        },
+        |s| {
+            s.settings_ui.plugin_delete_confirm = None;
+        },
+        k,
+        overlays,
+    );
+}
+
+fn skills_tab_view(
+    s: &AppState,
+    ws_id: Option<&str>,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) -> El {
+    let Some(ws_id) = ws_id else {
+        return Section::new()
+            .title("Skills & marketplaces")
+            .description("Manage skills available to Cowork and configure marketplace catalogs.")
+            .child(
+                el().px(16.0).py(16.0).child(
+                    EmptyState::new("No workspace selected")
+                        .icon(&icons::WRENCH)
+                        .description("Select or add a workspace to manage skills and marketplaces.")
+                        .build(k, t),
+                ),
+            )
+            .build(k, t);
+    };
+
+    let query = s
+        .settings_ui
+        .tool_search_edit
+        .text
+        .trim()
+        .to_ascii_lowercase();
+    let mut skills: Vec<&SkillSummary> = s.skills.iter().collect();
+    skills.sort_by_key(|sk| sk.name.to_lowercase());
+
+    let visible: Vec<&SkillSummary> = skills
+        .iter()
+        .copied()
+        .filter(|sk| {
+            if query.is_empty() {
+                true
+            } else {
+                sk.name.to_ascii_lowercase().contains(&query)
+                    || sk.description.to_ascii_lowercase().contains(&query)
+            }
+        })
+        .collect();
+
+    let install_btn = Button::new("+ Install skill")
+        .variant(ButtonVariant::Contrast)
+        .control_size(ControlSize::Small)
+        .on_press(|s: &mut AppState| {
+            s.settings_ui.install_target_edit = TextEdit::new("");
+            s.settings_ui.skill_install_scope = "global".to_string();
+            s.settings_ui.install_skill_open = true;
+        })
+        .build(k);
+
+    let mut skills_section = Section::new()
+        .title("Installed skills")
+        .description("Enable, disable, inspect, or remove installed agent skills.")
+        .action(install_btn);
+
+    if skills.is_empty() {
+        skills_section = skills_section.child(
+            el().px(16.0).py(16.0).child(
+                EmptyState::new("No skills installed")
+                    .icon(&icons::WRENCH)
+                    .description(
+                        "Install a skill from GitHub, a URL, or a local SKILL.md directory.",
+                    )
+                    .action(
+                        Button::new("+ Install skill")
+                            .variant(ButtonVariant::Outline)
+                            .control_size(ControlSize::Regular)
+                            .on_press(|s: &mut AppState| {
+                                s.settings_ui.install_target_edit = TextEdit::new("");
+                                s.settings_ui.install_skill_open = true;
+                            })
+                            .build(k),
+                    )
+                    .build(k, t),
+            ),
+        );
+    } else {
+        skills_section = skills_section.child(
+            row()
+                .w_full()
+                .items_center()
+                .gap(12.0)
+                .px(16.0)
+                .py(12.0)
+                .child(
+                    TextInput::new(&s.settings_ui.tool_search_edit)
+                        .placeholder("Search skills...")
+                        .width(Some(300.0))
+                        .on_edit(|s: &mut AppState| &mut s.settings_ui.tool_search_edit)
+                        .build(k),
+                )
+                .child(el().grow(1.0))
+                .child(status_pill(
+                    format!("{} of {}", visible.len(), skills.len()),
+                    StatusTone::Neutral,
+                    k,
+                    t,
+                )),
+        );
+
+        if visible.is_empty() {
+            skills_section = skills_section.child(
+                el().px(16.0).py(16.0).child(
+                    EmptyState::new("No matching skills")
+                        .icon(&icons::SEARCH)
+                        .description(format!(
+                            "No skills matched \"{}\".",
+                            s.settings_ui.tool_search_edit.text.trim()
+                        ))
+                        .build(k, t),
+                ),
+            );
+        } else {
+            for sk in visible {
+                skills_section = skills_section.child(render_skill_row(s, sk, ws_id, k, t));
+            }
+        }
+    }
+
+    let marketplaces = parse_marketplaces(&s.marketplaces);
+    let add_mkt_btn = Button::new("+ Add marketplace")
+        .variant(ButtonVariant::Outline)
+        .control_size(ControlSize::Small)
+        .on_press(|s: &mut AppState| {
+            s.settings_ui.marketplace_url_edit = TextEdit::new("");
+            s.settings_ui.marketplace_dialog_open = true;
+        })
+        .build(k);
+
+    let mut mkt_section = Section::new()
+        .title("Marketplace sources")
+        .description("Catalogs Cowork can install plugins and skills from.")
+        .action(add_mkt_btn);
+
+    if marketplaces.is_empty() {
+        mkt_section = mkt_section.child(
+            el().px(16.0).py(16.0).child(
+                EmptyState::new("No marketplaces configured")
+                    .icon(&icons::SEARCH)
+                    .description(
+                        "Add a GitHub repository or URL containing a Cowork marketplace index.",
+                    )
+                    .build(k, t),
+            ),
+        );
+    } else {
+        for mkt in marketplaces {
+            let mut meta_parts = vec![mkt.repo.clone()];
+            if let Some(p) = mkt.plugin_count {
+                meta_parts.push(format!("{p} plugin{}", if p == 1 { "" } else { "s" }));
+            }
+            if let Some(sk) = mkt.skill_count {
+                meta_parts.push(format!("{sk} skill{}", if sk == 1 { "" } else { "s" }));
+            }
+
+            let mut info = col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(3.0)
+                .child(
+                    text(&mkt.display_name)
+                        .font(k.ty.body_medium)
+                        .color(t.text_base),
+                )
+                .child(
+                    text(meta_parts.join(" · "))
+                        .font(k.ty.text_xsmall)
+                        .color(t.text_muted),
+                );
+            if let Some(err) = mkt.fetch_error.as_deref() {
+                info = info.child(text(err).font(k.ty.text_xsmall).color(t.danger).wrap());
+            }
+
+            let mkt_id_rm = mkt.id.clone();
+            let mkt_name_rm = mkt.display_name.clone();
+            let row_el = row()
+                .w_full()
+                .min_w(0.0)
+                .items_center()
+                .justify_between()
+                .gap(12.0)
+                .px(16.0)
+                .py(12.0)
+                .child(info)
+                .child(
+                    Button::new("Remove")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Small)
+                        .on_press(move |s: &mut AppState| {
+                            s.settings_ui.marketplace_remove_confirm =
+                                Some((mkt_id_rm.clone(), mkt_name_rm.clone()));
+                        })
+                        .build(k),
+                );
+            mkt_section = mkt_section.child(row_el);
+        }
+    }
+
+    append_install_skill_dialog(s, ws_id, k, t, overlays);
+    append_skill_detail_dialog(s, ws_id, k, t, overlays);
+    append_skill_delete_confirm(s, ws_id, k, overlays);
+    append_add_marketplace_dialog(s, ws_id, k, t, overlays);
+    append_marketplace_remove_confirm(s, ws_id, k, overlays);
+
+    col()
+        .w_full()
+        .min_w(0.0)
+        .gap(20.0)
+        .child(skills_section.build(k, t))
+        .child(mkt_section.build(k, t))
+}
+
+fn render_skill_row(s: &AppState, sk: &SkillSummary, ws_id: &str, k: &Kit, t: &ThemeTokens) -> El {
+    let mut header = row()
+        .items_center()
+        .gap(8.0)
+        .child(text(&sk.name).font(k.ty.body_medium).color(t.text_base))
+        .child(status_pill(
+            skill_scope_label(&sk.scope),
+            StatusTone::Neutral,
+            k,
+            t,
+        ));
+    if !sk.enabled {
+        header = header.child(status_pill("Disabled", StatusTone::Neutral, k, t));
+    }
+    if sk.update_available {
+        header = header.child(status_pill("Update available", StatusTone::Warning, k, t));
+    }
+
+    let skill_select = sk.name.clone();
+    let mut info = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(3.0)
+        .radius(6.0)
+        .hover(t.hover)
+        .role("button")
+        .label(format!("Inspect skill {}", sk.name))
+        .on_press(move |s: &mut AppState| {
+            s.settings_ui.selected_skill_id = Some(skill_select.clone());
+        })
+        .child(header);
+    if !sk.description.trim().is_empty() {
+        info = info.child(
+            text(&sk.description)
+                .font(k.ty.text_xsmall)
+                .color(t.text_muted)
+                .wrap(),
+        );
+    }
+
+    let ws_toggle = ws_id.to_string();
+    let name_toggle = sk.name.clone();
+    let next_enabled = !sk.enabled;
+    let is_builtin = sk.scope == "built-in";
+
+    let mut actions = row()
+        .items_center()
+        .gap(8.0)
+        .shrink()
+        .child(
+            Switch::new(sk.enabled)
+                .label(format!("Enable {}", sk.name))
+                .hide_label()
+                .control_size(ControlSize::Mini)
+                .on_toggle(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+                        workspace_id: ws_toggle.clone(),
+                        name: name_toggle.clone(),
+                        enabled: next_enabled,
+                    }));
+                })
+                .build(k),
+        )
+        .child(
+            Button::new("Details")
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press({
+                    let sk_name = sk.name.clone();
+                    move |s: &mut AppState| {
+                        s.settings_ui.selected_skill_id = Some(sk_name.clone());
+                    }
+                })
+                .build(k),
+        );
+
+    if !is_builtin {
+        let sk_del = sk.name.clone();
+        actions = actions.child(
+            Button::new("Delete")
+                .variant(ButtonVariant::Danger)
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut AppState| {
+                    s.settings_ui.skill_delete_confirm = Some(sk_del.clone());
+                })
+                .build(k),
+        );
+    }
+
+    row()
+        .w_full()
+        .min_w(0.0)
+        .items_center()
+        .justify_between()
+        .gap(12.0)
+        .px(16.0)
+        .py(12.0)
+        .child(
+            row()
+                .grow(1.0)
+                .min_w(0.0)
+                .items_center()
+                .gap(12.0)
+                .child(entity_icon(
+                    s,
+                    sk.icon.as_deref(),
+                    &sk.name,
+                    EntityIconSize::Md,
+                    k,
+                    t,
+                ))
+                .child(info),
+        )
+        .child(actions)
+}
+
+fn append_install_skill_dialog(
+    s: &AppState,
+    ws_id: &str,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) {
+    if !s.settings_ui.install_skill_open {
+        return;
+    }
+
+    let scope_idx = usize::from(s.settings_ui.skill_install_scope == "project");
+    let scope_seg = SegmentedControl::new(&["Cowork Library", "This workspace"], Some(scope_idx))
+        .label("Install skill scope")
+        .fit()
+        .on_pick(|s: &mut AppState, idx, _tx| {
+            s.settings_ui.skill_install_scope = if idx == 1 {
+                "project".to_string()
+            } else {
+                "global".to_string()
+            };
+        })
+        .build(k);
+
+    let ws_install = ws_id.to_string();
+    let can_install = !s.settings_ui.install_target_edit.text.trim().is_empty();
+
+    let body = col()
+        .w_full()
+        .min_w(0.0)
+        .px(16.0)
+        .pb(16.0)
+        .gap(12.0)
+        .child(
+            text("Install a skill from GitHub (owner/repo), a URL, or a local folder containing SKILL.md.")
+                .font(k.ty.text_small)
+                .color(t.text_muted)
+                .wrap(),
+        )
+        .child(scope_seg)
+        .child(
+            TextArea::new(&s.settings_ui.install_target_edit)
+                .label("Source")
+                .placeholder("owner/repo or https://github.com/owner/repo")
+                .width(None)
+                .rows(2)
+                .on_edit(|s: &mut AppState| &mut s.settings_ui.install_target_edit)
+                .build(k),
+        )
+        .child(
+            row()
+                .w_full()
+                .justify_end()
+                .gap(8.0)
+                .pt(6.0)
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Regular)
+                        .on_press(|s: &mut AppState| {
+                            s.settings_ui.install_skill_open = false;
+                        })
+                        .build(k),
+                )
+                .child(
+                    Button::new("Install skill")
+                        .variant(ButtonVariant::Contrast)
+                        .control_size(ControlSize::Regular)
+                        .disabled(!can_install)
+                        .on_press(move |s: &mut AppState| {
+                            let src = s.settings_ui.install_target_edit.text.trim().to_string();
+                            if !src.is_empty() {
+                                let params =
+                                    skill_install_params(&src, &s.settings_ui.skill_install_scope);
+                                s.dispatch(Action::Settings(SettingsAction::InstallSkill {
+                                    workspace_id: ws_install.clone(),
+                                    params,
+                                }));
+                                s.settings_ui.install_skill_open = false;
+                            }
+                        })
+                        .build(k),
+                ),
+        );
+
+    Dialog::new("install-skill-dialog", "Install skill")
+        .open(true)
+        .width(480.0)
+        .fit()
+        .on_close(|s: &mut AppState| {
+            s.settings_ui.install_skill_open = false;
+        })
+        .child(body)
+        .build(k, overlays);
+}
+
+fn append_skill_detail_dialog(
+    s: &AppState,
+    ws_id: &str,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) {
+    let Some(name) = s.settings_ui.selected_skill_id.as_deref() else {
+        return;
+    };
+    let Some(sk) = s.skills.iter().find(|entry| entry.name == name) else {
+        return;
+    };
+
+    let ws_toggle = ws_id.to_string();
+    let sk_toggle = sk.name.clone();
+    let next_enabled = !sk.enabled;
+    let is_builtin = sk.scope == "built-in";
+    let sk_del = sk.name.clone();
+
+    let mut content = col().w_full().min_w(0.0).px(16.0).pb(16.0).gap(12.0).child(
+        row()
+            .items_center()
+            .gap(10.0)
+            .child(entity_icon(
+                s,
+                sk.icon.as_deref(),
+                &sk.name,
+                EntityIconSize::Lg,
+                k,
+                t,
+            ))
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(4.0)
+                    .child(text(&sk.name).font(k.ty.body_medium).color(t.text_base))
+                    .child(
+                        row()
+                            .items_center()
+                            .gap(6.0)
+                            .child(status_pill(
+                                skill_scope_label(&sk.scope),
+                                StatusTone::Neutral,
+                                k,
+                                t,
+                            ))
+                            .child(status_pill(
+                                if sk.enabled { "Enabled" } else { "Disabled" },
+                                if sk.enabled {
+                                    StatusTone::Success
+                                } else {
+                                    StatusTone::Neutral
+                                },
+                                k,
+                                t,
+                            )),
+                    ),
+            ),
+    );
+
+    if !sk.description.trim().is_empty() {
+        content = content.child(
+            text(&sk.description)
+                .font(k.ty.text_small)
+                .color(t.text_muted)
+                .wrap(),
+        );
+    }
+    if let Some(src) = sk.source.as_deref().filter(|v| !v.trim().is_empty()) {
+        content = content.child(
+            text(format!("Source: {src}"))
+                .font(k.ty.text_xsmall)
+                .color(t.text_muted)
+                .wrap(),
+        );
+    }
+
+    let mut footer = row()
+        .w_full()
+        .justify_between()
+        .items_center()
+        .gap(8.0)
+        .pt(6.0);
+    if !is_builtin {
+        footer = footer.child(
+            Button::new("Delete")
+                .variant(ButtonVariant::Danger)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.settings_ui.selected_skill_id = None;
+                    s.settings_ui.skill_delete_confirm = Some(sk_del.clone());
+                })
+                .build(k),
+        );
+    } else {
+        footer = footer.child(el());
+    }
+    footer = footer.child(
+        row()
+            .items_center()
+            .gap(8.0)
+            .child(
+                Button::new(if sk.enabled { "Disable" } else { "Enable" })
+                    .variant(ButtonVariant::Contrast)
+                    .control_size(ControlSize::Regular)
+                    .on_press(move |s: &mut AppState| {
+                        s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+                            workspace_id: ws_toggle.clone(),
+                            name: sk_toggle.clone(),
+                            enabled: next_enabled,
+                        }));
+                    })
+                    .build(k),
+            )
+            .child(
+                Button::new("Close")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Regular)
+                    .on_press(|s: &mut AppState| {
+                        s.settings_ui.selected_skill_id = None;
+                    })
+                    .build(k),
+            ),
+    );
+    content = content.child(footer);
+
+    Dialog::new("skill-detail-dialog", "Skill details")
+        .open(true)
+        .width(480.0)
+        .fit()
+        .on_close(|s: &mut AppState| {
+            s.settings_ui.selected_skill_id = None;
+        })
+        .child(content)
+        .build(k, overlays);
+}
+
+fn append_skill_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &mut Vec<El>) {
+    let Some(name) = s.settings_ui.skill_delete_confirm.as_deref() else {
+        return;
+    };
+    let ws_del = ws_id.to_string();
+    let sk_del = name.to_string();
+    confirm_dialog(
+        ConfirmDialogSpec {
+            key: "skill-delete-confirm",
+            title: "Delete skill",
+            description: format!("Delete skill \"{name}\"? This removes it from the active scope."),
+            confirm_label: "Delete",
+            danger: true,
+            open: true,
+        },
+        move |s| {
+            s.dispatch(Action::Settings(SettingsAction::DeleteSkill {
+                workspace_id: ws_del.clone(),
+                name: sk_del.clone(),
+            }));
+            s.settings_ui.skill_delete_confirm = None;
+        },
+        |s| {
+            s.settings_ui.skill_delete_confirm = None;
+        },
+        k,
+        overlays,
+    );
+}
+
+fn append_add_marketplace_dialog(
+    s: &AppState,
+    ws_id: &str,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) {
+    if !s.settings_ui.marketplace_dialog_open {
+        return;
+    }
+    let ws_add = ws_id.to_string();
+    let can_add = !s.settings_ui.marketplace_url_edit.text.trim().is_empty();
+
+    let body = col()
+        .w_full()
+        .min_w(0.0)
+        .px(16.0)
+        .pb(16.0)
+        .gap(12.0)
+        .child(
+            text("Add a GitHub repo (owner/repo) or marketplace URL to browse installable skills and plugins.")
+                .font(k.ty.text_small)
+                .color(t.text_muted)
+                .wrap(),
+        )
+        .child(
+            TextInput::new(&s.settings_ui.marketplace_url_edit)
+                .label("Marketplace source")
+                .placeholder("owner/repo or https://github.com/owner/repo")
+                .width(None)
+                .on_edit(|s: &mut AppState| &mut s.settings_ui.marketplace_url_edit)
+                .build(k),
+        )
+        .child(
+            row()
+                .w_full()
+                .justify_end()
+                .gap(8.0)
+                .pt(6.0)
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Regular)
+                        .on_press(|s: &mut AppState| {
+                            s.settings_ui.marketplace_dialog_open = false;
+                        })
+                        .build(k),
+                )
+                .child(
+                    Button::new("Add marketplace")
+                        .variant(ButtonVariant::Contrast)
+                        .control_size(ControlSize::Regular)
+                        .disabled(!can_add)
+                        .on_press(move |s: &mut AppState| {
+                            let url = s.settings_ui.marketplace_url_edit.text.trim().to_string();
+                            if !url.is_empty() {
+                                s.dispatch(Action::Settings(SettingsAction::AddMarketplace {
+                                    workspace_id: ws_add.clone(),
+                                    url,
+                                }));
+                                s.settings_ui.marketplace_dialog_open = false;
+                            }
+                        })
+                        .build(k),
+                ),
+        );
+
+    Dialog::new("add-marketplace-dialog", "Add marketplace")
+        .open(true)
+        .width(460.0)
+        .fit()
+        .on_close(|s: &mut AppState| {
+            s.settings_ui.marketplace_dialog_open = false;
+        })
+        .child(body)
+        .build(k, overlays);
+}
+
+fn append_marketplace_remove_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &mut Vec<El>) {
+    let Some((mkt_id, mkt_name)) = s.settings_ui.marketplace_remove_confirm.as_ref() else {
+        return;
+    };
+    let ws_rm = ws_id.to_string();
+    let id_rm = mkt_id.clone();
+    confirm_dialog(
+        ConfirmDialogSpec {
+            key: "marketplace-remove-confirm",
+            title: "Remove marketplace",
+            description: format!(
+                "Remove marketplace \"{mkt_name}\"? Already installed items stay intact."
+            ),
+            confirm_label: "Remove",
+            danger: true,
+            open: true,
+        },
+        move |s| {
+            s.dispatch(Action::Settings(SettingsAction::RemoveMarketplace {
+                workspace_id: ws_rm.clone(),
+                id: id_rm.clone(),
+            }));
+            s.settings_ui.marketplace_remove_confirm = None;
+        },
+        |s| {
+            s.settings_ui.marketplace_remove_confirm = None;
+        },
+        k,
+        overlays,
+    );
+}
+
+fn search_tab_view(
+    s: &AppState,
+    target_ws: Option<&WorkspaceRecord>,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) -> El {
+    let Some(ws) = target_ws else {
+        return Section::new()
+            .title("Search")
+            .description(
+                "Choose provider-native search or a local search tool for models that need one.",
+            )
+            .child(
+                el().px(16.0).py(16.0).child(
+                    EmptyState::new("No workspace selected")
+                        .icon(&icons::SEARCH)
+                        .description("Open or add a workspace to configure web search defaults.")
+                        .build(k, t),
+                ),
+            )
+            .build(k, t);
+    };
+
+    let current_backend = workspace_search_provider(ws.provider_options.as_ref());
+    let uses_native = current_backend == "native";
+    let local_fallback = workspace_local_search_fallback(ws.provider_options.as_ref());
+    let codex_mode = workspace_codex_search_mode(ws.provider_options.as_ref());
+
+    let backend_labels: Vec<&str> = WEB_SEARCH_BACKENDS.iter().map(|(_, lbl)| *lbl).collect();
+    let backend_current = WEB_SEARCH_BACKENDS
+        .iter()
+        .find(|(id, _)| *id == current_backend)
+        .map(|(_, lbl)| *lbl)
+        .unwrap_or("Provider native");
+
+    let backend_open =
+        s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-backend");
+    let ws_id_backend = ws.id.clone();
+    let existing_opts_backend = ws.provider_options.clone();
+    let backend_select = Select::new("tool-access-search-backend", &backend_labels)
+        .appearance(SelectAppearance::Field)
+        .width(220.0)
+        .current(Some(backend_current))
+        .open(backend_open)
+        .on_toggle(|s: &mut AppState| {
+            let open =
+                s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-backend");
+            s.settings_ui.open_select_key = if open {
+                None
+            } else {
+                Some("tool-access-search-backend".to_string())
+            };
+        })
+        .on_close(|s: &mut AppState| {
+            if s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-backend") {
+                s.settings_ui.open_select_key = None;
+            }
+        })
+        .on_choose(move |s: &mut AppState, chosen, _tx| {
+            s.settings_ui.open_select_key = None;
+            if let Some((backend_id, _)) =
+                WEB_SEARCH_BACKENDS.iter().find(|(_, lbl)| *lbl == chosen)
+            {
+                let next_opts = patch_search_provider(existing_opts_backend.as_ref(), backend_id);
+                s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                    workspace_id: ws_id_backend.clone(),
+                    defaults: json!({ "providerOptions": next_opts }),
+                }));
+            }
+        })
+        .build(k, overlays);
+
+    let mut search_section = Section::new()
+        .title("Search")
+        .description(
+            "Choose provider-native search or a local search tool for models that need one.",
+        )
+        .child(
+            row()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(16.0)
+                .px(16.0)
+                .py(14.0)
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(3.0)
+                        .child(
+                            text("Search provider")
+                                .font(k.ty.body_medium)
+                                .color(t.text_base),
+                        )
+                        .child(
+                            text(if uses_native {
+                                "Use provider-native search when the active model supports it."
+                            } else {
+                                "Use the local webSearch tool for models without built-in search."
+                            })
+                            .font(k.ty.text_xsmall)
+                            .color(t.text_muted)
+                            .wrap(),
+                        ),
+                )
+                .child(backend_select),
+        );
+
+    if uses_native {
+        let fb_labels: Vec<&str> = LOCAL_SEARCH_FALLBACKS.iter().map(|(_, lbl)| *lbl).collect();
+        let fb_current = LOCAL_SEARCH_FALLBACKS
+            .iter()
+            .find(|(id, _)| *id == local_fallback)
+            .map(|(_, lbl)| *lbl)
+            .unwrap_or("Exa Search");
+        let fb_open =
+            s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-fallback");
+        let ws_id_fb = ws.id.clone();
+        let existing_opts_fb = ws.provider_options.clone();
+        let fb_select = Select::new("tool-access-search-fallback", &fb_labels)
+            .appearance(SelectAppearance::Field)
+            .width(220.0)
+            .current(Some(fb_current))
+            .open(fb_open)
+            .on_toggle(|s: &mut AppState| {
+                let open =
+                    s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-fallback");
+                s.settings_ui.open_select_key = if open {
+                    None
+                } else {
+                    Some("tool-access-search-fallback".to_string())
+                };
+            })
+            .on_close(|s: &mut AppState| {
+                if s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-fallback") {
+                    s.settings_ui.open_select_key = None;
+                }
+            })
+            .on_choose(move |s: &mut AppState, chosen, _tx| {
+                s.settings_ui.open_select_key = None;
+                if let Some((fb_id, _)) = LOCAL_SEARCH_FALLBACKS
+                    .iter()
+                    .find(|(_, lbl)| *lbl == chosen)
+                {
+                    let next_opts = patch_local_search_fallback(existing_opts_fb.as_ref(), fb_id);
+                    s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                        workspace_id: ws_id_fb.clone(),
+                        defaults: json!({ "providerOptions": next_opts }),
+                    }));
+                }
+            })
+            .build(k, overlays);
+
+        search_section = search_section.child(
+            row()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(16.0)
+                .px(16.0)
+                .py(14.0)
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(3.0)
+                        .child(
+                            text("Fallback local search tool")
+                                .font(k.ty.body_medium)
+                                .color(t.text_base),
+                        )
+                        .child(
+                            text("Used for non-Codex models without provider-native web search.")
+                                .font(k.ty.text_xsmall)
+                                .color(t.text_muted)
+                                .wrap(),
+                        ),
+                )
+                .child(fb_select),
+        );
+    }
+
+    let mode_open = s.settings_ui.open_select_key.as_deref() == Some("tool-access-codex-mode");
+    let ws_id_mode = ws.id.clone();
+    let existing_opts_mode = ws.provider_options.clone();
+    let mode_select = Select::new("tool-access-codex-mode", CODEX_WEB_SEARCH_MODES)
+        .appearance(SelectAppearance::Field)
+        .width(220.0)
+        .disabled(!uses_native)
+        .current(Some(codex_mode))
+        .open(mode_open)
+        .on_toggle(|s: &mut AppState| {
+            let open = s.settings_ui.open_select_key.as_deref() == Some("tool-access-codex-mode");
+            s.settings_ui.open_select_key = if open {
+                None
+            } else {
+                Some("tool-access-codex-mode".to_string())
+            };
+        })
+        .on_close(|s: &mut AppState| {
+            if s.settings_ui.open_select_key.as_deref() == Some("tool-access-codex-mode") {
+                s.settings_ui.open_select_key = None;
+            }
+        })
+        .on_choose(move |s: &mut AppState, chosen, _tx| {
+            s.settings_ui.open_select_key = None;
+            let next_opts = patch_codex_search_mode(existing_opts_mode.as_ref(), chosen);
+            s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                workspace_id: ws_id_mode.clone(),
+                defaults: json!({ "providerOptions": next_opts }),
+            }));
+        })
+        .build(k, overlays);
+
+    search_section = search_section.child(
+        row()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap(16.0)
+            .px(16.0)
+            .py(14.0)
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(3.0)
+                    .child(
+                        text("Codex web search mode")
+                            .font(k.ty.body_medium)
+                            .color(t.text_base),
+                    )
+                    .child(
+                        text("Controls Codex app-server native search behavior when native search is enabled.")
+                            .font(k.ty.text_xsmall)
+                            .color(t.text_muted)
+                            .wrap(),
+                    ),
+            )
+            .child(mode_select),
+    );
+
+    let tool_providers = tool_providers_section(s, ws, k, t);
+
+    col()
+        .w_full()
+        .min_w(0.0)
+        .gap(20.0)
+        .child(search_section.build(k, t))
+        .child(tool_providers)
+}
+
+fn tool_providers_section(s: &AppState, ws: &WorkspaceRecord, k: &Kit, t: &ThemeTokens) -> El {
+    let mut section = Section::new()
+        .title("Tool Providers")
+        .description("API keys powering local web search tools for models without native search.")
+        .action(
+            Button::new("Configure in Models")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut AppState| {
+                    s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+                        SettingsPageId::Models,
+                    ))));
+                })
+                .build(k),
+        );
+
+    let statuses = workspace_provider_statuses(s, Some(ws.id.as_str()));
+
+    for (provider_id, name, subtitle) in [
+        (
+            "exa",
+            "Exa Search",
+            "Semantic web search and page content extraction.",
+        ),
+        (
+            "parallel",
+            "Parallel Search",
+            "Parallel AI search queries and curated web extracts.",
+        ),
+    ] {
+        let summary = s.provider_catalog.iter().find(|p| p.id == provider_id);
+        let status = statuses.iter().find(|st| st.provider == provider_id);
+        let connected = summary.is_some_and(|sum| is_provider_connected(sum, status, Some(ws)))
+            || status.is_some_and(|st| {
+                st.healthy
+                    || st.connected
+                    || st
+                        .saved_api_key_mask
+                        .as_deref()
+                        .is_some_and(|m| !m.trim().is_empty())
+            });
+
+        section = section.child(
+            row()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(12.0)
+                .px(16.0)
+                .py(12.0)
+                .child(
+                    row()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .items_center()
+                        .gap(12.0)
+                        .child(entity_icon(s, None, name, EntityIconSize::Sm, k, t))
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(2.0)
+                                .child(text(name).font(k.ty.body_medium).color(t.text_base))
+                                .child(text(subtitle).font(k.ty.text_xsmall).color(t.text_muted)),
+                        ),
+                )
+                .child(status_pill(
+                    if connected {
+                        "Configured"
+                    } else {
+                        "Not configured"
+                    },
+                    if connected {
+                        StatusTone::Success
+                    } else {
+                        StatusTone::Neutral
+                    },
+                    k,
+                    t,
+                )),
+        );
+    }
+
+    section.build(k, t)
+}

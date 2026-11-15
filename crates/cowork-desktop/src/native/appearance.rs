@@ -4,6 +4,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
 
 use anyhow::Result;

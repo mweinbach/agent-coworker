@@ -95,10 +95,15 @@ fn create_symlink(link_target: &Path, target: &Path) -> std::io::Result<()> {
 fn is_unsafe_link_fallback_error(err: &std::io::Error) -> bool {
     #[cfg(unix)]
     if let Some(code) = err.raw_os_error() {
-        return matches!(
-            code,
-            libc::ENOTSUP | libc::EOPNOTSUPP | libc::EXDEV | libc::ENOSYS | libc::EPERM
-        );
+        // On Linux glibc `ENOTSUP == EOPNOTSUPP`; `[...].contains` avoids unreachable-pattern warnings.
+        return [
+            libc::ENOTSUP,
+            libc::EOPNOTSUPP,
+            libc::EXDEV,
+            libc::ENOSYS,
+            libc::EPERM,
+        ]
+        .contains(&code);
     }
     err.kind() == ErrorKind::Unsupported || err.kind() == ErrorKind::PermissionDenied
 }

@@ -152,7 +152,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let icon_row = SettingsRow::new("Show quick chat icon")
         .description(
-            "Keep the compact popup available from the macOS menu bar or Windows system tray.",
+            "Keep the compact popup available from the macOS menu bar or Windows/Linux system tray.",
         )
         .control(
             Switch::new(ds.quick_chat_icon_enabled)

@@ -2373,6 +2373,7 @@ fn search_tab_view(
     let ws_id_backend = ws.id.clone();
     let existing_opts_backend = ws.provider_options.clone();
     let backend_select = Select::new("tool-access-search-backend", &backend_labels)
+        .label("Web search provider")
         .appearance(SelectAppearance::Field)
         .width(220.0)
         .current(Some(backend_current))
@@ -2454,6 +2455,7 @@ fn search_tab_view(
         let ws_id_fb = ws.id.clone();
         let existing_opts_fb = ws.provider_options.clone();
         let fb_select = Select::new("tool-access-search-fallback", &fb_labels)
+            .label("Fallback local search tool")
             .appearance(SelectAppearance::Field)
             .width(220.0)
             .current(Some(fb_current))
@@ -2520,6 +2522,7 @@ fn search_tab_view(
     let ws_id_mode = ws.id.clone();
     let existing_opts_mode = ws.provider_options.clone();
     let mode_select = Select::new("tool-access-codex-mode", CODEX_WEB_SEARCH_MODES)
+        .label("Codex web search mode")
         .appearance(SelectAppearance::Field)
         .width(220.0)
         .disabled(!uses_native)

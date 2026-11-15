@@ -200,6 +200,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         let current_label = active_target.map(|t| t.label.as_str());
         let open = s.settings_ui.open_select_key.as_deref() == Some("memory-target-select");
         let picker = Select::new("memory-target-select", &label_refs)
+            .label("Memory target")
             .appearance(SelectAppearance::Field)
             .width(220.0)
             .current(current_label)
@@ -494,6 +495,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         let ws_id_gen = ws_id.clone();
 
         let gen_select = Select::new("memory-generation-model", &gen_refs)
+            .label("Memory generation model")
             .appearance(SelectAppearance::Field)
             .width(240.0)
             .current(Some(current_gen_label))
@@ -641,6 +643,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let ws_si_model = ws_id.clone();
 
             let si_model_select = Select::new("skill-improvement-model", &si_model_refs)
+                .label("Skill improvement model")
                 .appearance(SelectAppearance::Field)
                 .width(240.0)
                 .current(Some(si_model_cur))
@@ -693,6 +696,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 s.settings_ui.open_select_key.as_deref() == Some("skill-improvement-scope");
             let ws_si_scope = ws_id.clone();
             let si_scope_select = Select::new("skill-improvement-scope", &si_scope_opts)
+                .label("Skill improvement scope")
                 .appearance(SelectAppearance::Field)
                 .width(190.0)
                 .current(Some(si_scope_label))
@@ -1178,6 +1182,7 @@ fn build_advanced_memory_section(
                 .is_empty();
         let type_open = s.settings_ui.open_select_key.as_deref() == Some("advanced-memory-type");
         let type_select = Select::new("advanced-memory-type", ADVANCED_MEMORY_TYPES)
+            .label("Memory record type")
             .appearance(SelectAppearance::Field)
             .width(180.0)
             .current(Some(s.settings_ui.advanced_memory_type.as_str()))
@@ -1664,6 +1669,7 @@ fn build_legacy_memory_section(
         let scope_options = ["Workspace", "Everywhere"];
         let scope_open = s.settings_ui.open_select_key.as_deref() == Some("legacy-memory-scope");
         let scope_select = Select::new("legacy-memory-scope", &scope_options)
+            .label("Memory scope")
             .appearance(SelectAppearance::Field)
             .width(180.0)
             .disabled(editing)

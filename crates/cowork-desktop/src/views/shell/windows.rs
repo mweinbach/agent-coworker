@@ -274,8 +274,17 @@ pub fn build_quick_chat_window(
                 .icon(&icons::POPOUT)
                 .on_press_tx(|s: &mut AppState, tx| {
                     let active_thread_id = s.route().active_thread_id.clone();
+                    let open_new_chat_workspace = if active_thread_id.is_some() {
+                        None
+                    } else {
+                        Some(match s.landing_workspace_id.as_deref() {
+                            Some(crate::state::ONE_OFF_LANDING_SENTINEL) => String::new(),
+                            Some(ws_id) => ws_id.to_string(),
+                            None => s.active_workspace_id.clone().unwrap_or_default(),
+                        })
+                    };
                     s.dispatch(Action::Shell(ShellAction::FocusMainWindow {
-                        open_new_chat_workspace: None,
+                        open_new_chat_workspace,
                         open_thread_id: active_thread_id,
                     }));
                     s.dispatch(Action::Shell(ShellAction::SetQuickChatOpen(false)));

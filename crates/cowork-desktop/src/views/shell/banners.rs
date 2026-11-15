@@ -9,7 +9,7 @@ use rune_kit::{
 };
 
 use crate::actions::{Action, NativeAction, NavAction, SettingsAction, ShellAction};
-use crate::router::SettingsPageId;
+use crate::router::{SettingsPageId, ViewId};
 use crate::state::{AppState, FilePreviewState, ServerLifecycleState, WorkspaceRuntime};
 use crate::theme::ThemeTokens;
 use crate::ws::WsConnectionState;
@@ -67,8 +67,14 @@ pub fn build_primary_content(
     {
         top_banners.push(conn_banner);
     }
-    if let Some(readiness_banner) =
-        build_creation_readiness_notice(s, active_ws.map(|w| w.id.clone()), k, t)
+    let on_creation_screen = match s.route().view {
+        ViewId::Chat => s.route().active_thread_id.is_none(),
+        ViewId::Task => s.active_task.is_none(),
+        ViewId::Settings => false,
+    };
+    if on_creation_screen
+        && let Some(readiness_banner) =
+            build_creation_readiness_notice(s, active_ws.map(|w| w.id.clone()), k, t)
     {
         top_banners.push(readiness_banner);
     }
@@ -807,5 +813,68 @@ mod tests {
         let tree = rt.a11y_json();
         assert!(tree.contains("Provider credentials required"));
         assert!(!tree.contains("\"credentials\""));
+    }
+
+    #[test]
+    fn creation_readiness_notice_hidden_on_active_thread_and_task() {
+        use cowork_protocol::CreationPreflightResult;
+
+        fn blocked_state() -> AppState {
+            let check = CreationReadinessCheck {
+                id: "credentials".into(),
+                status: "blocked".into(),
+                message: "Connect Google before starting this chat.".into(),
+                repair_action: Some(CreationRepairAction::ConnectProvider {
+                    provider: "google".into(),
+                }),
+            };
+            AppState {
+                workspace_creation_preflight: Some(CreationPreflightResult {
+                    ready: false,
+                    checks: vec![check],
+                }),
+                ..Default::default()
+            }
+        }
+
+        fn primary_view(state: &AppState, cx: &mut rune::Cx<AppState>) -> El {
+            let dark = state.effective_dark(cx.system_dark());
+            let (kit, tok) = crate::theme::build_kit(
+                dark,
+                state.desktop_settings.reduced_transparency,
+                state.desktop_settings.high_contrast,
+            );
+            build_primary_content(state, &kit, &tok, el().w_full().h_full(), false)
+        }
+
+        // On new chat landing, the notice renders.
+        let mut landing_rt = rune::Runtime::new(
+            blocked_state(),
+            primary_view,
+            (800.0, 600.0),
+            rune::Env::new(true, 1.0),
+        );
+        landing_rt.frame(0.0);
+        assert!(
+            landing_rt
+                .a11y_json()
+                .contains("Provider credentials required")
+        );
+
+        // On an existing thread, the creation notice is suppressed.
+        let mut on_thread = blocked_state();
+        on_thread.dispatch(Action::Navigate(NavAction::OpenThread("th-1".into())));
+        let mut thread_rt = rune::Runtime::new(
+            on_thread,
+            primary_view,
+            (800.0, 600.0),
+            rune::Env::new(true, 1.0),
+        );
+        thread_rt.frame(0.0);
+        assert!(
+            !thread_rt
+                .a11y_json()
+                .contains("Provider credentials required")
+        );
     }
 }

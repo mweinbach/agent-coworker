@@ -449,7 +449,16 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
             .description(
                 "Sign in with OpenAI, Anthropic, Google, or a local model server such as LM Studio.",
             )
-            .child(Badge::new(format!("{configured_providers} configured provider(s)")).build(k))
+            .child(
+                row()
+                    .gap(8.0)
+                    .center_y()
+                    .child(
+                        Badge::new(format!("{configured_providers} configured provider(s)"))
+                            .build(k)
+                            .key("onboarding-provider-badge"),
+                    ),
+            )
             .action(
                 Button::new("Configure providers")
                     .variant(ButtonVariant::Contrast)
@@ -1377,5 +1386,32 @@ mod tests {
         assert!(!rt.state.onboarding.dismissed);
         assert!(rt.state.onboarding.completed_steps.contains("step-5"));
         assert!(!is_onboarding_visible(&rt.state));
+    }
+
+    #[test]
+    fn onboarding_step2_provider_badge_stays_pill_sized() {
+        use rune::{Env, Runtime};
+
+        let mut s = AppState::default();
+        s.shell_ui.onboarding_step = 1;
+
+        let mut rt = Runtime::new(
+            s,
+            |state: &AppState, cx: &mut rune::Cx<AppState>| {
+                let (k, t) = crate::theme::build_kit(false, false, false);
+                crate::views::shell::view(state, cx, &k, &t)
+            },
+            (1280.0, 820.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let (badge_rect, _) = rt
+            .presented("onboarding-provider-badge")
+            .expect("provider badge should render on onboarding step 2");
+        assert!(
+            badge_rect[2] > 0.0 && badge_rect[2] < 280.0,
+            "onboarding step 2 provider badge must stay pill-sized rather than stretching full modal width, got w={}",
+            badge_rect[2]
+        );
     }
 }

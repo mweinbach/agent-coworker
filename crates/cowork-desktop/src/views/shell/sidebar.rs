@@ -128,9 +128,7 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
         .detail("⌘K")
         .height(30.0)
         .on_select(|s: &mut AppState, _| {
-            s.shell_ui.command_palette_selected = 0;
-            s.command_palette_edit.focused = true;
-            s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(true)));
+            super::palette::open_command_palette(s);
         })
         .build(k)
         .key("sidebar-command-palette");

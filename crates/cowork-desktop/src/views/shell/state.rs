@@ -194,9 +194,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 
     if ev.is_command('k') && !ev.mods.alt && !ev.mods.shift {
-        s.shell_ui.command_palette_selected = 0;
-        s.command_palette_edit.focused = !s.command_palette_open;
-        s.dispatch(Action::Shell(ShellAction::ToggleCommandPalette));
+        super::palette::toggle_command_palette(s);
         return true;
     }
 
@@ -227,9 +225,9 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
             }
             Key::Enter => {
                 if let Some(item) = items.get(s.shell_ui.command_palette_selected.min(max_idx)) {
-                    s.shell_ui.command_palette_selected = 0;
-                    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
-                    s.dispatch(item.action.clone());
+                    let act = item.action.clone();
+                    super::palette::close_command_palette(s);
+                    s.dispatch(act);
                 }
                 return true;
             }
@@ -353,8 +351,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
 /// Dismisses the highest-precedence overlay, preview, or modal route cleanly.
 pub fn handle_escape(s: &mut AppState) -> bool {
     if s.command_palette_open {
-        s.shell_ui.command_palette_selected = 0;
-        s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+        super::palette::close_command_palette(s);
         return true;
     }
     if s.shell_ui.search_overlay_open {
@@ -621,5 +618,41 @@ mod tests {
 
         assert!(handle_escape(&mut s));
         assert!(s.active_file_preview.is_none());
+    }
+
+    #[test]
+    fn command_palette_resets_query_on_close_and_reopen() {
+        let mut s = AppState::default();
+        let mut tx = Tx::default();
+        let cmd_k = KeyEvent {
+            key: Key::Command('k'),
+            mods: rune::Mods {
+                cmd: true,
+                ..Default::default()
+            },
+        };
+
+        assert!(handle_key(&mut s, &cmd_k, &mut tx));
+        assert!(s.command_palette_open);
+
+        s.command_palette_edit = rune::TextEdit::new("Zoom");
+        s.dispatch(Action::Shell(ShellAction::SetCommandPaletteQuery(
+            "Zoom".into(),
+        )));
+        s.shell_ui.command_palette_selected = 1;
+
+        assert!(handle_escape(&mut s));
+        assert!(!s.command_palette_open);
+        assert!(s.command_palette_query.is_empty());
+        assert!(s.command_palette_edit.text.is_empty());
+        assert_eq!(s.shell_ui.command_palette_selected, 0);
+
+        // Even if external callers left a stale query before Cmd+K open, opening clears it.
+        s.command_palette_edit = rune::TextEdit::new("stale");
+        s.command_palette_query = "stale".into();
+        assert!(handle_key(&mut s, &cmd_k, &mut tx));
+        assert!(s.command_palette_open);
+        assert!(s.command_palette_query.is_empty());
+        assert!(s.command_palette_edit.text.is_empty());
     }
 }

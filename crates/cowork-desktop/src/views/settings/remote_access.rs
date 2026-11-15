@@ -350,7 +350,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         }
         let copied = s.settings_ui.remote_access_copied_url.as_deref() == Some(url);
         qr_col = qr_col.child(
-            row().gap(8.0).flex_wrap().child(
+            row().w_full().min_w(0.0).gap(8.0).flex_wrap().child(
                 Button::new(if copied {
                     "Pairing key copied"
                 } else {

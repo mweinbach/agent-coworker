@@ -560,7 +560,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let ws_id_si_toggle = ws_id.clone();
     let mut si_section = Section::new()
-        .title("Skill Improvement (Beta)")
+        .title("Skill improvement (Beta)")
         .description("Optional maintenance agent that sharpens local skills from recent usage.")
         .child(
             SettingsRow::new("Advanced skill maintenance")

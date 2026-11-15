@@ -566,6 +566,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let on_apps = effective_tab == ToolAccessTab::Connectors;
             Button::new("Refresh")
                 .variant(ButtonVariant::Outline)
+                .icon(&icons::REFRESH_CCW)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
@@ -636,25 +637,14 @@ fn plugins_tab_view(
         })
         .collect();
 
-    let ws_refresh = ws_id.to_string();
-    let header_btns = row()
-        .items_center()
-        .gap(8.0)
-        .child(
-            Button::new("Refresh")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .icon(&icons::REFRESH_CCW)
-                .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
-                        workspace_id: ws_refresh.clone(),
-                    }));
-                })
-                .build(k),
-        )
-        .child(
-            Button::new("+ Install plugin")
+    let mut installed_section = Section::new()
+        .title("Installed plugins")
+        .description("Toggle plugins on or off or inspect their bundled skills and MCP servers.");
+    if !plugins.is_empty() {
+        installed_section = installed_section.action(
+            Button::new("Install plugin")
                 .variant(ButtonVariant::Contrast)
+                .icon(&icons::PLUS)
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut AppState| {
                     s.settings_ui.install_target_edit = TextEdit::new("");
@@ -663,11 +653,7 @@ fn plugins_tab_view(
                 })
                 .build(k),
         );
-
-    let mut installed_section = Section::new()
-        .title("Installed plugins")
-        .description("Toggle plugins on or off or inspect their bundled skills and MCP servers.")
-        .action(header_btns);
+    }
 
     if !s.plugin_catalog_warnings.is_empty() {
         installed_section = installed_section.child(el().px(16.0).pt(12.0).child(callout_banner(
@@ -685,11 +671,13 @@ fn plugins_tab_view(
                     .icon(&icons::WRENCH)
                     .description("Install a plugin from a GitHub repository, URL, or local path.")
                     .action(
-                        Button::new("+ Install plugin")
-                            .variant(ButtonVariant::Outline)
+                        Button::new("Install plugin")
+                            .variant(ButtonVariant::Contrast)
+                            .icon(&icons::PLUS)
                             .control_size(ControlSize::Regular)
                             .on_press(|s: &mut AppState| {
                                 s.settings_ui.install_target_edit = TextEdit::new("");
+                                s.settings_ui.plugin_install_scope = "user".to_string();
                                 s.settings_ui.install_plugin_open = true;
                             })
                             .build(k),
@@ -1376,25 +1364,14 @@ fn skills_tab_view(
         })
         .collect();
 
-    let ws_refresh = ws_id.to_string();
-    let header_btns = row()
-        .items_center()
-        .gap(8.0)
-        .child(
-            Button::new("Refresh")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .icon(&icons::REFRESH_CCW)
-                .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
-                        workspace_id: ws_refresh.clone(),
-                    }));
-                })
-                .build(k),
-        )
-        .child(
-            Button::new("+ Install skill")
+    let mut skills_section = Section::new()
+        .title("Installed skills")
+        .description("Enable, disable, inspect, or remove installed agent skills.");
+    if !skills.is_empty() {
+        skills_section = skills_section.action(
+            Button::new("Install skill")
                 .variant(ButtonVariant::Contrast)
+                .icon(&icons::PLUS)
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut AppState| {
                     s.settings_ui.install_target_edit = TextEdit::new("");
@@ -1403,11 +1380,7 @@ fn skills_tab_view(
                 })
                 .build(k),
         );
-
-    let mut skills_section = Section::new()
-        .title("Installed skills")
-        .description("Enable, disable, inspect, or remove installed agent skills.")
-        .action(header_btns);
+    }
 
     if skills.is_empty() {
         skills_section = skills_section.child(
@@ -1418,11 +1391,13 @@ fn skills_tab_view(
                         "Install a skill from GitHub, a URL, or a local SKILL.md directory.",
                     )
                     .action(
-                        Button::new("+ Install skill")
-                            .variant(ButtonVariant::Outline)
+                        Button::new("Install skill")
+                            .variant(ButtonVariant::Contrast)
+                            .icon(&icons::PLUS)
                             .control_size(ControlSize::Regular)
                             .on_press(|s: &mut AppState| {
                                 s.settings_ui.install_target_edit = TextEdit::new("");
+                                s.settings_ui.skill_install_scope = "global".to_string();
                                 s.settings_ui.install_skill_open = true;
                             })
                             .build(k),
@@ -2595,7 +2570,7 @@ fn search_tab_view(
 
 fn tool_providers_section(s: &AppState, ws: &WorkspaceRecord, k: &Kit, t: &ThemeTokens) -> El {
     let mut section = Section::new()
-        .title("Tool Providers")
+        .title("Tool providers")
         .description("API keys powering local web search tools for models without native search.")
         .action(
             Button::new("Configure in Models")

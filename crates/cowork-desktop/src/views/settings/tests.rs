@@ -1537,4 +1537,79 @@ fn build_layout_and_desktop_accent_picker_behave_cleanly() {
             .any(|e| e.text.as_deref() == Some(AccentPalette::OchreAmber.description())),
         "Desktop Accent color description must reflect updated palette"
     );
+
+    // Verify Developer bundle actions wrap cleanly inside 1024x768 (no clipping past card border)
+    // and section headings use sentence case.
+    let mut rt_dev = rune::Runtime::new(
+        make_state(SettingsPageId::Developer),
+        render_shell_view,
+        (1024.0, 768.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_dev.frame(0.0);
+    let dev_els = rt_dev.elements();
+    let copy_btn = dev_els
+        .iter()
+        .find(|e| e.role == "button" && e.label.as_deref() == Some("Copy Diagnostic Summary"))
+        .expect("Copy Diagnostic Summary button must render on Developer");
+    assert!(
+        copy_btn.rect[0] + copy_btn.rect[2] <= 1024.0 - 32.0,
+        "Copy Diagnostic Summary {:?} overflows 1024px Developer card",
+        copy_btn.rect
+    );
+    assert!(
+        dev_els
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Diagnostics bundle"))
+            && dev_els
+                .iter()
+                .any(|e| e.text.as_deref() == Some("File explorer")),
+        "Developer section headings must use sentence case"
+    );
+
+    // Verify Tool Access exposes a single Refresh and single empty-state CTA per tab.
+    for tab in [
+        super::state::ToolAccessTab::Plugins,
+        super::state::ToolAccessTab::Skills,
+        super::state::ToolAccessTab::Connectors,
+        super::state::ToolAccessTab::Search,
+    ] {
+        let mut s = make_state(SettingsPageId::ToolAccess);
+        s.settings_ui.tool_access_tab = tab;
+        let mut rt_ta = rune::Runtime::new(
+            s,
+            render_shell_view,
+            (1100.0, 820.0),
+            rune::Env::new(true, 1.0),
+        );
+        rt_ta.frame(0.0);
+        let els = rt_ta.elements();
+        let refresh_count = els
+            .iter()
+            .filter(|e| e.role == "button" && e.label.as_deref() == Some("Refresh"))
+            .count();
+        assert_eq!(
+            refresh_count, 1,
+            "Tool Access {:?} tab must render exactly one Refresh button",
+            tab
+        );
+        for cta in ["Install plugin", "Install skill", "Add connector"] {
+            let cta_count = els
+                .iter()
+                .filter(|e| e.role == "button" && e.label.as_deref() == Some(cta))
+                .count();
+            assert!(
+                cta_count <= 1,
+                "Tool Access {:?} must not duplicate empty-state CTA `{cta}` ({cta_count})",
+                tab
+            );
+        }
+        if tab == super::state::ToolAccessTab::Search {
+            assert!(
+                els.iter()
+                    .any(|e| e.text.as_deref() == Some("Tool providers")),
+                "Search tab must use sentence-case heading `Tool providers`"
+            );
+        }
+    }
 }

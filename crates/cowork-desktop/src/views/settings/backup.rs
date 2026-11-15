@@ -246,7 +246,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let (session_id, checkpoint_opt) = split_backup_id(&snapshot.id);
             let backup_id_for_delete = snapshot.id.clone();
 
-            let mut actions = row().gap(8.0).flex_wrap();
+            let mut actions = row().w_full().min_w(0.0).gap(8.0).flex_wrap();
             if let Some(target) = target_opt {
                 if let Some(cp_id) = checkpoint_opt {
                     let ws_inspect = target.id.clone();

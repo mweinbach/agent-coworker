@@ -1478,7 +1478,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .with_header_actions(vec![
             Button::new("Refresh")
                 .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
+                .control_size(ControlSize::Regular)
                 .icon(&icons::REFRESH_CCW)
                 .on_press(move |s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::ReadAgentProfilesCatalog {
@@ -1487,8 +1487,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 })
                 .build(k),
             Button::new("New subagent")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Regular)
                 .icon(&icons::PLUS)
                 .on_press(open_create_dialog)
                 .build(k),

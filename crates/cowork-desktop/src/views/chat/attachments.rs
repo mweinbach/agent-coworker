@@ -28,45 +28,66 @@ pub fn split_filename_extension(filename: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Resolves `raw_path` cleanly against `base_path`, blocking directory traversal escapes (`..`).
+/// Resolves `raw_path` strictly inside `base_path`, blocking missing workspace roots, `..` traversal,
+/// non-file schemes, and symlinks pointing outside `base_path`.
 pub fn resolve_safe_local_path(raw_path: &str, base_path: Option<&str>) -> Option<PathBuf> {
     let trimmed = raw_path.trim();
-    if trimmed.is_empty() || trimmed.contains("://") && !trimmed.starts_with("file://") {
+    if trimmed.is_empty() {
         return None;
     }
 
-    let stripped = if let Some(rest) = trimmed.strip_prefix("file://") {
+    let base_raw = base_path?.trim();
+    if base_raw.is_empty() {
+        return None;
+    }
+
+    let candidate = if trimmed.starts_with("file://") {
         url::Url::parse(trimmed)
             .ok()
-            .and_then(|u| u.to_file_path().ok())
-            .unwrap_or_else(|| PathBuf::from(rest))
+            .and_then(|u| u.to_file_path().ok())?
+    } else if trimmed.contains("://") {
+        return None;
+    } else if let Ok(parsed) = url::Url::parse(trimmed)
+        && parsed.scheme() != "file"
+        && parsed.scheme().len() > 1
+    {
+        return None;
     } else {
         PathBuf::from(trimmed)
     };
 
-    if stripped.is_absolute() {
-        return Some(normalize_lexical(&stripped));
-    }
+    let base = Path::new(base_raw);
+    let normalized_base = normalize_lexical(base);
+    let lexical_target = if candidate.is_absolute() {
+        normalize_lexical(&candidate)
+    } else {
+        let mut joined = normalized_base.clone();
+        for component in candidate.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(seg) => joined.push(seg),
+                Component::ParentDir => {
+                    if joined == normalized_base || !joined.pop() {
+                        return None;
+                    }
+                }
+                Component::RootDir | Component::Prefix(_) => return None,
+            }
+        }
+        joined
+    };
 
-    let base = base_path?.trim();
-    if base.is_empty() {
+    if !cowork_config::is_inside(&normalized_base, &lexical_target) {
         return None;
     }
-    let normalized_base = normalize_lexical(Path::new(base));
-    let mut joined = normalized_base.clone();
-    for component in stripped.components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(seg) => joined.push(seg),
-            Component::ParentDir => {
-                if joined == normalized_base || !joined.pop() {
-                    return None;
-                }
-            }
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
+
+    let canon_base = cowork_config::canonicalize_sync(base);
+    let canon_target = cowork_config::canonicalize_sync(&lexical_target);
+    if canon_target == canon_base || !cowork_config::is_inside(&canon_base, &canon_target) {
+        return None;
     }
-    Some(joined)
+
+    Some(canon_target)
 }
 
 fn normalize_lexical(path: &Path) -> PathBuf {
@@ -315,13 +336,65 @@ mod tests {
             Some(PathBuf::from("/repo/project/assets/chart.png"))
         );
         assert_eq!(
+            resolve_safe_local_path("/repo/project/assets/chart.png", Some("/repo/project")),
+            Some(PathBuf::from("/repo/project/assets/chart.png"))
+        );
+        assert_eq!(
+            resolve_safe_local_path(
+                "file:///repo/project/assets/chart.png",
+                Some("/repo/project")
+            ),
+            Some(PathBuf::from("/repo/project/assets/chart.png"))
+        );
+        assert_eq!(
             resolve_safe_local_path("../../etc/passwd", Some("/repo/project")),
             None
         );
         assert_eq!(
+            resolve_safe_local_path("/etc/passwd", Some("/repo/project")),
+            None
+        );
+        assert_eq!(
+            resolve_safe_local_path("file:///etc/passwd", Some("/repo/project")),
+            None
+        );
+        assert_eq!(resolve_safe_local_path("/etc/passwd", None), None);
+        assert_eq!(resolve_safe_local_path("assets/chart.png", None), None);
+        assert_eq!(
             resolve_safe_local_path("https://example.com/a.png", Some("/repo/project")),
             None
         );
+        assert_eq!(
+            resolve_safe_local_path("data:image/png;base64,AAAA", Some("/repo/project")),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_safe_local_path_blocks_symlink_escape_and_non_image_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let outside_img = outside.path().join("secret.png");
+        std::fs::write(&outside_img, b"not-a-workspace-file").expect("write outside");
+
+        let escape_link = dir.path().join("escape.png");
+        std::os::unix::fs::symlink(&outside_img, &escape_link).expect("symlink outside");
+        assert_eq!(
+            resolve_safe_local_path("escape.png", dir.path().to_str()),
+            None
+        );
+        assert!(decode_image_from_uri("escape.png", dir.path().to_str(), None).is_none());
+
+        let inside_txt = dir.path().join("secret.txt");
+        std::fs::write(&inside_txt, b"secret").expect("write txt");
+        let masquerade_link = dir.path().join("photo.png");
+        std::os::unix::fs::symlink(&inside_txt, &masquerade_link).expect("symlink inside txt");
+        assert_eq!(
+            resolve_safe_local_path("photo.png", dir.path().to_str()),
+            Some(cowork_config::canonicalize_sync(&inside_txt))
+        );
+        assert!(decode_image_from_uri("photo.png", dir.path().to_str(), None).is_none());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! `src/ui/markdown/`, `src/ui/attachments/`, and `src/ui/AgentRunViewer.tsx`.
 
 pub mod attachments;
+pub mod components;
 pub mod icons;
 pub mod markdown;
 pub mod model;

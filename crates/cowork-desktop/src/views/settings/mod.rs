@@ -10,6 +10,7 @@ pub mod experiments;
 pub mod icons;
 pub mod manage_models_dialog;
 pub mod mcp_server_draft;
+pub mod memory;
 pub mod primitives;
 pub mod privacy_telemetry;
 pub mod providers;
@@ -17,8 +18,10 @@ pub mod providers_utils;
 pub mod remote_access;
 pub mod shell;
 pub mod state;
+pub mod subagents;
 pub mod updates;
 pub mod usage;
+pub mod workspaces;
 
 #[cfg(test)]
 mod tests;
@@ -143,6 +146,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, _k: &Kit) -> SubviewOutput {
     let active_page = resolve_active_page(s);
     let content = match active_page {
         SettingsPageId::Models => providers::view(s, &resolved_k, &t),
+        SettingsPageId::Subagents => subagents::view(s, &resolved_k, &t),
+        SettingsPageId::Defaults => workspaces::view(s, &resolved_k, &t),
+        SettingsPageId::ProfileMemory => memory::view(s, &resolved_k, &t),
         SettingsPageId::RemoteAccess => remote_access::view(s, &resolved_k, &t),
         SettingsPageId::Backup => backup::view(s, &resolved_k, &t),
         SettingsPageId::Chats => chats::view(s, &resolved_k, &t),

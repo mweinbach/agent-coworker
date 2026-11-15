@@ -249,6 +249,18 @@ pub enum SettingsAction {
         workspace_id: String,
         name: String,
     },
+    UpsertScopedMcpServer {
+        workspace_id: String,
+        name: String,
+        source: String,
+        previous_name: Option<String>,
+        server: Value,
+    },
+    DeleteScopedMcpServer {
+        workspace_id: String,
+        name: String,
+        source: String,
+    },
     UpsertSubagent {
         workspace_id: String,
         profile: SubagentProfile,
@@ -460,13 +472,29 @@ pub enum SettingsAction {
         id: String,
         enabled: bool,
     },
+    SetPluginEnabledScoped {
+        workspace_id: String,
+        id: String,
+        scope: Option<String>,
+        enabled: bool,
+    },
     DeletePlugin {
         workspace_id: String,
         id: String,
     },
+    DeletePluginScoped {
+        workspace_id: String,
+        id: String,
+        scope: Option<String>,
+    },
     UpdatePlugin {
         workspace_id: String,
         id: String,
+    },
+    UpdatePluginScoped {
+        workspace_id: String,
+        id: String,
+        scope: Option<String>,
     },
     InstallSkill {
         workspace_id: String,
@@ -480,6 +508,19 @@ pub enum SettingsAction {
     DeleteSkill {
         workspace_id: String,
         name: String,
+    },
+    SetSkillInstallationEnabled {
+        workspace_id: String,
+        installation_id: String,
+        enabled: bool,
+    },
+    DeleteSkillInstallation {
+        workspace_id: String,
+        installation_id: String,
+    },
+    UpdateSkillInstallation {
+        workspace_id: String,
+        installation_id: String,
     },
     AddMarketplace {
         workspace_id: String,

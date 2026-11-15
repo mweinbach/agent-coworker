@@ -3,12 +3,14 @@
 //! Ported from `apps/desktop/src/ui/ChatView.tsx`, `src/ui/chat/`, `src/ui/composer/`,
 //! `src/ui/markdown/`, `src/ui/attachments/`, and `src/ui/AgentRunViewer.tsx`.
 
+pub mod activity;
 pub mod attachments;
 pub mod components;
 pub mod composer;
 pub mod feed;
 pub mod feed_row;
 pub mod icons;
+pub mod interaction;
 pub mod landing;
 pub mod markdown;
 pub mod model;

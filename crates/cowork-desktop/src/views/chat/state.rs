@@ -39,7 +39,6 @@ pub struct MentionPopoverState {
 }
 
 /// Local UI state for the chat view, landing composer, feed, tool cards, and chat dialogs.
-#[derive(Default)]
 pub struct ChatUiState {
     /// Explicit open/closed overrides for grouped activity cards, keyed by group ID.
     pub expanded_activity_groups: HashMap<String, bool>,
@@ -53,6 +52,8 @@ pub struct ChatUiState {
     pub expanded_raw_io: HashSet<String>,
     /// Interactive `DiffView` state cache keyed by tool item ID.
     pub tool_diff_states: HashMap<String, DiffState>,
+    /// Immutable empty fallback used by `DiffView` closures if a state entry is cleared mid-frame.
+    pub(super) empty_diff_state: DiffState,
     /// Error feed row IDs whose full text is expanded.
     pub expanded_errors: HashSet<String>,
     /// Assistant message IDs whose bottom `Sources` carousel is expanded.
@@ -101,6 +102,44 @@ pub struct ChatUiState {
     pub synced_composer_key: Option<String>,
     /// Cached `TextEdit` snapshot per composer key so thread switching keeps local cursor/drafts.
     pub cached_composer_edits: HashMap<String, TextEdit>,
+}
+
+impl Default for ChatUiState {
+    fn default() -> Self {
+        Self {
+            expanded_activity_groups: HashMap::new(),
+            expanded_reasoning_sections: HashSet::new(),
+            expanded_tool_clusters: HashSet::new(),
+            expanded_tool_details: HashMap::new(),
+            expanded_raw_io: HashSet::new(),
+            tool_diff_states: HashMap::new(),
+            empty_diff_state: DiffState::new(Vec::new()),
+            expanded_errors: HashSet::new(),
+            open_citation_sources: HashSet::new(),
+            active_citation_popover: None,
+            active_mention_popover: None,
+            mention_active_index: 0,
+            mention_dismissed_query: None,
+            composer_drop_hover: false,
+            model_combobox: ComboboxState::default(),
+            reasoning_open: false,
+            landing_target_open: false,
+            composer_height_override: None,
+            cancel_subagents_open: false,
+            feed_visible_count_by_thread: HashMap::new(),
+            feed_at_bottom_by_thread: HashMap::new(),
+            feed_far_from_bottom_by_thread: HashMap::new(),
+            feed_unseen_updates_by_thread: HashMap::new(),
+            feed_seen_count_by_thread: HashMap::new(),
+            activity_at_bottom: HashMap::new(),
+            copied_feedback: None,
+            ask_text_edits: HashMap::new(),
+            ask_selected_options: HashMap::new(),
+            ask_active_question_idx: HashMap::new(),
+            synced_composer_key: None,
+            cached_composer_edits: HashMap::new(),
+        }
+    }
 }
 
 impl std::fmt::Debug for ChatUiState {

@@ -397,6 +397,12 @@ impl NativeWorkerContext {
             NativeCommand::RevealInOs(_)
             | NativeCommand::OpenInDefaultApp(_)
             | NativeCommand::TrashPath(_)
+            | NativeCommand::CopyText(_)
+            | NativeCommand::SetRemoteAccessEnabled(_)
+            | NativeCommand::RotateRemoteAccessSession
+            | NativeCommand::UpdateTrustedPhonePermissions { .. }
+            | NativeCommand::RefreshTelemetryStatus
+            | NativeCommand::DownloadUpdate
             | NativeCommand::ShowDesktopNotification { .. }
             | NativeCommand::ExportDiagnosticsBundle
             | NativeCommand::CheckForUpdates

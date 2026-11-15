@@ -1432,15 +1432,20 @@ fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
         .map(|(_, ms)| ms)
         .unwrap_or(created_at);
 
-    Some(WorkspaceRecord {
-        id,
-        name,
-        path,
-        one_off_chat,
-        archived,
-        created_at,
-        last_opened_at,
-    })
+    let mut ws = WorkspaceRecord::new(id, name, path, created_at);
+    ws.one_off_chat = one_off_chat;
+    ws.archived = archived;
+    ws.last_opened_at = last_opened_at;
+    ws.yolo = map.get("yolo").and_then(Value::as_bool).unwrap_or(false);
+    ws.default_provider = non_empty_string(map.get("defaultProvider"));
+    ws.default_model = non_empty_string(map.get("defaultModel"));
+    if let Some(mcp) = map.get("defaultEnableMcp").and_then(Value::as_bool) {
+        ws.default_enable_mcp = mcp;
+    }
+    if let Some(backups) = map.get("defaultBackupsEnabled").and_then(Value::as_bool) {
+        ws.default_backups_enabled = backups;
+    }
+    Some(ws)
 }
 
 fn non_empty_env(env: &HashMap<String, String>, key: &str) -> Option<String> {

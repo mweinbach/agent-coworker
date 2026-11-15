@@ -1859,7 +1859,7 @@ impl AppState {
         }
     }
 
-    fn resolve_workspace_fs_path(&self, workspace_id: &str, raw: &str) -> String {
+    pub fn resolve_workspace_fs_path(&self, workspace_id: &str, raw: &str) -> String {
         let Some(root) = self.workspace_path(workspace_id) else {
             return raw.to_string();
         };
@@ -1879,6 +1879,17 @@ impl AppState {
         } else {
             Path::new(&root).join(rel).to_string_lossy().into_owned()
         }
+    }
+
+    fn resolve_active_workspace_fs_path(&self, raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || Path::new(trimmed).is_absolute() {
+            return raw.to_string();
+        }
+        if let Some(ws_id) = self.active_workspace_id.as_deref() {
+            return self.resolve_workspace_fs_path(ws_id, raw);
+        }
+        raw.to_string()
     }
 
     fn sync_active_explorer_dir(&mut self) {
@@ -2133,7 +2144,7 @@ impl AppState {
     /// Returns true when `feature_flags["canvas"]` is enabled AND `path` is a Canvas-editable
     /// markdown/text/code document (keeping spreadsheets/OOXML decks/PDF/images on native preview).
     pub fn should_open_in_canvas(&self, path: &str) -> bool {
-        self.is_canvas_enabled() && crate::views::chat::canvas::is_canvas_document_path(path)
+        self.is_canvas_enabled() && crate::views::chat::is_canvas_document_path(path)
     }
 
     pub fn is_workspace_ws_connected(&self, workspace_id: &str) -> bool {
@@ -2227,10 +2238,16 @@ impl AppState {
         {
             return true;
         }
-        self.canvas_document
-            .as_ref()
-            .is_some_and(CanvasDocumentSession::dirty)
-            || self.chat_ui.canvas.is_dirty()
+        if let Some(doc) = self.canvas_document.as_ref() {
+            let matches_session = self.chat_ui.canvas.synced_doc_identity.as_deref()
+                == Some(&format!(
+                    "session\0{}\0{}",
+                    doc.workspace_id, doc.document_id
+                ));
+            return doc.dirty()
+                || (matches_session && self.chat_ui.canvas.source_edit.text != doc.draft_content);
+        }
+        self.chat_ui.canvas.is_dirty()
     }
 
     fn clamp_ui_scale(scale: f32) -> f32 {
@@ -2426,6 +2443,7 @@ impl AppState {
     }
 
     fn close_canvas_document(&mut self) {
+        self.chat_ui.canvas.clear();
         let Some(prev) = self.canvas_document.take() else {
             return;
         };
@@ -6860,17 +6878,20 @@ impl AppState {
                 self.send_native(NativeCommand::OpenExternalUrl(url));
             }
             NativeAction::RevealInOs(path) => {
-                self.send_native(NativeCommand::RevealInOs(path));
+                let resolved = self.resolve_active_workspace_fs_path(&path);
+                self.send_native(NativeCommand::RevealInOs(resolved));
             }
             NativeAction::OpenInDefaultApp(path) => {
+                let resolved = self.resolve_active_workspace_fs_path(&path);
                 self.last_launchable_window = self.window_mode;
                 self.send_native(NativeCommand::OpenInDefaultApp {
-                    path,
+                    path: resolved,
                     confirmed: false,
                 });
             }
             NativeAction::TrashPath(path) => {
-                self.send_native(NativeCommand::TrashPath(path));
+                let resolved = self.resolve_active_workspace_fs_path(&path);
+                self.send_native(NativeCommand::TrashPath(resolved));
             }
             NativeAction::RenameWorkspaceEntry {
                 workspace_id,
@@ -14096,6 +14117,48 @@ mod tests {
 
         quick.composer_edit = TextEdit::new("quick draft");
         assert!(quick.has_unsaved_or_busy_work_for(WINDOW_QUICK_CHAT, false));
+
+        // #131: Clean Canvas autosave must clear `has_unsaved_or_busy_work()` even before
+        // `chat_ui.canvas` re-syncs, and `CloseCanvasDocument` clears `chat_ui.canvas`.
+        main.thread_runtime_by_id.clear();
+        main.canvas_document = Some(CanvasDocumentSession {
+            workspace_id: "ws-1".to_string(),
+            document_id: "doc-1".to_string(),
+            generation: 1,
+            path: "/tmp/note.md".to_string(),
+            disk_content: "saved".to_string(),
+            draft_content: "saved".to_string(),
+            edit_revision: 1,
+            last_saved_edit_revision: 1,
+            truncated: false,
+            revision: None,
+            status: CanvasDocumentStatus::Ready,
+            last_saved_at_secs: Some(12.0),
+            dirty_since_secs: None,
+            last_poll_secs: 12.0,
+        });
+        main.chat_ui.canvas.sync_session(
+            "session\0ws-1\0doc-1",
+            "session\0ws-1\0doc-1\x001\0ready",
+            1,
+            "before-autosave",
+            "saved",
+            true,
+            true,
+            false,
+        );
+        assert!(main.chat_ui.canvas.is_dirty());
+        assert!(!main.has_unsaved_or_busy_work());
+
+        main.chat_ui
+            .canvas
+            .source_edit
+            .replace_text("unsynced edit");
+        assert!(main.has_unsaved_or_busy_work());
+        main.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+        assert!(main.canvas_document.is_none());
+        assert!(main.chat_ui.canvas.synced_doc_identity.is_none());
+        assert!(!main.has_unsaved_or_busy_work());
     }
 
     #[test]

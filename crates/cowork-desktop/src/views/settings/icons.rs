@@ -210,6 +210,41 @@ pub static QR_CODE: Icon = Icon {
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></g>"#,
 };
 
+/// Chevron down icon for expanded cards/panels.
+pub static CHEVRON_DOWN: Icon = Icon {
+    name: "settings-chevron-down",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></g>"#,
+};
+
+/// Chevron right icon for collapsed cards/panels.
+pub static CHEVRON_RIGHT: Icon = Icon {
+    name: "settings-chevron-right",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></g>"#,
+};
+
+/// Eye icon for revealing secret inputs.
+pub static EYE: Icon = Icon {
+    name: "settings-eye",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></g>"#,
+};
+
+/// Eye-off icon for masking secret inputs.
+pub static EYE_OFF: Icon = Icon {
+    name: "settings-eye-off",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></g>"#,
+};
+
+/// External link icon for OAuth verification links.
+pub static EXTERNAL_LINK: Icon = Icon {
+    name: "settings-external-link",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></g>"#,
+};
+
 /// Returns the navigation icon matching a canonical `SettingsPageId`.
 pub fn page_icon(page: SettingsPageId) -> &'static Icon {
     match page.canonical() {

@@ -185,7 +185,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let known_rows: Vec<El> = KNOWN_FEATURE_FLAGS
         .iter()
         .map(|meta| {
-            let overridden = !s.is_packaged && s.feature_flags.contains_key(meta.id);
+            let overridden = !s.is_packaged && s.feature_flag_overrides.contains_key(meta.id);
             let enabled = resolve_flag_enabled(s, meta);
             let packaged_forced_off = s.is_packaged && meta.packaged_forced_off;
             render_flag_row(

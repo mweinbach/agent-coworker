@@ -298,7 +298,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
             key: "pal-act-zoom-reset".into(),
             section: "Actions",
             title: "Actual Size".into(),
-            subtitle: "Reset interface scale to 100% (⌘0)".into(),
+            subtitle: "Reset interface zoom scale to 100% (⌘0)".into(),
             icon_glyph: &icons::REFRESH,
             action: Action::Shell(ShellAction::ResetZoom),
         },
@@ -465,5 +465,11 @@ mod tests {
         let enabled_items = collect_palette_items(&s, "");
         assert!(enabled_items.iter().any(|i| i.key == "pal-act-new-task"));
         assert!(enabled_items.iter().any(|i| i.key == "pal-task-task-1"));
+
+        let zoom_items = collect_palette_items(&s, "zoom");
+        let zoom_keys: Vec<_> = zoom_items.iter().map(|i| i.key.as_str()).collect();
+        assert!(zoom_keys.contains(&"pal-act-zoom-in"));
+        assert!(zoom_keys.contains(&"pal-act-zoom-out"));
+        assert!(zoom_keys.contains(&"pal-act-zoom-reset"));
     }
 }

@@ -155,6 +155,17 @@ fn build_workspace_split_frame(
     );
 
     let mut split = SplitView::new(primary_el).toolbar(toolbar);
+    let chrome = cx.chrome_insets();
+    let left_drawer_top = if chrome.leading > 0.0 {
+        chrome.height
+    } else {
+        0.0
+    };
+    let right_drawer_top = if chrome.trailing > 0.0 {
+        chrome.height
+    } else {
+        0.0
+    };
 
     if adaptive.left_overlay {
         if s.shell_ui.left_overlay_open {
@@ -172,7 +183,7 @@ fn build_workspace_split_frame(
                             .w(280.0)
                             .h_full()
                             .min_h(0.0)
-                            .pt(cx.titlebar_inset())
+                            .pt(left_drawer_top)
                             .fill(t.popover_bg)
                             .border(1.0, t.border_strong)
                             .child(sidebar_el),
@@ -230,7 +241,7 @@ fn build_workspace_split_frame(
                                 .w(drawer_width)
                                 .h_full()
                                 .min_h(0.0)
-                                .pt(cx.titlebar_inset())
+                                .pt(right_drawer_top)
                                 .fill(t.popover_bg)
                                 .border(1.0, t.border_strong)
                                 .child(right_panel_el),
@@ -451,6 +462,113 @@ mod tests {
         assert!(
             rt.state.shell_ui.pending_trash_entry.is_none(),
             "Confirming Move to Trash should clear pending_trash_entry"
+        );
+    }
+
+    #[test]
+    fn compact_right_drawer_has_no_top_blank_band_and_quick_chat_clears_only_titlebar_band() {
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.shell_ui.viewport_width = 900.0;
+        s.feature_flags.insert("canvas".into(), true);
+        s.dispatch(Action::Shell(ShellAction::OpenFilePreview(
+            FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "/tmp/ws-1/notes.md".into(),
+                title: "notes.md".into(),
+                content: Some("# Compact\n\nOverlay canvas".into()),
+                is_markdown: true,
+                ..Default::default()
+            },
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (900.0, 700.0), Env::new(true, 1.0));
+        let mut insets = rune::ChromeInsets::default();
+        insets.leading = 72.0;
+        insets.height = 38.0;
+        rt.set_titlebar_inset(72.0);
+        rt.set_chrome_insets(insets);
+        rt.frame(0.0);
+        let (drawer_rect, _) = rt
+            .presented("adaptive-right-drawer-panel")
+            .expect("compact overlay drawer should be mounted");
+        let (canvas_rect, _) = rt
+            .presented("canvas-pane")
+            .expect("canvas pane should be mounted in drawer");
+        assert_eq!(drawer_rect[1], 0.0);
+        assert!(
+            canvas_rect[1] <= 2.0,
+            "right drawer canvas pane must start flush near y=0, got y={}",
+            canvas_rect[1]
+        );
+
+        let mut qc = AppState {
+            scene_mode: true,
+            window_mode: WindowMode::QuickChat,
+            ..Default::default()
+        };
+        qc.onboarding.completed = true;
+        let mut qc_rt = Runtime::new(qc, test_shell_root, (440.0, 560.0), Env::new(true, 1.0));
+        let mut qc_insets = rune::ChromeInsets::default();
+        qc_insets.leading = 72.0;
+        qc_insets.height = 38.0;
+        qc_rt.set_titlebar_inset(72.0);
+        qc_rt.set_chrome_insets(qc_insets);
+        qc_rt.frame(0.0);
+        let (qc_header_rect, _) = qc_rt
+            .presented("quick-chat-header")
+            .expect("quick chat header should be mounted");
+        assert!(
+            qc_header_rect[3] <= 44.0,
+            "quick chat header should stay within ~42px titlebar height, got h={}",
+            qc_header_rect[3]
+        );
+    }
+
+    #[test]
+    fn inline_spreadsheet_preview_gives_preview_majority_width() {
+        let csv = "item,jan,feb,mar,apr\nRent,1200,1200,1200,1200\nFood,350,360,340,370\n";
+        let spreadsheet = crate::views::preview::decode_spreadsheet_preview(
+            Path::new("budget.csv"),
+            csv.as_bytes(),
+            false,
+        )
+        .expect("csv should decode cleanly");
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.feature_flags.insert("canvas".into(), true);
+        s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(false)));
+        s.dispatch(Action::Shell(ShellAction::OpenFilePreview(
+            FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "/tmp/ws-1/budget.csv".into(),
+                title: "budget.csv".into(),
+                content: Some(csv.into()),
+                spreadsheet: Some(spreadsheet),
+                ..Default::default()
+            },
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let (chat_rect, _) = rt
+            .presented("primary-subview-pane")
+            .expect("chat split pane should be mounted");
+        let (preview_rect, _) = rt
+            .presented("inline-file-preview")
+            .expect("inline preview pane should be mounted");
+        assert!(
+            preview_rect[2] > chat_rect[2] && preview_rect[2] >= 550.0,
+            "preview pane should receive ~62% majority width (>=550px), got preview={} vs chat={}",
+            preview_rect[2],
+            chat_rect[2]
         );
     }
 }

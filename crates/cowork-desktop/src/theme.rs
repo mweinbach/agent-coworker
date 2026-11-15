@@ -274,9 +274,12 @@ pub fn contrast_ratio(fg: Color, bg: Color) -> f32 {
 
 struct AccentSeed {
     accent: Color,
+    accent_on: Color,
+    accent_hover_overlay: Color,
+    accent_pressed_overlay: Color,
     cta_bg: Color,
     send_bg: Color,
-    on: Color,
+    cta_on: Color,
     focus_ring: Color,
     soft_alpha: f32,
     hover_overlay: Color,
@@ -286,18 +289,18 @@ struct AccentSeed {
 fn build_accent_set(seed: AccentSeed) -> AccentTokenSet {
     AccentTokenSet {
         accent: seed.accent,
-        accent_hover: composite_srgb_over(seed.hover_overlay, seed.accent),
-        accent_pressed: composite_srgb_over(seed.pressed_overlay, seed.accent),
-        accent_on: seed.on,
+        accent_hover: composite_srgb_over(seed.accent_hover_overlay, seed.accent),
+        accent_pressed: composite_srgb_over(seed.accent_pressed_overlay, seed.accent),
+        accent_on: seed.accent_on,
         accent_soft: seed.accent.alpha(seed.soft_alpha),
         focus_ring: seed.focus_ring,
         cta_bg: seed.cta_bg,
         cta_hover: composite_srgb_over(seed.hover_overlay, seed.cta_bg),
         cta_pressed: composite_srgb_over(seed.pressed_overlay, seed.cta_bg),
-        cta_on: seed.on,
+        cta_on: seed.cta_on,
         send_bg: seed.send_bg,
         send_hover: composite_srgb_over(seed.hover_overlay, seed.send_bg),
-        send_on: seed.on,
+        send_on: seed.cta_on,
         hover_overlay: seed.hover_overlay,
         pressed_overlay: seed.pressed_overlay,
     }
@@ -305,24 +308,30 @@ fn build_accent_set(seed: AccentSeed) -> AccentTokenSet {
 
 /// Resolves the named [`AccentTokenSet`] for a palette, appearance mode, and high-contrast setting.
 pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) -> AccentTokenSet {
-    let (hover_overlay, pressed_overlay, soft_alpha) = if dark {
-        let h = if high_contrast { 0.14 } else { 0.12 };
-        let p = if high_contrast { 0.24 } else { 0.22 };
+    let h = if high_contrast { 0.14 } else { 0.12 };
+    let p = if high_contrast { 0.24 } else { 0.22 };
+    // Filled CTA/Send surfaces always pair with white ink so dark-mode disabled Contrast buttons
+    // stay light-on-dark instead of collapsing into dark ink on muddy brown, and hover/press
+    // consistently darken the fill.
+    let hover_overlay = srgba(0x00, 0x00, 0x00, h);
+    let pressed_overlay = srgba(0x00, 0x00, 0x00, p);
+    let (accent_hover_overlay, accent_pressed_overlay, soft_alpha) = if dark {
         let s = if high_contrast { 0.17 } else { 0.12 };
         (srgba(0xff, 0xff, 0xff, h), srgba(0xff, 0xff, 0xff, p), s)
     } else {
-        let h = if high_contrast { 0.14 } else { 0.12 };
-        let p = if high_contrast { 0.24 } else { 0.22 };
         let s = if high_contrast { 0.14 } else { 0.10 };
-        (srgba(0x00, 0x00, 0x00, h), srgba(0x00, 0x00, 0x00, p), s)
+        (hover_overlay, pressed_overlay, s)
     };
 
     let seed = match (palette, dark, high_contrast) {
         (AccentPalette::KhakiSand, false, false) => AccentSeed {
             accent: srgb(0x6d, 0x56, 0x30),
+            accent_on: Color::WHITE,
+            accent_hover_overlay,
+            accent_pressed_overlay,
             cta_bg: srgb(0x65, 0x4f, 0x2b),
             send_bg: srgb(0x5d, 0x48, 0x27),
-            on: Color::WHITE,
+            cta_on: Color::WHITE,
             focus_ring: srgb(0x6d, 0x56, 0x30),
             soft_alpha,
             hover_overlay,
@@ -330,9 +339,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::KhakiSand, false, true) => AccentSeed {
             accent: srgb(0x5a, 0x46, 0x23),
+            accent_on: Color::WHITE,
+            accent_hover_overlay,
+            accent_pressed_overlay,
             cta_bg: srgb(0x52, 0x3f, 0x1f),
             send_bg: srgb(0x4c, 0x3a, 0x1c),
-            on: Color::WHITE,
+            cta_on: Color::WHITE,
             focus_ring: srgb(0x4c, 0x3a, 0x1c),
             soft_alpha,
             hover_overlay,
@@ -340,9 +352,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::KhakiSand, true, false) => AccentSeed {
             accent: srgb(0xcb, 0xb2, 0x7d),
-            cta_bg: srgb(0xd2, 0xba, 0x88),
-            send_bg: srgb(0xd8, 0xc1, 0x90),
-            on: srgb(0x18, 0x14, 0x0d),
+            accent_on: srgb(0x18, 0x14, 0x0d),
+            accent_hover_overlay,
+            accent_pressed_overlay,
+            cta_bg: srgb(0x8b, 0x70, 0x42),
+            send_bg: srgb(0x80, 0x67, 0x3b),
+            cta_on: Color::WHITE,
             focus_ring: srgb(0xcb, 0xb2, 0x7d),
             soft_alpha,
             hover_overlay,
@@ -350,9 +365,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::KhakiSand, true, true) => AccentSeed {
             accent: srgb(0xe0, 0xca, 0x98),
-            cta_bg: srgb(0xe6, 0xd2, 0xa4),
-            send_bg: srgb(0xeb, 0xd9, 0xae),
-            on: srgb(0x10, 0x0d, 0x08),
+            accent_on: srgb(0x10, 0x0d, 0x08),
+            accent_hover_overlay,
+            accent_pressed_overlay,
+            cta_bg: srgb(0x6e, 0x57, 0x30),
+            send_bg: srgb(0x64, 0x4e, 0x2b),
+            cta_on: Color::WHITE,
             focus_ring: srgb(0xe0, 0xca, 0x98),
             soft_alpha,
             hover_overlay,
@@ -360,9 +378,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::OchreAmber, false, false) => AccentSeed {
             accent: srgb(0x85, 0x4e, 0x07),
+            accent_on: Color::WHITE,
+            accent_hover_overlay,
+            accent_pressed_overlay,
             cta_bg: srgb(0x7b, 0x47, 0x05),
             send_bg: srgb(0x73, 0x42, 0x04),
-            on: Color::WHITE,
+            cta_on: Color::WHITE,
             focus_ring: srgb(0x85, 0x4e, 0x07),
             soft_alpha,
             hover_overlay,
@@ -370,9 +391,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::OchreAmber, false, true) => AccentSeed {
             accent: srgb(0x70, 0x40, 0x04),
+            accent_on: Color::WHITE,
+            accent_hover_overlay,
+            accent_pressed_overlay,
             cta_bg: srgb(0x66, 0x3a, 0x03),
             send_bg: srgb(0x5e, 0x35, 0x02),
-            on: Color::WHITE,
+            cta_on: Color::WHITE,
             focus_ring: srgb(0x5e, 0x35, 0x02),
             soft_alpha,
             hover_overlay,
@@ -380,9 +404,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::OchreAmber, true, false) => AccentSeed {
             accent: srgb(0xde, 0x9e, 0x35),
-            cta_bg: srgb(0xe4, 0xa7, 0x42),
-            send_bg: srgb(0xe9, 0xaf, 0x4d),
-            on: srgb(0x19, 0x12, 0x06),
+            accent_on: srgb(0x19, 0x12, 0x06),
+            accent_hover_overlay,
+            accent_pressed_overlay,
+            cta_bg: srgb(0xa6, 0x66, 0x11),
+            send_bg: srgb(0x99, 0x5c, 0x0c),
+            cta_on: Color::WHITE,
             focus_ring: srgb(0xde, 0x9e, 0x35),
             soft_alpha,
             hover_overlay,
@@ -390,9 +417,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::OchreAmber, true, true) => AccentSeed {
             accent: srgb(0xee, 0xb6, 0x55),
-            cta_bg: srgb(0xf2, 0xbe, 0x64),
-            send_bg: srgb(0xf5, 0xc5, 0x70),
-            on: srgb(0x12, 0x0c, 0x03),
+            accent_on: srgb(0x12, 0x0c, 0x03),
+            accent_hover_overlay,
+            accent_pressed_overlay,
+            cta_bg: srgb(0x88, 0x50, 0x09),
+            send_bg: srgb(0x7d, 0x49, 0x06),
+            cta_on: Color::WHITE,
             focus_ring: srgb(0xee, 0xb6, 0x55),
             soft_alpha,
             hover_overlay,
@@ -400,9 +430,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::BurntOrange, false, false) => AccentSeed {
             accent: srgb(0x9b, 0x40, 0x1e),
+            accent_on: Color::WHITE,
+            accent_hover_overlay,
+            accent_pressed_overlay,
             cta_bg: srgb(0x90, 0x3b, 0x1b),
             send_bg: srgb(0x86, 0x36, 0x18),
-            on: Color::WHITE,
+            cta_on: Color::WHITE,
             focus_ring: srgb(0x9b, 0x40, 0x1e),
             soft_alpha,
             hover_overlay,
@@ -410,9 +443,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::BurntOrange, false, true) => AccentSeed {
             accent: srgb(0x82, 0x33, 0x14),
+            accent_on: Color::WHITE,
+            accent_hover_overlay,
+            accent_pressed_overlay,
             cta_bg: srgb(0x78, 0x2e, 0x11),
             send_bg: srgb(0x6f, 0x2a, 0x0f),
-            on: Color::WHITE,
+            cta_on: Color::WHITE,
             focus_ring: srgb(0x6f, 0x2a, 0x0f),
             soft_alpha,
             hover_overlay,
@@ -420,9 +456,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::BurntOrange, true, false) => AccentSeed {
             accent: srgb(0xea, 0x8c, 0x64),
-            cta_bg: srgb(0xef, 0x96, 0x70),
-            send_bg: srgb(0xf3, 0x9f, 0x7a),
-            on: srgb(0x18, 0x0d, 0x08),
+            accent_on: srgb(0x18, 0x0d, 0x08),
+            accent_hover_overlay,
+            accent_pressed_overlay,
+            cta_bg: srgb(0xc2, 0x52, 0x27),
+            send_bg: srgb(0xb6, 0x49, 0x1f),
+            cta_on: Color::WHITE,
             focus_ring: srgb(0xea, 0x8c, 0x64),
             soft_alpha,
             hover_overlay,
@@ -430,9 +469,12 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
         },
         (AccentPalette::BurntOrange, true, true) => AccentSeed {
             accent: srgb(0xf5, 0xa2, 0x7d),
-            cta_bg: srgb(0xf8, 0xac, 0x8a),
-            send_bg: srgb(0xfa, 0xb5, 0x96),
-            on: srgb(0x11, 0x08, 0x05),
+            accent_on: srgb(0x11, 0x08, 0x05),
+            accent_hover_overlay,
+            accent_pressed_overlay,
+            cta_bg: srgb(0xa6, 0x42, 0x1d),
+            send_bg: srgb(0x9b, 0x3b, 0x18),
+            cta_on: Color::WHITE,
             focus_ring: srgb(0xf5, 0xa2, 0x7d),
             soft_alpha,
             hover_overlay,
@@ -677,7 +719,7 @@ pub fn build_kit_with_accent(
     kit.c.bg_deep = tok.sidebar_bg;
     kit.c.layer_01 = tok.panel_bg;
     kit.c.layer_02 = tok.elevated_bg;
-    kit.c.bg_accent = tok.accent;
+    kit.c.bg_accent = tok.cta_bg;
     kit.c.bg_contrast = tok.cta_bg;
     kit.c.bg_icon_button_contrast = tok.send_bg;
     kit.c.text_contrast = tok.cta_on;
@@ -687,7 +729,7 @@ pub fn build_kit_with_accent(
     kit.c.submit_hover = tok.accent_hover_overlay;
     kit.c.submit_fg = tok.send_on;
     kit.c.submit_icon = tok.send_on;
-    kit.c.knob_on = tok.accent_on;
+    kit.c.knob_on = tok.cta_on;
     kit.c.text_base = tok.text_base;
     kit.c.text_muted = tok.text_muted;
     kit.c.text_faint = tok.text_faint;
@@ -802,12 +844,32 @@ mod tests {
                         );
                     }
 
-                    assert_eq!(kit.c.bg_accent, tok.accent);
+                    if !high_contrast {
+                        let ui_ratio = contrast_ratio(tok.cta_bg, tok.elevated_bg);
+                        assert!(
+                            ui_ratio >= 3.0,
+                            "{palette:?} dark={dark} cta_bg on elevated_bg {ui_ratio:.2} < 3.0"
+                        );
+                    }
+
+                    // Disabled Contrast buttons render with rune-kit's 0.4 layer opacity; in dark
+                    // mode, white CTA ink composites to light neutral over panel_bg rather than
+                    // collapsing near the background luminance.
+                    if dark {
+                        let disabled_ink = composite_srgb_over(tok.cta_on.alpha(0.4), tok.panel_bg);
+                        let dis_panel_ratio = contrast_ratio(disabled_ink, tok.panel_bg);
+                        assert!(
+                            dis_panel_ratio >= 3.5,
+                            "{palette:?} dark={dark} hc={high_contrast} disabled Contrast ink vs panel_bg {dis_panel_ratio:.2} < 3.5"
+                        );
+                    }
+
+                    assert_eq!(kit.c.bg_accent, tok.cta_bg);
                     assert_eq!(kit.c.bg_contrast, tok.cta_bg);
                     assert_eq!(kit.c.bg_icon_button_contrast, tok.send_bg);
                     assert_eq!(kit.c.text_contrast, tok.cta_on);
                     assert_eq!(kit.c.submit_fg, tok.send_on);
-                    assert_eq!(kit.c.knob_on, tok.accent_on);
+                    assert_eq!(kit.c.knob_on, tok.cta_on);
                     assert_eq!(kit.c.border_focus, tok.focus_ring);
                 }
             }

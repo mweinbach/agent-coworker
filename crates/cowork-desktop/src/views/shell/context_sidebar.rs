@@ -15,6 +15,21 @@ use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{format_bytes, format_cost_usd, format_tokens};
 use crate::views::shell::icons;
 
+/// Closes the inline right context sidebar and any narrow-viewport overlay drawer.
+fn close_context_inspector(s: &mut AppState) {
+    s.shell_ui.right_overlay_open = false;
+    s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(false)));
+}
+
+/// Closes Context first so opening AgentRunViewer never squeezes chat into 4 panes.
+fn open_agent_run_from_context(s: &mut AppState, agent_id: String, title: String) {
+    close_context_inspector(s);
+    s.dispatch(Action::Chat(ChatAction::OpenAgentThread {
+        agent_id,
+        title: Some(title),
+    }));
+}
+
 /// Renders the right inspector sidebar panel for the active chat or task route.
 pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
     let header = row()
@@ -31,7 +46,7 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
                 .control_size(ControlSize::Small)
                 .help("Close context sidebar")
                 .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(false)));
+                    close_context_inspector(s);
                 })
                 .build(k)
                 .key("context-sidebar-close"),
@@ -231,10 +246,7 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit) -> El {
                 .justify_between()
                 .items_center()
                 .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Chat(ChatAction::OpenAgentThread {
-                        agent_id: aid.clone(),
-                        title: Some(name.clone()),
-                    }));
+                    open_agent_run_from_context(s, aid.clone(), name.clone());
                 })
                 .child(
                     col()
@@ -552,5 +564,22 @@ mod tests {
             explorer_dir_state_key("ws-1", "src"),
             explorer_dir_state_key("ws-2", "src")
         );
+    }
+
+    #[test]
+    fn opening_agent_run_from_context_closes_sidebar_and_narrow_drawer() {
+        let mut s = AppState::default();
+        s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(true)));
+        s.shell_ui.right_overlay_open = true;
+        s.dispatch(Action::Navigate(crate::actions::NavAction::OpenThread(
+            "th-1".into(),
+        )));
+
+        assert!(s.context_sidebar.is_open());
+        open_agent_run_from_context(&mut s, "sub-rev-1".into(), "Reviewer".into());
+
+        assert!(!s.context_sidebar.is_open());
+        assert!(!s.shell_ui.right_overlay_open);
+        assert!(s.agent_viewer.is_some());
     }
 }

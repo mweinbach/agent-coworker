@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use rune::{Cursor, El, ImageCache, Tx, col, icon, row, spacer, text};
+use rune::{Cursor, Direction, El, ImageCache, Tx, col, icon, row, spacer, text};
 use rune_kit::diff::{DiffMode, DiffState, DiffView, FileDiff, LineKind};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::Value;
@@ -57,6 +57,7 @@ pub fn build_activity_group_card(
     let mut card = col()
         .key(format!("group:{}", group.id))
         .w_full()
+        .min_w(0.0)
         .max_w(768.0)
         .gap(6.0)
         .child(header);
@@ -816,17 +817,25 @@ fn build_tool_card(
 
     hdr = hdr.child(icon(chevron, 12.0).color(t.text_faint));
 
-    let mut card = col().key(format!("tool:{id}")).w_full().gap(6.0).child(hdr);
+    let mut card = col()
+        .key(format!("tool:{id}"))
+        .w_full()
+        .min_w(0.0)
+        .gap(6.0)
+        .child(hdr);
 
     if expanded {
         let mut details_col = col()
             .w_full()
+            .min_w(0.0)
             .gap(8.0)
             .px(12.0)
             .py(10.0)
             .radius(8.0)
             .fill(t.card_bg)
-            .border(1.0, t.border_muted);
+            .border(1.0, t.border_muted)
+            .border_layout()
+            .clip_rounded(8.0);
 
         if let Some(err_msg) = error.as_deref().filter(|e| !e.trim().is_empty()) {
             details_col = details_col.child(
@@ -867,9 +876,10 @@ fn build_tool_card(
                     )
                     .child(
                         text(value.clone())
+                            .dir(Direction::Ltr)
                             .font(k.ty.mono)
                             .color(t.text_base)
-                            .wrap()
+                            .wrap_anywhere()
                             .selectable(true)
                             .grow(1.0)
                             .min_w(0.0),
@@ -1118,12 +1128,17 @@ fn build_raw_io_section(
 
     root = root.child(
         col()
+            .dir(Direction::Ltr)
             .w_full()
+            .min_w(0.0)
             .gap(6.0)
-            .padding(10.0)
+            .px(12.0)
+            .py(10.0)
             .radius(8.0)
             .fill(t.code_bg)
             .border(1.0, t.border_muted)
+            .border_layout()
+            .clip_rounded(8.0)
             .child(
                 row()
                     .w_full()
@@ -1151,9 +1166,10 @@ fn build_raw_io_section(
                 text(truncated)
                     .font(k.ty.mono)
                     .color(t.text_base)
-                    .wrap()
+                    .wrap_anywhere()
                     .selectable(true)
-                    .w_full(),
+                    .w_full()
+                    .min_w(0.0),
             ),
     );
 

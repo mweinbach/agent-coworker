@@ -2316,3 +2316,134 @@ fn quick_chat_landing_does_not_clip_heading_or_lose_desktop_centering() {
         "Desktop landing should stay vertically centered inside landing-scroll (top_space={top_space}, bottom_space={bottom_space})"
     );
 }
+
+#[test]
+fn approval_and_escalation_code_blocks_wrap_inside_padded_rounded_frame() {
+    let long_unbroken_arg = format!("touch /home/cua/{}", "x".repeat(140));
+    let long_no_slash = "x".repeat(140);
+    let tall_multiline = (1..=16)
+        .map(|i| format!("echo step_{i} && test -d /tmp/sandbox_{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for (name, risk_code, cmd, vp) in [
+        (
+            "approval-long-unbroken-arg",
+            "workspace_command",
+            long_unbroken_arg.as_str(),
+            SNAP_VIEWPORT,
+        ),
+        (
+            "escalation-long-no-slash",
+            "sandbox_denied_escalation",
+            long_no_slash.as_str(),
+            SNAP_VIEWPORT,
+        ),
+        (
+            "escalation-tall-multiline",
+            "sandbox_denied_escalation",
+            tall_multiline.as_str(),
+            SNAP_VIEWPORT,
+        ),
+        (
+            "escalation-narrow-480",
+            "sandbox_denied_escalation",
+            "touch /home/cua/outside-sandbox-probe && rm -f /home/cua/outside-sandbox-probe && echo cua-bash-approved && ls -1",
+            (480.0, 760.0),
+        ),
+    ] {
+        let mut s = build_populated_thread_state(false);
+        let tid = "th-demo".to_string();
+        let rt_state = s.thread_runtime_by_id.get_mut(&tid).unwrap();
+        rt_state.feed.clear();
+        rt_state.pending_interactions = vec![
+            ChatInteraction::CommandApproval {
+                request_id: JsonRpcLiteId::String(format!("req-{name}")),
+                item_id: format!("item-{name}"),
+                command: Some(cmd.to_string()),
+                cwd: Some("/home/cua/agent-coworker".to_string()),
+                reason: Some(
+                    "The OS sandbox blocked this command from writing outside the workspace."
+                        .to_string(),
+                ),
+                risk_code: Some(risk_code.to_string()),
+            },
+            ChatInteraction::FileChangeApproval {
+                request_id: JsonRpcLiteId::String(format!("req-file-{name}")),
+                item_id: format!("item-file-{name}"),
+                path: Some(format!("/home/cua/{}/file.txt", "deepdir".repeat(18))),
+                reason: Some("file_read_outside_workspace".to_string()),
+            },
+        ];
+
+        let mut rt = Runtime::new(s, test_chat_root, vp, Env::new(true, 2.0));
+        rt.frame(0.0);
+        let els = rt.elements();
+
+        for (card_key, preview_key) in [
+            (
+                format!("interaction:req-{name}:item-{name}"),
+                format!("cmd-preview:req-{name}:item-{name}"),
+            ),
+            (
+                format!("interaction:req-file-{name}:item-file-{name}"),
+                format!("file-preview:req-file-{name}:item-file-{name}"),
+            ),
+        ] {
+            let card = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some(card_key.as_str()))
+                .unwrap_or_else(|| panic!("expected card {card_key}"));
+            let box_el = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some(preview_key.as_str()))
+                .unwrap_or_else(|| panic!("expected preview box {preview_key}"));
+            let scroll_key = format!("{preview_key}:scroll");
+            let scroll_el = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some(scroll_key.as_str()))
+                .unwrap_or_else(|| panic!("expected scroll container {scroll_key}"));
+            let txt_key = format!("{preview_key}:text");
+            let txt_el = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some(txt_key.as_str()))
+                .unwrap_or_else(|| panic!("expected text element {txt_key}"));
+
+            assert!(
+                card.rect[0] >= 20.0 && card.rect[0] + card.rect[2] <= vp.0 - 20.0,
+                "{name}: card {card_key} rect {:?} overflows viewport width {}",
+                card.rect,
+                vp.0
+            );
+            assert!(
+                box_el.rect[0] >= card.rect[0] + 15.0
+                    && box_el.rect[0] + box_el.rect[2] <= card.rect[0] + card.rect[2] - 15.0,
+                "{name}: preview box {:?} exceeds card {:?}",
+                box_el.rect,
+                card.rect
+            );
+            assert!(
+                txt_el.rect[0] >= box_el.rect[0] + 14.0
+                    && txt_el.rect[0] + txt_el.rect[2] <= box_el.rect[0] + box_el.rect[2] - 14.0,
+                "{name}: text {:?} lacks >=14pt horizontal inset inside box {:?}",
+                txt_el.rect,
+                box_el.rect
+            );
+            assert!(
+                txt_el.rect[3] >= 30.0,
+                "{name}: long content {txt_key} must wrap onto multiple lines (got height {})",
+                txt_el.rect[3]
+            );
+            assert!(
+                scroll_el.rect[3] <= 160.5,
+                "{name}: scroll box height {} exceeded 160pt cap",
+                scroll_el.rect[3]
+            );
+        }
+
+        if vp == SNAP_VIEWPORT {
+            let rgba = render_offscreen_rgba(&mut rt, false);
+            maybe_save_snap(name, &rgba, 2.0);
+        }
+    }
+}

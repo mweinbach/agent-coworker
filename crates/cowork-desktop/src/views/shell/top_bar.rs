@@ -40,6 +40,7 @@ pub fn build_settings_toolbar(
     k: &Kit,
     t: &ThemeTokens,
     narrow: bool,
+    primary_width: f32,
     title: &str,
     workspace_badge: Option<&str>,
     header_actions: Vec<El>,
@@ -66,6 +67,18 @@ pub fn build_settings_toolbar(
             .build(k)
             .key("topbar-narrow-settings-nav-toggle");
         toolbar = toolbar.leading(narrow_nav_btn);
+    }
+
+    if let Some(menu_strip) =
+        super::menu_bar::build_menu_bar_strip(s, k, t, Some(primary_width), chrome.trailing)
+    {
+        toolbar = toolbar.leading(menu_strip).leading(
+            el().w(1.0)
+                .h(14.0)
+                .mx(4.0)
+                .fill(t.border_muted)
+                .a11y_hidden(),
+        );
     }
 
     let mut heading = row()
@@ -102,6 +115,7 @@ pub fn build_toolbar(
     cx: &Cx<AppState>,
     k: &Kit,
     t: &ThemeTokens,
+    primary_width: f32,
     layer: &mut Vec<El>,
 ) -> ShellToolbar {
     let chrome = cx.chrome_insets();
@@ -226,6 +240,18 @@ pub fn build_toolbar(
             .build(k)
             .key("topbar-narrow-sidebar-toggle");
         toolbar = toolbar.leading(narrow_sidebar_btn);
+    }
+
+    if let Some(menu_strip) =
+        super::menu_bar::build_menu_bar_strip(s, k, t, Some(primary_width), chrome.trailing)
+    {
+        toolbar = toolbar.leading(menu_strip).leading(
+            el().w(1.0)
+                .h(14.0)
+                .mx(4.0)
+                .fill(t.border_muted)
+                .a11y_hidden(),
+        );
     }
 
     toolbar = toolbar

@@ -5,6 +5,7 @@ pub mod banners;
 pub mod context_sidebar;
 pub mod helpers;
 pub mod icons;
+pub mod menu_bar;
 pub mod overlays;
 pub mod palette;
 pub mod sidebar;
@@ -151,6 +152,7 @@ fn build_settings_frame(
         k,
         t,
         narrow,
+        adaptive.primary_width,
         &layout.title,
         layout.workspace_badge.as_deref(),
         layout.header_actions,
@@ -174,6 +176,15 @@ fn build_settings_frame(
             )
             .sidebar_padding(12.0, 8.0);
     }
+
+    menu_bar::push_menu_bar_overlay(
+        s,
+        k,
+        t,
+        Some(adaptive.primary_width),
+        chrome.trailing,
+        layer,
+    );
 
     split
         .hide_sidebar_toggle()
@@ -200,25 +211,6 @@ fn build_workspace_split_frame(
     let canvas_active = canvas_content.is_some();
     let canvas_maximized = canvas_active && crate::views::chat::is_canvas_maximized(s);
     layer.extend(canvas_overlays);
-
-    let toolbar = top_bar::build_toolbar(s, cx, k, t, layer);
-    let (primary_el, right_panel_el) = if canvas_maximized {
-        (
-            el().key("primary-canvas-maximized")
-                .w_full()
-                .h_full()
-                .grow(1.0)
-                .shrink()
-                .min_h(0.0)
-                .children(canvas_content),
-            None,
-        )
-    } else {
-        let primary = banners::build_primary_content(s, k, t, main_subview, canvas_active);
-        let right = canvas_content
-            .unwrap_or_else(|| context_sidebar::build_context_sidebar(s, k, t, layer));
-        (primary, Some(right))
-    };
 
     let route_view = s.route().view;
     let right_kind = if canvas_active {
@@ -247,6 +239,25 @@ fn build_workspace_split_frame(
         right_width_pref,
         right_kind,
     );
+
+    let toolbar = top_bar::build_toolbar(s, cx, k, t, adaptive.primary_width, layer);
+    let (primary_el, right_panel_el) = if canvas_maximized {
+        (
+            el().key("primary-canvas-maximized")
+                .w_full()
+                .h_full()
+                .grow(1.0)
+                .shrink()
+                .min_h(0.0)
+                .children(canvas_content),
+            None,
+        )
+    } else {
+        let primary = banners::build_primary_content(s, k, t, main_subview, canvas_active);
+        let right = canvas_content
+            .unwrap_or_else(|| context_sidebar::build_context_sidebar(s, k, t, layer));
+        (primary, Some(right))
+    };
 
     let mut split = FullBleedSplit::new(primary_el).toolbar(toolbar);
     let chrome = cx.chrome_insets();
@@ -343,6 +354,15 @@ fn build_workspace_split_frame(
             );
         }
     }
+
+    menu_bar::push_menu_bar_overlay(
+        s,
+        k,
+        t,
+        Some(adaptive.primary_width),
+        chrome.trailing,
+        layer,
+    );
 
     split
         .titlebar_inset(leading_lights)

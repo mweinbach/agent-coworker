@@ -76,6 +76,7 @@ pub struct ShellUiState {
     pub last_canvas_key: Option<String>,
     pub sidebar_resize_start_width: Option<f32>,
     pub inspector_resize_start_width: Option<f32>,
+    pub menu_bar: super::menu_bar::MenuBarUiState,
 }
 
 impl Default for ShellUiState {
@@ -125,6 +126,7 @@ impl Default for ShellUiState {
             last_canvas_key: None,
             sidebar_resize_start_width: None,
             inspector_resize_start_width: None,
+            menu_bar: super::menu_bar::MenuBarUiState::default(),
         }
     }
 }
@@ -177,8 +179,32 @@ impl std::fmt::Debug for ShellUiState {
             .field("renaming_thread_id", &self.renaming_thread_id)
             .field("search_overlay_open", &self.search_overlay_open)
             .field("onboarding_step", &self.onboarding_step)
+            .field("menu_bar", &self.menu_bar)
             .finish()
     }
+}
+
+/// True when a blocking modal, dialog, onboarding step, or popup overlay (excluding the
+/// application menu bar) is currently active.
+pub(crate) fn any_non_menu_overlay_open(s: &AppState) -> bool {
+    s.command_palette_open
+        || s.shell_ui.search_overlay_open
+        || super::overlays::is_onboarding_visible(s)
+        || s.lmstudio_start_modal.is_some()
+        || s.pending_external_url.is_some()
+        || s.pending_confirm_dialog.is_some()
+        || s.shell_ui.pending_delete_thread_id.is_some()
+        || s.shell_ui.pending_trash_entry.is_some()
+        || s.shell_ui.selected_workflow_run_id.is_some()
+        || s.shell_ui.context_menu_thread_id.is_some()
+        || s.shell_ui.file_context_menu.is_some()
+        || s.shell_ui.usage_popover_open
+        || s.shell_ui.task_question_dialog_open
+        || s.shell_ui.task_feedback_open
+        || s.shell_ui.task_create_open
+        || s.shell_ui.onboarding_confirm_discard
+        || s.agent_viewer.is_some()
+        || s.chat_ui.cancel_subagents_open
 }
 
 /// Global keyboard dispatcher for shell shortcuts (`Cmd/Ctrl+K`, `Cmd/Ctrl+Shift+B`, `Cmd/Ctrl+.`, `Escape`).
@@ -186,6 +212,9 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if rune_kit::shell::is_sidebar_toggle(ev)
         || (ev.is_command('b') && !ev.mods.shift && !ev.mods.alt)
     {
+        if s.shell_ui.menu_bar.is_active() || s.shell_ui.menu_bar.temp_revealed {
+            super::menu_bar::dismiss_menu_bar(s, tx, false);
+        }
         if s.shell_ui.viewport_width < super::helpers::NARROW_BREAKPOINT {
             if s.route().view == ViewId::Settings {
                 s.settings_ui.mobile_nav_open = !s.settings_ui.mobile_nav_open;
@@ -205,11 +234,17 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 
     if ev.is_command('k') && !ev.mods.alt && !ev.mods.shift {
+        if s.shell_ui.menu_bar.is_active() || s.shell_ui.menu_bar.temp_revealed {
+            super::menu_bar::dismiss_menu_bar(s, tx, false);
+        }
         super::palette::toggle_command_palette(s);
         return true;
     }
 
     if ev.is_command('f') && ev.mods.shift && !ev.mods.alt {
+        if s.shell_ui.menu_bar.is_active() || s.shell_ui.menu_bar.temp_revealed {
+            super::menu_bar::dismiss_menu_bar(s, tx, false);
+        }
         let opening = !s.shell_ui.search_overlay_open;
         s.shell_ui.search_overlay_open = opening;
         s.shell_ui.search_selected = 0;
@@ -342,6 +377,10 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
             thread_id,
             include_subagents: true,
         }));
+        return true;
+    }
+
+    if super::menu_bar::handle_key(s, ev, tx) {
         return true;
     }
 

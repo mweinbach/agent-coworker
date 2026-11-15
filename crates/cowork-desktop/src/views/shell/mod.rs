@@ -15,11 +15,10 @@ pub mod windows;
 
 pub use state::{ShellUiState, handle_key};
 
-use rune::{Cx, El, Spring, col, el, row, spacer, text};
+use rune::{Cx, El, Spring, col, el};
 use rune_kit::shell::{PaneMotion, SidebarPeek, SidebarToggle, SplitView};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
+use rune_kit::{ControlSize, Kit};
 
-use crate::actions::{Action, NavAction};
 use crate::router::ViewId;
 use crate::state::{AppState, WindowMode};
 use crate::theme::ThemeTokens;
@@ -59,7 +58,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     }
 
     let base = if route.view == ViewId::Settings {
-        build_settings_frame(s, cx, k, t, subview.content)
+        build_settings_frame(t, subview.content)
     } else {
         build_workspace_split_frame(s, cx, k, t, subview.content, &mut subview.overlays)
     };
@@ -78,58 +77,15 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     )
 }
 
-fn build_settings_frame(
-    _s: &AppState,
-    cx: &mut Cx<AppState>,
-    k: &Kit,
-    t: &ThemeTokens,
-    settings_content: El,
-) -> El {
-    let top_inset = cx.titlebar_inset().max(8.0);
-    let lights_reserve = if top_inset > 20.0 { 92.0 } else { 12.0 };
-    let trailing_reserve = cx.chrome_insets().trailing;
-
-    let top_bar = row()
-        .key("settings-shell-topbar")
-        .w_full()
-        .h(top_inset.max(48.0))
-        .pl(lights_reserve)
-        .pr(trailing_reserve + 12.0)
-        .center_y()
-        .gap(8.0)
-        .fill(t.panel_bg)
-        .child(
-            Button::new("Back to workspace")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .icon(&icons::ARROW_LEFT)
-                .on_press_tx(|s: &mut AppState, _| {
-                    if s.nav.can_go_back() {
-                        s.dispatch(Action::Navigate(NavAction::GoBack));
-                    } else {
-                        s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
-                    }
-                })
-                .build(k),
-        )
-        .child(spacer())
-        .child(text("Settings").font(t.label).color(t.text_muted));
-
-    col()
-        .key("settings-shell-frame")
+fn build_settings_frame(t: &ThemeTokens, settings_content: El) -> El {
+    // `views::settings::shell` renders the full-height nav rail (`cx.titlebar_inset()`
+    // top padding) and `<- Back` control directly; avoid duplicating a shell topbar above it.
+    el().key("settings-shell-frame")
         .w_full()
         .h_full()
         .min_h(0.0)
         .fill(t.app_bg)
-        .child(top_bar)
-        .child(el().w_full().h(1.0).fill(t.border_muted))
-        .child(
-            el().grow(1.0)
-                .shrink()
-                .min_h(0.0)
-                .w_full()
-                .child(settings_content),
-        )
+        .child(settings_content)
 }
 
 fn build_workspace_split_frame(

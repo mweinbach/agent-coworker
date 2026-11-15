@@ -1787,6 +1787,11 @@ impl AppState {
             .entry(workspace_id.to_string())
             .or_default();
         rt.control_session_config = Some(cfg.clone());
+        if let Some(obj) = cfg.as_object()
+            && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
+        {
+            apply_defaults_obj_to_workspace(ws, obj);
+        }
         if let Some(tid) = evt
             .get("sessionId")
             .or_else(|| evt.get("threadId"))
@@ -4158,85 +4163,35 @@ impl AppState {
                 if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
                     && let Some(obj) = defaults.as_object()
                 {
-                    if !ws.defaults.is_object() {
-                        ws.defaults = json!({});
-                    }
-                    if let Some(dst) = ws.defaults.as_object_mut() {
-                        for (k, v) in obj {
-                            dst.insert(k.clone(), v.clone());
-                        }
-                        if clear_overflow {
-                            dst.remove("defaultToolOutputOverflowChars");
-                            dst.remove("toolOutputOverflowChars");
-                            dst.remove("clearDefaultToolOutputOverflowChars");
-                            dst.remove("clearToolOutputOverflowChars");
-                        } else if let Some(val) = obj
-                            .get("defaultToolOutputOverflowChars")
-                            .or_else(|| obj.get("toolOutputOverflowChars"))
-                        {
-                            dst.insert("defaultToolOutputOverflowChars".to_string(), val.clone());
-                            dst.remove("clearDefaultToolOutputOverflowChars");
-                            dst.remove("clearToolOutputOverflowChars");
-                        }
-                    }
-                    if let Some(yolo) = obj.get("yolo").and_then(Value::as_bool)
-                        && ws.yolo != yolo
-                    {
-                        ws.yolo = yolo;
-                        restart_for_yolo = Some((ws.path.clone(), yolo));
-                    }
-                    if let Some(p) = obj.get("defaultProvider").and_then(Value::as_str) {
-                        ws.default_provider = Some(p.to_string());
-                    }
-                    if let Some(m) = obj.get("defaultModel").and_then(Value::as_str) {
-                        ws.default_model = Some(m.to_string());
-                    }
-                    if let Some(mcp) = obj.get("defaultEnableMcp").and_then(Value::as_bool) {
-                        ws.default_enable_mcp = mcp;
-                    }
-                    if let Some(b) = obj.get("defaultBackupsEnabled").and_then(Value::as_bool) {
-                        ws.default_backups_enabled = b;
-                    }
-                    if let Some(un) = obj.get("userName").and_then(Value::as_str) {
-                        ws.user_name = Some(un.to_string());
-                    }
-                    if let Some(up) = obj.get("userProfile") {
-                        ws.user_profile = Some(up.clone());
+                    let prev_yolo = ws.yolo;
+                    apply_defaults_obj_to_workspace(ws, obj);
+                    if ws.yolo != prev_yolo {
+                        restart_for_yolo = Some((ws.path.clone(), ws.yolo));
                     }
                 }
                 self.persist_state();
-                let mut config_map = defaults.as_object().cloned();
-                if let Some(ref mut map) = config_map {
-                    if let Some(v) = map.remove("defaultToolOutputOverflowChars")
-                        && !map.contains_key("toolOutputOverflowChars")
-                    {
-                        map.insert("toolOutputOverflowChars".to_string(), v);
-                    }
-                    if let Some(v) = map.remove("clearDefaultToolOutputOverflowChars")
-                        && !map.contains_key("clearToolOutputOverflowChars")
-                    {
-                        map.insert("clearToolOutputOverflowChars".to_string(), v);
-                    }
-                    if clear_overflow {
-                        map.remove("toolOutputOverflowChars");
-                        map.insert("clearToolOutputOverflowChars".to_string(), json!(true));
-                    } else if map.contains_key("toolOutputOverflowChars") {
-                        map.remove("clearToolOutputOverflowChars");
-                    }
-                }
+                let config_map = defaults
+                    .as_object()
+                    .map(|obj| build_session_defaults_config_map(obj, clear_overflow))
+                    .filter(|m| !m.is_empty());
                 let params = SessionDefaultsApplyParams {
                     cwd,
                     thread_id: self.nav.current().active_thread_id.clone(),
                     provider: defaults
                         .get("defaultProvider")
+                        .or_else(|| defaults.get("provider"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     model: defaults
                         .get("defaultModel")
+                        .or_else(|| defaults.get("model"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    enable_mcp: defaults.get("defaultEnableMcp").and_then(Value::as_bool),
-                    config: config_map.filter(|m| !m.is_empty()),
+                    enable_mcp: defaults
+                        .get("defaultEnableMcp")
+                        .or_else(|| defaults.get("enableMcp"))
+                        .and_then(Value::as_bool),
+                    config: config_map,
                 };
                 let _ = self.send_ws_typed(
                     &workspace_id,
@@ -4440,21 +4395,29 @@ impl AppState {
                         )
                     })
                     .unwrap_or_else(|| "default".to_string());
+                let existing = self
+                    .agent_profiles_catalog
+                    .profiles
+                    .iter()
+                    .find(|e| e.profile.id == profile.id && e.scope == scope)
+                    .map(|e| &e.profile);
                 let input = AgentProfileUpsertInputWire {
                     scope,
                     id: profile.id,
                     display_name: profile.name,
                     description: profile.description,
-                    enabled: true,
+                    enabled: existing.map(|e| e.enabled).unwrap_or(true),
                     base_role,
                     prompt: profile.system_prompt,
                     allowed_built_in_tools: profile.allowed_tools,
-                    allowed_mcp_servers: Vec::new(),
-                    skill_names: Vec::new(),
+                    allowed_mcp_servers: existing
+                        .map(|e| e.allowed_mcp_servers.clone())
+                        .unwrap_or_default(),
+                    skill_names: existing.map(|e| e.skill_names.clone()).unwrap_or_default(),
                     model: profile.model.filter(|m| !m.trim().is_empty()),
                     reasoning_effort: profile.reasoning_effort.filter(|r| !r.trim().is_empty()),
-                    default_task_type: None,
-                    default_context_mode: None,
+                    default_task_type: existing.and_then(|e| e.default_task_type.clone()),
+                    default_context_mode: existing.and_then(|e| e.default_context_mode.clone()),
                 };
                 let profile_payload = build_agent_profile_upsert_payload(&input);
                 let _ = self.send_ws_request(
@@ -7035,24 +6998,7 @@ impl AppState {
                     .agent_profiles_catalog
                     .profiles
                     .iter()
-                    .map(|entry| SubagentProfile {
-                        id: entry.profile.id.clone(),
-                        name: entry.profile.display_name.clone(),
-                        description: entry.profile.description.clone(),
-                        provider: entry
-                            .profile
-                            .model
-                            .as_deref()
-                            .and_then(|m| m.split_once('/').map(|(p, _)| p.to_string())),
-                        model: entry.profile.model.clone(),
-                        system_prompt: entry.profile.prompt.clone(),
-                        tool_preset: Some(entry.profile.base_role.clone()),
-                        allowed_tools: entry.profile.allowed_built_in_tools.clone(),
-                        denied_tools: Vec::new(),
-                        builtin: entry.built_in.unwrap_or(false),
-                        reasoning_effort: entry.profile.reasoning_effort.clone(),
-                        scope: Some(entry.scope.clone()),
-                    })
+                    .map(catalog_entry_to_subagent_profile)
                     .collect();
                 return;
             }
@@ -7063,24 +7009,7 @@ impl AppState {
                 .filter_map(|v| {
                     serde_json::from_value::<AgentProfileCatalogEntry>(v.clone())
                         .ok()
-                        .map(|entry| SubagentProfile {
-                            id: entry.profile.id,
-                            name: entry.profile.display_name,
-                            description: entry.profile.description,
-                            provider: entry
-                                .profile
-                                .model
-                                .as_deref()
-                                .and_then(|m| m.split_once('/').map(|(p, _)| p.to_string())),
-                            model: entry.profile.model,
-                            system_prompt: entry.profile.prompt,
-                            tool_preset: Some(entry.profile.base_role),
-                            allowed_tools: entry.profile.allowed_built_in_tools,
-                            denied_tools: Vec::new(),
-                            builtin: entry.built_in.unwrap_or(false),
-                            reasoning_effort: entry.profile.reasoning_effort,
-                            scope: Some(entry.scope),
-                        })
+                        .map(|entry| catalog_entry_to_subagent_profile(&entry))
                         .or_else(|| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
                 })
                 .collect();
@@ -7133,12 +7062,24 @@ impl AppState {
             self.installed_plugin_entries = arr.clone();
             self.plugins = arr.iter().filter_map(parse_plugin_summary).collect();
         }
+        let available_partial =
+            evt.get("availablePluginsPartial").and_then(Value::as_bool) == Some(true);
         if let Some(avail) = catalog
             .and_then(|c| c.get("availablePlugins"))
             .or_else(|| evt.get("availablePlugins"))
             .and_then(Value::as_array)
         {
-            self.available_plugins = avail.clone();
+            if available_partial && avail.is_empty() && !self.available_plugins.is_empty() {
+                let installed_ids: HashSet<&str> =
+                    self.plugins.iter().map(|p| p.id.as_str()).collect();
+                self.available_plugins.retain(|p| {
+                    p.get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| !installed_ids.contains(id))
+                });
+            } else {
+                self.available_plugins = avail.clone();
+            }
         }
         if let Some(warnings) = catalog
             .and_then(|c| c.get("warnings"))
@@ -7161,8 +7102,23 @@ impl AppState {
         if let Some(installations) = catalog.get("installations").and_then(Value::as_array) {
             self.skill_installations = installations.clone();
         }
+        let available_partial =
+            evt.get("availableSkillsPartial").and_then(Value::as_bool) == Some(true);
         if let Some(avail) = catalog.get("availableSkills").and_then(Value::as_array) {
-            self.available_skills = avail.clone();
+            if available_partial && avail.is_empty() && !self.available_skills.is_empty() {
+                let installed_names: HashSet<&str> = self
+                    .skill_installations
+                    .iter()
+                    .filter_map(|s| s.get("name").and_then(Value::as_str))
+                    .collect();
+                self.available_skills.retain(|s| {
+                    s.get("name")
+                        .and_then(Value::as_str)
+                        .is_none_or(|name| !installed_names.contains(name))
+                });
+            } else {
+                self.available_skills = avail.clone();
+            }
         }
         if let Some(effective) = catalog.get("effectiveSkills").and_then(Value::as_array) {
             self.effective_skills = effective.clone();
@@ -7846,6 +7802,183 @@ fn parse_scoped_memory_entry(v: &Value) -> Option<ScopedMemoryEntry> {
         updated_at,
         updated_at_ms,
     })
+}
+
+fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, Value>) {
+    let clear_overflow = obj
+        .get("clearDefaultToolOutputOverflowChars")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || obj
+            .get("clearToolOutputOverflowChars")
+            .and_then(Value::as_bool)
+            == Some(true);
+    if !ws.defaults.is_object() {
+        ws.defaults = json!({});
+    }
+    if let Some(dst) = ws.defaults.as_object_mut() {
+        for (k, v) in obj {
+            dst.insert(k.clone(), v.clone());
+        }
+        if clear_overflow {
+            dst.remove("defaultToolOutputOverflowChars");
+            dst.remove("toolOutputOverflowChars");
+            dst.remove("clearDefaultToolOutputOverflowChars");
+            dst.remove("clearToolOutputOverflowChars");
+        } else if let Some(val) = obj
+            .get("defaultToolOutputOverflowChars")
+            .or_else(|| obj.get("toolOutputOverflowChars"))
+        {
+            dst.insert("defaultToolOutputOverflowChars".to_string(), val.clone());
+            dst.remove("clearDefaultToolOutputOverflowChars");
+            dst.remove("clearToolOutputOverflowChars");
+        }
+    }
+    if let Some(yolo) = obj.get("yolo").and_then(Value::as_bool) {
+        ws.yolo = yolo;
+    }
+    if let Some(p) = obj
+        .get("defaultProvider")
+        .or_else(|| obj.get("provider"))
+        .and_then(Value::as_str)
+    {
+        ws.default_provider = (!p.trim().is_empty()).then(|| p.to_string());
+    }
+    if let Some(m) = obj
+        .get("defaultModel")
+        .or_else(|| obj.get("model"))
+        .and_then(Value::as_str)
+    {
+        ws.default_model = (!m.trim().is_empty()).then(|| m.to_string());
+    }
+    if let Some(val) = obj
+        .get("defaultPreferredChildModel")
+        .or_else(|| obj.get("preferredChildModel"))
+    {
+        ws.default_preferred_child_model = val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(val) = obj
+        .get("defaultChildModelRoutingMode")
+        .or_else(|| obj.get("childModelRoutingMode"))
+    {
+        ws.default_child_model_routing_mode = val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(val) = obj
+        .get("defaultPreferredChildModelRef")
+        .or_else(|| obj.get("preferredChildModelRef"))
+    {
+        ws.default_preferred_child_model_ref = val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(arr) = obj
+        .get("defaultAllowedChildModelRefs")
+        .or_else(|| obj.get("allowedChildModelRefs"))
+        .and_then(Value::as_array)
+    {
+        ws.default_allowed_child_model_refs = arr
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(mcp) = obj
+        .get("defaultEnableMcp")
+        .or_else(|| obj.get("enableMcp"))
+        .and_then(Value::as_bool)
+    {
+        ws.default_enable_mcp = mcp;
+    }
+    if let Some(b) = obj
+        .get("defaultBackupsEnabled")
+        .or_else(|| obj.get("backupsEnabled"))
+        .and_then(Value::as_bool)
+    {
+        ws.default_backups_enabled = b;
+    }
+    if let Some(un) = obj.get("userName").and_then(Value::as_str) {
+        ws.user_name = Some(un.to_string());
+    }
+    if let Some(up) = obj.get("userProfile") {
+        ws.user_profile = Some(up.clone());
+    }
+    if let Some(po) = obj.get("providerOptions") {
+        ws.provider_options = Some(po.clone());
+    }
+}
+
+fn build_session_defaults_config_map(
+    raw: &Map<String, Value>,
+    clear_overflow: bool,
+) -> Map<String, Value> {
+    let mut map = raw.clone();
+    for (desktop_key, server_key) in [
+        ("defaultToolOutputOverflowChars", "toolOutputOverflowChars"),
+        (
+            "clearDefaultToolOutputOverflowChars",
+            "clearToolOutputOverflowChars",
+        ),
+        ("defaultPreferredChildModel", "preferredChildModel"),
+        ("defaultChildModelRoutingMode", "childModelRoutingMode"),
+        ("defaultPreferredChildModelRef", "preferredChildModelRef"),
+        ("defaultAllowedChildModelRefs", "allowedChildModelRefs"),
+        ("defaultBackupsEnabled", "backupsEnabled"),
+        (
+            "defaultWorkflowMaxConcurrentAgents",
+            "workflowMaxConcurrentAgents",
+        ),
+        ("defaultToolCalling", "toolCalling"),
+        ("advancedMemoryEnabled", "advancedMemory"),
+    ] {
+        if let Some(val) = map.remove(desktop_key)
+            && !map.contains_key(server_key)
+        {
+            map.insert(server_key.to_string(), val);
+        }
+    }
+    if clear_overflow {
+        map.remove("toolOutputOverflowChars");
+        map.insert("clearToolOutputOverflowChars".to_string(), json!(true));
+    } else if map.contains_key("toolOutputOverflowChars") {
+        map.remove("clearToolOutputOverflowChars");
+    }
+    map
+}
+
+fn parse_profile_model_provider(model_ref: &str) -> Option<String> {
+    cowork_config::parse_child_model_ref(model_ref, None)
+        .and_then(|(prov, _, _, explicit)| explicit.then(|| prov.as_str().to_string()))
+}
+
+fn catalog_entry_to_subagent_profile(entry: &AgentProfileCatalogEntry) -> SubagentProfile {
+    SubagentProfile {
+        id: entry.profile.id.clone(),
+        name: entry.profile.display_name.clone(),
+        description: entry.profile.description.clone(),
+        provider: entry
+            .profile
+            .model
+            .as_deref()
+            .and_then(parse_profile_model_provider),
+        model: entry.profile.model.clone(),
+        system_prompt: entry.profile.prompt.clone(),
+        tool_preset: Some(entry.profile.base_role.clone()),
+        allowed_tools: entry.profile.allowed_built_in_tools.clone(),
+        denied_tools: Vec::new(),
+        builtin: entry.built_in.unwrap_or(false),
+        reasoning_effort: entry.profile.reasoning_effort.clone(),
+        scope: Some(entry.scope.clone()),
+    }
 }
 
 fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
@@ -10560,5 +10693,235 @@ mod tests {
         assert_eq!(mcp_upsert["source"], "user");
         assert_eq!(mcp_upsert["previousName"], "github");
         assert_eq!(mcp_upsert["server"]["name"], "github-enterprise");
+    }
+
+    #[test]
+    fn child_routing_defaults_subagent_colon_delimiter_and_partial_catalogs() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        // 1. UpdateWorkspaceDefaults syncs child model routing fields + remaps server keys.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({
+                "defaultChildModelRoutingMode": "custom",
+                "defaultPreferredChildModel": "claude-haiku-4-5",
+                "defaultPreferredChildModelRef": "anthropic:claude-haiku-4-5",
+                "defaultAllowedChildModelRefs": ["anthropic:claude-haiku-4-5", "openai:gpt-4.1-mini"],
+                "defaultBackupsEnabled": false
+            }),
+        }));
+        let params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(params["config"]["childModelRoutingMode"], "custom");
+        assert_eq!(params["config"]["preferredChildModel"], "claude-haiku-4-5");
+        assert_eq!(
+            params["config"]["preferredChildModelRef"],
+            "anthropic:claude-haiku-4-5"
+        );
+        assert_eq!(
+            params["config"]["allowedChildModelRefs"],
+            json!(["anthropic:claude-haiku-4-5", "openai:gpt-4.1-mini"])
+        );
+        assert_eq!(params["config"]["backupsEnabled"], false);
+        assert!(
+            params["config"]
+                .get("defaultPreferredChildModelRef")
+                .is_none()
+        );
+        let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+        assert_eq!(
+            ws.default_child_model_routing_mode.as_deref(),
+            Some("custom")
+        );
+        assert_eq!(
+            ws.default_preferred_child_model.as_deref(),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(
+            ws.default_preferred_child_model_ref.as_deref(),
+            Some("anthropic:claude-haiku-4-5")
+        );
+        assert_eq!(
+            ws.default_allowed_child_model_refs,
+            vec![
+                "anthropic:claude-haiku-4-5".to_string(),
+                "openai:gpt-4.1-mini".to_string()
+            ]
+        );
+        assert!(!ws.default_backups_enabled);
+
+        // Incoming session_config syncs updated defaults back onto WorkspaceRecord.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "cowork/controlEvent".to_string(),
+            params: json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "childModelRoutingMode": "inherit",
+                        "preferredChildModel": "gpt-4.1",
+                        "preferredChildModelRef": "openai:gpt-4.1",
+                        "allowedChildModelRefs": ["openai:gpt-4.1"],
+                        "backupsEnabled": true
+                    }
+                }
+            }),
+        });
+        let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+        assert_eq!(
+            ws.default_child_model_routing_mode.as_deref(),
+            Some("inherit")
+        );
+        assert_eq!(ws.default_preferred_child_model.as_deref(), Some("gpt-4.1"));
+        assert_eq!(
+            ws.default_preferred_child_model_ref.as_deref(),
+            Some("openai:gpt-4.1")
+        );
+        assert_eq!(
+            ws.default_allowed_child_model_refs,
+            vec!["openai:gpt-4.1".to_string()]
+        );
+        assert!(ws.default_backups_enabled);
+
+        // 2. Colon provider delimiter parsing + UpsertSubagent preservation of existing fields.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 21,
+            method: "cowork/agentProfiles/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "agent_profiles_catalog",
+                    "catalog": {
+                        "profiles": [
+                            {
+                                "scope": "workspace",
+                                "builtIn": false,
+                                "locked": false,
+                                "effective": true,
+                                "shadowed": false,
+                                "profile": {
+                                    "version": 1,
+                                    "id": "reviewer",
+                                    "displayName": "Reviewer",
+                                    "description": "Review code",
+                                    "enabled": false,
+                                    "baseRole": "reviewer",
+                                    "prompt": "Old prompt",
+                                    "allowedBuiltInTools": ["read_file"],
+                                    "allowedMcpServers": ["github"],
+                                    "skillNames": ["rust-audit"],
+                                    "model": "anthropic:claude-sonnet-4-5"
+                                }
+                            },
+                            {
+                                "scope": "workspace",
+                                "effective": true,
+                                "shadowed": false,
+                                "profile": {
+                                    "version": 1,
+                                    "id": "local-ollama",
+                                    "displayName": "Local",
+                                    "description": "",
+                                    "enabled": true,
+                                    "baseRole": "worker",
+                                    "prompt": "",
+                                    "allowedBuiltInTools": [],
+                                    "allowedMcpServers": [],
+                                    "skillNames": [],
+                                    "model": "llama3:8b"
+                                }
+                            }
+                        ]
+                    }
+                }
+            })),
+        });
+        assert_eq!(state.subagents[0].provider.as_deref(), Some("anthropic"));
+        assert_eq!(state.subagents[1].provider, None);
+
+        let mut updated = state.subagents[0].clone();
+        updated.system_prompt = "New prompt".to_string();
+        state.dispatch(Action::Settings(SettingsAction::UpsertSubagent {
+            workspace_id: "ws-1".to_string(),
+            profile: updated,
+        }));
+        let subagent_upsert = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/agentProfiles/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(subagent_upsert["profile"]["enabled"], false);
+        assert_eq!(
+            subagent_upsert["profile"]["allowedMcpServers"],
+            json!(["github"])
+        );
+        assert_eq!(
+            subagent_upsert["profile"]["skillNames"],
+            json!(["rust-audit"])
+        );
+
+        // 3. Partial marketplace responses preserve un-installed entries.
+        state.available_plugins = vec![json!({ "id": "plug-a" }), json!({ "id": "plug-keep" })];
+        state.available_skills = vec![
+            json!({ "name": "skill-a" }),
+            json!({ "name": "skill-keep" }),
+        ];
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 22,
+            method: "cowork/plugins/install".to_string(),
+            result: Ok(json!({
+                "events": [
+                    {
+                        "type": "plugins_catalog",
+                        "availablePluginsPartial": true,
+                        "catalog": {
+                            "plugins": [{ "id": "plug-a", "name": "plug-a" }],
+                            "availablePlugins": [],
+                            "warnings": []
+                        }
+                    },
+                    {
+                        "type": "skills_catalog",
+                        "availableSkillsPartial": true,
+                        "catalog": {
+                            "scopes": [],
+                            "installations": [{ "installationId": "i1", "name": "skill-a" }],
+                            "effectiveSkills": [],
+                            "availableSkills": []
+                        }
+                    }
+                ]
+            })),
+        });
+        assert_eq!(state.available_plugins, vec![json!({ "id": "plug-keep" })]);
+        assert_eq!(
+            state.available_skills,
+            vec![json!({ "name": "skill-keep" })]
+        );
     }
 }

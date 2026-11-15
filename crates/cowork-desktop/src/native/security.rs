@@ -12,7 +12,6 @@ use anyhow::{Result, bail};
 use cowork_config::{canonical_key, canonicalize_sync, host_platform};
 use url::Url;
 
-use super::path_boundary::is_path_equal_or_inside;
 use super::validation::assert_safe_id;
 
 pub const MAX_ATTACHMENT_UPLOAD_BYTE_SIZE: u64 = 100 * 1024 * 1024;
@@ -75,6 +74,7 @@ pub struct WorkspaceRootsController {
     approved_roots_by_key: HashMap<String, RootEntry>,
     persisted_by_workspace_id: HashMap<String, PathBuf>,
     unpersisted_by_workspace_id: HashMap<String, PathBuf>,
+    picked_root_keys: HashSet<String>,
 }
 
 impl WorkspaceRootsController {
@@ -85,6 +85,9 @@ impl WorkspaceRootsController {
     pub fn approve_root(&mut self, root_path: &Path, persisted: bool) -> PathBuf {
         let canonical = canonicalize_sync(root_path);
         let key = canonical_key(&canonical, host_platform());
+        if !persisted {
+            self.picked_root_keys.insert(key.clone());
+        }
         self.approved_roots_by_key
             .entry(key)
             .and_modify(|entry| {
@@ -102,7 +105,15 @@ impl WorkspaceRootsController {
         I: IntoIterator<Item = (&'a str, &'a Path)>,
     {
         self.persisted_by_workspace_id.clear();
+        self.picked_root_keys.clear();
         self.approved_roots_by_key.retain(|_, v| !v.persisted);
+        let retained_unpersisted: HashSet<String> = self
+            .unpersisted_by_workspace_id
+            .values()
+            .map(|p| canonical_key(p, host_platform()))
+            .collect();
+        self.approved_roots_by_key
+            .retain(|k, v| v.persisted || retained_unpersisted.contains(k));
 
         for (id, path) in workspaces {
             if assert_safe_id(id, "workspaceId").is_err() {
@@ -117,15 +128,54 @@ impl WorkspaceRootsController {
 
     pub fn register_workspace(&mut self, workspace_id: &str, root_path: &Path) -> Result<PathBuf> {
         assert_safe_id(workspace_id, "workspaceId")?;
-        let canonical = self.approve_root(root_path, false);
+        let canonical = canonicalize_sync(root_path);
+        let key = canonical_key(&canonical, host_platform());
+        self.approved_roots_by_key
+            .entry(key)
+            .or_insert_with(|| RootEntry {
+                canonical_path: canonical.clone(),
+                persisted: false,
+            });
         self.unpersisted_by_workspace_id
             .insert(workspace_id.to_string(), canonical.clone());
         Ok(canonical)
     }
 
+    /// Creates and approves a new one-off chat workspace directory strictly inside `one_off_chats_root`.
+    pub fn approve_one_off_chat_workspace(
+        &mut self,
+        workspace_id: &str,
+        root_path: &Path,
+        one_off_chats_root: &Path,
+    ) -> Result<PathBuf> {
+        assert_safe_id(workspace_id, "workspaceId")?;
+        let lexical = cowork_config::normalize_lexical_path(root_path);
+        let chats_lexical = cowork_config::normalize_lexical_path(one_off_chats_root);
+        let canonical_chats = canonicalize_sync(one_off_chats_root);
+        if !cowork_config::is_inside(&chats_lexical, &lexical) || lexical == chats_lexical {
+            bail!("One-off chat workspace path must be inside the one-off chats root");
+        }
+        cowork_config::ensure_private_dir_sync(&lexical)
+            .map_err(|err| anyhow::anyhow!("Unable to prepare one-off chat directory: {err}"))?;
+        let canonical = canonicalize_sync(&lexical);
+        if !cowork_config::is_inside(&canonical_chats, &canonical) || canonical == canonical_chats {
+            bail!("One-off chat workspace resolves outside the one-off chats root");
+        }
+        self.register_workspace(workspace_id, &canonical)
+    }
+
     pub fn unregister_workspace(&mut self, workspace_id: &str) {
         self.unpersisted_by_workspace_id.remove(workspace_id);
         self.persisted_by_workspace_id.remove(workspace_id);
+
+        let referenced: HashSet<String> = self
+            .persisted_by_workspace_id
+            .values()
+            .chain(self.unpersisted_by_workspace_id.values())
+            .map(|p| canonical_key(p, host_platform()))
+            .collect();
+        self.approved_roots_by_key
+            .retain(|key, _| referenced.contains(key) || self.picked_root_keys.contains(key));
     }
 
     pub fn approved_roots(&self) -> Vec<PathBuf> {
@@ -139,8 +189,8 @@ impl WorkspaceRootsController {
         out
     }
 
-    /// Resolves and verifies that a requested workspace root belongs to an approved root
-    /// and matches any recorded root for `workspace_id`.
+    /// Resolves and verifies that a requested workspace root matches an exact approved root
+    /// and any recorded root for `workspace_id`.
     pub fn resolve_authorized_workspace_root(
         &self,
         workspace_id: &str,
@@ -165,13 +215,11 @@ impl WorkspaceRootsController {
             bail!("Workspace root mismatch for {workspace_id}");
         }
 
-        let is_approved = self
-            .approved_roots_by_key
-            .values()
-            .any(|entry| is_path_equal_or_inside(&entry.canonical_path, &requested));
-
-        if !is_approved {
-            bail!("Workspace root is outside approved workspace roots");
+        let key = canonical_key(&requested, host_platform());
+        if !self.approved_roots_by_key.contains_key(&key) {
+            bail!(
+                "Workspace root is not approved. Select the folder with the desktop picker before starting."
+            );
         }
 
         Ok(requested)
@@ -348,6 +396,12 @@ mod tests {
                 .resolve_authorized_workspace_root("ws-1", Some(&ws))
                 .is_ok()
         );
+        // Subdirectory inside an approved workspace must not pass as an authorized root itself.
+        assert!(
+            controller
+                .resolve_authorized_workspace_root("ws-2", Some(&sub))
+                .is_err()
+        );
         assert!(
             controller
                 .resolve_authorized_workspace_root("ws-1", Some(&outside))
@@ -356,6 +410,27 @@ mod tests {
         assert!(
             controller
                 .resolve_authorized_workspace_root("unknown", Some(&outside))
+                .is_err()
+        );
+
+        controller.unregister_workspace("ws-1");
+        assert!(controller.approved_roots().is_empty());
+
+        let chats_root = temp.path().join("chats");
+        let oneoff = chats_root.join("chat-99");
+        assert!(
+            controller
+                .approve_one_off_chat_workspace("ws-chat", &oneoff, &chats_root)
+                .is_ok()
+        );
+        assert!(
+            controller
+                .approve_one_off_chat_workspace("ws-root", &chats_root, &chats_root)
+                .is_err()
+        );
+        assert!(
+            controller
+                .approve_one_off_chat_workspace("ws-esc", &outside, &chats_root)
                 .is_err()
         );
     }

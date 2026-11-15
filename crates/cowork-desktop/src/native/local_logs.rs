@@ -200,14 +200,17 @@ fn redact_username_tokens(input: &str, home_dir: Option<&Path>) -> String {
 fn redact_token_patterns(input: &str) -> String {
     let mut out = input.to_string();
 
-    // Redact URL query tokens (`?coworkBrowserToken=...` or `&token=...`).
+    // Redact URL query tokens (`?coworkBrowserToken=...`, `?token=...`, `&token=...`).
     for needle in [
         "coworkBrowserToken=",
         "access_token=",
         "refresh_token=",
         "id_token=",
+        "?token=",
+        "&token=",
         "api_key=",
         "apiKey=",
+        "secret=",
     ] {
         out = redact_assignment_values(&out, needle);
     }

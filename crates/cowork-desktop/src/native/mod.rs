@@ -95,9 +95,11 @@ use window_state::{
 type ShutdownLatch = Arc<(Mutex<bool>, Condvar)>;
 
 const QUIT_SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT: Duration = Duration::from_millis(600);
 const BOUNDS_SAMPLE_THROTTLE: Duration = Duration::from_millis(250);
 
 static APP_HANDLE: OnceLock<Mutex<Option<AppHandle<AppState>>>> = OnceLock::new();
+static APP_HANDLE_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static WORKER_CMD_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<NativeCommand>>>> =
     OnceLock::new();
 static SHUTDOWN_LATCH: OnceLock<Mutex<Option<ShutdownLatch>>> = OnceLock::new();
@@ -186,9 +188,15 @@ fn app_handle_slot() -> &'static Mutex<Option<AppHandle<AppState>>> {
     APP_HANDLE.get_or_init(|| Mutex::new(None))
 }
 
+fn app_handle_notify() -> &'static tokio::sync::Notify {
+    APP_HANDLE_NOTIFY.get_or_init(tokio::sync::Notify::new)
+}
+
 fn store_app_handle(handle: AppHandle<AppState>) {
     let mut guard = app_handle_slot().lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(handle);
+    drop(guard);
+    app_handle_notify().notify_one();
 }
 
 fn current_app_handle() -> Option<AppHandle<AppState>> {
@@ -380,35 +388,30 @@ pub fn spawn_native_worker(
                 let coord_latch = coordinator.completion_latch();
                 store_shutdown_latch(Some(coord_latch));
 
-                while let Some(cmd) = cmd_rx.recv().await {
-                    match cmd {
-                        NativeCommand::Shutdown => {
-                            set_shared_analytics(None);
-                            let _ = runtime_ctx.transcript_buffer.flush();
-                            runtime_ctx.watcher.unwatch_all().await;
-                            runtime_ctx.tray.teardown(current_app_handle().as_ref());
-                            runtime_ctx.crash_reporting.flush().await;
-                            runtime_ctx.product_analytics.flush().await;
-                            runtime_ctx.crash_reporting.shutdown();
-                            runtime_ctx.product_analytics.shutdown();
-                            coordinator.shutdown().await;
-                            break;
+                let handle_notify = app_handle_notify();
+                let mut handle_synced = false;
+                loop {
+                    if !handle_synced && let Some(app_handle) = current_app_handle() {
+                        runtime_ctx
+                            .tray
+                            .sync_with_handle_if_needed(Some(&app_handle));
+                        handle_synced = true;
+                    }
+                    tokio::select! {
+                        biased;
+                        maybe_cmd = cmd_rx.recv() => {
+                            match maybe_cmd {
+                                Some(NativeCommand::Shutdown) | None => break,
+                                Some(other) => {
+                                    runtime_ctx.handle_command(other).await;
+                                }
+                            }
                         }
-                        other => {
-                            runtime_ctx.handle_command(other).await;
-                        }
+                        _ = handle_notify.notified(), if !handle_synced => {}
                     }
                 }
 
-                set_shared_analytics(None);
-                let _ = runtime_ctx.transcript_buffer.flush();
-                runtime_ctx.watcher.unwatch_all().await;
-                runtime_ctx.tray.teardown(current_app_handle().as_ref());
-                runtime_ctx.crash_reporting.flush().await;
-                runtime_ctx.product_analytics.flush().await;
-                runtime_ctx.crash_reporting.shutdown();
-                runtime_ctx.product_analytics.shutdown();
-                coordinator.shutdown().await;
+                run_native_shutdown(&runtime_ctx, &coordinator).await;
                 let (lock, cvar) = &*latch;
                 *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
                 cvar.notify_all();
@@ -424,7 +427,35 @@ pub fn spawn_native_worker(
 
 /// Signals native and WebSocket teardown and blocks briefly until sidecars/logs finish flushing,
 /// because Rune runs `fast_exit` immediately after `App::on_quit` returns.
+async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &ShutdownCoordinator) {
+    set_shared_analytics(None);
+    let _ = runtime_ctx.transcript_buffer.flush();
+    runtime_ctx.tray.teardown_for_shutdown();
+    tokio::join!(
+        runtime_ctx.watcher.unwatch_all(),
+        async {
+            let _ = tokio::time::timeout(
+                SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT,
+                runtime_ctx.crash_reporting.flush(),
+            )
+            .await;
+            runtime_ctx.crash_reporting.shutdown();
+        },
+        async {
+            let _ = tokio::time::timeout(
+                SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT,
+                runtime_ctx.product_analytics.flush(),
+            )
+            .await;
+            runtime_ctx.product_analytics.shutdown();
+        },
+        coordinator.shutdown(),
+    );
+}
+
 pub fn on_shutdown(state: &mut AppState) {
+    #[cfg(target_os = "macos")]
+    tray::destroy_macos_tray_on_main_thread();
     state.send_native(NativeCommand::Shutdown);
     state.send_ws(crate::ws::WsCommand::Shutdown);
     if let Some(tx) = take_worker_cmd_tx() {
@@ -568,7 +599,7 @@ impl NativeWorkerContext {
             Arc::new(move || diag_mgr.get_diagnostics()),
         )
         .with_recent_report_ids_provider(Arc::new(move || diag_crash.recent_report_ids()));
-        let tray = QuickChatTrayController::new(Some(logger.clone()));
+        let tray = QuickChatTrayController::new(Some(logger.clone())).with_emitter(emit.clone());
         let remote_access = RemoteAccessBridge::new(
             server_manager.clone(),
             Some(logger.clone()),
@@ -655,6 +686,16 @@ impl NativeWorkerContext {
                 };
                 core.product_analytics = self.product_analytics_value();
                 self.sync_runtime_caches(&core);
+                apply_desktop_state(
+                    &core,
+                    &self.roots,
+                    &self.logger,
+                    &self.appearance,
+                    &self.tray,
+                    current_app_handle().as_ref(),
+                    false,
+                    self.is_packaged,
+                );
                 core
             }
         }

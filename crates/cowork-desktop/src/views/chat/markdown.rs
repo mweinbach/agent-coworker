@@ -379,13 +379,21 @@ pub fn desktop_markdown(
             )
         })
         .image_frame(move |img_el, frame| {
+            let styled = img_el
+                .max_h(420.0)
+                .radius(8.0)
+                .border(1.0, Color::TRANSPARENT);
+            let can_open = frame.src.starts_with(WORKSPACE_FILE_SCHEME)
+                || is_allowed_external_url(frame.src)
+                || resolve_safe_local_path(frame.src, ws_path_img.as_deref()).is_some();
+            if !can_open {
+                return styled;
+            }
             let src_open = frame.src.to_string();
             let ws_id = ws_id_img.clone();
             let ws_path = ws_path_img.clone();
-            img_el
-                .max_h(420.0)
-                .radius(8.0)
-                .border(1.0, Color::TRANSPARENT)
+            styled
+                .cursor(Cursor::Pointer)
                 .on_press_tx(move |s: &mut AppState, _tx| {
                     dispatch_link_action(
                         s,
@@ -503,6 +511,10 @@ pub fn desktop_markdown(
     md.build(k)
 }
 
+fn is_allowed_external_url(raw: &str) -> bool {
+    url::Url::parse(raw.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "mailto"))
+}
+
 fn dispatch_link_action(
     s: &mut AppState,
     url: &str,
@@ -540,9 +552,11 @@ fn dispatch_link_action(
         return;
     }
 
-    s.dispatch(Action::Shell(ShellAction::RequestExternalUrl(
-        url.to_string(),
-    )));
+    if is_allowed_external_url(url) {
+        s.dispatch(Action::Shell(ShellAction::RequestExternalUrl(
+            url.trim().to_string(),
+        )));
+    }
 }
 
 /// Renders the expandable bottom `Sources` pill and horizontal strip of external citation cards.
@@ -593,7 +607,7 @@ pub fn citation_sources_carousel(
                 .to_string();
             let open_url = source.url.clone();
 
-            let card = col()
+            let mut card = col()
                 .key(format!("{message_key}:src:{idx}"))
                 .w(212.0)
                 .gap(4.0)
@@ -601,15 +615,19 @@ pub fn citation_sources_carousel(
                 .py(8.0)
                 .radius(10.0)
                 .fill(t.card_bg)
-                .hover(t.hover)
+                .hover(t.elevated_bg)
                 .border(1.0, t.border_muted)
-                .cursor(Cursor::Pointer)
-                .help(source.url.clone())
-                .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Shell(ShellAction::RequestExternalUrl(
-                        open_url.clone(),
-                    )));
-                })
+                .help(source.url.clone());
+            if is_allowed_external_url(&open_url) {
+                card = card
+                    .cursor(Cursor::Pointer)
+                    .on_press(move |s: &mut AppState| {
+                        s.dispatch(Action::Shell(ShellAction::RequestExternalUrl(
+                            open_url.clone(),
+                        )));
+                    });
+            }
+            card = card
                 .child(
                     row()
                         .w_full()
@@ -670,5 +688,15 @@ mod tests {
             resolve_workspace_code_link("https://example.com/a.rs", Some("/repo")),
             None
         );
+    }
+
+    #[test]
+    fn allowed_external_urls_restrict_schemes_to_http_https_mailto() {
+        assert!(is_allowed_external_url("https://example.com/docs"));
+        assert!(is_allowed_external_url("http://example.com"));
+        assert!(is_allowed_external_url("mailto:support@example.com"));
+        assert!(!is_allowed_external_url("data:image/png;base64,AAAA"));
+        assert!(!is_allowed_external_url("file:///etc/passwd"));
+        assert!(!is_allowed_external_url("javascript:alert(1)"));
     }
 }

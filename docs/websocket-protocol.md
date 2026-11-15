@@ -1000,7 +1000,7 @@ source-chat locks.
 
 Ask/approval prompts still arrive as server requests, but the harness also emits matching projected `system` feed items so snapshots and live feeds stay aligned.
 
-`item/completed` should be treated as the latest snapshot for that projected item id. For long-lived items, especially `toolCall`, the harness may emit multiple `item/completed` notifications for the same id as the projected state advances.
+`item/completed` is the latest snapshot for that projected item id. A `toolCall` can have several such updates. The harness groups streamed argument fragments into previews, so clients should replace the preview rather than concatenate it. Approval, completion, and error snapshots include the latest available arguments.
 
 ### JSON-RPC error codes
 

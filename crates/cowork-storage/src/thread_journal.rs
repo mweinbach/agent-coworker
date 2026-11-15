@@ -55,13 +55,9 @@ struct FailureState {
     last_failure_message: String,
 }
 
-struct PendingItem {
-    event: ThreadJournalEventInput,
-    done: oneshot::Sender<Result<()>>,
-}
-
 struct ThreadQueue {
-    pending: Vec<PendingItem>,
+    pending: Vec<ThreadJournalEventInput>,
+    waiters: Vec<oneshot::Sender<Result<()>>>,
     in_flight_count: usize,
     idle_notify: Arc<Notify>,
 }
@@ -108,23 +104,37 @@ impl ThreadJournal {
     }
 
     pub async fn enqueue(&self, event: ThreadJournalEventInput) -> Result<()> {
-        if self.inner.closed.load(Ordering::SeqCst) {
+        self.enqueue_batch(vec![event]).await
+    }
+
+    /// Register consecutive events for one thread together. The receipt covers the whole write.
+    pub async fn enqueue_batch(&self, events: Vec<ThreadJournalEventInput>) -> Result<()> {
+        let Some(first) = events.first() else {
             return Ok(());
+        };
+        if events.iter().any(|e| e.thread_id != first.thread_id) {
+            return Err(crate::error::StorageError::Validation {
+                field: "thread_id".into(),
+                message: "journal batch spans multiple threads".into(),
+            });
         }
-
+        let thread_id = first.thread_id.clone();
         let (tx, rx) = oneshot::channel();
-        let thread_id = event.thread_id.clone();
         let mut should_spawn_worker = false;
-
         {
             let mut queues = self.inner.queues.lock();
+            if self.inner.closed.load(Ordering::SeqCst) {
+                return Ok(());
+            }
             if let Some(existing) = queues.get_mut(&thread_id) {
-                existing.pending.push(PendingItem { event, done: tx });
+                existing.pending.extend(events);
+                existing.waiters.push(tx);
             } else {
                 queues.insert(
                     thread_id.clone(),
                     ThreadQueue {
-                        pending: vec![PendingItem { event, done: tx }],
+                        pending: events,
+                        waiters: vec![tx],
                         in_flight_count: 0,
                         idle_notify: Arc::new(Notify::new()),
                     },
@@ -451,7 +461,7 @@ impl ThreadJournal {
 
 async fn flush_thread_queue(inner: Arc<ThreadJournalInner>, thread_id: String) {
     loop {
-        let (mut batch, notify) = {
+        let (inputs, mut waiters, notify) = {
             let mut queues = inner.queues.lock();
             let Some(q) = queues.get_mut(&thread_id) else {
                 return;
@@ -464,32 +474,33 @@ async fn flush_thread_queue(inner: Arc<ThreadJournalInner>, thread_id: String) {
             }
             let taken = std::mem::take(&mut q.pending);
             q.in_flight_count = taken.len();
-            (taken, Arc::clone(&q.idle_notify))
+            (
+                taken,
+                std::mem::take(&mut q.waiters),
+                Arc::clone(&q.idle_notify),
+            )
         };
 
-        let inputs: Vec<ThreadJournalEventInput> =
-            batch.iter().map(|item| item.event.clone()).collect();
-        let append_res = inner.session_db.append_thread_journal_events(&inputs).await;
-
-        match append_res {
+        match inner.session_db.append_thread_journal_events(&inputs).await {
             Ok(_) => {
-                for item in batch {
-                    let _ = item.done.send(Ok(()));
+                for done in waiters {
+                    let _ = done.send(Ok(()));
                 }
             }
             Err(err) => {
+                let mut dropped = inputs.len();
                 if inner.closed.load(Ordering::SeqCst) {
                     let mut queues = inner.queues.lock();
                     if let Some(q) = queues.get_mut(&thread_id) {
-                        batch.extend(std::mem::take(&mut q.pending));
+                        dropped += q.pending.len();
+                        q.pending.clear();
+                        waiters.append(&mut q.waiters);
                     }
                 }
                 let err_msg = err.to_string();
-                record_failure(&inner, &thread_id, batch.len() as u64, &err_msg).await;
-                for item in batch {
-                    let _ = item
-                        .done
-                        .send(Err(crate::error::StorageError::Conflict(err_msg.clone())));
+                record_failure(&inner, &thread_id, dropped as u64, &err_msg).await;
+                for done in waiters {
+                    let _ = done.send(Err(crate::error::StorageError::Conflict(err_msg.clone())));
                 }
             }
         }
@@ -615,6 +626,25 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn failed_batch_records_all_dropped_events_and_no_partial_commit() {
+        let (_root, db, journal) = open_journal("batch-failure").await;
+        let conn = rusqlite::Connection::open(db.db_path()).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_second BEFORE INSERT ON thread_journal_events
+            WHEN NEW.seq = 2 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+        )
+        .unwrap();
+        let batch = (0..3).map(|i| journal_event("thread", i)).collect();
+        assert!(journal.enqueue_batch(batch).await.is_err());
+        journal.wait_for_idle("thread").await;
+        let health = journal.get_health("thread").unwrap();
+        assert!(health.snapshot_required);
+        assert_eq!(health.tail_seq, 0);
+        assert_eq!(health.failed_write_count, 1);
+        assert_eq!(health.dropped_event_count, 3);
+    }
+
     /// Arms the test gate and returns (reached, resume) handles for the paused waiter.
     fn arm_wait_gate(journal: &ThreadJournal) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (reached_tx, reached_rx) = oneshot::channel();
@@ -636,10 +666,8 @@ mod tests {
         journal.inner.queues.lock().insert(
             "thread-race".to_string(),
             ThreadQueue {
-                pending: vec![PendingItem {
-                    event: journal_event("thread-race", 1),
-                    done: done_tx,
-                }],
+                pending: vec![journal_event("thread-race", 1)],
+                waiters: vec![done_tx],
                 in_flight_count: 0,
                 idle_notify: Arc::new(Notify::new()),
             },
@@ -666,10 +694,8 @@ mod tests {
         journal.inner.queues.lock().insert(
             "thread-race".to_string(),
             ThreadQueue {
-                pending: vec![PendingItem {
-                    event: journal_event("thread-race", 2),
-                    done: later_tx,
-                }],
+                pending: vec![journal_event("thread-race", 2)],
+                waiters: vec![later_tx],
                 in_flight_count: 0,
                 idle_notify: Arc::new(Notify::new()),
             },
@@ -696,6 +722,7 @@ mod tests {
             "thread-empty".to_string(),
             ThreadQueue {
                 pending: Vec::new(),
+                waiters: Vec::new(),
                 in_flight_count: 1,
                 idle_notify: Arc::new(Notify::new()),
             },

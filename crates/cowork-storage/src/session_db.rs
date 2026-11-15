@@ -18,8 +18,8 @@ use crate::types::{
     PersistedExternalConversationImport, PersistedExternalConversationImportMutation,
     PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
     PersistedSessionSummary, PersistedThreadJournalEvent, PersistedThreadJournalFailure,
-    PersistedThreadMetadata, PersistedThreadMetadataPatch, SessionDbOptions, SessionKind,
-    SessionPersistenceStatus, SessionTitleSource, StartupReconciliationReport,
+    PersistedThreadMetadata, PersistedThreadMetadataPatch, RootThreadListRow, SessionDbOptions,
+    SessionKind, SessionPersistenceStatus, SessionTitleSource, StartupReconciliationReport,
     ThreadJournalEventInput,
 };
 use crate::write_coordinator::{
@@ -565,63 +565,66 @@ impl SessionDb {
                  WHERE session_kind = 'root'
                  ORDER BY updated_at DESC",
             )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, i64>(9)?,
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, i64>(11)?,
-                    row.get::<_, String>(12)?,
-                ))
-            })?;
-
+            let mut rows = stmt.query([])?;
             let mut out = Vec::new();
-            for item in rows {
-                let (
-                    session_id,
-                    title,
-                    title_source,
-                    title_model,
-                    provider_raw,
-                    model,
-                    created_at,
-                    updated_at,
-                    message_count,
-                    last_event_seq,
-                    has_pending_ask,
-                    has_pending_approval,
-                    wd,
-                ) = item?;
-
-                if let Some(target_ws) = filter_ws
-                    && !same_workspace_path(&wd, target_ws)
+            while let Some(row) = rows.next()? {
+                if let Some(target) = filter_ws
+                    && !same_workspace_path(&row.get::<_, String>("working_directory")?, target)
                 {
                     continue;
                 }
-                let Some(provider) = ProviderName::parse(&provider_raw) else {
-                    continue;
-                };
-                out.push(PersistedSessionSummary {
-                    session_id,
-                    title,
-                    title_source: SessionTitleSource::from_db(&title_source),
-                    title_model,
-                    provider,
-                    model,
-                    created_at,
-                    updated_at,
-                    message_count: message_count.max(0) as usize,
-                    last_event_seq: last_event_seq.max(0) as u64,
-                    has_pending_ask: has_pending_ask != 0,
-                    has_pending_approval: has_pending_approval != 0,
+                if let Some(summary) = read_session_summary(row)? {
+                    out.push(summary);
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// List chat summaries in one read. Keep idle roots here: a busy live session may
+    /// override an otherwise unlistable row. The server merges live state before paging.
+    pub fn list_root_thread_summaries(
+        &self,
+        workspace: Option<&str>,
+    ) -> Result<Vec<RootThreadListRow>> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT s.session_id, s.title, s.title_source, s.title_model, s.provider, s.model,
+                        s.created_at, s.updated_at, s.message_count, s.last_event_seq,
+                        s.has_pending_ask, s.has_pending_approval, s.working_directory,
+                        s.execution_state, s.last_message_preview, m.pinned, m.pinned_at,
+                        m.archived, m.archived_at, m.updated_at AS metadata_updated_at,
+                        (SELECT MAX(seq) FROM thread_journal_events WHERE thread_id = s.session_id) AS journal_tail
+                 FROM sessions s
+                 LEFT JOIN thread_metadata m ON m.thread_id = s.session_id
+                 WHERE s.session_kind = 'root' AND s.parent_session_id IS NULL
+                   AND s.role IS NULL AND s.agent_type IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM task_threads t WHERE t.session_id = s.session_id)
+                   AND EXISTS (SELECT 1 FROM session_state st WHERE st.session_id = s.session_id)",
+            )?;
+            let mut rows = stmt.query([])?;
+            let mut out = Vec::new();
+            let mut path_matches = HashMap::new();
+            while let Some(row) = rows.next()? {
+                let wd: String = row.get("working_directory")?;
+                if let Some(target) = workspace && wd != target
+                    && !*path_matches.entry(wd.clone()).or_insert_with(|| same_workspace_path(&wd, target))
+                { continue; }
+                let Some(session) = read_session_summary(row)? else { continue };
+                out.push(RootThreadListRow {
+                    working_directory: wd,
+                    last_message_preview: row.get::<_, Option<String>>("last_message_preview")?.unwrap_or_default(),
+                    execution_state: row.get::<_, Option<String>>("execution_state")?.as_deref().and_then(AgentExecutionState::from_db),
+                    metadata: PersistedThreadMetadata {
+                        thread_id: session.session_id.clone(),
+                        pinned: row.get::<_, Option<bool>>("pinned")?.unwrap_or(false),
+                        pinned_at: row.get("pinned_at")?,
+                        archived: row.get::<_, Option<bool>>("archived")?.unwrap_or(false),
+                        archived_at: row.get("archived_at")?,
+                        updated_at: row.get::<_, Option<String>>("metadata_updated_at")?.unwrap_or_default(),
+                    },
+                    journal_tail_seq: row.get::<_, Option<i64>>("journal_tail")?.unwrap_or(0).max(0) as u64,
+                    session,
                 });
             }
             Ok(out)
@@ -1780,11 +1783,17 @@ pub(crate) fn append_thread_journal_events_sync(
     inputs: &[ThreadJournalEventInput],
 ) -> Result<Vec<u64>> {
     let tx = conn.transaction()?;
-    let mut next_seq_by_thread: HashMap<String, u64> = HashMap::new();
+    let mut next_seq_by_thread: HashMap<&str, u64> = HashMap::new();
     let mut inserted = Vec::with_capacity(inputs.len());
 
+    let mut insert = tx.prepare(
+        "INSERT INTO thread_journal_events (
+               thread_id, seq, ts, event_type, turn_id, item_id, request_id, payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
+
     for input in inputs {
-        let next_seq = match next_seq_by_thread.get(&input.thread_id).copied() {
+        let next_seq = match next_seq_by_thread.get(input.thread_id.as_str()).copied() {
             Some(seq) => seq,
             None => {
                 let latest: Option<i64> = tx
@@ -1801,25 +1810,21 @@ pub(crate) fn append_thread_journal_events_sync(
             }
         };
         let payload_json = serde_json::to_string(&input.payload)?;
-        tx.execute(
-            "INSERT INTO thread_journal_events (
-               thread_id, seq, ts, event_type, turn_id, item_id, request_id, payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                input.thread_id,
-                next_seq as i64,
-                input.ts,
-                input.event_type,
-                input.turn_id,
-                input.item_id,
-                input.request_id,
-                payload_json,
-            ],
-        )?;
+        insert.execute(params![
+            input.thread_id,
+            next_seq as i64,
+            input.ts,
+            input.event_type,
+            input.turn_id,
+            input.item_id,
+            input.request_id,
+            payload_json,
+        ])?;
         inserted.push(next_seq);
-        next_seq_by_thread.insert(input.thread_id.clone(), next_seq + 1);
+        next_seq_by_thread.insert(input.thread_id.as_str(), next_seq + 1);
     }
 
+    drop(insert);
     tx.commit()?;
     Ok(inserted)
 }
@@ -2017,6 +2022,28 @@ fn find_open_journal_turns(conn: &Connection, thread_id: &str) -> Result<Vec<Str
     }
     open_order.retain(|tid| !closed.contains(tid));
     Ok(open_order)
+}
+
+fn read_session_summary(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Option<PersistedSessionSummary>> {
+    let Some(provider) = ProviderName::parse(&row.get::<_, String>("provider")?) else {
+        return Ok(None);
+    };
+    Ok(Some(PersistedSessionSummary {
+        session_id: row.get("session_id")?,
+        title: row.get("title")?,
+        title_source: SessionTitleSource::from_db(&row.get::<_, String>("title_source")?),
+        title_model: row.get("title_model")?,
+        provider,
+        model: row.get("model")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        message_count: row.get::<_, i64>("message_count")?.max(0) as usize,
+        last_event_seq: row.get::<_, i64>("last_event_seq")?.max(0) as u64,
+        has_pending_ask: row.get("has_pending_ask")?,
+        has_pending_approval: row.get("has_pending_approval")?,
+    }))
 }
 
 pub(crate) fn read_session_record_from_conn(

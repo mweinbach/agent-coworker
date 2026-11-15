@@ -692,10 +692,6 @@ impl TurnStepRunner {
             } else {
                 tools_map.values().map(|t| t.definition()).collect()
             };
-            let tool_values: Vec<Value> = step_tool_defs
-                .iter()
-                .filter_map(|d| serde_json::to_value(d).ok())
-                .collect();
             let auth_names: Vec<String> = step_tool_defs.iter().map(|d| d.name.clone()).collect();
 
             // The stored fingerprint covers the post-assistant prefix, while `history` already
@@ -747,7 +743,7 @@ impl TurnStepRunner {
                 system_prompt: self.cfg.system_prompt.clone(),
                 messages: history.clone(),
                 tools: step_tool_defs,
-                authorized_tool_names: Some(auth_names.clone()),
+                authorized_tool_names: Some(auth_names),
                 provider_options: step_provider_options.clone(),
                 continuation: valid_cont,
                 policy: RequestPolicy {
@@ -946,31 +942,33 @@ impl TurnStepRunner {
                 .unwrap_or_else(|| step_ok.assistant.clone());
             history.push(persisted_assistant);
 
-            // Stamp updated continuation state with the post-assistant prefix fingerprint!
             if let Some(mut next_cont) = step_ok.continuation {
-                let next_fp = compute_continuation_fingerprint(&ContinuationFingerprintInput {
-                    provider: self.cfg.provider.as_str(),
-                    model_id: &self.cfg.model_id,
-                    system_prompt: &self.cfg.system_prompt,
-                    tools: &tool_values,
-                    authorized_tool_names: Some(&auth_names),
-                    canonical_prefix: &history,
-                    stream_options: &step_provider_options,
-                });
-                match &mut next_cont {
-                    ProviderContinuationState::OpenAi {
-                        request_fingerprint,
-                        ..
-                    }
-                    | ProviderContinuationState::Google {
-                        request_fingerprint,
-                        ..
-                    } => {
-                        if request_fingerprint.is_empty() {
-                            *request_fingerprint = next_fp;
-                        }
-                    }
-                    ProviderContinuationState::CodexCli { .. } => {}
+                // Native transports stamp their own prefix; only compute the fallback on a miss.
+                if let ProviderContinuationState::OpenAi {
+                    request_fingerprint,
+                    ..
+                }
+                | ProviderContinuationState::Google {
+                    request_fingerprint,
+                    ..
+                } = &mut next_cont
+                    && request_fingerprint.is_empty()
+                {
+                    let tools: Vec<_> = req_template
+                        .tools
+                        .iter()
+                        .filter_map(|d| serde_json::to_value(d).ok())
+                        .collect();
+                    *request_fingerprint =
+                        compute_continuation_fingerprint(&ContinuationFingerprintInput {
+                            provider: self.cfg.provider.as_str(),
+                            model_id: &self.cfg.model_id,
+                            system_prompt: &self.cfg.system_prompt,
+                            tools: &tools,
+                            authorized_tool_names: req_template.authorized_tool_names.as_deref(),
+                            canonical_prefix: &history,
+                            stream_options: &step_provider_options,
+                        });
                 }
                 current_continuation = Some(next_cont);
             }

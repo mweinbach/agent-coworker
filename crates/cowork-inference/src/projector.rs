@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::ast::Citation;
-use crate::partial_json::{StreamingToolDeltaParser, parse_partial_json_object};
+use crate::partial_json::parse_partial_json_object;
 use crate::stream::{ReasoningStreamMode, StreamEvent};
 
 /// Negotiated client feature capabilities affecting outbound JSON-RPC projection.
@@ -67,7 +67,8 @@ struct ActiveToolItem {
     item_id: String,
     name: String,
     state: String,
-    parser: StreamingToolDeltaParser,
+    raw_args: String,
+    parsed_bytes: usize,
     args: Option<Map<String, Value>>,
     result: Option<Value>,
     retry_of: Option<String>,
@@ -84,7 +85,15 @@ impl ActiveToolItem {
         )
     }
 
-    fn to_item_value(&self) -> Value {
+    fn refresh_args(&mut self) {
+        if self.raw_args.len() != self.parsed_bytes {
+            self.args = Some(parse_partial_json_object(&self.raw_args));
+            self.parsed_bytes = self.raw_args.len();
+        }
+    }
+
+    fn item_snapshot(&mut self) -> Value {
+        self.refresh_args();
         let mut obj = Map::new();
         obj.insert("id".to_string(), Value::String(self.item_id.clone()));
         obj.insert("type".to_string(), Value::String("toolCall".to_string()));
@@ -397,12 +406,18 @@ impl StreamEventProjector {
 
                 let full_key = format!("{turn_id}:{key}");
                 let start_new = self.tools_by_key.contains_key(&full_key);
+                if let Some(previous) = self.tools_by_key.get_mut(&full_key)
+                    && previous.raw_args.len() != previous.parsed_bytes
+                {
+                    let item = previous.item_snapshot();
+                    self.publish_tool_update(&mut out, turn_id, item, true);
+                }
                 let tool = self.resolve_tool_state(turn_id, key, name, start_new);
                 if let Some(args) = initial_args {
                     tool.args = Some(args.clone());
                 }
                 tool.state = "input-streaming".to_string();
-                let item = tool.to_item_value();
+                let item = tool.item_snapshot();
                 let was_started = tool.started;
                 tool.started = true;
                 self.publish_tool_update(&mut out, turn_id, item, was_started);
@@ -420,9 +435,19 @@ impl StreamEventProjector {
                 if tool.is_terminal() {
                     return out;
                 }
-                let partial_args = tool.parser.push_delta(delta);
-                tool.args = Some(partial_args);
-                let item = tool.to_item_value();
+                // Each preview carries the whole argument object. Show the first fragment
+                // immediately, then amortize parsing and publishing over larger chunks.
+                // Grow the interval for large inputs so total snapshot bytes stay linear.
+                const MIN_PREVIEW_BYTES: usize = 4096;
+                tool.raw_args.push_str(delta);
+                let interval = MIN_PREVIEW_BYTES.max(tool.parsed_bytes / 4);
+                if delta.is_empty()
+                    || (tool.parsed_bytes != 0
+                        && tool.raw_args.len() - tool.parsed_bytes < interval)
+                {
+                    return out;
+                }
+                let item = tool.item_snapshot();
                 let was_started = tool.started;
                 tool.started = true;
                 self.publish_tool_update(&mut out, turn_id, item, was_started);
@@ -444,8 +469,7 @@ impl StreamEventProjector {
                 }
                 if let Some(explicit_args) = arguments {
                     tool.args = Some(explicit_args.clone());
-                } else if !tool.parser.buffer().is_empty() {
-                    tool.args = Some(parse_partial_json_object(tool.parser.buffer()));
+                    tool.parsed_bytes = tool.raw_args.len();
                 }
                 if retry_of.is_some() {
                     tool.retry_of = retry_of.clone();
@@ -456,7 +480,7 @@ impl StreamEventProjector {
                 if tool.state != "approval-requested" {
                     tool.state = "input-available".to_string();
                 }
-                let item = tool.to_item_value();
+                let item = tool.item_snapshot();
                 let was_started = tool.started;
                 tool.started = true;
                 self.publish_tool_update(&mut out, turn_id, item, was_started);
@@ -473,7 +497,7 @@ impl StreamEventProjector {
                 let tool = self.resolve_tool_state(turn_id, key, name, false);
                 tool.state = "approval-requested".to_string();
                 tool.approval = Some(approval.clone());
-                let item = tool.to_item_value();
+                let item = tool.item_snapshot();
                 let was_started = tool.started;
                 tool.started = true;
                 self.publish_tool_update(&mut out, turn_id, item, was_started);
@@ -498,7 +522,7 @@ impl StreamEventProjector {
                     "output-available".to_string()
                 };
                 tool.result = Some(result.clone());
-                let item = tool.to_item_value();
+                let item = tool.item_snapshot();
                 let was_started = tool.started;
                 tool.started = true;
                 if !was_started {
@@ -511,13 +535,9 @@ impl StreamEventProjector {
             } => {
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
                 self.close_open_assistant_before_boundary(&mut out, turn_id);
-                if status == "failed" || status == "interrupted" {
-                    self.fail_open_tools_for_turn(
-                        &mut out,
-                        turn_id,
-                        "Turn ended before tool completion.",
-                    );
-                }
+                let error = matches!(status.as_str(), "failed" | "interrupted")
+                    .then_some("Turn ended before tool completion.");
+                self.flush_open_tools_for_turn(&mut out, turn_id, error);
                 self.push_notification(
                     &mut out,
                     "turn/completed",
@@ -539,7 +559,7 @@ impl StreamEventProjector {
             } => {
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
                 self.close_open_assistant_before_boundary(&mut out, turn_id);
-                self.fail_open_tools_for_turn(&mut out, turn_id, message);
+                self.flush_open_tools_for_turn(&mut out, turn_id, Some(message));
                 let (norm_code, norm_source) = match code.as_deref() {
                     Some("budget_exceeded" | "validation_failed") => {
                         ("validation_failed", "session")
@@ -849,7 +869,8 @@ impl StreamEventProjector {
                 item_id,
                 name: name.to_string(),
                 state: "input-streaming".to_string(),
-                parser: StreamingToolDeltaParser::new(),
+                raw_args: String::new(),
+                parsed_bytes: 0,
                 args: None,
                 result: None,
                 retry_of: None,
@@ -882,11 +903,11 @@ impl StreamEventProjector {
         }
     }
 
-    fn fail_open_tools_for_turn(
+    fn flush_open_tools_for_turn(
         &mut self,
         out: &mut Vec<ProjectedNotification>,
         turn_id: &str,
-        error_message: &str,
+        error_message: Option<&str>,
     ) {
         let prefix = format!("{turn_id}:");
         let keys: Vec<String> = self
@@ -900,14 +921,15 @@ impl StreamEventProjector {
             if let Some(tool) = self.tools_by_key.get_mut(&full_key)
                 && !tool.is_terminal()
             {
-                if tool.args.is_none() && !tool.parser.buffer().is_empty() {
-                    tool.args = Some(parse_partial_json_object(tool.parser.buffer()));
+                if let Some(message) = error_message {
+                    tool.state = "output-error".to_string();
+                    tool.result = Some(json!({ "error": message }));
+                } else if tool.raw_args.len() == tool.parsed_bytes {
+                    continue;
                 }
-                tool.state = "output-error".to_string();
-                tool.result = Some(json!({ "error": error_message }));
                 let was_started = tool.started;
                 tool.started = true;
-                to_emit = Some((was_started, tool.to_item_value()));
+                to_emit = Some((was_started, tool.item_snapshot()));
             }
             if let Some((was_started, item)) = to_emit {
                 if !was_started {

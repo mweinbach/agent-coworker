@@ -191,6 +191,7 @@ pub struct SettingsUiState {
     pub install_target_edit: TextEdit,
     pub selected_plugin_id: Option<String>,
     pub selected_skill_id: Option<String>,
+    pub developer_overflow_threshold_synced: Option<String>,
 }
 
 impl Default for SettingsUiState {
@@ -206,7 +207,7 @@ impl Default for SettingsUiState {
             diagnostics_status_banner: None,
             last_diagnostics_bundle_path: None,
             developer_restart_onboarding_confirm_open: false,
-            developer_overflow_threshold_edit: TextEdit::new("30000"),
+            developer_overflow_threshold_edit: TextEdit::new(""),
             developer_overflow_threshold_workspace: None,
             usage_window: UsageTimeWindow::All,
             usage_tab: UsageViewTab::Overview,
@@ -290,6 +291,7 @@ impl Default for SettingsUiState {
             install_target_edit: TextEdit::new(""),
             selected_plugin_id: None,
             selected_skill_id: None,
+            developer_overflow_threshold_synced: None,
         }
     }
 }

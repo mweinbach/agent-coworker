@@ -212,32 +212,45 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     // Full-payload capture exposes prompts, tool outputs, commands, logs, and file paths;
     // require explicit confirmation modal before turning ON while turning OFF remains one click.
+    let (payload_label, payload_tone) = if !pt.ai_trace_telemetry_enabled {
+        ("Requires metadata", StatusTone::Neutral)
+    } else if pt.ai_trace_payloads_enabled {
+        ("Full payload", StatusTone::Success)
+    } else {
+        ("Disabled", StatusTone::Neutral)
+    };
     let payloads_row = SettingsRow::new("AI trace payloads")
         .description(
             "Include prompt and tool payload samples in AI traces. Requires AI trace metadata.",
         )
         .control(
-            Switch::new(pt.ai_trace_payloads_enabled)
-                .label("AI trace payloads")
-                .hide_label()
-                .disabled(!pt.ai_trace_telemetry_enabled)
-                .on_toggle(|s: &mut AppState| {
-                    if s.desktop_settings
-                        .privacy_telemetry
-                        .ai_trace_payloads_enabled
-                    {
-                        dispatch_privacy_patch(s, |p| {
-                            p.ai_trace_payloads_enabled = false;
-                        });
-                    } else if s
-                        .desktop_settings
-                        .privacy_telemetry
-                        .ai_trace_telemetry_enabled
-                    {
-                        s.settings_ui.privacy_trace_payloads_confirm_open = true;
-                    }
-                })
-                .build(k),
+            row()
+                .items_center()
+                .gap(8.0)
+                .child(status_pill(payload_label, payload_tone, k, t))
+                .child(
+                    Switch::new(pt.ai_trace_payloads_enabled)
+                        .label("AI trace payloads")
+                        .hide_label()
+                        .disabled(!pt.ai_trace_telemetry_enabled)
+                        .on_toggle(|s: &mut AppState| {
+                            if s.desktop_settings
+                                .privacy_telemetry
+                                .ai_trace_payloads_enabled
+                            {
+                                dispatch_privacy_patch(s, |p| {
+                                    p.ai_trace_payloads_enabled = false;
+                                });
+                            } else if s
+                                .desktop_settings
+                                .privacy_telemetry
+                                .ai_trace_telemetry_enabled
+                            {
+                                s.settings_ui.privacy_trace_payloads_confirm_open = true;
+                            }
+                        })
+                        .build(k),
+                ),
         );
     let payloads_row = if !pt.ai_trace_payloads_enabled && pt.ai_trace_telemetry_enabled {
         payloads_row

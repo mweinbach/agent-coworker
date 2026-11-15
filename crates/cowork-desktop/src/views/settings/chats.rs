@@ -28,7 +28,6 @@ const RETENTION_OPTIONS: &[(u32, &str)] = &[
 const IMPORT_SOURCE_OPTIONS: &[(&str, &str)] = &[
     ("codex", "Codex"),
     ("claude-code", "Claude Code"),
-    ("chatgpt", "ChatGPT export"),
     ("cowork", "Cowork backup / .cowork folder"),
 ];
 
@@ -48,19 +47,34 @@ fn days_for_retention_label(label: &str) -> u32 {
         .unwrap_or(30)
 }
 
-fn build_import_source_params(s: &AppState) -> Value {
-    let mut sources: Vec<String> = s
-        .settings_ui
-        .import_selected_sources
-        .iter()
-        .cloned()
-        .collect();
-    sources.sort();
-    let mut obj = Map::new();
-    obj.insert("sources".to_string(), json!(sources));
+/// Builds JSON-RPC source selection parameters conforming to `ConversationImportPreviewParams`
+/// and `ConversationImportRunParams` (`sources` objects with optional `path`, or `include*` flags).
+pub fn build_import_source_params(s: &AppState) -> Value {
+    let selected = &s.settings_ui.import_selected_sources;
     let cowork_path = s.settings_ui.import_path_edit.text.trim();
-    if !cowork_path.is_empty() {
-        obj.insert("coworkPath".to_string(), json!(cowork_path));
+    let include_codex = selected.contains("codex");
+    let include_claude_code = selected.contains("claude-code");
+    let include_cowork = selected.contains("cowork");
+
+    let mut obj = Map::new();
+    if include_cowork && !cowork_path.is_empty() {
+        let mut requests = Vec::new();
+        for (source_id, _) in IMPORT_SOURCE_OPTIONS {
+            if !selected.contains(*source_id) {
+                continue;
+            }
+            let mut req = Map::new();
+            req.insert("source".to_string(), json!(source_id));
+            if *source_id == "cowork" {
+                req.insert("path".to_string(), json!(cowork_path));
+            }
+            requests.push(Value::Object(req));
+        }
+        obj.insert("sources".to_string(), Value::Array(requests));
+    } else {
+        obj.insert("includeCodex".to_string(), json!(include_codex));
+        obj.insert("includeClaudeCode".to_string(), json!(include_claude_code));
+        obj.insert("includeCowork".to_string(), json!(include_cowork));
     }
     Value::Object(obj)
 }
@@ -250,7 +264,6 @@ fn build_import_dialog(
 
     Dialog::new("conversation-import-dialog", "Import conversations")
         .open(s.settings_ui.import_dialog_open)
-        .description("Bring existing transcripts from Codex, Claude Code, ChatGPT exports, or another Cowork backup into this workspace.")
         .width(520.0)
         .fit()
         .on_close(|s: &mut AppState| {
@@ -259,7 +272,16 @@ fn build_import_dialog(
         .child(
             col()
                 .w_full()
+                .min_w(0.0)
+                .px(16.0)
+                .pb(16.0)
                 .gap(12.0)
+                .child(
+                    text("Bring existing transcripts from Codex, Claude Code, or another Cowork backup into this workspace.")
+                        .font(k.ty.text_small)
+                        .color(t.text_muted)
+                        .wrap(),
+                )
                 .child(source_checks)
                 .child(path_field)
                 .child(preview_summary)
@@ -285,7 +307,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     // 1. Conversation import section
     let import_section = Section::new()
         .title("Import conversations")
-        .description("Import transcripts from Codex, Claude Code, ChatGPT exports, or Cowork backups.")
+        .description("Import transcripts from Codex, Claude Code, or Cowork backups.")
         .child(
             SettingsRow::new("Conversation importer")
                 .description("Scan local archives, review matching conversations, and skip already-imported threads.")

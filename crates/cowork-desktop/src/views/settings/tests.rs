@@ -1,9 +1,11 @@
 //! Unit tests for Settings navigation, gating, target resolution, and primitives.
 
+use super::chats::build_import_source_params;
 use super::desktop::{
     DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label,
     parse_quick_chat_accelerator, shortcut_to_accelerator,
 };
+use super::developer::{parse_libreoffice_status, resolve_workspace_overflow_config};
 use super::experiments::{KNOWN_FEATURE_FLAGS, is_flag_enabled, resolve_flag_enabled};
 use super::manage_models_dialog::{can_add_custom_model, filter_provider_models};
 use super::mcp_server_draft::{
@@ -502,11 +504,25 @@ fn remote_access_permissions_parse_and_update_json_and_csv() {
     assert!(reparsed.contains("conversations"));
     assert!(reparsed.contains("turns"));
 
-    let parsed_csv = parse_phone_permissions("conversations, serverRequests");
+    let parsed_csv = parse_phone_permissions("conversations, serverRequests; backups");
     assert!(parsed_csv.contains("conversations"));
     assert!(parsed_csv.contains("serverRequests"));
+    assert!(parsed_csv.contains("backups"));
     let updated_csv = update_phone_permission_string("conversations,turns", "turns", false);
     assert_eq!(updated_csv, "conversations");
+
+    // Empty non-JSON disable falls back to `"none"` so `native::remote_access` accepts the patch.
+    assert_eq!(
+        update_phone_permission_string("conversations", "conversations", false),
+        "none"
+    );
+    assert!(parse_phone_permissions("none").is_empty());
+    assert!(parse_phone_permissions("read-only").is_empty());
+    assert_eq!(parse_phone_permissions("all").len(), 7);
+    assert_eq!(
+        update_phone_permission_string("none", "turns", true),
+        "turns"
+    );
 
     let from_empty = update_phone_permission_string("", "backups", true);
     let reparsed_empty = parse_phone_permissions(&from_empty);
@@ -576,4 +592,96 @@ fn providers_and_manage_models_helpers_filter_and_detect_connection() {
 
     assert!(can_add_custom_model("openrouter"));
     assert!(!can_add_custom_model("codex-cli"));
+}
+
+#[test]
+fn chats_import_source_params_match_server_schema() {
+    let mut state = AppState::default();
+    state.settings_ui.import_selected_sources.clear();
+    state
+        .settings_ui
+        .import_selected_sources
+        .insert("codex".to_string());
+    state
+        .settings_ui
+        .import_selected_sources
+        .insert("chatgpt".to_string());
+
+    let default_params = build_import_source_params(&state);
+    assert_eq!(default_params["includeCodex"], serde_json::json!(true));
+    assert_eq!(
+        default_params["includeClaudeCode"],
+        serde_json::json!(false)
+    );
+    assert_eq!(default_params["includeCowork"], serde_json::json!(false));
+    assert!(default_params.get("coworkPath").is_none());
+    assert!(default_params.get("sources").is_none());
+
+    state
+        .settings_ui
+        .import_selected_sources
+        .insert("cowork".to_string());
+    state.settings_ui.import_path_edit = rune::TextEdit::new("/tmp/alt-cowork");
+    let path_params = build_import_source_params(&state);
+    let sources = path_params["sources"]
+        .as_array()
+        .expect("sources array emitted when alternate cowork path provided");
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0], serde_json::json!({ "source": "codex" }));
+    assert_eq!(
+        sources[1],
+        serde_json::json!({ "source": "cowork", "path": "/tmp/alt-cowork" })
+    );
+    assert!(path_params.get("coworkPath").is_none());
+}
+
+#[test]
+fn developer_libreoffice_and_overflow_config_parse_runtime_shapes() {
+    let nested = serde_json::json!({
+        "status": {
+            "status": "available",
+            "version": "24.8.3",
+            "resolvedPath": "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+            "message": "Ready"
+        }
+    });
+    let (avail, detail) = parse_libreoffice_status(&nested);
+    assert_eq!(avail, Some(true));
+    let detail_str = detail.expect("formatted LibreOffice detail");
+    assert!(detail_str.contains("24.8.3"));
+    assert!(detail_str.contains("soffice"));
+
+    let missing = serde_json::json!({ "status": "missing", "message": "soffice not found" });
+    assert_eq!(
+        parse_libreoffice_status(&missing),
+        (Some(false), Some("soffice not found".to_string()))
+    );
+
+    let ws_explicit = WorkspaceRecord {
+        id: "ws-1".to_string(),
+        defaults: serde_json::json!({ "defaultToolOutputOverflowChars": 12000 }),
+        ..Default::default()
+    };
+    let rt_inherited = crate::state::WorkspaceRuntime {
+        control_session_config: Some(serde_json::json!({ "toolOutputOverflowChars": 48000 })),
+        ..Default::default()
+    };
+    assert_eq!(
+        resolve_workspace_overflow_config(Some(&ws_explicit), Some(&rt_inherited)),
+        (true, false, false, 12000)
+    );
+    assert_eq!(
+        resolve_workspace_overflow_config(None, Some(&rt_inherited)),
+        (true, true, false, 48000)
+    );
+
+    let ws_disabled = WorkspaceRecord {
+        id: "ws-2".to_string(),
+        defaults: serde_json::json!({ "defaultToolOutputOverflowChars": null }),
+        ..Default::default()
+    };
+    assert_eq!(
+        resolve_workspace_overflow_config(Some(&ws_disabled), Some(&rt_inherited)),
+        (false, false, false, 48000)
+    );
 }

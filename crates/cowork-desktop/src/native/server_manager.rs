@@ -1326,17 +1326,10 @@ impl ServerManager {
             .map(|(id, h)| (id.clone(), h.workspace_path.clone(), h.yolo))
     }
 
-    fn mobile_h3_admin_request_context(
+    fn mobile_h3_admin_base(
         &self,
         workspace_id: &str,
-        device_id: &str,
-        action_suffix: Option<&str>,
-    ) -> Result<(Arc<RunningServerHandle>, String, Url, Url), String> {
-        let trimmed_id = device_id.trim();
-        if trimmed_id.is_empty() {
-            return Err("Trusted phone identifier is empty.".into());
-        }
-
+    ) -> Result<(Arc<RunningServerHandle>, String, Url), String> {
         let handle = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.servers.get(workspace_id).cloned()
@@ -1344,7 +1337,7 @@ impl ServerManager {
         .ok_or_else(|| "Workspace server is not running.".to_string())?;
 
         if handle.exited.load(Ordering::Acquire) {
-            return Err("Workspace server has exited.".into());
+            return Err("Workspace server has exited.".to_string());
         }
 
         let admin_token = {
@@ -1363,8 +1356,26 @@ impl ServerManager {
         })?;
 
         let base_http = to_http_server_request_url(&handle.ws_url, "/")?;
-        let mut device_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
-        device_url.set_query(None);
+        let mut list_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
+        list_url.set_query(None);
+        list_url.set_path("/mobile-h3/trusted");
+
+        Ok((handle, admin_token, list_url))
+    }
+
+    fn mobile_h3_admin_request_context(
+        &self,
+        workspace_id: &str,
+        device_id: &str,
+        action_suffix: Option<&str>,
+    ) -> Result<(Arc<RunningServerHandle>, String, Url, Url), String> {
+        let trimmed_id = device_id.trim();
+        if trimmed_id.is_empty() {
+            return Err("Trusted phone identifier is empty.".into());
+        }
+
+        let (handle, admin_token, list_url) = self.mobile_h3_admin_base(workspace_id)?;
+        let mut device_url = list_url.clone();
         {
             let mut segs = device_url
                 .path_segments_mut()
@@ -1378,11 +1389,18 @@ impl ServerManager {
             }
         }
 
-        let mut list_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
-        list_url.set_query(None);
-        list_url.set_path("/mobile-h3/trusted");
-
         Ok((handle, admin_token, device_url, list_url))
+    }
+
+    fn parse_mobile_h3_error_detail(
+        status: reqwest::StatusCode,
+        resp_json: Option<&Value>,
+    ) -> String {
+        resp_json
+            .and_then(|v| v.get("error"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("HTTP {}", status.as_u16()))
     }
 
     async fn fetch_mobile_h3_trusted_devices_list(
@@ -1438,13 +1456,10 @@ impl ServerManager {
         let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok();
 
         if !status.is_success() {
-            let detail = resp_json
-                .as_ref()
-                .and_then(|v| v.get("error"))
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-            return Err(detail);
+            return Err(Self::parse_mobile_h3_error_detail(
+                status,
+                resp_json.as_ref(),
+            ));
         }
 
         // Refresh full trusted device list from GET /mobile-h3/trusted when available.
@@ -1480,14 +1495,19 @@ impl ServerManager {
         Ok(h3_guard.clone())
     }
 
-    /// Revokes a paired phone via `DELETE /mobile-h3/trusted/<id>` and refreshes `trustedDevices`.
-    pub async fn forget_mobile_h3_trusted_device(
+    async fn send_mobile_h3_admin_delete(
         &self,
         workspace_id: &str,
-        device_id: &str,
+        device_id: Option<&str>,
+        error_prefix: &str,
     ) -> Result<Option<Value>, String> {
-        let (handle, admin_token, delete_url, list_url) =
-            self.mobile_h3_admin_request_context(workspace_id, device_id, None)?;
+        let (handle, admin_token, delete_url, list_url) = match device_id {
+            Some(id) => self.mobile_h3_admin_request_context(workspace_id, id, None)?,
+            None => {
+                let (handle, admin_token, list_url) = self.mobile_h3_admin_base(workspace_id)?;
+                (handle, admin_token, list_url.clone(), list_url)
+            }
+        };
 
         let resp = self
             .http_client
@@ -1495,47 +1515,73 @@ impl ServerManager {
             .bearer_auth(&admin_token)
             .send()
             .await
-            .map_err(|err| format!("Failed forgetting trusted phone: {err}"))?;
+            .map_err(|err| format!("{error_prefix}: {err}"))?;
 
         let status = resp.status();
         let resp_bytes = resp
             .bytes()
             .await
-            .map_err(|err| format!("Failed reading forget-phone response: {err}"))?;
+            .map_err(|err| format!("{error_prefix} response: {err}"))?;
         let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok();
 
         if !status.is_success() {
-            let detail = resp_json
-                .as_ref()
-                .and_then(|v| v.get("error"))
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-            return Err(detail);
+            return Err(Self::parse_mobile_h3_error_detail(
+                status,
+                resp_json.as_ref(),
+            ));
         }
 
         let refreshed_list = self
             .fetch_mobile_h3_trusted_devices_list(list_url, &admin_token)
             .await;
 
-        let trimmed_id = device_id.trim();
+        let trimmed_id = device_id.map(str::trim);
         let mut h3_guard = handle.mobile_h3.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(Value::Object(map)) = h3_guard.as_mut() {
             if let Some(list) = refreshed_list {
                 map.insert("trustedDevices".to_string(), Value::Array(list));
-            } else if let Some(Value::Array(devices)) = map.get_mut("trustedDevices") {
-                devices.retain(|d| d.get("deviceId").and_then(Value::as_str) != Some(trimmed_id));
+            } else if let Some(target_id) = trimmed_id {
+                if let Some(Value::Array(devices)) = map.get_mut("trustedDevices") {
+                    devices
+                        .retain(|d| d.get("deviceId").and_then(Value::as_str) != Some(target_id));
+                }
+            } else {
+                map.insert("trustedDevices".to_string(), Value::Array(Vec::new()));
             }
-            if map
-                .get("trustedDevice")
-                .and_then(|d| d.get("deviceId"))
-                .and_then(Value::as_str)
-                == Some(trimmed_id)
+            if trimmed_id.is_none()
+                || map
+                    .get("trustedDevice")
+                    .and_then(|d| d.get("deviceId"))
+                    .and_then(Value::as_str)
+                    == trimmed_id
             {
                 map.remove("trustedDevice");
             }
         }
         Ok(h3_guard.clone())
+    }
+
+    /// Revokes a paired phone via `DELETE /mobile-h3/trusted/<id>` and refreshes `trustedDevices`.
+    pub async fn forget_mobile_h3_trusted_device(
+        &self,
+        workspace_id: &str,
+        device_id: &str,
+    ) -> Result<Option<Value>, String> {
+        self.send_mobile_h3_admin_delete(
+            workspace_id,
+            Some(device_id),
+            "Failed forgetting trusted phone",
+        )
+        .await
+    }
+
+    /// Revokes every paired phone via `DELETE /mobile-h3/trusted` and refreshes `trustedDevices`.
+    pub async fn revoke_all_mobile_h3_trusted_devices(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<Value>, String> {
+        self.send_mobile_h3_admin_delete(workspace_id, None, "Failed revoking trusted phones")
+            .await
     }
 
     async fn graceful_kill_handle(handle: &RunningServerHandle) {
@@ -1770,7 +1816,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let server_task = tokio::spawn(async move {
-            for idx in 0..4 {
+            for idx in 0..6 {
                 let (mut sock, _) = listener.accept().await.unwrap();
                 let mut buf = vec![0u8; 4096];
                 let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf)
@@ -1809,6 +1855,22 @@ mod tests {
                     2 => {
                         assert!(req.starts_with("DELETE /mobile-h3/trusted/dev%2F1+2 "));
                         json!({ "ok": true, "removed": true }).to_string()
+                    }
+                    3 => {
+                        assert!(req.starts_with("GET /mobile-h3/trusted "));
+                        json!({
+                            "trustedDevices": [{
+                                "deviceId": "dev-2",
+                                "displayName": "iPad",
+                                "lastPairedAt": "2026-01-01T00:00:00Z",
+                                "permissions": { "turns": true }
+                            }]
+                        })
+                        .to_string()
+                    }
+                    4 => {
+                        assert!(req.starts_with("DELETE /mobile-h3/trusted "));
+                        json!({ "ok": true }).to_string()
                     }
                     _ => {
                         assert!(req.starts_with("GET /mobile-h3/trusted "));
@@ -1892,7 +1954,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(after_delete["trustedDevices"], json!([]));
+        assert_eq!(
+            after_delete["trustedDevices"][0]["deviceId"],
+            json!("dev-2")
+        );
+        let after_revoke_all = manager
+            .revoke_all_mobile_h3_trusted_devices("ws-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_revoke_all["trustedDevices"], json!([]));
         server_task.await.unwrap();
     }
 }

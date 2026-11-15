@@ -1248,25 +1248,39 @@ pub fn build_visible_user_message(raw: &str) -> VisibleUserMessage {
     let mut canvas_title = None;
 
     for tag in ["spreadsheet_canvas_request", "canvas_request"] {
-        let open = format!("<{tag}>");
-        let close = format!("</{tag}>");
-        if let Some(start) = text.find(&open)
-            && let Some(rel_end) = text[start..].find(&close)
-        {
-            let inner = &text[start + open.len()..start + rel_end];
-            if let Some(title) = extract_xml_tag_text(inner, "title")
+        if let Some((start, end, inner)) = find_xml_envelope(&text, tag) {
+            let parsed_title = extract_xml_tag_text(inner, "title")
                 .or_else(|| extract_xml_tag_text(inner, "file_name"))
-            {
-                canvas_title = Some(title);
-            } else {
-                canvas_title = Some("Canvas".to_string());
-            }
-            let prompt = extract_xml_tag_text(inner, "user_request")
-                .or_else(|| extract_xml_tag_text(inner, "instruction"))
+                .or_else(|| extract_xml_attr(inner, "file", "name"))
+                .or_else(|| extract_xml_attr(inner, "workbook", "file_name"));
+            canvas_title = Some(parsed_title.unwrap_or_else(|| "Canvas".to_string()));
+
+            let without_instructions = strip_xml_block(inner, "assistant_instructions");
+            let selection =
+                extract_xml_tag_text(&without_instructions, "selection").and_then(|s| {
+                    if let Some(val) = extract_xml_tag_text(&s, "value") {
+                        Some(val)
+                    } else if s.trim_start().starts_with('<') {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                });
+            let prompt = extract_xml_tag_text(&without_instructions, "user_request")
+                .or_else(|| extract_xml_tag_text(&without_instructions, "instruction"))
                 .unwrap_or_default();
+
+            let body = match (selection.as_deref(), prompt.as_str()) {
+                (Some(sel), p) if !sel.is_empty() && !p.is_empty() => {
+                    format!("\u{201C}{sel}\u{201D}\n\n{p}")
+                }
+                (Some(sel), _) if !sel.is_empty() => format!("\u{201C}{sel}\u{201D}"),
+                (_, p) => p.to_string(),
+            };
+
             let before = text[..start].trim();
-            let after = text[start + rel_end + close.len()..].trim();
-            text = [before, prompt.as_str(), after]
+            let after = text[end..].trim();
+            text = [before, body.as_str(), after]
                 .into_iter()
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
@@ -1303,14 +1317,115 @@ pub fn build_visible_user_message(raw: &str) -> VisibleUserMessage {
     }
 }
 
-fn extract_xml_tag_text(xml: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
+fn find_xml_envelope<'a>(text: &'a str, tag: &str) -> Option<(usize, usize, &'a str)> {
+    let open_prefix = format!("<{tag}");
     let close = format!("</{tag}>");
-    let start = xml.find(&open)?;
-    let rest = &xml[start + open.len()..];
-    let end = rest.find(&close)?;
-    let trimmed = rest[..end].trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    let mut search_from = 0usize;
+    while let Some(rel_start) = text[search_from..].find(&open_prefix) {
+        let start = search_from + rel_start;
+        let after_name = start + open_prefix.len();
+        let next = text.as_bytes().get(after_name).copied();
+        if !matches!(next, Some(b'>' | b' ' | b'\t' | b'\r' | b'\n')) {
+            search_from = after_name;
+            continue;
+        }
+        let open_end = text[after_name..].find('>')? + after_name + 1;
+        let rel_close = text[open_end..].find(&close)?;
+        let inner = &text[open_end..open_end + rel_close];
+        let total_end = open_end + rel_close + close.len();
+        return Some((start, total_end, inner));
+    }
+    None
+}
+
+fn strip_xml_block(xml: &str, tag: &str) -> String {
+    if let Some((start, end, _)) = find_xml_envelope(xml, tag) {
+        let mut out = String::with_capacity(xml.len());
+        out.push_str(&xml[..start]);
+        out.push_str(&xml[end..]);
+        out
+    } else {
+        xml.to_string()
+    }
+}
+
+fn extract_xml_attr(xml: &str, element: &str, attr: &str) -> Option<String> {
+    let elem_prefix = format!("<{element}");
+    let elem_start = xml.find(&elem_prefix)?;
+    let after_elem = &xml[elem_start + elem_prefix.len()..];
+    let elem_end = after_elem.find('>')?;
+    let attrs = &after_elem[..elem_end];
+    let needle = format!("{attr}=\"");
+    let mut search_from = 0usize;
+    while let Some(rel_idx) = attrs[search_from..].find(&needle) {
+        let idx = search_from + rel_idx;
+        let prev_ok = idx == 0
+            || attrs[..idx]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace);
+        if !prev_ok {
+            search_from = idx + needle.len();
+            continue;
+        }
+        let val_start = idx + needle.len();
+        let val_end = attrs[val_start..].find('"')?;
+        let decoded = unescape_xml(&attrs[val_start..val_start + val_end]);
+        let trimmed = decoded.trim();
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    None
+}
+
+fn extract_xml_tag_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut search_from = 0usize;
+    while let Some(rel_start) = xml[search_from..].find(&open) {
+        let start = search_from + rel_start;
+        let after_name = start + open.len();
+        let next = xml.as_bytes().get(after_name).copied();
+        if !matches!(next, Some(b'>' | b' ' | b'\t' | b'\r' | b'\n')) {
+            search_from = after_name;
+            continue;
+        }
+        let open_end = xml[after_name..].find('>')? + after_name + 1;
+        let end = xml[open_end..].find(&close)?;
+        let decoded = unescape_xml(&xml[open_end..open_end + end]);
+        let trimmed = decoded.trim();
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    None
+}
+
+fn unescape_xml(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        if let Some(after) = tail.strip_prefix("&lt;") {
+            out.push('<');
+            rest = after;
+        } else if let Some(after) = tail.strip_prefix("&gt;") {
+            out.push('>');
+            rest = after;
+        } else if let Some(after) = tail.strip_prefix("&quot;") {
+            out.push('"');
+            rest = after;
+        } else if let Some(after) = tail.strip_prefix("&apos;") {
+            out.push('\'');
+            rest = after;
+        } else if let Some(after) = tail.strip_prefix("&amp;") {
+            out.push('&');
+            rest = after;
+        } else {
+            out.push('&');
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Cleans `<workflow_result>` and `<agent_report>` JSON envelopes inside subagent transcripts.
@@ -1871,6 +1986,32 @@ mod tests {
         assert_eq!(parsed.canvas_title.as_deref(), Some("Budget.xlsx"));
         assert_eq!(parsed.text, "Sum column B");
         assert_eq!(parsed.attached_names, vec!["report.csv", "notes.txt"]);
+    }
+
+    #[test]
+    fn visible_user_message_parses_electron_v1_canvas_request_with_selection() {
+        let raw = concat!(
+            "<canvas_request version=\"1\" source=\"document\">\n",
+            "  <assistant_instructions><instruction>Treat this as structured context.</instruction></assistant_instructions>\n",
+            "  <file name=\"spec.md\" path=\"/w/spec.md\" kind=\"markdown\" />\n",
+            "  <selection>Legacy &amp; verbose intro</selection>\n",
+            "  <user_request>Rewrite &lt;v1&gt; concisely</user_request>\n",
+            "</canvas_request>",
+        );
+        let parsed = build_visible_user_message(raw);
+        assert_eq!(parsed.canvas_title.as_deref(), Some("spec.md"));
+        assert_eq!(
+            parsed.text,
+            "\u{201C}Legacy & verbose intro\u{201D}\n\nRewrite <v1> concisely"
+        );
+    }
+
+    #[test]
+    fn visible_user_message_preserves_malformed_unclosed_canvas_request() {
+        let raw = "<canvas_request version=\"1\">broken payload";
+        let parsed = build_visible_user_message(raw);
+        assert_eq!(parsed.canvas_title, None);
+        assert_eq!(parsed.text, raw);
     }
 
     #[test]

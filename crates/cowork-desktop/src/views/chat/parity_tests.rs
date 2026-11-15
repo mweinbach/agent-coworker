@@ -8,13 +8,14 @@ use serde_json::json;
 use crate::actions::{Action, NavAction, StoreEvent};
 use crate::state::{
     AgentViewerState, AppState, ChatInteraction, ChatViewReadOnlyNotice, CitationSource,
-    ComposerDraft, FeedItem, FeedMessageRole, ONE_OFF_LANDING_SENTINEL, PluginSummary,
-    ProviderModelSummary, ProviderSummary, ServerLifecycleState, SkillSummary, ThreadAgentSummary,
-    ThreadRecord, ThreadRuntime, ThreadStatus, TodoItemView, ToolRunStatus,
+    ComposerDraft, FeedItem, FeedMessageRole, FilePreviewState, ONE_OFF_LANDING_SENTINEL,
+    PluginSummary, ProviderModelSummary, ProviderSummary, ServerLifecycleState, SkillSummary,
+    ThreadAgentSummary, ThreadRecord, ThreadRuntime, ThreadStatus, TodoItemView, ToolRunStatus,
     TranscriptDeliveryFailure, WorkspaceRecord, WorkspaceRuntime,
 };
 use crate::theme::{self, ThemePreference};
 use crate::views::chat;
+use crate::views::chat::state::{CanvasFixtureState, CanvasLifecycleKind, CanvasTab};
 use crate::ws::{WsCommand, WsConnectionState};
 
 const SNAP_VIEWPORT: (f32, f32) = (1280.0, 820.0);
@@ -1062,4 +1063,434 @@ fn review_72_and_79_ask_preservation_composer_locks_and_overlay_viewer() {
             .is_some_and(|d| !d.attachments.is_empty()),
         "normal active thread must still accept dropped files on composer card"
     );
+}
+
+fn test_canvas_docked_root(state: &AppState, cx: &mut Cx<AppState>, right_width: f32) -> El {
+    let dark = state.effective_dark(cx.system_dark());
+    let (kit, tokens) = theme::build_kit(
+        dark,
+        state.desktop_settings.reduced_transparency,
+        state.desktop_settings.high_contrast,
+    );
+    cx.foreground(tokens.text_base);
+    cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+    cx.web_focus();
+
+    let chat_out = chat::view(state, cx, &kit);
+    let mut overlays = chat_out.overlays;
+    let mut split = row()
+        .w_full()
+        .h_full()
+        .min_w(0.0)
+        .min_h(0.0)
+        .child(el().grow(1.0).min_w(0.0).h_full().child(chat_out.content));
+
+    if let Some(canvas_out) = chat::canvas_pane(state, cx, &kit) {
+        overlays.extend(canvas_out.overlays);
+        split = split.child(
+            el().w(right_width)
+                .h_full()
+                .min_h(0.0)
+                .border_sides([0.0, 0.0, 0.0, 1.0], tokens.border)
+                .child(canvas_out.content),
+        );
+    }
+
+    el().w_full()
+        .h_full()
+        .fill(tokens.panel_bg)
+        .child(rune_kit::root(split, overlays))
+}
+
+fn test_canvas_500_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+    test_canvas_docked_root(state, cx, 500.0)
+}
+
+fn test_canvas_320_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+    test_canvas_docked_root(state, cx, 320.0)
+}
+
+fn click_key(rt: &mut Runtime<AppState>, key: &str) {
+    let (x, y) = rt
+        .find(key)
+        .unwrap_or_else(|| panic!("expected clickable element key `{key}`"));
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+}
+
+fn click_canvas_key(rt: &mut Runtime<AppState>, key: &str) {
+    let el_rect = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key) && e.rect[0] >= 779.0)
+        .map(|e| e.rect)
+        .unwrap_or_else(|| panic!("expected clickable Canvas element key `{key}`"));
+    let x = el_rect[0] + el_rect[2] * 0.5;
+    let y = el_rect[1] + el_rect[3] * 0.5;
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+}
+
+#[test]
+fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
+    let md_content = "# Launch Spec\n\nInitial overview paragraph.\n\n- Check telemetry\n- Verify Canvas pane\n\n```rust\nfn ready() -> bool { true }\n```\n";
+
+    // 1) Feature flag default (`canvas = false`) keeps canvas_pane inactive,
+    //    and spreadsheets (.csv / .xlsx) stay out of Canvas even when enabled.
+    let mut gated = build_populated_thread_state(false);
+    gated.active_file_preview = Some(FilePreviewState {
+        workspace_id: "ws-1".into(),
+        path: "docs/spec.md".into(),
+        title: "spec.md".into(),
+        content: Some(md_content.into()),
+        is_binary: false,
+        is_markdown: true,
+        truncated: false,
+        error: None,
+    });
+    let mut rt_off = Runtime::new(
+        gated,
+        test_canvas_500_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 1.0),
+    );
+    rt_off.frame(0.0);
+    assert!(
+        rt_off.find("canvas-pane").is_none(),
+        "canvas-pane must stay hidden when feature_flags[\"canvas\"] is false"
+    );
+
+    rt_off.update(|s, _| {
+        s.feature_flags.insert("canvas".to_string(), true);
+        s.active_file_preview = Some(FilePreviewState {
+            workspace_id: "ws-1".into(),
+            path: "data/budget.csv".into(),
+            title: "budget.csv".into(),
+            content: Some("colA,colB\n1,2\n".into()),
+            is_binary: false,
+            is_markdown: false,
+            truncated: false,
+            error: None,
+        });
+    });
+    rt_off.frame(0.0);
+    assert!(
+        rt_off.find("canvas-pane").is_none(),
+        "spreadsheets must stay on views/preview/ even when canvas flag is true"
+    );
+
+    // 2) Document view (light + dark) + 320px minimum right-rail width bounds check.
+    for dark in [false, true] {
+        let mut s = build_populated_thread_state(dark);
+        s.feature_flags.insert("canvas".to_string(), true);
+        s.active_file_preview = Some(FilePreviewState {
+            workspace_id: "ws-1".into(),
+            path: "docs/spec.md".into(),
+            title: "spec.md".into(),
+            content: Some(md_content.into()),
+            is_binary: false,
+            is_markdown: true,
+            truncated: false,
+            error: None,
+        });
+        let mut rt = Runtime::new(s, test_canvas_500_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+        rt.frame(0.0);
+        let rgba = render_offscreen_rgba(&mut rt, dark);
+        maybe_save_snap(
+            if dark {
+                "canvas-document-dark"
+            } else {
+                "canvas-document-light"
+            },
+            &rgba,
+            2.0,
+        );
+        let els = rt.elements();
+        for key in [
+            "canvas-pane",
+            "canvas-header",
+            "canvas-toolbar",
+            "canvas-formatting-bar",
+            "canvas-document-tab",
+            "canvas-prompt-footer",
+        ] {
+            let found = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some(key))
+                .unwrap_or_else(|| panic!("missing `{key}` (dark={dark})"));
+            assert!(
+                found.rect[0] >= 779.0 && found.rect[0] + found.rect[2] <= SNAP_VIEWPORT.0 + 1.0,
+                "`{key}` x-bounds {:?} overflow right rail",
+                found.rect
+            );
+        }
+    }
+
+    // 320px narrow right-rail bounds check: toolbar wraps cleanly inside 320px.
+    let mut s_narrow = build_populated_thread_state(false);
+    s_narrow.feature_flags.insert("canvas".to_string(), true);
+    s_narrow.active_file_preview = Some(FilePreviewState {
+        workspace_id: "ws-1".into(),
+        path: "docs/very-long-canvas-document-title.md".into(),
+        title: "very-long-canvas-document-title.md".into(),
+        content: Some(md_content.into()),
+        is_binary: false,
+        is_markdown: true,
+        truncated: false,
+        error: None,
+    });
+    let mut rt_narrow = Runtime::new(
+        s_narrow,
+        test_canvas_320_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 1.0),
+    );
+    rt_narrow.frame(0.0);
+    for key in [
+        "canvas-pane",
+        "canvas-header",
+        "canvas-toolbar",
+        "canvas-formatting-bar",
+        "canvas-save-btn",
+        "canvas-save-as-btn",
+        "canvas-prompt-send",
+    ] {
+        let found = rt_narrow
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("missing `{key}` at 320px"));
+        assert!(
+            found.rect[0] >= SNAP_VIEWPORT.0 - 321.0
+                && found.rect[0] + found.rect[2] <= SNAP_VIEWPORT.0 + 1.0,
+            "`{key}` x-bounds {:?} clipped at 320px rail",
+            found.rect
+        );
+    }
+
+    // 3) Switch to Source tab, apply Bold formatting, render Source PNGs, submit <canvas_request>.
+    let mut s_edit = build_populated_thread_state(false);
+    s_edit.feature_flags.insert("canvas".to_string(), true);
+    s_edit.active_file_preview = Some(FilePreviewState {
+        workspace_id: "ws-1".into(),
+        path: "docs/spec.md".into(),
+        title: "spec.md".into(),
+        content: Some("Hello world\nSecond line".into()),
+        is_binary: false,
+        is_markdown: true,
+        truncated: false,
+        error: None,
+    });
+    let mut rt_edit = Runtime::new(
+        s_edit,
+        test_canvas_500_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt_edit.frame(0.0);
+    click_canvas_key(&mut rt_edit, "segment1");
+    assert_eq!(rt_edit.state.chat_ui.canvas.active_tab, CanvasTab::Source);
+    assert_eq!(
+        rt_edit.state.chat_ui.canvas.source_edit.text,
+        "Hello world\nSecond line"
+    );
+    assert!(!rt_edit.state.chat_ui.canvas.is_dirty());
+
+    // Select "world" and click Bold formatting button.
+    rt_edit.update(|s, _| {
+        s.chat_ui.canvas.source_edit.set_selection(6, 11);
+    });
+    rt_edit.frame(0.0);
+    click_key(&mut rt_edit, "canvas-fmt-bold");
+    assert_eq!(
+        rt_edit.state.chat_ui.canvas.source_edit.text,
+        "Hello **world**\nSecond line"
+    );
+    assert!(rt_edit.state.chat_ui.canvas.is_dirty());
+    assert!(
+        rt_edit.find("canvas-selection-chip").is_some(),
+        "selection excerpt chip should show when text is selected in Source mode"
+    );
+
+    let rgba_src_light = render_offscreen_rgba(&mut rt_edit, false);
+    maybe_save_snap("canvas-source-light", &rgba_src_light, 2.0);
+
+    // Fresh Runtime for dark snapshot so headless Renderer starts with an empty GPU glyph atlas.
+    let mut s_edit_dark = build_populated_thread_state(true);
+    s_edit_dark.feature_flags.insert("canvas".to_string(), true);
+    s_edit_dark.active_file_preview = Some(FilePreviewState {
+        workspace_id: "ws-1".into(),
+        path: "docs/spec.md".into(),
+        title: "spec.md".into(),
+        content: Some("Hello world\nSecond line".into()),
+        is_binary: false,
+        is_markdown: true,
+        truncated: false,
+        error: None,
+    });
+    let mut rt_edit_dark = Runtime::new(
+        s_edit_dark,
+        test_canvas_500_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt_edit_dark.frame(0.0);
+    click_canvas_key(&mut rt_edit_dark, "segment1");
+    rt_edit_dark.update(|s, _| {
+        s.chat_ui.canvas.source_edit.set_selection(6, 11);
+    });
+    rt_edit_dark.frame(0.0);
+    click_key(&mut rt_edit_dark, "canvas-fmt-bold");
+    let rgba_src_dark = render_offscreen_rgba(&mut rt_edit_dark, true);
+    maybe_save_snap("canvas-source-dark", &rgba_src_dark, 2.0);
+
+    // Submit collaborative prompt referencing the selected word.
+    rt_edit.update(|s, _| {
+        s.chat_ui.canvas.prompt_edit = TextEdit::new("Make this sharper");
+    });
+    rt_edit.frame(0.0);
+    rt_edit.settle_all();
+    rt_edit.frame(0.0);
+    click_key(&mut rt_edit, "canvas-prompt-send");
+    assert!(
+        rt_edit.state.chat_ui.canvas.prompt_edit.text.is_empty(),
+        "prompt box must clear on submit"
+    );
+    let cmds = &rt_edit.state.services.emitted_ws_commands;
+    let has_canvas_xml = cmds.iter().any(|c| match c {
+        WsCommand::SendRequest { method, params, .. } if method == "turn/start" => {
+            let s = params.to_string();
+            s.contains("<canvas_request")
+                && s.contains("Make this sharper")
+                && s.contains("spec.md")
+        }
+        _ => false,
+    });
+    assert!(
+        has_canvas_xml,
+        "canvas prompt must dispatch turn/start containing <canvas_request> XML, got {cmds:?}"
+    );
+
+    // Maximize toggle & Close.
+    assert!(!chat::is_canvas_maximized(&rt_edit.state));
+    click_key(&mut rt_edit, "canvas-maximize-btn");
+    assert!(chat::is_canvas_maximized(&rt_edit.state));
+    click_key(&mut rt_edit, "canvas-close-btn");
+    assert!(rt_edit.find("canvas-pane").is_none());
+    assert!(rt_edit.state.active_file_preview.is_none());
+}
+
+#[test]
+fn canvas_pane_conflict_reload_modal_load_error_and_truncation_guards() {
+    // 1) Truncation enforces read-only banners and hides styling toolbar + disables send.
+    let mut s_trunc = build_populated_thread_state(false);
+    s_trunc.chat_ui.canvas.fixture = Some(CanvasFixtureState {
+        workspace_id: "ws-1".into(),
+        path: "docs/huge.md".into(),
+        title: "huge.md".into(),
+        content: "# Huge file\nTruncated preview...".into(),
+        is_markdown: true,
+        truncated: true,
+        lifecycle: CanvasLifecycleKind::Ready,
+        message: None,
+    });
+    s_trunc.chat_ui.canvas.prompt_edit = TextEdit::new("Attempt edit");
+    let mut rt_trunc = Runtime::new(
+        s_trunc,
+        test_canvas_500_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 1.0),
+    );
+    rt_trunc.frame(0.0);
+    assert!(rt_trunc.find("canvas-truncated-banner").is_some());
+    assert!(rt_trunc.find("canvas-formatting-bar").is_none());
+    let send_el = rt_trunc
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("canvas-prompt-send"))
+        .expect("canvas-prompt-send should render");
+    assert!(
+        !send_el.focusable,
+        "truncated documents must disable prompt submit"
+    );
+
+    // 2) Conflict banner + Reload confirmation modal protects unsaved edits until confirmed.
+    let mut s_conf = build_populated_thread_state(false);
+    s_conf.chat_ui.canvas.fixture = Some(CanvasFixtureState {
+        workspace_id: "ws-1".into(),
+        path: "docs/spec.md".into(),
+        title: "spec.md".into(),
+        content: "# Updated on disk\n\nFresh content from server.".into(),
+        is_markdown: true,
+        truncated: false,
+        lifecycle: CanvasLifecycleKind::Conflict,
+        message: Some("File changed on disk while you had local edits.".into()),
+    });
+    let mut rt_conf = Runtime::new(
+        s_conf,
+        test_canvas_500_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt_conf.frame(0.0);
+    click_canvas_key(&mut rt_conf, "segment1");
+    rt_conf.update(|s, _| {
+        s.chat_ui
+            .canvas
+            .source_edit
+            .replace_text("# My unsaved local draft");
+    });
+    rt_conf.frame(0.0);
+    rt_conf.settle_all();
+    rt_conf.frame(0.0);
+    assert!(rt_conf.find("canvas-conflict-banner").is_some());
+    click_key(&mut rt_conf, "canvas-conflict-reload-btn");
+    rt_conf.frame(0.3);
+    assert!(rt_conf.state.chat_ui.canvas.reload_confirm_open);
+    let rgba_conf = render_offscreen_rgba(&mut rt_conf, false);
+    maybe_save_snap("canvas-conflict-modal-light", &rgba_conf, 2.0);
+    assert_eq!(
+        rt_conf.state.chat_ui.canvas.source_edit.text,
+        "# My unsaved local draft"
+    );
+
+    click_key(&mut rt_conf, "canvas-reload-confirm-btn");
+    assert!(!rt_conf.state.chat_ui.canvas.reload_confirm_open);
+    assert!(!rt_conf.state.chat_ui.canvas.is_dirty());
+    assert_eq!(
+        rt_conf.state.chat_ui.canvas.source_edit.text,
+        "# Updated on disk\n\nFresh content from server."
+    );
+
+    // 3) LoadError Retry recovers cleanly.
+    let mut s_err = build_populated_thread_state(false);
+    s_err.chat_ui.canvas.fixture = Some(CanvasFixtureState {
+        workspace_id: "ws-1".into(),
+        path: "docs/missing.md".into(),
+        title: "missing.md".into(),
+        content: "# Recovered\nLoaded cleanly.".into(),
+        is_markdown: true,
+        truncated: false,
+        lifecycle: CanvasLifecycleKind::LoadError,
+        message: Some("File was temporarily unreadable.".into()),
+    });
+    let mut rt_err = Runtime::new(
+        s_err,
+        test_canvas_500_root,
+        SNAP_VIEWPORT,
+        Env::new(true, 1.0),
+    );
+    rt_err.frame(0.0);
+    assert!(rt_err.find("canvas-load-error").is_some());
+    click_key(&mut rt_err, "canvas-load-retry-btn");
+    assert!(rt_err.find("canvas-load-error").is_none());
+    assert!(rt_err.find("canvas-document-tab").is_some());
 }

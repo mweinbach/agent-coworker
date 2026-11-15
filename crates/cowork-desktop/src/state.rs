@@ -103,7 +103,9 @@ pub const CANVAS_REVISION_POLL_SECS: f64 = 1.5;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WindowCommand {
     OpenQuickChat,
+    ToggleQuickChat,
     OpenUtility,
+    ToggleUtility,
     FocusMain {
         open_new_chat_workspace: Option<String>,
         open_thread_id: Option<String>,
@@ -1399,7 +1401,7 @@ impl Default for DesktopSettings {
             per_workspace_settings: false,
             quick_chat_icon_enabled: true,
             quick_chat_shortcut_enabled: true,
-            quick_chat_shortcut: "Option+Space".to_string(),
+            quick_chat_shortcut: "CommandOrControl+Shift+Space".to_string(),
             archived_chats_auto_delete_days: 30,
             sidebar_section_order: vec![
                 SidebarSectionKey::Pinned,
@@ -3862,13 +3864,16 @@ impl AppState {
                 "open_quick_chat" | "file.open_quick_chat" => {
                     self.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
                 }
-                "open_utility" | "tray_click" => {
+                "open_utility" => {
                     self.dispatch(Action::Shell(ShellAction::OpenUtilityWindow));
+                }
+                "tray_click" | "toggle_utility" => {
+                    self.dispatch(Action::Shell(ShellAction::ToggleUtilityWindow));
                 }
                 _ => {}
             },
             StoreEvent::QuickChatToggled => {
-                self.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
+                self.dispatch(Action::Shell(ShellAction::ToggleQuickChatWindow));
             }
             StoreEvent::DeepLink(url) => {
                 let trimmed = url.trim();
@@ -4429,8 +4434,14 @@ impl AppState {
             ShellAction::OpenQuickChatWindow => {
                 self.send_window(WindowCommand::OpenQuickChat);
             }
+            ShellAction::ToggleQuickChatWindow => {
+                self.send_window(WindowCommand::ToggleQuickChat);
+            }
             ShellAction::OpenUtilityWindow => {
                 self.send_window(WindowCommand::OpenUtility);
+            }
+            ShellAction::ToggleUtilityWindow => {
+                self.send_window(WindowCommand::ToggleUtility);
             }
             ShellAction::FocusMainWindow {
                 open_new_chat_workspace,
@@ -14439,11 +14450,23 @@ mod tests {
         main_state.apply_store_event(StoreEvent::MenuInvoked("reset_zoom".to_string()));
         assert!((main_state.ui_scale - DEFAULT_UI_SCALE).abs() < f32::EPSILON);
 
+        assert_eq!(
+            main_state.desktop_settings.quick_chat_shortcut,
+            "CommandOrControl+Shift+Space"
+        );
+
         main_state.apply_store_event(StoreEvent::QuickChatToggled);
+        main_state.apply_store_event(StoreEvent::MenuInvoked("open_quick_chat".to_string()));
         main_state.apply_store_event(StoreEvent::MenuInvoked("open_utility".to_string()));
+        main_state.apply_store_event(StoreEvent::MenuInvoked("tray_click".to_string()));
         assert_eq!(
             main_state.services.emitted_window_commands,
-            vec![WindowCommand::OpenQuickChat, WindowCommand::OpenUtility]
+            vec![
+                WindowCommand::ToggleQuickChat,
+                WindowCommand::OpenQuickChat,
+                WindowCommand::OpenUtility,
+                WindowCommand::ToggleUtility,
+            ]
         );
 
         let mut quick_state = AppState {

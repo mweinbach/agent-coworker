@@ -436,6 +436,28 @@ fn setup_app(state: &mut AppState, waker: Waker) {
     });
 }
 
+fn apply_popup_window_command(
+    target: Option<&rune::AppHandle<AppState>>,
+    sibling: Option<&rune::AppHandle<AppState>>,
+    toggle: bool,
+) {
+    let Some(target) = target else {
+        return;
+    };
+    if toggle && target.is_visible() {
+        target.hide();
+        target.wake();
+        return;
+    }
+    if let Some(other) = sibling
+        && other.is_visible()
+    {
+        other.hide();
+    }
+    target.open();
+    target.wake();
+}
+
 fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
     state.app_elapsed_secs = now;
     if !state.scene_mode {
@@ -481,16 +503,32 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
             for cmd in commands {
                 match cmd {
                     WindowCommand::OpenQuickChat => {
-                        if let Some(ref handle) = quick_chat_handle {
-                            handle.open();
-                            handle.wake();
-                        }
+                        apply_popup_window_command(
+                            quick_chat_handle.as_ref(),
+                            utility_handle.as_ref(),
+                            false,
+                        );
+                    }
+                    WindowCommand::ToggleQuickChat => {
+                        apply_popup_window_command(
+                            quick_chat_handle.as_ref(),
+                            utility_handle.as_ref(),
+                            true,
+                        );
                     }
                     WindowCommand::OpenUtility => {
-                        if let Some(ref handle) = utility_handle {
-                            handle.open();
-                            handle.wake();
-                        }
+                        apply_popup_window_command(
+                            utility_handle.as_ref(),
+                            quick_chat_handle.as_ref(),
+                            false,
+                        );
+                    }
+                    WindowCommand::ToggleUtility => {
+                        apply_popup_window_command(
+                            utility_handle.as_ref(),
+                            quick_chat_handle.as_ref(),
+                            true,
+                        );
                     }
                     WindowCommand::FocusMain {
                         open_new_chat_workspace,

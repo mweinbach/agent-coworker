@@ -115,7 +115,9 @@ pub enum ShellAction {
     ZoomOut,
     ResetZoom,
     OpenQuickChatWindow,
+    ToggleQuickChatWindow,
     OpenUtilityWindow,
+    ToggleUtilityWindow,
     FocusMainWindow {
         open_new_chat_workspace: Option<String>,
         open_thread_id: Option<String>,

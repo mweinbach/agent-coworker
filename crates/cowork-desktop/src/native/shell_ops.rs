@@ -1,6 +1,7 @@
 //! OS shell actions (reveal in file manager, open in default app with launchable warning,
 //! trash path, external URL opening, and bounded remote/data image fetching).
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,18 +31,42 @@ pub enum OpenInDefaultAppOutcome {
 
 /// Computes directories allowed for reveal-in-OS (active workspaces + `~/.cowork` + bundled dist).
 pub fn resolve_allowed_reveal_roots(workspace_roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut roots = workspace_roots.to_vec();
     let env = env_map_from_process();
-    let home = resolve_home_dir(&env, host_platform());
+    let platform = host_platform();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    let resources_dir = super::resolve_packaged_resources_dir_for(platform, exe_dir.as_deref());
+    resolve_allowed_reveal_roots_with(workspace_roots, &env, platform, resources_dir.as_deref())
+}
+
+pub(crate) fn resolve_allowed_reveal_roots_with(
+    workspace_roots: &[PathBuf],
+    env: &HashMap<String, String>,
+    platform: &str,
+    resources_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut roots = workspace_roots.to_vec();
+    let home = resolve_home_dir(env, platform);
     let chats_dir = get_one_off_chats_root(&home);
     if !roots.iter().any(|r| is_path_equal_or_inside(r, &chats_dir)) {
         roots.push(chats_dir);
     }
-    roots.push(cowork_home(&env));
+    roots.push(cowork_home(env));
     if let Some(builtin) = env.get("COWORK_BUILTIN_DIR").map(|s| s.trim())
         && !builtin.is_empty()
     {
         roots.push(PathBuf::from(builtin));
+    }
+    if let Some(res) = resources_dir {
+        let bundled_dist = res.join("dist");
+        if bundled_dist.join("config").join("defaults.json").is_file()
+            && !roots
+                .iter()
+                .any(|r| is_path_equal_or_inside(r, &bundled_dist))
+        {
+            roots.push(bundled_dist);
+        }
     }
     roots
 }
@@ -515,5 +540,21 @@ mod tests {
                 "expected {blocked} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn resolve_allowed_reveal_roots_includes_packaged_dist_when_present() {
+        let dir = tempdir().unwrap();
+        let res = dir.path().join("Resources");
+        let dist_cfg = res.join("dist").join("config");
+        std::fs::create_dir_all(&dist_cfg).unwrap();
+        std::fs::write(dist_cfg.join("defaults.json"), "{}").unwrap();
+
+        let env = HashMap::from([(
+            "HOME".to_string(),
+            dir.path().to_string_lossy().into_owned(),
+        )]);
+        let roots = resolve_allowed_reveal_roots_with(&[], &env, "linux", Some(&res));
+        assert!(roots.contains(&res.join("dist")));
     }
 }

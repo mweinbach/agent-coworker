@@ -81,7 +81,7 @@ use shutdown::ShutdownCoordinator;
 use sidecar::resolve_dev_repo_root;
 use telemetry_status::resolve_desktop_telemetry_status;
 use tray::QuickChatTrayController;
-use updater::DesktopUpdaterService;
+use updater::{DesktopUpdaterService, UpdaterConfig};
 use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
 use window_lifecycle::{
     WindowCloseCoordinator, complete_window_close_resolution, execute_window_close_hook,
@@ -204,6 +204,12 @@ fn current_app_handle() -> Option<AppHandle<AppState>> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
+}
+
+fn request_app_quit() {
+    if let Some(app_handle) = current_app_handle() {
+        app_handle.quit();
+    }
 }
 
 fn worker_cmd_slot() -> &'static Mutex<Option<mpsc::UnboundedSender<NativeCommand>>> {
@@ -375,6 +381,8 @@ pub fn spawn_native_worker(
                 emit(StoreEvent::RemoteAccessChanged(
                     runtime_ctx.remote_access.current_state(),
                 ));
+                emit(StoreEvent::UpdaterChanged(runtime_ctx.updater.get_state()));
+                runtime_ctx.updater.start();
 
                 let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
                 runtime_ctx.window_state.spawn_debounce_loop(shutdown_rx);
@@ -385,8 +393,6 @@ pub fn spawn_native_worker(
                     Some(runtime_ctx.logger.clone()),
                     Some(shutdown_tx),
                 );
-                let coord_latch = coordinator.completion_latch();
-                store_shutdown_latch(Some(coord_latch));
 
                 let handle_notify = app_handle_notify();
                 let mut handle_synced = false;
@@ -429,6 +435,7 @@ pub fn spawn_native_worker(
 /// because Rune runs `fast_exit` immediately after `App::on_quit` returns.
 async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &ShutdownCoordinator) {
     set_shared_analytics(None);
+    runtime_ctx.updater.dispose();
     let _ = runtime_ctx.transcript_buffer.flush();
     runtime_ctx.tray.teardown_for_shutdown();
     tokio::join!(
@@ -451,6 +458,16 @@ async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &Sh
         },
         coordinator.shutdown(),
     );
+    if let Err(err) = runtime_ctx.updater.execute_pending_install_on_shutdown() {
+        let meta = json!({ "error": err.to_string() });
+        runtime_ctx.logger.error(
+            "updater",
+            "failed to install staged update on shutdown",
+            Some(&meta),
+        );
+        runtime_ctx.logger.flush_all();
+        eprintln!("cowork-desktop failed to install staged update on shutdown: {err}");
+    }
 }
 
 pub fn on_shutdown(state: &mut AppState) {
@@ -561,16 +578,10 @@ impl NativeWorkerContext {
             .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
         let cwd = std::env::current_dir().ok();
         let repo_root = resolve_dev_repo_root(env, current_exe_dir.as_deref(), cwd.as_deref());
-        let resources_dir = current_exe_dir.as_ref().and_then(|dir| {
-            #[cfg(target_os = "macos")]
-            {
-                let res = dir.parent().map(|contents| contents.join("Resources"));
-                if res.as_ref().is_some_and(|p| p.is_dir()) {
-                    return res;
-                }
-            }
-            Some(dir.clone())
-        });
+        let resources_dir = resolve_packaged_resources_dir_for(
+            cowork_config::host_platform(),
+            current_exe_dir.as_deref(),
+        );
 
         let server_manager = ServerManager::new(
             ServerManagerRuntime {
@@ -586,8 +597,21 @@ impl NativeWorkerContext {
         server_manager.set_product_analytics_state(product_analytics.persisted_state());
 
         let notifications = DesktopNotificationService::new(Some(logger.clone()));
-        let updater = DesktopUpdaterService::new(Some(logger.clone()), emit.clone())
-            .with_analytics(product_analytics.clone());
+        let mut updater_cfg = UpdaterConfig::from_build_env(is_packaged);
+        if let Some(appimage) = env
+            .get("APPIMAGE")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            updater_cfg.target.appimage_path = Some(PathBuf::from(appimage));
+        }
+        if register_globals {
+            updater_cfg.request_quit = Some(Arc::new(request_app_quit));
+        }
+        let updater =
+            DesktopUpdaterService::with_config(updater_cfg, Some(logger.clone()), emit.clone())
+                .with_notifications(notifications.clone())
+                .with_analytics(product_analytics.clone());
         let diag_mgr = server_manager.clone();
         let diag_crash = crash_reporting.clone();
         let diagnostics = DiagnosticsService::new(
@@ -1754,8 +1778,111 @@ fn make_emitter(
     })
 }
 
-fn is_packaged_build() -> bool {
-    if let Ok(raw) = std::env::var("COWORK_IS_PACKAGED") {
+/// Resolves the compile-time desktop app version, preferring `COWORK_APP_VERSION` over `CARGO_PKG_VERSION`.
+pub(crate) fn resolve_desktop_app_version() -> &'static str {
+    option_env!("COWORK_APP_VERSION")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+fn is_cargo_dev_exe_path(exe: &Path) -> bool {
+    let Some(parent) = exe.parent() else {
+        return false;
+    };
+    let comps: Vec<String> = parent
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let tail = match comps.last().map(String::as_str) {
+        Some("deps" | "examples") if comps.len() >= 2 => &comps[..comps.len() - 1],
+        _ => &comps[..],
+    };
+    let n = tail.len();
+    let is_profile_tail = tail
+        .last()
+        .is_some_and(|s| matches!(s.as_str(), "debug" | "release"));
+    if !is_profile_tail {
+        return false;
+    }
+    (n >= 2 && tail[n - 2] == "target") || (n >= 3 && tail[n - 3] == "target")
+}
+
+fn has_packaged_resource_markers(dir: &Path) -> bool {
+    let has_dist = dir
+        .join("dist")
+        .join("config")
+        .join("defaults.json")
+        .is_file();
+    if !has_dist {
+        return false;
+    }
+    let binaries_dir = dir.join("binaries");
+    if binaries_dir.join("cowork-server-manifest.json").is_file() {
+        return true;
+    }
+    std::fs::read_dir(&binaries_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("cowork-server"))
+                && entry.path().is_file()
+        })
+}
+
+/// Resolves the bundled resources directory (`dist/` + `binaries/`) for a packaged app layout.
+pub(crate) fn resolve_packaged_resources_dir_for(
+    platform: &str,
+    current_exe_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    let exe_dir = current_exe_dir?;
+    match platform {
+        "darwin" => {
+            if let Some(res) = exe_dir.parent().map(|contents| contents.join("Resources"))
+                && res.is_dir()
+            {
+                return Some(res);
+            }
+            Some(exe_dir.to_path_buf())
+        }
+        "win32" => {
+            let nested = exe_dir.join("resources");
+            if has_packaged_resource_markers(&nested) || nested.is_dir() {
+                return Some(nested);
+            }
+            Some(exe_dir.to_path_buf())
+        }
+        "linux" => {
+            if let Some(lib_dir) = exe_dir
+                .parent()
+                .map(|prefix| prefix.join("lib").join("cowork-desktop"))
+                && lib_dir.is_dir()
+            {
+                return Some(lib_dir);
+            }
+            if matches!(exe_dir.to_str(), Some("/usr/bin") | Some("/usr/local/bin")) {
+                let sys_lib = PathBuf::from("/usr/lib/cowork-desktop");
+                if sys_lib.is_dir() {
+                    return Some(sys_lib);
+                }
+            }
+            Some(exe_dir.to_path_buf())
+        }
+        _ => Some(exe_dir.to_path_buf()),
+    }
+}
+
+fn detect_packaged_build_with(
+    env: &HashMap<String, String>,
+    platform: &str,
+    current_exe: Option<&Path>,
+) -> bool {
+    if let Some(raw) = env.get("COWORK_IS_PACKAGED") {
         let trimmed = raw.trim().to_ascii_lowercase();
         if matches!(trimmed.as_str(), "1" | "true" | "yes" | "on") {
             return true;
@@ -1764,13 +1891,23 @@ fn is_packaged_build() -> bool {
             return false;
         }
     }
-    #[cfg(target_os = "macos")]
-    if let Ok(exe) = std::env::current_exe()
-        && exe.to_string_lossy().contains(".app/Contents/MacOS/")
-    {
-        return true;
+    let Some(exe) = current_exe else {
+        return false;
+    };
+    if platform == "darwin" {
+        return exe.to_string_lossy().contains(".app/Contents/MacOS/");
     }
-    false
+    if is_cargo_dev_exe_path(exe) {
+        return false;
+    }
+    resolve_packaged_resources_dir_for(platform, exe.parent())
+        .is_some_and(|dir| has_packaged_resource_markers(&dir))
+}
+
+fn is_packaged_build() -> bool {
+    let env = cowork_config::env_map_from_process();
+    let exe = std::env::current_exe().ok();
+    detect_packaged_build_with(&env, cowork_config::host_platform(), exe.as_deref())
 }
 
 /// Resolves an explorer/preview request path (`"."`, `""`, relative, or absolute) against `authorized_root`.
@@ -2309,5 +2446,132 @@ mod tests {
                 .and_then(Value::as_str),
             Some(generated_id.as_str())
         );
+    }
+
+    fn seed_packaged_markers(root: &Path) {
+        let dist_cfg = root.join("dist").join("config");
+        let bin_dir = root.join("binaries");
+        std::fs::create_dir_all(&dist_cfg).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(dist_cfg.join("defaults.json"), "{}").unwrap();
+        std::fs::write(bin_dir.join("cowork-server-manifest.json"), "{}").unwrap();
+    }
+
+    #[test]
+    fn packaged_layout_detection_covers_macos_windows_linux_and_excludes_cargo_dev() {
+        let tmp = tempfile::tempdir().unwrap();
+        let empty_env = HashMap::new();
+
+        // macOS .app/Contents/MacOS -> Contents/Resources
+        let mac_exe = tmp
+            .path()
+            .join("Cowork.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("cowork-desktop");
+        let mac_res = tmp
+            .path()
+            .join("Cowork.app")
+            .join("Contents")
+            .join("Resources");
+        std::fs::create_dir_all(mac_exe.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&mac_res).unwrap();
+        assert_eq!(
+            resolve_packaged_resources_dir_for("darwin", mac_exe.parent()),
+            Some(mac_res)
+        );
+        assert!(detect_packaged_build_with(
+            &empty_env,
+            "darwin",
+            Some(&mac_exe)
+        ));
+
+        // Windows direct exe_dir and nested resources/ layouts
+        let win_direct_dir = tmp.path().join("win-direct");
+        std::fs::create_dir_all(&win_direct_dir).unwrap();
+        seed_packaged_markers(&win_direct_dir);
+        let win_direct_exe = win_direct_dir.join("cowork-desktop.exe");
+        assert_eq!(
+            resolve_packaged_resources_dir_for("win32", win_direct_exe.parent()),
+            Some(win_direct_dir.clone())
+        );
+        assert!(detect_packaged_build_with(
+            &empty_env,
+            "win32",
+            Some(&win_direct_exe)
+        ));
+
+        let win_nested_dir = tmp.path().join("win-nested");
+        let win_nested_res = win_nested_dir.join("resources");
+        seed_packaged_markers(&win_nested_res);
+        let win_nested_exe = win_nested_dir.join("cowork-desktop.exe");
+        assert_eq!(
+            resolve_packaged_resources_dir_for("win32", win_nested_exe.parent()),
+            Some(win_nested_res)
+        );
+        assert!(detect_packaged_build_with(
+            &empty_env,
+            "win32",
+            Some(&win_nested_exe)
+        ));
+
+        // Linux FHS (.deb / .AppImage): usr/bin -> usr/lib/cowork-desktop
+        let linux_exe = tmp
+            .path()
+            .join("linux-pkg")
+            .join("usr")
+            .join("bin")
+            .join("cowork-desktop");
+        let linux_res = tmp
+            .path()
+            .join("linux-pkg")
+            .join("usr")
+            .join("lib")
+            .join("cowork-desktop");
+        std::fs::create_dir_all(linux_exe.parent().unwrap()).unwrap();
+        seed_packaged_markers(&linux_res);
+        assert_eq!(
+            resolve_packaged_resources_dir_for("linux", linux_exe.parent()),
+            Some(linux_res)
+        );
+        assert!(detect_packaged_build_with(
+            &empty_env,
+            "linux",
+            Some(&linux_exe)
+        ));
+
+        // Cargo dev target paths remain unpackaged unless explicitly overridden
+        let dev_exe = tmp
+            .path()
+            .join("repo")
+            .join("target")
+            .join("debug")
+            .join("cowork-desktop");
+        std::fs::create_dir_all(dev_exe.parent().unwrap()).unwrap();
+        seed_packaged_markers(dev_exe.parent().unwrap());
+        assert!(!detect_packaged_build_with(
+            &empty_env,
+            "linux",
+            Some(&dev_exe)
+        ));
+        assert!(!detect_packaged_build_with(
+            &empty_env,
+            "win32",
+            Some(&dev_exe)
+        ));
+
+        let mut forced_env = HashMap::new();
+        forced_env.insert("COWORK_IS_PACKAGED".into(), "true".into());
+        assert!(detect_packaged_build_with(
+            &forced_env,
+            "linux",
+            Some(&dev_exe)
+        ));
+        forced_env.insert("COWORK_IS_PACKAGED".into(), "0".into());
+        assert!(!detect_packaged_build_with(
+            &forced_env,
+            "darwin",
+            Some(&mac_exe)
+        ));
     }
 }

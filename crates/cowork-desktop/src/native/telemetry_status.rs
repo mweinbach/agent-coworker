@@ -15,6 +15,17 @@ pub(crate) fn normalize_env_value(value: Option<&String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+pub(crate) fn build_time_env(value: Option<&'static str>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub(crate) fn build_time_http_url(value: Option<&'static str>) -> Option<String> {
+    let owned = build_time_env(value)?;
+    normalize_http_url(Some(&owned))
+}
+
 fn parse_env_bool(value: Option<&String>) -> Option<bool> {
     let raw = value?.trim().to_ascii_lowercase();
     match raw.as_str() {
@@ -179,7 +190,8 @@ pub fn resolve_desktop_telemetry_status(
     let consent = resolve_telemetry_consent(&snapshot.settings.privacy_telemetry, env, is_packaged);
     let kill_switch = consent.network_telemetry_disabled;
 
-    let sentry_dsn = coalesce_env(env, &["COWORK_SENTRY_DSN", "SENTRY_DSN"]);
+    let sentry_dsn = coalesce_env(env, &["COWORK_SENTRY_DSN", "SENTRY_DSN"])
+        .or_else(|| build_time_env(option_env!("COWORK_SENTRY_DSN")));
     let crash_enabled = !kill_switch && consent.crash_reports_enabled && sentry_dsn.is_some();
     let crash_status = if kill_switch || !consent.crash_reports_enabled {
         "disabled"
@@ -189,7 +201,8 @@ pub fn resolve_desktop_telemetry_status(
         "not_configured"
     };
 
-    let posthog_key = normalize_env_value(env.get("COWORK_POSTHOG_KEY"));
+    let posthog_key = normalize_env_value(env.get("COWORK_POSTHOG_KEY"))
+        .or_else(|| build_time_env(option_env!("COWORK_POSTHOG_KEY")));
     let anon_id = raw_state_doc
         .and_then(|d| d.get("productAnalytics"))
         .and_then(|pa| pa.get("anonymousInstallationId"))

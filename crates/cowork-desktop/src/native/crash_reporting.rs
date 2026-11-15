@@ -23,7 +23,7 @@ use crate::state::PrivacyTelemetrySettings;
 
 use super::local_logs::{DiagnosticsRedactionContext, redact_diagnostic_text, strip_url_secrets};
 use super::telemetry_status::{
-    coalesce_env, is_network_telemetry_globally_disabled, resolve_packaging_mode,
+    build_time_env, coalesce_env, is_network_telemetry_globally_disabled, resolve_packaging_mode,
     resolve_telemetry_consent,
 };
 
@@ -162,7 +162,8 @@ pub fn resolve_crash_reporting_config(
 ) -> CrashReportingConfig {
     let consent = resolve_telemetry_consent(settings, env, is_packaged);
     let mode = resolve_packaging_mode(env, is_packaged);
-    let dsn_raw = coalesce_env(env, &["COWORK_SENTRY_DSN", "SENTRY_DSN"]);
+    let dsn_raw = coalesce_env(env, &["COWORK_SENTRY_DSN", "SENTRY_DSN"])
+        .or_else(|| build_time_env(option_env!("COWORK_SENTRY_DSN")));
     let release = coalesce_env(
         env,
         &["COWORK_RELEASE", "SENTRY_RELEASE", "COWORK_APP_VERSION"],
@@ -173,7 +174,7 @@ pub fn resolve_crash_reporting_config(
             .filter(|s| !s.is_empty())
             .map(ToString::to_string)
     })
-    .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    .unwrap_or_else(|| super::resolve_desktop_app_version().to_string());
     let client_header = format!("cowork-desktop/{release}");
     let dsn = dsn_raw
         .as_deref()

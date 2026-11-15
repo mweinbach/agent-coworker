@@ -39,8 +39,8 @@ pub fn build_open_folder_dialog(title: Option<&str>) -> FileDialogOptions {
 }
 
 pub fn build_open_files_dialog(title: Option<&str>, allow_multiple: bool) -> FileDialogOptions {
-    // Note: Rune 0.x FileDialogOptions currently selects a single file; we preserve
-    // `allow_multiple` in the builder API for forward compatibility.
+    // Rune's FileDialogOptions handles single-file selection (and Linux fallback); multi-file
+    // selection on macOS/Windows uses `rfd::AsyncFileDialog::pick_files` in `native/mod.rs`.
     let _ = allow_multiple;
     FileDialogOptions {
         title: title

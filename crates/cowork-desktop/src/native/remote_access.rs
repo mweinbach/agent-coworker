@@ -558,6 +558,32 @@ impl RemoteAccessBridge {
         }
     }
 
+    pub async fn forget_trusted_phone(&self, phone_id: &str) {
+        let _lock = self.mutation_lock.lock().await;
+        let (available, active_ws) = {
+            let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            (guard.available, guard.active_workspace_id.clone())
+        };
+        let Some(ws_id) = active_ws else {
+            self.emit_error(available, "Remote access is not currently running.");
+            return;
+        };
+
+        match self
+            .server_manager
+            .forget_mobile_h3_trusted_device(&ws_id, phone_id)
+            .await
+        {
+            Ok(updated_h3) => {
+                let next = remote_access_state_from_mobile_h3(available, updated_h3.as_ref(), None);
+                self.publish_state(next);
+            }
+            Err(err) => {
+                self.emit_error(available, &err);
+            }
+        }
+    }
+
     fn publish_state(&self, state: RemoteAccessState) {
         {
             let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());

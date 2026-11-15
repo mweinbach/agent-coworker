@@ -1326,14 +1326,12 @@ impl ServerManager {
             .map(|(id, h)| (id.clone(), h.workspace_path.clone(), h.yolo))
     }
 
-    /// Updates a paired phone's permissions via `PATCH /mobile-h3/trusted/<id>/permissions`
-    /// and returns the refreshed `mobileH3` snapshot cached on the running workspace server.
-    pub async fn update_mobile_h3_trusted_device_permissions(
+    fn mobile_h3_admin_request_context(
         &self,
         workspace_id: &str,
         device_id: &str,
-        permissions: Value,
-    ) -> Result<Option<Value>, String> {
+        action_suffix: Option<&str>,
+    ) -> Result<(Arc<RunningServerHandle>, String, Url, Url), String> {
         let trimmed_id = device_id.trim();
         if trimmed_id.is_empty() {
             return Err("Trusted phone identifier is empty.".into());
@@ -1365,22 +1363,60 @@ impl ServerManager {
         })?;
 
         let base_http = to_http_server_request_url(&handle.ws_url, "/")?;
-        let mut patch_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
-        patch_url.set_query(None);
+        let mut device_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
+        device_url.set_query(None);
         {
-            let mut segs = patch_url
+            let mut segs = device_url
                 .path_segments_mut()
                 .map_err(|()| "Invalid workspace HTTP URL".to_string())?;
             segs.clear();
             segs.push("mobile-h3");
             segs.push("trusted");
             segs.push(trimmed_id);
-            segs.push("permissions");
+            if let Some(suffix) = action_suffix {
+                segs.push(suffix);
+            }
         }
 
         let mut list_url = Url::parse(&base_http).map_err(|err| err.to_string())?;
         list_url.set_query(None);
         list_url.set_path("/mobile-h3/trusted");
+
+        Ok((handle, admin_token, device_url, list_url))
+    }
+
+    async fn fetch_mobile_h3_trusted_devices_list(
+        &self,
+        list_url: Url,
+        admin_token: &str,
+    ) -> Option<Vec<Value>> {
+        match self
+            .http_client
+            .get(list_url)
+            .bearer_auth(admin_token)
+            .send()
+            .await
+        {
+            Ok(list_resp) if list_resp.status().is_success() => list_resp
+                .bytes()
+                .await
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .and_then(|v| v.get("trustedDevices").and_then(Value::as_array).cloned()),
+            _ => None,
+        }
+    }
+
+    /// Updates a paired phone's permissions via `PATCH /mobile-h3/trusted/<id>/permissions`
+    /// and returns the refreshed `mobileH3` snapshot cached on the running workspace server.
+    pub async fn update_mobile_h3_trusted_device_permissions(
+        &self,
+        workspace_id: &str,
+        device_id: &str,
+        permissions: Value,
+    ) -> Result<Option<Value>, String> {
+        let (handle, admin_token, patch_url, list_url) =
+            self.mobile_h3_admin_request_context(workspace_id, device_id, Some("permissions"))?;
 
         let body_bytes = serde_json::to_vec(&json!({ "permissions": permissions }))
             .map_err(|e| e.to_string())?;
@@ -1412,21 +1448,9 @@ impl ServerManager {
         }
 
         // Refresh full trusted device list from GET /mobile-h3/trusted when available.
-        let refreshed_list = match self
-            .http_client
-            .get(list_url)
-            .bearer_auth(&admin_token)
-            .send()
-            .await
-        {
-            Ok(list_resp) if list_resp.status().is_success() => list_resp
-                .bytes()
-                .await
-                .ok()
-                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-                .and_then(|v| v.get("trustedDevices").and_then(Value::as_array).cloned()),
-            _ => None,
-        };
+        let refreshed_list = self
+            .fetch_mobile_h3_trusted_devices_list(list_url, &admin_token)
+            .await;
 
         let updated_device = resp_json.and_then(|v| v.get("trustedDevice").cloned());
         let mut h3_guard = handle.mobile_h3.lock().unwrap_or_else(|e| e.into_inner());
@@ -1451,6 +1475,64 @@ impl ServerManager {
                 }
                 map.insert("trustedDevices".to_string(), Value::Array(devices));
                 map.insert("trustedDevice".to_string(), dev);
+            }
+        }
+        Ok(h3_guard.clone())
+    }
+
+    /// Revokes a paired phone via `DELETE /mobile-h3/trusted/<id>` and refreshes `trustedDevices`.
+    pub async fn forget_mobile_h3_trusted_device(
+        &self,
+        workspace_id: &str,
+        device_id: &str,
+    ) -> Result<Option<Value>, String> {
+        let (handle, admin_token, delete_url, list_url) =
+            self.mobile_h3_admin_request_context(workspace_id, device_id, None)?;
+
+        let resp = self
+            .http_client
+            .delete(delete_url)
+            .bearer_auth(&admin_token)
+            .send()
+            .await
+            .map_err(|err| format!("Failed forgetting trusted phone: {err}"))?;
+
+        let status = resp.status();
+        let resp_bytes = resp
+            .bytes()
+            .await
+            .map_err(|err| format!("Failed reading forget-phone response: {err}"))?;
+        let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok();
+
+        if !status.is_success() {
+            let detail = resp_json
+                .as_ref()
+                .and_then(|v| v.get("error"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
+            return Err(detail);
+        }
+
+        let refreshed_list = self
+            .fetch_mobile_h3_trusted_devices_list(list_url, &admin_token)
+            .await;
+
+        let trimmed_id = device_id.trim();
+        let mut h3_guard = handle.mobile_h3.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(Value::Object(map)) = h3_guard.as_mut() {
+            if let Some(list) = refreshed_list {
+                map.insert("trustedDevices".to_string(), Value::Array(list));
+            } else if let Some(Value::Array(devices)) = map.get_mut("trustedDevices") {
+                devices.retain(|d| d.get("deviceId").and_then(Value::as_str) != Some(trimmed_id));
+            }
+            if map
+                .get("trustedDevice")
+                .and_then(|d| d.get("deviceId"))
+                .and_then(Value::as_str)
+                == Some(trimmed_id)
+            {
+                map.remove("trustedDevice");
             }
         }
         Ok(h3_guard.clone())
@@ -1688,7 +1770,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let server_task = tokio::spawn(async move {
-            for idx in 0..2 {
+            for idx in 0..4 {
                 let (mut sock, _) = listener.accept().await.unwrap();
                 let mut buf = vec![0u8; 4096];
                 let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf)
@@ -1699,41 +1781,46 @@ mod tests {
                 assert!(req_lower.contains("authorization: bearer adm-secret"));
                 assert!(!req.contains("coworkBrowserToken"));
 
-                if idx == 0 {
-                    assert!(req.starts_with("PATCH /mobile-h3/trusted/dev%2F1+2/permissions "));
-                    let body = json!({
-                        "trustedDevice": {
-                            "deviceId": "dev/1+2",
-                            "displayName": "iPhone",
-                            "lastPairedAt": "2026-01-01T00:00:00Z",
-                            "permissions": { "turns": true, "backups": false }
-                        }
-                    })
-                    .to_string();
-                    let resp = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    sock.write_all(resp.as_bytes()).await.unwrap();
-                } else {
-                    assert!(req.starts_with("GET /mobile-h3/trusted "));
-                    let body = json!({
-                        "trustedDevices": [{
-                            "deviceId": "dev/1+2",
-                            "displayName": "iPhone",
-                            "lastPairedAt": "2026-01-01T00:00:00Z",
-                            "permissions": { "turns": true, "backups": false }
-                        }]
-                    })
-                    .to_string();
-                    let resp = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    sock.write_all(resp.as_bytes()).await.unwrap();
-                }
+                let body = match idx {
+                    0 => {
+                        assert!(req.starts_with("PATCH /mobile-h3/trusted/dev%2F1+2/permissions "));
+                        json!({
+                            "trustedDevice": {
+                                "deviceId": "dev/1+2",
+                                "displayName": "iPhone",
+                                "lastPairedAt": "2026-01-01T00:00:00Z",
+                                "permissions": { "turns": true, "backups": false }
+                            }
+                        })
+                        .to_string()
+                    }
+                    1 => {
+                        assert!(req.starts_with("GET /mobile-h3/trusted "));
+                        json!({
+                            "trustedDevices": [{
+                                "deviceId": "dev/1+2",
+                                "displayName": "iPhone",
+                                "lastPairedAt": "2026-01-01T00:00:00Z",
+                                "permissions": { "turns": true, "backups": false }
+                            }]
+                        })
+                        .to_string()
+                    }
+                    2 => {
+                        assert!(req.starts_with("DELETE /mobile-h3/trusted/dev%2F1+2 "));
+                        json!({ "ok": true, "removed": true }).to_string()
+                    }
+                    _ => {
+                        assert!(req.starts_with("GET /mobile-h3/trusted "));
+                        json!({ "trustedDevices": [] }).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                sock.write_all(resp.as_bytes()).await.unwrap();
             }
         });
 
@@ -1800,6 +1887,12 @@ mod tests {
             updated["trustedDevices"][0]["permissions"]["turns"],
             json!(true)
         );
+        let after_delete = manager
+            .forget_mobile_h3_trusted_device("ws-1", "dev/1+2")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_delete["trustedDevices"], json!([]));
         server_task.await.unwrap();
     }
 }

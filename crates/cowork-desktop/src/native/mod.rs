@@ -1018,7 +1018,12 @@ impl NativeWorkerContext {
                         .await;
                 });
             }
-            NativeCommand::ForgetTrustedPhone(_) => {}
+            NativeCommand::ForgetTrustedPhone(phone_id) => {
+                let remote = self.remote_access.clone();
+                tokio::spawn(async move {
+                    remote.forget_trusted_phone(&phone_id).await;
+                });
+            }
             NativeCommand::Shutdown => {}
         }
     }
@@ -1062,35 +1067,52 @@ impl NativeWorkerContext {
         let uploads = self.uploads.clone();
         let logger = self.logger.clone();
         let req_id = request_id.clone();
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if allow_multiple {
+            let emit = self.emit.clone();
+            let tokio_rt = tokio::runtime::Handle::try_current().ok();
+            handle.update(move |_state, _tx| {
+                // `rfd::backend::macos::ModalFuture` calls `MainThreadMarker::new_unchecked()`
+                // inside `pick_files()`, so the dialog future must be constructed on Rune's UI
+                // main thread and awaited asynchronously once the OS sheet completes.
+                let pick_fut = rfd::AsyncFileDialog::new()
+                    .set_title("Select Files")
+                    .pick_files();
+                let finish = async move {
+                    let candidates = pick_fut
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|fh| fh.path().to_path_buf())
+                        .collect();
+                    let paths = authorize_picked_files(candidates, &uploads, &logger);
+                    (emit)(StoreEvent::FilesPicked {
+                        request_id: req_id,
+                        paths,
+                    });
+                };
+                if let Some(rt) = tokio_rt {
+                    rt.spawn(finish);
+                } else {
+                    std::thread::spawn(move || {
+                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread().build() {
+                            rt.block_on(finish);
+                        }
+                    });
+                }
+            });
+            return;
+        }
+
         handle.update(move |_state, tx| {
             let uploads_inner = uploads.clone();
             let logger_inner = logger.clone();
             let id_inner = req_id.clone();
-            // Rune's FileDialogOptions currently supports single-file open_file; multi-select
-            // returns at most one selected file until Rune exposes multi-selection.
             let options = dialogs::build_open_files_dialog(None, allow_multiple);
             tx.open_file(options, move |state: &mut AppState, result, _tx| {
-                let paths = match result.ok().flatten() {
-                    Some(p) => {
-                        let mut reg = uploads_inner.lock().unwrap_or_else(|e| e.into_inner());
-                        // Native Rune feeds picked paths directly into in-process `ingest_composer_paths`
-                        // (no IPC upload boundary), so `authorize_file` enforces regular-file, non-symlink,
-                        // and 100 MiB validation before forwarding the selected path.
-                        match reg.authorize_file(&p) {
-                            Ok(_token) => vec![p],
-                            Err(err) => {
-                                let meta = json!({ "error": err.to_string() });
-                                logger_inner.warn(
-                                    "security",
-                                    "picked upload source failed file authorization",
-                                    Some(&meta),
-                                );
-                                Vec::new()
-                            }
-                        }
-                    }
-                    None => Vec::new(),
-                };
+                let candidates = result.ok().flatten().into_iter().collect();
+                let paths = authorize_picked_files(candidates, &uploads_inner, &logger_inner);
                 state.apply_store_event(StoreEvent::FilesPicked {
                     request_id: id_inner,
                     paths,
@@ -1098,6 +1120,32 @@ impl NativeWorkerContext {
             });
         });
     }
+}
+
+fn authorize_picked_files(
+    candidates: Vec<PathBuf>,
+    uploads: &Arc<Mutex<AuthorizedUploadRegistry>>,
+    logger: &Arc<LocalLogger>,
+) -> Vec<PathBuf> {
+    let mut reg = uploads.lock().unwrap_or_else(|e| e.into_inner());
+    let mut authorized = Vec::with_capacity(candidates.len());
+    for path in candidates {
+        // Native Rune feeds picked paths directly into in-process `ingest_composer_paths`
+        // (no IPC upload boundary), so `authorize_file` enforces regular-file, non-symlink,
+        // and 100 MiB validation before forwarding each selected path.
+        match reg.authorize_file(&path) {
+            Ok(_token) => authorized.push(path),
+            Err(err) => {
+                let meta = json!({ "error": err.to_string() });
+                logger.warn(
+                    "security",
+                    "picked upload source failed file authorization",
+                    Some(&meta),
+                );
+            }
+        }
+    }
+    authorized
 }
 
 fn make_emitter(

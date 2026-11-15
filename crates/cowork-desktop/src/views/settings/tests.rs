@@ -63,6 +63,7 @@ fn management_targets_collapse_one_off_chats() {
                 archived: false,
                 created_at: 1,
                 last_opened_at: 1,
+                ..Default::default()
             },
             WorkspaceRecord {
                 id: "ws-1".to_string(),
@@ -72,6 +73,7 @@ fn management_targets_collapse_one_off_chats() {
                 archived: false,
                 created_at: 2,
                 last_opened_at: 2,
+                ..Default::default()
             },
             WorkspaceRecord {
                 id: "chat-2".to_string(),
@@ -81,6 +83,7 @@ fn management_targets_collapse_one_off_chats() {
                 archived: false,
                 created_at: 3,
                 last_opened_at: 3,
+                ..Default::default()
             },
             WorkspaceRecord {
                 id: "ws-arch".to_string(),
@@ -90,6 +93,7 @@ fn management_targets_collapse_one_off_chats() {
                 archived: true,
                 created_at: 4,
                 last_opened_at: 4,
+                ..Default::default()
             },
         ],
         ..Default::default()
@@ -164,6 +168,7 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
             output_tokens: 500,
             cached_tokens: 200,
             estimated_cost_usd: 0.12,
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -196,6 +201,7 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
                 output_tokens: 1_000,
                 cached_tokens: 300,
                 estimated_cost_usd: 0.25,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -208,6 +214,7 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
                 output_tokens: 2_000,
                 cached_tokens: 0,
                 estimated_cost_usd: 0.50,
+                ..Default::default()
             }),
             ..Default::default()
         },

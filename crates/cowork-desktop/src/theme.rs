@@ -239,13 +239,8 @@ pub fn tokens(dark: bool) -> ThemeTokens {
     }
 }
 
-/// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, and radii,
-/// paired with `ThemeTokens` for Cowork-specific tokens (such as `sidebar_bg` and search badges).
-pub fn build_kit(
-    dark: bool,
-    reduced_transparency: bool,
-    high_contrast: bool,
-) -> (Kit, ThemeTokens) {
+/// Resolves Cowork's semantic tokens with optional reduced-transparency and high-contrast overrides.
+pub fn resolve_tokens(dark: bool, reduced_transparency: bool, high_contrast: bool) -> ThemeTokens {
     let mut tok = tokens(dark);
     if reduced_transparency {
         tok.glass_bg = tok.panel_bg;
@@ -263,6 +258,17 @@ pub fn build_kit(
         };
         tok.text_muted = tok.text_base.alpha(0.88);
     }
+    tok
+}
+
+/// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, and radii,
+/// paired with `ThemeTokens` for Cowork-specific tokens (such as `sidebar_bg` and search badges).
+pub fn build_kit(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+) -> (Kit, ThemeTokens) {
+    let tok = resolve_tokens(dark, reduced_transparency, high_contrast);
 
     let mut kit = Kit::from_palette(PaletteSeed {
         bg: tok.panel_bg,

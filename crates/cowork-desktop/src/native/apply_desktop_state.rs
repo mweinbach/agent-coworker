@@ -1,0 +1,45 @@
+//! Applies persisted [`PersistedDesktopState`] changes to native side-effect controllers
+//! (`WorkspaceRootsController`, `LocalLogger` workspace redaction, `AppearancePreferences`, and
+//! `QuickChatTrayController`) without triggering re-entrant persistence writes.
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use rune::AppHandle;
+
+use crate::state::{AppState, PersistedDesktopState};
+
+use super::appearance::AppearancePreferences;
+use super::local_logs::LocalLogger;
+use super::security::WorkspaceRootsController;
+use super::tray::QuickChatTrayController;
+
+/// Coordinates side effects whenever desktop settings/workspaces are loaded or saved.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_desktop_state(
+    state: &PersistedDesktopState,
+    roots: &Arc<Mutex<WorkspaceRootsController>>,
+    logger: &Arc<LocalLogger>,
+    appearance_prefs: &AppearancePreferences,
+    tray: &QuickChatTrayController,
+    app_handle: Option<&AppHandle<AppState>>,
+    apply_workspace_roots: bool,
+) {
+    if apply_workspace_roots {
+        let approved = {
+            let mut guard = roots.lock().unwrap_or_else(|e| e.into_inner());
+            let pairs: Vec<(&str, PathBuf)> = state
+                .workspaces
+                .iter()
+                .map(|ws| (ws.id.as_str(), PathBuf::from(&ws.path)))
+                .collect();
+            guard.set_persisted_workspaces(pairs.iter().map(|(id, p)| (*id, p.as_path())));
+            guard.approved_roots()
+        };
+        logger.set_workspace_paths(approved);
+    }
+
+    let _ = appearance_prefs.save_theme_preference(state.settings.theme);
+    let menu_bar_enabled = state.feature_flags.get("menuBar").copied().unwrap_or(true);
+    tray.sync_from_settings(&state.settings, menu_bar_enabled, app_handle);
+}

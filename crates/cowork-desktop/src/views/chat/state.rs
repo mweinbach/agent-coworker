@@ -1,0 +1,254 @@
+//! Ephemeral UI state owned by `views/chat/`.
+//!
+//! Kept isolated here and attached once on `AppState` (`chat_ui`) so chat UI interactions,
+//! collapsibles, popovers, scroll indicators, and per-prompt edit buffers stay clean without
+//! coupling core store reducers to widget-level details.
+
+use std::collections::{HashMap, HashSet};
+
+use rune::TextEdit;
+use rune_kit::ComboboxState;
+use rune_kit::diff::DiffState;
+
+use super::model::MentionItem;
+
+pub const DEFAULT_VISIBLE_FEED_COUNT: usize = 80;
+pub const FEED_OLDER_PAGE_SIZE: usize = 60;
+const COPY_FEEDBACK_DURATION_SECS: f64 = 1.6;
+
+/// Resolved external source attached to an assistant citation chip or sources drawer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CitationSource {
+    pub url: String,
+    pub title: Option<String>,
+}
+
+/// Active inline citation carousel popover state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CitationPopoverState {
+    pub anchor_key: String,
+    pub sources: Vec<CitationSource>,
+    pub active_index: usize,
+}
+
+/// Active clicked `@`-mention overview popover state inside a user message bubble.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MentionPopoverState {
+    pub anchor_key: String,
+    pub item: MentionItem,
+}
+
+/// Local UI state for the chat view, landing composer, feed, tool cards, and chat dialogs.
+#[derive(Default)]
+pub struct ChatUiState {
+    /// Explicit open/closed overrides for grouped activity cards, keyed by group ID.
+    pub expanded_activity_groups: HashMap<String, bool>,
+    /// Expanded reasoning timeline section keys (`"{item_id}:{section_index}"`).
+    pub expanded_reasoning_sections: HashSet<String>,
+    /// Expanded same-title tool cluster keys (`"{group_id}:{cluster_id}"`).
+    pub expanded_tool_clusters: HashSet<String>,
+    /// Explicit open/closed overrides for individual tool detail panels, keyed by tool item ID.
+    pub expanded_tool_details: HashMap<String, bool>,
+    /// Tool item IDs whose raw input/output JSON section is expanded.
+    pub expanded_raw_io: HashSet<String>,
+    /// Interactive `DiffView` state cache keyed by tool item ID.
+    pub tool_diff_states: HashMap<String, DiffState>,
+    /// Error feed row IDs whose full text is expanded.
+    pub expanded_errors: HashSet<String>,
+    /// Assistant message IDs whose bottom `Sources` carousel is expanded.
+    pub open_citation_sources: HashSet<String>,
+    /// Currently open citation chip carousel popover.
+    pub active_citation_popover: Option<CitationPopoverState>,
+    /// Currently open clicked `@`-mention detail popover.
+    pub active_mention_popover: Option<MentionPopoverState>,
+    /// Highlighted option index in the active `@`-mention autocomplete list.
+    pub mention_active_index: usize,
+    /// Query token dismissed via Escape so the popover stays hidden until the query changes.
+    pub mention_dismissed_query: Option<String>,
+    /// Active drag-over visual highlight on the composer drop zone.
+    pub composer_drop_hover: bool,
+    /// Searchable model selector state.
+    pub model_combobox: ComboboxState,
+    /// Reasoning effort selector open flag.
+    pub reasoning_open: bool,
+    /// Landing workspace/project target popover open flag.
+    pub landing_target_open: bool,
+    /// Developer-mode vertical composer resize override (points).
+    pub composer_height_override: Option<f32>,
+    /// Confirmation modal when stopping a turn that has running subagents.
+    pub cancel_subagents_open: bool,
+    /// Number of tail feed items currently rendered per thread key.
+    pub feed_visible_count_by_thread: HashMap<String, usize>,
+    /// Latest `on_at_bottom` signal per thread key.
+    pub feed_at_bottom_by_thread: HashMap<String, bool>,
+    /// Latest `on_far_from_bottom_under` signal per thread key (drives jump-to-latest pill).
+    pub feed_far_from_bottom_by_thread: HashMap<String, bool>,
+    /// Unseen appended updates while scrolled away from the bottom, per thread key.
+    pub feed_unseen_updates_by_thread: HashMap<String, usize>,
+    /// Last rendered item count observed while at the bottom, per thread key.
+    pub feed_seen_count_by_thread: HashMap<String, usize>,
+    /// Nested live activity timeline scroll at-bottom tracking, keyed by group ID.
+    pub activity_at_bottom: HashMap<String, bool>,
+    /// Transient `"Copied"` indicator `(target_key, expires_at_secs)`.
+    pub copied_feedback: Option<(String, f64)>,
+    /// Freeform `TextEdit` inputs for pending `ask` interactions, keyed by `"{request_id}:{question_id}"`.
+    pub ask_text_edits: HashMap<String, TextEdit>,
+    /// Selected option labels for pending `ask` interactions, keyed by `"{request_id}:{question_id}"`.
+    pub ask_selected_options: HashMap<String, Vec<String>>,
+    /// Active step index for multi-question `ask` interactions, keyed by request ID string.
+    pub ask_active_question_idx: HashMap<String, usize>,
+    /// Last `composer_key()` synced with `AppState::composer_edit`.
+    pub synced_composer_key: Option<String>,
+    /// Cached `TextEdit` snapshot per composer key so thread switching keeps local cursor/drafts.
+    pub cached_composer_edits: HashMap<String, TextEdit>,
+}
+
+impl std::fmt::Debug for ChatUiState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatUiState")
+            .field(
+                "expanded_activity_groups",
+                &self.expanded_activity_groups.len(),
+            )
+            .field("expanded_tool_details", &self.expanded_tool_details.len())
+            .field("cancel_subagents_open", &self.cancel_subagents_open)
+            .field("reasoning_open", &self.reasoning_open)
+            .field("landing_target_open", &self.landing_target_open)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ChatUiState {
+    /// Returns true while a copy badge for `key` should show confirmation feedback.
+    pub fn is_copied(&self, key: &str, now_secs: f64) -> bool {
+        matches!(
+            &self.copied_feedback,
+            Some((active_key, expires_at)) if active_key == key && now_secs < *expires_at
+        )
+    }
+
+    /// Marks `key` as recently copied for brief visual confirmation.
+    pub fn mark_copied(&mut self, key: impl Into<String>, now_secs: f64) {
+        self.copied_feedback = Some((key.into(), now_secs + COPY_FEEDBACK_DURATION_SECS));
+    }
+
+    /// Resolves whether an activity group card should currently be expanded.
+    pub fn is_activity_expanded(&self, group_id: &str, default_open: bool) -> bool {
+        self.expanded_activity_groups
+            .get(group_id)
+            .copied()
+            .unwrap_or(default_open)
+    }
+
+    /// Toggles an activity group card relative to its current resolved open state.
+    pub fn toggle_activity(&mut self, group_id: &str, currently_open: bool) {
+        self.expanded_activity_groups
+            .insert(group_id.to_string(), !currently_open);
+    }
+
+    /// Returns whether an individual tool detail card should be expanded.
+    pub fn is_tool_expanded(&self, tool_id: &str, default_open: bool) -> bool {
+        self.expanded_tool_details
+            .get(tool_id)
+            .copied()
+            .unwrap_or(default_open)
+    }
+
+    /// Toggles an individual tool detail card relative to its current state.
+    pub fn toggle_tool(&mut self, tool_id: &str, currently_open: bool) {
+        self.expanded_tool_details
+            .insert(tool_id.to_string(), !currently_open);
+    }
+
+    /// Returns the number of tail feed items visible for `thread_key`.
+    pub fn visible_count_for(&self, thread_key: &str) -> usize {
+        self.feed_visible_count_by_thread
+            .get(thread_key)
+            .copied()
+            .unwrap_or(DEFAULT_VISIBLE_FEED_COUNT)
+    }
+
+    /// Expands the rendered window upward to reveal older messages.
+    pub fn show_older_messages(&mut self, thread_key: &str, total_items: usize, page_size: usize) {
+        let current = self.visible_count_for(thread_key);
+        let next = current.saturating_add(page_size.max(1)).min(total_items);
+        self.feed_visible_count_by_thread
+            .insert(thread_key.to_string(), next);
+    }
+
+    /// Records viewport scroll state reported by Rune's edge callbacks.
+    pub fn update_scroll_state(
+        &mut self,
+        thread_key: &str,
+        at_bottom: Option<bool>,
+        far_from_bottom: Option<bool>,
+        total_items: usize,
+    ) {
+        if let Some(at) = at_bottom {
+            self.feed_at_bottom_by_thread
+                .insert(thread_key.to_string(), at);
+            if at {
+                self.feed_unseen_updates_by_thread
+                    .insert(thread_key.to_string(), 0);
+                self.feed_seen_count_by_thread
+                    .insert(thread_key.to_string(), total_items);
+            }
+        }
+        if let Some(far) = far_from_bottom {
+            self.feed_far_from_bottom_by_thread
+                .insert(thread_key.to_string(), far);
+            if !far {
+                self.feed_unseen_updates_by_thread
+                    .insert(thread_key.to_string(), 0);
+                self.feed_seen_count_by_thread
+                    .insert(thread_key.to_string(), total_items);
+            }
+        }
+    }
+
+    /// Clears unseen update count when the user jumps back to the bottom.
+    pub fn mark_jumped_to_latest(&mut self, thread_key: &str, total_items: usize) {
+        self.feed_at_bottom_by_thread
+            .insert(thread_key.to_string(), true);
+        self.feed_far_from_bottom_by_thread
+            .insert(thread_key.to_string(), false);
+        self.feed_unseen_updates_by_thread
+            .insert(thread_key.to_string(), 0);
+        self.feed_seen_count_by_thread
+            .insert(thread_key.to_string(), total_items);
+    }
+
+    /// Returns whether the jump-to-latest pill should be displayed for `thread_key`.
+    pub fn show_jump_to_latest(&self, thread_key: &str, total_items: usize) -> bool {
+        let far = self
+            .feed_far_from_bottom_by_thread
+            .get(thread_key)
+            .copied()
+            .unwrap_or(false);
+        let unseen = self.unseen_update_count(thread_key, total_items);
+        far || unseen > 0
+    }
+
+    /// Returns unseen updates appended while detached from the bottom.
+    pub fn unseen_update_count(&self, thread_key: &str, total_items: usize) -> usize {
+        let at_bottom = self
+            .feed_at_bottom_by_thread
+            .get(thread_key)
+            .copied()
+            .unwrap_or(true);
+        if at_bottom {
+            return 0;
+        }
+        let baseline = self
+            .feed_seen_count_by_thread
+            .get(thread_key)
+            .copied()
+            .unwrap_or(total_items);
+        let recorded = self
+            .feed_unseen_updates_by_thread
+            .get(thread_key)
+            .copied()
+            .unwrap_or(0);
+        recorded.max(total_items.saturating_sub(baseline))
+    }
+}

@@ -21,8 +21,8 @@ use crate::state::PrivacyTelemetrySettings;
 
 use super::persistence::PersistenceService;
 use super::telemetry_status::{
-    coalesce_env, is_network_telemetry_globally_disabled, normalize_env_value, normalize_http_url,
-    resolve_telemetry_consent,
+    build_time_env, build_time_http_url, coalesce_env, is_network_telemetry_globally_disabled,
+    normalize_env_value, normalize_http_url, resolve_telemetry_consent,
 };
 
 const DEFAULT_POSTHOG_HOST: &str = "https://us.i.posthog.com";
@@ -267,14 +267,16 @@ pub fn resolve_product_analytics_config(
     event_source: &str,
 ) -> ProductAnalyticsConfig {
     let consent = resolve_telemetry_consent(settings, env, is_packaged);
-    let api_key = normalize_env_value(env.get("COWORK_POSTHOG_KEY"));
+    let api_key = normalize_env_value(env.get("COWORK_POSTHOG_KEY"))
+        .or_else(|| build_time_env(option_env!("COWORK_POSTHOG_KEY")));
     let host = normalize_http_url(env.get("COWORK_POSTHOG_HOST"))
+        .or_else(|| build_time_http_url(option_env!("COWORK_POSTHOG_HOST")))
         .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_string());
     let app_version = fallback_version
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
-        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+        .unwrap_or_else(|| super::resolve_desktop_app_version().to_string());
     let release = coalesce_env(env, &["COWORK_RELEASE", "COWORK_APP_VERSION"])
         .unwrap_or_else(|| app_version.clone());
     let env_raw = coalesce_env(
@@ -933,7 +935,7 @@ impl ProductAnalyticsService {
             })),
         };
         if let Some(prev) = previous_version
-            && prev != env!("CARGO_PKG_VERSION")
+            && prev != super::resolve_desktop_app_version()
         {
             service.emit_app_updated_if_active();
         }
@@ -964,7 +966,8 @@ impl ProductAnalyticsService {
                 guard.persisted.anonymous_installation_id =
                     Some(generate_anonymous_installation_id());
                 if guard.persisted.last_app_version.is_none() {
-                    guard.persisted.last_app_version = Some(env!("CARGO_PKG_VERSION").to_string());
+                    guard.persisted.last_app_version =
+                        Some(super::resolve_desktop_app_version().to_string());
                 }
                 if let Some(store) = persistence {
                     persist_product_analytics_state(store, &guard.persisted);
@@ -1258,7 +1261,7 @@ mod tests {
             assert!(id.starts_with("anon_"));
             assert_eq!(
                 persisted.last_app_version.as_deref(),
-                Some(env!("CARGO_PKG_VERSION"))
+                Some(crate::native::resolve_desktop_app_version())
             );
 
             let mut props = BTreeMap::new();

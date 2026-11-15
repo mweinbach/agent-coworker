@@ -175,7 +175,7 @@ impl DiagnosticsService {
             "schemaVersion": 1,
             "createdAt": created_at,
             "app": {
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": super::resolve_desktop_app_version(),
                 "platform": host_platform(),
                 "arch": std::env::consts::ARCH,
                 "packaged": self.is_packaged,
@@ -206,7 +206,7 @@ impl DiagnosticsService {
 
         let summary = format!(
             "Created: {created_at}\nVersion: {} ({} {}, packaged: {})\nWorkspaces: {}, Threads: {}\nUpload configured: {}, Upload enabled: {}\nLogs: {}",
-            env!("CARGO_PKG_VERSION"),
+            super::resolve_desktop_app_version(),
             host_platform(),
             std::env::consts::ARCH,
             self.is_packaged,

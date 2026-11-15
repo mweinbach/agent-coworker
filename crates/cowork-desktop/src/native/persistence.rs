@@ -22,7 +22,7 @@ use crate::state::{
     DesktopSettings, OnboardingState, PersistedDesktopState, PrivacyTelemetrySettings,
     ThreadRecord, ThreadStatus, WorkspaceRecord,
 };
-use crate::theme::ThemePreference;
+use crate::theme::{AccentPalette, ThemePreference};
 
 pub const DESKTOP_USER_DATA_DIR_ENV: &str = "COWORK_DESKTOP_USER_DATA_DIR";
 pub const LEGACY_ELECTRON_USER_DATA_DIR_ENV: &str = "COWORK_ELECTRON_USER_DATA_DIR";
@@ -1159,6 +1159,10 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         ds.insert("theme".to_string(), theme_val);
     }
     ds.insert(
+        "accentPalette".to_string(),
+        Value::String(snapshot.settings.accent_palette.id().to_string()),
+    );
+    ds.insert(
         "reducedTransparency".to_string(),
         json!(snapshot.settings.reduced_transparency),
     );
@@ -1586,6 +1590,10 @@ fn sanitize_threads(raw: Option<&Vec<Value>>, workspace_ids: &HashSet<String>) -
     out
 }
 
+fn parse_accent_palette_value(raw: Option<&Value>) -> Option<AccentPalette> {
+    raw.and_then(Value::as_str).and_then(AccentPalette::parse)
+}
+
 fn sanitize_desktop_settings(raw: Option<&Value>) -> Value {
     let defaults = DesktopSettings::default();
     let mut map = raw.and_then(Value::as_object).cloned().unwrap_or_default();
@@ -1629,6 +1637,13 @@ fn sanitize_desktop_settings(raw: Option<&Value>) -> Value {
     } else if let Ok(serialized) = serde_json::to_value(defaults.theme) {
         map.insert("theme".to_string(), serialized);
     }
+
+    let accent_palette =
+        parse_accent_palette_value(map.get("accentPalette")).unwrap_or(defaults.accent_palette);
+    map.insert(
+        "accentPalette".to_string(),
+        Value::String(accent_palette.id().to_string()),
+    );
 
     map.insert(
         "reducedTransparency".to_string(),
@@ -1873,6 +1888,9 @@ fn core_desktop_settings_from_document(obj: &Map<String, Value>) -> DesktopSetti
             && let Ok(theme) = serde_json::from_value::<ThemePreference>(v.clone())
         {
             settings.theme = theme;
+        }
+        if let Some(palette) = parse_accent_palette_value(ds.get("accentPalette")) {
+            settings.accent_palette = palette;
         }
         if let Some(v) = ds.get("reducedTransparency").and_then(Value::as_bool) {
             settings.reduced_transparency = v;
@@ -2944,5 +2962,63 @@ mod tests {
         assert_eq!(after_arr.len(), 1);
         assert_eq!(after_arr[0]["id"], "th-task");
         assert!(after_prune["activeThreadId"].is_null());
+    }
+
+    #[test]
+    fn roundtrips_and_sanitizes_desktop_accent_palette() {
+        let tmp = tempdir().unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+
+        for palette in AccentPalette::ALL {
+            let mut snapshot = PersistedDesktopState::default();
+            snapshot.settings.accent_palette = palette;
+            let saved = service.merge_and_save_core_snapshot(&snapshot).unwrap();
+            assert_eq!(saved["desktopSettings"]["accentPalette"], palette.id());
+
+            let reloaded = service.load_core_state().unwrap();
+            assert_eq!(reloaded.settings.accent_palette, palette);
+        }
+
+        // Aliases / mixed case normalize to canonical kebab-case id.
+        let mut alias_doc = service.load_state_value().unwrap();
+        alias_doc["desktopSettings"]["accentPalette"] = json!(" AMBER ");
+        let saved_alias = service.save_state_value(alias_doc).unwrap();
+        assert_eq!(
+            saved_alias["desktopSettings"]["accentPalette"],
+            "ochre-amber"
+        );
+        assert_eq!(
+            service.load_core_state().unwrap().settings.accent_palette,
+            AccentPalette::OchreAmber
+        );
+
+        // Invalid strings fall back to the default accent palette.
+        let mut invalid_doc = service.load_state_value().unwrap();
+        invalid_doc["desktopSettings"]["accentPalette"] = json!("olive-green");
+        let saved_invalid = service.save_state_value(invalid_doc).unwrap();
+        assert_eq!(
+            saved_invalid["desktopSettings"]["accentPalette"],
+            AccentPalette::default().id()
+        );
+        assert_eq!(
+            service.load_core_state().unwrap().settings.accent_palette,
+            AccentPalette::default()
+        );
+
+        // Absent accentPalette (legacy document) resolves cleanly to default.
+        let mut legacy_doc = service.load_state_value().unwrap();
+        legacy_doc["desktopSettings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("accentPalette");
+        let saved_legacy = service.save_state_value(legacy_doc).unwrap();
+        assert_eq!(
+            saved_legacy["desktopSettings"]["accentPalette"],
+            AccentPalette::default().id()
+        );
+        assert_eq!(
+            service.load_core_state().unwrap().settings.accent_palette,
+            AccentPalette::default()
+        );
     }
 }

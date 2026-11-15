@@ -1005,6 +1005,76 @@ pub struct PersistedDesktopState {
     pub feature_flags: HashMap<String, bool>,
 }
 
+/// Feature flag metadata matching `src/shared/featureFlags.ts`.
+pub const FEATURE_FLAG_DEFINITIONS: &[(&str, bool, Option<&str>, bool)] = &[
+    ("menuBar", true, None, false),
+    (
+        "remoteAccess",
+        false,
+        Some("COWORK_ENABLE_REMOTE_ACCESS"),
+        true,
+    ),
+    ("workspacePicker", true, None, false),
+    ("workspaceLifecycle", true, None, false),
+    ("openAiNativeConnectors", false, None, false),
+    ("canvas", false, None, false),
+    ("tasks", false, Some("COWORK_ENABLE_TASKS"), false),
+    ("workflows", false, Some("COWORK_ENABLE_WORKFLOWS"), false),
+];
+
+fn parse_boolean_flag(value: Option<&str>) -> Option<bool> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Resolves desktop feature flags matching `src/shared/featureFlags.ts::resolveFeatureFlags`.
+/// Packaged builds ignore persisted dev overrides and force `remoteAccess` off while
+/// preserving non-forced-off environment overrides (`COWORK_ENABLE_TASKS`, `COWORK_ENABLE_WORKFLOWS`).
+pub fn resolve_feature_flags_with_env<F>(
+    is_packaged: bool,
+    overrides: &HashMap<String, bool>,
+    env_var: F,
+) -> HashMap<String, bool>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut values = HashMap::new();
+    for &(id, default_enabled, env_key, _) in FEATURE_FLAG_DEFINITIONS {
+        let mut enabled = default_enabled;
+        if let Some(key) = env_key
+            && let Some(env_override) = parse_boolean_flag(env_var(key).as_deref())
+        {
+            enabled = env_override;
+        }
+        values.insert(id.to_string(), enabled);
+    }
+    if !is_packaged {
+        for (id, enabled) in overrides {
+            values.insert(id.clone(), *enabled);
+        }
+    }
+    if is_packaged {
+        for &(id, _, _, packaged_forced_off) in FEATURE_FLAG_DEFINITIONS {
+            if packaged_forced_off {
+                values.insert(id.to_string(), false);
+            }
+        }
+    }
+    values
+}
+
+/// Resolves desktop feature flags against the current process environment.
+pub fn resolve_feature_flags(
+    is_packaged: bool,
+    overrides: &HashMap<String, bool>,
+) -> HashMap<String, bool> {
+    resolve_feature_flags_with_env(is_packaged, overrides, |key| std::env::var(key).ok())
+}
+
 /// Non-serialized service handles for background workers and test capture.
 pub struct AppServices {
     pub waker: Option<rune::Waker>,
@@ -1052,6 +1122,7 @@ pub struct AppState {
     pub onboarding: OnboardingState,
     pub desktop_settings: DesktopSettings,
     pub feature_flags: HashMap<String, bool>,
+    pub feature_flag_overrides: HashMap<String, bool>,
     pub workspaces: Vec<WorkspaceRecord>,
     pub workspace_order: Vec<String>,
     pub collapsed_workspace_ids: HashSet<String>,
@@ -1077,6 +1148,7 @@ pub struct AppState {
     pub active_task: Option<TaskRecordView>,
     pub workflow_runs: Vec<WorkflowRunView>,
     pub explorer_entries_by_dir: HashMap<String, Vec<WorkspaceFileEntry>>,
+    pub explorer_entries_by_workspace: HashMap<(String, String), Vec<WorkspaceFileEntry>>,
     pub explorer_expanded_dirs: HashSet<String>,
     pub provider_catalog: Vec<ProviderSummary>,
     pub provider_auth_methods: HashMap<String, Vec<String>>,
@@ -1147,6 +1219,7 @@ impl Default for AppState {
             onboarding: OnboardingState::default(),
             desktop_settings: DesktopSettings::default(),
             feature_flags: HashMap::new(),
+            feature_flag_overrides: HashMap::new(),
             workspaces: Vec::new(),
             workspace_order: Vec::new(),
             collapsed_workspace_ids: HashSet::new(),
@@ -1172,6 +1245,7 @@ impl Default for AppState {
             active_task: None,
             workflow_runs: Vec::new(),
             explorer_entries_by_dir: HashMap::new(),
+            explorer_entries_by_workspace: HashMap::new(),
             explorer_expanded_dirs: HashSet::new(),
             provider_catalog: Vec::new(),
             provider_auth_methods: HashMap::new(),
@@ -1231,6 +1305,112 @@ impl AppState {
     pub fn active_workspace(&self) -> Option<&WorkspaceRecord> {
         let id = self.active_workspace_id.as_deref()?;
         self.workspaces.iter().find(|w| w.id == id)
+    }
+
+    /// Returns cached explorer entries for `workspace_id` and directory `dir`,
+    /// normalizing both relative paths (`"./src"`, `""`, `"."`) and canonical/raw root prefixes.
+    pub fn explorer_entries(&self, workspace_id: &str, dir: &str) -> Option<&[WorkspaceFileEntry]> {
+        let norm = self.normalize_explorer_path(workspace_id, dir);
+        self.explorer_entries_by_workspace
+            .get(&(workspace_id.to_string(), norm))
+            .map(Vec::as_slice)
+    }
+
+    fn normalize_explorer_path(&self, workspace_id: &str, raw: &str) -> String {
+        fn clean_slashes(s: &str) -> String {
+            let replaced = s.trim().replace('\\', "/");
+            if replaced.len() > 1 {
+                replaced.trim_end_matches('/').to_string()
+            } else {
+                replaced
+            }
+        }
+
+        let clean = clean_slashes(raw);
+        if clean.is_empty() || clean == "." || clean == "./" {
+            return ".".to_string();
+        }
+
+        let mut stripped: &str = &clean;
+        let mut owned_relative: Option<String> = None;
+        if let Some(root) = self.workspace_path(workspace_id) {
+            let mut candidates = vec![clean_slashes(&root)];
+            if let Ok(canon) = std::fs::canonicalize(&root) {
+                let lossy = canon.to_string_lossy();
+                let no_unc = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
+                let canon_clean = clean_slashes(no_unc);
+                if !candidates.contains(&canon_clean) {
+                    candidates.push(canon_clean);
+                }
+            }
+            for prefix in candidates {
+                if clean == prefix {
+                    return ".".to_string();
+                }
+                if prefix == "/" {
+                    if let Some(rest) = clean.strip_prefix('/') {
+                        owned_relative = Some(rest.to_string());
+                        break;
+                    }
+                } else if clean.starts_with(&prefix)
+                    && clean.as_bytes().get(prefix.len()) == Some(&b'/')
+                {
+                    owned_relative = Some(clean[prefix.len() + 1..].to_string());
+                    break;
+                }
+            }
+        }
+        if let Some(ref rel) = owned_relative {
+            stripped = rel.as_str();
+        }
+        while let Some(rest) = stripped.strip_prefix("./") {
+            stripped = rest;
+        }
+        let stripped = if stripped.len() > 1 {
+            stripped.trim_end_matches('/')
+        } else {
+            stripped
+        };
+        if stripped.is_empty() || stripped == "." {
+            ".".to_string()
+        } else {
+            stripped.to_string()
+        }
+    }
+
+    fn resolve_workspace_fs_path(&self, workspace_id: &str, raw: &str) -> String {
+        let Some(root) = self.workspace_path(workspace_id) else {
+            return raw.to_string();
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || matches!(trimmed, "." | "./") {
+            return root;
+        }
+        let mut rel = trimmed;
+        while let Some(rest) = rel.strip_prefix("./") {
+            rel = rest;
+        }
+        if rel.is_empty() || rel == "." {
+            return root;
+        }
+        if Path::new(rel).is_absolute() {
+            raw.to_string()
+        } else {
+            Path::new(&root).join(rel).to_string_lossy().into_owned()
+        }
+    }
+
+    fn sync_active_explorer_dir(&mut self) {
+        self.explorer_entries_by_dir.clear();
+        let Some(active_ws) = self.active_workspace_id.as_deref() else {
+            return;
+        };
+        for ((ws_id, dir), entries) in &self.explorer_entries_by_workspace {
+            if ws_id == active_ws {
+                self.explorer_entries_by_dir
+                    .insert(dir.clone(), entries.clone());
+            }
+        }
     }
 
     /// Returns workspaces ordered for display (non-archived, respecting `workspace_order`).
@@ -1547,7 +1727,9 @@ impl AppState {
                 }
                 self.desktop_settings = persisted.settings;
                 self.onboarding = persisted.onboarding;
-                self.feature_flags = persisted.feature_flags;
+                self.feature_flag_overrides = persisted.feature_flags;
+                self.feature_flags =
+                    resolve_feature_flags(is_packaged, &self.feature_flag_overrides);
                 self.workspaces = persisted.workspaces;
                 self.workspace_order = persisted.workspace_order;
                 self.collapsed_workspace_ids =
@@ -1578,6 +1760,7 @@ impl AppState {
                         yolo,
                     });
                 }
+                self.sync_active_explorer_dir();
             }
             StoreEvent::SystemAppearanceChanged { system_dark } => {
                 self.system_dark_override = Some(system_dark);
@@ -1608,14 +1791,28 @@ impl AppState {
                     self.workspace_order.push(workspace_id.clone());
                 }
                 self.active_workspace_id = Some(workspace_id.clone());
+                self.sync_active_explorer_dir();
                 self.send_native(NativeCommand::StartWorkspaceServer {
                     workspace_id,
                     path,
                     yolo,
                 });
             }
-            StoreEvent::WorkspaceFilesListed { dir, entries, .. } => {
-                self.explorer_entries_by_dir.insert(dir, entries);
+            StoreEvent::WorkspaceFilesListed {
+                workspace_id,
+                dir,
+                mut entries,
+                ..
+            } => {
+                let norm_dir = self.normalize_explorer_path(&workspace_id, &dir);
+                for entry in &mut entries {
+                    entry.path = self.normalize_explorer_path(&workspace_id, &entry.path);
+                }
+                self.explorer_entries_by_workspace
+                    .insert((workspace_id.clone(), norm_dir), entries);
+                if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
+                    self.sync_active_explorer_dir();
+                }
             }
             StoreEvent::FilePreviewLoaded { path, result, .. } => match result {
                 Ok(preview) => self.active_file_preview = Some(preview),
@@ -1791,7 +1988,38 @@ impl AppState {
             StoreEvent::QuickChatToggled => {
                 self.quick_chat_open = !self.quick_chat_open;
             }
-            StoreEvent::DeepLink(_url) => {}
+            StoreEvent::DeepLink(url) => {
+                let trimmed = url.trim();
+                if let Some(rest) = trimmed.strip_prefix("cowork://") {
+                    let path_only = rest.split(['?', '#']).next().unwrap_or("");
+                    let mut parts = path_only.split('/').filter(|s| !s.is_empty());
+                    match parts.next() {
+                        Some("settings") => {
+                            let page = parts.next().map(SettingsPageId::from_route_segment);
+                            self.dispatch(Action::Navigate(NavAction::OpenSettings(page)));
+                        }
+                        Some("tasks") => {
+                            if self.feature_flags.get("tasks").copied().unwrap_or(false) {
+                                if let Some(task_id) = parts.next() {
+                                    self.dispatch(Action::Navigate(NavAction::OpenTask(
+                                        task_id.to_string(),
+                                    )));
+                                } else {
+                                    self.dispatch(Action::Navigate(NavAction::OpenView(
+                                        ViewId::Task,
+                                    )));
+                                }
+                            }
+                        }
+                        Some("chat") | Some("new") => {
+                            self.dispatch(Action::Navigate(NavAction::OpenNewChat {
+                                workspace_id: None,
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -1836,6 +2064,7 @@ impl AppState {
                     .map(|t| t.workspace_id.clone())
                 {
                     self.active_workspace_id = Some(ws_id);
+                    self.sync_active_explorer_dir();
                 }
                 if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
                     rt.unread = false;
@@ -1866,6 +2095,7 @@ impl AppState {
                 if let Some(ws_id) = workspace_id {
                     self.active_workspace_id = Some(ws_id.clone());
                     self.landing_workspace_id = Some(ws_id);
+                    self.sync_active_explorer_dir();
                 }
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Chat),
@@ -1919,6 +2149,7 @@ impl AppState {
             }
             NavAction::SelectWorkspace(workspace_id) => {
                 self.active_workspace_id = Some(workspace_id);
+                self.sync_active_explorer_dir();
             }
             NavAction::GoBack => {
                 self.nav.go_back();
@@ -2131,13 +2362,58 @@ impl AppState {
                 review_required,
                 provider,
                 model,
+                idempotency_key,
+                requirements,
+                work_items,
             } => {
                 let mut params = Map::new();
-                params.insert("title".to_string(), json!(title));
-                params.insert("objective".to_string(), json!(objective));
-                if let Some(c) = context.filter(|s| !s.trim().is_empty()) {
-                    params.insert("context".to_string(), json!(c));
-                }
+                let key = idempotency_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.chars().take(200).collect::<String>())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let title_val: String = {
+                    let t = title.trim();
+                    let raw = if t.is_empty() { "Untitled task" } else { t };
+                    raw.chars().take(160).collect()
+                };
+                let obj_val = {
+                    let o = objective.trim();
+                    if o.is_empty() { title_val.as_str() } else { o }
+                };
+                let ctx_val = context
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(obj_val);
+                let reqs_val = if requirements.is_empty() {
+                    vec![json!({
+                        "kind": "acceptance_criterion",
+                        "text": format!("Deliver: {obj_val}"),
+                        "permanence": "fixed",
+                    })]
+                } else {
+                    requirements
+                };
+                let work_items_val = if work_items.is_empty() {
+                    let wi_title: String = title_val.chars().take(200).collect();
+                    vec![json!({
+                        "key": "wi-1",
+                        "title": wi_title,
+                        "description": obj_val,
+                        "expectedOutputs": ["Primary task deliverable"],
+                    })]
+                } else {
+                    work_items
+                };
+
+                params.insert("idempotencyKey".to_string(), json!(key));
+                params.insert("title".to_string(), json!(title_val));
+                params.insert("objective".to_string(), json!(obj_val));
+                params.insert("context".to_string(), json!(ctx_val));
+                params.insert("requirements".to_string(), json!(reqs_val));
+                params.insert("workItems".to_string(), json!(work_items_val));
                 if let Some(r) = review_required {
                     params.insert("reviewRequired".to_string(), json!(r));
                 }
@@ -3450,7 +3726,7 @@ impl AppState {
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/auth/callback",
-                    json!({ "cwd": cwd, "name": name, "source": source, "callbackUrl": callback_url }),
+                    json!({ "cwd": cwd, "name": name, "source": source, "code": callback_url }),
                     false,
                 );
             }
@@ -3490,7 +3766,7 @@ impl AppState {
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/agentProfiles/copy",
-                    json!({ "cwd": cwd, "id": id, "targetScope": target_scope }),
+                    json!({ "cwd": cwd, "copy": { "sourceRef": id, "targetScope": target_scope } }),
                     false,
                 );
             }
@@ -3564,20 +3840,19 @@ impl AppState {
             }
             SettingsAction::RestoreSkillImprovement {
                 workspace_id,
-                backup_id,
+                skill_name,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/skills/improvement/restore",
-                    json!({ "cwd": cwd, "backupId": backup_id }),
+                    json!({ "cwd": cwd, "skillName": skill_name }),
                     false,
                 );
             }
             SettingsAction::RefreshPluginsAndSkills { workspace_id } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let c = json!({ "cwd": cwd });
-                let _ = self.send_ws_request(&workspace_id, "cowork/plugins/read", c.clone(), true);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/plugins/catalog/read",
@@ -3658,7 +3933,7 @@ impl AppState {
                 let _ = self.send_ws_request(
                     &workspace_id,
                     method,
-                    json!({ "cwd": cwd, "name": name }),
+                    json!({ "cwd": cwd, "skillName": name }),
                     false,
                 );
             }
@@ -3667,7 +3942,7 @@ impl AppState {
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/skills/delete",
-                    json!({ "cwd": cwd, "name": name }),
+                    json!({ "cwd": cwd, "skillName": name }),
                     false,
                 );
             }
@@ -3676,7 +3951,7 @@ impl AppState {
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/marketplaces/add",
-                    json!({ "cwd": cwd, "source": url }),
+                    json!({ "cwd": cwd, "sourceInput": url }),
                     false,
                 );
             }
@@ -3721,7 +3996,11 @@ impl AppState {
                 self.settings_mutation_error = None;
             }
             SettingsAction::SetFeatureFlag { flag_id, enabled } => {
-                self.feature_flags.insert(flag_id, enabled);
+                if self.is_packaged {
+                    return;
+                }
+                self.feature_flag_overrides.insert(flag_id, enabled);
+                self.feature_flags = resolve_feature_flags(false, &self.feature_flag_overrides);
                 self.persist_state();
             }
             SettingsAction::RefreshDiagnostics { workspace_id } => {
@@ -3828,9 +4107,8 @@ impl AppState {
             }
             SettingsAction::PreviewConversationImport {
                 workspace_id,
-                mut params,
+                params,
             } => {
-                inject_cwd(&mut params, self.workspace_path(&workspace_id));
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/conversationImport/preview",
@@ -3840,9 +4118,8 @@ impl AppState {
             }
             SettingsAction::ExecuteConversationImport {
                 workspace_id,
-                mut params,
+                params,
             } => {
-                inject_cwd(&mut params, self.workspace_path(&workspace_id));
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/conversationImport/import",
@@ -3953,6 +4230,7 @@ impl AppState {
                 self.workspaces.push(ws);
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
+                self.sync_active_explorer_dir();
                 self.persist_state();
                 self.send_native(NativeCommand::StartWorkspaceServer {
                     workspace_id: id,
@@ -3966,9 +4244,15 @@ impl AppState {
                 self.collapsed_workspace_ids.remove(&workspace_id);
                 self.workspace_runtime_by_id.remove(&workspace_id);
                 self.workspace_socket_by_id.remove(&workspace_id);
+                self.explorer_entries_by_workspace
+                    .retain(|(ws_id, _), _| ws_id != &workspace_id);
+                let expanded_prefix = format!("{workspace_id}::");
+                self.explorer_expanded_dirs
+                    .retain(|key| !key.starts_with(&expanded_prefix));
                 if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
                     self.active_workspace_id = self.workspaces.first().map(|w| w.id.clone());
                 }
+                self.sync_active_explorer_dir();
                 self.persist_state();
                 self.send_native(NativeCommand::StopWorkspaceServer {
                     workspace_id: workspace_id.clone(),
@@ -3999,11 +4283,12 @@ impl AppState {
                 if let Some(root) = self.workspace_path(&workspace_id) {
                     let request_id = self.next_tag("ls");
                     let show_hidden = self.desktop_settings.show_hidden_files;
+                    let resolved_dir = self.resolve_workspace_fs_path(&workspace_id, &dir);
                     self.send_native(NativeCommand::ListWorkspaceFiles {
                         request_id,
                         workspace_id,
                         workspace_root: root,
-                        dir,
+                        dir: resolved_dir,
                         show_hidden,
                     });
                 }
@@ -4011,11 +4296,12 @@ impl AppState {
             NativeAction::LoadFilePreview { workspace_id, path } => {
                 if let Some(root) = self.workspace_path(&workspace_id) {
                     let request_id = self.next_tag("preview");
+                    let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
                     self.send_native(NativeCommand::ReadFilePreview {
                         request_id,
                         workspace_id,
                         workspace_root: root,
-                        path,
+                        path: resolved_path,
                     });
                 }
             }
@@ -5046,7 +5332,10 @@ impl AppState {
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    questions: params.get("questions").cloned().unwrap_or(Value::Null),
+                    questions: params
+                        .get("questions")
+                        .cloned()
+                        .unwrap_or_else(|| params.clone()),
                 });
             }
             _ => {}
@@ -5713,7 +6002,7 @@ impl AppState {
             active_workspace_id: self.active_workspace_id.clone(),
             active_thread_id,
             onboarding: self.onboarding.clone(),
-            feature_flags: self.feature_flags.clone(),
+            feature_flags: self.feature_flag_overrides.clone(),
         };
         self.send_native(NativeCommand::SavePersistedState(Box::new(snapshot)));
     }
@@ -7009,5 +7298,366 @@ mod tests {
         state.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
         assert!(state.active_task.is_none());
         assert_eq!(state.nav.current().active_task_id, None);
+    }
+
+    #[test]
+    fn create_task_emits_server_valid_payload() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Repo".to_string(),
+            path: "/tmp/repo".to_string(),
+            ..Default::default()
+        });
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Task(TaskAction::CreateTask {
+            workspace_id: "ws-1".to_string(),
+            title: "Ship parity".to_string(),
+            objective: "Implement full schema alignment".to_string(),
+            context: None,
+            review_required: Some(true),
+            provider: Some("anthropic".to_string()),
+            model: None,
+            idempotency_key: None,
+            requirements: Vec::new(),
+            work_items: Vec::new(),
+        }));
+
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "task/create");
+                assert_eq!(params["cwd"], "/tmp/repo");
+                assert!(!params["idempotencyKey"].as_str().unwrap_or("").is_empty());
+                assert_eq!(params["title"], "Ship parity");
+                assert_eq!(params["objective"], "Implement full schema alignment");
+                assert_eq!(params["context"], "Implement full schema alignment");
+                assert_eq!(params["reviewRequired"], true);
+                assert_eq!(params["provider"], "anthropic");
+                let req = &params["requirements"][0];
+                assert_eq!(req["kind"], "acceptance_criterion");
+                assert!(!req["text"].as_str().unwrap_or("").is_empty());
+                assert_eq!(req["permanence"], "fixed");
+                let wi = &params["workItems"][0];
+                assert_eq!(wi["key"], "wi-1");
+                assert!(!wi["expectedOutputs"][0].as_str().unwrap_or("").is_empty());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn settings_protocol_payloads_match_server_schemas() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Repo".to_string(),
+            path: "/tmp/repo".to_string(),
+            ..Default::default()
+        });
+
+        state.dispatch(Action::Settings(SettingsAction::CopyAgentProfile {
+            workspace_id: "ws-1".to_string(),
+            id: "global:reviewer".to_string(),
+            target_scope: "workspace".to_string(),
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/agentProfiles/copy");
+                assert_eq!(params["copy"]["sourceRef"], "global:reviewer");
+                assert_eq!(params["copy"]["targetScope"], "workspace");
+                assert!(params.get("id").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Settings(SettingsAction::RestoreSkillImprovement {
+            workspace_id: "ws-1".to_string(),
+            skill_name: "code-review".to_string(),
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/skills/improvement/restore");
+                assert_eq!(params["skillName"], "code-review");
+                assert!(params.get("backupId").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        let before = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Settings(SettingsAction::RefreshPluginsAndSkills {
+            workspace_id: "ws-1".to_string(),
+        }));
+        let refresh_methods: Vec<String> = state.services.emitted_ws_commands[before..]
+            .iter()
+            .filter_map(|cmd| match cmd {
+                WsCommand::SendRequest { method, .. } => Some(method.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!refresh_methods.contains(&"cowork/plugins/read".to_string()));
+        assert!(refresh_methods.contains(&"cowork/plugins/catalog/read".to_string()));
+        assert!(refresh_methods.contains(&"cowork/skills/list".to_string()));
+
+        state.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+            workspace_id: "ws-1".to_string(),
+            name: "alpha".to_string(),
+            enabled: false,
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/skills/disable");
+                assert_eq!(params["skillName"], "alpha");
+                assert!(params.get("name").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Settings(SettingsAction::DeleteSkill {
+            workspace_id: "ws-1".to_string(),
+            name: "beta".to_string(),
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/skills/delete");
+                assert_eq!(params["skillName"], "beta");
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Settings(SettingsAction::AddMarketplace {
+            workspace_id: "ws-1".to_string(),
+            url: "owner/repo".to_string(),
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/marketplaces/add");
+                assert_eq!(params["sourceInput"], "owner/repo");
+                assert!(params.get("source").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Settings(SettingsAction::CompleteMcpOAuthCallback {
+            workspace_id: "ws-1".to_string(),
+            name: "linear".to_string(),
+            source: "workspace".to_string(),
+            callback_url: "http://127.0.0.1/cb?code=abc".to_string(),
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/mcp/server/auth/callback");
+                assert_eq!(params["code"], "http://127.0.0.1/cb?code=abc");
+                assert!(params.get("callbackUrl").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Settings(
+            SettingsAction::PreviewConversationImport {
+                workspace_id: "ws-1".to_string(),
+                params: json!({ "source": "claude", "sourcePath": "/tmp/export.json" }),
+            },
+        ));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/conversationImport/preview");
+                assert!(params.get("cwd").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Settings(
+            SettingsAction::ExecuteConversationImport {
+                workspace_id: "ws-1".to_string(),
+                params: json!({ "source": "claude", "sourcePath": "/tmp/export.json" }),
+            },
+        ));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "cowork/conversationImport/import");
+                assert!(params.get("cwd").is_none());
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explorer_entries_are_workspace_scoped_and_normalized() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "One".to_string(),
+            path: "/tmp/ws1".to_string(),
+            ..Default::default()
+        });
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-2".to_string(),
+            name: "Two".to_string(),
+            path: "/tmp/ws2".to_string(),
+            ..Default::default()
+        });
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
+            workspace_id: "ws-1".to_string(),
+            dir: ".".to_string(),
+        }));
+        match state.services.emitted_native_commands.last().unwrap() {
+            NativeCommand::ListWorkspaceFiles { dir, .. } => assert_eq!(dir, "/tmp/ws1"),
+            other => panic!("expected ListWorkspaceFiles, got {other:?}"),
+        }
+
+        state.apply_store_event(StoreEvent::WorkspaceFilesListed {
+            workspace_id: "ws-1".to_string(),
+            dir: "/tmp/ws1".to_string(),
+            entries: vec![WorkspaceFileEntry {
+                name: "src".to_string(),
+                path: "/tmp/ws1/src".to_string(),
+                is_dir: true,
+                size_bytes: None,
+                git_status: None,
+            }],
+        });
+        state.apply_store_event(StoreEvent::WorkspaceFilesListed {
+            workspace_id: "ws-1".to_string(),
+            dir: "/tmp/ws1/src/".to_string(),
+            entries: vec![WorkspaceFileEntry {
+                name: "lib.rs".to_string(),
+                path: "/tmp/ws1/src/lib.rs".to_string(),
+                is_dir: false,
+                size_bytes: Some(42),
+                git_status: None,
+            }],
+        });
+
+        assert_eq!(state.explorer_entries("ws-1", ".").unwrap()[0].path, "src");
+        assert_eq!(
+            state.explorer_entries("ws-1", "./src").unwrap()[0].path,
+            "src/lib.rs"
+        );
+        assert!(state.explorer_entries_by_dir.contains_key("."));
+        assert!(state.explorer_entries_by_dir.contains_key("src"));
+
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-2".to_string(),
+        )));
+        assert!(state.explorer_entries_by_dir.is_empty());
+
+        state.apply_store_event(StoreEvent::WorkspaceFilesListed {
+            workspace_id: "ws-2".to_string(),
+            dir: ".".to_string(),
+            entries: vec![WorkspaceFileEntry {
+                name: "README.md".to_string(),
+                path: "/tmp/ws2/README.md".to_string(),
+                is_dir: false,
+                size_bytes: Some(12),
+                git_status: None,
+            }],
+        });
+        assert_eq!(
+            state.explorer_entries_by_dir.get(".").unwrap()[0].name,
+            "README.md"
+        );
+
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-1".to_string(),
+        )));
+        assert_eq!(
+            state.explorer_entries_by_dir.get(".").unwrap()[0].name,
+            "src"
+        );
+
+        state.dispatch(Action::Native(NativeAction::RemoveWorkspace(
+            "ws-1".to_string(),
+        )));
+        assert!(state.explorer_entries("ws-1", ".").is_none());
+        assert_eq!(
+            state.explorer_entries_by_dir.get(".").unwrap()[0].name,
+            "README.md"
+        );
+    }
+
+    #[test]
+    fn resolve_feature_flags_and_packaged_gating() {
+        let mut overrides = HashMap::new();
+        overrides.insert("remoteAccess".to_string(), true);
+        overrides.insert("canvas".to_string(), true);
+
+        let dev_flags = resolve_feature_flags_with_env(false, &overrides, |key| match key {
+            "COWORK_ENABLE_TASKS" => Some("1".to_string()),
+            _ => None,
+        });
+        assert_eq!(dev_flags.get("remoteAccess"), Some(&true));
+        assert_eq!(dev_flags.get("canvas"), Some(&true));
+        assert_eq!(dev_flags.get("tasks"), Some(&true));
+        assert_eq!(dev_flags.get("menuBar"), Some(&true));
+
+        let pkg_flags = resolve_feature_flags_with_env(true, &overrides, |key| match key {
+            "COWORK_ENABLE_REMOTE_ACCESS" => Some("true".to_string()),
+            "COWORK_ENABLE_TASKS" => Some("on".to_string()),
+            _ => None,
+        });
+        assert_eq!(pkg_flags.get("remoteAccess"), Some(&false));
+        assert_eq!(pkg_flags.get("canvas"), Some(&false));
+        assert_eq!(pkg_flags.get("tasks"), Some(&true));
+
+        let mut persisted = PersistedDesktopState::default();
+        persisted
+            .feature_flags
+            .insert("remoteAccess".to_string(), true);
+        persisted.feature_flags.insert("canvas".to_string(), true);
+
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::NativeReady {
+            persisted: Box::new(persisted),
+            is_packaged: true,
+            system_dark: None,
+        });
+        assert_eq!(state.feature_flags.get("remoteAccess"), Some(&false));
+        assert_eq!(state.feature_flags.get("canvas"), Some(&false));
+        assert_eq!(state.feature_flag_overrides.get("canvas"), Some(&true));
+
+        state.dispatch(Action::Settings(SettingsAction::SetFeatureFlag {
+            flag_id: "remoteAccess".to_string(),
+            enabled: true,
+        }));
+        assert_eq!(state.feature_flags.get("remoteAccess"), Some(&false));
+
+        state.apply_store_event(StoreEvent::DeepLink(
+            "cowork://settings/toolAccess".to_string(),
+        ));
+        assert_eq!(state.nav.current().view, ViewId::Settings);
+        assert_eq!(
+            state.nav.current().settings_page,
+            crate::router::SettingsPageId::ToolAccess
+        );
+    }
+
+    #[test]
+    fn request_user_input_preserves_canonical_question_and_options() {
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::WsServerRequest {
+            workspace_id: "ws-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            method: "item/tool/requestUserInput".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "itemId": "call-1",
+                "question": "Pick deployment target",
+                "options": ["staging", "production"]
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        match rt.pending_interactions.first().unwrap() {
+            ChatInteraction::UserInput {
+                item_id, questions, ..
+            } => {
+                assert_eq!(item_id, "call-1");
+                assert_eq!(questions["question"], "Pick deployment target");
+                assert_eq!(questions["options"][0], "staging");
+            }
+            other => panic!("expected UserInput, got {other:?}"),
+        }
     }
 }

@@ -113,36 +113,45 @@ static SCENES: &[SceneEntry] = &[
     ("utility", scene_utility),
 ];
 
-fn scene_default(state: &mut AppState) {
+fn apply_scene_env_overrides(state: &mut AppState) {
     state.scene_mode = true;
+    if let Ok(raw) = std::env::var("COWORK_ACCENT_PALETTE")
+        && let Some(palette) = theme::AccentPalette::parse(&raw)
+    {
+        state.desktop_settings.accent_palette = palette;
+    }
+}
+
+fn scene_default(state: &mut AppState) {
+    apply_scene_env_overrides(state);
 }
 
 fn scene_light(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.desktop_settings.theme = ThemePreference::Light;
     state.system_dark_override = Some(false);
 }
 
 fn scene_dark(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.desktop_settings.theme = ThemePreference::Dark;
     state.system_dark_override = Some(true);
 }
 
 fn scene_settings(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
         SettingsPageId::Models,
     ))));
 }
 
 fn scene_chat(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
 }
 
 fn scene_chat_demo(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.provider_catalog = vec![
         state::ProviderSummary {
             id: "anthropic".to_string(),
@@ -253,7 +262,7 @@ fn scene_chat_demo(state: &mut AppState) {
         },
         state::FeedItem::Reasoning {
             id: "reason-1".to_string(),
-            content: "**Checking theme tokens** Aligning `ButtonVariant::Submit` to olive accent."
+            content: "**Checking theme tokens** Aligning `ButtonVariant::Submit` to warm accent tokens."
                 .to_string(),
             mode: "summary".to_string(),
             streaming: false,
@@ -304,9 +313,9 @@ fn scene_chat_demo(state: &mut AppState) {
                     "+++ b/crates/cowork-desktop/src/theme.rs\n",
                     "@@ -282,2 +282,4 @@\n",
                     "     kit.c.bg_accent = tok.accent;\n",
-                    "+    kit.c.bg_contrast = tok.accent;\n",
-                    "+    kit.c.bg_icon_button_contrast = tok.accent;\n",
-                    "     kit.c.submit_fg = tok.primary_fg;\n",
+                    "+    kit.c.bg_contrast = tok.cta_bg;\n",
+                    "+    kit.c.bg_icon_button_contrast = tok.send_bg;\n",
+                    "     kit.c.submit_fg = tok.send_on;\n",
                 )
                 .to_string(),
             ),
@@ -318,7 +327,7 @@ fn scene_chat_demo(state: &mut AppState) {
         state::FeedItem::Message {
             id: "msg-asst-1".to_string(),
             role: state::FeedMessageRole::Assistant,
-            content: "### Theme Summary\n\nUpdated primary controls to use `tok.accent`:\n\n- `bg_contrast` now uses olive in light/dark\n- `bg_icon_button_contrast` matches composer send\n\n```rust\nkit.c.bg_contrast = tok.accent;\n```\n\nReview the pending command approval below to run tests."
+            content: "### Theme Summary\n\nUpdated primary controls to use warm semantic accent tokens:\n\n- `bg_contrast` now uses `tok.cta_bg` across light, dark, and high-contrast\n- `bg_icon_button_contrast` uses `tok.send_bg` for composer send\n\n```rust\nkit.c.bg_contrast = tok.cta_bg;\n```\n\nReview the pending command approval below to run tests."
                 .to_string(),
             client_message_id: None,
             attachments: Vec::new(),
@@ -363,7 +372,8 @@ fn scene_chat_demo(state: &mut AppState) {
         vec![state::FeedItem::Message {
             id: "sub-msg-1".to_string(),
             role: state::FeedMessageRole::Assistant,
-            content: "Verified `tok.primary_fg` contrast on `#66763d` and `#a8b963`.".to_string(),
+            content: "Verified WCAG AA contrast for `tok.cta_on` and `tok.send_on` across light, dark, and high-contrast variants."
+                .to_string(),
             client_message_id: None,
             attachments: Vec::new(),
             references: Vec::new(),
@@ -378,14 +388,14 @@ fn scene_chat_demo(state: &mut AppState) {
 }
 
 fn scene_quick_chat(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.dispatch(Action::Shell(ShellAction::SetWindowMode(
         state::WindowMode::QuickChat,
     )));
 }
 
 fn scene_utility(state: &mut AppState) {
-    state.scene_mode = true;
+    apply_scene_env_overrides(state);
     state.dispatch(Action::Shell(ShellAction::SetWindowMode(
         state::WindowMode::Utility,
     )));
@@ -564,10 +574,11 @@ fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
 fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
     cx.zoom(state.ui_scale);
     let dark = state.effective_dark(cx.system_dark());
-    let (kit, tokens) = theme::build_kit(
+    let (kit, tokens) = theme::build_kit_with_accent(
         dark,
         state.desktop_settings.reduced_transparency,
         state.desktop_settings.high_contrast,
+        state.desktop_settings.accent_palette,
     );
     cx.foreground(tokens.text_base);
     cx.focus_ring(2.0, 2.5, tokens.focus_ring);

@@ -20,7 +20,7 @@ use crate::state::{
     PrivacyTelemetrySettings, ReasoningEffortValue, RemoteAccessState, SubagentProfile,
     ThreadBusyPolicy, UpdaterState, WindowMode, WorkspaceFileEntry, WorkspaceRecord,
 };
-use crate::theme::ThemePreference;
+use crate::theme::{AccentPalette, ThemePreference};
 use crate::ws::{WsConnectionState, WsRpcError};
 
 /// Ordered sidebar sections matching `apps/desktop/src/app/types.ts`.
@@ -248,6 +248,7 @@ pub enum ChatAction {
 #[derive(Clone, Debug)]
 pub enum SettingsAction {
     UpdateDesktopSettings(DesktopSettings),
+    SetAccentPalette(AccentPalette),
     RefreshProviderCatalog {
         workspace_id: String,
     },

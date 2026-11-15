@@ -42,7 +42,7 @@ use crate::actions::{
 use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
 };
-use crate::theme::{self, ThemePreference};
+use crate::theme::{self, AccentPalette, ThemePreference};
 use crate::ws::{PendingRpcMeta, WsCommand, WsConnectionState, WsRpcError};
 
 pub const WINDOW_MAIN: &str = "main";
@@ -1387,6 +1387,8 @@ pub struct PrivacyTelemetrySettings {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSettings {
     pub theme: ThemePreference,
+    #[serde(default)]
+    pub accent_palette: AccentPalette,
     pub reduced_transparency: bool,
     pub high_contrast: bool,
     pub reduce_motion: bool,
@@ -1406,6 +1408,7 @@ impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
             theme: ThemePreference::System,
+            accent_palette: AccentPalette::default(),
             reduced_transparency: false,
             high_contrast: false,
             reduce_motion: false,
@@ -5967,6 +5970,12 @@ impl AppState {
             SettingsAction::UpdateDesktopSettings(settings) => {
                 self.desktop_settings = settings;
                 self.persist_state();
+            }
+            SettingsAction::SetAccentPalette(palette) => {
+                if self.desktop_settings.accent_palette != palette {
+                    self.desktop_settings.accent_palette = palette;
+                    self.persist_state();
+                }
             }
             SettingsAction::RefreshProviderCatalog { workspace_id } => {
                 let cwd = self.workspace_path(&workspace_id);
@@ -11595,6 +11604,26 @@ mod tests {
         state.dispatch(Action::Shell(ShellAction::SetTheme(ThemePreference::Dark)));
         assert_eq!(state.desktop_settings.theme, ThemePreference::Dark);
         assert!(!state.services.emitted_native_commands.is_empty());
+
+        state.services.emitted_native_commands.clear();
+        state.dispatch(Action::Settings(SettingsAction::SetAccentPalette(
+            AccentPalette::OchreAmber,
+        )));
+        assert_eq!(
+            state.desktop_settings.accent_palette,
+            AccentPalette::OchreAmber
+        );
+        assert!(!state.services.emitted_native_commands.is_empty());
+
+        let mut legacy_json =
+            serde_json::to_value(DesktopSettings::default()).expect("serialize DesktopSettings");
+        legacy_json
+            .as_object_mut()
+            .expect("object")
+            .remove("accentPalette");
+        let legacy: DesktopSettings = serde_json::from_value(legacy_json)
+            .expect("legacy DesktopSettings without accentPalette must deserialize");
+        assert_eq!(legacy.accent_palette, AccentPalette::default());
     }
 
     #[test]

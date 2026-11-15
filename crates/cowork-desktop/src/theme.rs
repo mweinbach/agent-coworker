@@ -29,6 +29,83 @@ impl ThemePreference {
     }
 }
 
+/// User-selectable warm accent palette persisted with desktop settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccentPalette {
+    KhakiSand,
+    OchreAmber,
+    #[default]
+    BurntOrange,
+}
+
+impl AccentPalette {
+    /// All candidate accent palettes in Settings display order.
+    pub const ALL: [AccentPalette; 3] = [
+        AccentPalette::KhakiSand,
+        AccentPalette::OchreAmber,
+        AccentPalette::BurntOrange,
+    ];
+
+    /// Stable kebab-case identifier used for persistence and CLI overrides.
+    pub const fn id(self) -> &'static str {
+        match self {
+            AccentPalette::KhakiSand => "khaki-sand",
+            AccentPalette::OchreAmber => "ochre-amber",
+            AccentPalette::BurntOrange => "burnt-orange",
+        }
+    }
+
+    /// Human-facing label shown in Settings.
+    pub const fn label(self) -> &'static str {
+        match self {
+            AccentPalette::KhakiSand => "Khaki Sand",
+            AccentPalette::OchreAmber => "Ochre Amber",
+            AccentPalette::BurntOrange => "Burnt Orange",
+        }
+    }
+
+    /// Short description of the palette tone.
+    pub const fn description(self) -> &'static str {
+        match self {
+            AccentPalette::KhakiSand => "Warm limestone and muted brass sand.",
+            AccentPalette::OchreAmber => "Burnished golden ochre and warm amber.",
+            AccentPalette::BurntOrange => "Muted terracotta and warm burnt orange.",
+        }
+    }
+
+    /// Parses a palette id or alias (case-insensitive).
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "khaki-sand" | "khaki_sand" | "khaki" | "sand" => Some(Self::KhakiSand),
+            "ochre-amber" | "ochre_amber" | "ochre" | "amber" => Some(Self::OchreAmber),
+            "burnt-orange" | "burnt_orange" | "terracotta" | "orange" => Some(Self::BurntOrange),
+            _ => None,
+        }
+    }
+}
+
+/// Accent token set for a single `(AccentPalette, dark, high_contrast)` configuration.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AccentTokenSet {
+    pub accent: Color,
+    pub accent_hover: Color,
+    pub accent_pressed: Color,
+    pub accent_on: Color,
+    pub accent_soft: Color,
+    pub focus_ring: Color,
+    pub cta_bg: Color,
+    pub cta_hover: Color,
+    pub cta_pressed: Color,
+    pub cta_on: Color,
+    pub send_bg: Color,
+    pub send_hover: Color,
+    pub send_on: Color,
+    /// Straight-alpha overlays painted by `rune_kit` (`contrast_hover`, `contrast_pressed`, `submit_hover`).
+    pub hover_overlay: Color,
+    pub pressed_overlay: Color,
+}
+
 /// Standard spacing and layout constants used across views.
 pub mod layout {
     pub const TITLEBAR_HEIGHT: f32 = 38.0;
@@ -78,7 +155,18 @@ pub struct ThemeTokens {
     pub primary_fg: Color,
     pub accent: Color,
     pub accent_hover: Color,
+    pub accent_pressed: Color,
+    pub accent_on: Color,
     pub accent_soft: Color,
+    pub cta_bg: Color,
+    pub cta_hover: Color,
+    pub cta_pressed: Color,
+    pub cta_on: Color,
+    pub send_bg: Color,
+    pub send_hover: Color,
+    pub send_on: Color,
+    pub accent_hover_overlay: Color,
+    pub accent_pressed_overlay: Color,
     pub danger: Color,
     pub danger_hover: Color,
     pub danger_fg: Color,
@@ -103,13 +191,26 @@ pub struct ThemeTokens {
     pub code: TextStyle,
 }
 
-fn srgb_to_linear(channel: u8) -> f32 {
-    let c = channel as f32 / 255.0;
+fn srgb_unit_to_linear(channel: f32) -> f32 {
+    let c = channel.clamp(0.0, 1.0);
     if c <= 0.04045 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
+}
+
+fn linear_to_srgb_channel(linear: f32) -> f32 {
+    let c = linear.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn srgb_to_linear(channel: u8) -> f32 {
+    srgb_unit_to_linear(channel as f32 / 255.0)
 }
 
 fn srgba(r: u8, g: u8, b: u8, a: f32) -> Color {
@@ -125,8 +226,249 @@ fn srgb(r: u8, g: u8, b: u8) -> Color {
     srgba(r, g, b, 1.0)
 }
 
-/// Returns Cowork's semantic tokens for light or dark appearance.
+/// Composites straight-alpha `top` over opaque `bottom` in sRGB perceptual space (matching Rune's `srgb_blend`).
+pub fn composite_srgb_over(top: Color, bottom: Color) -> Color {
+    let a = top.a.clamp(0.0, 1.0);
+    if a <= 0.0 {
+        return bottom;
+    }
+    if a >= 0.999 {
+        return Color { a: 1.0, ..top };
+    }
+    let mix = |t: f32, b: f32| {
+        let s = linear_to_srgb_channel(t) * a + linear_to_srgb_channel(b) * (1.0 - a);
+        srgb_unit_to_linear(s)
+    };
+    Color {
+        r: mix(top.r, bottom.r),
+        g: mix(top.g, bottom.g),
+        b: mix(top.b, bottom.b),
+        a: 1.0,
+    }
+}
+
+/// Relative luminance of an opaque linear `rune::Color` per WCAG 2.1.
+pub fn relative_luminance(color: Color) -> f32 {
+    0.2126 * color.r.clamp(0.0, 1.0)
+        + 0.7152 * color.g.clamp(0.0, 1.0)
+        + 0.0722 * color.b.clamp(0.0, 1.0)
+}
+
+/// WCAG 2.1 contrast ratio between `fg` and `bg` (compositing semi-transparent `fg` over `bg` first).
+pub fn contrast_ratio(fg: Color, bg: Color) -> f32 {
+    let resolved_bg = if bg.a < 0.999 {
+        composite_srgb_over(bg, Color::BLACK)
+    } else {
+        bg
+    };
+    let resolved_fg = if fg.a < 0.999 {
+        composite_srgb_over(fg, resolved_bg)
+    } else {
+        fg
+    };
+    let l1 = relative_luminance(resolved_fg);
+    let l2 = relative_luminance(resolved_bg);
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+struct AccentSeed {
+    accent: Color,
+    cta_bg: Color,
+    send_bg: Color,
+    on: Color,
+    focus_ring: Color,
+    soft_alpha: f32,
+    hover_overlay: Color,
+    pressed_overlay: Color,
+}
+
+fn build_accent_set(seed: AccentSeed) -> AccentTokenSet {
+    AccentTokenSet {
+        accent: seed.accent,
+        accent_hover: composite_srgb_over(seed.hover_overlay, seed.accent),
+        accent_pressed: composite_srgb_over(seed.pressed_overlay, seed.accent),
+        accent_on: seed.on,
+        accent_soft: seed.accent.alpha(seed.soft_alpha),
+        focus_ring: seed.focus_ring,
+        cta_bg: seed.cta_bg,
+        cta_hover: composite_srgb_over(seed.hover_overlay, seed.cta_bg),
+        cta_pressed: composite_srgb_over(seed.pressed_overlay, seed.cta_bg),
+        cta_on: seed.on,
+        send_bg: seed.send_bg,
+        send_hover: composite_srgb_over(seed.hover_overlay, seed.send_bg),
+        send_on: seed.on,
+        hover_overlay: seed.hover_overlay,
+        pressed_overlay: seed.pressed_overlay,
+    }
+}
+
+/// Resolves the named [`AccentTokenSet`] for a palette, appearance mode, and high-contrast setting.
+pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) -> AccentTokenSet {
+    let (hover_overlay, pressed_overlay, soft_alpha) = if dark {
+        let h = if high_contrast { 0.14 } else { 0.12 };
+        let p = if high_contrast { 0.24 } else { 0.22 };
+        let s = if high_contrast { 0.17 } else { 0.12 };
+        (srgba(0xff, 0xff, 0xff, h), srgba(0xff, 0xff, 0xff, p), s)
+    } else {
+        let h = if high_contrast { 0.14 } else { 0.12 };
+        let p = if high_contrast { 0.24 } else { 0.22 };
+        let s = if high_contrast { 0.14 } else { 0.10 };
+        (srgba(0x00, 0x00, 0x00, h), srgba(0x00, 0x00, 0x00, p), s)
+    };
+
+    let seed = match (palette, dark, high_contrast) {
+        (AccentPalette::KhakiSand, false, false) => AccentSeed {
+            accent: srgb(0x6d, 0x56, 0x30),
+            cta_bg: srgb(0x65, 0x4f, 0x2b),
+            send_bg: srgb(0x5d, 0x48, 0x27),
+            on: Color::WHITE,
+            focus_ring: srgb(0x6d, 0x56, 0x30),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::KhakiSand, false, true) => AccentSeed {
+            accent: srgb(0x5a, 0x46, 0x23),
+            cta_bg: srgb(0x52, 0x3f, 0x1f),
+            send_bg: srgb(0x4c, 0x3a, 0x1c),
+            on: Color::WHITE,
+            focus_ring: srgb(0x4c, 0x3a, 0x1c),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::KhakiSand, true, false) => AccentSeed {
+            accent: srgb(0xcb, 0xb2, 0x7d),
+            cta_bg: srgb(0xd2, 0xba, 0x88),
+            send_bg: srgb(0xd8, 0xc1, 0x90),
+            on: srgb(0x18, 0x14, 0x0d),
+            focus_ring: srgb(0xcb, 0xb2, 0x7d),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::KhakiSand, true, true) => AccentSeed {
+            accent: srgb(0xe0, 0xca, 0x98),
+            cta_bg: srgb(0xe6, 0xd2, 0xa4),
+            send_bg: srgb(0xeb, 0xd9, 0xae),
+            on: srgb(0x10, 0x0d, 0x08),
+            focus_ring: srgb(0xe0, 0xca, 0x98),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::OchreAmber, false, false) => AccentSeed {
+            accent: srgb(0x85, 0x4e, 0x07),
+            cta_bg: srgb(0x7b, 0x47, 0x05),
+            send_bg: srgb(0x73, 0x42, 0x04),
+            on: Color::WHITE,
+            focus_ring: srgb(0x85, 0x4e, 0x07),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::OchreAmber, false, true) => AccentSeed {
+            accent: srgb(0x70, 0x40, 0x04),
+            cta_bg: srgb(0x66, 0x3a, 0x03),
+            send_bg: srgb(0x5e, 0x35, 0x02),
+            on: Color::WHITE,
+            focus_ring: srgb(0x5e, 0x35, 0x02),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::OchreAmber, true, false) => AccentSeed {
+            accent: srgb(0xde, 0x9e, 0x35),
+            cta_bg: srgb(0xe4, 0xa7, 0x42),
+            send_bg: srgb(0xe9, 0xaf, 0x4d),
+            on: srgb(0x19, 0x12, 0x06),
+            focus_ring: srgb(0xde, 0x9e, 0x35),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::OchreAmber, true, true) => AccentSeed {
+            accent: srgb(0xee, 0xb6, 0x55),
+            cta_bg: srgb(0xf2, 0xbe, 0x64),
+            send_bg: srgb(0xf5, 0xc5, 0x70),
+            on: srgb(0x12, 0x0c, 0x03),
+            focus_ring: srgb(0xee, 0xb6, 0x55),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::BurntOrange, false, false) => AccentSeed {
+            accent: srgb(0x9b, 0x40, 0x1e),
+            cta_bg: srgb(0x90, 0x3b, 0x1b),
+            send_bg: srgb(0x86, 0x36, 0x18),
+            on: Color::WHITE,
+            focus_ring: srgb(0x9b, 0x40, 0x1e),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::BurntOrange, false, true) => AccentSeed {
+            accent: srgb(0x82, 0x33, 0x14),
+            cta_bg: srgb(0x78, 0x2e, 0x11),
+            send_bg: srgb(0x6f, 0x2a, 0x0f),
+            on: Color::WHITE,
+            focus_ring: srgb(0x6f, 0x2a, 0x0f),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::BurntOrange, true, false) => AccentSeed {
+            accent: srgb(0xea, 0x8c, 0x64),
+            cta_bg: srgb(0xef, 0x96, 0x70),
+            send_bg: srgb(0xf3, 0x9f, 0x7a),
+            on: srgb(0x18, 0x0d, 0x08),
+            focus_ring: srgb(0xea, 0x8c, 0x64),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+        (AccentPalette::BurntOrange, true, true) => AccentSeed {
+            accent: srgb(0xf5, 0xa2, 0x7d),
+            cta_bg: srgb(0xf8, 0xac, 0x8a),
+            send_bg: srgb(0xfa, 0xb5, 0x96),
+            on: srgb(0x11, 0x08, 0x05),
+            focus_ring: srgb(0xf5, 0xa2, 0x7d),
+            soft_alpha,
+            hover_overlay,
+            pressed_overlay,
+        },
+    };
+    build_accent_set(seed)
+}
+
+fn apply_accent_set(tok: &mut ThemeTokens, set: AccentTokenSet) {
+    tok.primary_fg = set.accent_on;
+    tok.accent = set.accent;
+    tok.accent_hover = set.accent_hover;
+    tok.accent_pressed = set.accent_pressed;
+    tok.accent_on = set.accent_on;
+    tok.accent_soft = set.accent_soft;
+    tok.focus_ring = set.focus_ring;
+    tok.cta_bg = set.cta_bg;
+    tok.cta_hover = set.cta_hover;
+    tok.cta_pressed = set.cta_pressed;
+    tok.cta_on = set.cta_on;
+    tok.send_bg = set.send_bg;
+    tok.send_hover = set.send_hover;
+    tok.send_on = set.send_on;
+    tok.accent_hover_overlay = set.hover_overlay;
+    tok.accent_pressed_overlay = set.pressed_overlay;
+    tok.selection_bg = set.accent.alpha(if tok.dark { 0.28 } else { 0.24 });
+}
+
+/// Returns Cowork's semantic tokens for light or dark appearance using the default accent palette.
 pub fn tokens(dark: bool) -> ThemeTokens {
+    tokens_with_accent(dark, AccentPalette::default())
+}
+
+/// Returns Cowork's semantic tokens for light or dark appearance with the chosen accent palette.
+pub fn tokens_with_accent(dark: bool, accent_palette: AccentPalette) -> ThemeTokens {
     let search_badges = [
         srgb(0xa8, 0x38, 0xff), // purple
         srgb(0x00, 0x7a, 0xff), // blue
@@ -143,9 +485,9 @@ pub fn tokens(dark: bool) -> ThemeTokens {
     let body_lg = TextStyle::new(15.0, 400.0).lh(24.0);
     let title = TextStyle::new(16.0, 600.0).lh(22.0);
     let code = TextStyle::new(12.0, 400.0).mono().lh(18.0);
+    let set = accent_tokens(accent_palette, dark, false);
 
     if dark {
-        let accent = srgb(0xa8, 0xb9, 0x63);
         let text_base = srgb(0xe9, 0xe9, 0xe7);
         ThemeTokens {
             dark: true,
@@ -163,10 +505,21 @@ pub fn tokens(dark: bool) -> ThemeTokens {
             text_base,
             text_muted: srgb(0xa3, 0xa3, 0x9c),
             text_faint: srgba(0xa3, 0xa3, 0x9c, 0.72),
-            primary_fg: srgb(0x1f, 0x1f, 0x1c),
-            accent,
-            accent_hover: srgb(0xb7, 0xc8, 0x73),
-            accent_soft: accent.alpha(0.16),
+            primary_fg: set.accent_on,
+            accent: set.accent,
+            accent_hover: set.accent_hover,
+            accent_pressed: set.accent_pressed,
+            accent_on: set.accent_on,
+            accent_soft: set.accent_soft,
+            cta_bg: set.cta_bg,
+            cta_hover: set.cta_hover,
+            cta_pressed: set.cta_pressed,
+            cta_on: set.cta_on,
+            send_bg: set.send_bg,
+            send_hover: set.send_hover,
+            send_on: set.send_on,
+            accent_hover_overlay: set.hover_overlay,
+            accent_pressed_overlay: set.pressed_overlay,
             danger: srgb(0xe8, 0x60, 0x60),
             danger_hover: srgb(0xf2, 0x70, 0x70),
             danger_fg: srgb(0x14, 0x14, 0x15),
@@ -176,12 +529,12 @@ pub fn tokens(dark: bool) -> ThemeTokens {
             border: srgba(0xff, 0xff, 0xff, 0.10),
             border_muted: srgba(0xff, 0xff, 0xff, 0.06),
             border_strong: srgba(0xff, 0xff, 0xff, 0.18),
-            focus_ring: accent,
+            focus_ring: set.focus_ring,
             hover: srgba(0xff, 0xff, 0xff, 0.06),
             pressed: srgba(0xff, 0xff, 0xff, 0.11),
             scrim: srgba(0x00, 0x00, 0x00, 0.56),
             code_bg: srgba(0x00, 0x00, 0x00, 0.30),
-            selection_bg: accent.alpha(0.28),
+            selection_bg: set.accent.alpha(0.28),
             search_badges,
             caption,
             label,
@@ -191,7 +544,6 @@ pub fn tokens(dark: bool) -> ThemeTokens {
             code,
         }
     } else {
-        let accent = srgb(0x66, 0x76, 0x3d);
         let text_base = srgb(0x1f, 0x1f, 0x1c);
         ThemeTokens {
             dark: false,
@@ -209,10 +561,21 @@ pub fn tokens(dark: bool) -> ThemeTokens {
             text_base,
             text_muted: srgb(0x61, 0x61, 0x5b),
             text_faint: srgba(0x61, 0x61, 0x5b, 0.72),
-            primary_fg: Color::WHITE,
-            accent,
-            accent_hover: srgb(0x5b, 0x6a, 0x35),
-            accent_soft: accent.alpha(0.14),
+            primary_fg: set.accent_on,
+            accent: set.accent,
+            accent_hover: set.accent_hover,
+            accent_pressed: set.accent_pressed,
+            accent_on: set.accent_on,
+            accent_soft: set.accent_soft,
+            cta_bg: set.cta_bg,
+            cta_hover: set.cta_hover,
+            cta_pressed: set.cta_pressed,
+            cta_on: set.cta_on,
+            send_bg: set.send_bg,
+            send_hover: set.send_hover,
+            send_on: set.send_on,
+            accent_hover_overlay: set.hover_overlay,
+            accent_pressed_overlay: set.pressed_overlay,
             danger: srgb(0xbb, 0x3e, 0x3e),
             danger_hover: srgb(0xa7, 0x35, 0x35),
             danger_fg: Color::WHITE,
@@ -222,12 +585,12 @@ pub fn tokens(dark: bool) -> ThemeTokens {
             border: srgba(0x1f, 0x1f, 0x1c, 0.12),
             border_muted: srgba(0x1f, 0x1f, 0x1c, 0.07),
             border_strong: srgba(0x1f, 0x1f, 0x1c, 0.22),
-            focus_ring: accent,
+            focus_ring: set.focus_ring,
             hover: srgba(0x1f, 0x1f, 0x1c, 0.05),
             pressed: srgba(0x1f, 0x1f, 0x1c, 0.10),
             scrim: srgba(0x1f, 0x1f, 0x1c, 0.36),
             code_bg: srgba(0x1f, 0x1f, 0x1c, 0.05),
-            selection_bg: accent.alpha(0.24),
+            selection_bg: set.accent.alpha(0.24),
             search_badges,
             caption,
             label,
@@ -239,13 +602,30 @@ pub fn tokens(dark: bool) -> ThemeTokens {
     }
 }
 
-/// Resolves Cowork's semantic tokens with optional reduced-transparency and high-contrast overrides.
+/// Resolves Cowork's semantic tokens with optional reduced-transparency and high-contrast overrides
+/// using the default accent palette.
 pub fn resolve_tokens(dark: bool, reduced_transparency: bool, high_contrast: bool) -> ThemeTokens {
-    let mut tok = tokens(dark);
+    resolve_tokens_with_accent(
+        dark,
+        reduced_transparency,
+        high_contrast,
+        AccentPalette::default(),
+    )
+}
+
+/// Resolves Cowork's semantic tokens with reduced-transparency, high-contrast, and accent overrides.
+pub fn resolve_tokens_with_accent(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    accent_palette: AccentPalette,
+) -> ThemeTokens {
+    let mut tok = tokens_with_accent(dark, accent_palette);
     if reduced_transparency {
         tok.glass_bg = tok.panel_bg;
     }
     if high_contrast {
+        apply_accent_set(&mut tok, accent_tokens(accent_palette, dark, true));
         tok.border = if dark {
             srgba(0xff, 0xff, 0xff, 0.28)
         } else {
@@ -261,14 +641,30 @@ pub fn resolve_tokens(dark: bool, reduced_transparency: bool, high_contrast: boo
     tok
 }
 
-/// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, and radii,
-/// paired with `ThemeTokens` for Cowork-specific tokens (such as `sidebar_bg` and search badges).
+/// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, and radii
+/// using the default accent palette.
 pub fn build_kit(
     dark: bool,
     reduced_transparency: bool,
     high_contrast: bool,
 ) -> (Kit, ThemeTokens) {
-    let tok = resolve_tokens(dark, reduced_transparency, high_contrast);
+    build_kit_with_accent(
+        dark,
+        reduced_transparency,
+        high_contrast,
+        AccentPalette::default(),
+    )
+}
+
+/// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, radii, and
+/// selected [`AccentPalette`], paired with `ThemeTokens`.
+pub fn build_kit_with_accent(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    accent_palette: AccentPalette,
+) -> (Kit, ThemeTokens) {
+    let tok = resolve_tokens_with_accent(dark, reduced_transparency, high_contrast, accent_palette);
 
     let mut kit = Kit::from_palette(PaletteSeed {
         bg: tok.panel_bg,
@@ -282,15 +678,16 @@ pub fn build_kit(
     kit.c.layer_01 = tok.panel_bg;
     kit.c.layer_02 = tok.elevated_bg;
     kit.c.bg_accent = tok.accent;
-    kit.c.bg_contrast = tok.accent;
-    kit.c.bg_icon_button_contrast = tok.accent;
-    kit.c.text_contrast = tok.primary_fg;
-    kit.c.icon_contrast = tok.primary_fg;
-    kit.c.contrast_hover = tok.primary_fg.alpha(0.10);
-    kit.c.contrast_pressed = tok.primary_fg.alpha(0.20);
-    kit.c.submit_hover = tok.primary_fg.alpha(0.12);
-    kit.c.submit_fg = tok.primary_fg;
-    kit.c.submit_icon = tok.primary_fg;
+    kit.c.bg_contrast = tok.cta_bg;
+    kit.c.bg_icon_button_contrast = tok.send_bg;
+    kit.c.text_contrast = tok.cta_on;
+    kit.c.icon_contrast = tok.cta_on;
+    kit.c.contrast_hover = tok.accent_hover_overlay;
+    kit.c.contrast_pressed = tok.accent_pressed_overlay;
+    kit.c.submit_hover = tok.accent_hover_overlay;
+    kit.c.submit_fg = tok.send_on;
+    kit.c.submit_icon = tok.send_on;
+    kit.c.knob_on = tok.accent_on;
     kit.c.text_base = tok.text_base;
     kit.c.text_muted = tok.text_muted;
     kit.c.text_faint = tok.text_faint;
@@ -345,4 +742,112 @@ pub fn build_kit(
     kit.radius.xl = layout::RADIUS_LG;
 
     (kit, tok)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_candidate_palettes_meet_wcag_aa_across_all_variants() {
+        for palette in AccentPalette::ALL {
+            for dark in [false, true] {
+                for high_contrast in [false, true] {
+                    let (kit, tok) = build_kit_with_accent(dark, false, high_contrast, palette);
+
+                    // Text/icon on accent, CTA, and Send surfaces must meet WCAG AA >= 4.5:1 across all states.
+                    for (role, fg, bg) in [
+                        ("accent", tok.accent_on, tok.accent),
+                        ("accent_hover", tok.accent_on, tok.accent_hover),
+                        ("accent_pressed", tok.accent_on, tok.accent_pressed),
+                        ("cta_bg", tok.cta_on, tok.cta_bg),
+                        ("cta_hover", tok.cta_on, tok.cta_hover),
+                        ("cta_pressed", tok.cta_on, tok.cta_pressed),
+                        ("send_bg", tok.send_on, tok.send_bg),
+                        ("send_hover", tok.send_on, tok.send_hover),
+                        ("badge_accent", kit.c.text_contrast, kit.c.bg_accent),
+                    ] {
+                        let ratio = contrast_ratio(fg, bg);
+                        assert!(
+                            ratio >= 4.5,
+                            "{palette:?} dark={dark} hc={high_contrast} {role} ratio {ratio:.2} < 4.5"
+                        );
+                    }
+
+                    // Accent used as text/icon and subtle surface foreground must meet WCAG AA >= 4.5:1.
+                    for (surf_name, surface) in [
+                        ("app_bg", tok.app_bg),
+                        ("sidebar_bg", tok.sidebar_bg),
+                        ("panel_bg", tok.panel_bg),
+                        ("elevated_bg", tok.elevated_bg),
+                    ] {
+                        let fg_ratio = contrast_ratio(tok.accent, surface);
+                        assert!(
+                            fg_ratio >= 4.5,
+                            "{palette:?} dark={dark} hc={high_contrast} accent on {surf_name} {fg_ratio:.2} < 4.5"
+                        );
+
+                        let soft_bg = composite_srgb_over(tok.accent_soft, surface);
+                        let soft_ratio = contrast_ratio(tok.accent, soft_bg);
+                        assert!(
+                            soft_ratio >= 4.5,
+                            "{palette:?} dark={dark} hc={high_contrast} accent on soft({surf_name}) {soft_ratio:.2} < 4.5"
+                        );
+
+                        let ring_ratio = contrast_ratio(tok.focus_ring, surface);
+                        let min_ring = if high_contrast { 6.0 } else { 3.0 };
+                        assert!(
+                            ring_ratio >= min_ring,
+                            "{palette:?} dark={dark} hc={high_contrast} focus_ring on {surf_name} {ring_ratio:.2} < {min_ring:.1}"
+                        );
+                    }
+
+                    assert_eq!(kit.c.bg_accent, tok.accent);
+                    assert_eq!(kit.c.bg_contrast, tok.cta_bg);
+                    assert_eq!(kit.c.bg_icon_button_contrast, tok.send_bg);
+                    assert_eq!(kit.c.text_contrast, tok.cta_on);
+                    assert_eq!(kit.c.submit_fg, tok.send_on);
+                    assert_eq!(kit.c.knob_on, tok.accent_on);
+                    assert_eq!(kit.c.border_focus, tok.focus_ring);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn high_contrast_strengthens_accent_contrast() {
+        for palette in AccentPalette::ALL {
+            for dark in [false, true] {
+                let normal = resolve_tokens_with_accent(dark, false, false, palette);
+                let hc = resolve_tokens_with_accent(dark, false, true, palette);
+                assert!(
+                    contrast_ratio(hc.cta_on, hc.cta_bg)
+                        > contrast_ratio(normal.cta_on, normal.cta_bg),
+                    "{palette:?} dark={dark} high-contrast CTA did not increase text contrast"
+                );
+                assert!(
+                    contrast_ratio(hc.focus_ring, hc.panel_bg)
+                        > contrast_ratio(normal.focus_ring, normal.panel_bg),
+                    "{palette:?} dark={dark} high-contrast focus ring did not increase contrast"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accent_palette_parse_and_serde_roundtrip() {
+        for palette in AccentPalette::ALL {
+            assert_eq!(AccentPalette::parse(palette.id()), Some(palette));
+            let json = serde_json::to_value(palette).expect("serialize accent palette");
+            assert_eq!(json, serde_json::Value::String(palette.id().to_string()));
+            let back: AccentPalette = serde_json::from_value(json).expect("deserialize");
+            assert_eq!(back, palette);
+        }
+        assert_eq!(
+            AccentPalette::parse("amber"),
+            Some(AccentPalette::OchreAmber)
+        );
+        assert_eq!(AccentPalette::parse("SAND"), Some(AccentPalette::KhakiSand));
+        assert_eq!(AccentPalette::parse("unknown"), None);
+    }
 }

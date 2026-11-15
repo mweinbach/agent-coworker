@@ -139,7 +139,7 @@ fn build_initialize_params(
         client_info: ClientInfo {
             name: "cowork-desktop".to_string(),
             title: Some("Cowork Desktop".to_string()),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            version: Some(crate::native::resolve_desktop_app_version().to_string()),
         },
         capabilities: Some(ClientCapabilities {
             experimental_api: Some(true),

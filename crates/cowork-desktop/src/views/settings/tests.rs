@@ -5,6 +5,7 @@ use super::desktop::{
     parse_quick_chat_accelerator, shortcut_to_accelerator,
 };
 use super::experiments::{KNOWN_FEATURE_FLAGS, is_flag_enabled, resolve_flag_enabled};
+use super::manage_models_dialog::{can_add_custom_model, filter_provider_models};
 use super::mcp_server_draft::{
     McpDraftInput, build_mcp_server_config, draft_from_summary, parse_args_line, parse_env_lines,
     parse_header_lines,
@@ -13,6 +14,7 @@ use super::primitives::{
     StatusTone, entity_palette_index, format_byte_size, management_targets, name_initials,
 };
 use super::privacy_telemetry::apply_privacy_patch;
+use super::providers::{fallback_providers, is_provider_connected, provider_model_preview};
 use super::providers_utils::{
     extract_rate_limit_hint, provider_status_badge, sort_and_filter_providers,
 };
@@ -510,4 +512,68 @@ fn remote_access_permissions_parse_and_update_json_and_csv() {
     let reparsed_empty = parse_phone_permissions(&from_empty);
     assert!(reparsed_empty.contains("backups"));
     assert!(!reparsed_empty.contains("turns"));
+}
+
+#[test]
+fn providers_and_manage_models_helpers_filter_and_detect_connection() {
+    let defaults = fallback_providers();
+    assert!(defaults.iter().any(|p| p.id == "anthropic"));
+    assert!(defaults.iter().any(|p| p.id == "lmstudio"));
+
+    let lm = ProviderSummary {
+        id: "lmstudio".to_string(),
+        name: "LM Studio".to_string(),
+        configured: true,
+        ..Default::default()
+    };
+    let healthy = ProviderStatusSummary {
+        provider: "lmstudio".to_string(),
+        healthy: true,
+        connected: true,
+        ..Default::default()
+    };
+    let ws_disabled = WorkspaceRecord {
+        id: "ws-1".to_string(),
+        defaults: serde_json::json!({ "lmStudioEnabled": false }),
+        ..Default::default()
+    };
+    let ws_enabled = WorkspaceRecord {
+        id: "ws-1".to_string(),
+        defaults: serde_json::json!({ "lmStudioEnabled": true }),
+        ..Default::default()
+    };
+    assert!(!is_provider_connected(
+        &lm,
+        Some(&healthy),
+        Some(&ws_disabled)
+    ));
+    assert!(is_provider_connected(
+        &lm,
+        Some(&healthy),
+        Some(&ws_enabled)
+    ));
+
+    let mut models = Vec::new();
+    for i in 0..10 {
+        models.push(ProviderModelSummary {
+            id: format!("model-{i}"),
+            name: if i == 2 {
+                "Claude Sonnet".to_string()
+            } else {
+                String::new()
+            },
+            enabled: i != 0,
+            ..Default::default()
+        });
+    }
+    let filtered = filter_provider_models(&models, "sonnet");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, "model-2");
+
+    let (preview, overflow) = provider_model_preview(&models);
+    assert_eq!(preview.len(), 8);
+    assert_eq!(overflow, 1);
+
+    assert!(can_add_custom_model("openrouter"));
+    assert!(!can_add_custom_model("codex-cli"));
 }

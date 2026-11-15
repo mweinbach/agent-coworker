@@ -27,6 +27,8 @@ static SCENES: &[SceneEntry] = &[
     ("dark", scene_dark),
     ("settings", scene_settings),
     ("chat", scene_chat),
+    ("quick-chat", scene_quick_chat),
+    ("utility", scene_utility),
 ];
 
 fn scene_default(state: &mut AppState) {
@@ -57,8 +59,36 @@ fn scene_chat(state: &mut AppState) {
     state.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
 }
 
+fn scene_quick_chat(state: &mut AppState) {
+    state.scene_mode = true;
+    state.dispatch(Action::Shell(ShellAction::SetWindowMode(
+        state::WindowMode::QuickChat,
+    )));
+}
+
+fn scene_utility(state: &mut AppState) {
+    state.scene_mode = true;
+    state.dispatch(Action::Shell(ShellAction::SetWindowMode(
+        state::WindowMode::Utility,
+    )));
+}
+
 fn init_state() -> AppState {
     AppState::default()
+}
+
+fn init_quick_chat_state() -> AppState {
+    AppState {
+        window_mode: state::WindowMode::QuickChat,
+        ..AppState::default()
+    }
+}
+
+fn init_utility_state() -> AppState {
+    AppState {
+        window_mode: state::WindowMode::Utility,
+        ..AppState::default()
+    }
 }
 
 fn setup_app(state: &mut AppState, waker: Waker) {
@@ -77,12 +107,12 @@ fn poll_app(state: &mut AppState, now: f64, _tx: &mut Tx) -> bool {
     state.drain_events()
 }
 
-fn handle_key(state: &mut AppState, ev: &KeyEvent, _tx: &mut Tx) -> bool {
+fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if rune_kit::shell::is_sidebar_toggle(ev) {
         state.dispatch(Action::Shell(ShellAction::ToggleSidebar));
         return true;
     }
-    false
+    views::shell::handle_key(state, ev, tx)
 }
 
 fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
@@ -100,14 +130,53 @@ fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
 
 /// Builds the Rune `AppSpec<AppState>` (also reusable for headless tests).
 pub fn app_spec() -> AppSpec<AppState> {
+    app_spec_for_mode(state::WindowMode::Main)
+}
+
+/// Builds an `AppSpec` tailored to a primary or secondary desktop window mode.
+pub fn app_spec_for_mode(mode: state::WindowMode) -> AppSpec<AppState> {
+    let (base, min_size) = match mode {
+        state::WindowMode::Main => (
+            AppSpec::new("Cowork", (1280.0, 820.0), init_state, root_view),
+            Some((840.0, 560.0)),
+        ),
+        state::WindowMode::QuickChat => (
+            AppSpec::new(
+                "Cowork Quick Chat",
+                (440.0, 560.0),
+                init_quick_chat_state,
+                root_view,
+            ),
+            Some((360.0, 420.0)),
+        ),
+        state::WindowMode::Utility => (
+            AppSpec::new(
+                "Cowork Utility",
+                (360.0, 480.0),
+                init_utility_state,
+                root_view,
+            ),
+            Some((320.0, 380.0)),
+        ),
+    };
     AppSpec {
         scenes: SCENES,
         setup: Some(setup_app),
         poll: Some(poll_app),
         on_key: Some(handle_key),
-        min_size: Some((840.0, 560.0)),
-        ..AppSpec::new("Cowork", (1280.0, 820.0), init_state, root_view)
+        min_size,
+        ..base
     }
+}
+
+/// Builds a Rune `WindowSpec` keyed for main, quick-chat, or utility windows.
+pub fn window_spec_for_mode(mode: state::WindowMode) -> rune::WindowSpec<AppState> {
+    let key = match mode {
+        state::WindowMode::Main => "main",
+        state::WindowMode::QuickChat => "quick-chat",
+        state::WindowMode::Utility => "utility",
+    };
+    rune::WindowSpec::new(key, app_spec_for_mode(mode))
 }
 
 /// Launches the native Cowork desktop app.

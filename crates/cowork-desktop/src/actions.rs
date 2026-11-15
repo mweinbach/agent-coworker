@@ -39,6 +39,7 @@ pub enum Action {
     Navigate(NavAction),
     Shell(ShellAction),
     Chat(ChatAction),
+    Task(TaskAction),
     Settings(SettingsAction),
     Native(NativeAction),
 }
@@ -73,6 +74,7 @@ pub enum ShellAction {
     SetContextSidebarOpen(bool),
     SetSidebarSearch(String),
     SetSidebarSectionOrder(Vec<SidebarSectionKey>),
+    ToggleSidebarSectionCollapsed(SidebarSectionKey),
     ToggleWorkspaceCollapsed(String),
     ReorderWorkspaces(Vec<String>),
     ToggleCommandPalette,
@@ -521,6 +523,108 @@ pub enum NativeAction {
     RevealInOs(String),
     OpenInDefaultApp(String),
     TrashPath(String),
+}
+
+/// Answer entry for `task/questions/resolve` (`questionId` + either `optionId` or `text`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskQuestionAnswerParam {
+    pub question_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub option_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// Interactive task mode actions dispatched to `task/*` JSON-RPC methods.
+#[derive(Clone, Debug)]
+pub enum TaskAction {
+    ListTasks {
+        workspace_id: String,
+    },
+    ReadTask {
+        workspace_id: String,
+        task_id: String,
+    },
+    CreateTask {
+        workspace_id: String,
+        title: String,
+        objective: String,
+        context: Option<String>,
+        review_required: Option<bool>,
+        provider: Option<String>,
+        model: Option<String>,
+    },
+    UpdateBrief {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+        title: Option<String>,
+        objective: Option<String>,
+    },
+    ResolveQuestions {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+        answers: Vec<TaskQuestionAnswerParam>,
+    },
+    ReadArtifact {
+        workspace_id: String,
+        task_id: String,
+        artifact_id: String,
+    },
+    AcceptArtifactVersion {
+        workspace_id: String,
+        task_id: String,
+        artifact_id: String,
+        version_id: Option<String>,
+        expected_revision: i64,
+    },
+    RestoreArtifactVersion {
+        workspace_id: String,
+        task_id: String,
+        artifact_id: String,
+        version_id: String,
+        expected_revision: i64,
+        change_summary: Option<String>,
+    },
+    CreateTaskThread {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+        title: String,
+        work_item_id: Option<String>,
+        provider: Option<String>,
+        model: Option<String>,
+    },
+    AcceptTask {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+    },
+    RequestChanges {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+        feedback: String,
+    },
+    CancelTask {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+        reason: Option<String>,
+    },
+    ReopenTask {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+        reason: Option<String>,
+    },
+    RetryTask {
+        workspace_id: String,
+        task_id: String,
+        expected_revision: i64,
+    },
 }
 
 /// Commands emitted from the core store to the `native/` worker.

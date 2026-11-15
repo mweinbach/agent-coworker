@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 
 use crate::actions::{
     Action, ChatAction, NativeAction, NativeCommand, NavAction, SettingsAction, ShellAction,
-    SidebarSectionKey, StoreEvent,
+    SidebarSectionKey, StoreEvent, TaskAction,
 };
 use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
@@ -506,6 +506,8 @@ pub struct ThreadRuntime {
     pub todos: Vec<TodoItemView>,
     pub unread: bool,
     pub usage: Option<UsageSummary>,
+    #[serde(default)]
+    pub last_turn_usage: Option<UsageSummary>,
     pub usage_hard_cap: Option<f64>,
     pub usage_hard_cap_reached: bool,
     pub transcript_delivery_failure: Option<TranscriptDeliveryFailure>,
@@ -761,6 +763,22 @@ pub struct TaskSummaryView {
     pub status: String,
     pub schedule: Option<String>,
     pub last_run_at: Option<i64>,
+    #[serde(default)]
+    pub revision: i64,
+    #[serde(default)]
+    pub objective: String,
+    #[serde(default)]
+    pub pending_question_count: usize,
+    #[serde(default)]
+    pub blocking_question_count: usize,
+    #[serde(default)]
+    pub active_blocker_count: usize,
+    #[serde(default)]
+    pub completed_work_item_count: usize,
+    #[serde(default)]
+    pub total_work_item_count: usize,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,6 +788,18 @@ pub struct TaskArtifactView {
     pub name: String,
     pub path: String,
     pub mime_type: Option<String>,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub work_item_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub latest_version_id: Option<String>,
+    #[serde(default)]
+    pub accepted_version_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -780,6 +810,20 @@ pub struct TaskRecordView {
     pub questions: Value,
     pub artifacts: Vec<TaskArtifactView>,
     pub runs: Vec<WorkflowRunView>,
+    #[serde(default)]
+    pub active_artifact_detail: Option<Value>,
+    #[serde(default)]
+    pub artifact_details_by_id: HashMap<String, Value>,
+    #[serde(default)]
+    pub blockers: Value,
+    #[serde(default)]
+    pub work_items: Value,
+    #[serde(default)]
+    pub threads: Value,
+    #[serde(default)]
+    pub requirements: Value,
+    #[serde(default)]
+    pub activity: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -813,11 +857,26 @@ pub struct BackupSummary {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelUsageBreakdown {
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub turns: usize,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_tokens: u64,
+    pub estimated_cost_usd: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageSummary {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
     pub estimated_cost_usd: f64,
+    #[serde(default)]
+    pub by_model: HashMap<String, ModelUsageBreakdown>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,6 +914,12 @@ pub struct UpdaterState {
     pub available_version: Option<String>,
     #[serde(default)]
     pub download_progress: Option<f32>,
+    #[serde(default)]
+    pub downloaded_bytes: Option<u64>,
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    pub bytes_per_second: Option<u64>,
     #[serde(default)]
     pub packaged: bool,
 }
@@ -932,6 +997,8 @@ pub struct PersistedDesktopState {
     pub workspaces: Vec<WorkspaceRecord>,
     pub workspace_order: Vec<String>,
     pub collapsed_workspace_ids: Vec<String>,
+    #[serde(default)]
+    pub collapsed_sidebar_sections: Vec<SidebarSectionKey>,
     pub active_workspace_id: Option<String>,
     pub active_thread_id: Option<String>,
     pub onboarding: OnboardingState,
@@ -988,6 +1055,7 @@ pub struct AppState {
     pub workspaces: Vec<WorkspaceRecord>,
     pub workspace_order: Vec<String>,
     pub collapsed_workspace_ids: HashSet<String>,
+    pub collapsed_sidebar_sections: HashSet<SidebarSectionKey>,
     pub active_workspace_id: Option<String>,
     pub landing_workspace_id: Option<String>,
     pub workspace_runtime_by_id: HashMap<String, WorkspaceRuntime>,
@@ -1043,8 +1111,9 @@ pub struct AppState {
     pub pending_rpc_meta: HashMap<u64, PendingRpcMeta>,
     pub chat_ui: crate::views::chat::ChatUiState,
     pub settings_ui: crate::views::settings::SettingsUiState,
-    pending_draft_threads_by_rpc_id: HashMap<u64, String>,
-    pending_picker_composer_by_request: HashMap<String, String>,
+    pub shell_ui: crate::views::shell::ShellUiState,
+    pub(crate) pending_draft_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_picker_composer_by_request: HashMap<String, String>,
     pub native_ready: bool,
     pub is_packaged: bool,
     pub system_dark_override: Option<bool>,
@@ -1081,6 +1150,7 @@ impl Default for AppState {
             workspaces: Vec::new(),
             workspace_order: Vec::new(),
             collapsed_workspace_ids: HashSet::new(),
+            collapsed_sidebar_sections: HashSet::new(),
             active_workspace_id: None,
             landing_workspace_id: None,
             workspace_runtime_by_id: HashMap::new(),
@@ -1136,6 +1206,7 @@ impl Default for AppState {
             pending_rpc_meta: HashMap::new(),
             chat_ui: crate::views::chat::ChatUiState::default(),
             settings_ui: crate::views::settings::SettingsUiState::default(),
+            shell_ui: crate::views::shell::ShellUiState::default(),
             pending_draft_threads_by_rpc_id: HashMap::new(),
             pending_picker_composer_by_request: HashMap::new(),
             native_ready: false,
@@ -1481,6 +1552,8 @@ impl AppState {
                 self.workspace_order = persisted.workspace_order;
                 self.collapsed_workspace_ids =
                     persisted.collapsed_workspace_ids.into_iter().collect();
+                self.collapsed_sidebar_sections =
+                    persisted.collapsed_sidebar_sections.into_iter().collect();
                 self.active_workspace_id = persisted.active_workspace_id;
                 if let Some(thread_id) = persisted.active_thread_id {
                     self.nav.replace_current(NavigationSnapshot {
@@ -1728,6 +1801,7 @@ impl AppState {
             Action::Navigate(nav) => self.reduce_nav(nav),
             Action::Shell(shell) => self.reduce_shell(shell),
             Action::Chat(chat) => self.reduce_chat(chat),
+            Action::Task(task) => self.reduce_task(task),
             Action::Settings(settings) => self.reduce_settings(settings),
             Action::Native(native) => self.reduce_native(native),
         }
@@ -1736,10 +1810,22 @@ impl AppState {
     fn reduce_nav(&mut self, action: NavAction) {
         match action {
             NavAction::OpenView(view) => {
-                self.nav.update(NavigationPatch {
-                    view: Some(view),
-                    ..Default::default()
-                });
+                if view == ViewId::Task {
+                    self.active_task = None;
+                    self.nav.update(NavigationPatch {
+                        view: Some(view),
+                        active_task_id: Some(None),
+                        ..Default::default()
+                    });
+                    if let Some(ws_id) = self.active_workspace_id.clone() {
+                        self.send_task_ws(&ws_id, "task/list", json!({}));
+                    }
+                } else {
+                    self.nav.update(NavigationPatch {
+                        view: Some(view),
+                        ..Default::default()
+                    });
+                }
             }
             NavAction::OpenThread(thread_id) => {
                 let old_key = self.composer_key();
@@ -1790,11 +1876,21 @@ impl AppState {
                 self.sync_composer_edit_across_switch(&old_key, &new_key);
             }
             NavAction::OpenTask(task_id) => {
+                if self
+                    .active_task
+                    .as_ref()
+                    .is_some_and(|t| t.summary.id != task_id)
+                {
+                    self.active_task = None;
+                }
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Task),
-                    active_task_id: Some(Some(task_id)),
+                    active_task_id: Some(Some(task_id.clone())),
                     ..Default::default()
                 });
+                if let Some(ws_id) = self.active_workspace_id.clone() {
+                    self.send_task_ws(&ws_id, "task/read", json!({ "taskId": task_id }));
+                }
             }
             NavAction::OpenSettings(page) => {
                 self.nav.update(NavigationPatch {
@@ -1848,6 +1944,12 @@ impl AppState {
             }
             ShellAction::SetSidebarSectionOrder(order) => {
                 self.desktop_settings.sidebar_section_order = order;
+                self.persist_state();
+            }
+            ShellAction::ToggleSidebarSectionCollapsed(section) => {
+                if !self.collapsed_sidebar_sections.remove(&section) {
+                    self.collapsed_sidebar_sections.insert(section);
+                }
                 self.persist_state();
             }
             ShellAction::ToggleWorkspaceCollapsed(ws_id) => {
@@ -2000,6 +2102,226 @@ impl AppState {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fn send_task_ws(&mut self, workspace_id: &str, method: &str, mut params: Value) {
+        let cwd = self.workspace_path(workspace_id);
+        inject_cwd(&mut params, cwd);
+        let _ = self.send_ws_request(workspace_id, method, params, false);
+    }
+
+    fn reduce_task(&mut self, action: TaskAction) {
+        match action {
+            TaskAction::ListTasks { workspace_id } => {
+                self.send_task_ws(&workspace_id, "task/list", json!({}));
+            }
+            TaskAction::ReadTask {
+                workspace_id,
+                task_id,
+            } => {
+                self.send_task_ws(&workspace_id, "task/read", json!({ "taskId": task_id }));
+            }
+            TaskAction::CreateTask {
+                workspace_id,
+                title,
+                objective,
+                context,
+                review_required,
+                provider,
+                model,
+            } => {
+                let mut params = Map::new();
+                params.insert("title".to_string(), json!(title));
+                params.insert("objective".to_string(), json!(objective));
+                if let Some(c) = context.filter(|s| !s.trim().is_empty()) {
+                    params.insert("context".to_string(), json!(c));
+                }
+                if let Some(r) = review_required {
+                    params.insert("reviewRequired".to_string(), json!(r));
+                }
+                if let Some(p) = provider.filter(|s| !s.trim().is_empty()) {
+                    params.insert("provider".to_string(), json!(p));
+                }
+                if let Some(m) = model.filter(|s| !s.trim().is_empty()) {
+                    params.insert("model".to_string(), json!(m));
+                }
+                self.send_task_ws(&workspace_id, "task/create", Value::Object(params));
+            }
+            TaskAction::UpdateBrief {
+                workspace_id,
+                task_id,
+                expected_revision,
+                title,
+                objective,
+            } => {
+                let mut params = Map::new();
+                params.insert("taskId".to_string(), json!(task_id));
+                params.insert("expectedRevision".to_string(), json!(expected_revision));
+                if let Some(t) = title.filter(|s| !s.trim().is_empty()) {
+                    params.insert("title".to_string(), json!(t));
+                }
+                if let Some(o) = objective.filter(|s| !s.trim().is_empty()) {
+                    params.insert("objective".to_string(), json!(o));
+                }
+                self.send_task_ws(&workspace_id, "task/updateBrief", Value::Object(params));
+            }
+            TaskAction::ResolveQuestions {
+                workspace_id,
+                task_id,
+                expected_revision,
+                answers,
+            } => {
+                let params = json!({
+                    "taskId": task_id,
+                    "expectedRevision": expected_revision,
+                    "answers": answers,
+                });
+                self.send_task_ws(&workspace_id, "task/questions/resolve", params);
+            }
+            TaskAction::ReadArtifact {
+                workspace_id,
+                task_id,
+                artifact_id,
+            } => {
+                self.send_task_ws(
+                    &workspace_id,
+                    "task/artifact/read",
+                    json!({ "taskId": task_id, "artifactId": artifact_id }),
+                );
+            }
+            TaskAction::AcceptArtifactVersion {
+                workspace_id,
+                task_id,
+                artifact_id,
+                version_id,
+                expected_revision,
+            } => {
+                let mut params = Map::new();
+                params.insert("taskId".to_string(), json!(task_id));
+                params.insert("artifactId".to_string(), json!(artifact_id));
+                params.insert("expectedRevision".to_string(), json!(expected_revision));
+                if let Some(v) = version_id.filter(|s| !s.trim().is_empty()) {
+                    params.insert("versionId".to_string(), json!(v));
+                }
+                self.send_task_ws(
+                    &workspace_id,
+                    "task/artifact/version/accept",
+                    Value::Object(params),
+                );
+            }
+            TaskAction::RestoreArtifactVersion {
+                workspace_id,
+                task_id,
+                artifact_id,
+                version_id,
+                expected_revision,
+                change_summary,
+            } => {
+                let mut params = Map::new();
+                params.insert("taskId".to_string(), json!(task_id));
+                params.insert("artifactId".to_string(), json!(artifact_id));
+                params.insert("versionId".to_string(), json!(version_id));
+                params.insert("expectedRevision".to_string(), json!(expected_revision));
+                if let Some(s) = change_summary.filter(|s| !s.trim().is_empty()) {
+                    params.insert("changeSummary".to_string(), json!(s));
+                }
+                self.send_task_ws(
+                    &workspace_id,
+                    "task/artifact/version/restore",
+                    Value::Object(params),
+                );
+            }
+            TaskAction::CreateTaskThread {
+                workspace_id,
+                task_id,
+                expected_revision,
+                title,
+                work_item_id,
+                provider,
+                model,
+            } => {
+                let mut params = Map::new();
+                params.insert("taskId".to_string(), json!(task_id));
+                params.insert("expectedRevision".to_string(), json!(expected_revision));
+                params.insert("title".to_string(), json!(title));
+                if let Some(w) = work_item_id.filter(|s| !s.trim().is_empty()) {
+                    params.insert("workItemId".to_string(), json!(w));
+                }
+                if let Some(p) = provider.filter(|s| !s.trim().is_empty()) {
+                    params.insert("provider".to_string(), json!(p));
+                }
+                if let Some(m) = model.filter(|s| !s.trim().is_empty()) {
+                    params.insert("model".to_string(), json!(m));
+                }
+                self.send_task_ws(&workspace_id, "task/thread/create", Value::Object(params));
+            }
+            TaskAction::AcceptTask {
+                workspace_id,
+                task_id,
+                expected_revision,
+            } => {
+                self.send_task_ws(
+                    &workspace_id,
+                    "task/accept",
+                    json!({ "taskId": task_id, "expectedRevision": expected_revision }),
+                );
+            }
+            TaskAction::RequestChanges {
+                workspace_id,
+                task_id,
+                expected_revision,
+                feedback,
+            } => {
+                self.send_task_ws(
+                    &workspace_id,
+                    "task/requestChanges",
+                    json!({
+                        "taskId": task_id,
+                        "expectedRevision": expected_revision,
+                        "feedback": feedback,
+                    }),
+                );
+            }
+            TaskAction::CancelTask {
+                workspace_id,
+                task_id,
+                expected_revision,
+                reason,
+            } => {
+                let mut params = Map::new();
+                params.insert("taskId".to_string(), json!(task_id));
+                params.insert("expectedRevision".to_string(), json!(expected_revision));
+                if let Some(r) = reason.filter(|s| !s.trim().is_empty()) {
+                    params.insert("reason".to_string(), json!(r));
+                }
+                self.send_task_ws(&workspace_id, "task/cancel", Value::Object(params));
+            }
+            TaskAction::ReopenTask {
+                workspace_id,
+                task_id,
+                expected_revision,
+                reason,
+            } => {
+                let mut params = Map::new();
+                params.insert("taskId".to_string(), json!(task_id));
+                params.insert("expectedRevision".to_string(), json!(expected_revision));
+                if let Some(r) = reason.filter(|s| !s.trim().is_empty()) {
+                    params.insert("reason".to_string(), json!(r));
+                }
+                self.send_task_ws(&workspace_id, "task/reopen", Value::Object(params));
+            }
+            TaskAction::RetryTask {
+                workspace_id,
+                task_id,
+                expected_revision,
+            } => {
+                self.send_task_ws(
+                    &workspace_id,
+                    "task/retry",
+                    json!({ "taskId": task_id, "expectedRevision": expected_revision }),
+                );
             }
         }
     }
@@ -3843,6 +4165,55 @@ impl AppState {
                 let evt = params.get("event").unwrap_or(&params);
                 self.reduce_cowork_event(workspace_id, evt, now_ms);
             }
+            "cowork/session/turnUsage" => {
+                if params.get("type").is_some() {
+                    self.reduce_cowork_event(workspace_id, &params, now_ms);
+                } else {
+                    let mut normalized = params;
+                    if let Some(obj) = normalized.as_object_mut() {
+                        obj.insert("type".to_string(), json!("turn_usage"));
+                    }
+                    self.reduce_cowork_event(workspace_id, &normalized, now_ms);
+                }
+            }
+            "cowork/session/usage" => {
+                if params.get("type").is_some() {
+                    self.reduce_cowork_event(workspace_id, &params, now_ms);
+                } else {
+                    let mut normalized = params;
+                    if let Some(obj) = normalized.as_object_mut() {
+                        obj.insert("type".to_string(), json!("session_usage"));
+                    }
+                    self.reduce_cowork_event(workspace_id, &normalized, now_ms);
+                }
+            }
+            "task/created" | "task/updated" => {
+                let task_val = params.get("task").unwrap_or(&params);
+                self.apply_task_record_update(workspace_id, task_val, false);
+            }
+            "task/activity" => {
+                if let (Some(task_id), Some(activity)) = (
+                    params.get("taskId").and_then(Value::as_str),
+                    params.get("activity").cloned(),
+                ) && let Some(active) = self
+                    .active_task
+                    .as_mut()
+                    .filter(|t| t.summary.id == task_id)
+                {
+                    let dup = activity
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|aid| {
+                            active
+                                .activity
+                                .iter()
+                                .any(|a| a.get("id").and_then(Value::as_str) == Some(aid))
+                        });
+                    if !dup {
+                        active.activity.insert(0, activity);
+                    }
+                }
+            }
             _ => {
                 if method.starts_with("cowork/") {
                     self.reduce_cowork_event(workspace_id, &params, now_ms);
@@ -4380,7 +4751,20 @@ impl AppState {
             .map(str::to_string);
 
         match evt_type {
-            "turn_usage" | "session_usage" => {
+            "turn_usage" => {
+                let usage = parse_usage_summary(evt.get("usage").unwrap_or(evt));
+                if let Some(id) = tid {
+                    let rt = self.thread_runtime_by_id.entry(id).or_default();
+                    rt.last_turn_usage = Some(usage.clone());
+                    if rt.usage.is_none() {
+                        rt.usage = Some(usage.clone());
+                    }
+                }
+                if self.usage_summary.is_none() {
+                    self.usage_summary = Some(usage);
+                }
+            }
+            "session_usage" => {
                 let usage = parse_usage_summary(evt.get("usage").unwrap_or(evt));
                 if let Some(id) = tid {
                     self.thread_runtime_by_id
@@ -4901,13 +5285,56 @@ impl AppState {
                 if let Some(arr) = payload.get("tasks").and_then(Value::as_array) {
                     self.tasks = arr
                         .iter()
-                        .filter_map(|v| serde_json::from_value::<TaskSummaryView>(v.clone()).ok())
+                        .filter_map(|v| parse_task_summary(v, workspace_id))
                         .collect();
                 }
             }
-            "task/read" => {
-                if let Ok(task) = serde_json::from_value::<TaskRecordView>(payload) {
-                    self.active_task = Some(task);
+            "task/read"
+            | "task/create"
+            | "task/updateBrief"
+            | "task/questions/resolve"
+            | "task/accept"
+            | "task/requestChanges"
+            | "task/cancel"
+            | "task/reopen"
+            | "task/retry"
+            | "task/thread/create" => {
+                let task_val = payload.get("task").unwrap_or(&payload);
+                let select_active = matches!(method, "task/read" | "task/create");
+                self.apply_task_record_update(workspace_id, task_val, select_active);
+                if method == "task/create"
+                    && let Some(tid) = task_val.get("id").and_then(Value::as_str)
+                {
+                    self.nav.update(NavigationPatch {
+                        view: Some(ViewId::Task),
+                        active_task_id: Some(Some(tid.to_string())),
+                        ..Default::default()
+                    });
+                }
+                if method == "task/thread/create"
+                    && let Some(thread_val) = payload.get("thread")
+                    && let Some(thread_id) = self.upsert_thread_from_value(workspace_id, thread_val)
+                {
+                    self.dispatch(Action::Navigate(NavAction::OpenThread(thread_id)));
+                }
+            }
+            "task/artifact/read"
+            | "task/artifact/version/accept"
+            | "task/artifact/version/restore" => {
+                if let Some(task_val) = payload.get("task") {
+                    self.apply_task_record_update(workspace_id, task_val, false);
+                }
+                let detail = payload.get("detail").cloned().unwrap_or(payload.clone());
+                let artifact_id = detail
+                    .get("artifact")
+                    .and_then(|a| a.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                if let Some(active) = self.active_task.as_mut() {
+                    if let Some(aid) = artifact_id {
+                        active.artifact_details_by_id.insert(aid, detail.clone());
+                    }
+                    active.active_artifact_detail = Some(detail);
                 }
             }
             _ => {}
@@ -5281,12 +5708,90 @@ impl AppState {
             workspaces: self.workspaces.clone(),
             workspace_order: self.workspace_order.clone(),
             collapsed_workspace_ids: self.collapsed_workspace_ids.iter().cloned().collect(),
+            collapsed_sidebar_sections: self.collapsed_sidebar_sections.iter().copied().collect(),
             active_workspace_id: self.active_workspace_id.clone(),
             active_thread_id,
             onboarding: self.onboarding.clone(),
             feature_flags: self.feature_flags.clone(),
         };
         self.send_native(NativeCommand::SavePersistedState(Box::new(snapshot)));
+    }
+
+    fn upsert_task_summary(&mut self, summary: TaskSummaryView) {
+        if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == summary.id) {
+            *existing = summary;
+        } else {
+            self.tasks.insert(0, summary);
+        }
+    }
+
+    fn apply_task_record_update(&mut self, workspace_id: &str, val: &Value, select_active: bool) {
+        let Some(mut task) = parse_task_record(val, workspace_id) else {
+            return;
+        };
+        if let Some(existing) = self
+            .active_task
+            .as_ref()
+            .filter(|t| t.summary.id == task.summary.id)
+        {
+            if task.runs.is_empty() && !existing.runs.is_empty() {
+                task.runs = existing.runs.clone();
+            }
+            if task.active_artifact_detail.is_none() {
+                task.active_artifact_detail = existing.active_artifact_detail.clone();
+            }
+            for (k, v) in &existing.artifact_details_by_id {
+                task.artifact_details_by_id
+                    .entry(k.clone())
+                    .or_insert_with(|| v.clone());
+            }
+        }
+        self.upsert_task_summary(task.summary.clone());
+        let viewing_this_task = self.nav.current().active_task_id.as_deref()
+            == Some(task.summary.id.as_str())
+            || self
+                .active_task
+                .as_ref()
+                .is_some_and(|t| t.summary.id == task.summary.id);
+        if select_active || viewing_this_task {
+            self.active_task = Some(task);
+        }
+    }
+
+    fn upsert_thread_from_value(&mut self, workspace_id: &str, v: &Value) -> Option<String> {
+        let id = v.get("id").and_then(Value::as_str)?;
+        let title = v
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("New Chat")
+            .to_string();
+        let archived = v.get("archived").and_then(Value::as_bool).unwrap_or(false);
+        let pinned = v.get("pinned").and_then(Value::as_bool).unwrap_or(false);
+        let record = ThreadRecord {
+            id: id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            title,
+            status: ThreadStatus::Active,
+            session_id: Some(id.to_string()),
+            pinned,
+            archived,
+            draft: false,
+            provider: v
+                .get("modelProvider")
+                .or_else(|| v.get("provider"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            model: v.get("model").and_then(Value::as_str).map(str::to_string),
+            updated_at: parse_timestamp_ms(v.get("updatedAt").or_else(|| v.get("createdAt"))),
+            preview: v.get("preview").and_then(Value::as_str).map(str::to_string),
+            ..Default::default()
+        };
+        if let Some(existing) = self.threads.iter_mut().find(|t| t.id == id) {
+            *existing = record;
+        } else {
+            self.threads.push(record);
+        }
+        Some(id.to_string())
     }
 }
 
@@ -5385,28 +5890,283 @@ fn parse_tool_status(raw: Option<&str>) -> Option<ToolRunStatus> {
 }
 
 fn parse_usage_summary(val: &Value) -> UsageSummary {
+    let mut by_model = HashMap::new();
+    if let Some(arr) = val.get("byModel").and_then(Value::as_array) {
+        for item in arr {
+            let provider = item
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let model = item
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if model.is_empty() && provider.is_empty() {
+                continue;
+            }
+            let key = if provider.is_empty() {
+                model.clone()
+            } else {
+                format!("{provider}:{model}")
+            };
+            by_model.insert(
+                key,
+                ModelUsageBreakdown {
+                    provider,
+                    model,
+                    turns: item.get("turns").and_then(Value::as_u64).unwrap_or(0) as usize,
+                    input_tokens: item
+                        .get("totalPromptTokens")
+                        .or_else(|| item.get("promptTokens"))
+                        .or_else(|| item.get("inputTokens"))
+                        .or_else(|| item.get("input_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    output_tokens: item
+                        .get("totalCompletionTokens")
+                        .or_else(|| item.get("completionTokens"))
+                        .or_else(|| item.get("outputTokens"))
+                        .or_else(|| item.get("output_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    cached_tokens: item
+                        .get("totalCachedPromptTokens")
+                        .or_else(|| item.get("cachedPromptTokens"))
+                        .or_else(|| item.get("cachedTokens"))
+                        .or_else(|| item.get("cached_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    estimated_cost_usd: item
+                        .get("estimatedTotalCostUsd")
+                        .or_else(|| item.get("estimatedCostUsd"))
+                        .or_else(|| item.get("costUsd"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                },
+            );
+        }
+    } else if let Some(obj) = val.get("byModel").and_then(Value::as_object) {
+        for (k, item) in obj {
+            if let Ok(parsed) = serde_json::from_value::<ModelUsageBreakdown>(item.clone()) {
+                by_model.insert(k.clone(), parsed);
+            }
+        }
+    }
+
     UsageSummary {
         input_tokens: val
-            .get("inputTokens")
+            .get("totalPromptTokens")
+            .or_else(|| val.get("promptTokens"))
+            .or_else(|| val.get("inputTokens"))
             .or_else(|| val.get("input_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
         output_tokens: val
-            .get("outputTokens")
+            .get("totalCompletionTokens")
+            .or_else(|| val.get("completionTokens"))
+            .or_else(|| val.get("outputTokens"))
             .or_else(|| val.get("output_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
         cached_tokens: val
-            .get("cachedTokens")
+            .get("totalCachedPromptTokens")
+            .or_else(|| val.get("cachedPromptTokens"))
+            .or_else(|| val.get("cachedTokens"))
             .or_else(|| val.get("cached_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
         estimated_cost_usd: val
-            .get("estimatedCostUsd")
+            .get("estimatedTotalCostUsd")
+            .or_else(|| val.get("estimatedCostUsd"))
             .or_else(|| val.get("costUsd"))
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
+        by_model,
     }
+}
+
+fn parse_task_summary(val: &Value, fallback_workspace_id: &str) -> Option<TaskSummaryView> {
+    if let Ok(mut parsed) = serde_json::from_value::<TaskSummaryView>(val.clone()) {
+        if parsed.workspace_id.is_empty() {
+            parsed.workspace_id = fallback_workspace_id.to_string();
+        }
+        return Some(parsed);
+    }
+    let id = val
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let workspace_id = val
+        .get("workspaceId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback_workspace_id)
+        .to_string();
+    Some(TaskSummaryView {
+        id,
+        workspace_id,
+        title: val
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: val
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        schedule: val
+            .get("schedule")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        last_run_at: val.get("lastRunAt").and_then(Value::as_i64),
+        revision: val.get("revision").and_then(Value::as_i64).unwrap_or(0),
+        objective: val
+            .get("objective")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        pending_question_count: val
+            .get("pendingQuestionCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        blocking_question_count: val
+            .get("blockingQuestionCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        active_blocker_count: val
+            .get("activeBlockerCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        completed_work_item_count: val
+            .get("completedWorkItemCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        total_work_item_count: val
+            .get("totalWorkItemCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        updated_at: val
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+fn parse_task_artifact(val: &Value) -> Option<TaskArtifactView> {
+    if let Ok(mut parsed) = serde_json::from_value::<TaskArtifactView>(val.clone()) {
+        if parsed.title.is_empty() {
+            parsed.title = parsed.name.clone();
+        }
+        return Some(parsed);
+    }
+    let id = val
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let title = val
+        .get("title")
+        .or_else(|| val.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let path = val
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let name = val
+        .get("name")
+        .or_else(|| val.get("title"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
+    Some(TaskArtifactView {
+        id,
+        name,
+        path,
+        mime_type: val
+            .get("mimeType")
+            .or_else(|| val.get("mediaType"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        title,
+        kind: val
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        work_item_id: val
+            .get("workItemId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        thread_id: val
+            .get("threadId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        latest_version_id: val
+            .get("latestVersionId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        accepted_version_id: val
+            .get("acceptedVersionId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRecordView> {
+    if val.get("summary").is_some_and(Value::is_object)
+        && let Ok(parsed) = serde_json::from_value::<TaskRecordView>(val.clone())
+    {
+        return Some(parsed);
+    }
+    let summary = parse_task_summary(val, fallback_workspace_id)?;
+    let prompt = val
+        .get("prompt")
+        .or_else(|| val.get("objective"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let artifacts = val
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(parse_task_artifact).collect())
+        .unwrap_or_default();
+    let runs = val
+        .get("runs")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value::<WorkflowRunView>(v.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let activity = val
+        .get("activity")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Some(TaskRecordView {
+        summary,
+        prompt,
+        questions: val.get("questions").cloned().unwrap_or(Value::Null),
+        artifacts,
+        runs,
+        active_artifact_detail: val.get("activeArtifactDetail").cloned(),
+        artifact_details_by_id: HashMap::new(),
+        blockers: val.get("blockers").cloned().unwrap_or(Value::Null),
+        work_items: val.get("workItems").cloned().unwrap_or(Value::Null),
+        threads: val.get("threads").cloned().unwrap_or(Value::Null),
+        requirements: val.get("requirements").cloned().unwrap_or(Value::Null),
+        activity,
+    })
 }
 
 fn parse_timestamp_ms(val: Option<&Value>) -> i64 {
@@ -6019,5 +6779,234 @@ mod tests {
         )));
         assert_eq!(state.composer_edit.text, "");
         assert!(!state.attachment_previews_by_key.contains_key("th-1"));
+    }
+
+    #[test]
+    fn usage_turn_vs_session_by_model_and_updater_byte_progress() {
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "cowork/session/turnUsage".to_string(),
+            params: json!({
+                "type": "turn_usage",
+                "sessionId": "th-1",
+                "turnId": "turn-1",
+                "usage": {
+                    "promptTokens": 1200,
+                    "completionTokens": 300,
+                    "totalTokens": 1500,
+                    "cachedPromptTokens": 400,
+                    "estimatedCostUsd": 0.012
+                }
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        let last_turn = rt.last_turn_usage.as_ref().unwrap();
+        assert_eq!(last_turn.input_tokens, 1200);
+        assert_eq!(last_turn.output_tokens, 300);
+        assert_eq!(last_turn.cached_tokens, 400);
+        assert!((last_turn.estimated_cost_usd - 0.012).abs() < 1e-9);
+
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "cowork/session/usage".to_string(),
+            params: json!({
+                "type": "session_usage",
+                "sessionId": "th-1",
+                "usage": {
+                    "totalPromptTokens": 5000,
+                    "totalCompletionTokens": 1400,
+                    "totalCachedPromptTokens": 1200,
+                    "estimatedTotalCostUsd": 0.085,
+                    "byModel": [{
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "turns": 3,
+                        "totalPromptTokens": 5000,
+                        "totalCompletionTokens": 1400,
+                        "totalCachedPromptTokens": 1200,
+                        "estimatedCostUsd": 0.085
+                    }]
+                }
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        assert_eq!(rt.last_turn_usage.as_ref().unwrap().input_tokens, 1200);
+        let total = rt.usage.as_ref().unwrap();
+        assert_eq!(total.input_tokens, 5000);
+        assert_eq!(total.output_tokens, 1400);
+        assert_eq!(total.cached_tokens, 1200);
+        let model = total.by_model.get("openai:gpt-5.4").unwrap();
+        assert_eq!(model.turns, 3);
+        assert_eq!(model.input_tokens, 5000);
+
+        state.apply_store_event(StoreEvent::UpdaterChanged(UpdaterState {
+            status: "downloading".to_string(),
+            download_progress: Some(0.5),
+            downloaded_bytes: Some(5_000_000),
+            total_bytes: Some(10_000_000),
+            bytes_per_second: Some(1_250_000),
+            ..UpdaterState::default()
+        }));
+        assert_eq!(state.updater.downloaded_bytes, Some(5_000_000));
+        assert_eq!(state.updater.total_bytes, Some(10_000_000));
+        assert_eq!(state.updater.bytes_per_second, Some(1_250_000));
+    }
+
+    #[test]
+    fn sidebar_section_collapse_persists_and_reloads() {
+        let mut state = AppState::default();
+        state.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+            crate::actions::SidebarSectionKey::Tasks,
+        )));
+        assert!(
+            state
+                .collapsed_sidebar_sections
+                .contains(&crate::actions::SidebarSectionKey::Tasks)
+        );
+        let saved = match state.services.emitted_native_commands.last() {
+            Some(NativeCommand::SavePersistedState(snapshot)) => (**snapshot).clone(),
+            other => panic!("expected SavePersistedState, got {other:?}"),
+        };
+        assert_eq!(
+            saved.collapsed_sidebar_sections,
+            vec![crate::actions::SidebarSectionKey::Tasks]
+        );
+
+        let mut reloaded = AppState::default();
+        reloaded.apply_store_event(StoreEvent::NativeReady {
+            persisted: Box::new(saved),
+            is_packaged: false,
+            system_dark: Some(false),
+        });
+        assert!(
+            reloaded
+                .collapsed_sidebar_sections
+                .contains(&crate::actions::SidebarSectionKey::Tasks)
+        );
+    }
+
+    #[test]
+    fn task_actions_and_server_payloads_reduce_cleanly() {
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Repo".to_string(),
+            path: "/tmp/repo".to_string(),
+            ..Default::default()
+        });
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "task/list".to_string(),
+            result: Ok(json!({
+                "tasks": [{
+                    "id": "task-1",
+                    "workspacePath": "/tmp/repo",
+                    "title": "Audit desktop",
+                    "objective": "Verify task sync",
+                    "status": "blocked",
+                    "revision": 2,
+                    "pendingQuestionCount": 1,
+                    "blockingQuestionCount": 1,
+                    "updatedAt": "2026-11-14T00:00:00Z"
+                }],
+                "total": 1
+            })),
+        });
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].id, "task-1");
+        assert_eq!(state.tasks[0].workspace_id, "ws-1");
+        assert_eq!(state.tasks[0].revision, 2);
+
+        state.dispatch(Action::Navigate(NavAction::OpenTask("task-1".to_string())));
+        let read_cmd = state.services.emitted_ws_commands.last().unwrap();
+        match read_cmd {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "task/read");
+                assert_eq!(params["cwd"], "/tmp/repo");
+                assert_eq!(params["taskId"], "task-1");
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 11,
+            method: "task/read".to_string(),
+            result: Ok(json!({
+                "task": {
+                    "id": "task-1",
+                    "workspacePath": "/tmp/repo",
+                    "title": "Audit desktop",
+                    "objective": "Verify task sync",
+                    "status": "blocked",
+                    "revision": 3,
+                    "questions": [{ "id": "q-1", "prompt": "Proceed?" }],
+                    "artifacts": [{
+                        "id": "art-1",
+                        "title": "Plan.md",
+                        "path": "docs/plan.md",
+                        "kind": "document"
+                    }],
+                    "activity": [{ "id": "act-1", "kind": "created" }]
+                }
+            })),
+        });
+        let active = state.active_task.as_ref().unwrap();
+        assert_eq!(active.summary.revision, 3);
+        assert_eq!(active.artifacts[0].name, "Plan.md");
+
+        state.dispatch(Action::Task(TaskAction::ResolveQuestions {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_revision: 3,
+            answers: vec![crate::actions::TaskQuestionAnswerParam {
+                question_id: "q-1".to_string(),
+                option_id: Some("opt-yes".to_string()),
+                text: None,
+            }],
+        }));
+        match state.services.emitted_ws_commands.last().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => {
+                assert_eq!(method, "task/questions/resolve");
+                assert_eq!(params["expectedRevision"], 3);
+                assert_eq!(params["answers"][0]["questionId"], "q-1");
+                assert_eq!(params["answers"][0]["optionId"], "opt-yes");
+            }
+            other => panic!("expected SendRequest, got {other:?}"),
+        }
+
+        state.dispatch(Action::Task(TaskAction::ReadArtifact {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            artifact_id: "art-1".to_string(),
+        }));
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 12,
+            method: "task/artifact/read".to_string(),
+            result: Ok(json!({
+                "detail": {
+                    "artifact": { "id": "art-1", "title": "Plan.md" },
+                    "latestVersionId": "v-2"
+                }
+            })),
+        });
+        assert_eq!(
+            state
+                .active_task
+                .as_ref()
+                .and_then(|t| t.artifact_details_by_id.get("art-1"))
+                .and_then(|d| d.get("latestVersionId"))
+                .and_then(Value::as_str),
+            Some("v-2")
+        );
+
+        state.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
+        assert!(state.active_task.is_none());
+        assert_eq!(state.nav.current().active_task_id, None);
     }
 }

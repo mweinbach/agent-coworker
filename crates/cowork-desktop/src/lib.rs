@@ -407,6 +407,7 @@ fn setup_app(state: &mut AppState, waker: Waker) {
     if state.scene_mode {
         return;
     }
+    state.now_secs = state::wall_clock_epoch_secs();
     let mode = state.window_mode;
     WINDOW_HUB.with(|cell| {
         let mut hub = cell.borrow_mut();
@@ -430,7 +431,10 @@ fn setup_app(state: &mut AppState, waker: Waker) {
 }
 
 fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
-    state.now_secs = now;
+    state.app_elapsed_secs = now;
+    if !state.scene_mode {
+        state.now_secs = state::wall_clock_epoch_secs();
+    }
     let mut changed = state.drain_events();
     if !state.scene_mode {
         let mode = state.window_mode;
@@ -492,8 +496,8 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                 }
             }
         }
-        if let Some(due) = state.next_canvas_wake_at() {
-            tx.wake_at(due);
+        if let Some(delay) = state.next_canvas_wake_delay_secs() {
+            tx.wake_at(state.app_elapsed_secs + delay);
         }
     }
     changed

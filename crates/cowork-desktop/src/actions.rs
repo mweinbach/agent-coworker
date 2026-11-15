@@ -91,6 +91,7 @@ pub enum ShellAction {
     },
     DismissToast(String),
     CompleteOnboardingStep(String),
+    CompleteOnboarding,
     SkipOnboarding,
     OpenFilePreview(FilePreviewState),
     CloseFilePreview,

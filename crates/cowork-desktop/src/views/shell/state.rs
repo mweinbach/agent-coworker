@@ -122,6 +122,12 @@ pub(crate) fn active_canvas_target_key(s: &AppState) -> Option<String> {
     if !s.feature_flags.get("canvas").copied().unwrap_or(false) {
         return None;
     }
+    if let Some(ref doc) = s.canvas_document {
+        return Some(format!(
+            "session:{}:{}:{}",
+            doc.workspace_id, doc.document_id, doc.generation
+        ));
+    }
     let preview = s.active_file_preview.as_ref()?;
     if preview.is_binary {
         return None;
@@ -423,9 +429,14 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         s.chat_ui.canvas.maximized = false;
         return true;
     }
-    if s.active_file_preview.is_some() {
+    if s.active_file_preview.is_some() || s.canvas_document.is_some() {
         s.shell_ui.preview_maximized = false;
-        s.dispatch(Action::Shell(ShellAction::CloseFilePreview));
+        if s.active_file_preview.is_some() {
+            s.dispatch(Action::Shell(ShellAction::CloseFilePreview));
+        }
+        if s.canvas_document.is_some() {
+            s.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+        }
         return true;
     }
     if s.route().view == ViewId::Settings {

@@ -443,10 +443,16 @@ mod tests {
         // Dirty chat canvas UI also triggers the close guard for the main window, while secondary
         // hide-only windows ("quick-chat", "utility") always hide without prompting.
         let mut dirty_canvas = AppState::default();
-        dirty_canvas
-            .chat_ui
-            .canvas
-            .sync_session("ws:notes.md:gen1", 1, "before", true, false);
+        dirty_canvas.chat_ui.canvas.sync_session(
+            "ws:notes.md",
+            "ws:notes.md:gen1",
+            1,
+            "before",
+            "before",
+            true,
+            false,
+            false,
+        );
         dirty_canvas
             .chat_ui
             .canvas

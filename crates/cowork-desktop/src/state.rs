@@ -9148,20 +9148,23 @@ impl AppState {
                     id,
                     role: FeedMessageRole::User,
                     content,
-                    client_message_id: Some(c),
+                    client_message_id,
                     ..
                 } = item
                 {
                     let trimmed = content.trim().to_string();
                     let seen_count = rt_user_counts.entry(trimmed.clone()).or_insert(0);
                     *seen_count += 1;
-                    let snapshot_count = snapshot_user_counts.get(&trimmed).copied().unwrap_or(0);
-                    if id.starts_with("optimistic-")
-                        && !seen_ids.contains(id)
-                        && !seen_cids.contains(c)
-                        && *seen_count > snapshot_count
-                    {
-                        next_feed.push(item.clone());
+                    if let Some(c) = client_message_id {
+                        let snapshot_count =
+                            snapshot_user_counts.get(&trimmed).copied().unwrap_or(0);
+                        if id.starts_with("optimistic-")
+                            && !seen_ids.contains(id)
+                            && !seen_cids.contains(c)
+                            && *seen_count > snapshot_count
+                        {
+                            next_feed.push(item.clone());
+                        }
                     }
                 }
             }
@@ -15918,6 +15921,57 @@ mod tests {
                 status: ToolRunStatus::Declined,
                 ..
             })
+        ));
+
+        // Sending the exact same prompt a second time while an older snapshot (with only the
+        // first confirmed "Run pwd") arrives must keep the unpersisted second optimistic message.
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: Some("th-1".to_string()),
+            text: "Run pwd".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+        state.apply_thread_snapshot_response(
+            "ws-1",
+            &json!({
+                "coworkSnapshot": {
+                    "sessionId": "th-1",
+                    "lastEventSeq": 0,
+                    "feed": [
+                        {
+                            "id": "u-srv-1",
+                            "kind": "message",
+                            "role": "user",
+                            "ts": "2026-11-15T12:00:00Z",
+                            "text": "Run pwd"
+                        },
+                        {
+                            "id": "a-srv-1",
+                            "kind": "message",
+                            "role": "assistant",
+                            "ts": "2026-11-15T12:00:03Z",
+                            "text": "/tmp/demo"
+                        }
+                    ]
+                }
+            }),
+        );
+        let feed = &state.thread_runtime_by_id["th-1"].feed;
+        assert_eq!(
+            feed.len(),
+            3,
+            "repeat optimistic user prompt must be preserved"
+        );
+        assert!(matches!(
+            &feed[2],
+            FeedItem::Message {
+                id,
+                role: FeedMessageRole::User,
+                content,
+                client_message_id: Some(_),
+                ..
+            } if id.starts_with("optimistic-") && content == "Run pwd"
         ));
     }
 }

@@ -7,9 +7,11 @@ license-file.workspace = true
 [dependencies]
 anyhow.workspace = true
 base64 = "0.22"
+calamine.workspace = true
 chrono.workspace = true
 cowork-config.workspace = true
 cowork-protocol.workspace = true
+csv.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
 hex.workspace = true

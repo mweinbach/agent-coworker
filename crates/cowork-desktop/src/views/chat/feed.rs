@@ -3,17 +3,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rune::{El, GrowthSpec, ImageCache, ScrollSpec, Tx, col, el, row, text};
+use rune::{El, GrowthSpec, ImageCache, ScrollSpec, Tx, col, row};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, scroll_bar};
 
 use crate::state::{AppState, ChatInteraction, FeedItem, ThreadAgentSummary};
 use crate::theme::ThemeTokens;
 
+use super::activity::{ActivityCardContext, build_activity_group_card};
 use super::components::{
     day_separator_row, empty_feed_state, scroll_to_latest_pill, transcript_only_banner,
     working_placeholder_row,
 };
 use super::feed_row::{FeedRowContext, build_feed_row};
+use super::interaction::build_interaction_card;
 use super::model::{
     ChatRenderItem, build_chat_render_items, build_mention_catalog, day_bucket_key,
     format_day_separator, prepare_feed, select_feed_window, should_show_working_placeholder,
@@ -49,8 +51,6 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
     let total_items = prepared.len();
     let visible_count = s.chat_ui.visible_count_for(props.thread_key);
     let (visible_slice, hidden_count) = select_feed_window(&prepared, visible_count);
-
-    let _ = (props.interaction_errors, props.agents);
 
     if visible_slice.is_empty() && props.pending_interactions.is_empty() {
         let mut empty_col = col()
@@ -94,6 +94,16 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         catalog: &catalog,
         external_cache: props.external_cache.clone(),
         is_agent_viewer: props.is_agent_viewer,
+        copied_key,
+    };
+
+    let activity_ctx = ActivityCardContext {
+        thread_id: props.thread_key,
+        workspace_id: props.workspace_id,
+        workspace_path: props.workspace_path,
+        pending_interactions: props.pending_interactions,
+        agents: props.agents,
+        external_cache: props.external_cache.clone(),
         copied_key,
     };
 
@@ -159,24 +169,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
                 children.push(build_feed_row(s, k, t, item, &row_ctx));
             }
             ChatRenderItem::ActivityGroup(group) => {
-                // Full timeline card will replace this placeholder in Slice 3 (`activity.rs`).
-                let label = if group.is_live {
-                    group.current_action.clone()
-                } else {
-                    group.summary_label.clone()
-                };
-                children.push(
-                    row()
-                        .key(format!("group:{}", group.id))
-                        .w_full()
-                        .max_w(768.0)
-                        .px(12.0)
-                        .py(8.0)
-                        .radius(10.0)
-                        .fill(k.alpha(t.elevated_bg, 0.55))
-                        .border(1.0, t.border_muted)
-                        .child(text(label).font(k.ty.small_medium).color(t.text_muted)),
-                );
+                children.push(build_activity_group_card(s, k, t, group, &activity_ctx));
             }
         }
     }
@@ -185,9 +178,19 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         children.push(working_placeholder_row(k, t).key("working-placeholder"));
     }
 
-    // Pending `ask` / approval cards are mounted here in Slice 3 (`interaction.rs`).
-    for (idx, _interaction) in props.pending_interactions.iter().enumerate() {
-        children.push(el().key(format!("interaction:{idx}")).w_full().max_w(768.0));
+    let total_interactions = props.pending_interactions.len();
+    for (idx, interaction) in props.pending_interactions.iter().enumerate() {
+        children.push(build_interaction_card(
+            s,
+            k,
+            t,
+            props.workspace_id,
+            props.thread_key,
+            interaction,
+            idx + 1,
+            total_interactions,
+            props.interaction_errors,
+        ));
     }
 
     let tk_at = props.thread_key.to_string();

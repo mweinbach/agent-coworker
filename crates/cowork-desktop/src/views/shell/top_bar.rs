@@ -131,14 +131,7 @@ pub fn build_toolbar(
 
     let mut toolbar = Toolbar::new();
     if narrow {
-        if chrome.leading > 0.0 {
-            toolbar = toolbar.leading(
-                el().key("topbar-leading-reserve")
-                    .w(chrome.leading)
-                    .h(1.0)
-                    .a11y_hidden(),
-            );
-        }
+        // `SplitView` already pads leading toolbar items by `titlebar_inset` when the sidebar is collapsed.
         let drawer_open = s.shell_ui.left_overlay_open;
         let narrow_sidebar_btn = IconButton::new(&shell::SIDEBAR)
             .variant(IconButtonVariant::GhostMuted)

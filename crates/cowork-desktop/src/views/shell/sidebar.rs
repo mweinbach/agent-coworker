@@ -11,7 +11,7 @@ use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem, 
 use crate::actions::{Action, ChatAction, NativeAction, NavAction, ShellAction, SidebarSectionKey};
 use crate::router::{SettingsPageId, ViewId};
 use crate::state::{AppState, ThreadRecord, WorkspaceRecord};
-use crate::theme::ThemeTokens;
+use crate::theme::{ThemeTokens, contrast_ratio};
 use crate::views::shell::helpers::{
     filtered_threads, format_relative_age, pending_input_count, split_workspaces,
     thread_row_status, workspace_badge_color,
@@ -503,7 +503,7 @@ fn build_workspaces_section(
             .collect();
 
         let ws_row = SidebarRow::new(ws.name.clone())
-            .avatar(workspace_avatar(&ws.name, badge_col, k))
+            .avatar(workspace_avatar(&ws.name, badge_col, k, t))
             .detail(ws_threads.len().to_string())
             .selected(is_active_ws && active_thread_id.is_none())
             .trailing(
@@ -608,7 +608,17 @@ pub(crate) fn reorder_project_workspaces(s: &AppState, from: usize, to: usize) -
     project_ids
 }
 
-fn workspace_avatar(name: &str, fill: Color, k: &Kit) -> El {
+/// Selects whichever foreground (white or theme dark ink) maximizes contrast against a badge fill.
+fn workspace_avatar_fg(fill: Color, t: &ThemeTokens) -> Color {
+    let dark_ink = if t.dark { t.app_bg } else { t.text_base };
+    if contrast_ratio(Color::WHITE, fill) >= contrast_ratio(dark_ink, fill) {
+        Color::WHITE
+    } else {
+        dark_ink
+    }
+}
+
+fn workspace_avatar(name: &str, fill: Color, k: &Kit, t: &ThemeTokens) -> El {
     let ch = name
         .chars()
         .find(|c| !c.is_whitespace())
@@ -626,7 +636,7 @@ fn workspace_avatar(name: &str, fill: Color, k: &Kit) -> El {
                     size: 10.0,
                     ..k.ty.small_medium
                 })
-                .color(Color::WHITE),
+                .color(workspace_avatar_fg(fill, t)),
         )
 }
 
@@ -688,6 +698,7 @@ fn build_thread_row(
                 &ws.name,
                 workspace_badge_color(&ws.id, t),
                 k,
+                t,
             ));
         } else {
             r = r.icon(&icons::PIN);
@@ -814,5 +825,21 @@ mod tests {
 
         let next = reorder_project_workspaces(&s, 0, 1);
         assert_eq!(next, vec!["ws-b", "ws-a", "oneoff"]);
+    }
+
+    #[test]
+    fn workspace_avatar_fg_picks_contrast_safe_ink_across_badges() {
+        for dark in [false, true] {
+            let tok = crate::theme::tokens(dark);
+            for (idx, badge) in tok.search_badges.iter().enumerate() {
+                let fg = workspace_avatar_fg(*badge, &tok);
+                let chosen = contrast_ratio(fg, *badge);
+                let white_only = contrast_ratio(Color::WHITE, *badge);
+                assert!(
+                    chosen >= white_only && chosen >= 3.9,
+                    "badge[{idx}] dark={dark} chosen contrast {chosen:.2} (white={white_only:.2})"
+                );
+            }
+        }
     }
 }

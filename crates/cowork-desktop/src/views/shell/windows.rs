@@ -100,12 +100,8 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         .gap(8.0)
         .child({
             let ws_id = active_ws.map(|w| w.id.clone());
-            let mut primary_kit = k.clone();
-            primary_kit.c.bg_icon_button_contrast = t.accent;
-            primary_kit.c.submit_fg = t.primary_fg;
-            primary_kit.c.submit_icon = t.primary_fg;
             Button::new("New chat")
-                .variant(ButtonVariant::Submit)
+                .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Small)
                 .icon(&icons::PLUS)
                 .on_press_tx(move |s: &mut AppState, tx| {
@@ -115,7 +111,7 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
                     }));
                     tx.close_window();
                 })
-                .build(&primary_kit)
+                .build(k)
         })
         .child(
             Button::new("Quick Chat")

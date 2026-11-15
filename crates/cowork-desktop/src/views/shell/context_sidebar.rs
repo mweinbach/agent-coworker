@@ -1133,10 +1133,11 @@ mod tests {
             s_menu,
             |state: &AppState, cx: &mut rune::Cx<AppState>| {
                 let dark = state.effective_dark(cx.system_dark());
-                let (kit, tokens) = crate::theme::build_kit(
+                let (kit, tokens) = crate::theme::build_kit_with_accent(
                     dark,
                     state.desktop_settings.reduced_transparency,
                     state.desktop_settings.high_contrast,
+                    state.desktop_settings.accent_palette,
                 );
                 let mut layer = Vec::new();
                 let body = build_context_sidebar(state, &kit, &tokens, &mut layer);

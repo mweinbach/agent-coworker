@@ -801,10 +801,11 @@ mod tests {
         };
         fn notice_view(state: &AppState, cx: &mut rune::Cx<AppState>) -> El {
             let dark = state.effective_dark(cx.system_dark());
-            let (kit, tok) = crate::theme::build_kit(
+            let (kit, tok) = crate::theme::build_kit_with_accent(
                 dark,
                 state.desktop_settings.reduced_transparency,
                 state.desktop_settings.high_contrast,
+                state.desktop_settings.accent_palette,
             );
             let notice = build_creation_readiness_notice(state, Some("ws-1".into()), &kit, &tok)
                 .expect("notice should render when preflight is not ready");
@@ -841,10 +842,11 @@ mod tests {
 
         fn primary_view(state: &AppState, cx: &mut rune::Cx<AppState>) -> El {
             let dark = state.effective_dark(cx.system_dark());
-            let (kit, tok) = crate::theme::build_kit(
+            let (kit, tok) = crate::theme::build_kit_with_accent(
                 dark,
                 state.desktop_settings.reduced_transparency,
                 state.desktop_settings.high_contrast,
+                state.desktop_settings.accent_palette,
             );
             build_primary_content(state, &kit, &tok, el().w_full().h_full(), false)
         }

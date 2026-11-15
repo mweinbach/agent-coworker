@@ -4,9 +4,11 @@
 //! `src/ui/markdown/`, `src/ui/attachments/`, and `src/ui/AgentRunViewer.tsx`.
 
 pub mod activity;
+pub mod agent_run_viewer;
 pub mod attachments;
 pub mod components;
 pub mod composer;
+pub mod dialogs;
 pub mod feed;
 pub mod feed_row;
 pub mod icons;
@@ -18,19 +20,21 @@ pub mod state;
 
 pub use state::ChatUiState;
 
-use rune::{Cx, col};
+use rune::{Cx, col, row};
 use rune_kit::Kit;
 
 use crate::state::{AppState, ServerLifecycleState, ThreadStatus};
 use crate::theme;
 use crate::views::SubviewOutput;
 
+use self::agent_run_viewer::build_agent_run_drawer;
 use self::components::{locked_task_bar, read_only_notice_bar};
+use self::dialogs::{build_cancel_subagents_dialog, build_transcript_recovery_banner};
 use self::feed::{ChatFeedProps, build_chat_feed};
 use self::feed_row::render_active_feed_popovers;
 use self::model::workspace_is_reconnecting;
 
-/// Renders the active chat landing view or thread transcript + composer + chat overlays.
+/// Renders the active chat landing view or thread transcript + composer + subagent drawer + overlays.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
     let dark = s.effective_dark(cx.system_dark());
     let t = theme::resolve_tokens(
@@ -50,10 +54,15 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
         let reconnecting = workspace_is_reconnecting(ws_rt);
         let thread_busy = rt.is_some_and(|r| r.streaming || r.active_turn_id.is_some());
 
-        let mut root = col().key("chat-view").w_full().grow(1.0).min_h(0.0);
+        let mut main_col = col()
+            .key("chat-main")
+            .w_full()
+            .grow(1.0)
+            .min_w(0.0)
+            .min_h(0.0);
 
         if let Some(notice) = rt.and_then(|r| r.read_only_notice.as_ref()) {
-            root = root.child(read_only_notice_bar(
+            main_col = main_col.child(read_only_notice_bar(
                 k,
                 &t,
                 &notice.title,
@@ -88,23 +97,44 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
                 frame_key: "chat-feed-frame",
             },
         );
-        root = root.child(feed_el);
+
+        let mut feed_wrap = col()
+            .key("chat-feed-surface")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .child(feed_el);
+
+        if let Some(failure) = rt.and_then(|r| r.transcript_delivery_failure.as_ref()) {
+            feed_wrap =
+                feed_wrap.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
+        }
+        main_col = main_col.child(feed_wrap);
 
         if let Some(lock) = rt
             .and_then(|r| r.source_task.as_ref())
             .filter(|l| l.read_only)
         {
-            root = root.child(locked_task_bar(
+            main_col = main_col.child(locked_task_bar(
                 k,
                 &t,
                 lock.task_id.clone(),
                 lock.task_title.clone(),
             ));
         } else {
-            root = root.child(composer::build_composer(s, k, &t, &mut overlays, false));
+            main_col = main_col.child(composer::build_composer(s, k, &t, &mut overlays, false));
         }
 
-        root
+        let mut split = row()
+            .key("chat-view")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .child(main_col);
+        if let Some(drawer) = build_agent_run_drawer(s, k, &t) {
+            split = split.child(drawer);
+        }
+        split
     } else {
         col()
             .key("chat-view")
@@ -114,6 +144,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .child(landing::build_landing_view(s, k, &t, &mut overlays))
     };
 
+    build_cancel_subagents_dialog(s, k, &mut overlays);
     render_active_feed_popovers(s, k, &t, &mut overlays);
 
     SubviewOutput { content, overlays }

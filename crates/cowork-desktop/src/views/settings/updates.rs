@@ -97,7 +97,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     }
 
     let current_version = if updater.current_version.trim().is_empty() {
-        env!("CARGO_PKG_VERSION")
+        crate::native::resolve_desktop_app_version()
     } else {
         updater.current_version.trim()
     };

@@ -1309,4 +1309,71 @@ fn updates_page_renders_disabled_status_and_disables_check_button() {
             .any(|cmd| matches!(cmd, NativeCommand::CheckForUpdates)),
         "interactive Check for updates button must emit NativeCommand::CheckForUpdates"
     );
+
+    // 4) Empty current_version on Updates and Developer summary fall back to resolve_desktop_app_version().
+    let expected_version = format!(
+        "Cowork Desktop v{}",
+        crate::native::resolve_desktop_app_version()
+    );
+    let mut updates_fallback_state = AppState {
+        scene_mode: true,
+        is_packaged: true,
+        ..Default::default()
+    };
+    updates_fallback_state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Updates,
+    ))));
+    let mut rt_updates_fallback = rune::Runtime::new(
+        updates_fallback_state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_updates_fallback.frame(0.0);
+    assert!(
+        has_text(&rt_updates_fallback, &expected_version),
+        "Settings -> Updates empty current_version must fall back to {expected_version}"
+    );
+
+    let mut dev_summary_state = AppState {
+        scene_mode: true,
+        ..Default::default()
+    };
+    dev_summary_state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Developer,
+    ))));
+    let mut rt_dev_summary = rune::Runtime::new(
+        dev_summary_state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_dev_summary.frame(0.0);
+    let copy_btn = rt_dev_summary
+        .elements()
+        .into_iter()
+        .find(|e| e.role == "button" && e.label.as_deref() == Some("Copy Diagnostic Summary"))
+        .expect("Copy Diagnostic Summary button must render on Settings -> Developer");
+    let [dx, dy] = [
+        copy_btn.rect[0] + copy_btn.rect[2] * 0.5,
+        copy_btn.rect[1] + copy_btn.rect[3] * 0.5,
+    ];
+    rt_dev_summary.pointer_move(dx, dy);
+    rt_dev_summary.pointer_down(dx, dy);
+    rt_dev_summary.pointer_up(dx, dy);
+    rt_dev_summary.frame(0.0);
+    let copied = rt_dev_summary
+        .state
+        .services
+        .emitted_native_commands
+        .iter()
+        .find_map(|cmd| match cmd {
+            NativeCommand::CopyText(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .expect("clicking Copy Diagnostic Summary must emit NativeCommand::CopyText");
+    assert!(
+        copied.starts_with(&expected_version),
+        "Diagnostic summary `{copied}` must start with {expected_version}"
+    );
 }

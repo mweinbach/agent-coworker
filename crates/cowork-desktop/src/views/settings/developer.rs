@@ -134,7 +134,7 @@ fn format_onboarding_status(s: &AppState) -> (String, StatusTone) {
 fn build_diagnostic_summary_text(s: &AppState, runtime_summary: &str) -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::native::resolve_desktop_app_version();
     let bundle_path = s
         .settings_ui
         .last_diagnostics_bundle_path

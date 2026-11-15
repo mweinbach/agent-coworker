@@ -51,7 +51,7 @@ pub fn markdown_style(
     } else {
         TextStyle {
             line_height: 22.4,
-            ..t.body
+            ..t.body_lg
         }
     };
     let h1 = TextStyle {
@@ -172,10 +172,11 @@ fn strip_line_col_suffix(token: &str) -> (&str, Option<&str>) {
     (token, None)
 }
 
-/// Rewrites `[label](url)` links that match `citations` into `cowork-citation:<index>` pill targets
-/// while leaving fenced code blocks untouched.
+/// Rewrites `[label](url)` links matching `citations` into `cowork-citation:<index>` pill targets
+/// and strips unrendered provider citation PUA tokens (`\u{e200}cite...\u{e201}`) outside fences.
 pub fn normalize_citation_links(src: &str, citations: &[CitationSource]) -> String {
-    if citations.is_empty() || !src.contains("](") {
+    let has_pua_cite = src.contains('\u{e200}');
+    if !has_pua_cite && (citations.is_empty() || !src.contains("](")) {
         return src.to_string();
     }
 
@@ -192,9 +193,39 @@ pub fn normalize_citation_links(src: &str, citations: &[CitationSource]) -> Stri
             out.push_str(segment);
             continue;
         }
-        out.push_str(&rewrite_line_citations(segment, citations));
+        let cleaned = if has_pua_cite {
+            strip_pua_citation_tokens(segment)
+        } else {
+            segment.to_string()
+        };
+        if !citations.is_empty() && cleaned.contains("](") {
+            out.push_str(&rewrite_line_citations(&cleaned, citations));
+        } else {
+            out.push_str(&cleaned);
+        }
     }
     out
+}
+
+fn strip_pua_citation_tokens(segment: &str) -> String {
+    let mut result = String::with_capacity(segment.len());
+    let mut rest = segment;
+    while let Some(start) = rest.find('\u{e200}') {
+        let after_marker = start + '\u{e200}'.len_utf8();
+        if let Some(end_rel) = rest[after_marker..].find('\u{e201}')
+            && rest[after_marker..].starts_with("cite")
+        {
+            let before = &rest[..start];
+            result.push_str(before.trim_end_matches([' ', '\t']));
+            let after = after_marker + end_rel + '\u{e201}'.len_utf8();
+            rest = &rest[after..];
+        } else {
+            result.push_str(&rest[..after_marker]);
+            rest = &rest[after_marker..];
+        }
+    }
+    result.push_str(rest);
+    result
 }
 
 fn rewrite_line_citations(line: &str, citations: &[CitationSource]) -> String {

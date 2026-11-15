@@ -180,6 +180,60 @@ pub static CORNER_DOWN_RIGHT: Icon = stroke_icon!(
     r#"<polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>"#
 );
 
+#[allow(dead_code)]
+pub static LOCK: Icon = stroke_icon!(
+    "chat-lock",
+    r#"<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#
+);
+
+#[allow(dead_code)]
+pub static TRASH: Icon = stroke_icon!(
+    "chat-trash",
+    r#"<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>"#
+);
+
+#[allow(dead_code)]
+pub static CLOCK: Icon = stroke_icon!(
+    "chat-clock",
+    r#"<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>"#
+);
+
+#[allow(dead_code)]
+pub static CHEVRON_RIGHT: Icon = stroke_icon!("chat-chevron-right", r#"<path d="m9 18 6-6-6-6"/>"#);
+
+#[allow(dead_code)]
+pub static CHEVRON_DOWN: Icon = stroke_icon!("chat-chevron-down", r#"<path d="m6 9 6 6 6-6"/>"#);
+
+#[allow(dead_code)]
+pub static MESSAGE_SQUARE: Icon = stroke_icon!(
+    "chat-message-square",
+    r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#
+);
+
+#[allow(dead_code)]
+pub static CHECK_CIRCLE: Icon = stroke_icon!(
+    "chat-check-circle",
+    r#"<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>"#
+);
+
+#[allow(dead_code)]
+pub static CIRCLE_DASHED: Icon = stroke_icon!(
+    "chat-circle-dashed",
+    r#"<path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/>"#
+);
+
+#[allow(dead_code)]
+pub static X_CIRCLE: Icon = stroke_icon!(
+    "chat-x-circle",
+    r#"<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>"#
+);
+
+#[allow(dead_code)]
+pub static PENCIL: Icon = stroke_icon!(
+    "chat-pencil",
+    r#"<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>"#
+);
+
 /// Maps a tool category into its matching Lucide timeline icon.
 #[allow(dead_code)]
 pub fn tool_icon(category: ToolIconCategory) -> &'static Icon {

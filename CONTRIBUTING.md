@@ -51,6 +51,7 @@ Key modules:
 | `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery. |
 | `src/shared/` | Pure TypeScript client/UI contracts and schemas. |
 | `apps/desktop/` | Electron desktop app. |
+| `crates/cowork-desktop/` | Native Rune desktop app (`crates/cowork-desktop/README.md`). |
 | `crates/cowork-cli/` | CLI REPL client. |
 
 ## Directory Structure
@@ -70,6 +71,7 @@ crates/
   cowork-harness/       # Agent turn loop, subagents, tasks, extensions, OOXML, backups
   cowork-server/        # Axum WebSocket/HTTP server and sidecar binary
   cowork-cli/           # CLI REPL binary
+  cowork-desktop/       # Native Rust desktop app on Rune
 src/
   types.ts              # Shared TypeScript types
   client/               # WebSocket JSON-RPC client (JsonRpcSocket)
@@ -232,4 +234,5 @@ with the runtime condition it misses; do not add generic comments merely to sile
 - [`docs/websocket-protocol.md`](docs/websocket-protocol.md) -- WebSocket message format and flow
 - [`docs/harness/index.md`](docs/harness/index.md) -- Harness docs map
 - [`docs/session-storage-architecture.md`](docs/session-storage-architecture.md) -- Session persistence design
+- [`crates/cowork-desktop/README.md`](crates/cowork-desktop/README.md) -- Native Rune desktop app quickstart, headless scenes, and module ownership
 - [`AGENTS.md`](AGENTS.md) -- Agent onboarding doc; index of `agent_docs/` task-specific guides

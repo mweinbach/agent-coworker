@@ -587,14 +587,26 @@ pub fn run() {
     let quick_chat_app = App::new(app_spec_for_mode(WindowMode::QuickChat))
         .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
         .windowless()
-        .turn_scope(enter_shared_turn, leave_shared_turn);
+        .turn_scope(enter_shared_turn, leave_shared_turn)
+        .on_window(|window_handle| {
+            native::on_window_opened(WINDOW_QUICK_CHAT, window_handle);
+        })
+        .on_close(|state, tx| {
+            native::on_window_close(WINDOW_QUICK_CHAT, state, tx);
+        });
     let (quick_chat_handle, _) =
         app.window(WindowSpec::from_app(WINDOW_QUICK_CHAT, quick_chat_app));
 
     let utility_app = App::new(app_spec_for_mode(WindowMode::Utility))
         .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
         .windowless()
-        .turn_scope(enter_shared_turn, leave_shared_turn);
+        .turn_scope(enter_shared_turn, leave_shared_turn)
+        .on_window(|window_handle| {
+            native::on_window_opened(WINDOW_UTILITY, window_handle);
+        })
+        .on_close(|state, tx| {
+            native::on_window_close(WINDOW_UTILITY, state, tx);
+        });
     let (utility_handle, _) = app.window(WindowSpec::from_app(WINDOW_UTILITY, utility_app));
 
     WINDOW_HUB.with(|cell| {

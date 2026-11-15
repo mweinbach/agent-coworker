@@ -336,7 +336,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .build(k),
     );
 
-    let appearance_section = Section::new()
+    let mut appearance_section = Section::new()
         .title("Appearance & motion")
         .description("Customize window appearance, accent palette, contrast, and motion across desktop surfaces.")
         .child(
@@ -350,7 +350,28 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .description(ds.accent_palette.description())
                 .control(accent_picker)
                 .build(k, t),
-        )
+        );
+
+    let platform = s.effective_desktop_platform();
+    if platform.is_linux() || platform.is_windows() {
+        appearance_section = appearance_section.child(
+            SettingsRow::new("Show menu bar")
+                .description("When off, press Alt or F10 to show it.")
+                .control(mini_switch(
+                    ds.show_menu_bar,
+                    "Show menu bar",
+                    false,
+                    |s: &mut AppState| {
+                        let next = !s.desktop_settings.show_menu_bar;
+                        s.dispatch(Action::Shell(ShellAction::SetShowMenuBar(next)));
+                    },
+                    k,
+                ))
+                .build(k, t),
+        );
+    }
+
+    let appearance_section = appearance_section
         .child(
             SettingsRow::new("Reduce transparency")
                 .description(

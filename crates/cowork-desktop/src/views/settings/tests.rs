@@ -27,9 +27,9 @@ use super::usage::{aggregate_usage, format_estimated_cost, format_token_count};
 use crate::actions::{Action, NativeCommand, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
 use crate::state::{
-    AppState, McpServerSummary, PrivacyTelemetrySettings, ProviderModelSummary,
-    ProviderStatusSummary, ProviderSummary, ThreadRecord, ThreadRuntime, UpdaterState,
-    UsageSummary, WorkspaceRecord,
+    AppState, DesktopPlatformOverride, McpServerSummary, PrivacyTelemetrySettings,
+    ProviderModelSummary, ProviderStatusSummary, ProviderSummary, ThreadRecord, ThreadRuntime,
+    UpdaterState, UsageSummary, WorkspaceRecord,
 };
 
 #[test]
@@ -1611,5 +1611,92 @@ fn build_layout_and_desktop_accent_picker_behave_cleanly() {
                 "Search tab must use sentence-case heading `Tool providers`"
             );
         }
+    }
+}
+
+#[test]
+fn desktop_show_menu_bar_toggle_visibility_and_action() {
+    fn render_desktop(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
+        let (kit, tok) = crate::theme::build_kit_with_accent(
+            false,
+            false,
+            false,
+            s.desktop_settings.accent_palette,
+        );
+        super::build_layout(s, cx, &kit, &tok).main
+    }
+    let make_desktop_state = |platform: DesktopPlatformOverride| {
+        let mut s = AppState {
+            scene_mode: true,
+            menu_platform_override: Some(platform),
+            ..Default::default()
+        };
+        s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Desktop,
+        ))));
+        s
+    };
+
+    // Hidden on macOS.
+    let mut rt_mac = rune::Runtime::new(
+        make_desktop_state(DesktopPlatformOverride::MacOs),
+        render_desktop,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_mac.frame(0.0);
+    assert!(
+        !rt_mac.elements().iter().any(|e| {
+            e.label.as_deref() == Some("Show menu bar")
+                || e.text.as_deref() == Some("Show menu bar")
+                || e.text.as_deref() == Some("When off, press Alt or F10 to show it.")
+        }),
+        "macOS Desktop settings must not show the Linux/Windows menu bar toggle"
+    );
+
+    // Visible and interactive on Linux and Windows.
+    for platform in [
+        DesktopPlatformOverride::Linux,
+        DesktopPlatformOverride::Windows,
+    ] {
+        let mut rt = rune::Runtime::new(
+            make_desktop_state(platform),
+            render_desktop,
+            (1100.0, 900.0),
+            rune::Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let els = rt.elements();
+        assert!(
+            els.iter()
+                .any(|e| e.text.as_deref() == Some("When off, press Alt or F10 to show it.")),
+            "{platform:?} Desktop settings must render the Show menu bar hint"
+        );
+        let switch = els
+            .iter()
+            .find(|e| e.focusable && e.label.as_deref() == Some("Show menu bar"))
+            .expect("Show menu bar switch must be present on Linux/Windows");
+        let [cx, cy] = [
+            switch.rect[0] + switch.rect[2] * 0.5,
+            switch.rect[1] + switch.rect[3] * 0.5,
+        ];
+
+        assert!(rt.state.desktop_settings.show_menu_bar);
+        rt.pointer_move(cx, cy);
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.0);
+        assert!(
+            !rt.state.desktop_settings.show_menu_bar,
+            "{platform:?} clicking Show menu bar must disable desktop_settings.show_menu_bar"
+        );
+
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.0);
+        assert!(
+            rt.state.desktop_settings.show_menu_bar,
+            "{platform:?} clicking Show menu bar again must re-enable desktop_settings.show_menu_bar"
+        );
     }
 }

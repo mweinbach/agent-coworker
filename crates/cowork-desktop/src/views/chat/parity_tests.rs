@@ -13,7 +13,7 @@ use crate::state::{
     ThreadAgentSummary, ThreadRecord, ThreadRuntime, ThreadStatus, TodoItemView, ToolRunStatus,
     TranscriptDeliveryFailure, WorkspaceRecord, WorkspaceRuntime,
 };
-use crate::theme::{self, ThemePreference};
+use crate::theme::{self, AccentPalette, ThemePreference};
 use crate::views::chat;
 use crate::views::chat::state::{CanvasFixtureState, CanvasLifecycleKind, CanvasTab};
 use crate::ws::{WsCommand, WsConnectionState};
@@ -22,10 +22,11 @@ const SNAP_VIEWPORT: (f32, f32) = (1280.0, 820.0);
 
 fn test_chat_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
     let dark = state.effective_dark(cx.system_dark());
-    let (kit, tokens) = theme::build_kit(
+    let (kit, tokens) = theme::build_kit_with_accent(
         dark,
         state.desktop_settings.reduced_transparency,
         state.desktop_settings.high_contrast,
+        state.desktop_settings.accent_palette,
     );
     cx.foreground(tokens.text_base);
     cx.focus_ring(2.0, 2.5, tokens.focus_ring);
@@ -56,7 +57,12 @@ fn render_offscreen_rgba(rt: &mut Runtime<AppState>, dark: bool) -> Vec<u8> {
         &rt.instances,
         (dw, dh),
     );
-    let tokens = theme::resolve_tokens(dark, false, false);
+    let tokens = theme::resolve_tokens_with_accent(
+        dark,
+        rt.state.desktop_settings.reduced_transparency,
+        rt.state.desktop_settings.high_contrast,
+        rt.state.desktop_settings.accent_palette,
+    );
     let clear = [
         tokens.panel_bg.r,
         tokens.panel_bg.g,
@@ -1068,10 +1074,11 @@ fn review_72_and_79_ask_preservation_composer_locks_and_overlay_viewer() {
 
 fn test_canvas_docked_root(state: &AppState, cx: &mut Cx<AppState>, right_width: f32) -> El {
     let dark = state.effective_dark(cx.system_dark());
-    let (kit, tokens) = theme::build_kit(
+    let (kit, tokens) = theme::build_kit_with_accent(
         dark,
         state.desktop_settings.reduced_transparency,
         state.desktop_settings.high_contrast,
+        state.desktop_settings.accent_palette,
     );
     cx.foreground(tokens.text_base);
     cx.focus_ring(2.0, 2.5, tokens.focus_ring);
@@ -2246,10 +2253,11 @@ fn mixed_plain_and_inline_math_list_items_align_horizontally() {
 fn quick_chat_landing_does_not_clip_heading_or_lose_desktop_centering() {
     fn landing_with_header(s: &AppState, cx: &mut Cx<AppState>) -> El {
         let dark = s.effective_dark(cx.system_dark());
-        let (kit, tokens) = theme::build_kit(
+        let (kit, tokens) = theme::build_kit_with_accent(
             dark,
             s.desktop_settings.reduced_transparency,
             s.desktop_settings.high_contrast,
+            s.desktop_settings.accent_palette,
         );
         cx.foreground(tokens.text_base);
         let out = chat::view(s, cx, &kit);
@@ -2444,6 +2452,83 @@ fn approval_and_escalation_code_blocks_wrap_inside_padded_rounded_frame() {
         if vp == SNAP_VIEWPORT {
             let rgba = render_offscreen_rgba(&mut rt, false);
             maybe_save_snap(name, &rgba, 2.0);
+        }
+    }
+}
+
+#[test]
+fn chat_and_canvas_views_respect_selected_accent_palette() {
+    fn canvas_only_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+        let dark = state.effective_dark(cx.system_dark());
+        let (kit, tokens) = theme::build_kit_with_accent(
+            dark,
+            state.desktop_settings.reduced_transparency,
+            state.desktop_settings.high_contrast,
+            state.desktop_settings.accent_palette,
+        );
+        cx.foreground(tokens.text_base);
+        cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+        cx.web_focus();
+        let canvas_out = chat::canvas_pane(state, cx, &kit).expect("canvas pane expected");
+        el().w_full()
+            .h_full()
+            .fill(tokens.panel_bg)
+            .child(rune_kit::root(canvas_out.content, canvas_out.overlays))
+    }
+
+    for dark in [false, true] {
+        let mut chat_renders: Vec<(AccentPalette, Vec<u8>)> = Vec::new();
+        let mut canvas_renders: Vec<(AccentPalette, Vec<u8>)> = Vec::new();
+
+        for palette in AccentPalette::ALL {
+            let mut s = build_populated_thread_state(dark);
+            s.desktop_settings.accent_palette = palette;
+            s.composer_edit = TextEdit::new("Check accent palette contrast");
+
+            let mut rt_chat = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 2.0));
+            rt_chat.frame(0.0);
+            let chat_rgba = render_offscreen_rgba(&mut rt_chat, dark);
+            chat_renders.push((palette, chat_rgba));
+
+            let mut s_canvas = build_populated_thread_state(dark);
+            s_canvas.desktop_settings.accent_palette = palette;
+            s_canvas.feature_flags.insert("canvas".to_string(), true);
+            s_canvas.chat_ui.canvas.prompt_edit = TextEdit::new("Tighten intro");
+            s_canvas.active_file_preview = Some(FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "docs/accent.md".into(),
+                title: "accent.md".into(),
+                content: Some("# Accent Spec\n\nSee [tokens](https://example.com).".into()),
+                is_binary: false,
+                is_markdown: true,
+                truncated: false,
+                error: None,
+                ..Default::default()
+            });
+            let mut rt_canvas = Runtime::new(
+                s_canvas,
+                canvas_only_root,
+                SNAP_VIEWPORT,
+                Env::new(true, 2.0),
+            );
+            rt_canvas.frame(0.0);
+            let canvas_rgba = render_offscreen_rgba(&mut rt_canvas, dark);
+            canvas_renders.push((palette, canvas_rgba));
+        }
+
+        for i in 0..chat_renders.len() {
+            for j in (i + 1)..chat_renders.len() {
+                assert_ne!(
+                    chat_renders[i].1, chat_renders[j].1,
+                    "dark={dark}: chat::view pixels did not change between {:?} and {:?}",
+                    chat_renders[i].0, chat_renders[j].0
+                );
+                assert_ne!(
+                    canvas_renders[i].1, canvas_renders[j].1,
+                    "dark={dark}: chat::canvas_pane pixels did not change between {:?} and {:?}",
+                    canvas_renders[i].0, canvas_renders[j].0
+                );
+            }
         }
     }
 }

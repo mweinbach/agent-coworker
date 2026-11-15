@@ -95,6 +95,7 @@ pub enum ShellAction {
     OpenFilePreview(FilePreviewState),
     CloseFilePreview,
     SetLandingWorkspace(Option<String>),
+    SelectLandingQuickChat,
     RequestExternalUrl(String),
     ConfirmExternalUrl,
     DismissExternalUrl,
@@ -456,6 +457,10 @@ pub enum SettingsAction {
         workspace_id: String,
         target_session_id: String,
         checkpoint_id: String,
+    },
+    DeleteBackupEntry {
+        workspace_id: String,
+        target_session_id: String,
     },
     PreviewConversationImport {
         workspace_id: String,

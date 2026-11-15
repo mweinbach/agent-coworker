@@ -1636,6 +1636,8 @@ fn build_document_tab(
                     },
                 )),
                 on_citation_click: None,
+                math_waker: s.services.waker.clone(),
+                math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
             },
         )
     } else {

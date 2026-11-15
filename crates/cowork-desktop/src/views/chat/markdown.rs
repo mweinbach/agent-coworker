@@ -14,6 +14,10 @@ use crate::theme::ThemeTokens;
 
 use super::attachments::{decode_image_from_uri, resolve_safe_local_path};
 use super::icons;
+use super::math::{
+    MathBlockSegment, MathChunk, render_display_math_block, render_inline_math_paragraph,
+    render_streaming_math_block, split_inline_math_chunks, split_math_blocks,
+};
 use super::model::display_domain;
 use super::state::CitationSource;
 
@@ -34,6 +38,10 @@ pub struct MarkdownHooks {
     pub on_copy: Option<CopyHandler>,
     /// Called when clicking a `cowork-citation:<index>` link chip.
     pub on_citation_click: Option<CitationClickHandler>,
+    /// Main-loop waker invoked when background KaTeX rasterization finishes.
+    pub math_waker: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Effective oversampling scale factor (e.g. `(2.0 * ui_scale).clamp(2.0, 4.0)`).
+    pub math_scale: Option<f32>,
 }
 
 /// Derives `MarkdownStyle` aligned with cowork's Electron theme tokens and type scale.
@@ -289,6 +297,134 @@ pub fn desktop_markdown(
     hooks: MarkdownHooks,
 ) -> El {
     let normalized = normalize_citation_links(src, citations);
+    if normalized.contains("$$") {
+        let block_segments = split_math_blocks(&normalized, streaming);
+        let fast_plain = matches!(
+            block_segments.as_slice(),
+            [MathBlockSegment::Markdown(md)]
+                if matches!(
+                    split_inline_math_chunks(md, streaming).as_slice(),
+                    [MathChunk::Markdown(inner)] if inner == md
+                )
+        );
+        if !fast_plain {
+            let ws_id_cb = workspace_id.map(str::to_owned);
+            let ws_path_cb = workspace_path.map(str::to_owned);
+            let on_cit_cb = hooks.on_citation_click.clone();
+            let on_link = move |s: &mut AppState, url: String, tx: &mut Tx| {
+                dispatch_link_action(
+                    s,
+                    &url,
+                    ws_id_cb.as_deref(),
+                    ws_path_cb.as_deref(),
+                    on_cit_cb.as_deref(),
+                    Some(tx),
+                );
+            };
+            let mut children = Vec::new();
+            for (b_idx, block) in block_segments.into_iter().enumerate() {
+                match block {
+                    MathBlockSegment::DisplayMath(tex) => {
+                        children.push(render_display_math_block(
+                            k,
+                            t,
+                            &tex,
+                            compact,
+                            hooks.math_scale,
+                            hooks.math_waker.as_ref(),
+                            &format!("{key_prefix}:math:{b_idx}"),
+                        ));
+                    }
+                    MathBlockSegment::StreamingMath(tex) => {
+                        children.push(render_streaming_math_block(
+                            k,
+                            t,
+                            &tex,
+                            &format!("{key_prefix}:smath:{b_idx}"),
+                        ));
+                    }
+                    MathBlockSegment::Markdown(md_chunk) => {
+                        for (c_idx, chunk) in split_inline_math_chunks(&md_chunk, streaming)
+                            .into_iter()
+                            .enumerate()
+                        {
+                            match chunk {
+                                MathChunk::Markdown(sub_md) => {
+                                    if sub_md.trim().is_empty() {
+                                        continue;
+                                    }
+                                    children.push(desktop_markdown_chunk(
+                                        k,
+                                        t,
+                                        sub_md,
+                                        &format!("{key_prefix}:mc:{b_idx}:{c_idx}"),
+                                        compact,
+                                        streaming,
+                                        reduce_motion,
+                                        workspace_id,
+                                        workspace_path,
+                                        citations,
+                                        external_cache.clone(),
+                                        &hooks,
+                                    ));
+                                }
+                                MathChunk::InlineMathParagraph { kind, spans } => {
+                                    children.push(render_inline_math_paragraph(
+                                        k,
+                                        t,
+                                        &kind,
+                                        &spans,
+                                        compact,
+                                        hooks.math_scale,
+                                        hooks.math_waker.as_ref(),
+                                        &format!("{key_prefix}:imp:{b_idx}:{c_idx}"),
+                                        &on_link,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return col()
+                .key(format!("{key_prefix}:math-root"))
+                .w_full()
+                .gap(if compact { 6.0 } else { 10.0 })
+                .children(children);
+        }
+    }
+
+    desktop_markdown_chunk(
+        k,
+        t,
+        normalized,
+        key_prefix,
+        compact,
+        streaming,
+        reduce_motion,
+        workspace_id,
+        workspace_path,
+        citations,
+        external_cache,
+        &hooks,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn desktop_markdown_chunk(
+    k: &Kit,
+    t: &ThemeTokens,
+    normalized: String,
+    key_prefix: &str,
+    compact: bool,
+    streaming: bool,
+    reduce_motion: bool,
+    workspace_id: Option<&str>,
+    workspace_path: Option<&str>,
+    citations: &[CitationSource],
+    external_cache: Option<Arc<ImageCache>>,
+    hooks: &MarkdownHooks,
+) -> El {
     let style = markdown_style(k, t, compact, None);
 
     let ws_id_link = workspace_id.map(str::to_owned);

@@ -379,7 +379,7 @@ fn build_reasoning_node(
     };
 
     let sections = parse_reasoning_sections(content);
-    let md_hooks = activity_markdown_hooks(ctx.copied_key);
+    let md_hooks = activity_markdown_hooks(s, ctx.copied_key);
 
     if sections.len() <= 1 {
         let heading = sections
@@ -531,7 +531,7 @@ fn build_progress_note_node(
             ctx.workspace_path,
             &chat_citations,
             ctx.external_cache.clone(),
-            activity_markdown_hooks(ctx.copied_key),
+            activity_markdown_hooks(s, ctx.copied_key),
         ))
 }
 
@@ -1190,7 +1190,7 @@ fn extract_child_agent_ref(
     Some((agent_id, title))
 }
 
-fn activity_markdown_hooks(copied_key: Option<&str>) -> MarkdownHooks {
+fn activity_markdown_hooks(s: &AppState, copied_key: Option<&str>) -> MarkdownHooks {
     let copied_owned = copied_key.map(str::to_owned);
     MarkdownHooks {
         is_copied: Some(Rc::new(move |key: &str| {
@@ -1200,6 +1200,8 @@ fn activity_markdown_hooks(copied_key: Option<&str>) -> MarkdownHooks {
             s.chat_ui.mark_copied(&key, s.now_secs);
         })),
         on_citation_click: None,
+        math_waker: s.services.waker.clone(),
+        math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
     }
 }
 

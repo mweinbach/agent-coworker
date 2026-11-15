@@ -5,56 +5,65 @@
 
 pub mod attachments;
 pub mod components;
+pub mod composer;
 pub mod icons;
+pub mod landing;
 pub mod markdown;
 pub mod model;
 pub mod state;
 
 pub use state::ChatUiState;
 
-use rune::{Cx, col, text};
-use rune_kit::{Button, ButtonVariant, Kit};
+use rune::{Cx, col, el, text};
+use rune_kit::Kit;
 
-use crate::actions::{Action, NavAction};
 use crate::state::AppState;
+use crate::theme;
 use crate::views::SubviewOutput;
 
 /// Renders the active chat landing view or thread transcript + composer + chat overlays.
-pub fn view(s: &AppState, _cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
-    let title = s
-        .active_thread()
-        .map(|t| t.title.clone())
-        .unwrap_or_else(|| "New Cowork Chat".to_string());
+pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
+    let dark = s.effective_dark(cx.system_dark());
+    let t = theme::resolve_tokens(
+        dark,
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+    );
 
-    let feed_count = s
-        .active_thread_runtime()
-        .map(|rt| rt.feed.len())
-        .unwrap_or(0);
+    let mut overlays = Vec::new();
+    let content = if let Some(thread) = s.active_thread() {
+        let rt = s.active_thread_runtime();
+        let feed_count = rt.map(|r| r.feed.len()).unwrap_or(0);
+        let placeholder_feed = col()
+            .key("chat-feed-placeholder")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .items_center()
+            .justify_center()
+            .padding(24.0)
+            .child(
+                text(format!("{} ({feed_count} feed items)", thread.title))
+                    .font(k.ty.ui)
+                    .color(t.text_muted),
+            );
+        let dock = composer::build_composer(s, k, &t, &mut overlays, false);
 
-    let content = col()
-        .key("chat-view")
-        .grow(1.0)
-        .w_full()
-        .h_full()
-        .padding(24.0)
-        .gap(12.0)
-        .child(text(title).font(k.ty.body_medium).color(k.c.text_base))
-        .child(
-            text(format!("Chat view ready ({feed_count} feed items)"))
-                .font(k.ty.ui)
-                .color(k.c.text_muted),
-        )
-        .child(
-            Button::new("Open Settings")
-                .variant(ButtonVariant::Neutral)
-                .on_press_tx(|s: &mut AppState, _tx| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
-                })
-                .build(k),
-        );
+        col()
+            .key("chat-view")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .child(el().w_full().grow(1.0).min_h(0.0).child(placeholder_feed))
+            .child(dock)
+    } else {
+        col()
+            .key("chat-view")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .child(landing::build_landing_view(s, k, &t, &mut overlays))
+    };
 
-    SubviewOutput {
-        content,
-        overlays: Vec::new(),
-    }
+    SubviewOutput { content, overlays }
 }

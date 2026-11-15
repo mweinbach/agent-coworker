@@ -18,6 +18,83 @@ use crate::views::shell::helpers::{
 };
 use crate::views::shell::icons;
 
+fn append_caption_reserve(toolbar: Toolbar, chrome: rune::ChromeInsets) -> Toolbar {
+    if chrome.trailing > 0.0 {
+        toolbar.trailing(
+            el().key("topbar-caption-reserve")
+                .w(chrome.trailing)
+                .h(1.0)
+                .a11y_hidden(),
+        )
+    } else {
+        toolbar
+    }
+}
+
+/// Builds the Settings surface toolbar hosted inside `SplitView` (`panel-bg` card header).
+#[allow(clippy::too_many_arguments)]
+pub fn build_settings_toolbar(
+    s: &AppState,
+    cx: &Cx<AppState>,
+    k: &Kit,
+    t: &ThemeTokens,
+    narrow: bool,
+    title: &str,
+    workspace_badge: Option<&str>,
+    header_actions: Vec<El>,
+) -> Toolbar {
+    let chrome = cx.chrome_insets();
+    let mut toolbar = Toolbar::new();
+
+    if narrow {
+        let drawer_open = s.settings_ui.mobile_nav_open;
+        let narrow_nav_btn = IconButton::new(&shell::SIDEBAR)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(ControlSize::Small)
+            .help(if drawer_open {
+                "Close settings navigation"
+            } else {
+                "Open settings navigation"
+            })
+            .on_press(|s: &mut AppState| {
+                s.settings_ui.mobile_nav_open = !s.settings_ui.mobile_nav_open;
+                if s.settings_ui.mobile_nav_open {
+                    s.shell_ui.right_overlay_open = false;
+                }
+            })
+            .build(k)
+            .key("topbar-narrow-settings-nav-toggle");
+        toolbar = toolbar.leading(narrow_nav_btn);
+    }
+
+    let mut heading = row()
+        .key("settings-toolbar-heading")
+        .items_center()
+        .gap(8.0)
+        .min_w(0.0)
+        .transition(rune::Transition::none())
+        .child(
+            text(title)
+                .font(k.ty.ui_medium)
+                .color(t.text_base)
+                .truncate(),
+        );
+    if let Some(badge_label) = workspace_badge {
+        heading = heading.child(
+            Badge::new(badge_label)
+                .variant(BadgeVariant::Subtle)
+                .build(k),
+        );
+    }
+    toolbar = toolbar.leading(heading);
+
+    for action in header_actions {
+        toolbar = toolbar.trailing(action.transition(rune::Transition::none()));
+    }
+
+    append_caption_reserve(toolbar, chrome)
+}
+
 /// Builds the main pane top toolbar matching `SplitView`'s 48pt unified drag band.
 pub fn build_toolbar(
     s: &AppState,
@@ -235,16 +312,7 @@ pub fn build_toolbar(
         .trailing(inspector_btn)
         .trailing(settings_btn);
 
-    if chrome.trailing > 0.0 {
-        toolbar = toolbar.trailing(
-            el().key("topbar-caption-reserve")
-                .w(chrome.trailing)
-                .h(1.0)
-                .a11y_hidden(),
-        );
-    }
-
-    toolbar
+    append_caption_reserve(toolbar, chrome)
 }
 
 fn build_usage_popover(

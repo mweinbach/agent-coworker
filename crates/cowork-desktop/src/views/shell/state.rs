@@ -183,11 +183,18 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         || (ev.is_command('b') && !ev.mods.shift && !ev.mods.alt)
     {
         if s.shell_ui.viewport_width < super::helpers::NARROW_BREAKPOINT {
-            s.shell_ui.left_overlay_open = !s.shell_ui.left_overlay_open;
-            if s.shell_ui.left_overlay_open {
-                s.shell_ui.right_overlay_open = false;
+            if s.route().view == ViewId::Settings {
+                s.settings_ui.mobile_nav_open = !s.settings_ui.mobile_nav_open;
+                if s.settings_ui.mobile_nav_open {
+                    s.shell_ui.right_overlay_open = false;
+                }
+            } else {
+                s.shell_ui.left_overlay_open = !s.shell_ui.left_overlay_open;
+                if s.shell_ui.left_overlay_open {
+                    s.shell_ui.right_overlay_open = false;
+                }
             }
-        } else {
+        } else if s.route().view != ViewId::Settings {
             s.dispatch(Action::Shell(ShellAction::ToggleSidebar));
         }
         return true;
@@ -371,6 +378,7 @@ fn has_blocking_overlay_or_focused_input(s: &AppState) -> bool {
         || s.shell_ui.renaming_thread_id.is_some()
         || s.shell_ui.renaming_file_key.is_some()
         || s.shell_ui.left_overlay_open
+        || (s.route().view == ViewId::Settings && s.settings_ui.mobile_nav_open)
         || s.shell_ui.right_overlay_open
         || s.shell_ui.onboarding_confirm_discard
         || s.agent_viewer.is_some()
@@ -523,10 +531,12 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         return true;
     }
     if s.shell_ui.left_overlay_open
+        || (s.route().view == ViewId::Settings && s.settings_ui.mobile_nav_open)
         || s.shell_ui.right_overlay_open
         || (right_rail_uses_overlay(s) && is_right_overlay_visible(s))
     {
         s.shell_ui.left_overlay_open = false;
+        s.settings_ui.mobile_nav_open = false;
         s.shell_ui.right_overlay_open = false;
         if let Some(key) = active_canvas_target_key(s) {
             s.shell_ui.canvas_overlay_dismissed_key = Some(key);

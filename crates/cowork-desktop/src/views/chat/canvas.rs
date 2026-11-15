@@ -6,7 +6,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rune::{
     Color, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx, auto_grow, col, el, icon,
@@ -19,7 +19,7 @@ use rune_kit::{
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
 use crate::native::dialogs::build_save_canvas_dialog;
-use crate::state::{AppState, ServerLifecycleState, ThreadBusyPolicy};
+use crate::state::{AppState, CanvasDocumentStatus, ServerLifecycleState, ThreadBusyPolicy};
 use crate::theme::{self, ThemeTokens};
 use crate::views::SubviewOutput;
 
@@ -434,24 +434,42 @@ pub fn build_canvas_document_prompt(
 }
 
 #[derive(Clone, Debug)]
+struct LiveSessionMeta {
+    document_id: String,
+    generation: u64,
+    dirty: bool,
+}
+
+#[derive(Clone, Debug)]
 struct ResolvedCanvasDoc {
+    doc_identity: String,
     session_key: String,
     workspace_id: String,
     path: String,
     title: String,
     disk_content: String,
+    draft_content: String,
     disk_hash: u64,
     kind: CanvasFileKind,
     truncated: bool,
     lifecycle: CanvasLifecycleKind,
     error_message: Option<String>,
-    has_live_persistence: bool,
+    live_session: Option<LiveSessionMeta>,
 }
 
 fn hash_text(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+fn title_for_path(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
 fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
@@ -462,33 +480,79 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
             classify_canvas_path(&fx.path).unwrap_or(CanvasFileKind::Text)
         };
         let title = if fx.title.trim().is_empty() {
-            Path::new(&fx.path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&fx.path)
-                .to_string()
+            title_for_path(&fx.path)
         } else {
             fx.title.clone()
         };
         return Some(ResolvedCanvasDoc {
+            doc_identity: format!("fixture\0{}\0{}", fx.workspace_id, fx.path),
             session_key: format!("fixture\0{}\0{}", fx.workspace_id, fx.path),
             workspace_id: fx.workspace_id.clone(),
             path: fx.path.clone(),
             title,
             disk_hash: hash_text(&fx.content),
             disk_content: fx.content.clone(),
+            draft_content: fx.content.clone(),
             kind,
             truncated: fx.truncated,
             lifecycle: fx.lifecycle,
             error_message: fx.message.clone(),
-            has_live_persistence: false,
+            live_session: None,
         });
     }
 
     // Electron parity (#110): Canvas activates when `feature_flags["canvas"] == true`
     // and the opened file preview is an editable markdown/text/code document.
-    if !s.feature_flags.get("canvas").copied().unwrap_or(false) {
+    if !s.is_canvas_enabled() {
         return None;
+    }
+
+    if let Some(ref doc) = s.canvas_document {
+        let (lifecycle, error_message) = match &doc.status {
+            CanvasDocumentStatus::Loading => (CanvasLifecycleKind::Loading, None),
+            CanvasDocumentStatus::Ready => (CanvasLifecycleKind::Ready, None),
+            CanvasDocumentStatus::Saving => (CanvasLifecycleKind::Saving, None),
+            CanvasDocumentStatus::LoadError { message, .. } => {
+                (CanvasLifecycleKind::LoadError, Some(message.clone()))
+            }
+            CanvasDocumentStatus::SaveError { message, .. } => {
+                (CanvasLifecycleKind::SaveError, Some(message.clone()))
+            }
+            CanvasDocumentStatus::Conflict { message, .. } => {
+                (CanvasLifecycleKind::Conflict, Some(message.clone()))
+            }
+        };
+        let ready_phase = match doc.status {
+            CanvasDocumentStatus::Loading => 0u8,
+            CanvasDocumentStatus::LoadError { .. } => 1u8,
+            CanvasDocumentStatus::Ready
+            | CanvasDocumentStatus::Saving
+            | CanvasDocumentStatus::SaveError { .. }
+            | CanvasDocumentStatus::Conflict { .. } => 2u8,
+        };
+        let kind = classify_canvas_path(&doc.path).unwrap_or(CanvasFileKind::Text);
+        return Some(ResolvedCanvasDoc {
+            doc_identity: format!("session\0{}\0{}", doc.workspace_id, doc.document_id),
+            session_key: format!(
+                "session\0{}\0{}\0{}\0{ready_phase}",
+                doc.workspace_id, doc.document_id, doc.generation
+            ),
+            workspace_id: doc.workspace_id.clone(),
+            path: doc.path.clone(),
+            title: title_for_path(&doc.path),
+            disk_hash: hash_text(&doc.disk_content),
+            disk_content: doc.disk_content.clone(),
+            draft_content: doc.draft_content.clone(),
+            kind,
+            truncated: doc.truncated,
+            lifecycle,
+            error_message,
+            live_session: Some(LiveSessionMeta {
+                document_id: doc.document_id.clone(),
+                generation: doc.generation,
+                dirty: doc.dirty(),
+            }),
+        });
     }
 
     let preview = s.active_file_preview.as_ref()?;
@@ -506,53 +570,124 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
     };
 
     Some(ResolvedCanvasDoc {
+        doc_identity: format!("preview\0{}\0{}", preview.workspace_id, preview.path),
         session_key: format!("preview\0{}\0{}", preview.workspace_id, preview.path),
         workspace_id: preview.workspace_id.clone(),
         path: preview.path.clone(),
         title: preview.title.clone(),
         disk_hash: hash_text(&disk_content),
+        draft_content: disk_content.clone(),
         disk_content,
         kind,
         truncated: preview.truncated,
         lifecycle,
         error_message: preview.error.clone(),
-        has_live_persistence: false,
+        live_session: None,
     })
 }
 
 fn ensure_canvas_synced(ui: &mut CanvasUiState, doc: &ResolvedCanvasDoc, force_reset: bool) {
     ui.sync_session(
+        &doc.doc_identity,
         &doc.session_key,
         doc.disk_hash,
         &doc.disk_content,
+        &doc.draft_content,
         doc.kind == CanvasFileKind::Markdown,
+        doc.live_session.is_some(),
         force_reset,
     );
 }
 
-fn trigger_save(s: &mut AppState, doc: &ResolvedCanvasDoc) {
-    ensure_canvas_synced(&mut s.chat_ui.canvas, doc, false);
-    if doc.truncated || !s.chat_ui.canvas.is_dirty() {
+fn sync_live_draft(s: &mut AppState, doc: &ResolvedCanvasDoc) {
+    let Some(ref live) = doc.live_session else {
+        return;
+    };
+    if doc.truncated
+        || matches!(
+            doc.lifecycle,
+            CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
+        )
+    {
         return;
     }
-    if !doc.has_live_persistence {
-        s.chat_ui.canvas.local_error = Some(
-            "Workspace document save requires the shared document persistence RPC hook; local edits remain in your draft buffer."
-                .to_string(),
-        );
+    if s.chat_ui.canvas.synced_session_key.as_deref() != Some(doc.session_key.as_str()) {
+        return;
+    }
+    let next = s.chat_ui.canvas.source_edit.text.clone();
+    let needs_dispatch = s.canvas_document.as_ref().is_some_and(|session| {
+        session.document_id == live.document_id
+            && session.generation == live.generation
+            && session.draft_content != next
+    });
+    if needs_dispatch {
+        s.dispatch(Action::Chat(ChatAction::UpdateCanvasDraft {
+            document_id: live.document_id.clone(),
+            generation: live.generation,
+            content: next,
+        }));
     }
 }
 
-fn trigger_save_as_dialog(tx: &mut Tx, doc: &ResolvedCanvasDoc) {
-    let opts = build_save_canvas_dialog(Path::new(&doc.path));
+fn resolve_canvas_abs_path(s: &AppState, workspace_id: &str, path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    if let Some(ws) = s.workspaces.iter().find(|w| w.id == workspace_id) {
+        return Path::new(&ws.path).join(p);
+    }
+    p.to_path_buf()
+}
+
+fn trigger_save(s: &mut AppState, doc: &ResolvedCanvasDoc) {
+    ensure_canvas_synced(&mut s.chat_ui.canvas, doc, false);
+    if doc.truncated {
+        return;
+    }
+    if let Some(ref live) = doc.live_session {
+        sync_live_draft(s, doc);
+        let is_dirty_now = s.chat_ui.canvas.is_dirty()
+            || s.canvas_document
+                .as_ref()
+                .is_some_and(|session| session.dirty());
+        if !is_dirty_now && doc.lifecycle != CanvasLifecycleKind::SaveError {
+            return;
+        }
+        s.chat_ui.canvas.local_error = None;
+        if s.canvas_document.as_ref().is_some_and(|session| {
+            session.document_id == live.document_id && session.generation == live.generation
+        }) {
+            s.dispatch(Action::Chat(ChatAction::SaveCanvasDocument));
+        }
+        return;
+    }
+    if !s.chat_ui.canvas.is_dirty() {
+        return;
+    }
+    s.chat_ui.canvas.local_error = Some(
+        "Workspace document save requires an active workspace document session; local edits remain in your draft buffer."
+            .to_string(),
+    );
+}
+
+fn trigger_save_as_dialog(s: &AppState, tx: &mut Tx, doc: &ResolvedCanvasDoc) {
+    let suggested = resolve_canvas_abs_path(s, &doc.workspace_id, &doc.path);
+    let opts = build_save_canvas_dialog(&suggested);
     let doc_for_cb = doc.clone();
     tx.save_file(opts, move |s: &mut AppState, result, _| {
         ensure_canvas_synced(&mut s.chat_ui.canvas, &doc_for_cb, false);
         match result {
             Ok(Some(chosen_path)) => {
-                if !doc_for_cb.has_live_persistence {
+                if doc_for_cb.live_session.is_some() {
+                    sync_live_draft(s, &doc_for_cb);
+                    s.chat_ui.canvas.local_error = None;
+                    s.dispatch(Action::Chat(ChatAction::SaveCanvasDocumentAs {
+                        path: chosen_path.to_string_lossy().into_owned(),
+                    }));
+                } else {
                     s.chat_ui.canvas.local_error = Some(format!(
-                        "Selected \"{}\" for Save As; awaiting shared document/saveAs persistence hook.",
+                        "Selected \"{}\" for Save As; live workspace document session is unavailable for this preview.",
                         chosen_path.display()
                     ));
                 }
@@ -581,17 +716,42 @@ fn trigger_reload(s: &mut AppState, doc: &ResolvedCanvasDoc) {
         }
         let content = fx.content.clone();
         let is_md = fx.is_markdown;
-        s.chat_ui
-            .canvas
-            .sync_session(&doc.session_key, hash_text(&content), &content, is_md, true);
+        s.chat_ui.canvas.sync_session(
+            &doc.doc_identity,
+            &doc.session_key,
+            hash_text(&content),
+            &content,
+            &content,
+            is_md,
+            false,
+            true,
+        );
+        return;
+    }
+
+    if let Some(ref live) = doc.live_session
+        && s.canvas_document.as_ref().is_some_and(|session| {
+            session.document_id == live.document_id && session.generation == live.generation
+        })
+    {
+        // Keep `synced_doc_identity` intact across Reload so the user's tab (`Document`/`Source`)
+        // persists while the incoming generation refreshes disk/draft state.
+        s.chat_ui.canvas.synced_session_key = None;
+        s.chat_ui.canvas.synced_disk_hash = None;
+        s.chat_ui.canvas.synced_disk_content.clear();
+        s.chat_ui.canvas.source_edit.clear();
+        s.dispatch(Action::Chat(ChatAction::ReloadCanvasDocument));
         return;
     }
 
     s.chat_ui.canvas.sync_session(
+        &doc.doc_identity,
         &doc.session_key,
         doc.disk_hash,
         &doc.disk_content,
+        &doc.draft_content,
         doc.kind == CanvasFileKind::Markdown,
+        false,
         true,
     );
     s.dispatch(Action::Native(NativeAction::LoadFilePreview {
@@ -601,7 +761,11 @@ fn trigger_reload(s: &mut AppState, doc: &ResolvedCanvasDoc) {
 }
 
 fn trigger_close(s: &mut AppState) {
+    let had_canvas_session = s.canvas_document.is_some();
     s.chat_ui.canvas.clear();
+    if had_canvas_session {
+        s.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+    }
     if s.active_file_preview.is_some() {
         s.dispatch(Action::Shell(ShellAction::CloseFilePreview));
     }
@@ -700,22 +864,31 @@ pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<Subvi
     );
 
     let synced = s.chat_ui.canvas.synced_session_key.as_deref() == Some(doc.session_key.as_str());
-    let dirty = if synced {
+    let same_doc =
+        s.chat_ui.canvas.synced_doc_identity.as_deref() == Some(doc.doc_identity.as_str());
+    let disk_changed_while_ui_clean = synced
+        && doc.live_session.is_some()
+        && s.chat_ui.canvas.synced_disk_hash != Some(doc.disk_hash)
+        && !s.chat_ui.canvas.is_dirty();
+    let view_synced = synced && !disk_changed_while_ui_clean;
+    let dirty = if let Some(ref live) = doc.live_session {
+        live.dirty || (view_synced && s.chat_ui.canvas.source_edit.text != doc.draft_content)
+    } else if view_synced {
         s.chat_ui.canvas.is_dirty()
     } else {
         false
     };
-    let active_tab = if synced {
+    let active_tab = if view_synced || same_doc {
         s.chat_ui.canvas.active_tab
     } else if doc.kind == CanvasFileKind::Markdown {
         CanvasTab::Document
     } else {
         CanvasTab::Source
     };
-    let live_text = if synced {
+    let live_text = if view_synced {
         s.chat_ui.canvas.source_edit.text.as_str()
     } else {
-        doc.disk_content.as_str()
+        doc.draft_content.as_str()
     };
 
     let mut overlays = Vec::new();
@@ -748,8 +921,16 @@ pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<Subvi
     }
 
     root = root
-        .child(build_body(s, k, &t, &doc, synced, active_tab, live_text))
-        .child(build_prompt_footer(s, k, &t, &doc, synced));
+        .child(build_body(
+            s,
+            k,
+            &t,
+            &doc,
+            view_synced,
+            active_tab,
+            live_text,
+        ))
+        .child(build_prompt_footer(s, k, &t, &doc, view_synced));
 
     Some(SubviewOutput {
         content: root,
@@ -900,7 +1081,7 @@ fn build_toolbar_row(
         );
     }
 
-    let can_save = dirty
+    let can_save = (dirty || doc.lifecycle == CanvasLifecycleKind::SaveError)
         && !doc.truncated
         && !matches!(
             doc.lifecycle,
@@ -948,8 +1129,8 @@ fn build_toolbar_row(
                 .icon(&icons::FILE_PLUS)
                 .disabled(!can_save_as)
                 .help("Save a copy in workspace")
-                .on_press_tx(move |_s: &mut AppState, tx| {
-                    trigger_save_as_dialog(tx, &doc_save_as);
+                .on_press_tx(move |s: &mut AppState, tx| {
+                    trigger_save_as_dialog(s, tx, &doc_save_as);
                 })
                 .build(k)
                 .key("canvas-save-as-btn"),
@@ -1025,6 +1206,7 @@ fn apply_canvas_format_action(
     s.chat_ui.canvas.active_tab = CanvasTab::Source;
     s.chat_ui.canvas.source_edit.focused = true;
     s.chat_ui.canvas.local_error = None;
+    sync_live_draft(s, doc);
     if let Some(tx) = tx {
         tx.focus("canvas-source-input", false);
     }
@@ -1173,8 +1355,8 @@ fn build_banners(
                             .variant(ButtonVariant::Outline)
                             .control_size(ControlSize::Small)
                             .icon(&icons::FILE_PLUS)
-                            .on_press_tx(move |_s: &mut AppState, tx| {
-                                trigger_save_as_dialog(tx, &doc_save_as);
+                            .on_press_tx(move |s: &mut AppState, tx| {
+                                trigger_save_as_dialog(s, tx, &doc_save_as);
                             })
                             .build(k),
                     ),
@@ -1213,15 +1395,16 @@ fn build_banners(
                             .on_press(move |s: &mut AppState| {
                                 trigger_save(s, &doc_retry);
                             })
-                            .build(k),
+                            .build(k)
+                            .key("canvas-retry-save-btn"),
                     )
                     .child(
                         Button::new("Save As")
                             .variant(ButtonVariant::Outline)
                             .control_size(ControlSize::Small)
                             .icon(&icons::FILE_PLUS)
-                            .on_press_tx(move |_s: &mut AppState, tx| {
-                                trigger_save_as_dialog(tx, &doc_save_as);
+                            .on_press_tx(move |s: &mut AppState, tx| {
+                                trigger_save_as_dialog(s, tx, &doc_save_as);
                             })
                             .build(k),
                     ),
@@ -1506,11 +1689,12 @@ fn build_source_tab(
     let edit_ref = if synced {
         &s.chat_ui.canvas.source_edit
     } else {
-        fallback_edit = TextEdit::new(&doc.disk_content);
+        fallback_edit = TextEdit::new(&doc.draft_content);
         &fallback_edit
     };
     let read_only = doc.truncated || doc.lifecycle == CanvasLifecycleKind::Loading;
     let doc_edit = doc.clone();
+    let doc_change = doc.clone();
     let doc_key = doc.clone();
 
     let mut field = text_input(
@@ -1535,8 +1719,9 @@ fn build_source_tab(
                 ensure_canvas_synced(&mut state.chat_ui.canvas, &doc_edit, false);
                 &mut state.chat_ui.canvas.source_edit
             })
-            .on_input_change(|state: &mut AppState, _| {
+            .on_input_change(move |state: &mut AppState, _| {
                 state.chat_ui.canvas.local_error = None;
+                sync_live_draft(state, &doc_change);
             })
             .on_input_key(move |state: &mut AppState, ev: &KeyEvent, tx| {
                 handle_source_editor_key(state, &doc_key, ev, tx)
@@ -1898,6 +2083,10 @@ mod tests {
         assert_eq!(classify_canvas_path("/w/report.pdf"), None);
         assert_eq!(classify_canvas_path("/w/diagram.png"), None);
         assert_eq!(classify_canvas_path("/w/archive.zip"), None);
+        assert!(is_canvas_document_path("/w/README.md"));
+        assert!(is_canvas_document_path("/w/.gitignore"));
+        assert!(!is_canvas_document_path("/w/data.csv"));
+        assert!(!is_canvas_document_path("/w/budget.xlsx"));
     }
 
     #[test]

@@ -1500,3 +1500,495 @@ fn canvas_pane_conflict_reload_modal_load_error_and_truncation_guards() {
     assert!(rt_err.find("canvas-load-error").is_none());
     assert!(rt_err.find("canvas-document-tab").is_some());
 }
+
+#[test]
+fn canvas_pane_live_persistence_edit_save_conflict_reload_and_close_roundtrip() {
+    use crate::actions::{ChatAction, NativeAction};
+    use crate::state::CanvasDocumentStatus;
+    use crate::ws::WsRpcError;
+
+    let collect_canvas_badge_texts = |rt: &Runtime<AppState>| -> Vec<String> {
+        let mut texts = Vec::new();
+        for el in rt.elements() {
+            if el.rect[0] >= 779.0
+                && let Some(t) = el.text
+            {
+                texts.push(t);
+            }
+        }
+        texts
+    };
+
+    let mut s = build_populated_thread_state(false);
+    s.feature_flags.insert("canvas".to_string(), true);
+    let ws_id = s.workspaces[0].id.clone();
+    s.workspaces[0].path = "/tmp/ws-canvas".to_string();
+
+    let mut rt = Runtime::new(s, test_canvas_500_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.find("canvas-pane").is_none());
+
+    // 1) LoadFilePreview routes markdown docs into live CanvasDocumentSession (`Loading`).
+    let ws_id_open = ws_id.clone();
+    rt.update(move |st, _| {
+        st.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: ws_id_open,
+            path: "docs/spec.md".to_string(),
+        }));
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+
+    assert!(rt.find("canvas-loading").is_some());
+    assert!(
+        collect_canvas_badge_texts(&rt)
+            .iter()
+            .any(|t| t == "Loading")
+    );
+    let (open_req_id, doc_id, doc_gen) = {
+        let session = rt
+            .state
+            .canvas_document
+            .as_ref()
+            .expect("canvas_document session created");
+        assert_eq!(session.status, CanvasDocumentStatus::Loading);
+        assert_eq!(session.path, "/tmp/ws-canvas/docs/spec.md");
+        let req_id = rt
+            .state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/open" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected cowork/workspace/document/open request");
+        (req_id, session.document_id.clone(), session.generation)
+    };
+
+    // 2) Open RPC response transitions Loading -> Ready, renders Document tab cleanly.
+    let ws_id_ev = ws_id.clone();
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id_ev,
+            request_id: open_req_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": {
+                    "path": "/tmp/ws-canvas/docs/spec.md",
+                    "content": "# Spec\nInitial paragraph.",
+                    "truncated": false,
+                    "revision": {
+                        "modifiedAtMs": 1000.0,
+                        "changeTimeMs": 1000.0,
+                        "size": 25,
+                        "fingerprint": "fp-1"
+                    }
+                }
+            })),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+
+    assert!(rt.find("canvas-loading").is_none());
+    assert!(rt.find("canvas-document-tab").is_some());
+    assert!(collect_canvas_badge_texts(&rt).iter().any(|t| t == "Saved"));
+    let save_el = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("canvas-save-btn"))
+        .expect("canvas-save-btn present");
+    assert!(!save_el.focusable, "clean doc should disable Save");
+
+    // 3) Switch to Source, type/paste + Markdown Bold -> dispatches UpdateCanvasDraft immediately.
+    let tabs_rect = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("canvas-view-tabs") && e.rect[0] >= 779.0)
+        .map(|e| e.rect)
+        .expect("canvas-view-tabs rect");
+    let src_x = tabs_rect[0] + tabs_rect[2] * 0.78;
+    let src_y = tabs_rect[1] + tabs_rect[3] * 0.5;
+    rt.pointer_move(src_x, src_y);
+    rt.pointer_down(src_x, src_y);
+    rt.pointer_up(src_x, src_y);
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+
+    assert!(rt.find("canvas-source-input").is_some());
+    click_key(&mut rt, "canvas-source-input");
+    rt.paste("\nAdded ");
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    click_key(&mut rt, "canvas-fmt-bold");
+
+    let expected_edited = rt.state.chat_ui.canvas.source_edit.text.clone();
+    assert!(expected_edited.contains("Added **"));
+    assert_eq!(
+        rt.state
+            .canvas_document
+            .as_ref()
+            .expect("live session")
+            .draft_content,
+        expected_edited
+    );
+    assert!(
+        collect_canvas_badge_texts(&rt)
+            .iter()
+            .any(|t| t == "Unsaved")
+    );
+    let save_el_dirty = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("canvas-save-btn"))
+        .expect("canvas-save-btn present");
+    assert!(save_el_dirty.focusable, "dirty doc should enable Save");
+
+    // 4) Clicking Save dispatches cowork/workspace/document/save; Ok clears dirty while keeping Source tab.
+    click_key(&mut rt, "canvas-save-btn");
+    assert_eq!(
+        rt.state.canvas_document.as_ref().unwrap().status,
+        CanvasDocumentStatus::Saving
+    );
+    let (save_req_id, save_content) = rt
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendRequest {
+                request_id,
+                method,
+                params,
+                ..
+            } if method == "cowork/workspace/document/save" => Some((
+                *request_id,
+                params
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            )),
+            _ => None,
+        })
+        .expect("expected cowork/workspace/document/save request");
+    assert_eq!(save_content, expected_edited);
+
+    let save_edit_rev = rt.state.canvas_document.as_ref().unwrap().edit_revision;
+    let saved_body = expected_edited.clone();
+    let ws_id_save = ws_id.clone();
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id_save,
+            request_id: save_req_id,
+            method: "cowork/workspace/document/save".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "editRevision": save_edit_rev,
+                "document": {
+                    "path": "/tmp/ws-canvas/docs/spec.md",
+                    "content": saved_body,
+                    "revision": {
+                        "modifiedAtMs": 2000.0,
+                        "changeTimeMs": 2000.0,
+                        "size": expected_edited.len(),
+                        "fingerprint": "fp-2"
+                    }
+                }
+            })),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+
+    assert_eq!(
+        rt.state.canvas_document.as_ref().unwrap().status,
+        CanvasDocumentStatus::Ready
+    );
+    assert!(!rt.state.canvas_document.as_ref().unwrap().dirty());
+    assert!(collect_canvas_badge_texts(&rt).iter().any(|t| t == "Saved"));
+    assert!(
+        rt.find("canvas-source-input").is_some(),
+        "saving must preserve Source tab"
+    );
+    let save_el_clean = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("canvas-save-btn"))
+        .expect("canvas-save-btn present");
+    assert!(!save_el_clean.focusable, "saved doc should re-disable Save");
+
+    // 5) SaveError banner + Retry Save recovers cleanly.
+    click_key(&mut rt, "canvas-source-input");
+    rt.paste(" retry");
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    click_key(&mut rt, "canvas-save-btn");
+    let fail_save_id = rt
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendRequest {
+                request_id, method, ..
+            } if method == "cowork/workspace/document/save" => Some(*request_id),
+            _ => None,
+        })
+        .expect("save req before failure");
+    let ws_id_err = ws_id.clone();
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id_err,
+            request_id: fail_save_id,
+            method: "cowork/workspace/document/save".to_string(),
+            result: Err(WsRpcError {
+                code: -32000,
+                message: "disk write failed".to_string(),
+                data: None,
+            }),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    assert!(rt.find("canvas-save-error-banner").is_some());
+
+    click_key(&mut rt, "canvas-retry-save-btn");
+    let retry_save_id = rt
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendRequest {
+                request_id, method, ..
+            } if method == "cowork/workspace/document/save" => Some(*request_id),
+            _ => None,
+        })
+        .expect("retry save request");
+    assert_ne!(retry_save_id, fail_save_id);
+    let retry_edit_rev = rt.state.canvas_document.as_ref().unwrap().edit_revision;
+    let retry_body = rt.state.chat_ui.canvas.source_edit.text.clone();
+    let ws_id_retry = ws_id.clone();
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id_retry,
+            request_id: retry_save_id,
+            method: "cowork/workspace/document/save".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "editRevision": retry_edit_rev,
+                "document": {
+                    "path": "/tmp/ws-canvas/docs/spec.md",
+                    "content": retry_body,
+                    "revision": {
+                        "modifiedAtMs": 3000.0,
+                        "changeTimeMs": 3000.0,
+                        "size": 64,
+                        "fingerprint": "fp-3"
+                    }
+                }
+            })),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    assert!(rt.find("canvas-save-error-banner").is_none());
+    assert!(collect_canvas_badge_texts(&rt).iter().any(|t| t == "Saved"));
+
+    // 6) Conflict via revision poll while dirty -> Reload confirmation modal -> Discard & Reload
+    // bumps generation, preserves Source tab, and hydrates fresh disk content.
+    click_key(&mut rt, "canvas-source-input");
+    rt.paste(" unsaved");
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+
+    rt.update(|st, _| {
+        st.now_secs += 5.0;
+        if let Some(doc) = st.canvas_document.as_mut() {
+            doc.dirty_since_secs = Some(st.now_secs + 10.0);
+            doc.last_poll_secs = st.now_secs - 5.0;
+        }
+        st.drain_events();
+    });
+    let rev_req_id = rt
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendRequest {
+                request_id, method, ..
+            } if method == "cowork/workspace/document/revision" => Some(*request_id),
+            _ => None,
+        })
+        .expect("expected cowork/workspace/document/revision poll");
+    let ws_id_rev = ws_id.clone();
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id_rev,
+            request_id: rev_req_id,
+            method: "cowork/workspace/document/revision".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "revision": {
+                    "modifiedAtMs": 9999.0,
+                    "changeTimeMs": 9999.0,
+                    "size": 120,
+                    "fingerprint": "fp-external"
+                }
+            })),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+
+    assert!(rt.find("canvas-conflict-banner").is_some());
+    click_key(&mut rt, "canvas-conflict-reload-btn");
+    assert!(rt.state.chat_ui.canvas.reload_confirm_open);
+    assert!(rt.find("canvas-reload-confirm-btn").is_some());
+    click_key(&mut rt, "canvas-reload-confirm-btn");
+
+    assert!(rt.find("canvas-loading").is_some());
+    let (reload_open_id, new_gen) = {
+        let session = rt.state.canvas_document.as_ref().expect("reloaded session");
+        assert_eq!(session.document_id, doc_id);
+        assert!(session.generation > doc_gen);
+        let req_id = rt
+            .state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/open" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected document/open for reload");
+        (req_id, session.generation)
+    };
+    assert_ne!(reload_open_id, open_req_id);
+
+    let ws_id_reload = ws_id.clone();
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id_reload,
+            request_id: reload_open_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": {
+                    "path": "/tmp/ws-canvas/docs/spec.md",
+                    "content": "# Reloaded\nFresh disk copy.",
+                    "truncated": false,
+                    "revision": {
+                        "modifiedAtMs": 9999.0,
+                        "changeTimeMs": 9999.0,
+                        "size": 27,
+                        "fingerprint": "fp-external"
+                    }
+                }
+            })),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+
+    assert!(rt.find("canvas-conflict-banner").is_none());
+    assert!(
+        rt.find("canvas-source-input").is_some(),
+        "reload should preserve Source tab"
+    );
+    assert_eq!(
+        rt.state.chat_ui.canvas.active_tab,
+        CanvasTab::Source,
+        "reload must keep user's active tab"
+    );
+    assert!(collect_canvas_badge_texts(&rt).iter().any(|t| t == "Saved"));
+
+    // Verify Save As action routes properly as well, then close.
+    rt.update(|st, _| {
+        st.dispatch(Action::Chat(ChatAction::SaveCanvasDocumentAs {
+            path: "/tmp/ws-canvas/docs/spec-copy.md".to_string(),
+        }));
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    let save_as_id = rt
+        .state
+        .services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            WsCommand::SendRequest {
+                request_id, method, ..
+            } if method == "cowork/workspace/document/saveAs" => Some(*request_id),
+            _ => None,
+        })
+        .expect("expected cowork/workspace/document/saveAs request");
+    let save_as_rev = rt.state.canvas_document.as_ref().unwrap().edit_revision;
+    rt.update(move |st, _| {
+        st.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: ws_id,
+            request_id: save_as_id,
+            method: "cowork/workspace/document/saveAs".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "editRevision": save_as_rev,
+                "document": {
+                    "path": "/tmp/ws-canvas/docs/spec-copy.md",
+                    "content": "# Reloaded\nFresh disk copy.",
+                    "revision": {
+                        "modifiedAtMs": 10000.0,
+                        "changeTimeMs": 10000.0,
+                        "size": 27,
+                        "fingerprint": "fp-copy"
+                    }
+                }
+            })),
+        });
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    assert!(
+        collect_canvas_badge_texts(&rt)
+            .iter()
+            .any(|t| t == "spec-copy.md")
+    );
+
+    // 7) Close button dispatches CloseCanvasDocument and clears pane/UI state.
+    click_key(&mut rt, "canvas-close-btn");
+    assert!(rt.find("canvas-pane").is_none());
+    assert!(rt.state.canvas_document.is_none());
+    assert!(!rt.state.chat_ui.canvas.is_dirty());
+    assert!(
+        rt.state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .any(|cmd| matches!(
+                cmd,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/workspace/document/close"
+                        && params.get("generation").and_then(|v| v.as_u64()) == Some(new_gen)
+            )),
+        "closing Canvas must emit document/close for active generation"
+    );
+}

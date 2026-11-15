@@ -18,13 +18,22 @@ pub fn is_allowed_release_link(raw_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn updater_status_meta(status: &str) -> (&'static str, StatusTone) {
+pub(super) fn updater_status_meta(status: &str, is_packaged: bool) -> (&'static str, StatusTone) {
     match status {
         "checking" => ("Checking", StatusTone::Neutral),
         "available" => ("Update available", StatusTone::Warning),
         "downloading" => ("Downloading", StatusTone::Neutral),
         "downloaded" => ("Ready to install", StatusTone::Success),
         "up-to-date" | "not-available" => ("Up to date", StatusTone::Success),
+        "disabled" => (
+            if is_packaged {
+                "Unavailable"
+            } else {
+                "Not available in dev mode"
+            },
+            StatusTone::Neutral,
+        ),
+        "unavailable" => ("Unavailable", StatusTone::Neutral),
         "error" => ("Error", StatusTone::Danger),
         _ => ("Idle", StatusTone::Neutral),
     }
@@ -34,8 +43,10 @@ fn updater_status_meta(status: &str) -> (&'static str, StatusTone) {
 pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let updater = &s.updater;
     let status = updater.status.trim();
+    let is_packaged = s.is_packaged || updater.packaged;
     let is_busy = status == "checking" || status == "downloading";
-    let (status_label, status_tone) = updater_status_meta(status);
+    let is_disabled = status == "disabled" || status == "unavailable";
+    let (status_label, status_tone) = updater_status_meta(status, is_packaged);
 
     let check_btn = Button::new(if status == "checking" {
         "Checking..."
@@ -44,11 +55,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     })
     .variant(ButtonVariant::Outline)
     .control_size(ControlSize::Regular)
-    .disabled(is_busy)
+    .disabled(is_busy || is_disabled)
     .on_press(|s: &mut AppState| {
         s.dispatch(Action::Settings(SettingsAction::CheckUpdates));
     })
-    .build(k);
+    .build(k)
+    .key("updates-check-btn");
 
     let mut header_actions = Vec::new();
     if status == "available" {
@@ -89,7 +101,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     } else {
         updater.current_version.trim()
     };
-    let build_mode = if s.is_packaged {
+    let build_mode = if is_packaged {
         "Packaged desktop build"
     } else {
         "Development build"
@@ -102,6 +114,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .filter(|ver| !ver.trim().is_empty());
     let available_detail = match available_ver {
         Some(ver) => format!("Latest detected version: v{ver}"),
+        None if status == "disabled" && !is_packaged => {
+            "This is a development build, so in-app update checks are disabled.".to_string()
+        }
+        None if is_disabled => {
+            "Automatic in-app updates are unavailable for this build.".to_string()
+        }
         None => "Automatic updates check release channels when packaged.".to_string(),
     };
 
@@ -135,6 +153,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         install_control = install_control.child(
             text(if is_busy {
                 "In progress"
+            } else if is_disabled {
+                "Unavailable"
             } else {
                 "No pending restart"
             })

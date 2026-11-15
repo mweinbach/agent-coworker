@@ -37,8 +37,9 @@ use tokio::sync::mpsc;
 
 use crate::actions::{
     Action, ChatAction, NativeAction, NativeCommand, NavAction, SettingsAction, ShellAction,
-    SidebarSectionKey, StoreEvent, TaskAction,
+    SidebarSectionKey, StoreEvent, TaskAction, TranscriptLogEntry,
 };
+use crate::native::file_preview_read::{FilePreviewKind, classify_file_preview_kind};
 use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
 };
@@ -72,6 +73,93 @@ pub struct ConfirmDialogRequest {
     pub confirm_label: String,
     pub cancel_label: String,
     pub destructive: bool,
+}
+
+pub const DEFAULT_UI_SCALE: f32 = 1.0;
+pub const MIN_UI_SCALE: f32 = 0.5;
+pub const MAX_UI_SCALE: f32 = 2.5;
+pub const UI_SCALE_STEP: f32 = 0.1;
+pub const CANVAS_AUTOSAVE_DEBOUNCE_SECS: f64 = 0.6;
+pub const CANVAS_REVISION_POLL_SECS: f64 = 1.5;
+
+/// Pending OS window command executed on the Rune UI thread via `WINDOW_HUB`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowCommand {
+    OpenQuickChat,
+    OpenUtility,
+    FocusMain {
+        open_new_chat_workspace: Option<String>,
+        open_thread_id: Option<String>,
+    },
+}
+
+/// Server-reported revision metadata for a Canvas document (`FileChangeVersion`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasDocumentRevision {
+    pub modified_at_ms: f64,
+    pub change_time_ms: f64,
+    pub size: u64,
+    pub fingerprint: String,
+}
+
+/// Lifecycle state of an active Canvas editing session.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CanvasDocumentStatus {
+    Loading,
+    Ready,
+    Saving,
+    LoadError {
+        kind: Option<String>,
+        message: String,
+    },
+    SaveError {
+        kind: Option<String>,
+        message: String,
+    },
+    Conflict {
+        message: String,
+        current_revision: Option<CanvasDocumentRevision>,
+    },
+}
+
+/// Client-side Canvas document session synced over `cowork/workspace/document/*`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasDocumentSession {
+    pub workspace_id: String,
+    pub document_id: String,
+    pub generation: u64,
+    pub path: String,
+    pub disk_content: String,
+    pub draft_content: String,
+    pub edit_revision: u64,
+    pub last_saved_edit_revision: u64,
+    pub truncated: bool,
+    pub revision: Option<CanvasDocumentRevision>,
+    pub status: CanvasDocumentStatus,
+    pub last_saved_at_secs: Option<f64>,
+    pub dirty_since_secs: Option<f64>,
+    pub last_poll_secs: f64,
+}
+
+impl CanvasDocumentSession {
+    pub fn dirty(&self) -> bool {
+        self.draft_content != self.disk_content
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingCanvasRpc {
+    pub document_id: String,
+    pub generation: u64,
+    pub edit_revision: u64,
+    pub target_path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingMainFocus {
+    pub open_new_chat_workspace: Option<String>,
+    pub open_thread_id: Option<String>,
 }
 
 /// Workspace record shown in the sidebar and connected to a local `cowork-server`.
@@ -1325,6 +1413,8 @@ pub struct PersistedDesktopState {
     pub active_thread_id: Option<String>,
     pub onboarding: OnboardingState,
     pub feature_flags: HashMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_analytics: Option<Value>,
 }
 
 /// Feature flag metadata matching `src/shared/featureFlags.ts`.
@@ -1404,9 +1494,11 @@ pub struct AppServices {
     pub event_rx: mpsc::UnboundedReceiver<StoreEvent>,
     pub ws_tx: Option<mpsc::UnboundedSender<WsCommand>>,
     pub native_tx: Option<mpsc::UnboundedSender<NativeCommand>>,
+    pub window_tx: Option<mpsc::UnboundedSender<WindowCommand>>,
     /// Test capture queues used when worker threads are not attached.
     pub emitted_ws_commands: Vec<WsCommand>,
     pub emitted_native_commands: Vec<NativeCommand>,
+    pub emitted_window_commands: Vec<WindowCommand>,
     next_rpc_id: u64,
     next_request_tag: u64,
 }
@@ -1420,8 +1512,10 @@ impl Default for AppServices {
             event_rx,
             ws_tx: None,
             native_tx: None,
+            window_tx: None,
             emitted_ws_commands: Vec::new(),
             emitted_native_commands: Vec::new(),
+            emitted_window_commands: Vec::new(),
             next_rpc_id: 1,
             next_request_tag: 1,
         }
@@ -1532,6 +1626,15 @@ pub struct AppState {
     /// True when started under a static Rune `--scene`; prevents `NativeReady` from overwriting scene state.
     pub scene_mode: bool,
     pub now_secs: f64,
+    pub ui_scale: f32,
+    pub canvas_document: Option<CanvasDocumentSession>,
+    pub product_analytics: Option<Value>,
+    pub(crate) pending_launchable_open_path: Option<String>,
+    pub(crate) canvas_generation_seq: u64,
+    pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
+    pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_main_focus: Option<PendingMainFocus>,
+    pub(crate) shared_dirty: bool,
 }
 
 impl Default for AppState {
@@ -1646,6 +1749,15 @@ impl Default for AppState {
             system_dark_override: None,
             scene_mode: false,
             now_secs: 0.0,
+            ui_scale: DEFAULT_UI_SCALE,
+            canvas_document: None,
+            product_analytics: None,
+            pending_launchable_open_path: None,
+            canvas_generation_seq: 1,
+            pending_canvas_rpcs: HashMap::new(),
+            pending_hydrate_threads_by_rpc_id: HashMap::new(),
+            pending_main_focus: None,
+            shared_dirty: false,
         }
     }
 }
@@ -1990,6 +2102,939 @@ impl AppState {
         }
     }
 
+    /// Emits a `WindowCommand` to `WINDOW_HUB` on the Rune UI thread (or test buffer).
+    pub fn send_window(&mut self, cmd: WindowCommand) {
+        if let Some(ref tx) = self.services.window_tx {
+            let _ = tx.send(cmd);
+            if let Some(ref waker) = self.services.waker {
+                (waker)();
+            }
+        } else {
+            self.services.emitted_window_commands.push(cmd);
+        }
+    }
+
+    pub fn is_canvas_enabled(&self) -> bool {
+        self.feature_flags.get("canvas").copied().unwrap_or(false)
+    }
+
+    /// Mirrors Electron `isCanvasSupportedFile` minus spreadsheets/OOXML decks handled natively.
+    pub fn should_open_in_canvas(&self, path: &str) -> bool {
+        self.is_canvas_enabled()
+            && matches!(
+                classify_file_preview_kind(Path::new(path)),
+                FilePreviewKind::Markdown | FilePreviewKind::Text
+            )
+    }
+
+    pub fn is_workspace_ws_connected(&self, workspace_id: &str) -> bool {
+        self.workspace_socket_by_id
+            .get(workspace_id)
+            .is_some_and(WsConnectionState::is_connected)
+    }
+
+    /// True when closing the window risks losing unsent drafts, active turns, approvals, or dirty Canvas edits.
+    pub fn has_unsaved_or_busy_work(&self) -> bool {
+        if !self.composer_edit.text.trim().is_empty() {
+            return true;
+        }
+        if self.composer_drafts.values().any(|d| {
+            !d.text.trim().is_empty()
+                || !d.attachments.is_empty()
+                || !d.references.is_empty()
+                || d.submitting
+        }) {
+            return true;
+        }
+        if self.thread_runtime_by_id.values().any(|rt| {
+            rt.streaming
+                || rt.active_turn_id.is_some()
+                || rt.pending_turn_count > 0
+                || !rt.pending_interactions.is_empty()
+        }) {
+            return true;
+        }
+        if self
+            .pending_thread_messages
+            .values()
+            .any(|queue| !queue.is_empty())
+        {
+            return true;
+        }
+        self.canvas_document
+            .as_ref()
+            .is_some_and(CanvasDocumentSession::dirty)
+    }
+
+    fn clamp_ui_scale(scale: f32) -> f32 {
+        ((scale * 10.0).round() / 10.0).clamp(MIN_UI_SCALE, MAX_UI_SCALE)
+    }
+
+    pub fn zoom_in(&mut self) {
+        self.ui_scale = Self::clamp_ui_scale(self.ui_scale + UI_SCALE_STEP);
+    }
+
+    pub fn zoom_out(&mut self) {
+        self.ui_scale = Self::clamp_ui_scale(self.ui_scale - UI_SCALE_STEP);
+    }
+
+    pub fn reset_zoom(&mut self) {
+        self.ui_scale = DEFAULT_UI_SCALE;
+    }
+
+    /// Next wall-clock instant (`now_secs` units) when Canvas autosave or revision polling is due.
+    pub fn next_canvas_wake_at(&self) -> Option<f64> {
+        let doc = self.canvas_document.as_ref()?;
+        if !matches!(
+            doc.status,
+            CanvasDocumentStatus::Ready | CanvasDocumentStatus::SaveError { .. }
+        ) {
+            return None;
+        }
+        let mut next: Option<f64> = None;
+        if !doc.truncated
+            && doc.dirty()
+            && !matches!(doc.status, CanvasDocumentStatus::SaveError { .. })
+        {
+            let autosave_at =
+                doc.dirty_since_secs.unwrap_or(self.now_secs) + CANVAS_AUTOSAVE_DEBOUNCE_SECS;
+            next = Some(autosave_at);
+        }
+        if self.is_workspace_ws_connected(&doc.workspace_id) {
+            let poll_at = doc.last_poll_secs + CANVAS_REVISION_POLL_SECS;
+            next = Some(match next {
+                Some(existing) => existing.min(poll_at),
+                None => poll_at,
+            });
+        }
+        next
+    }
+
+    /// Runs debounced Canvas autosave (`0.6s`) and revision polling (`1.5s`).
+    pub fn tick_canvas_timers(&mut self) -> bool {
+        let Some(doc) = self.canvas_document.as_ref() else {
+            return false;
+        };
+        let status_ready = matches!(doc.status, CanvasDocumentStatus::Ready);
+        let status_pollable = matches!(
+            doc.status,
+            CanvasDocumentStatus::Ready | CanvasDocumentStatus::SaveError { .. }
+        );
+        if !status_pollable {
+            return false;
+        }
+        let should_autosave = status_ready
+            && !doc.truncated
+            && doc.dirty()
+            && doc
+                .dirty_since_secs
+                .is_some_and(|since| self.now_secs >= since + CANVAS_AUTOSAVE_DEBOUNCE_SECS);
+        if should_autosave {
+            self.request_canvas_save();
+            return true;
+        }
+        let poll_ws_ready =
+            self.is_workspace_ws_connected(&doc.workspace_id) || self.services.ws_tx.is_none();
+        let should_poll =
+            poll_ws_ready && (self.now_secs >= doc.last_poll_secs + CANVAS_REVISION_POLL_SECS);
+        if should_poll {
+            self.request_canvas_revision();
+            return true;
+        }
+        false
+    }
+
+    fn open_canvas_document(&mut self, workspace_id: String, path: String) {
+        let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
+        self.close_canvas_document();
+        self.active_file_preview = None;
+        self.context_sidebar.set_open(true);
+        self.canvas_generation_seq += 1;
+        let generation = self.canvas_generation_seq;
+        let document_id = self.next_tag("canvas");
+        self.canvas_document = Some(CanvasDocumentSession {
+            workspace_id: workspace_id.clone(),
+            document_id: document_id.clone(),
+            generation,
+            path: resolved_path.clone(),
+            disk_content: String::new(),
+            draft_content: String::new(),
+            edit_revision: 0,
+            last_saved_edit_revision: 0,
+            truncated: false,
+            revision: None,
+            status: CanvasDocumentStatus::Loading,
+            last_saved_at_secs: None,
+            dirty_since_secs: None,
+            last_poll_secs: self.now_secs,
+        });
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/document/open",
+            json!({
+                "path": resolved_path,
+                "documentId": document_id,
+                "generation": generation,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs.insert(
+            req_id,
+            PendingCanvasRpc {
+                document_id,
+                generation,
+                edit_revision: 0,
+                target_path: None,
+            },
+        );
+    }
+
+    fn reload_canvas_document(&mut self) {
+        let Some(prev) = self.canvas_document.take() else {
+            return;
+        };
+        let _ = self.send_ws_request(
+            &prev.workspace_id,
+            "cowork/workspace/document/close",
+            json!({
+                "documentId": prev.document_id,
+                "generation": prev.generation,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs
+            .retain(|_, pending| pending.generation != prev.generation);
+
+        self.canvas_generation_seq += 1;
+        let generation = self.canvas_generation_seq;
+        let workspace_id = prev.workspace_id;
+        let document_id = prev.document_id;
+        let path = prev.path;
+        self.canvas_document = Some(CanvasDocumentSession {
+            workspace_id: workspace_id.clone(),
+            document_id: document_id.clone(),
+            generation,
+            path: path.clone(),
+            disk_content: String::new(),
+            draft_content: String::new(),
+            edit_revision: 0,
+            last_saved_edit_revision: 0,
+            truncated: false,
+            revision: None,
+            status: CanvasDocumentStatus::Loading,
+            last_saved_at_secs: prev.last_saved_at_secs,
+            dirty_since_secs: None,
+            last_poll_secs: self.now_secs,
+        });
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/document/open",
+            json!({
+                "path": path,
+                "documentId": document_id,
+                "generation": generation,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs.insert(
+            req_id,
+            PendingCanvasRpc {
+                document_id,
+                generation,
+                edit_revision: 0,
+                target_path: None,
+            },
+        );
+    }
+
+    fn close_canvas_document(&mut self) {
+        let Some(prev) = self.canvas_document.take() else {
+            return;
+        };
+        self.pending_canvas_rpcs
+            .retain(|_, pending| pending.generation != prev.generation);
+        let _ = self.send_ws_request(
+            &prev.workspace_id,
+            "cowork/workspace/document/close",
+            json!({
+                "documentId": prev.document_id,
+                "generation": prev.generation,
+            }),
+            false,
+        );
+    }
+
+    fn request_canvas_save(&mut self) {
+        let Some(doc) = self.canvas_document.as_mut() else {
+            return;
+        };
+        if doc.truncated
+            || matches!(
+                doc.status,
+                CanvasDocumentStatus::Loading
+                    | CanvasDocumentStatus::Saving
+                    | CanvasDocumentStatus::LoadError { .. }
+            )
+        {
+            return;
+        }
+        let workspace_id = doc.workspace_id.clone();
+        let document_id = doc.document_id.clone();
+        let generation = doc.generation;
+        let edit_revision = doc.edit_revision;
+        let content = doc.draft_content.clone();
+        doc.status = CanvasDocumentStatus::Saving;
+        doc.dirty_since_secs = None;
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/document/save",
+            json!({
+                "documentId": document_id,
+                "generation": generation,
+                "editRevision": edit_revision,
+                "content": content,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs.insert(
+            req_id,
+            PendingCanvasRpc {
+                document_id,
+                generation,
+                edit_revision,
+                target_path: None,
+            },
+        );
+    }
+
+    fn request_canvas_save_as(&mut self, path: String) {
+        let trimmed = path.trim().to_string();
+        if trimmed.is_empty() {
+            return;
+        }
+        let Some(doc) = self.canvas_document.as_mut() else {
+            return;
+        };
+        if matches!(
+            doc.status,
+            CanvasDocumentStatus::Loading
+                | CanvasDocumentStatus::Saving
+                | CanvasDocumentStatus::LoadError { .. }
+        ) {
+            return;
+        }
+        let workspace_id = doc.workspace_id.clone();
+        let document_id = doc.document_id.clone();
+        let generation = doc.generation;
+        let edit_revision = doc.edit_revision;
+        let content = doc.draft_content.clone();
+        doc.status = CanvasDocumentStatus::Saving;
+        doc.dirty_since_secs = None;
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/document/saveAs",
+            json!({
+                "documentId": document_id,
+                "generation": generation,
+                "editRevision": edit_revision,
+                "content": content,
+                "path": trimmed,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs.insert(
+            req_id,
+            PendingCanvasRpc {
+                document_id,
+                generation,
+                edit_revision,
+                target_path: Some(trimmed),
+            },
+        );
+    }
+
+    fn request_canvas_revision(&mut self) {
+        let Some(doc) = self.canvas_document.as_mut() else {
+            return;
+        };
+        let workspace_id = doc.workspace_id.clone();
+        let document_id = doc.document_id.clone();
+        let generation = doc.generation;
+        let edit_revision = doc.edit_revision;
+        doc.last_poll_secs = self.now_secs;
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/document/revision",
+            json!({
+                "documentId": document_id,
+                "generation": generation,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs.insert(
+            req_id,
+            PendingCanvasRpc {
+                document_id,
+                generation,
+                edit_revision,
+                target_path: None,
+            },
+        );
+    }
+
+    fn apply_canvas_rpc_response(&mut self, request_id: u64, method: &str, payload: &Value) {
+        let pending = self.pending_canvas_rpcs.remove(&request_id);
+        let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        let resp_doc = payload.get("document");
+        let resp_doc_id = payload
+            .get("documentId")
+            .or_else(|| resp_doc.and_then(|d| d.get("documentId")))
+            .and_then(Value::as_str);
+        let resp_gen = payload
+            .get("generation")
+            .or_else(|| resp_doc.and_then(|d| d.get("generation")))
+            .and_then(Value::as_u64);
+
+        let expected_gen = resp_gen.or_else(|| pending.as_ref().map(|p| p.generation));
+        let expected_doc_id = resp_doc_id
+            .map(str::to_string)
+            .or_else(|| pending.as_ref().map(|p| p.document_id.clone()));
+
+        let Some(active_doc) = self.canvas_document.as_ref() else {
+            return;
+        };
+        if expected_gen != Some(active_doc.generation)
+            || expected_doc_id
+                .as_deref()
+                .is_some_and(|id| id != active_doc.document_id)
+        {
+            return;
+        }
+
+        match method {
+            "cowork/workspace/document/open" => {
+                let Some(doc) = self.canvas_document.as_mut() else {
+                    return;
+                };
+                if ok && let Some(snap) = resp_doc {
+                    let path = snap
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&doc.path)
+                        .to_string();
+                    let content = snap
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let truncated = snap
+                        .get("truncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let revision = snap.get("revision").and_then(|r| {
+                        serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
+                    });
+                    doc.path = path;
+                    doc.disk_content = content.clone();
+                    doc.draft_content = content;
+                    doc.truncated = truncated;
+                    doc.revision = revision;
+                    doc.last_saved_edit_revision = doc.edit_revision;
+                    doc.dirty_since_secs = None;
+                    doc.last_poll_secs = self.now_secs;
+                    doc.status = CanvasDocumentStatus::Ready;
+                } else {
+                    let kind = payload
+                        .get("error")
+                        .and_then(|e| e.get("kind"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let message = payload
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Unable to open document.")
+                        .to_string();
+                    doc.status = CanvasDocumentStatus::LoadError { kind, message };
+                }
+            }
+            "cowork/workspace/document/revision" => {
+                if ok {
+                    let new_rev = payload.get("revision").and_then(|r| {
+                        serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
+                    });
+                    let Some(new_rev) = new_rev else {
+                        return;
+                    };
+                    let changed = self
+                        .canvas_document
+                        .as_ref()
+                        .is_some_and(|d| d.revision.as_ref() != Some(&new_rev));
+                    if !changed {
+                        return;
+                    }
+                    let (dirty, in_flight) = self
+                        .canvas_document
+                        .as_ref()
+                        .map(|d| {
+                            (
+                                d.dirty(),
+                                matches!(
+                                    d.status,
+                                    CanvasDocumentStatus::Loading | CanvasDocumentStatus::Saving
+                                ),
+                            )
+                        })
+                        .unwrap_or((false, true));
+                    if !dirty && !in_flight {
+                        self.reload_canvas_document();
+                    } else if dirty && let Some(doc) = self.canvas_document.as_mut() {
+                        doc.status = CanvasDocumentStatus::Conflict {
+                            message: "The file changed on disk while you have unsaved edits."
+                                .to_string(),
+                            current_revision: Some(new_rev),
+                        };
+                        doc.dirty_since_secs = None;
+                    }
+                } else {
+                    let kind = payload
+                        .get("error")
+                        .and_then(|e| e.get("kind"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let message = payload
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Unable to check document revision.")
+                        .to_string();
+                    if let Some(doc) = self.canvas_document.as_mut()
+                        && kind.as_deref() != Some("session_not_found")
+                    {
+                        if doc.dirty() {
+                            doc.status = CanvasDocumentStatus::Conflict {
+                                message,
+                                current_revision: None,
+                            };
+                            doc.dirty_since_secs = None;
+                        } else {
+                            doc.status = CanvasDocumentStatus::LoadError { kind, message };
+                        }
+                    }
+                }
+            }
+            "cowork/workspace/document/save" | "cowork/workspace/document/saveAs" => {
+                let save_as = method.ends_with("/saveAs");
+                let saved_edit_rev = payload
+                    .get("editRevision")
+                    .and_then(Value::as_u64)
+                    .or_else(|| pending.as_ref().map(|p| p.edit_revision))
+                    .unwrap_or(0);
+                let saved_path = payload
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| pending.as_ref().and_then(|p| p.target_path.clone()));
+                if ok {
+                    let status_str = payload
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("saved");
+                    let new_rev = payload.get("revision").and_then(|r| {
+                        serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
+                    });
+                    let Some(doc) = self.canvas_document.as_mut() else {
+                        return;
+                    };
+                    if status_str == "saved" {
+                        if let Some(p) = saved_path {
+                            doc.path = p;
+                        }
+                        if let Some(rev) = new_rev {
+                            doc.revision = Some(rev);
+                        }
+                        doc.last_saved_edit_revision =
+                            doc.last_saved_edit_revision.max(saved_edit_rev);
+                        doc.last_saved_at_secs = Some(self.now_secs);
+                        if doc.edit_revision <= saved_edit_rev {
+                            doc.disk_content = doc.draft_content.clone();
+                            doc.dirty_since_secs = None;
+                            doc.status = CanvasDocumentStatus::Ready;
+                        } else {
+                            // Newer keystrokes arrived while this save was in-flight; keep dirty and debounce again.
+                            doc.dirty_since_secs = Some(self.now_secs);
+                            doc.status = CanvasDocumentStatus::Ready;
+                        }
+                    } else if doc.edit_revision <= saved_edit_rev {
+                        doc.status = CanvasDocumentStatus::Ready;
+                    }
+                    let save_as_refresh = if save_as {
+                        Some((doc.workspace_id.clone(), doc.path.clone()))
+                    } else {
+                        None
+                    };
+                    if let Some((ws_id, doc_path)) = save_as_refresh {
+                        let parent_raw = Path::new(&doc_path)
+                            .parent()
+                            .and_then(|p| p.to_str())
+                            .unwrap_or(".");
+                        let dir = self.normalize_explorer_path(&ws_id, parent_raw);
+                        self.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
+                            workspace_id: ws_id,
+                            dir,
+                        }));
+                    }
+                } else {
+                    let kind = payload
+                        .get("error")
+                        .and_then(|e| e.get("kind"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let message = payload
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Failed to save document.")
+                        .to_string();
+                    let current_revision = payload.get("currentRevision").and_then(|r| {
+                        serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
+                    });
+                    if let Some(doc) = self.canvas_document.as_mut() {
+                        doc.dirty_since_secs = None;
+                        if kind.as_deref() == Some("conflict") {
+                            doc.status = CanvasDocumentStatus::Conflict {
+                                message,
+                                current_revision,
+                            };
+                        } else {
+                            doc.status = CanvasDocumentStatus::SaveError { kind, message };
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_canvas_rpc_error(&mut self, request_id: u64, method: &str, err: &WsRpcError) {
+        let Some(pending) = self.pending_canvas_rpcs.remove(&request_id) else {
+            return;
+        };
+        let Some(doc) = self.canvas_document.as_mut() else {
+            return;
+        };
+        if doc.document_id != pending.document_id || doc.generation != pending.generation {
+            return;
+        }
+        doc.dirty_since_secs = None;
+        if method.ends_with("/save") || method.ends_with("/saveAs") {
+            doc.status = CanvasDocumentStatus::SaveError {
+                kind: None,
+                message: err.message.clone(),
+            };
+        } else if method.ends_with("/open") {
+            doc.status = CanvasDocumentStatus::LoadError {
+                kind: None,
+                message: err.message.clone(),
+            };
+        }
+    }
+
+    fn apply_workspace_file_changed(&mut self, workspace_id: &str, params: &Value) {
+        let Some(doc) = self.canvas_document.as_ref() else {
+            return;
+        };
+        if doc.workspace_id != workspace_id
+            || matches!(
+                doc.status,
+                CanvasDocumentStatus::Loading | CanvasDocumentStatus::Saving
+            )
+        {
+            return;
+        }
+        let Some(changed_path) = params.get("path").and_then(Value::as_str) else {
+            return;
+        };
+        let resolved_changed = self.resolve_workspace_fs_path(workspace_id, changed_path);
+        let path_matches = changed_path == doc.path || resolved_changed == doc.path;
+        if !path_matches {
+            return;
+        }
+        // Ignore our own save echoes when server broadcasts matching revision.
+        if let Some(version) = params
+            .get("version")
+            .and_then(|v| serde_json::from_value::<CanvasDocumentRevision>(v.clone()).ok())
+            && doc.revision.as_ref() == Some(&version)
+        {
+            return;
+        }
+        self.request_canvas_revision();
+    }
+
+    fn iso_timestamp_now(&self) -> String {
+        let secs = self.now_secs.max(0.0);
+        let millis = (secs * 1000.0).round() as i64;
+        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
+            .unwrap_or_else(chrono::Utc::now)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    fn emit_client_transcript_user_message(
+        &mut self,
+        thread_id: &str,
+        text: &str,
+        client_message_id: Option<&str>,
+    ) {
+        if thread_id.is_empty() {
+            return;
+        }
+        let ts = self.iso_timestamp_now();
+        let payload = json!({
+            "type": "user_message",
+            "text": text,
+            "clientMessageId": client_message_id,
+        });
+        self.send_native(NativeCommand::AppendTranscriptEvent(TranscriptLogEntry {
+            ts,
+            thread_id: thread_id.to_string(),
+            direction: "client".to_string(),
+            payload,
+        }));
+    }
+
+    fn emit_server_transcript_notification(&mut self, method: &str, params: &Value) {
+        let should_log = matches!(
+            method,
+            "turn/started"
+                | "turn/completed"
+                | "item/started"
+                | "item/agentMessage/delta"
+                | "item/reasoning/delta"
+                | "item/completed"
+                | "cowork/sessionEvent"
+                | "cowork/controlEvent"
+                | "cowork/session/turnUsage"
+                | "cowork/session/usage"
+        );
+        if !should_log {
+            return;
+        }
+        let thread_id = params
+            .get("threadId")
+            .or_else(|| params.get("sessionId"))
+            .or_else(|| params.get("event").and_then(|e| e.get("sessionId")))
+            .and_then(Value::as_str);
+        let Some(tid) = thread_id.filter(|id| !id.is_empty()) else {
+            return;
+        };
+        let payload = match method {
+            "cowork/sessionEvent" | "cowork/controlEvent" => params
+                .get("event")
+                .cloned()
+                .unwrap_or_else(|| params.clone()),
+            _ => json!({
+                "method": method,
+                "params": params,
+            }),
+        };
+        let ts = self.iso_timestamp_now();
+        self.send_native(NativeCommand::AppendTranscriptEvent(TranscriptLogEntry {
+            ts,
+            thread_id: tid.to_string(),
+            direction: "server".to_string(),
+            payload,
+        }));
+    }
+
+    fn request_local_transcript(&mut self, thread_id: &str) {
+        let mut candidate_ids = vec![thread_id.to_string()];
+        if let Some(t) = self.threads.iter().find(|t| t.id == thread_id)
+            && let Some(sid) = t
+                .session_id
+                .as_ref()
+                .filter(|s| !s.is_empty() && *s != thread_id)
+        {
+            candidate_ids.push(sid.clone());
+        }
+        let request_id = self.next_tag("transcript");
+        self.send_native(NativeCommand::ReadLocalTranscript {
+            request_id,
+            thread_id: thread_id.to_string(),
+            candidate_ids,
+        });
+    }
+
+    fn replay_local_transcript(&mut self, thread_id: &str, entries: Vec<TranscriptLogEntry>) {
+        let should_skip_for_live = self
+            .thread_runtime_by_id
+            .get(thread_id)
+            .is_some_and(|rt| rt.hydrated && !rt.transcript_only && rt.last_event_seq > 0);
+        if should_skip_for_live {
+            if let Some(rt) = self.thread_runtime_by_id.get_mut(thread_id) {
+                rt.hydrating = false;
+            }
+            return;
+        }
+        let workspace_id = self.workspace_for_thread(thread_id).unwrap_or_default();
+        {
+            let rt = self
+                .thread_runtime_by_id
+                .entry(thread_id.to_string())
+                .or_default();
+            rt.feed.clear();
+            rt.agents.clear();
+            rt.agent_run_feeds.clear();
+            rt.todos.clear();
+            rt.pending_interactions.clear();
+            rt.usage = None;
+            rt.last_turn_usage = None;
+            rt.streaming = false;
+            rt.active_turn_id = None;
+            rt.hydrated = true;
+            rt.hydrating = false;
+            rt.transcript_only = true;
+        }
+
+        let mut seen_user_keys: HashSet<String> = HashSet::new();
+        for (idx, entry) in entries.into_iter().enumerate() {
+            let ts_ms = chrono::DateTime::parse_from_rfc3339(&entry.ts)
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or_else(|_| (self.now_secs * 1000.0) as i64);
+
+            if let Some(method) = entry.payload.get("method").and_then(Value::as_str)
+                && let Some(params) = entry.payload.get("params")
+            {
+                let mut params_owned = params.clone();
+                if let Some(obj) = params_owned.as_object_mut()
+                    && !obj.contains_key("threadId")
+                {
+                    obj.insert("threadId".to_string(), json!(thread_id));
+                }
+                self.apply_ws_notification_inner(&workspace_id, method, params_owned, ts_ms, false);
+                continue;
+            }
+
+            let Some(evt_type) = entry.payload.get("type").and_then(Value::as_str) else {
+                continue;
+            };
+            match evt_type {
+                "user_message" => {
+                    let content = entry
+                        .payload
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if content.trim().is_empty() {
+                        continue;
+                    }
+                    let cid = entry
+                        .payload
+                        .get("clientMessageId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let dedupe_key = cid
+                        .as_ref()
+                        .map(|c| format!("cid:{c}"))
+                        .unwrap_or_else(|| format!("txt:{}", content.trim()));
+                    if !seen_user_keys.insert(dedupe_key) {
+                        continue;
+                    }
+                    let rt = self
+                        .thread_runtime_by_id
+                        .entry(thread_id.to_string())
+                        .or_default();
+                    rt.feed.push(FeedItem::Message {
+                        id: format!("transcript-user-{idx}"),
+                        role: FeedMessageRole::User,
+                        content,
+                        client_message_id: cid,
+                        attachments: Vec::new(),
+                        references: Vec::new(),
+                        citations: Vec::new(),
+                        streaming: false,
+                        timestamp_ms: ts_ms,
+                    });
+                }
+                "assistant_message" => {
+                    let content = entry
+                        .payload
+                        .get("text")
+                        .or_else(|| entry.payload.get("content"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if content.trim().is_empty() {
+                        continue;
+                    }
+                    let rt = self
+                        .thread_runtime_by_id
+                        .entry(thread_id.to_string())
+                        .or_default();
+                    rt.feed.push(FeedItem::Message {
+                        id: format!("transcript-assistant-{idx}"),
+                        role: FeedMessageRole::Assistant,
+                        content,
+                        client_message_id: None,
+                        attachments: Vec::new(),
+                        references: Vec::new(),
+                        citations: Vec::new(),
+                        streaming: false,
+                        timestamp_ms: ts_ms,
+                    });
+                }
+                "reasoning" => {
+                    let content = entry
+                        .payload
+                        .get("text")
+                        .or_else(|| entry.payload.get("content"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if content.trim().is_empty() {
+                        continue;
+                    }
+                    let rt = self
+                        .thread_runtime_by_id
+                        .entry(thread_id.to_string())
+                        .or_default();
+                    rt.feed.push(FeedItem::Reasoning {
+                        id: format!("transcript-reasoning-{idx}"),
+                        content,
+                        mode: "summary".to_string(),
+                        streaming: false,
+                        timestamp_ms: ts_ms,
+                    });
+                }
+                _ => {
+                    let mut evt = entry.payload.clone();
+                    if let Some(obj) = evt.as_object_mut()
+                        && !obj.contains_key("sessionId")
+                        && !obj.contains_key("threadId")
+                    {
+                        obj.insert("sessionId".to_string(), json!(thread_id));
+                    }
+                    self.reduce_cowork_event(&workspace_id, &evt, ts_ms);
+                }
+            }
+        }
+        if let Some(rt) = self.thread_runtime_by_id.get_mut(thread_id) {
+            rt.streaming = false;
+            rt.active_turn_id = None;
+            rt.hydrating = false;
+            rt.hydrated = true;
+            rt.transcript_only = true;
+            for item in &mut rt.feed {
+                match item {
+                    FeedItem::Message { streaming, .. }
+                    | FeedItem::Reasoning { streaming, .. }
+                    | FeedItem::Tool { streaming, .. } => *streaming = false,
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Emits a `WsCommand` to the attached WS manager (or test buffer).
     pub fn send_ws(&mut self, cmd: WsCommand) {
         if let Some(ref tx) = self.services.ws_tx {
@@ -2221,11 +3266,18 @@ impl AppState {
             self.apply_store_event(event);
             changed = true;
         }
+        if self.tick_canvas_timers() {
+            changed = true;
+        }
+        if changed {
+            self.shared_dirty = true;
+        }
         changed
     }
 
     /// Applies an asynchronous `StoreEvent` onto `AppState`.
     pub fn apply_store_event(&mut self, event: StoreEvent) {
+        self.shared_dirty = true;
         match event {
             StoreEvent::NativeReady {
                 persisted,
@@ -2243,6 +3295,7 @@ impl AppState {
                 }
                 self.desktop_settings = persisted.settings;
                 self.onboarding = persisted.onboarding;
+                self.product_analytics = persisted.product_analytics;
                 self.feature_flag_overrides = persisted.feature_flags;
                 self.feature_flags =
                     resolve_feature_flags(is_packaged, &self.feature_flag_overrides);
@@ -2300,11 +3353,14 @@ impl AppState {
                 let workspace_id = workspace.id.clone();
                 let path = workspace.path.clone();
                 let yolo = workspace.yolo;
+                let mcp_enabled = workspace.default_enable_mcp;
+                let mut added_new = false;
                 if let Some(existing) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
                     *existing = workspace;
                 } else {
                     self.workspaces.push(workspace);
                     self.workspace_order.push(workspace_id.clone());
+                    added_new = true;
                 }
                 self.active_workspace_id = Some(workspace_id.clone());
                 self.sync_active_explorer_dir();
@@ -2313,6 +3369,17 @@ impl AppState {
                     path,
                     yolo,
                 });
+                if added_new {
+                    self.send_native(NativeCommand::TrackAnalyticsEvent {
+                        name: "workspace_added".to_string(),
+                        properties: json!({
+                            "eventSource": "renderer",
+                            "workspaceCount": self.workspaces.len(),
+                            "mcpEnabled": mcp_enabled,
+                            "yoloEnabled": yolo,
+                        }),
+                    });
+                }
             }
             StoreEvent::WorkspaceFilesListed {
                 workspace_id,
@@ -2541,10 +3608,25 @@ impl AppState {
                 "command_palette" => {
                     self.dispatch(Action::Shell(ShellAction::ToggleCommandPalette));
                 }
+                "zoom_in" => {
+                    self.dispatch(Action::Shell(ShellAction::ZoomIn));
+                }
+                "zoom_out" => {
+                    self.dispatch(Action::Shell(ShellAction::ZoomOut));
+                }
+                "reset_zoom" => {
+                    self.dispatch(Action::Shell(ShellAction::ResetZoom));
+                }
+                "open_quick_chat" | "file.open_quick_chat" => {
+                    self.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
+                }
+                "open_utility" | "tray_click" => {
+                    self.dispatch(Action::Shell(ShellAction::OpenUtilityWindow));
+                }
                 _ => {}
             },
             StoreEvent::QuickChatToggled => {
-                self.quick_chat_open = !self.quick_chat_open;
+                self.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
             }
             StoreEvent::DeepLink(url) => {
                 let trimmed = url.trim();
@@ -2578,11 +3660,111 @@ impl AppState {
                     }
                 }
             }
+            StoreEvent::WorkspaceEntryRenamed {
+                workspace_id,
+                old_path,
+                new_path,
+            } => {
+                let norm_old = self.normalize_explorer_path(&workspace_id, &old_path);
+                let norm_new = self.normalize_explorer_path(&workspace_id, &new_path);
+                let new_name = Path::new(&new_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&new_path)
+                    .to_string();
+                for ((ws_id, _), entries) in &mut self.explorer_entries_by_workspace {
+                    if ws_id != &workspace_id {
+                        continue;
+                    }
+                    for entry in entries.iter_mut() {
+                        if entry.path == old_path || entry.path == norm_old {
+                            entry.path = norm_new.clone();
+                            entry.name = new_name.clone();
+                        }
+                    }
+                }
+                self.sync_active_explorer_dir();
+                if let Some(ref mut preview) = self.active_file_preview
+                    && preview.workspace_id == workspace_id
+                    && (preview.path == old_path || preview.path == norm_old)
+                {
+                    preview.path = new_path.clone();
+                    preview.title = new_name;
+                }
+                if let Some(ref mut doc) = self.canvas_document
+                    && doc.workspace_id == workspace_id
+                    && (doc.path == old_path || doc.path == norm_old)
+                {
+                    doc.path = new_path;
+                }
+            }
+            StoreEvent::WorkspaceEntryRenameFailed { error, .. } => {
+                self.dispatch(Action::Shell(ShellAction::PushToast {
+                    key: "explorer-rename-failed".to_string(),
+                    title: "Could not rename item".to_string(),
+                    description: Some(error),
+                    tone: NotificationTone::Error,
+                }));
+            }
+            StoreEvent::LaunchableFileConfirmRequired { path, file_name } => {
+                self.pending_launchable_open_path = Some(path);
+                let tag = self.next_tag("launchable");
+                self.pending_confirm_dialog = Some(ConfirmDialogRequest {
+                    id: format!("launchable-open:{tag}"),
+                    title: "Open file that can run code?".to_string(),
+                    message: format!(
+                        "\"{file_name}\" can run programs on this computer.\n\nOpening it runs it outside Cowork's sandbox. Only continue if you trust where this file came from."
+                    ),
+                    confirm_label: "Open Anyway".to_string(),
+                    cancel_label: "Cancel".to_string(),
+                    destructive: true,
+                });
+            }
+            StoreEvent::ConfirmWindowClose {
+                window_id,
+                request_id,
+                title,
+                message,
+            } => {
+                self.pending_confirm_dialog = Some(ConfirmDialogRequest {
+                    id: format!("window-close:{window_id}:{request_id}"),
+                    title,
+                    message,
+                    confirm_label: "Close Anyway".to_string(),
+                    cancel_label: "Keep Open".to_string(),
+                    destructive: true,
+                });
+            }
+            StoreEvent::LocalTranscriptLoaded {
+                thread_id, result, ..
+            } => match result {
+                Ok(entries) => self.replay_local_transcript(&thread_id, entries),
+                Err(err) => {
+                    let was_hydrated = self
+                        .thread_runtime_by_id
+                        .get(&thread_id)
+                        .is_some_and(|rt| rt.hydrated);
+                    let rt = self.thread_runtime_by_id.entry(thread_id).or_default();
+                    rt.hydrating = false;
+                    if !was_hydrated {
+                        rt.last_error = Some(err);
+                    }
+                }
+            },
+            StoreEvent::ProductAnalyticsStateUpdated(val) => {
+                self.product_analytics = val;
+            }
         }
     }
 
     /// Synchronous state transition entrypoint called by views, keyboard shortcuts, and tests.
     pub fn dispatch(&mut self, action: Action) {
+        if !matches!(
+            action,
+            Action::Navigate(_) | Action::Shell(ShellAction::SetWindowMode(_))
+        ) {
+            self.shared_dirty = true;
+        }
         match action {
             Action::Navigate(nav) => self.reduce_nav(nav),
             Action::Shell(shell) => self.reduce_shell(shell),
@@ -2843,8 +4025,26 @@ impl AppState {
             ShellAction::RequestConfirmDialog(req) => {
                 self.pending_confirm_dialog = Some(req);
             }
-            ShellAction::ResolveConfirmDialog { .. } => {
+            ShellAction::ResolveConfirmDialog { id, confirmed } => {
                 self.pending_confirm_dialog = None;
+                if id.starts_with("launchable-open:") {
+                    if let Some(path) = self.pending_launchable_open_path.take()
+                        && confirmed
+                    {
+                        self.send_native(NativeCommand::OpenInDefaultApp {
+                            path,
+                            confirmed: true,
+                        });
+                    }
+                } else if let Some(rest) = id.strip_prefix("window-close:")
+                    && let Some((window_id, request_id)) = rest.split_once(':')
+                {
+                    self.send_native(NativeCommand::ResolveWindowClose {
+                        window_id: window_id.to_string(),
+                        request_id: request_id.to_string(),
+                        confirmed,
+                    });
+                }
             }
             ShellAction::RepairCreationReadiness {
                 action,
@@ -2909,6 +4109,87 @@ impl AppState {
                     }
                 }
             }
+            ShellAction::ZoomIn => self.zoom_in(),
+            ShellAction::ZoomOut => self.zoom_out(),
+            ShellAction::ResetZoom => self.reset_zoom(),
+            ShellAction::OpenQuickChatWindow => {
+                self.send_window(WindowCommand::OpenQuickChat);
+            }
+            ShellAction::OpenUtilityWindow => {
+                self.send_window(WindowCommand::OpenUtility);
+            }
+            ShellAction::FocusMainWindow {
+                open_new_chat_workspace,
+                open_thread_id,
+            } => {
+                if self.window_mode == WindowMode::Main {
+                    self.apply_main_focus_nav(open_new_chat_workspace, open_thread_id);
+                } else {
+                    self.pending_main_focus = Some(PendingMainFocus {
+                        open_new_chat_workspace: open_new_chat_workspace.clone(),
+                        open_thread_id: open_thread_id.clone(),
+                    });
+                    self.send_window(WindowCommand::FocusMain {
+                        open_new_chat_workspace,
+                        open_thread_id,
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn swap_shared_core(&mut self, other: &mut Self) {
+        std::mem::swap(self, other);
+        // Preserve per-window state across shared-core synchronization.
+        std::mem::swap(&mut self.window_mode, &mut other.window_mode);
+        std::mem::swap(&mut self.nav, &mut other.nav);
+        std::mem::swap(&mut self.sidebar, &mut other.sidebar);
+        std::mem::swap(&mut self.context_sidebar, &mut other.context_sidebar);
+        std::mem::swap(&mut self.sidebar_search, &mut other.sidebar_search);
+        std::mem::swap(
+            &mut self.sidebar_search_edit,
+            &mut other.sidebar_search_edit,
+        );
+        std::mem::swap(
+            &mut self.command_palette_open,
+            &mut other.command_palette_open,
+        );
+        std::mem::swap(
+            &mut self.command_palette_query,
+            &mut other.command_palette_query,
+        );
+        std::mem::swap(
+            &mut self.command_palette_edit,
+            &mut other.command_palette_edit,
+        );
+        std::mem::swap(&mut self.quick_chat_open, &mut other.quick_chat_open);
+        std::mem::swap(&mut self.composer_edit, &mut other.composer_edit);
+        std::mem::swap(&mut self.chat_ui, &mut other.chat_ui);
+        std::mem::swap(&mut self.settings_ui, &mut other.settings_ui);
+        std::mem::swap(&mut self.shell_ui, &mut other.shell_ui);
+        std::mem::swap(&mut self.scene_mode, &mut other.scene_mode);
+        std::mem::swap(&mut self.now_secs, &mut other.now_secs);
+    }
+
+    pub fn apply_pending_main_focus(&mut self) -> bool {
+        let Some(focus) = self.pending_main_focus.take() else {
+            return false;
+        };
+        self.apply_main_focus_nav(focus.open_new_chat_workspace, focus.open_thread_id);
+        true
+    }
+
+    pub fn apply_main_focus_nav(
+        &mut self,
+        open_new_chat_workspace: Option<String>,
+        open_thread_id: Option<String>,
+    ) {
+        if let Some(tid) = open_thread_id {
+            self.dispatch(Action::Navigate(NavAction::OpenThread(tid)));
+        } else if let Some(ws_id) = open_new_chat_workspace {
+            self.dispatch(Action::Navigate(NavAction::OpenNewChat {
+                workspace_id: (!ws_id.is_empty()).then_some(ws_id),
+            }));
         }
     }
 
@@ -3270,9 +4551,25 @@ impl AppState {
                         after_seq,
                         include_turns: Some(true),
                     };
-                    let _ = self.send_ws_typed(&ws_id, "thread/hydrate", &params, true);
-                    let cmd_params = CommandListParams { thread_id };
+                    if let Some(req_id) =
+                        self.send_ws_typed(&ws_id, "thread/hydrate", &params, true)
+                    {
+                        self.pending_hydrate_threads_by_rpc_id
+                            .insert(req_id, thread_id.clone());
+                    }
+                    let cmd_params = CommandListParams {
+                        thread_id: thread_id.clone(),
+                    };
                     let _ = self.send_ws_typed(&ws_id, "command/list", &cmd_params, true);
+                    let already_hydrated = self
+                        .thread_runtime_by_id
+                        .get(&thread_id)
+                        .is_some_and(|rt| rt.hydrated && !rt.transcript_only);
+                    if !self.is_workspace_ws_connected(&ws_id) && !already_hydrated {
+                        self.request_local_transcript(&thread_id);
+                    }
+                } else {
+                    self.request_local_transcript(&thread_id);
                 }
             }
             ChatAction::CreateThread {
@@ -3567,6 +4864,58 @@ impl AppState {
                     false,
                 );
             }
+            ChatAction::OpenCanvasDocument { workspace_id, path } => {
+                self.open_canvas_document(workspace_id, path);
+            }
+            ChatAction::ReloadCanvasDocument => {
+                self.reload_canvas_document();
+            }
+            ChatAction::UpdateCanvasDraft {
+                document_id,
+                generation,
+                content,
+            } => {
+                if let Some(ref mut doc) = self.canvas_document
+                    && doc.document_id == document_id
+                    && doc.generation == generation
+                    && !doc.truncated
+                    && doc.draft_content != content
+                {
+                    doc.draft_content = content;
+                    doc.edit_revision += 1;
+                    if doc.dirty() {
+                        if doc.dirty_since_secs.is_none() {
+                            doc.dirty_since_secs = Some(self.now_secs);
+                        }
+                    } else {
+                        doc.dirty_since_secs = None;
+                    }
+                    if matches!(doc.status, CanvasDocumentStatus::SaveError { .. }) {
+                        doc.status = CanvasDocumentStatus::Ready;
+                    }
+                }
+            }
+            ChatAction::SaveCanvasDocument => {
+                self.request_canvas_save();
+            }
+            ChatAction::SaveCanvasDocumentAs { path } => {
+                self.request_canvas_save_as(path);
+            }
+            ChatAction::CloseCanvasDocument => {
+                self.close_canvas_document();
+            }
+            ChatAction::SendCanvasEditPrompt { prompt } => {
+                if !prompt.trim().is_empty() {
+                    let tid = self.nav.current().active_thread_id.clone();
+                    self.submit_chat_message(
+                        tid,
+                        prompt,
+                        ThreadBusyPolicy::Steer,
+                        Vec::new(),
+                        Vec::new(),
+                    );
+                }
+            }
         }
     }
 
@@ -3682,9 +5031,9 @@ impl AppState {
                     }
                     let input = build_turn_input(&trimmed, &attachments);
                     let params = TurnSteerParams {
-                        thread_id: tid,
+                        thread_id: tid.clone(),
                         turn_id: active_turn_id,
-                        client_message_id: Some(client_message_id),
+                        client_message_id: Some(client_message_id.clone()),
                         input,
                         references: (!references.is_empty()).then(|| {
                             references
@@ -3694,6 +5043,11 @@ impl AppState {
                         }),
                     };
                     let _ = self.send_ws_typed(&ws_id, "turn/steer", &params, false);
+                    self.emit_client_transcript_user_message(
+                        &tid,
+                        &trimmed,
+                        Some(&client_message_id),
+                    );
                     return;
                 }
 
@@ -3731,8 +5085,8 @@ impl AppState {
                 if let Some(ws_id) = self.workspace_for_thread(&tid) {
                     let input = build_turn_input(&trimmed, &attachments);
                     let params = TurnStartParams {
-                        thread_id: tid,
-                        client_message_id: Some(client_message_id),
+                        thread_id: tid.clone(),
+                        client_message_id: Some(client_message_id.clone()),
                         input,
                         references: (!references.is_empty()).then(|| {
                             references
@@ -3744,6 +5098,11 @@ impl AppState {
                         tools: None,
                     };
                     let _ = self.send_ws_typed(&ws_id, "turn/start", &params, false);
+                    self.emit_client_transcript_user_message(
+                        &tid,
+                        &trimmed,
+                        Some(&client_message_id),
+                    );
                 }
             }
             None => {
@@ -3875,13 +5234,18 @@ impl AppState {
         });
         let params = TurnStartParams {
             thread_id: thread_id.to_string(),
-            client_message_id: pending.client_message_id,
+            client_message_id: pending.client_message_id.clone(),
             input,
             references,
             retry: None,
             tools: None,
         };
         let _ = self.send_ws_typed(workspace_id, "turn/start", &params, false);
+        self.emit_client_transcript_user_message(
+            thread_id,
+            &pending.text,
+            pending.client_message_id.as_deref(),
+        );
     }
 
     fn reduce_settings(&mut self, action: SettingsAction) {
@@ -5300,7 +6664,9 @@ impl AppState {
                 });
             }
             NativeAction::RemoveWorkspace(workspace_id) => {
+                let before_len = self.workspaces.len();
                 self.workspaces.retain(|w| w.id != workspace_id);
+                let removed = self.workspaces.len() < before_len;
                 self.workspace_order.retain(|id| id != &workspace_id);
                 self.collapsed_workspace_ids.remove(&workspace_id);
                 self.workspace_runtime_by_id.remove(&workspace_id);
@@ -5313,11 +6679,27 @@ impl AppState {
                 if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
                     self.active_workspace_id = self.workspaces.first().map(|w| w.id.clone());
                 }
+                if self
+                    .canvas_document
+                    .as_ref()
+                    .is_some_and(|d| d.workspace_id == workspace_id)
+                {
+                    self.close_canvas_document();
+                }
                 self.sync_active_explorer_dir();
                 self.persist_state();
                 self.send_native(NativeCommand::StopWorkspaceServer {
                     workspace_id: workspace_id.clone(),
                 });
+                if removed {
+                    self.send_native(NativeCommand::TrackAnalyticsEvent {
+                        name: "workspace_removed".to_string(),
+                        properties: json!({
+                            "eventSource": "renderer",
+                            "workspaceCount": self.workspaces.len(),
+                        }),
+                    });
+                }
                 self.send_ws(WsCommand::DisconnectWorkspace { workspace_id });
             }
             NativeAction::RestartWorkspaceServer(workspace_id) => {
@@ -5356,14 +6738,21 @@ impl AppState {
             }
             NativeAction::LoadFilePreview { workspace_id, path } => {
                 if let Some(root) = self.workspace_path(&workspace_id) {
-                    let request_id = self.next_tag("preview");
                     let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
-                    self.send_native(NativeCommand::ReadFilePreview {
-                        request_id,
-                        workspace_id,
-                        workspace_root: root,
-                        path: resolved_path,
-                    });
+                    if self.should_open_in_canvas(&resolved_path) {
+                        self.open_canvas_document(workspace_id, resolved_path);
+                    } else {
+                        if self.canvas_document.as_ref().is_some_and(|d| !d.dirty()) {
+                            self.close_canvas_document();
+                        }
+                        let request_id = self.next_tag("preview");
+                        self.send_native(NativeCommand::ReadFilePreview {
+                            request_id,
+                            workspace_id,
+                            workspace_root: root,
+                            path: resolved_path,
+                        });
+                    }
                 }
             }
             NativeAction::FetchImageBytes { request_id, url } => {
@@ -5379,10 +6768,30 @@ impl AppState {
                 self.send_native(NativeCommand::RevealInOs(path));
             }
             NativeAction::OpenInDefaultApp(path) => {
-                self.send_native(NativeCommand::OpenInDefaultApp(path));
+                self.send_native(NativeCommand::OpenInDefaultApp {
+                    path,
+                    confirmed: false,
+                });
             }
             NativeAction::TrashPath(path) => {
                 self.send_native(NativeCommand::TrashPath(path));
+            }
+            NativeAction::RenameWorkspaceEntry {
+                workspace_id,
+                path,
+                new_name,
+            } => {
+                if let Some(root) = self.workspace_path(&workspace_id) {
+                    let request_id = self.next_tag("rename");
+                    let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
+                    self.send_native(NativeCommand::RenameWorkspaceEntry {
+                        request_id,
+                        workspace_id,
+                        workspace_root: root,
+                        path: resolved_path,
+                        new_name,
+                    });
+                }
             }
         }
     }
@@ -5487,6 +6896,20 @@ impl AppState {
 
     fn apply_ws_notification(&mut self, workspace_id: &str, method: &str, params: Value) {
         let now_ms = (self.now_secs * 1000.0) as i64;
+        self.apply_ws_notification_inner(workspace_id, method, params, now_ms, true);
+    }
+
+    fn apply_ws_notification_inner(
+        &mut self,
+        workspace_id: &str,
+        method: &str,
+        params: Value,
+        now_ms: i64,
+        record_transcript: bool,
+    ) {
+        if record_transcript {
+            self.emit_server_transcript_notification(method, &params);
+        }
         if let Some(seq) = params.get("seq").and_then(Value::as_u64)
             && let Some(tid) = params.get("threadId").and_then(Value::as_str)
         {
@@ -5496,6 +6919,9 @@ impl AppState {
                 .or_default();
             if seq > rt.last_event_seq {
                 rt.last_event_seq = seq;
+            }
+            if record_transcript && seq > 0 {
+                rt.transcript_only = false;
             }
         }
 
@@ -5585,6 +7011,9 @@ impl AppState {
                         active.activity.insert(0, activity);
                     }
                 }
+            }
+            "cowork/workspace/fileChanged" => {
+                self.apply_workspace_file_changed(workspace_id, &params);
             }
             _ => {
                 if method.starts_with("cowork/") {
@@ -6478,7 +7907,20 @@ impl AppState {
             "thread/list" => self.apply_thread_list_response(workspace_id, &payload),
             "thread/start" => self.apply_thread_start_response(workspace_id, request_id, &payload),
             "thread/read" | "thread/hydrate" | "thread/resume" => {
-                self.apply_thread_snapshot_response(workspace_id, &payload);
+                let pending_tid = self.pending_hydrate_threads_by_rpc_id.remove(&request_id);
+                if payload.get("coworkSnapshot").is_some() {
+                    self.apply_thread_snapshot_response(workspace_id, &payload);
+                } else if let Some(tid) = pending_tid {
+                    let already_hydrated = self
+                        .thread_runtime_by_id
+                        .get(&tid)
+                        .is_some_and(|rt| rt.hydrated && !rt.feed.is_empty());
+                    if !already_hydrated {
+                        self.request_local_transcript(&tid);
+                    } else if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
+                        rt.hydrating = false;
+                    }
+                }
             }
             "turn/start" => {
                 for draft in self.composer_drafts.values_mut() {
@@ -6744,6 +8186,15 @@ impl AppState {
                     active.active_artifact_detail = Some(detail);
                 }
             }
+            "cowork/workspace/document/open"
+            | "cowork/workspace/document/revision"
+            | "cowork/workspace/document/save"
+            | "cowork/workspace/document/saveAs" => {
+                self.apply_canvas_rpc_response(request_id, method, &payload);
+            }
+            "cowork/workspace/document/close" => {
+                self.pending_canvas_rpcs.remove(&request_id);
+            }
             _ => {}
         }
     }
@@ -6761,6 +8212,23 @@ impl AppState {
             rt.pending_turn_count = 0;
             rt.last_error = Some(err.message.clone());
         }
+        if matches!(method, "thread/read" | "thread/hydrate" | "thread/resume")
+            && let Some(tid) = self.pending_hydrate_threads_by_rpc_id.remove(&request_id)
+        {
+            let already_hydrated = self
+                .thread_runtime_by_id
+                .get(&tid)
+                .is_some_and(|rt| rt.hydrated && !rt.feed.is_empty());
+            if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
+                rt.hydrating = false;
+            }
+            if !already_hydrated {
+                self.request_local_transcript(&tid);
+            }
+        }
+        if method.starts_with("cowork/workspace/document/") {
+            self.apply_canvas_rpc_error(request_id, method, &err);
+        }
         if method == "turn/start" {
             for draft in self.composer_drafts.values_mut() {
                 if draft.submitting {
@@ -6768,7 +8236,8 @@ impl AppState {
                     draft.submission_error = Some(err.message.clone());
                 }
             }
-        } else if method.starts_with("cowork/") {
+        } else if method.starts_with("cowork/") && !method.starts_with("cowork/workspace/document/")
+        {
             self.settings_mutation_error = Some(err.message.clone());
         }
         let rt = self
@@ -6988,6 +8457,7 @@ impl AppState {
         let rt = self.thread_runtime_by_id.entry(session_id).or_default();
         rt.hydrating = false;
         rt.hydrated = true;
+        rt.transcript_only = false;
 
         // Guard against out-of-order stale snapshots when live events already advanced `last_event_seq`.
         if snap_seq > 0 && rt.last_event_seq > snap_seq {
@@ -7588,6 +9058,7 @@ impl AppState {
             active_thread_id,
             onboarding: self.onboarding.clone(),
             feature_flags: self.feature_flag_overrides.clone(),
+            product_analytics: self.product_analytics.clone(),
         };
         self.send_native(NativeCommand::SavePersistedState(Box::new(snapshot)));
     }
@@ -12200,5 +13671,492 @@ mod tests {
         );
         assert_eq!(statuses[1].provider, "google");
         assert!(statuses[1].saved_api_key_mask.is_none());
+    }
+
+    #[test]
+    fn wave2_zoom_window_commands_and_shared_core_swap() {
+        let mut main_state = AppState::default();
+        assert!((main_state.ui_scale - DEFAULT_UI_SCALE).abs() < f32::EPSILON);
+
+        for _ in 0..20 {
+            main_state.dispatch(Action::Shell(ShellAction::ZoomIn));
+        }
+        assert!((main_state.ui_scale - MAX_UI_SCALE).abs() < f32::EPSILON);
+
+        for _ in 0..25 {
+            main_state.apply_store_event(StoreEvent::MenuInvoked("zoom_out".to_string()));
+        }
+        assert!((main_state.ui_scale - MIN_UI_SCALE).abs() < f32::EPSILON);
+
+        main_state.apply_store_event(StoreEvent::MenuInvoked("reset_zoom".to_string()));
+        assert!((main_state.ui_scale - DEFAULT_UI_SCALE).abs() < f32::EPSILON);
+
+        main_state.apply_store_event(StoreEvent::QuickChatToggled);
+        main_state.apply_store_event(StoreEvent::MenuInvoked("open_utility".to_string()));
+        assert_eq!(
+            main_state.services.emitted_window_commands,
+            vec![WindowCommand::OpenQuickChat, WindowCommand::OpenUtility]
+        );
+
+        let mut quick_state = AppState {
+            window_mode: WindowMode::QuickChat,
+            nav: NavigationHistory::default(),
+            ..Default::default()
+        };
+        quick_state.composer_edit = TextEdit::new("local draft");
+        quick_state.now_secs = 42.0;
+
+        main_state.workspaces.push(WorkspaceRecord {
+            id: "ws-shared".to_string(),
+            name: "Shared".to_string(),
+            path: "/tmp/shared".to_string(),
+            ..Default::default()
+        });
+        main_state.dispatch(Action::Shell(ShellAction::ZoomIn));
+        main_state.swap_shared_core(&mut quick_state);
+
+        assert_eq!(quick_state.window_mode, WindowMode::QuickChat);
+        assert_eq!(quick_state.composer_edit.text, "local draft");
+        assert_eq!(quick_state.now_secs, 42.0);
+        assert_eq!(quick_state.workspaces.len(), 1);
+        assert!((quick_state.ui_scale - 1.1).abs() < 1e-5);
+        assert!(main_state.workspaces.is_empty());
+
+        quick_state.dispatch(Action::Shell(ShellAction::FocusMainWindow {
+            open_new_chat_workspace: Some("ws-shared".to_string()),
+            open_thread_id: None,
+        }));
+        assert!(matches!(
+            quick_state.services.emitted_window_commands.last(),
+            Some(WindowCommand::FocusMain {
+                open_new_chat_workspace: Some(ws),
+                open_thread_id: None,
+            }) if ws == "ws-shared"
+        ));
+
+        quick_state.swap_shared_core(&mut main_state);
+        assert_eq!(main_state.window_mode, WindowMode::Main);
+        assert_eq!(main_state.workspaces.len(), 1);
+        assert!(main_state.apply_pending_main_focus());
+        assert_eq!(main_state.nav.current().view, ViewId::Chat);
+    }
+
+    #[test]
+    fn wave2_launchable_confirm_and_window_close_guard_flows() {
+        let mut state = AppState::default();
+        assert!(!state.has_unsaved_or_busy_work());
+
+        state.composer_edit = TextEdit::new("unsent text");
+        assert!(state.has_unsaved_or_busy_work());
+        state.composer_edit = TextEdit::new("");
+        assert!(!state.has_unsaved_or_busy_work());
+
+        state.thread_runtime_by_id.insert(
+            "t-busy".to_string(),
+            ThreadRuntime {
+                streaming: true,
+                ..Default::default()
+            },
+        );
+        assert!(state.has_unsaved_or_busy_work());
+        state.thread_runtime_by_id.clear();
+
+        state.dispatch(Action::Native(NativeAction::OpenInDefaultApp(
+            "/tmp/script.sh".to_string(),
+        )));
+        assert!(matches!(
+            state.services.emitted_native_commands.last(),
+            Some(NativeCommand::OpenInDefaultApp {
+                path,
+                confirmed: false,
+            }) if path == "/tmp/script.sh"
+        ));
+
+        state.apply_store_event(StoreEvent::LaunchableFileConfirmRequired {
+            path: "/tmp/script.sh".to_string(),
+            file_name: "script.sh".to_string(),
+        });
+        let launch_id = state
+            .pending_confirm_dialog
+            .as_ref()
+            .expect("launchable confirm dialog should open")
+            .id
+            .clone();
+        state.dispatch(Action::Shell(ShellAction::ResolveConfirmDialog {
+            id: launch_id,
+            confirmed: true,
+        }));
+        assert!(matches!(
+            state.services.emitted_native_commands.last(),
+            Some(NativeCommand::OpenInDefaultApp {
+                path,
+                confirmed: true,
+            }) if path == "/tmp/script.sh"
+        ));
+
+        state.apply_store_event(StoreEvent::ConfirmWindowClose {
+            window_id: "main".to_string(),
+            request_id: "req-1".to_string(),
+            title: "Unsaved changes".to_string(),
+            message: "Close?".to_string(),
+        });
+        let close_id = state
+            .pending_confirm_dialog
+            .as_ref()
+            .expect("close confirm dialog should open")
+            .id
+            .clone();
+        state.dispatch(Action::Shell(ShellAction::ResolveConfirmDialog {
+            id: close_id,
+            confirmed: false,
+        }));
+        assert!(matches!(
+            state.services.emitted_native_commands.last(),
+            Some(NativeCommand::ResolveWindowClose {
+                window_id,
+                request_id,
+                confirmed: false,
+            }) if window_id == "main" && request_id == "req-1"
+        ));
+    }
+
+    #[test]
+    fn wave2_canvas_routing_lifecycle_debounce_poll_conflict_and_self_echo() {
+        let mut state = AppState {
+            now_secs: 100.0,
+            ..Default::default()
+        };
+        state.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Repo".to_string(),
+            path: "/tmp/repo".to_string(),
+            ..Default::default()
+        });
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), crate::ws::WsConnectionState::Connected);
+
+        // Canvas feature flag defaults to false -> Explorer routes markdown to FilePreview.
+        assert!(!state.should_open_in_canvas("README.md"));
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "README.md".to_string(),
+        }));
+        assert!(state.canvas_document.is_none());
+        assert!(matches!(
+            state.services.emitted_native_commands.last(),
+            Some(NativeCommand::ReadFilePreview { path, .. }) if path == "/tmp/repo/README.md"
+        ));
+
+        // Enable Canvas flag: text/markdown opens in Canvas, spreadsheets & PDF stay out.
+        state.feature_flags.insert("canvas".to_string(), true);
+        assert!(state.should_open_in_canvas("README.md"));
+        assert!(state.should_open_in_canvas("src/main.rs"));
+        assert!(!state.should_open_in_canvas("sheet.xlsx"));
+        assert!(!state.should_open_in_canvas("data.csv"));
+        assert!(!state.should_open_in_canvas("manual.pdf"));
+
+        // Stale open drops when document closed before response arrives.
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "README.md".to_string(),
+        }));
+        let Some(WsCommand::SendRequest {
+            request_id: stale_open_id,
+            method,
+            ..
+        }) = state.services.emitted_ws_commands.last().cloned()
+        else {
+            panic!("expected document/open request");
+        };
+        assert_eq!(method, "cowork/workspace/document/open");
+        state.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: stale_open_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": { "path": "README.md", "content": "stale", "truncated": false }
+            })),
+        });
+        assert!(state.canvas_document.is_none());
+
+        // Fresh open -> Ready with initial revision.
+        state.dispatch(Action::Chat(ChatAction::OpenCanvasDocument {
+            workspace_id: "ws-1".to_string(),
+            path: "README.md".to_string(),
+        }));
+        let Some(WsCommand::SendRequest {
+            request_id: open_id,
+            ..
+        }) = state.services.emitted_ws_commands.last().cloned()
+        else {
+            panic!("expected document/open request");
+        };
+        let doc_id = state.canvas_document.as_ref().unwrap().document_id.clone();
+        let doc_gen = state.canvas_document.as_ref().unwrap().generation;
+        let rev1 = json!({ "modifiedAtMs": 1000.0, "changeTimeMs": 1000.0, "size": 5, "fingerprint": "fp-1" });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: open_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": {
+                    "path": "/tmp/repo/README.md",
+                    "content": "hello",
+                    "truncated": false,
+                    "revision": rev1,
+                }
+            })),
+        });
+        assert_eq!(
+            state.canvas_document.as_ref().unwrap().status,
+            CanvasDocumentStatus::Ready
+        );
+        assert!(!state.has_unsaved_or_busy_work());
+
+        // Self-echo fileChanged with matching revision does NOT schedule a poll.
+        let before_cmds = state.services.emitted_ws_commands.len();
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "cowork/workspace/fileChanged".to_string(),
+            params: json!({
+                "path": "/tmp/repo/README.md",
+                "version": rev1,
+            }),
+        });
+        assert_eq!(state.services.emitted_ws_commands.len(), before_cmds);
+
+        // Draft edit sets dirty + schedules 0.6s debounce autosave + marks busy work.
+        state.dispatch(Action::Chat(ChatAction::UpdateCanvasDraft {
+            document_id: doc_id.clone(),
+            generation: doc_gen,
+            content: "hello world".to_string(),
+        }));
+        assert!(state.canvas_document.as_ref().unwrap().dirty());
+        assert!(state.has_unsaved_or_busy_work());
+        let wake = state.next_canvas_wake_at().expect("wake_at scheduled");
+        assert!((wake - (100.0 + CANVAS_AUTOSAVE_DEBOUNCE_SECS)).abs() < 1e-6);
+
+        state.now_secs = 100.0 + CANVAS_AUTOSAVE_DEBOUNCE_SECS;
+        assert!(state.drain_events());
+        let Some(WsCommand::SendRequest {
+            request_id: save_id,
+            method: save_method,
+            ..
+        }) = state.services.emitted_ws_commands.last().cloned()
+        else {
+            panic!("expected document/save request");
+        };
+        assert_eq!(save_method, "cowork/workspace/document/save");
+        let rev2 = json!({ "modifiedAtMs": 2000.0, "changeTimeMs": 2000.0, "size": 11, "fingerprint": "fp-2" });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: save_id,
+            method: "cowork/workspace/document/save".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "editRevision": 1,
+                "document": {
+                    "path": "/tmp/repo/README.md",
+                    "content": "hello world",
+                    "revision": rev2,
+                }
+            })),
+        });
+        assert!(!state.canvas_document.as_ref().unwrap().dirty());
+        assert_eq!(
+            state.canvas_document.as_ref().unwrap().status,
+            CanvasDocumentStatus::Ready
+        );
+
+        // SaveAs switches path and triggers workspace file listing refresh.
+        state.dispatch(Action::Chat(ChatAction::SaveCanvasDocumentAs {
+            path: "/tmp/repo/README-copy.md".to_string(),
+        }));
+        let Some(WsCommand::SendRequest {
+            request_id: save_as_id,
+            method: save_as_method,
+            ..
+        }) = state.services.emitted_ws_commands.last().cloned()
+        else {
+            panic!("expected document/saveAs request");
+        };
+        assert_eq!(save_as_method, "cowork/workspace/document/saveAs");
+        let rev3 = json!({ "modifiedAtMs": 3000.0, "changeTimeMs": 3000.0, "size": 11, "fingerprint": "fp-3" });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: save_as_id,
+            method: "cowork/workspace/document/saveAs".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "editRevision": 1,
+                "document": {
+                    "path": "/tmp/repo/README-copy.md",
+                    "content": "hello world",
+                    "revision": rev3,
+                }
+            })),
+        });
+        assert_eq!(
+            state.canvas_document.as_ref().unwrap().path,
+            "/tmp/repo/README-copy.md"
+        );
+
+        // Revision poll at +1.5s detects external change while dirty -> Conflict.
+        state.dispatch(Action::Chat(ChatAction::UpdateCanvasDraft {
+            document_id: doc_id,
+            generation: doc_gen,
+            content: "local unsaved edit".to_string(),
+        }));
+        state.now_secs = 100.0 + CANVAS_AUTOSAVE_DEBOUNCE_SECS + CANVAS_REVISION_POLL_SECS + 0.1;
+        // Simulate save error recovery or pre-autosave dirty conflict by setting status Ready with later dirty_since
+        if let Some(doc) = state.canvas_document.as_mut() {
+            doc.dirty_since_secs = Some(state.now_secs);
+            doc.last_poll_secs = state.now_secs - CANVAS_REVISION_POLL_SECS;
+        }
+        assert!(state.drain_events());
+        let Some(WsCommand::SendRequest {
+            request_id: rev_id,
+            method: rev_method,
+            ..
+        }) = state.services.emitted_ws_commands.last().cloned()
+        else {
+            panic!("expected document/revision request");
+        };
+        assert_eq!(rev_method, "cowork/workspace/document/revision");
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: rev_id,
+            method: "cowork/workspace/document/revision".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "revision": { "modifiedAtMs": 9999.0, "changeTimeMs": 9999.0, "size": 99, "fingerprint": "fp-99" }
+            })),
+        });
+        assert!(matches!(
+            state.canvas_document.as_ref().unwrap().status,
+            CanvasDocumentStatus::Conflict { .. }
+        ));
+    }
+
+    #[test]
+    fn wave2_offline_transcript_replay_and_analytics_roundtrip() {
+        let mut state = AppState {
+            now_secs: 1_700_000_000.0,
+            ..Default::default()
+        };
+        let ws = WorkspaceRecord {
+            id: "ws-a".to_string(),
+            name: "Alpha".to_string(),
+            path: "/tmp/alpha".to_string(),
+            ..Default::default()
+        };
+        state.apply_store_event(StoreEvent::WorkspaceAdded(ws));
+        assert!(matches!(
+            state.services.emitted_native_commands.last(),
+            Some(NativeCommand::TrackAnalyticsEvent { name, properties })
+                if name == "workspace_added"
+                    && properties.get("workspaceCount") == Some(&json!(1))
+                    && properties.get("eventSource") == Some(&json!("renderer"))
+        ));
+
+        state.threads.push(ThreadRecord {
+            id: "t-1".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Offline thread".to_string(),
+            session_id: Some("sess-1".to_string()),
+            ..Default::default()
+        });
+
+        // Disconnected HydrateThread falls back to local JSONL transcript read.
+        state.dispatch(Action::Chat(ChatAction::HydrateThread("t-1".to_string())));
+        let req_id = match state.services.emitted_native_commands.last() {
+            Some(NativeCommand::ReadLocalTranscript {
+                request_id,
+                thread_id,
+                candidate_ids,
+            }) => {
+                assert_eq!(thread_id, "t-1");
+                assert_eq!(
+                    candidate_ids,
+                    &vec!["t-1".to_string(), "sess-1".to_string()]
+                );
+                request_id.clone()
+            }
+            other => panic!("expected ReadLocalTranscript, got {other:?}"),
+        };
+
+        state.apply_store_event(StoreEvent::LocalTranscriptLoaded {
+            request_id: req_id,
+            thread_id: "t-1".to_string(),
+            result: Ok(vec![
+                TranscriptLogEntry {
+                    ts: "2026-01-01T00:00:00Z".to_string(),
+                    thread_id: "t-1".to_string(),
+                    direction: "client".to_string(),
+                    payload: json!({
+                        "type": "user_message",
+                        "clientMessageId": "cm-1",
+                        "text": "hello offline",
+                    }),
+                },
+                TranscriptLogEntry {
+                    ts: "2026-01-01T00:00:01Z".to_string(),
+                    thread_id: "t-1".to_string(),
+                    direction: "server".to_string(),
+                    payload: json!({
+                        "type": "assistant_message",
+                        "text": "cached answer",
+                    }),
+                },
+            ]),
+        });
+        let rt = &state.thread_runtime_by_id["t-1"];
+        assert!(rt.hydrated);
+        assert!(rt.transcript_only);
+        assert_eq!(rt.feed.len(), 2);
+
+        // Live snapshot clears transcript_only.
+        state.apply_thread_snapshot_response(
+            "ws-a",
+            &json!({ "coworkSnapshot": { "sessionId": "t-1", "title": "Live", "lastEventSeq": 1, "events": [] } }),
+        );
+        assert!(!state.thread_runtime_by_id["t-1"].transcript_only);
+
+        // Analytics state updates & persists in NativeReady / SavePersistedState.
+        let analytics_payload = json!({ "distinctId": "anon-1", "optedOut": false });
+        state.apply_store_event(StoreEvent::ProductAnalyticsStateUpdated(Some(
+            analytics_payload.clone(),
+        )));
+        assert_eq!(state.product_analytics, Some(analytics_payload.clone()));
+
+        state.dispatch(Action::Native(NativeAction::RemoveWorkspace(
+            "ws-a".to_string(),
+        )));
+        assert!(matches!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .rev()
+                .find(|c| matches!(c, NativeCommand::TrackAnalyticsEvent { .. })),
+            Some(NativeCommand::TrackAnalyticsEvent { name, properties })
+                if name == "workspace_removed"
+                    && properties.get("workspaceCount") == Some(&json!(0))
+                    && properties.get("eventSource") == Some(&json!("renderer"))
+        ));
+        assert!(matches!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .rev()
+                .find(|c| matches!(c, NativeCommand::SavePersistedState(_))),
+            Some(NativeCommand::SavePersistedState(persisted))
+                if persisted.product_analytics == Some(analytics_payload)
+        ));
     }
 }

@@ -889,9 +889,9 @@ impl NativeWorkerContext {
                         .warn("shell", "failed to reveal path in OS", Some(&meta));
                 }
             }
-            NativeCommand::OpenInDefaultApp(path) => {
+            NativeCommand::OpenInDefaultApp { path, confirmed } => {
                 let roots = self.approved_roots_snapshot();
-                match open_in_default_app(&roots, Path::new(&path), false) {
+                match open_in_default_app(&roots, Path::new(&path), confirmed) {
                     Ok(OpenInDefaultAppOutcome::Opened) => {}
                     Ok(OpenInDefaultAppOutcome::ConfirmationRequired {
                         path: safe_path,
@@ -1170,7 +1170,12 @@ impl NativeWorkerContext {
                     }
                 });
             }
-            NativeCommand::Shutdown => {}
+            NativeCommand::RenameWorkspaceEntry { .. }
+            | NativeCommand::ResolveWindowClose { .. }
+            | NativeCommand::ReadLocalTranscript { .. }
+            | NativeCommand::AppendTranscriptEvent(_)
+            | NativeCommand::TrackAnalyticsEvent { .. }
+            | NativeCommand::Shutdown => {}
         }
     }
 

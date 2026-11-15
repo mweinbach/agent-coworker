@@ -110,6 +110,15 @@ pub enum ShellAction {
         action: CreationRepairAction,
         workspace_id: Option<String>,
     },
+    ZoomIn,
+    ZoomOut,
+    ResetZoom,
+    OpenQuickChatWindow,
+    OpenUtilityWindow,
+    FocusMainWindow {
+        open_new_chat_workspace: Option<String>,
+        open_thread_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +221,24 @@ pub enum ChatAction {
     StartLmStudioAndRetry {
         workspace_id: String,
         thread_id: String,
+    },
+    OpenCanvasDocument {
+        workspace_id: String,
+        path: String,
+    },
+    ReloadCanvasDocument,
+    UpdateCanvasDraft {
+        document_id: String,
+        generation: u64,
+        content: String,
+    },
+    SaveCanvasDocument,
+    SaveCanvasDocumentAs {
+        path: String,
+    },
+    CloseCanvasDocument,
+    SendCanvasEditPrompt {
+        prompt: String,
     },
 }
 
@@ -623,6 +650,11 @@ pub enum NativeAction {
     RevealInOs(String),
     OpenInDefaultApp(String),
     TrashPath(String),
+    RenameWorkspaceEntry {
+        workspace_id: String,
+        path: String,
+        new_name: String,
+    },
 }
 
 /// Answer entry for `task/questions/resolve` (`questionId` + either `optionId` or `text`).
@@ -730,6 +762,17 @@ pub enum TaskAction {
     },
 }
 
+/// Wire/disk shape matching a JSONL line in local thread transcripts (`TranscriptEvent`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptLogEntry {
+    pub ts: String,
+    pub thread_id: String,
+    pub direction: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
 /// Commands emitted from the core store to the `native/` worker.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeCommand {
@@ -768,7 +811,10 @@ pub enum NativeCommand {
     },
     OpenExternalUrl(String),
     RevealInOs(String),
-    OpenInDefaultApp(String),
+    OpenInDefaultApp {
+        path: String,
+        confirmed: bool,
+    },
     TrashPath(String),
     CopyText(String),
     SetRemoteAccessEnabled(bool),
@@ -794,6 +840,28 @@ pub enum NativeCommand {
     },
     CheckForUpdates,
     QuitAndInstallUpdate,
+    RenameWorkspaceEntry {
+        request_id: String,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        new_name: String,
+    },
+    ResolveWindowClose {
+        window_id: String,
+        request_id: String,
+        confirmed: bool,
+    },
+    ReadLocalTranscript {
+        request_id: String,
+        thread_id: String,
+        candidate_ids: Vec<String>,
+    },
+    AppendTranscriptEvent(TranscriptLogEntry),
+    TrackAnalyticsEvent {
+        name: String,
+        properties: Value,
+    },
     Shutdown,
 }
 
@@ -899,4 +967,30 @@ pub enum StoreEvent {
     MenuInvoked(String),
     QuickChatToggled,
     DeepLink(String),
+    WorkspaceEntryRenamed {
+        workspace_id: String,
+        old_path: String,
+        new_path: String,
+    },
+    WorkspaceEntryRenameFailed {
+        workspace_id: String,
+        path: String,
+        error: String,
+    },
+    LaunchableFileConfirmRequired {
+        path: String,
+        file_name: String,
+    },
+    ConfirmWindowClose {
+        window_id: String,
+        request_id: String,
+        title: String,
+        message: String,
+    },
+    LocalTranscriptLoaded {
+        request_id: String,
+        thread_id: String,
+        result: Result<Vec<TranscriptLogEntry>, String>,
+    },
+    ProductAnalyticsStateUpdated(Option<Value>),
 }

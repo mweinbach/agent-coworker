@@ -12,12 +12,87 @@ pub mod theme;
 pub mod views;
 pub mod ws;
 
-use rune::{App, AppSpec, Cx, El, KeyEvent, Titlebar, Tx, Waker};
+use std::cell::RefCell;
+
+use rune::{App, AppHandle, AppSpec, Cx, El, KeyEvent, Titlebar, Tx, Waker, WindowSpec};
+use tokio::sync::mpsc;
 
 use crate::actions::{Action, NavAction, ShellAction};
 use crate::router::{SettingsPageId, ViewId};
-use crate::state::AppState;
+use crate::state::{AppState, WINDOW_QUICK_CHAT, WINDOW_UTILITY, WindowCommand, WindowMode};
 use crate::theme::ThemePreference;
+
+#[derive(Default)]
+struct SharedWindowHub {
+    shared: Option<AppState>,
+    main_handle: Option<AppHandle<AppState>>,
+    quick_chat_handle: Option<AppHandle<AppState>>,
+    utility_handle: Option<AppHandle<AppState>>,
+    window_rx: Option<mpsc::UnboundedReceiver<WindowCommand>>,
+    wakers: Vec<(WindowMode, Waker)>,
+    pending_sync_repaint: [bool; 3],
+}
+
+thread_local! {
+    static WINDOW_HUB: RefCell<SharedWindowHub> = RefCell::new(SharedWindowHub::default());
+}
+
+fn mode_index(mode: WindowMode) -> usize {
+    match mode {
+        WindowMode::Main => 0,
+        WindowMode::QuickChat => 1,
+        WindowMode::Utility => 2,
+    }
+}
+
+fn enter_shared_turn(state: &mut AppState) {
+    if state.scene_mode {
+        return;
+    }
+    WINDOW_HUB.with(|cell| {
+        let mut hub = cell.borrow_mut();
+        if let Some(ref mut shared) = hub.shared {
+            state.swap_shared_core(shared);
+        }
+    });
+}
+
+fn leave_shared_turn(state: &mut AppState) {
+    if state.scene_mode {
+        return;
+    }
+    let current_mode = state.window_mode;
+    let dirty = std::mem::take(&mut state.shared_dirty);
+    let mut wake_list: Vec<Waker> = Vec::new();
+    WINDOW_HUB.with(|cell| {
+        let mut hub = cell.borrow_mut();
+        if let Some(ref mut shared) = hub.shared {
+            state.swap_shared_core(shared);
+        } else if current_mode == WindowMode::Main {
+            let mut shared = AppState::default();
+            state.swap_shared_core(&mut shared);
+            hub.shared = Some(shared);
+        } else {
+            // Do not seed shared state from a secondary window before Main completes a turn.
+            return;
+        }
+        if dirty {
+            let mut dirty_modes = Vec::new();
+            for (mode, waker) in &hub.wakers {
+                if *mode != current_mode {
+                    dirty_modes.push(*mode);
+                    wake_list.push(waker.clone());
+                }
+            }
+            for mode in dirty_modes {
+                hub.pending_sync_repaint[mode_index(mode)] = true;
+            }
+        }
+    });
+    for waker in wake_list {
+        (waker)();
+    }
+}
 
 type SceneEntry = (&'static str, fn(&mut AppState));
 
@@ -329,19 +404,97 @@ fn init_utility_state() -> AppState {
 }
 
 fn setup_app(state: &mut AppState, waker: Waker) {
-    state.services.waker = Some(waker.clone());
     if state.scene_mode {
         return;
     }
+    let mode = state.window_mode;
+    WINDOW_HUB.with(|cell| {
+        let mut hub = cell.borrow_mut();
+        hub.wakers.retain(|(existing, _)| *existing != mode);
+        hub.wakers.push((mode, waker.clone()));
+    });
+    if mode != WindowMode::Main || state.services.ws_tx.is_some() {
+        return;
+    }
+    state.services.waker = Some(waker.clone());
     let ws_tx = ws::spawn_ws_manager(state.services.event_tx.clone(), Some(waker.clone()));
     let native_tx = native::spawn_native_worker(state.services.event_tx.clone(), Some(waker));
+    let (window_tx, window_rx) = mpsc::unbounded_channel();
     state.services.ws_tx = Some(ws_tx);
     state.services.native_tx = Some(native_tx);
+    state.services.window_tx = Some(window_tx);
+    state.shared_dirty = true;
+    WINDOW_HUB.with(|cell| {
+        cell.borrow_mut().window_rx = Some(window_rx);
+    });
 }
 
-fn poll_app(state: &mut AppState, now: f64, _tx: &mut Tx) -> bool {
+fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
     state.now_secs = now;
-    state.drain_events()
+    let mut changed = state.drain_events();
+    if !state.scene_mode {
+        let mode = state.window_mode;
+        let sync_repaint = WINDOW_HUB.with(|cell| {
+            let idx = mode_index(mode);
+            let mut hub = cell.borrow_mut();
+            std::mem::take(&mut hub.pending_sync_repaint[idx])
+        });
+        if sync_repaint {
+            changed = true;
+        }
+        if mode == WindowMode::Main {
+            if state.apply_pending_main_focus() {
+                changed = true;
+            }
+            let (commands, main_handle, quick_chat_handle, utility_handle) =
+                WINDOW_HUB.with(|cell| {
+                    let mut hub = cell.borrow_mut();
+                    let mut commands = Vec::new();
+                    if let Some(ref mut rx) = hub.window_rx {
+                        while let Ok(cmd) = rx.try_recv() {
+                            commands.push(cmd);
+                        }
+                    }
+                    (
+                        commands,
+                        hub.main_handle.clone(),
+                        hub.quick_chat_handle.clone(),
+                        hub.utility_handle.clone(),
+                    )
+                });
+            for cmd in commands {
+                match cmd {
+                    WindowCommand::OpenQuickChat => {
+                        if let Some(ref handle) = quick_chat_handle {
+                            handle.open();
+                            handle.wake();
+                        }
+                    }
+                    WindowCommand::OpenUtility => {
+                        if let Some(ref handle) = utility_handle {
+                            handle.open();
+                            handle.wake();
+                        }
+                    }
+                    WindowCommand::FocusMain {
+                        open_new_chat_workspace,
+                        open_thread_id,
+                    } => {
+                        state.apply_main_focus_nav(open_new_chat_workspace, open_thread_id);
+                        changed = true;
+                        if let Some(ref handle) = main_handle {
+                            handle.open();
+                            handle.wake();
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(due) = state.next_canvas_wake_at() {
+            tx.wake_at(due);
+        }
+    }
+    changed
 }
 
 fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
@@ -353,6 +506,7 @@ fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
+    cx.zoom(state.ui_scale);
     let dark = state.effective_dark(cx.system_dark());
     let (kit, tokens) = theme::build_kit(
         dark,
@@ -423,7 +577,32 @@ pub fn run() {
         .try_init()
         .ok();
 
-    let app = App::new(app_spec())
-        .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0));
+    let mut app = App::new(app_spec())
+        .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
+        .keep_running()
+        .turn_scope(enter_shared_turn, leave_shared_turn);
+
+    let main_handle = app.handle();
+
+    let quick_chat_app = App::new(app_spec_for_mode(WindowMode::QuickChat))
+        .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
+        .windowless()
+        .turn_scope(enter_shared_turn, leave_shared_turn);
+    let (quick_chat_handle, _) =
+        app.window(WindowSpec::from_app(WINDOW_QUICK_CHAT, quick_chat_app));
+
+    let utility_app = App::new(app_spec_for_mode(WindowMode::Utility))
+        .titlebar(Titlebar::new(theme::layout::TITLEBAR_HEIGHT).traffic_lights(14.0, 11.0))
+        .windowless()
+        .turn_scope(enter_shared_turn, leave_shared_turn);
+    let (utility_handle, _) = app.window(WindowSpec::from_app(WINDOW_UTILITY, utility_app));
+
+    WINDOW_HUB.with(|cell| {
+        let mut hub = cell.borrow_mut();
+        hub.main_handle = Some(main_handle);
+        hub.quick_chat_handle = Some(quick_chat_handle);
+        hub.utility_handle = Some(utility_handle);
+    });
+
     native::configure_app(app).run();
 }

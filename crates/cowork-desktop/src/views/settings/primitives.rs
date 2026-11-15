@@ -5,18 +5,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use base64::Engine;
-use rune::{Color, El, Icon, ImageCache, Pixels, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit};
+use rune::{Color, El, Icon, ImageCache, Pixels, TextEdit, Tx, col, el, icon, row, text};
+use rune_kit::{
+    Button, ButtonVariant, ControlSize, Dialog, Kit, SegmentedControl, Switch, TextInput,
+};
 
 use crate::actions::{Action, SettingsAction};
 use crate::state::{AppState, DesktopSettings};
-use crate::theme::ThemeTokens;
+use crate::theme::{self, ThemeTokens};
 use crate::views::settings::icons;
 
-/// Maximum inner width matching `.settings-page { max-width: 1160px }`.
-const SETTINGS_PAGE_MAX_WIDTH: f32 = 1160.0;
+/// Maximum inner width matching Settings content column layout.
+const SETTINGS_PAGE_MAX_WIDTH: f32 = 1040.0;
 
-/// Centered vertical settings container (`gap: 20pt`, `max_w: 1160pt`).
+/// Centered vertical settings container (`gap: 20pt`, `max_w: 1040pt`).
 pub fn settings_page(children: Vec<El>) -> El {
     col().w_full().items_center().child(
         col()
@@ -89,12 +91,12 @@ impl Section {
             let mut title_col = col().grow(1.0).min_w(0.0).gap(2.0);
             if let Some(title) = self.title {
                 title_col =
-                    title_col.child(text(title).font(k.ty.body_medium).color(t.text_base).wrap());
+                    title_col.child(text(title).font(k.ty.ui_medium).color(t.text_base).wrap());
             }
             if let Some(desc) = self.description {
                 title_col = title_col.child(
                     text(desc)
-                        .font(k.ty.text_xsmall)
+                        .font(k.ty.small)
                         .color(t.text_muted)
                         .max_w(560.0)
                         .wrap(),
@@ -124,14 +126,14 @@ impl Section {
 
         let card = col()
             .w_full()
-            .radius(12.0)
-            .clip_rounded(12.0)
+            .radius(k.radius.lg)
+            .clip_rounded(k.radius.lg)
             .fill(t.card_bg)
             .border(1.0, t.border_muted)
             .children(card_children);
 
         children.push(card);
-        col().w_full().gap(12.0).children(children)
+        col().w_full().gap(10.0).children(children)
     }
 }
 
@@ -198,17 +200,17 @@ impl SettingsRow {
 
     /// Builds the `SettingsRow` element.
     pub fn build(self, k: &Kit, t: &ThemeTokens) -> El {
-        let mut text_col = col().grow(1.0).min_w(0.0).gap(4.0);
+        let mut text_col = col().grow(1.0).min_w(0.0).gap(3.0);
         text_col = text_col.child(
             text(self.title)
-                .font(k.ty.body_medium)
+                .font(k.ty.ui_medium)
                 .color(if self.danger { t.danger } else { t.text_base })
                 .wrap(),
         );
         if let Some(desc) = self.description {
             text_col = text_col.child(
                 text(desc)
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted)
                     .max_w(580.0)
                     .wrap(),
@@ -218,7 +220,7 @@ impl SettingsRow {
             text_col = text_col.child(
                 text(meta)
                     .pt(2.0)
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_faint)
                     .wrap(),
             );
@@ -236,15 +238,10 @@ impl SettingsRow {
             line = line.child(row().shrink().items_center().gap(8.0).child(control));
         }
 
-        let mut wrapper = el()
-            .w_full()
-            .px(16.0)
-            .py(14.0)
-            .hover(t.text_base.alpha(0.04))
-            .child(line);
+        let mut wrapper = el().w_full().px(16.0).py(13.0).hover(t.hover).child(line);
 
         if self.danger {
-            wrapper = wrapper.fill(t.danger.alpha(0.06));
+            wrapper = wrapper.fill(k.alpha(t.danger, 0.08));
         }
 
         wrapper
@@ -294,26 +291,33 @@ impl EmptyState {
             .w_full()
             .min_h(160.0)
             .px(24.0)
-            .py(36.0)
+            .py(32.0)
             .items_center()
             .justify_center()
             .gap(12.0);
 
         if let Some(glyph) = self.icon_glyph {
-            stack = stack.child(icon(glyph, 32.0).color(t.text_muted));
+            stack = stack.child(
+                el().size(40.0, 40.0)
+                    .radius(10.0)
+                    .fill(k.c.layer_02)
+                    .border(1.0, t.border_muted)
+                    .center()
+                    .child(icon(glyph, 18.0).color(t.text_muted)),
+            );
         }
 
         let mut copy = col().items_center().gap(4.0);
         copy = copy.child(
             text(self.title)
-                .font(k.ty.body_medium)
+                .font(k.ty.ui_medium)
                 .color(t.text_base)
                 .center(),
         );
         if let Some(desc) = self.description {
             copy = copy.child(
                 text(desc)
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted)
                     .max_w(420.0)
                     .wrap()
@@ -340,20 +344,21 @@ pub fn stat_tile(
     let mut tile = col()
         .grow(1.0)
         .min_w(0.0)
-        .radius(8.0)
-        .fill(t.elevated_bg)
+        .radius(k.radius.lg)
+        .fill(t.card_bg)
+        .border(1.0, t.border_muted)
         .px(16.0)
         .py(12.0)
         .gap(4.0)
         .child(
-            text(label.into().to_uppercase())
-                .font(t.label)
+            text(label.into())
+                .font(k.ty.small_medium)
                 .color(t.text_muted),
         )
-        .child(text(value.into()).font(k.ty.body_medium).color(t.text_base));
+        .child(text(value.into()).font(t.title).color(t.text_base));
 
     if let Some(hint_text) = hint {
-        tile = tile.child(text(hint_text).font(k.ty.text_xsmall).color(t.text_muted));
+        tile = tile.child(text(hint_text).font(k.ty.small).color(t.text_muted));
     }
     tile
 }
@@ -367,23 +372,31 @@ pub enum StatusTone {
     Danger,
 }
 
-/// Compact outlined status badge matching `SettingsStatusPill`.
+/// Compact outlined status pill matching `views::chat::components::status_pill`.
 pub fn status_pill(label: impl Into<String>, tone: StatusTone, k: &Kit, t: &ThemeTokens) -> El {
     let (bg, border, fg) = match tone {
-        StatusTone::Success => (t.success.alpha(0.12), t.success.alpha(0.30), t.text_base),
-        StatusTone::Warning => (t.warning.alpha(0.14), t.warning.alpha(0.35), t.warning),
-        StatusTone::Danger => (t.danger.alpha(0.12), t.danger.alpha(0.30), t.danger),
-        StatusTone::Neutral => (t.card_bg.alpha(0.65), t.border_muted, t.text_muted),
+        StatusTone::Success => (
+            k.alpha(t.success, 0.14),
+            k.alpha(t.success, 0.35),
+            t.success,
+        ),
+        StatusTone::Warning => (
+            k.alpha(t.warning, 0.14),
+            k.alpha(t.warning, 0.35),
+            t.warning,
+        ),
+        StatusTone::Danger => (k.alpha(t.danger, 0.14), k.alpha(t.danger, 0.35), t.danger),
+        StatusTone::Neutral => (k.c.layer_02, t.border_muted, t.text_muted),
     };
     row()
-        .h(24.0)
         .px(8.0)
-        .radius(6.0)
+        .py(2.0)
+        .radius(theme::layout::RADIUS_PILL)
         .fill(bg)
         .border(1.0, border)
         .center_y()
         .shrink()
-        .child(text(label.into()).font(k.ty.text_xsmall_medium).color(fg))
+        .child(text(label.into()).font(k.ty.small_medium).color(fg))
 }
 
 /// Informational or warning callout banner matching `Settings` inline alerts.
@@ -395,28 +408,33 @@ pub fn callout_banner(
 ) -> El {
     let (bg, border, icon_glyph, icon_color) = match tone {
         StatusTone::Danger => (
-            t.danger.alpha(0.10),
-            t.danger.alpha(0.28),
+            k.alpha(t.danger, 0.08),
+            k.alpha(t.danger, 0.28),
             &icons::ALERT_TRIANGLE,
             t.danger,
         ),
         StatusTone::Warning => (
-            t.warning.alpha(0.12),
-            t.warning.alpha(0.32),
+            k.alpha(t.warning, 0.10),
+            k.alpha(t.warning, 0.32),
             &icons::ALERT_TRIANGLE,
             t.warning,
         ),
         StatusTone::Success => (
-            t.success.alpha(0.10),
-            t.success.alpha(0.28),
+            k.alpha(t.success, 0.08),
+            k.alpha(t.success, 0.28),
             &icons::CHECK_CIRCLE,
             t.success,
         ),
-        StatusTone::Neutral => (t.elevated_bg, t.border_muted, &icons::INFO, t.accent),
+        StatusTone::Neutral => (
+            k.alpha(t.elevated_bg, 0.55),
+            t.border_muted,
+            &icons::INFO,
+            t.text_muted,
+        ),
     };
     row()
         .w_full()
-        .radius(10.0)
+        .radius(k.radius.lg)
         .fill(bg)
         .border(1.0, border)
         .px(14.0)
@@ -428,7 +446,7 @@ pub fn callout_banner(
             text(message.into())
                 .grow(1.0)
                 .min_w(0.0)
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_base)
                 .wrap(),
         )
@@ -544,8 +562,8 @@ pub fn entity_icon(
     {
         return el()
             .size(dim, dim)
-            .radius(6.0)
-            .clip_rounded(6.0)
+            .radius(k.radius.md)
+            .clip_rounded(k.radius.md)
             .fill(t.panel_bg)
             .border(1.0, t.border_muted)
             .pixels(&px)
@@ -556,8 +574,8 @@ pub fn entity_icon(
     {
         return el()
             .size(dim, dim)
-            .radius(6.0)
-            .clip_rounded(6.0)
+            .radius(k.radius.md)
+            .clip_rounded(k.radius.md)
             .fill(t.panel_bg)
             .border(1.0, t.border_muted)
             .pixels(&px)
@@ -572,27 +590,36 @@ pub fn entity_icon(
         };
         return el()
             .size(dim, dim)
-            .radius(6.0)
+            .radius(k.radius.md)
             .center()
             .shrink()
             .child(text(trimmed).font(emoji_style).color(t.text_base));
     }
 
-    let (bg, fg): (Color, Color) = match entity_palette_index(name) {
-        0 => (t.accent.alpha(0.12), t.accent),
-        1 => (t.success.alpha(0.12), t.success),
-        2 => (t.warning.alpha(0.14), t.warning),
-        3 => (t.elevated_bg, t.text_muted),
-        _ => (t.accent.alpha(0.16), t.accent),
+    let (bg, border, fg): (Color, Color, Color) = match entity_palette_index(name) {
+        0 => (k.c.layer_02, t.border_muted, t.text_muted),
+        1 => (k.alpha(t.accent, 0.12), k.alpha(t.accent, 0.25), t.accent),
+        2 => (k.alpha(t.info, 0.12), k.alpha(t.info, 0.25), t.info),
+        3 => (
+            k.alpha(t.warning, 0.12),
+            k.alpha(t.warning, 0.26),
+            t.warning,
+        ),
+        _ => (
+            k.alpha(t.search_badges[0], 0.12),
+            k.alpha(t.search_badges[0], 0.25),
+            t.search_badges[0],
+        ),
     };
     let font = match size {
-        EntityIconSize::Lg => k.ty.body_medium,
-        _ => k.ty.text_xsmall_medium,
+        EntityIconSize::Lg => k.ty.ui_medium,
+        _ => k.ty.small_medium,
     };
 
     el().size(dim, dim)
-        .radius(6.0)
+        .radius(k.radius.md)
         .fill(bg)
+        .border(1.0, border)
         .center()
         .shrink()
         .child(text(name_initials(name)).font(font).color(fg))
@@ -703,7 +730,7 @@ pub fn confirm_dialog(
         .pt(8.0)
         .child(
             Button::new("Cancel")
-                .variant(ButtonVariant::Outline)
+                .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
                     cancel_for_btn(s);
@@ -740,13 +767,69 @@ pub fn confirm_dialog(
                 .gap(12.0)
                 .child(
                     text(spec.description)
-                        .font(k.ty.text_small)
+                        .font(k.ty.ui)
                         .color(k.c.text_muted)
                         .wrap(),
                 )
                 .child(footer),
         )
         .build(k, overlays);
+}
+
+/// Shared Settings search input with consistent search icon, clear button, and sizing.
+pub fn search_input(
+    edit: &TextEdit,
+    label: impl Into<String>,
+    placeholder: impl Into<String>,
+    width: Option<f32>,
+    on_edit: impl Fn(&mut AppState) -> &mut TextEdit + 'static,
+    on_clear: impl Fn(&mut AppState, &mut Tx) + 'static,
+    k: &Kit,
+) -> El {
+    TextInput::new(edit)
+        .label(label.into())
+        .placeholder(placeholder.into())
+        .leading_icon(&icons::SEARCH)
+        .clear_button()
+        .width(width)
+        .on_edit(on_edit)
+        .on_action(on_clear)
+        .build(k)
+}
+
+/// Shared compact toggle switch matching all boolean Settings controls.
+pub fn mini_switch(
+    checked: bool,
+    label: impl Into<String>,
+    disabled: bool,
+    on_toggle: impl Fn(&mut AppState) + 'static,
+    k: &Kit,
+) -> El {
+    Switch::new(checked)
+        .label(label.into())
+        .hide_label()
+        .control_size(ControlSize::Mini)
+        .disabled(disabled)
+        .on_toggle(on_toggle)
+        .build(k)
+}
+
+/// Wraps a `SegmentedControl` in a shrink-wrapped row so column stretch cannot distort it.
+pub fn compact_tabs(
+    labels: &[&str],
+    active: usize,
+    a11y_label: &'static str,
+    on_pick: impl Fn(&mut AppState, usize, &mut Tx) + 'static,
+    k: &Kit,
+) -> El {
+    let cb = Rc::new(on_pick);
+    row().w_full().child(
+        SegmentedControl::new(labels, Some(active))
+            .label(a11y_label)
+            .fit()
+            .on_pick(move |s: &mut AppState, idx, tx| cb(s, idx, tx))
+            .build(k),
+    )
 }
 
 /// Formats a byte count into human-friendly units (`B`, `KB`, `MB`, `GB`).

@@ -143,7 +143,7 @@ pub fn settings_groups(
             pages: workspace_pages,
         },
         SettingsNavGroup {
-            label: "History & Data",
+            label: "History & data",
             pages: vec![
                 SettingsNavItem {
                     id: SettingsPageId::Backup,
@@ -308,6 +308,7 @@ pub fn settings_layout(
             .child(intro)
             .child(content.body)
     } else {
+        let centered_intro = col().w_full().items_center().child(intro);
         let scroll_body = k.scroll_bar(
             col()
                 .grow(1.0)
@@ -326,7 +327,7 @@ pub fn settings_layout(
                         .w_full()
                         .gap(16.0)
                         .transition(Transition::none())
-                        .child(intro)
+                        .child(centered_intro)
                         .child(content.body),
                 ),
         );

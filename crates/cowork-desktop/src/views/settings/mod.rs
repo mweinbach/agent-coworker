@@ -70,10 +70,11 @@ pub fn build_layout(s: &AppState, _cx: &Cx<AppState>, k: &Kit, t: &ThemeTokens) 
 /// Renders the full-window Settings shell in a standalone `SplitView` (used by settings tests).
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, _k: &Kit) -> SubviewOutput {
     let dark = s.effective_dark(cx.system_dark());
-    let (resolved_k, t) = theme::build_kit(
+    let (resolved_k, t) = theme::build_kit_with_accent(
         dark,
         s.desktop_settings.reduced_transparency,
         s.desktop_settings.high_contrast,
+        s.desktop_settings.accent_palette,
     );
 
     cx.foreground(t.text_base);

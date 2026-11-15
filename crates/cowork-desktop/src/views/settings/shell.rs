@@ -8,6 +8,7 @@ use crate::router::{SettingsPageId, ViewId};
 use crate::state::AppState;
 use crate::theme::{self, ThemeTokens};
 use crate::views::SubviewOutput;
+use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::active_workspace_banner_label;
 
@@ -191,11 +192,7 @@ pub fn settings_groups(
 /// Resolves the canonical active settings page, falling back cleanly if a gated
 /// route is selected when hidden.
 pub fn resolve_active_page(s: &AppState) -> SettingsPageId {
-    let remote_access_available = s
-        .feature_flags
-        .get("remoteAccess")
-        .copied()
-        .unwrap_or(false);
+    let remote_access_available = is_flag_enabled(s, "remoteAccess");
     let include_dev = !s.is_packaged;
     let groups = settings_groups(remote_access_available, include_dev);
     let requested = s.route().settings_page.canonical();
@@ -353,11 +350,7 @@ pub fn settings_shell(
     active_page: SettingsPageId,
     content: PageContent,
 ) -> SubviewOutput {
-    let remote_access_available = s
-        .feature_flags
-        .get("remoteAccess")
-        .copied()
-        .unwrap_or(false);
+    let remote_access_available = is_flag_enabled(s, "remoteAccess");
     let include_dev = !s.is_packaged;
     let groups = settings_groups(remote_access_available, include_dev);
 

@@ -1,19 +1,31 @@
 //! Developer & Diagnostics settings page (`apps/desktop/src/ui/settings/pages/DeveloperPage.tsx`).
 
-use rune::{El, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
+use rune::{El, TextEdit, col, el, row, text};
+use rune_kit::{
+    Button, ButtonVariant, ControlSize, Kit, Select, SelectAppearance, Switch, TextInput,
+};
+use serde_json::{Value, json};
 
-use crate::actions::{Action, SettingsAction};
+use crate::actions::{Action, NativeAction, SettingsAction};
 use crate::state::{AppState, ServerLifecycleState};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
-    Section, SettingsRow, StatusTone, management_targets, operation_banner, settings_page,
-    status_pill, update_desktop_settings,
+    ConfirmDialogSpec, Section, SettingsRow, StatusTone, confirm_dialog, management_targets,
+    operation_banner, settings_page, status_pill, update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 
-const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS: u64 = 30_000;
+pub const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS: u64 = 30_000;
+
+/// Parses a non-negative integer overflow threshold input.
+pub fn parse_overflow_threshold_draft(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    trimmed.parse::<u64>().ok()
+}
 
 fn server_state_meta(state: &ServerLifecycleState) -> (&'static str, StatusTone) {
     match state {
@@ -40,6 +52,20 @@ fn format_onboarding_status(s: &AppState) -> (String, StatusTone) {
     }
 }
 
+fn build_diagnostic_summary_text(s: &AppState, runtime_summary: &str) -> String {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let version = env!("CARGO_PKG_VERSION");
+    let bundle_path = s
+        .settings_ui
+        .last_diagnostics_bundle_path
+        .as_deref()
+        .unwrap_or("none");
+    format!(
+        "Cowork Desktop v{version} ({os}/{arch})\nBundle path: {bundle_path}\n{runtime_summary}"
+    )
+}
+
 /// Renders the Developer / Diagnostics settings page.
 pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let pt = &s.desktop_settings.privacy_telemetry;
@@ -50,59 +76,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .is_some_and(|op| op.busy);
 
     let targets = management_targets(s);
-    let active_target = s
-        .resolve_management_workspace_id()
+    let selected_target_id = s
+        .settings_ui
+        .developer_overflow_threshold_workspace
+        .as_deref()
+        .and_then(|id| targets.iter().find(|entry| entry.id == id))
+        .map(|entry| entry.id.as_str())
+        .or_else(|| s.resolve_management_workspace_id());
+    let active_target = selected_target_id
         .and_then(|id| targets.iter().find(|entry| entry.id == id))
         .or_else(|| targets.first());
-
-    let refresh_ws_id = active_target.map(|target| target.id.clone());
-    let mut diagnostics_actions = row().flex_wrap().gap(8.0).child(
-        Button::new("Create Diagnostics Bundle")
-            .variant(ButtonVariant::Contrast)
-            .icon(&icons::ARCHIVE_RESTORE)
-            .control_size(ControlSize::Regular)
-            .disabled(export_busy)
-            .on_press(|s: &mut AppState| {
-                s.dispatch(Action::Settings(SettingsAction::ExportDiagnosticsBundle));
-            })
-            .build(k),
-    );
-    if let Some(ws_id) = refresh_ws_id {
-        diagnostics_actions = diagnostics_actions.child(
-            Button::new("Refresh diagnostics")
-                .variant(ButtonVariant::Outline)
-                .icon(&icons::REFRESH_CCW)
-                .control_size(ControlSize::Regular)
-                .on_press(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::RefreshDiagnostics {
-                        workspace_id: ws_id.clone(),
-                    }));
-                })
-                .build(k),
-        );
-    }
-
-    let mut diagnostics_section = Section::new()
-        .title("Diagnostics Bundle")
-        .description("Local logs and redacted technical metadata.")
-        .action(status_pill(
-            if pt.diagnostics_upload_enabled {
-                "Uploads allowed"
-            } else {
-                "Uploads off"
-            },
-            if pt.diagnostics_upload_enabled {
-                StatusTone::Success
-            } else {
-                StatusTone::Neutral
-            },
-            k,
-            t,
-        ));
-
-    if let Some(banner) = operation_banner(s, export_op_key, k, t) {
-        diagnostics_section = diagnostics_section.child(el().px(16.0).py(12.0).child(banner));
-    }
 
     let runtime_summary = match &s.runtime_diagnostics {
         Some(diag) => {
@@ -129,6 +112,85 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         }
     };
 
+    let summary_text = build_diagnostic_summary_text(s, &runtime_summary);
+    let refresh_ws_id = active_target.map(|target| target.id.clone());
+    let mut diagnostics_actions = row().flex_wrap().gap(8.0).child(
+        Button::new("Create Diagnostics Bundle")
+            .variant(ButtonVariant::Contrast)
+            .icon(&icons::ARCHIVE_RESTORE)
+            .control_size(ControlSize::Regular)
+            .disabled(export_busy)
+            .on_press(|s: &mut AppState| {
+                s.dispatch(Action::Settings(SettingsAction::ExportDiagnosticsBundle));
+            })
+            .build(k),
+    );
+    if let Some(ws_id) = refresh_ws_id {
+        diagnostics_actions = diagnostics_actions.child(
+            Button::new("Refresh diagnostics")
+                .variant(ButtonVariant::Outline)
+                .icon(&icons::REFRESH_CCW)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::RefreshDiagnostics {
+                        workspace_id: ws_id.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+    diagnostics_actions = diagnostics_actions.child(
+        Button::new("Copy Diagnostic Summary")
+            .variant(ButtonVariant::Outline)
+            .control_size(ControlSize::Regular)
+            .on_press(move |s: &mut AppState| {
+                s.dispatch(Action::Native(NativeAction::CopyText(summary_text.clone())));
+                s.settings_ui.diagnostics_status_banner =
+                    Some("Diagnostic summary copied to clipboard.".to_string());
+            })
+            .build(k),
+    );
+
+    let mut diagnostics_section = Section::new()
+        .title("Diagnostics Bundle")
+        .description("Local logs and redacted technical metadata.")
+        .action(status_pill(
+            if pt.diagnostics_upload_enabled {
+                "Uploads allowed"
+            } else {
+                "Uploads off"
+            },
+            if pt.diagnostics_upload_enabled {
+                StatusTone::Success
+            } else {
+                StatusTone::Neutral
+            },
+            k,
+            t,
+        ));
+
+    if let Some(banner) = operation_banner(s, export_op_key, k, t) {
+        diagnostics_section = diagnostics_section.child(el().px(16.0).py(12.0).child(banner));
+    }
+
+    let bundle_detail = s
+        .settings_ui
+        .last_diagnostics_bundle_path
+        .clone()
+        .unwrap_or_else(|| {
+            "No bundle recorded in this session. Use Create Diagnostics Bundle above.".to_string()
+        });
+
+    let mut last_bundle_row = SettingsRow::new("Last bundle").description(bundle_detail);
+    if let Some(status_msg) = s
+        .settings_ui
+        .diagnostics_status_banner
+        .as_deref()
+        .filter(|msg| !msg.trim().is_empty())
+    {
+        last_bundle_row = last_bundle_row.meta(status_msg);
+    }
+
     diagnostics_section = diagnostics_section
         .child(
             SettingsRow::new("Bundle actions")
@@ -138,6 +200,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .body(diagnostics_actions)
                 .build(k, t),
         )
+        .child(last_bundle_row.build(k, t))
         .child(
             SettingsRow::new("Server runtime telemetry")
                 .description(runtime_summary)
@@ -155,6 +218,63 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     k,
                     t,
                 ))
+                .build(k, t),
+        );
+
+    let lo_available = s
+        .libreoffice_status
+        .as_ref()
+        .and_then(|v| v.get("available"))
+        .and_then(|v| v.as_bool());
+    let lo_detail = s
+        .libreoffice_status
+        .as_ref()
+        .and_then(|v| {
+            v.get("path")
+                .or_else(|| v.get("error"))
+                .or_else(|| v.get("message"))
+        })
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            "Checks whether soffice is available in this workspace runtime for document previews."
+                .to_string()
+        });
+    let mut lo_controls = row().items_center().gap(8.0).child(status_pill(
+        match lo_available {
+            Some(true) => "Available",
+            Some(false) => "Not detected",
+            None => "Unchecked",
+        },
+        match lo_available {
+            Some(true) => StatusTone::Success,
+            Some(false) => StatusTone::Warning,
+            None => StatusTone::Neutral,
+        },
+        k,
+        t,
+    ));
+    if let Some(target) = active_target {
+        let ws_id = target.id.clone();
+        lo_controls = lo_controls.child(
+            Button::new("Check runtime")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::CheckLibreOfficeRuntime {
+                        workspace_id: ws_id.clone(),
+                    }));
+                })
+                .build(k),
+        );
+    }
+    let runtime_checks_section = Section::new()
+        .title("Runtime checks")
+        .description("Verify optional document conversion and preview dependencies.")
+        .child(
+            SettingsRow::new("LibreOffice runtime")
+                .description(lo_detail)
+                .control(lo_controls)
                 .build(k, t),
         );
 
@@ -201,10 +321,25 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .child(
             SettingsRow::new("Onboarding")
                 .description("First-time desktop setup walkthrough status.")
-                .control(status_pill(onboarding_label, onboarding_tone, k, t))
+                .control(
+                    row()
+                        .items_center()
+                        .gap(8.0)
+                        .child(status_pill(onboarding_label, onboarding_tone, k, t))
+                        .child(
+                            Button::new("Run onboarding again")
+                                .variant(ButtonVariant::Outline)
+                                .control_size(ControlSize::Regular)
+                                .on_press(|s: &mut AppState| {
+                                    s.settings_ui.developer_restart_onboarding_confirm_open = true;
+                                })
+                                .build(k),
+                        ),
+                )
                 .build(k, t),
         );
 
+    let mut overlays = Vec::new();
     let mut overflow_section = Section::new()
         .title("Large Tool Output Handling")
         .description(
@@ -220,7 +355,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             );
         }
         Some(target) => {
-            let runtime = s.workspace_runtime_by_id.get(&target.id);
+            let ws_id = target.id.clone();
+            let ws_record = s.workspaces.iter().find(|w| w.id == ws_id);
+            let runtime = s.workspace_runtime_by_id.get(&ws_id);
             let server_pill = match runtime {
                 Some(rt) => {
                     let (label, tone) = server_state_meta(&rt.server_state);
@@ -228,27 +365,196 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 }
                 None => status_pill("Stopped", StatusTone::Neutral, k, t),
             };
-            let overflow_chars = runtime
+
+            let inherited_chars = runtime
                 .and_then(|rt| rt.control_session_config.as_ref())
-                .and_then(|cfg| cfg.get("toolOutputOverflowChars"))
-                .and_then(|val| val.as_u64())
+                .and_then(|cfg| cfg.get("toolOutputOverflowChars"));
+            let explicit_val = ws_record
+                .and_then(|w| w.defaults.as_object())
+                .and_then(|obj| obj.get("defaultToolOutputOverflowChars"));
+            let overflow_uses_inherited = explicit_val.is_none();
+            let overflow_enabled = match explicit_val {
+                Some(Value::Null) => false,
+                Some(Value::Number(_)) => true,
+                _ => !matches!(inherited_chars, Some(Value::Null)),
+            };
+            let persisted_threshold = explicit_val
+                .and_then(Value::as_u64)
+                .or_else(|| inherited_chars.and_then(Value::as_u64))
                 .unwrap_or(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
 
-            let note = col().w_full().gap(4.0).child(
-                text(format!(
-                    "Active spill threshold: {overflow_chars} characters (stored under {}/.ModelScratchpad).",
-                    target.path
-                ))
-                .font(k.ty.text_xsmall)
-                .color(t.text_muted)
-                .wrap(),
+            if targets.len() > 1 {
+                let labels: Vec<String> = targets.iter().map(|entry| entry.label.clone()).collect();
+                let open = s.settings_ui.open_select_key.as_deref() == Some("dev-overflow-ws");
+                let target_ids: Vec<(String, String)> = targets
+                    .iter()
+                    .map(|entry| (entry.label.clone(), entry.id.clone()))
+                    .collect();
+                let select_el = Select::new("dev-overflow-ws", &labels)
+                    .appearance(SelectAppearance::Field)
+                    .width(240.0)
+                    .current(Some(target.label.as_str()))
+                    .open(open)
+                    .on_toggle(|s: &mut AppState| {
+                        let currently =
+                            s.settings_ui.open_select_key.as_deref() == Some("dev-overflow-ws");
+                        s.settings_ui.open_select_key = if currently {
+                            None
+                        } else {
+                            Some("dev-overflow-ws".to_string())
+                        };
+                    })
+                    .on_close(|s: &mut AppState| {
+                        if s.settings_ui.open_select_key.as_deref() == Some("dev-overflow-ws") {
+                            s.settings_ui.open_select_key = None;
+                        }
+                    })
+                    .on_choose(move |s: &mut AppState, chosen, _tx| {
+                        s.settings_ui.open_select_key = None;
+                        if let Some((_, id)) = target_ids.iter().find(|(lbl, _)| lbl == chosen) {
+                            s.settings_ui.developer_overflow_threshold_workspace = Some(id.clone());
+                            if let Some(ws) = s.workspaces.iter().find(|w| w.id == *id) {
+                                let chars = ws
+                                    .defaults
+                                    .get("defaultToolOutputOverflowChars")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS);
+                                s.settings_ui.developer_overflow_threshold_edit =
+                                    TextEdit::new(chars.to_string());
+                            }
+                        }
+                    })
+                    .build(k, &mut overlays);
+
+                overflow_section = overflow_section.child(
+                    SettingsRow::new("Workspace")
+                        .description(target.path.clone())
+                        .control(select_el)
+                        .build(k, t),
+                );
+            } else {
+                overflow_section = overflow_section.child(
+                    SettingsRow::new(target.label.clone())
+                        .description(target.path.clone())
+                        .control(server_pill)
+                        .build(k, t),
+                );
+            }
+
+            let ws_toggle = ws_id.clone();
+            let inherited_is_null = matches!(inherited_chars, Some(Value::Null));
+            overflow_section = overflow_section.child(
+                SettingsRow::new("Save oversized tool output to scratch files")
+                    .description(
+                        "When enabled, oversized tool results are saved to disk instead of filling chat history.",
+                    )
+                    .control(
+                        Switch::new(overflow_enabled)
+                            .label("Save oversized tool output to scratch files")
+                            .hide_label()
+                            .on_toggle(move |s: &mut AppState| {
+                                let defaults = if overflow_enabled {
+                                    json!({ "defaultToolOutputOverflowChars": Value::Null })
+                                } else if inherited_is_null {
+                                    json!({ "defaultToolOutputOverflowChars": DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS })
+                                } else {
+                                    json!({ "clearDefaultToolOutputOverflowChars": true })
+                                };
+                                s.settings_ui.developer_overflow_threshold_edit =
+                                    TextEdit::new(persisted_threshold.to_string());
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::UpdateWorkspaceDefaults {
+                                        workspace_id: ws_toggle.clone(),
+                                        defaults,
+                                    },
+                                ));
+                            })
+                            .build(k),
+                    )
+                    .build(k, t),
             );
 
+            let draft_text = &s.settings_ui.developer_overflow_threshold_edit.text;
+            let parsed = parse_overflow_threshold_draft(draft_text);
+            let error_msg = if overflow_enabled && parsed.is_none() {
+                Some("Use a non-negative whole number.")
+            } else {
+                None
+            };
+            let dirty = overflow_enabled && parsed.is_some_and(|val| val != persisted_threshold);
+
+            let ws_save = ws_id.clone();
+            let ws_reset = ws_id;
+            let save_btn = Button::new("Save threshold")
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Regular)
+                .disabled(!overflow_enabled || !dirty || error_msg.is_some())
+                .on_press(move |s: &mut AppState| {
+                    if let Some(val) = parse_overflow_threshold_draft(
+                        &s.settings_ui.developer_overflow_threshold_edit.text,
+                    ) {
+                        s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                            workspace_id: ws_save.clone(),
+                            defaults: json!({ "defaultToolOutputOverflowChars": val }),
+                        }));
+                    }
+                })
+                .build(k);
+
+            let reset_btn = Button::new("Reset to default")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .disabled(overflow_enabled && overflow_uses_inherited)
+                .on_press(move |s: &mut AppState| {
+                    s.settings_ui.developer_overflow_threshold_edit =
+                        TextEdit::new(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.to_string());
+                    let defaults = if overflow_enabled {
+                        json!({ "clearDefaultToolOutputOverflowChars": true })
+                    } else if inherited_is_null {
+                        json!({ "defaultToolOutputOverflowChars": DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS })
+                    } else {
+                        json!({ "clearDefaultToolOutputOverflowChars": true })
+                    };
+                    s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                        workspace_id: ws_reset.clone(),
+                        defaults,
+                    }));
+                })
+                .build(k);
+
+            let input_el = TextInput::new(&s.settings_ui.developer_overflow_threshold_edit)
+                .label("Spill after this many characters")
+                .placeholder(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.to_string())
+                .width(Some(220.0))
+                .disabled(!overflow_enabled)
+                .invalid(error_msg.is_some())
+                .on_edit(|s: &mut AppState| &mut s.settings_ui.developer_overflow_threshold_edit)
+                .build(k);
+
+            let mut threshold_body = col().w_full().gap(8.0).child(input_el);
+            if let Some(err) = error_msg {
+                threshold_body =
+                    threshold_body.child(text(err).font(k.ty.text_xsmall).color(t.danger));
+            } else {
+                threshold_body = threshold_body.child(
+                    text(format!(
+                        "Active threshold: {persisted_threshold} characters (stored under {}/.ModelScratchpad). Set to 0 to spill immediately.",
+                        target.path
+                    ))
+                    .font(k.ty.text_xsmall)
+                    .color(t.text_muted)
+                    .wrap(),
+                );
+            }
+            threshold_body =
+                threshold_body.child(row().gap(8.0).flex_wrap().child(save_btn).child(reset_btn));
+
             overflow_section = overflow_section.child(
-                SettingsRow::new(target.label.clone())
-                    .description(target.path.clone())
-                    .control(server_pill)
-                    .body(note)
+                SettingsRow::new("Spill after this many characters")
+                    .description(
+                        "Characters kept inline before writing oversized tool output to disk.",
+                    )
+                    .body(threshold_body)
                     .build(k, t),
             );
         }
@@ -256,10 +562,31 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let blocks: Vec<El> = vec![
         diagnostics_section.build(k, t),
+        runtime_checks_section.build(k, t),
         file_explorer_section.build(k, t),
         debugging_section.build(k, t),
         overflow_section.build(k, t),
     ];
 
-    PageContent::simple(settings_page(blocks))
+    confirm_dialog(
+        ConfirmDialogSpec {
+            key: "developer-restart-onboarding-confirm",
+            open: s.settings_ui.developer_restart_onboarding_confirm_open,
+            title: "Run onboarding again?",
+            description: "Resets onboarding completion state so the guided desktop setup appears again on the main workspace surface.".to_string(),
+            confirm_label: "Restart onboarding",
+            danger: false,
+        },
+        |s| {
+            s.settings_ui.developer_restart_onboarding_confirm_open = false;
+        },
+        |s| {
+            s.settings_ui.developer_restart_onboarding_confirm_open = false;
+            s.dispatch(Action::Settings(SettingsAction::RestartOnboarding));
+        },
+        k,
+        &mut overlays,
+    );
+
+    PageContent::simple(settings_page(blocks)).with_overlays(overlays)
 }

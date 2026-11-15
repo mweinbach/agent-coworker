@@ -182,6 +182,34 @@ pub static COPY: Icon = Icon {
     body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></g>"#,
 };
 
+/// Search icon for filter inputs.
+pub static SEARCH: Icon = Icon {
+    name: "settings-search",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></g>"#,
+};
+
+/// Save icon for creating checkpoints / saving edits.
+pub static SAVE: Icon = Icon {
+    name: "settings-save",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></g>"#,
+};
+
+/// Smartphone icon for paired mobile devices.
+pub static SMARTPHONE: Icon = Icon {
+    name: "settings-smartphone",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></g>"#,
+};
+
+/// QR code icon for pairing empty states.
+pub static QR_CODE: Icon = Icon {
+    name: "settings-qr-code",
+    view: 24.0,
+    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></g>"#,
+};
+
 /// Returns the navigation icon matching a canonical `SettingsPageId`.
 pub fn page_icon(page: SettingsPageId) -> &'static Icon {
     match page.canonical() {

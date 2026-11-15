@@ -1,13 +1,32 @@
 //! Unit tests for Settings navigation, gating, target resolution, and primitives.
 
-use super::desktop::{DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label};
+use super::desktop::{
+    DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label,
+    parse_quick_chat_accelerator, shortcut_to_accelerator,
+};
 use super::experiments::{KNOWN_FEATURE_FLAGS, is_flag_enabled, resolve_flag_enabled};
-use super::primitives::{entity_palette_index, management_targets, name_initials};
+use super::mcp_server_draft::{
+    McpDraftInput, build_mcp_server_config, draft_from_summary, parse_args_line, parse_env_lines,
+    parse_header_lines,
+};
+use super::primitives::{
+    StatusTone, entity_palette_index, format_byte_size, management_targets, name_initials,
+};
+use super::privacy_telemetry::apply_privacy_patch;
+use super::providers_utils::{
+    extract_rate_limit_hint, provider_status_badge, sort_and_filter_providers,
+};
+use super::remote_access::{parse_phone_permissions, update_phone_permission_string};
 use super::shell::{page_key, resolve_active_page, settings_groups};
+use super::updates::is_allowed_release_link;
 use super::usage::{aggregate_usage, format_estimated_cost, format_token_count};
 use crate::actions::{Action, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
-use crate::state::{AppState, ThreadRecord, ThreadRuntime, UsageSummary, WorkspaceRecord};
+use crate::state::{
+    AppState, McpServerSummary, PrivacyTelemetrySettings, ProviderModelSummary,
+    ProviderStatusSummary, ProviderSummary, ThreadRecord, ThreadRuntime, UsageSummary,
+    WorkspaceRecord,
+};
 
 #[test]
 fn settings_groups_gate_remote_access_and_experiments() {
@@ -226,4 +245,269 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
     assert_eq!(agg.providers[0].provider, "openai");
     assert_eq!(agg.providers[1].provider, "anthropic");
     assert_eq!(agg.total_models(), 2);
+}
+
+#[test]
+fn packaged_builds_force_remote_access_off_and_ignore_flag_overrides() {
+    let mut state = AppState {
+        is_packaged: true,
+        ..Default::default()
+    };
+    state.feature_flags.insert("remoteAccess".to_string(), true);
+    state
+        .feature_flags
+        .insert("workspacePicker".to_string(), false);
+
+    assert!(!is_flag_enabled(&state, "remoteAccess"));
+    assert!(is_flag_enabled(&state, "workspacePicker"));
+
+    let remote = KNOWN_FEATURE_FLAGS
+        .iter()
+        .find(|flag| flag.id == "remoteAccess")
+        .expect("remoteAccess metadata");
+    assert!(!resolve_flag_enabled(&state, remote));
+
+    state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::RemoteAccess,
+    ))));
+    assert_eq!(resolve_active_page(&state), SettingsPageId::Models);
+    state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Experiments,
+    ))));
+    assert_eq!(resolve_active_page(&state), SettingsPageId::Models);
+}
+
+#[test]
+fn release_link_policy_restricts_to_safe_schemes() {
+    assert!(is_allowed_release_link("https://example.com/releases/v1.0"));
+    assert!(is_allowed_release_link("http://example.com/changelog"));
+    assert!(is_allowed_release_link("mailto:support@example.com"));
+
+    assert!(!is_allowed_release_link("javascript:alert(1)"));
+    assert!(!is_allowed_release_link("file:///etc/passwd"));
+    assert!(!is_allowed_release_link(
+        "data:text/html,<script>alert(1)</script>"
+    ));
+    assert!(!is_allowed_release_link("not a url"));
+}
+
+#[test]
+fn privacy_patch_clears_payloads_when_trace_telemetry_disables() {
+    let active = PrivacyTelemetrySettings {
+        crash_reports_enabled: true,
+        product_analytics_enabled: false,
+        ai_trace_telemetry_enabled: true,
+        ai_trace_payloads_enabled: true,
+        diagnostics_upload_enabled: false,
+        cloud_sync_enabled: false,
+    };
+    let cleared = apply_privacy_patch(&active, |next| {
+        next.ai_trace_telemetry_enabled = false;
+    });
+    assert!(!cleared.ai_trace_telemetry_enabled);
+    assert!(!cleared.ai_trace_payloads_enabled);
+}
+
+#[test]
+fn shortcut_roundtrip_and_byte_formatting() {
+    let default_parsed = parse_quick_chat_accelerator(DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR)
+        .expect("default shortcut parses");
+    assert_eq!(
+        shortcut_to_accelerator(&default_parsed),
+        DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR
+    );
+    assert!(parse_quick_chat_accelerator("Option+Space").is_some());
+    assert!(parse_quick_chat_accelerator("").is_none());
+
+    assert_eq!(format_byte_size(512), "512 B");
+    assert_eq!(format_byte_size(2048), "2.0 KB");
+    assert_eq!(format_byte_size(3 * 1024 * 1024), "3.0 MB");
+}
+
+#[test]
+fn mcp_draft_parsing_validation_and_roundtrip() {
+    let args = parse_args_line(r#"-y "@modelcontextprotocol/server-fs" '/tmp/my dir' --flag=1"#)
+        .expect("quoted args parse cleanly");
+    assert_eq!(
+        args,
+        vec![
+            "-y",
+            "@modelcontextprotocol/server-fs",
+            "/tmp/my dir",
+            "--flag=1"
+        ]
+    );
+
+    let unclosed = parse_args_line("--path \"unterminated").expect_err("unclosed quote rejected");
+    assert_eq!(unclosed.field, "args");
+
+    let env = parse_env_lines("# comment\nAPI_KEY = abc123\nEMPTY=\n").expect("env lines valid");
+    assert_eq!(env.get("API_KEY").map(String::as_str), Some("abc123"));
+    assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
+
+    assert!(parse_env_lines("INVALID_LINE").is_err());
+
+    let headers = parse_header_lines("Authorization: Bearer tok\nX-Custom: val:1")
+        .expect("header lines valid");
+    assert_eq!(
+        headers.get("Authorization").map(String::as_str),
+        Some("Bearer tok")
+    );
+    assert_eq!(headers.get("X-Custom").map(String::as_str), Some("val:1"));
+    assert!(parse_header_lines("Bad Header: foo").is_err());
+
+    let stdio_draft = McpDraftInput {
+        name: "fs_local".to_string(),
+        transport: "stdio".to_string(),
+        enabled: true,
+        command: "npx".to_string(),
+        args: r#"-y "@scope/pkg" "/tmp/with space""#.to_string(),
+        url: String::new(),
+        env_lines: "TOKEN=secret".to_string(),
+        header_lines: String::new(),
+    };
+    let (name, config) = build_mcp_server_config(&stdio_draft).expect("stdio config validates");
+    assert_eq!(name, "fs_local");
+    assert_eq!(config["transport"]["type"], "stdio");
+    assert_eq!(config["transport"]["command"], "npx");
+    assert_eq!(config["transport"]["args"][2], "/tmp/with space");
+    assert_eq!(config["transport"]["env"]["TOKEN"], "secret");
+
+    let summary = McpServerSummary {
+        name: name.clone(),
+        enabled: true,
+        transport: "stdio".to_string(),
+        config,
+        ..Default::default()
+    };
+    let roundtrip = draft_from_summary(&summary);
+    assert_eq!(roundtrip.command, "npx");
+    assert_eq!(roundtrip.env_lines, "TOKEN=secret");
+    assert_eq!(
+        parse_args_line(&roundtrip.args).expect("roundtripped args re-parse"),
+        vec!["-y", "@scope/pkg", "/tmp/with space"]
+    );
+
+    let bad_http = McpDraftInput {
+        name: "remote".to_string(),
+        transport: "http".to_string(),
+        url: "ftp://example.com/mcp".to_string(),
+        ..Default::default()
+    };
+    let err = build_mcp_server_config(&bad_http).expect_err("non-http scheme rejected");
+    assert_eq!(err.field, "url");
+
+    let good_http = McpDraftInput {
+        name: "remote_api".to_string(),
+        transport: "http".to_string(),
+        enabled: false,
+        url: "https://mcp.example.com/sse".to_string(),
+        header_lines: "Authorization: Bearer tok".to_string(),
+        ..Default::default()
+    };
+    let (_, http_cfg) = build_mcp_server_config(&good_http).expect("https config validates");
+    assert_eq!(http_cfg["transport"]["type"], "http");
+    assert_eq!(http_cfg["transport"]["url"], "https://mcp.example.com/sse");
+    assert_eq!(
+        http_cfg["transport"]["headers"]["Authorization"],
+        "Bearer tok"
+    );
+    assert_eq!(http_cfg["enabled"], false);
+}
+
+#[test]
+fn providers_utils_sorting_filtering_and_status_badges() {
+    let custom = ProviderSummary {
+        id: "custom-llm".to_string(),
+        name: "Custom Proxy".to_string(),
+        configured: true,
+        models: vec![ProviderModelSummary {
+            id: "my-fast-model".to_string(),
+            name: "Fast Model".to_string(),
+            enabled: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let openai = ProviderSummary {
+        id: "openai".to_string(),
+        name: "OpenAI".to_string(),
+        configured: false,
+        ..Default::default()
+    };
+    let anthropic = ProviderSummary {
+        id: "anthropic".to_string(),
+        name: "Anthropic".to_string(),
+        configured: true,
+        ..Default::default()
+    };
+    let list = vec![custom.clone(), openai.clone(), anthropic.clone()];
+    let statuses = vec![ProviderStatusSummary {
+        provider: "openai".to_string(),
+        healthy: true,
+        connected: true,
+        ..Default::default()
+    }];
+
+    // Connected ranks first (openai), then configured built-in before custom (anthropic before custom-llm).
+    let sorted = sort_and_filter_providers(&list, &statuses, "");
+    let ids: Vec<&str> = sorted.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, vec!["openai", "anthropic", "custom-llm"]);
+
+    // Query filters by nested model id/name too.
+    let filtered = sort_and_filter_providers(&list, &statuses, "fast-model");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, "custom-llm");
+
+    assert_eq!(
+        provider_status_badge(&openai, statuses.first()),
+        ("Connected", StatusTone::Success)
+    );
+    let warn_status = ProviderStatusSummary {
+        provider: "anthropic".to_string(),
+        healthy: false,
+        connected: false,
+        detail: Some("API key expired".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        provider_status_badge(&anthropic, Some(&warn_status)),
+        ("Needs attention", StatusTone::Warning)
+    );
+    assert_eq!(
+        provider_status_badge(&openai, None),
+        ("Not configured", StatusTone::Neutral)
+    );
+
+    let hint = extract_rate_limit_hint(Some(&serde_json::json!({
+        "remainingRequests": 18,
+        "limitRequests": 60
+    })));
+    assert_eq!(hint.as_deref(), Some("18 / 60 requests remaining"));
+}
+
+#[test]
+fn remote_access_permissions_parse_and_update_json_and_csv() {
+    let parsed_json =
+        parse_phone_permissions(r#"{"conversations":true,"turns":false,"backups":true}"#);
+    assert!(parsed_json.contains("conversations"));
+    assert!(parsed_json.contains("backups"));
+    assert!(!parsed_json.contains("turns"));
+
+    let updated_json =
+        update_phone_permission_string(r#"{"conversations":true,"turns":false}"#, "turns", true);
+    let reparsed = parse_phone_permissions(&updated_json);
+    assert!(reparsed.contains("conversations"));
+    assert!(reparsed.contains("turns"));
+
+    let parsed_csv = parse_phone_permissions("conversations, serverRequests");
+    assert!(parsed_csv.contains("conversations"));
+    assert!(parsed_csv.contains("serverRequests"));
+    let updated_csv = update_phone_permission_string("conversations,turns", "turns", false);
+    assert_eq!(updated_csv, "conversations");
+
+    let from_empty = update_phone_permission_string("", "backups", true);
+    let reparsed_empty = parse_phone_permissions(&from_empty);
+    assert!(reparsed_empty.contains("backups"));
+    assert!(!reparsed_empty.contains("turns"));
 }

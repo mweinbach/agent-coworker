@@ -751,3 +751,144 @@ fn slice5_workspace_subagent_and_memory_helpers_match_server_contracts() {
         })
     );
 }
+
+#[test]
+fn slice6_tool_access_mcp_connectors_and_search_helpers() {
+    use crate::state::McpServerSummary;
+    use crate::views::settings::connectors::{
+        filter_connectors, parse_connectors, safe_external_url,
+    };
+    use crate::views::settings::mcp_servers::{
+        auth_mode_label, compare_mcp_servers, editable_source, format_connection_line,
+        server_needs_oauth, source_label,
+    };
+    use crate::views::settings::state::ToolAccessTab;
+    use crate::views::settings::tool_access::{
+        parse_marketplaces, patch_codex_search_mode, patch_local_search_fallback,
+        patch_search_provider, plugin_install_params, skill_install_params,
+        workspace_codex_search_mode, workspace_local_search_fallback, workspace_search_provider,
+    };
+
+    assert_eq!(
+        ToolAccessTab::from_id("mcp", false),
+        ToolAccessTab::McpServers
+    );
+    assert_eq!(
+        ToolAccessTab::from_id("connectors", false),
+        ToolAccessTab::Plugins
+    );
+    assert_eq!(
+        ToolAccessTab::from_id("connectors", true),
+        ToolAccessTab::Connectors
+    );
+    assert_eq!(
+        ToolAccessTab::from_id("search", false),
+        ToolAccessTab::Search
+    );
+
+    assert_eq!(
+        safe_external_url(Some("https://chatgpt.com/apps")),
+        Some("https://chatgpt.com/apps".to_string())
+    );
+    assert_eq!(safe_external_url(Some("javascript:alert(1)")), None);
+    assert_eq!(safe_external_url(Some("file:///etc/passwd")), None);
+
+    let items = parse_connectors(&[
+        serde_json::json!({
+            "id": "conn-1",
+            "name": "GitHub",
+            "description": "Repos",
+            "isAccessible": true,
+            "isEnabled": true,
+            "installUrl": "https://chatgpt.com/g/github"
+        }),
+        serde_json::json!({
+            "id": "conn-2",
+            "name": "Slack",
+            "isAccessible": false,
+            "isEnabled": false,
+            "installUrl": "javascript:void(0)"
+        }),
+    ]);
+    assert_eq!(items.len(), 2);
+    assert!(items[0].install_url.is_some());
+    assert!(items[1].install_url.is_none());
+    assert_eq!(filter_connectors(&items, "git", false).len(), 1);
+    assert_eq!(filter_connectors(&items, "", true).len(), 1);
+
+    let srv_user = McpServerSummary {
+        name: "zeta".to_string(),
+        enabled: true,
+        transport: "http".to_string(),
+        source: Some("user".to_string()),
+        auth_status: Some("oauth_pending".to_string()),
+        config: serde_json::json!({
+            "transport": { "type": "http", "url": "https://mcp.example.com" },
+            "auth": { "type": "oauth" }
+        }),
+        ..Default::default()
+    };
+    let srv_plugin = McpServerSummary {
+        name: "alpha".to_string(),
+        enabled: true,
+        transport: "stdio".to_string(),
+        source: Some("plugin".to_string()),
+        config: serde_json::json!({
+            "transport": { "type": "stdio", "command": "npx", "args": ["-y", "demo"] }
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        compare_mcp_servers(&srv_user, &srv_plugin),
+        std::cmp::Ordering::Less
+    );
+    assert_eq!(source_label(srv_user.source.as_deref()), "All projects");
+    assert_eq!(editable_source(srv_user.source.as_deref()), Some("user"));
+    assert_eq!(editable_source(srv_plugin.source.as_deref()), None);
+    assert_eq!(format_connection_line(&srv_user), "https://mcp.example.com");
+    assert_eq!(format_connection_line(&srv_plugin), "npx -y demo");
+    assert_eq!(auth_mode_label(&srv_user), "OAuth sign-in pending");
+    assert!(server_needs_oauth(&srv_user));
+
+    let opts = serde_json::json!({
+        "openai": { "reasoningEffort": "high" },
+        "codex-cli": { "webSearchBackend": "native" },
+        "google": { "nativeWebSearch": false }
+    });
+    assert_eq!(workspace_search_provider(Some(&opts)), "exa");
+    let patched = patch_search_provider(Some(&opts), "parallel");
+    assert_eq!(workspace_search_provider(Some(&patched)), "parallel");
+    assert_eq!(
+        patched.pointer("/openai/reasoningEffort"),
+        Some(&serde_json::json!("high"))
+    );
+    assert_eq!(
+        patched.pointer("/google/nativeWebSearch"),
+        Some(&serde_json::json!(false))
+    );
+    let fb_patched = patch_local_search_fallback(Some(&patched), "parallel");
+    assert_eq!(
+        workspace_local_search_fallback(Some(&fb_patched)),
+        "parallel"
+    );
+    let mode_patched = patch_codex_search_mode(Some(&fb_patched), "live");
+    assert_eq!(workspace_codex_search_mode(Some(&mode_patched)), "live");
+
+    assert_eq!(
+        plugin_install_params(" owner/repo ", "workspace"),
+        serde_json::json!({ "sourceInput": "owner/repo", "targetScope": "workspace" })
+    );
+    assert_eq!(
+        skill_install_params(" owner/skill ", "project"),
+        serde_json::json!({ "sourceInput": "owner/skill", "targetScope": "project" })
+    );
+    let mkts = parse_marketplaces(&[serde_json::json!({
+        "id": "m1",
+        "repo": "acme/tools",
+        "displayName": "Acme Catalog",
+        "pluginCount": 4,
+        "skillCount": 9
+    })]);
+    assert_eq!(mkts.len(), 1);
+    assert_eq!(mkts[0].display_name, "Acme Catalog");
+}

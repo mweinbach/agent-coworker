@@ -269,9 +269,9 @@ fn nav_pane(
             let mut nav_btn = row()
                 .key(format!("settings-nav-{}", page_key(page_id)))
                 .w_full()
-                .min_h(34.0)
+                .min_h(30.0)
                 .px(10.0)
-                .py(7.0)
+                .py(5.0)
                 .radius(8.0)
                 .gap(10.0)
                 .items_center()
@@ -307,7 +307,7 @@ fn nav_pane(
                 .child(
                     text(group.label.to_uppercase())
                         .px(8.0)
-                        .py(6.0)
+                        .py(4.0)
                         .font(t.label)
                         .color(t.text_faint),
                 )
@@ -321,9 +321,9 @@ fn nav_pane(
             .min_h(0.0)
             .w_full()
             .px(10.0)
-            .pt(10.0)
-            .pb(16.0)
-            .gap(14.0)
+            .pt(8.0)
+            .pb(12.0)
+            .gap(10.0)
             .scroll(ScrollSpec {
                 stick_bottom: false,
             })

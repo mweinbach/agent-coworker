@@ -12,12 +12,15 @@ use rune_kit::{
 use serde_json::{Value, json};
 
 use crate::actions::{Action, SettingsAction};
-use crate::state::{AppState, SubagentProfile, WorkspaceRecord};
+use crate::state::{
+    AgentProfileCatalogEntry, AgentProfileDefinitionWire, AgentProfileUpsertInputWire, AppState,
+    SubagentProfile, WorkspaceRecord,
+};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, SettingsRow, StatusTone,
-    confirm_dialog, entity_icon, settings_page, status_pill,
+    callout_banner, confirm_dialog, entity_icon, settings_page, status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_providers};
@@ -187,6 +190,81 @@ fn collect_model_options(s: &AppState, ws: Option<&WorkspaceRecord>) -> Vec<(Str
     out
 }
 
+fn catalog_entries(s: &AppState) -> Vec<AgentProfileCatalogEntry> {
+    if !s.agent_profiles_catalog.profiles.is_empty() {
+        return s.agent_profiles_catalog.profiles.clone();
+    }
+    s.subagents
+        .iter()
+        .map(legacy_subagent_to_catalog_entry)
+        .collect()
+}
+
+fn legacy_subagent_to_catalog_entry(profile: &SubagentProfile) -> AgentProfileCatalogEntry {
+    let model = profile
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| {
+            if let Some(p) = profile
+                .provider
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                && !m.contains(':')
+            {
+                format!("{p}:{m}")
+            } else {
+                m.to_string()
+            }
+        });
+    AgentProfileCatalogEntry {
+        scope: profile
+            .scope
+            .clone()
+            .unwrap_or_else(|| "global".to_string()),
+        path: None,
+        built_in: Some(profile.builtin),
+        locked: Some(profile.id == "default"),
+        effective: true,
+        shadowed: false,
+        workspace_disabled: Some(false),
+        profile: AgentProfileDefinitionWire {
+            version: 1,
+            id: profile.id.clone(),
+            display_name: profile.name.clone(),
+            description: profile.description.clone(),
+            enabled: true,
+            base_role: profile
+                .tool_preset
+                .clone()
+                .unwrap_or_else(|| "worker".to_string()),
+            prompt: profile.system_prompt.clone(),
+            allowed_built_in_tools: profile.allowed_tools.clone(),
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model,
+            reasoning_effort: profile.reasoning_effort.clone(),
+            default_task_type: None,
+            default_context_mode: None,
+        },
+    }
+}
+
+fn split_model_ref(model_ref: Option<&str>) -> (String, String) {
+    let Some(raw) = model_ref.map(str::trim).filter(|m| !m.is_empty()) else {
+        return (String::new(), String::new());
+    };
+    if let Some((prov, model)) = raw.split_once(':') {
+        (prov.trim().to_string(), model.trim().to_string())
+    } else if let Some((prov, model)) = raw.split_once('/') {
+        (prov.trim().to_string(), model.trim().to_string())
+    } else {
+        (String::new(), raw.to_string())
+    }
+}
+
 fn open_create_dialog(s: &mut AppState) {
     let scope = if s.settings_ui.subagent_scope == "workspace" {
         "workspace"
@@ -194,6 +272,7 @@ fn open_create_dialog(s: &mut AppState) {
         "global"
     };
     s.settings_ui.subagent_editing_id = None;
+    s.settings_ui.subagent_editing_scope = scope.to_string();
     s.settings_ui.subagent_scope = scope.to_string();
     s.settings_ui.subagent_base_role = "worker".to_string();
     s.settings_ui.subagent_enabled = true;
@@ -212,28 +291,38 @@ fn open_create_dialog(s: &mut AppState) {
     s.settings_ui.subagent_dialog_open = true;
 }
 
-fn open_edit_dialog(s: &mut AppState, profile: &SubagentProfile) {
+fn open_edit_dialog(s: &mut AppState, entry: &AgentProfileCatalogEntry) {
+    let profile = &entry.profile;
+    if entry.locked == Some(true) || profile.id == "default" {
+        return;
+    }
+    let scope = if entry.scope == "workspace" {
+        "workspace".to_string()
+    } else {
+        "global".to_string()
+    };
     s.settings_ui.subagent_editing_id = Some(profile.id.clone());
-    s.settings_ui.subagent_scope = profile
-        .scope
-        .clone()
-        .unwrap_or_else(|| "global".to_string());
-    let base_role = profile
-        .tool_preset
-        .clone()
-        .filter(|r| ROLE_OPTIONS.iter().any(|(id, _)| *id == r))
-        .unwrap_or_else(|| "worker".to_string());
+    s.settings_ui.subagent_editing_scope = scope.clone();
+    s.settings_ui.subagent_scope = scope;
+    let base_role = if ROLE_OPTIONS.iter().any(|(id, _)| *id == profile.base_role) {
+        profile.base_role.clone()
+    } else {
+        "worker".to_string()
+    };
     s.settings_ui.subagent_base_role = base_role;
-    s.settings_ui.subagent_enabled = true;
-    s.settings_ui.subagent_name_edit = TextEdit::new(profile.name.as_str());
+    s.settings_ui.subagent_enabled = profile.enabled;
+    s.settings_ui.subagent_name_edit = TextEdit::new(profile.display_name.as_str());
     s.settings_ui.subagent_desc_edit = TextEdit::new(profile.description.as_str());
-    s.settings_ui.subagent_prompt_edit = TextEdit::new(profile.system_prompt.as_str());
-    s.settings_ui.subagent_draft_provider = profile.provider.clone().unwrap_or_default();
-    s.settings_ui.subagent_draft_model = profile.model.clone().unwrap_or_default();
+    s.settings_ui.subagent_prompt_edit = TextEdit::new(profile.prompt.as_str());
+    let (provider, model) = split_model_ref(profile.model.as_deref());
+    s.settings_ui.subagent_draft_provider = provider;
+    s.settings_ui.subagent_draft_model = model;
     s.settings_ui.subagent_reasoning_effort = profile.reasoning_effort.clone();
-    s.settings_ui.subagent_draft_allowed_tools = profile.allowed_tools.iter().cloned().collect();
-    s.settings_ui.subagent_draft_mcp_servers = HashSet::new();
-    s.settings_ui.subagent_draft_skill_names = HashSet::new();
+    s.settings_ui.subagent_draft_allowed_tools =
+        profile.allowed_built_in_tools.iter().cloned().collect();
+    s.settings_ui.subagent_draft_mcp_servers =
+        profile.allowed_mcp_servers.iter().cloned().collect();
+    s.settings_ui.subagent_draft_skill_names = profile.skill_names.iter().cloned().collect();
     s.settings_ui.subagent_dialog_open = true;
 }
 
@@ -491,25 +580,55 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     sections.push(controls_col);
 
-    // 3. Profiles list
+    // 3. Diagnostics & Profiles list
+    if !s.agent_profiles_catalog.diagnostics.is_empty() {
+        let diag_lines: Vec<String> = s
+            .agent_profiles_catalog
+            .diagnostics
+            .iter()
+            .take(5)
+            .map(|d| format!("[{}] {}: {}", d.scope, d.path, d.message))
+            .collect();
+        sections.push(callout_banner(
+            StatusTone::Warning,
+            format!("Agent profile warnings:\n{}", diag_lines.join("\n")),
+            k,
+            t,
+        ));
+    }
+
     let query = s
         .settings_ui
         .subagent_search_edit
         .text
         .trim()
         .to_ascii_lowercase();
-    let mut filtered: Vec<&SubagentProfile> = s
-        .subagents
+    let entries = catalog_entries(s);
+    let mut filtered: Vec<AgentProfileCatalogEntry> = entries
         .iter()
-        .filter(|p| p.scope.as_deref().unwrap_or("global") == current_scope)
-        .filter(|p| {
+        .filter(|entry| {
+            let entry_scope = if entry.scope == "workspace" {
+                "workspace"
+            } else {
+                "global"
+            };
+            entry_scope == current_scope
+        })
+        .filter(|entry| {
+            let p = &entry.profile;
             query.is_empty()
-                || p.name.to_ascii_lowercase().contains(&query)
+                || p.display_name.to_ascii_lowercase().contains(&query)
                 || p.id.to_ascii_lowercase().contains(&query)
                 || p.description.to_ascii_lowercase().contains(&query)
         })
+        .cloned()
         .collect();
-    filtered.sort_by_key(|a| a.name.to_lowercase());
+    filtered.sort_by_key(|a| {
+        (
+            a.profile.id != "default",
+            a.profile.display_name.to_lowercase(),
+        )
+    });
 
     if filtered.is_empty() {
         let empty_title = if !query.is_empty() {
@@ -544,26 +663,56 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
     } else {
         let mut list_section = Section::new();
-        for profile in filtered {
-            let p_clone = profile.clone();
-            let p_id_copy = profile.id.clone();
+        for entry in filtered {
+            let profile = &entry.profile;
+            let is_locked_default = entry.locked == Some(true) || profile.id == "default";
+            let is_builtin = entry.built_in == Some(true);
+            let ws_disabled = entry.workspace_disabled == Some(true);
+            let p_scope = if entry.scope == "workspace" {
+                "workspace"
+            } else {
+                "global"
+            };
+            let entry_clone = entry.clone();
+            let p_id_avail = profile.id.clone();
             let p_id_del = profile.id.clone();
-            let p_scope = profile.scope.as_deref().unwrap_or("global");
+            let p_scope_del = p_scope.to_string();
             let copy_target_scope = if p_scope == "workspace" {
                 "global"
             } else {
                 "workspace"
             };
+            let ws_avail = ws_id.clone();
             let ws_copy = ws_id.clone();
             let copy_ref = format!("{p_scope}:{}", profile.id);
 
             let mut badge_pills: Vec<El> = Vec::new();
-            if profile.builtin {
+            if is_builtin {
                 badge_pills.push(status_pill("Built-in", StatusTone::Neutral, k, t));
             }
-            if let Some(preset) = profile.tool_preset.as_deref() {
-                badge_pills.push(status_pill(role_label(preset), StatusTone::Neutral, k, t));
+            if is_locked_default {
+                badge_pills.push(status_pill("Locked", StatusTone::Neutral, k, t));
             }
+            if !profile.enabled {
+                badge_pills.push(status_pill("Off", StatusTone::Neutral, k, t));
+            }
+            if ws_disabled {
+                badge_pills.push(status_pill(
+                    "Disabled in workspace",
+                    StatusTone::Warning,
+                    k,
+                    t,
+                ));
+            }
+            if entry.shadowed {
+                badge_pills.push(status_pill("Shadowed", StatusTone::Neutral, k, t));
+            }
+            badge_pills.push(status_pill(
+                role_label(&profile.base_role),
+                StatusTone::Neutral,
+                k,
+                t,
+            ));
             if let Some(model) = profile.model.as_deref()
                 && !model.trim().is_empty()
             {
@@ -575,7 +724,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .flex_wrap()
                 .gap(8.0)
                 .child(
-                    text(profile.name.clone())
+                    text(profile.display_name.clone())
                         .font(k.ty.body_medium)
                         .color(t.text_base),
                 )
@@ -584,25 +733,44 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let desc = if profile.description.trim().is_empty() {
                 format!(
                     "{} template · {} tools allowed",
-                    role_label(profile.tool_preset.as_deref().unwrap_or("worker")),
-                    profile.allowed_tools.len()
+                    role_label(&profile.base_role),
+                    profile.allowed_built_in_tools.len()
                 )
             } else {
                 profile.description.clone()
             };
 
-            let actions = row()
-                .items_center()
-                .gap(6.0)
-                .child(
+            let mut actions = row().items_center().gap(6.0);
+            if p_scope == "global" && !is_locked_default {
+                actions = actions.child(
+                    Switch::new(!ws_disabled)
+                        .label(format!("Enable {} in workspace", profile.display_name))
+                        .hide_label()
+                        .control_size(ControlSize::Mini)
+                        .on_toggle(move |s: &mut AppState| {
+                            s.dispatch(Action::Settings(
+                                SettingsAction::SetAgentProfileWorkspaceAvailability {
+                                    workspace_id: ws_avail.clone(),
+                                    id: p_id_avail.clone(),
+                                    disabled: !ws_disabled,
+                                },
+                            ));
+                        })
+                        .build(k),
+                );
+            }
+            if !is_locked_default {
+                actions = actions.child(
                     Button::new("Edit")
                         .variant(ButtonVariant::Outline)
                         .control_size(ControlSize::Small)
                         .on_press(move |s: &mut AppState| {
-                            open_edit_dialog(s, &p_clone);
+                            open_edit_dialog(s, &entry_clone);
                         })
                         .build(k),
-                )
+                );
+            }
+            actions = actions
                 .child(
                     Button::new(if copy_target_scope == "global" {
                         "Copy global"
@@ -613,11 +781,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .control_size(ControlSize::Small)
                     .icon(&icons::COPY)
                     .on_press(move |s: &mut AppState| {
-                        let _ = &p_id_copy;
-                        s.dispatch(Action::Settings(SettingsAction::CopyAgentProfile {
+                        s.dispatch(Action::Settings(SettingsAction::CopyAgentProfileNamed {
                             workspace_id: ws_copy.clone(),
-                            id: copy_ref.clone(),
+                            source_ref: copy_ref.clone(),
                             target_scope: copy_target_scope.to_string(),
+                            target_id: None,
+                            target_display_name: None,
                         }));
                         s.settings_ui.subagent_scope = copy_target_scope.to_string();
                     })
@@ -628,9 +797,10 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Small)
                         .icon(&icons::TRASH)
-                        .disabled(profile.builtin)
+                        .disabled(is_locked_default || is_builtin)
                         .on_press(move |s: &mut AppState| {
-                            s.settings_ui.subagent_delete_confirm_id = Some(p_id_del.clone());
+                            s.settings_ui.subagent_delete_confirm =
+                                Some((p_scope_del.clone(), p_id_del.clone()));
                         })
                         .build(k),
                 );
@@ -652,7 +822,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             .child(entity_icon(
                                 s,
                                 None,
-                                &profile.name,
+                                &profile.display_name,
                                 EntityIconSize::Sm,
                                 k,
                                 t,
@@ -682,7 +852,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .subagent_editing_id
             .clone()
             .unwrap_or_else(|| profile_id_from_name(draft_name));
-        let can_save = !draft_name.is_empty() && !draft_id.is_empty();
+        let can_save = !draft_name.is_empty() && !draft_id.is_empty() && draft_id != "default";
 
         let scope_label = if s.settings_ui.subagent_scope == "workspace" {
             "Workspace"
@@ -1174,9 +1344,19 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             .subagent_editing_id
                             .clone()
                             .unwrap_or_else(|| profile_id_from_name(&name));
-                        if name.is_empty() || id.is_empty() {
+                        if name.is_empty() || id.is_empty() || id == "default" {
                             return;
                         }
+                        let save_scope = if s.settings_ui.subagent_editing_id.is_some() {
+                            s.settings_ui.subagent_editing_scope.clone()
+                        } else {
+                            s.settings_ui.subagent_scope.clone()
+                        };
+                        let existing_meta = s
+                            .agent_profiles_catalog
+                            .profiles
+                            .iter()
+                            .find(|e| e.profile.id == id && e.scope == save_scope);
                         let allowed_tools: Vec<String> = BUILT_IN_TOOLS
                             .iter()
                             .filter(|tool| {
@@ -1184,30 +1364,52 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             })
                             .map(|t| (*t).to_string())
                             .collect();
-                        let profile = SubagentProfile {
-                            id,
-                            name,
-                            description: s.settings_ui.subagent_desc_edit.text.trim().to_string(),
-                            provider: (!s.settings_ui.subagent_draft_provider.is_empty())
-                                .then(|| s.settings_ui.subagent_draft_provider.clone()),
-                            model: (!s.settings_ui.subagent_draft_model.is_empty())
-                                .then(|| s.settings_ui.subagent_draft_model.clone()),
-                            system_prompt: s
-                                .settings_ui
-                                .subagent_prompt_edit
-                                .text
-                                .trim()
-                                .to_string(),
-                            tool_preset: Some(s.settings_ui.subagent_base_role.clone()),
-                            allowed_tools,
-                            denied_tools: Vec::new(),
-                            builtin: false,
-                            reasoning_effort: s.settings_ui.subagent_reasoning_effort.clone(),
-                            scope: Some(s.settings_ui.subagent_scope.clone()),
+                        let mut allowed_mcp_servers: Vec<String> = s
+                            .settings_ui
+                            .subagent_draft_mcp_servers
+                            .iter()
+                            .cloned()
+                            .collect();
+                        allowed_mcp_servers.sort();
+                        let mut skill_names: Vec<String> = s
+                            .settings_ui
+                            .subagent_draft_skill_names
+                            .iter()
+                            .cloned()
+                            .collect();
+                        skill_names.sort();
+                        let model_ref = if s.settings_ui.subagent_draft_model.is_empty() {
+                            None
+                        } else if s.settings_ui.subagent_draft_provider.is_empty() {
+                            Some(s.settings_ui.subagent_draft_model.clone())
+                        } else {
+                            Some(format!(
+                                "{}:{}",
+                                s.settings_ui.subagent_draft_provider,
+                                s.settings_ui.subagent_draft_model
+                            ))
                         };
-                        s.dispatch(Action::Settings(SettingsAction::UpsertSubagent {
+                        let input = AgentProfileUpsertInputWire {
+                            scope: save_scope,
+                            id,
+                            display_name: name,
+                            description: s.settings_ui.subagent_desc_edit.text.trim().to_string(),
+                            enabled: s.settings_ui.subagent_enabled,
+                            base_role: s.settings_ui.subagent_base_role.clone(),
+                            prompt: s.settings_ui.subagent_prompt_edit.text.trim().to_string(),
+                            allowed_built_in_tools: allowed_tools,
+                            allowed_mcp_servers,
+                            skill_names,
+                            model: model_ref,
+                            reasoning_effort: s.settings_ui.subagent_reasoning_effort.clone(),
+                            default_task_type: existing_meta
+                                .and_then(|e| e.profile.default_task_type.clone()),
+                            default_context_mode: existing_meta
+                                .and_then(|e| e.profile.default_context_mode.clone()),
+                        };
+                        s.dispatch(Action::Settings(SettingsAction::UpsertAgentProfile {
                             workspace_id: ws_save.clone(),
-                            profile,
+                            input,
                         }));
                         s.settings_ui.subagent_dialog_open = false;
                         s.settings_ui.subagent_editing_id = None;
@@ -1247,14 +1449,13 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     }
 
     // 5. Delete confirmation
-    if let Some(delete_id) = s.settings_ui.subagent_delete_confirm_id.clone() {
-        let display_name = s
-            .subagents
+    if let Some((delete_scope, delete_id)) = s.settings_ui.subagent_delete_confirm.clone() {
+        let display_name = entries
             .iter()
-            .find(|p| p.id == delete_id)
-            .map(|p| p.name.clone())
+            .find(|p| p.profile.id == delete_id && p.scope == delete_scope)
+            .map(|p| p.profile.display_name.clone())
             .unwrap_or_else(|| delete_id.clone());
-        let ws_del = ws_id;
+        let ws_del = ws_id.clone();
         confirm_dialog(
             ConfirmDialogSpec {
                 key: "subagent-delete-confirm",
@@ -1266,11 +1467,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 confirm_label: "Delete",
                 danger: true,
             },
-            |s| s.settings_ui.subagent_delete_confirm_id = None,
+            |s| s.settings_ui.subagent_delete_confirm = None,
             move |s| {
-                s.settings_ui.subagent_delete_confirm_id = None;
-                s.dispatch(Action::Settings(SettingsAction::DeleteSubagent {
+                s.settings_ui.subagent_delete_confirm = None;
+                s.dispatch(Action::Settings(SettingsAction::DeleteAgentProfile {
                     workspace_id: ws_del.clone(),
+                    scope: delete_scope.clone(),
                     id: delete_id.clone(),
                 }));
             },
@@ -1279,8 +1481,19 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
     }
 
+    let ws_refresh = ws_id;
     PageContent::simple(settings_page(sections))
         .with_header_actions(vec![
+            Button::new("Refresh")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .icon(&icons::REFRESH_CCW)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::ReadAgentProfilesCatalog {
+                        workspace_id: ws_refresh.clone(),
+                    }));
+                })
+                .build(k),
             Button::new("New subagent")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)

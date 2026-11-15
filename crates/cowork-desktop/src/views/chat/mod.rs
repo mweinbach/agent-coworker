@@ -3,6 +3,14 @@
 //! Ported from `apps/desktop/src/ui/ChatView.tsx`, `src/ui/chat/`, `src/ui/composer/`,
 //! `src/ui/markdown/`, `src/ui/attachments/`, and `src/ui/AgentRunViewer.tsx`.
 
+pub mod attachments;
+pub mod icons;
+pub mod markdown;
+pub mod model;
+pub mod state;
+
+pub use state::ChatUiState;
+
 use rune::{Cx, col, text};
 use rune_kit::{Button, ButtonVariant, Kit};
 

@@ -1,9 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
+use rune::{Cx, El, Env, Runtime, el, row};
 
 use super::decoder::{decode_spreadsheet_preview, excel_column_name};
+use super::spreadsheet::render_spreadsheet_preview;
 use super::state::{
     MAX_PREVIEW_CELLS, MAX_PREVIEW_COLS, MAX_PREVIEW_ROWS, PreviewUiState, SpreadsheetCellAlign,
 };
+use crate::state::{AppState, FilePreviewState};
+use crate::theme;
 
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
@@ -327,4 +333,281 @@ fn preview_ui_state_syncs_and_selects_sheets() {
 
     ui.sync_for_preview_data(None, None);
     assert!(ui.active_path.is_empty());
+}
+
+const PREVIEW_VIEWPORT: (f32, f32) = (620.0, 480.0);
+
+fn render_preview_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+    let dark = state.effective_dark(cx.system_dark());
+    let (kit, tokens) = theme::build_kit(dark, false, false);
+    cx.foreground(tokens.text_base);
+    cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+    let preview = state
+        .active_file_preview
+        .as_ref()
+        .expect("active preview present");
+    let data = preview
+        .spreadsheet
+        .as_ref()
+        .expect("spreadsheet preview present");
+    el().w_full()
+        .h_full()
+        .fill(tokens.panel_bg)
+        .child(row().w_full().h_full().child(render_spreadsheet_preview(
+            state, preview, data, &kit, &tokens,
+        )))
+}
+
+fn render_offscreen_rgba(rt: &mut Runtime<AppState>, dark: bool) -> Vec<u8> {
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let scale = rt.env.scale;
+    let dw = (PREVIEW_VIEWPORT.0 * scale) as u32;
+    let dh = (PREVIEW_VIEWPORT.1 * scale) as u32;
+    let target = Offscreen::new(&gpu.device, dw, dh);
+
+    renderer.prepare(
+        &gpu.device,
+        &gpu.queue,
+        &mut rt.text.atlas,
+        &rt.instances,
+        (dw, dh),
+    );
+    let tokens = theme::resolve_tokens(dark, false, false);
+    let clear = [
+        tokens.panel_bg.r,
+        tokens.panel_bg.g,
+        tokens.panel_bg.b,
+        tokens.panel_bg.a,
+    ];
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, clear);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    target.read(&gpu.device)
+}
+
+fn maybe_save_snap(name: &str, rgba: &[u8], scale: f32) {
+    let Ok(dir) = std::env::var("COWORK_PREVIEW_SNAP_DIR") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("create preview snap dir");
+    let dw = (PREVIEW_VIEWPORT.0 * scale) as u32;
+    let dh = (PREVIEW_VIEWPORT.1 * scale) as u32;
+    write_png(&dir.join(format!("{name}.png")), dw, dh, rgba).expect("write preview png");
+}
+
+#[test]
+fn renders_spreadsheet_table_and_sheet_tabs_headlessly_in_light_and_dark() {
+    let sheet1_xml = concat!(
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Account</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Q1</t></is></c><c r=\"C1\" t=\"inlineStr\"><is><t>Q2</t></is></c><c r=\"D1\" t=\"inlineStr\"><is><t>Owner</t></is></c></row>",
+        "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Compute</t></is></c><c r=\"B2\"><v>12000</v></c><c r=\"C2\"><v>14500.75</v></c><c r=\"D2\" t=\"inlineStr\"><is><t>Platform</t></is></c></row>",
+        "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Storage</t></is></c><c r=\"B3\"><v>3200</v></c><c r=\"C3\"><v>3100</v></c><c r=\"D3\" t=\"inlineStr\"><is><t>Infra</t></is></c></row>"
+    );
+    let sheet2_xml = concat!(
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Metric</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Target</t></is></c></row>",
+        "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Uptime</t></is></c><c r=\"B2\"><v>99.95</v></c></row>"
+    );
+    let xlsx_bytes = build_minimal_xlsx(
+        &[("Summary", sheet1_xml), ("Assumptions", sheet2_xml)],
+        false,
+    );
+    let mut data =
+        decode_spreadsheet_preview(Path::new("/ws/budget.xlsx"), &xlsx_bytes, false).unwrap();
+    // Mark first sheet row-capped so the cap notice banner renders in parity snapshots too.
+    data.sheets[0].total_rows = 840;
+    data.sheets[0].rows_truncated = true;
+
+    for dark in [false, true] {
+        let mut state = AppState {
+            scene_mode: true,
+            system_dark_override: Some(dark),
+            ..Default::default()
+        };
+        state.desktop_settings.theme = if dark {
+            theme::ThemePreference::Dark
+        } else {
+            theme::ThemePreference::Light
+        };
+        let preview = FilePreviewState {
+            workspace_id: "ws-1".to_string(),
+            path: "/ws/budget.xlsx".to_string(),
+            title: "budget.xlsx".to_string(),
+            content: None,
+            is_binary: false,
+            is_markdown: false,
+            truncated: false,
+            error: None,
+            spreadsheet: Some(data.clone()),
+        };
+        state.active_file_preview = Some(preview);
+        state.sync_preview_ui();
+
+        let mut rt = Runtime::new(
+            state,
+            render_preview_root,
+            PREVIEW_VIEWPORT,
+            Env::new(true, 2.0),
+        );
+        rt.frame(0.0);
+
+        let rgba = render_offscreen_rgba(&mut rt, dark);
+        assert!(
+            rgba.chunks_exact(4).any(|px| px[..3] != rgba[..3]),
+            "rendered spreadsheet preview must not be blank (dark={dark})"
+        );
+        let label = if dark {
+            "spreadsheet-preview-dark"
+        } else {
+            "spreadsheet-preview-light"
+        };
+        maybe_save_snap(label, &rgba, 2.0);
+
+        let els = rt.elements();
+        for key in [
+            "spreadsheet-preview-root",
+            "spreadsheet-preview-meta",
+            "spreadsheet-preview-cap-banner",
+            "spreadsheet-table-scroll-0",
+            "spreadsheet-sheet-tabs",
+            "sheet-tab-0",
+            "sheet-tab-1",
+        ] {
+            assert!(
+                els.iter().any(|e| e.key.as_deref() == Some(key)),
+                "expected key `{key}` in rendered spreadsheet preview"
+            );
+        }
+
+        // Verify clicking the second sheet tab switches active_sheet cleanly.
+        let tab1_rect = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("sheet-tab-1"))
+            .unwrap()
+            .rect;
+        let cx = tab1_rect[0] + tab1_rect[2] * 0.5;
+        let cy = tab1_rect[1] + tab1_rect[3] * 0.5;
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.05);
+        assert_eq!(rt.state.preview_ui.active_sheet, 1);
+    }
+}
+
+#[test]
+fn renders_csv_preview_with_raw_toggle() {
+    let raw_csv = "Name,Amount\nCompute,1200\nStorage,350\n";
+    let data = decode_spreadsheet_preview(Path::new("/ws/costs.csv"), raw_csv.as_bytes(), false)
+        .expect("csv should decode");
+    let mut state = AppState {
+        scene_mode: true,
+        system_dark_override: Some(false),
+        ..Default::default()
+    };
+    state.active_file_preview = Some(FilePreviewState {
+        workspace_id: "ws-1".to_string(),
+        path: "/ws/costs.csv".to_string(),
+        title: "costs.csv".to_string(),
+        content: Some(raw_csv.to_string()),
+        is_binary: false,
+        is_markdown: false,
+        truncated: false,
+        error: None,
+        spreadsheet: Some(data),
+    });
+    state.sync_preview_ui();
+
+    let mut rt = Runtime::new(
+        state,
+        render_preview_root,
+        PREVIEW_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt.frame(0.0);
+    let rgba_table = render_offscreen_rgba(&mut rt, false);
+    maybe_save_snap("spreadsheet-preview-csv-table-light", &rgba_table, 2.0);
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.key.as_deref() == Some("spreadsheet-table-scroll-0"))
+    );
+
+    rt.state.preview_ui.raw_csv_mode = true;
+    rt.frame(0.6);
+    rt.frame(1.2);
+    let rgba_raw = render_offscreen_rgba(&mut rt, false);
+    maybe_save_snap("spreadsheet-preview-csv-raw-light", &rgba_raw, 2.0);
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.key.as_deref() == Some("spreadsheet-preview-raw-csv"))
+    );
+}
+
+#[test]
+fn wide_and_tall_spreadsheet_preserves_sheet_tabs_without_vertical_overflow() {
+    let mut csv = String::from("C1,C2,C3,C4,C5,C6,C7,C8,C9,C10,C11,C12\n");
+    for r in 1..=40 {
+        csv.push_str(&format!(
+            "Row-{r},100,200,300,Alpha,Beta,Gamma,Delta,Epsilon,Zeta,Eta,Theta\n"
+        ));
+    }
+    let sheet = decode_spreadsheet_preview(Path::new("/ws/wide.csv"), csv.as_bytes(), false)
+        .expect("wide csv should decode")
+        .sheets
+        .into_iter()
+        .next()
+        .unwrap();
+
+    let mut sheet2 = sheet.clone();
+    sheet2.name = "Second".to_string();
+    let data = super::state::SpreadsheetPreviewData {
+        format: "XLSX".to_string(),
+        sheets: vec![sheet, sheet2],
+        total_sheets: 2,
+        sheets_truncated: false,
+        max_rows_cap: MAX_PREVIEW_ROWS,
+        max_cols_cap: MAX_PREVIEW_COLS,
+        max_cells_cap: MAX_PREVIEW_CELLS,
+    };
+
+    let mut state = AppState {
+        scene_mode: true,
+        system_dark_override: Some(false),
+        ..Default::default()
+    };
+    state.active_file_preview = Some(FilePreviewState {
+        workspace_id: "ws-1".to_string(),
+        path: "/ws/wide_and_tall_financial_summary_2026.xlsx".to_string(),
+        title: "wide_and_tall_financial_summary_2026.xlsx".to_string(),
+        content: None,
+        is_binary: false,
+        is_markdown: false,
+        truncated: false,
+        error: None,
+        spreadsheet: Some(data),
+    });
+    state.sync_preview_ui();
+
+    let mut rt = Runtime::new(
+        state,
+        render_preview_root,
+        PREVIEW_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt.frame(0.0);
+    let rgba = render_offscreen_rgba(&mut rt, false);
+    maybe_save_snap("spreadsheet-preview-wide-light", &rgba, 2.0);
+
+    let els = rt.elements();
+    let tabs_rect = els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("spreadsheet-sheet-tabs"))
+        .expect("sheet tabs should render on multi-sheet wide/tall workbook")
+        .rect;
+    assert!(
+        tabs_rect[1] + tabs_rect[3] <= PREVIEW_VIEWPORT.1 + 0.5,
+        "sheet tabs must stay inside viewport bottom: {tabs_rect:?}"
+    );
 }

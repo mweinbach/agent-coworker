@@ -137,6 +137,37 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Validate release updater & telemetry variables
+        shell: bash
+        env:
+          SIGN_RELEASE: ${{ steps.meta.outputs.sign_release }}
+          REQUIRE_SIGN: ${{ steps.meta.outputs.require_sign }}
+          COWORK_UPDATER_PUBKEY: ${{ vars.COWORK_UPDATER_PUBKEY }}
+          COWORK_SENTRY_DSN: ${{ vars.COWORK_SENTRY_DSN }}
+          COWORK_POSTHOG_KEY: ${{ vars.COWORK_POSTHOG_KEY }}
+          COWORK_POSTHOG_HOST: ${{ vars.COWORK_POSTHOG_HOST }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUIRE_SIGN" == "true" && -z "${COWORK_UPDATER_PUBKEY:-}" ]]; then
+            echo "vars.COWORK_UPDATER_PUBKEY must be set when require_sign=true." >&2
+            exit 1
+          fi
+          if [[ "$SIGN_RELEASE" == "true" ]]; then
+            if [[ -z "${COWORK_SENTRY_DSN:-}" ]]; then
+              echo "::warning::vars.COWORK_SENTRY_DSN is unset; packaged release builds will omit Sentry DSN."
+            elif [[ ! "$COWORK_SENTRY_DSN" =~ ^https:// ]]; then
+              echo "vars.COWORK_SENTRY_DSN must start with https://." >&2
+              exit 1
+            fi
+            if [[ -z "${COWORK_POSTHOG_KEY:-}" ]]; then
+              echo "::warning::vars.COWORK_POSTHOG_KEY is unset; packaged release builds will omit PostHog key."
+            fi
+            if [[ -n "${COWORK_POSTHOG_HOST:-}" && ! "$COWORK_POSTHOG_HOST" =~ ^https:// ]]; then
+              echo "vars.COWORK_POSTHOG_HOST must start with https:// when set." >&2
+              exit 1
+            fi
+          fi
+
       - name: Docs consistency check
         run: bun run docs:check
 
@@ -296,6 +327,108 @@ jobs:
             args+=("--require-sign")
           fi
           bun run desktop:rune:package -- "${args[@]}"
+
+      - name: Verify macOS bundle, codesign, and notarization
+        if: matrix.platform == 'darwin'
+        shell: bash
+        env:
+          SIGN_RELEASE: ${{ needs.validate.outputs.sign_release }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+          MAC_ARCH: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x64' }}
+        run: |
+          set -euo pipefail
+          out_dir="target/rune-package/${{ matrix.platform_key }}/out"
+          app_path="$out_dir/Cowork.app"
+          dmg_path="$out_dir/Cowork_${EXPECTED_VERSION}_${MAC_ARCH}.dmg"
+          zip_path="$out_dir/Cowork_${EXPECTED_VERSION}_${MAC_ARCH}-mac.zip"
+          tar_path="$out_dir/Cowork_${EXPECTED_VERSION}_${MAC_ARCH}.app.tar.gz"
+
+          test -d "$app_path"
+          test -f "$dmg_path"
+          test -f "$zip_path"
+          test -f "$tar_path"
+
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
+          bundle_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+          if [[ "$bundle_id" != "com.cowork.desktop" ]]; then
+            echo "Unexpected CFBundleIdentifier: $bundle_id" >&2
+            exit 1
+          fi
+          if [[ "$bundle_ver" != "$EXPECTED_VERSION" ]]; then
+            echo "Unexpected CFBundleShortVersionString: $bundle_ver (expected $EXPECTED_VERSION)" >&2
+            exit 1
+          fi
+
+          if [[ "$SIGN_RELEASE" == "true" ]]; then
+            if codesign --verify --deep --strict --verbose=2 "$app_path"; then
+              xcrun stapler validate "$app_path" || true
+              xcrun stapler validate "$dmg_path" || true
+              spctl --assess --type exec --verbose=4 "$app_path" || true
+            elif [[ "${{ needs.validate.outputs.require_sign }}" == "true" ]]; then
+              echo "Signed macOS bundle verification failed." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Verify Windows PE architecture, sandbox hashes, and Authenticode
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        env:
+          SIGN_RELEASE: ${{ needs.validate.outputs.sign_release }}
+          REQUIRE_SIGN: ${{ needs.validate.outputs.require_sign }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+          WIN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workDir = "target/rune-package/${{ matrix.platform_key }}"
+          $outDir = Join-Path $workDir "out"
+          $stagedDir = Join-Path $workDir "staged"
+          $installer = Join-Path $outDir "Cowork_${env:EXPECTED_VERSION}_${env:WIN_ARCH}-setup.exe"
+          if (-not (Test-Path $installer)) {
+            throw "Missing NSIS installer: $installer"
+          }
+
+          $expectedMachine = if ($env:WIN_ARCH -eq 'arm64') { 0xAA64 } else { 0x8664 }
+          $checkPeMachine = {
+            param([string]$Path, [int]$Expected)
+            $bytes = [System.IO.File]::ReadAllBytes($Path)
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne $Expected) {
+              throw ("PE machine mismatch for {0}: got 0x{1:X4}, expected 0x{2:X4}" -f $Path, $machine, $Expected)
+            }
+          }
+
+          $sidecarTriple = if ($env:WIN_ARCH -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
+          & $checkPeMachine (Join-Path $stagedDir "binaries/cowork-server-$sidecarTriple.exe") $expectedMachine
+
+          foreach ($dirName in @('binaries', 'windows-sandbox')) {
+            $manifestPath = Join-Path $stagedDir "$dirName/cowork-win-sandbox.sha256.json"
+            if (Test-Path $manifestPath) {
+              $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+              foreach ($prop in $manifest.files.PSObject.Properties) {
+                $targetFile = Join-Path $stagedDir "$dirName/$($prop.Name)"
+                $actualHash = (Get-FileHash $targetFile -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualHash -ne $prop.Value.ToLowerInvariant()) {
+                  throw "Sandbox hash mismatch for $targetFile ($actualHash != $($prop.Value))"
+                }
+              }
+            }
+          }
+
+          if ($env:SIGN_RELEASE -eq 'true') {
+            $toCheck = @($installer)
+            Get-ChildItem -Path (Join-Path $stagedDir "binaries"), (Join-Path $stagedDir "windows-sandbox") -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object {
+              $toCheck += $_.FullName
+            }
+            foreach ($file in $toCheck) {
+              $sig = Get-AuthenticodeSignature -FilePath $file
+              if ($sig.Status -ne 'Valid') {
+                $msg = "Authenticode signature status for $file is $($sig.Status)"
+                if ($env:REQUIRE_SIGN -eq 'true') { throw $msg } else { Write-Warning $msg }
+              }
+            }
+          }
 
       - name: Stage release upload artifacts
         shell: bash

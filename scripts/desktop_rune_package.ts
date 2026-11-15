@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { which } from "../src/platform/exec";
+import { hostArch, hostPlatform } from "../src/platform/host";
+import { home } from "../src/platform/paths";
+import { scratchRoots } from "../src/platform/scratchRoots";
 import {
   normalizeSemverVersion,
   type UpdaterFragment,
@@ -245,8 +248,8 @@ function parseTargetShorthand(rawTarget: string): {
 export function parsePackageCliArgs(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
-  hostPlatform: NodeJS.Platform = process.platform,
-  hostArch: string = process.arch,
+  currentPlatform: NodeJS.Platform = hostPlatform(),
+  currentArch: string = hostArch(),
 ): PackageCliOptions {
   const targetArg = getFlagValue(argv, "--target");
   let platform: NodeJS.Platform;
@@ -257,7 +260,7 @@ export function parsePackageCliArgs(
     platform = parsed.platform;
     arch = parsed.arch;
   } else {
-    const resolved = resolveBuildTarget(argv, env, hostPlatform, hostArch);
+    const resolved = resolveBuildTarget(argv, env, currentPlatform, currentArch);
     platform = normalizePlatformName(getFlagValue(argv, "--platform") ?? resolved.platform);
     arch = normalizeArchName(getFlagValue(argv, "--arch") ?? resolved.arch);
   }
@@ -357,13 +360,62 @@ export function resolveCargoBuildEnv(
   return out;
 }
 
+const APPLE_NOTARIZE_ENV_KEYS = [
+  "APPLE_API_KEY",
+  "APPLE_API_KEY_ID",
+  "APPLE_API_KEY_PATH",
+  "APPLE_API_KEY_CONTENT",
+  "APPLE_API_ISSUER",
+  "APPLE_API_KEY_ISSUER",
+  "APPLE_ID",
+  "APPLE_PASSWORD",
+  "APPLE_APP_SPECIFIC_PASSWORD",
+  "APPLE_TEAM_ID",
+  "APPLE_KEYCHAIN_PROFILE",
+] as const;
+
+export function buildCargoPackagerEnv(params: {
+  buildEnv: Record<string, string>;
+  macSigningEnv: Record<string, string>;
+  skipNotarize: boolean;
+}): Record<string, string> {
+  const out: Record<string, string> = {
+    ...params.buildEnv,
+    ...params.macSigningEnv,
+  };
+  if (params.skipNotarize) {
+    for (const key of APPLE_NOTARIZE_ENV_KEYS) {
+      delete out[key];
+    }
+  }
+  return out;
+}
+
+export function validateUpdaterSignKeys(params: {
+  requireSign: boolean;
+  skipSign: boolean;
+  minisignPrivateKey?: string;
+  updaterPublicKey?: string;
+}): void {
+  if (!params.requireSign || params.skipSign) return;
+  if (!params.minisignPrivateKey?.trim()) {
+    throw new Error("--require-sign specified, but CARGO_PACKAGER_SIGN_PRIVATE_KEY is missing.");
+  }
+  if (!params.updaterPublicKey?.trim()) {
+    throw new Error(
+      "--require-sign specified, but COWORK_UPDATER_PUBKEY (or CARGO_PACKAGER_SIGN_PUBLIC_KEY) is missing.",
+    );
+  }
+}
+
 export async function prepareMacSigningEnv(
   env: NodeJS.ProcessEnv,
-  options: { tempDir?: string; skipNotarize?: boolean } = {},
+  options: { tempDir?: string; skipNotarize?: boolean; platform?: NodeJS.Platform } = {},
 ): Promise<ResolvedMacSigningCredentials> {
   const resolved: Record<string, string> = {};
   const tempFilesToCleanup: string[] = [];
-  const tempDir = options.tempDir ?? os.tmpdir();
+  const tempDir = options.tempDir ?? scratchRoots()[0] ?? "/tmp";
+  const currentPlatform = options.platform ?? hostPlatform();
 
   const rawCert = env.APPLE_CERTIFICATE?.trim() || env.CSC_LINK?.trim();
   const certPassword = env.APPLE_CERTIFICATE_PASSWORD ?? env.CSC_KEY_PASSWORD ?? "";
@@ -388,8 +440,12 @@ export async function prepareMacSigningEnv(
   }
 
   let signingIdentity = env.APPLE_SIGNING_IDENTITY?.trim() || env.CSC_NAME?.trim() || undefined;
-  if (!signingIdentity && p12PathForIdentityProbe && process.platform === "darwin") {
-    signingIdentity = await extractSigningIdentityFromP12(p12PathForIdentityProbe, certPassword);
+  if (!signingIdentity && p12PathForIdentityProbe && currentPlatform === "darwin") {
+    signingIdentity = await extractSigningIdentityFromP12(
+      p12PathForIdentityProbe,
+      certPassword,
+      tempDir,
+    );
   }
   if (signingIdentity) {
     resolved.APPLE_SIGNING_IDENTITY = signingIdentity;
@@ -474,6 +530,7 @@ async function execSpawn(
 async function extractSigningIdentityFromP12(
   p12Path: string,
   password: string,
+  tempDir?: string,
 ): Promise<string | undefined> {
   const passEnvKey = "COWORK_P12_PROBE_PASS";
   const pkcs12 = await execSpawn(
@@ -493,7 +550,10 @@ async function extractSigningIdentityFromP12(
   if (!certMatch) {
     return undefined;
   }
-  const tmpPem = path.join(os.tmpdir(), `cowork-cert-subject-${process.pid}.pem`);
+  const tmpPem = path.join(
+    tempDir ?? scratchRoots()[0] ?? "/tmp",
+    `cowork-cert-subject-${process.pid}.pem`,
+  );
   try {
     await fs.writeFile(tmpPem, certMatch[0], { mode: 0o600 });
     const subjectResult = await execSpawn(
@@ -746,13 +806,13 @@ export async function refreshWindowsSandboxHashManifests(stagedDir: string): Pro
 async function findCargoPackagerBin(env: NodeJS.ProcessEnv): Promise<string> {
   const override = env.CARGO_PACKAGER_BIN?.trim();
   if (override) return override;
-  const fromPath = Bun.which("cargo-packager");
+  const fromPath = which("cargo-packager", { env });
   if (fromPath) return fromPath;
   const cargoBin = path.join(
-    os.homedir(),
+    home(env),
     ".cargo",
     "bin",
-    process.platform === "win32" ? "cargo-packager.exe" : "cargo-packager",
+    hostPlatform() === "win32" ? "cargo-packager.exe" : "cargo-packager",
   );
   if (await pathExists(cargoBin)) return cargoBin;
   throw new Error(
@@ -861,8 +921,10 @@ async function listStagedWindowsExes(stagedDir: string): Promise<string[]> {
   return candidates;
 }
 
-async function findWindowsSigntool(): Promise<string> {
-  const fromPath = Bun.which("signtool.exe") ?? Bun.which("signtool");
+async function findWindowsSigntool(env: NodeJS.ProcessEnv): Promise<string> {
+  const fromPath =
+    which("signtool.exe", { env, platform: "win32" }) ??
+    which("signtool", { env, platform: "win32" });
   if (fromPath) return fromPath;
   const kitRoot = "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
   if (await pathExists(kitRoot)) {
@@ -880,7 +942,7 @@ async function signStagedWindowsExesWithThumbprint(
   thumbprint: string,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const signtool = await findWindowsSigntool();
+  const signtool = await findWindowsSigntool(env);
   const timestampUrl = env.WINDOWS_TIMESTAMP_URL?.trim() || "http://timestamp.digicert.com";
   const exes = await listStagedWindowsExes(stagedDir);
   for (const exePath of exes) {
@@ -953,7 +1015,27 @@ async function notarizeAndStapleDmg(
 
   console.log(`[package] Notarizing DMG: ${path.basename(dmgPath)}`);
   const dmgDir = path.dirname(dmgPath);
-  await runCommand(args, { cwd: dmgDir, env: { ...process.env, ...macSigningEnv } });
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await runCommand(args, { cwd: dmgDir, env: { ...process.env, ...macSigningEnv } });
+      lastError = undefined;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        const delayMs = attempt * 5000;
+        console.warn(
+          `[package] notarytool submit attempt ${attempt}/${maxAttempts} failed; retrying in ${delayMs / 1000}s...`,
+        );
+        await Bun.sleep(delayMs);
+      }
+    }
+  }
+  if (lastError !== undefined) {
+    throw lastError;
+  }
   await runCommand(["xcrun", "stapler", "staple", dmgPath], { cwd: dmgDir });
 }
 
@@ -1007,18 +1089,20 @@ export async function runRunePackage(
   const root = options.root ?? defaultRoot;
   const argv = options.argv ?? process.argv.slice(2);
   const env = options.env ?? process.env;
-  const cli = parsePackageCliArgs(argv, env);
+  const currentHostPlatform = hostPlatform();
+  const currentHostArch = hostArch();
+  const cli = parsePackageCliArgs(argv, env, currentHostPlatform, currentHostArch);
 
-  if (cli.platform !== process.platform) {
+  if (cli.platform !== currentHostPlatform) {
     throw new Error(
-      `Cross-OS packaging (${cli.platform} on ${process.platform} host) is not supported; run on a matching OS host.`,
+      `Cross-OS packaging (${cli.platform} on ${currentHostPlatform} host) is not supported; run on a matching OS host.`,
     );
   }
 
   const version = await resolvePackageVersion(root, cli.version, env);
   const rustTarget = resolveRustCompileTarget(cli.platform, cli.arch);
   const platformKey = resolvePlatformKey(cli.platform, cli.arch);
-  const isCrossArch = cli.arch !== process.arch || cli.forceCargoTarget;
+  const isCrossArch = cli.arch !== currentHostArch || cli.forceCargoTarget;
   const cargoTargetDir = env.CARGO_TARGET_DIR?.trim()
     ? path.resolve(root, env.CARGO_TARGET_DIR.trim())
     : path.join(root, "target");
@@ -1040,9 +1124,12 @@ export async function runRunePackage(
   const minisignKey = env.CARGO_PACKAGER_SIGN_PRIVATE_KEY?.trim();
   const minisignPassword = env.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD;
 
-  if (cli.requireSign && !cli.skipSign && !minisignKey) {
-    throw new Error("--require-sign specified, but CARGO_PACKAGER_SIGN_PRIVATE_KEY is missing.");
-  }
+  validateUpdaterSignKeys({
+    requireSign: cli.requireSign,
+    skipSign: cli.skipSign,
+    minisignPrivateKey: minisignKey,
+    updaterPublicKey: buildEnv.COWORK_UPDATER_PUBKEY,
+  });
 
   if (!cli.skipBuild) {
     const cargoArgs = ["cargo", "build", "-p", "cowork-desktop", "--release"];
@@ -1148,7 +1235,11 @@ export async function runRunePackage(
       [cargoPackagerBin, "--config", configPath, "--formats", cli.formats.join(",")],
       {
         cwd: root,
-        env: { ...buildEnv, ...macSigning.env },
+        env: buildCargoPackagerEnv({
+          buildEnv,
+          macSigningEnv: macSigning.env,
+          skipNotarize: cli.skipSign || cli.skipNotarize,
+        }),
       },
     );
 

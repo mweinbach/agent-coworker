@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildCargoPackagerEnv,
   buildPackagerConfig,
   loadPackagerBaseConfig,
   parsePackageCliArgs,
@@ -15,6 +15,7 @@ import {
   resolvePlatformKey,
   resolveUpdaterPayloadDescriptor,
   stageRuntimeResources,
+  validateUpdaterSignKeys,
 } from "../scripts/desktop_rune_package";
 import {
   buildLatestJsonManifest,
@@ -23,11 +24,12 @@ import {
   type UpdaterFragment,
   validateLatestJsonManifest,
 } from "../scripts/desktop_rune_release_manifest";
+import { scratchRoots } from "../src/platform/scratchRoots";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function makeTempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  return fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", prefix));
 }
 
 describe("cowork-desktop Packager.toml & entitlements", () => {
@@ -160,12 +162,75 @@ describe("desktop_rune_package CLI and build config helpers", () => {
           APPLE_APP_SPECIFIC_PASSWORD: "abcd-efgh",
           APPLE_TEAM_ID: "TEAM123",
         },
-        { tempDir, skipNotarize: true },
+        { tempDir, skipNotarize: true, platform: "darwin" },
       );
       expect(noNotarize.hasNotarizeCredentials).toBe(false);
+
+      const strippedEnv = buildCargoPackagerEnv({
+        buildEnv: {
+          COWORK_APP_VERSION: "1.3.1",
+          APPLE_API_KEY: "KEY123",
+          APPLE_API_KEY_PATH: "/tmp/AuthKey.p8",
+          APPLE_API_ISSUER: "issuer-1",
+          APPLE_ID: "dev@example.com",
+          APPLE_PASSWORD: "pw",
+          APPLE_APP_SPECIFIC_PASSWORD: "app-pw",
+          APPLE_TEAM_ID: "TEAM123",
+          APPLE_KEYCHAIN_PROFILE: "notary-profile",
+        },
+        macSigningEnv: {
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Example",
+        },
+        skipNotarize: true,
+      });
+      expect(strippedEnv.APPLE_SIGNING_IDENTITY).toBe("Developer ID Application: Example");
+      expect(strippedEnv.APPLE_API_KEY).toBeUndefined();
+      expect(strippedEnv.APPLE_API_KEY_PATH).toBeUndefined();
+      expect(strippedEnv.APPLE_API_ISSUER).toBeUndefined();
+      expect(strippedEnv.APPLE_ID).toBeUndefined();
+      expect(strippedEnv.APPLE_PASSWORD).toBeUndefined();
+      expect(strippedEnv.APPLE_APP_SPECIFIC_PASSWORD).toBeUndefined();
+      expect(strippedEnv.APPLE_TEAM_ID).toBeUndefined();
+      expect(strippedEnv.APPLE_KEYCHAIN_PROFILE).toBeUndefined();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("validateUpdaterSignKeys enforces private and public Minisign keys when requireSign is true", () => {
+    expect(() =>
+      validateUpdaterSignKeys({
+        requireSign: true,
+        skipSign: false,
+        minisignPrivateKey: "RWQf6LRCGA9i53mlYecO4IzT51TGPpvW",
+        updaterPublicKey: undefined,
+      }),
+    ).toThrow(/COWORK_UPDATER_PUBKEY/);
+
+    expect(() =>
+      validateUpdaterSignKeys({
+        requireSign: true,
+        skipSign: false,
+        minisignPrivateKey: undefined,
+        updaterPublicKey: "RWPublicKey",
+      }),
+    ).toThrow(/CARGO_PACKAGER_SIGN_PRIVATE_KEY/);
+
+    expect(() =>
+      validateUpdaterSignKeys({
+        requireSign: true,
+        skipSign: true,
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateUpdaterSignKeys({
+        requireSign: true,
+        skipSign: false,
+        minisignPrivateKey: "RWPrivKey",
+        updaterPublicKey: "RWPubKey",
+      }),
+    ).not.toThrow();
   });
 
   test("buildPackagerConfig toggles signing fields and windows-sandbox resource cleanly", async () => {

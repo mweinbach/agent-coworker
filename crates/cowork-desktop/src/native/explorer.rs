@@ -8,10 +8,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use cowork_config::{
-    canonicalize_sync, env_map_from_process, get_one_off_chats_root, host_platform,
-    resolve_home_dir,
-};
+use cowork_config::canonicalize_sync;
 
 use super::file_entry_rename::FileEntryRenamer;
 use super::path_boundary::is_path_equal_or_inside;
@@ -24,18 +21,6 @@ const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME: &str = "User Uploads";
 /// Hidden files and noisy dependency folders omitted from explorer listings unless requested.
 pub fn is_explorer_entry_hidden(name: &str) -> bool {
     name.starts_with('.') || name.starts_with("~$") || name == "node_modules"
-}
-
-/// Workspace roots plus `~/.cowork/chats` so global one-off sessions list/preview cleanly.
-pub fn explorer_allowed_roots(workspace_roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = workspace_roots.to_vec();
-    let env = env_map_from_process();
-    let home = resolve_home_dir(&env, host_platform());
-    let chats_dir = get_one_off_chats_root(&home);
-    if !roots.iter().any(|r| is_path_equal_or_inside(r, &chats_dir)) {
-        roots.push(chats_dir);
-    }
-    roots
 }
 
 fn validate_single_entry_name(name: &str, label: &str) -> Result<()> {
@@ -58,8 +43,7 @@ pub fn list_workspace_directory(
     requested_dir: &Path,
     include_hidden: bool,
 ) -> Result<Vec<WorkspaceFileEntry>> {
-    let roots = explorer_allowed_roots(workspace_roots);
-    let safe_dir = assert_path_within_roots(&roots, requested_dir, "path")?;
+    let safe_dir = assert_path_within_roots(workspace_roots, requested_dir, "path")?;
     let dir_meta = fs::metadata(&safe_dir)
         .with_context(|| format!("Unable to inspect {}", safe_dir.display()))?;
     if !dir_meta.is_dir() {
@@ -113,12 +97,11 @@ pub fn create_workspace_directory(
     dir_name: &str,
 ) -> Result<PathBuf> {
     validate_single_entry_name(dir_name, "directory name")?;
-    let roots = explorer_allowed_roots(workspace_roots);
-    let safe_parent = assert_path_within_roots(&roots, parent_path, "parentPath")?;
+    let safe_parent = assert_path_within_roots(workspace_roots, parent_path, "parentPath")?;
     let target = safe_parent.join(dir_name);
-    let _ = assert_directory_entry_within_roots(&roots, &target, "path")?;
+    let _ = assert_directory_entry_within_roots(workspace_roots, &target, "path")?;
     fs::create_dir(&target)?;
-    assert_path_within_roots(&roots, &target, "path")
+    assert_path_within_roots(workspace_roots, &target, "path")
 }
 
 /// Renames an entry inside an authorized workspace without replacing existing files.
@@ -129,10 +112,9 @@ pub async fn rename_workspace_entry(
     new_name: &str,
 ) -> Result<PathBuf> {
     validate_single_entry_name(new_name, "entry name")?;
-    let roots = explorer_allowed_roots(workspace_roots);
-    let safe_source = assert_directory_entry_within_roots(&roots, source_path, "path")?;
+    let safe_source = assert_directory_entry_within_roots(workspace_roots, source_path, "path")?;
 
-    let is_root_itself = roots
+    let is_root_itself = workspace_roots
         .iter()
         .any(|root| canonicalize_sync(root) == safe_source);
     if is_root_itself {
@@ -143,7 +125,7 @@ pub async fn rename_workspace_entry(
         bail!("Invalid source path");
     };
     let target = parent.join(new_name);
-    let safe_target = assert_directory_entry_within_roots(&roots, &target, "target")?;
+    let safe_target = assert_directory_entry_within_roots(workspace_roots, &target, "target")?;
 
     renamer.rename(safe_source, safe_target.clone()).await?;
     Ok(safe_target)
@@ -159,8 +141,8 @@ pub fn copy_authorized_upload_to_workspace(
     filename: &str,
     uploads_dir_override: Option<&Path>,
 ) -> Result<PathBuf> {
-    let roots = explorer_allowed_roots(workspace_roots);
-    let safe_workspace = assert_path_within_roots(&roots, workspace_path, "workspacePath")?;
+    let safe_workspace =
+        assert_path_within_roots(workspace_roots, workspace_path, "workspacePath")?;
     validate_single_entry_name(filename, "filename")?;
 
     let src_file = registry.consume_and_open(auth_token, source_path)?;
@@ -308,5 +290,35 @@ mod tests {
             out2.file_name().and_then(|s| s.to_str()),
             Some("photo_1.png")
         );
+    }
+
+    #[tokio::test]
+    async fn enforces_strict_workspace_isolation() {
+        let ws_a = tempdir().unwrap();
+        let ws_b = tempdir().unwrap();
+        fs::write(ws_b.path().join("secret.txt"), "other-workspace").unwrap();
+
+        let err = list_workspace_directory(&[ws_a.path().to_path_buf()], ws_b.path(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside allowed workspace roots"));
+
+        let err_mkdir =
+            create_workspace_directory(&[ws_a.path().to_path_buf()], ws_b.path(), "dir")
+                .unwrap_err()
+                .to_string();
+        assert!(err_mkdir.contains("outside allowed workspace roots"));
+
+        let renamer = FileEntryRenamer::default();
+        let err_rename = rename_workspace_entry(
+            &renamer,
+            &[ws_a.path().to_path_buf()],
+            &ws_b.path().join("secret.txt"),
+            "renamed.txt",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err_rename.contains("outside allowed workspace roots"));
     }
 }

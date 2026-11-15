@@ -32,6 +32,7 @@ impl DesktopUpdaterService {
                 version: None,
                 notes: None,
                 error: None,
+                current_version: env!("CARGO_PKG_VERSION").to_string(),
                 ..UpdaterState::default()
             })),
             logger,
@@ -49,6 +50,7 @@ impl DesktopUpdaterService {
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
             notes: Some(UNAVAILABLE_MESSAGE.to_string()),
             error: None,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
             ..UpdaterState::default()
         };
         if let Some(logger) = &self.logger {
@@ -64,12 +66,35 @@ impl DesktopUpdaterService {
         (self.emit)(StoreEvent::UpdaterChanged(next));
     }
 
+    pub fn download_update(&self) {
+        let next = UpdaterState {
+            status: "unavailable".to_string(),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            notes: Some(UNAVAILABLE_MESSAGE.to_string()),
+            error: None,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            ..UpdaterState::default()
+        };
+        if let Some(logger) = &self.logger {
+            logger.write(
+                LocalLogFileName::Updater,
+                LocalLogLevel::Info,
+                "updater",
+                "native update download requested (no signed native feed configured)",
+                None,
+            );
+        }
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+        (self.emit)(StoreEvent::UpdaterChanged(next));
+    }
+
     pub fn quit_and_install(&self) {
         let next = UpdaterState {
             status: "error".to_string(),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
             notes: None,
             error: Some(UNAVAILABLE_MESSAGE.to_string()),
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
             ..UpdaterState::default()
         };
         if let Some(logger) = &self.logger {
@@ -109,8 +134,15 @@ mod tests {
         service.check_for_updates();
         assert_eq!(service.get_state().status, "unavailable");
 
+        service.download_update();
+        assert_eq!(service.get_state().status, "unavailable");
+        assert_eq!(
+            service.get_state().current_version,
+            env!("CARGO_PKG_VERSION")
+        );
+
         service.quit_and_install();
         assert_eq!(service.get_state().status, "error");
-        assert_eq!(events.lock().unwrap().len(), 2);
+        assert_eq!(events.lock().unwrap().len(), 3);
     }
 }

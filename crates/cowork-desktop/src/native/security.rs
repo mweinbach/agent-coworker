@@ -361,6 +361,102 @@ impl AuthorizedUploadRegistry {
     }
 }
 
+struct FeatureFlagSpec {
+    id: &'static str,
+    default_enabled: bool,
+    env_override: Option<&'static str>,
+    forced_off_when_packaged: bool,
+}
+
+const FEATURE_FLAG_SPECS: &[FeatureFlagSpec] = &[
+    FeatureFlagSpec {
+        id: "menuBar",
+        default_enabled: true,
+        env_override: None,
+        forced_off_when_packaged: false,
+    },
+    FeatureFlagSpec {
+        id: "remoteAccess",
+        default_enabled: false,
+        env_override: Some("COWORK_ENABLE_REMOTE_ACCESS"),
+        forced_off_when_packaged: true,
+    },
+    FeatureFlagSpec {
+        id: "workspacePicker",
+        default_enabled: true,
+        env_override: None,
+        forced_off_when_packaged: false,
+    },
+    FeatureFlagSpec {
+        id: "workspaceLifecycle",
+        default_enabled: true,
+        env_override: None,
+        forced_off_when_packaged: false,
+    },
+    FeatureFlagSpec {
+        id: "openAiNativeConnectors",
+        default_enabled: false,
+        env_override: None,
+        forced_off_when_packaged: false,
+    },
+    FeatureFlagSpec {
+        id: "canvas",
+        default_enabled: false,
+        env_override: None,
+        forced_off_when_packaged: false,
+    },
+    FeatureFlagSpec {
+        id: "tasks",
+        default_enabled: false,
+        env_override: Some("COWORK_ENABLE_TASKS"),
+        forced_off_when_packaged: false,
+    },
+    FeatureFlagSpec {
+        id: "workflows",
+        default_enabled: false,
+        env_override: Some("COWORK_ENABLE_WORKFLOWS"),
+        forced_off_when_packaged: false,
+    },
+];
+
+fn parse_boolean_flag(raw: Option<&String>) -> Option<bool> {
+    let normalized = raw?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Resolves runtime desktop feature flags matching `src/shared/featureFlags.ts`:
+/// applies defaults, then env overrides, then persisted overrides (dev only), and
+/// enforces `packagedAvailability: "forced-off"` (such as `remoteAccess`) when packaged.
+pub fn resolve_effective_feature_flags(
+    persisted_overrides: &HashMap<String, bool>,
+    env: &HashMap<String, String>,
+    is_packaged: bool,
+) -> HashMap<String, bool> {
+    let mut resolved = HashMap::with_capacity(FEATURE_FLAG_SPECS.len());
+
+    for spec in FEATURE_FLAG_SPECS {
+        let mut enabled = spec.default_enabled;
+        if let Some(env_key) = spec.env_override
+            && let Some(parsed) = parse_boolean_flag(env.get(env_key))
+        {
+            enabled = parsed;
+        }
+        if !is_packaged && let Some(&override_val) = persisted_overrides.get(spec.id) {
+            enabled = override_val;
+        }
+        if is_packaged && spec.forced_off_when_packaged {
+            enabled = false;
+        }
+        resolved.insert(spec.id.to_string(), enabled);
+    }
+
+    resolved
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Read;
@@ -456,5 +552,35 @@ mod tests {
         let token2 = registry.authorize_file(&file).unwrap();
         fs::write(&file, "tampered-longer").unwrap();
         assert!(registry.consume_and_open(&token2, &file).is_err());
+    }
+
+    #[test]
+    fn resolves_effective_feature_flags_with_packaged_enforcement() {
+        let mut persisted = HashMap::new();
+        persisted.insert("remoteAccess".to_string(), true);
+        persisted.insert("tasks".to_string(), true);
+        persisted.insert("canvas".to_string(), true);
+        persisted.insert("unknownFlag".to_string(), true);
+
+        let mut env = HashMap::new();
+        env.insert("COWORK_ENABLE_WORKFLOWS".to_string(), "YES".to_string());
+        env.insert("COWORK_ENABLE_REMOTE_ACCESS".to_string(), "1".to_string());
+
+        // Development builds honor env overrides and persisted overrides.
+        let dev_flags = resolve_effective_feature_flags(&persisted, &env, false);
+        assert_eq!(dev_flags.get("menuBar"), Some(&true));
+        assert_eq!(dev_flags.get("remoteAccess"), Some(&true));
+        assert_eq!(dev_flags.get("tasks"), Some(&true));
+        assert_eq!(dev_flags.get("workflows"), Some(&true));
+        assert_eq!(dev_flags.get("canvas"), Some(&true));
+        assert!(!dev_flags.contains_key("unknownFlag"));
+
+        // Packaged builds ignore persisted dev overrides and force remoteAccess off.
+        let pkg_flags = resolve_effective_feature_flags(&persisted, &env, true);
+        assert_eq!(pkg_flags.get("menuBar"), Some(&true));
+        assert_eq!(pkg_flags.get("remoteAccess"), Some(&false));
+        assert_eq!(pkg_flags.get("tasks"), Some(&false));
+        assert_eq!(pkg_flags.get("canvas"), Some(&false));
+        assert_eq!(pkg_flags.get("workflows"), Some(&true));
     }
 }

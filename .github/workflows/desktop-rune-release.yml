@@ -1,0 +1,392 @@
+name: Desktop Rune Release
+
+on:
+  push:
+    tags:
+      # Keep `desktop-release.yml` on `v*` until Electron is retired.
+      # When cutting over to Rune as the primary desktop release, switch this
+      # workflow's tag trigger to `v*` and disable `.github/workflows/desktop-release.yml`.
+      - "desktop-rune-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional GitHub release tag to publish assets to (for example desktop-rune-v1.3.1 or v1.3.1)"
+        required: false
+        default: ""
+        type: string
+      sign_release:
+        description: "Sign installers/apps and updater feed using repository signing secrets"
+        required: false
+        default: false
+        type: boolean
+      require_sign:
+        description: "Fail the workflow if signing certificates or Minisign private key are missing"
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: desktop-rune-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Keep debug info trimmed in CI builds so Linux runners do not exhaust disk space.
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  validate:
+    name: Validate & resolve metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      sign_release: ${{ steps.meta.outputs.sign_release }}
+      require_sign: ${{ steps.meta.outputs.require_sign }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Linux desktop & sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            pkg-config \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libfontconfig1-dev
+
+      - name: Setup Linux sandbox
+        uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+        with:
+          cache-scope: mobile
+          cache-dependency-path: |
+            .bun-version
+            bun.lock
+            package.json
+            apps/desktop/package.json
+            packages/*/package.json
+            apps/mobile/bun.lock
+            apps/mobile/package.json
+
+      - name: Install mobile dependencies
+        run: bun install --cwd apps/mobile --frozen-lockfile
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: linux-dev
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          INPUT_SIGN_RELEASE: ${{ github.event.inputs.sign_release }}
+          INPUT_REQUIRE_SIGN: ${{ github.event.inputs.require_sign }}
+          INPUT_PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+            sign_release="true"
+            require_sign="true"
+          else
+            release_tag="$(echo "${INPUT_RELEASE_TAG:-}" | xargs)"
+            sign_release="${INPUT_SIGN_RELEASE:-false}"
+            require_sign="${INPUT_REQUIRE_SIGN:-false}"
+          fi
+
+          if [[ -n "$release_tag" ]]; then
+            version="${release_tag#desktop-rune-v}"
+            version="${version#v}"
+          else
+            version="$(bun -e 'const pkg = await Bun.file("apps/desktop/package.json").json(); console.log(pkg.version);')"
+          fi
+
+          if [[ -z "$version" ]]; then
+            echo "Unable to determine release version." >&2
+            exit 1
+          fi
+
+          prerelease="${INPUT_PRERELEASE:-false}"
+          if [[ "$version" == *-* ]]; then
+            prerelease="true"
+          fi
+
+          {
+            echo "version=$version"
+            echo "release_tag=$release_tag"
+            echo "sign_release=$sign_release"
+            echo "require_sign=$require_sign"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Docs consistency check
+        run: bun run docs:check
+
+      - name: TypeScript typecheck
+        run: bun run typecheck
+
+      - name: Lint & format check
+        run: bun run check
+
+      - name: Unit & client tests
+        run: bun run test
+
+      - name: Rune desktop crate tests
+        run: cargo test -p cowork-desktop -- --test-threads=4
+
+  package:
+    name: Package (${{ matrix.platform_key }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_key: macos-aarch64
+            platform: darwin
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+            formats: app,dmg
+            runner: macos-15
+            cache_scope: macos-release-arm64
+          - platform_key: macos-x86_64
+            platform: darwin
+            arch: x64
+            rust_target: x86_64-apple-darwin
+            formats: app,dmg
+            runner: macos-15
+            cache_scope: macos-release-x64
+          - platform_key: windows-x86_64
+            platform: win32
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            formats: nsis
+            runner: windows-latest
+            cache_scope: windows-release-x64
+          - platform_key: windows-aarch64
+            platform: win32
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+            formats: nsis
+            runner: windows-latest
+            cache_scope: windows-release-arm64
+          - platform_key: linux-x86_64
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+            formats: deb,appimage
+            runner: ubuntu-24.04
+            cache_scope: linux-release-x64
+          - platform_key: linux-aarch64
+            platform: linux
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+            formats: deb,appimage
+            runner: ubuntu-24.04-arm
+            cache_scope: linux-release-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Linux packaging dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            pkg-config \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            desktop-file-utils \
+            patchelf \
+            file
+          sudo apt-get install --yes --no-install-recommends libfuse2t64 || sudo apt-get install --yes --no-install-recommends libfuse2 || true
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: ${{ matrix.cache_scope }}
+
+      - name: Add Rust cross-compile target
+        shell: bash
+        run: rustup target add "${{ matrix.rust_target }}"
+
+      - name: Cache cargo-packager CLI
+        id: packager-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-packager*
+          key: cargo-packager-0.11.8-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-packager CLI
+        if: steps.packager-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Package Cowork Rune (${{ matrix.platform_key }})
+        shell: bash
+        env:
+          COWORK_APP_VERSION: ${{ needs.validate.outputs.version }}
+          COWORK_UPDATER_PUBKEY: ${{ vars.COWORK_UPDATER_PUBKEY }}
+          CARGO_PACKAGER_SIGN_PUBLIC_KEY: ${{ vars.COWORK_UPDATER_PUBKEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+          COWORK_SENTRY_DSN: ${{ vars.COWORK_SENTRY_DSN }}
+          COWORK_SENTRY_ENVIRONMENT: ${{ vars.COWORK_SENTRY_ENVIRONMENT }}
+          COWORK_POSTHOG_KEY: ${{ vars.COWORK_POSTHOG_KEY }}
+          COWORK_POSTHOG_HOST: ${{ vars.COWORK_POSTHOG_HOST }}
+          COWORK_POSTHOG_ENVIRONMENT: ${{ vars.COWORK_POSTHOG_ENVIRONMENT }}
+          # macOS codesigning + Apple notarization secrets (either APPLE_* or CSC_* / APPLE_ID aliases)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Windows Authenticode signing secrets
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+          # Required for running appimagetool inside containers without FUSE
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -euo pipefail
+          args=(
+            "--platform=${{ matrix.platform }}"
+            "--arch=${{ matrix.arch }}"
+            "--formats=${{ matrix.formats }}"
+            "--version=${{ needs.validate.outputs.version }}"
+          )
+          if [[ "${{ needs.validate.outputs.sign_release }}" != "true" ]]; then
+            args+=("--unsigned")
+          elif [[ "${{ needs.validate.outputs.require_sign }}" == "true" ]]; then
+            args+=("--require-sign")
+          fi
+          bun run desktop:rune:package -- "${args[@]}"
+
+      - name: Stage release upload artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="target/rune-package/${{ matrix.platform_key }}/out"
+          stage_dir="target/rune-package/${{ matrix.platform_key }}/upload"
+          rm -rf "$stage_dir"
+          mkdir -p "$stage_dir"
+          shopt -s nullglob
+          for pattern in \
+            "$out_dir"/*.dmg \
+            "$out_dir"/*-mac.zip \
+            "$out_dir"/*.app.tar.gz \
+            "$out_dir"/*-setup.exe \
+            "$out_dir"/*.msi \
+            "$out_dir"/*.deb \
+            "$out_dir"/*.AppImage \
+            "$out_dir"/*.sig \
+            "$out_dir"/updater-fragment-*.json \
+            "$out_dir"/package-summary-*.json
+          do
+            cp "$pattern" "$stage_dir/"
+          done
+          ls -la "$stage_dir"
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-rune-${{ matrix.platform_key }}
+          if-no-files-found: error
+          path: target/rune-package/${{ matrix.platform_key }}/upload/*
+
+  release:
+    name: Publish GitHub Release
+    needs: [validate, package]
+    if: needs.validate.outputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-rune-*
+          path: release-artifacts
+          merge-multiple: false
+
+      - name: Collect assets & generate latest.json
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          REQUIRE_SIGN: ${{ needs.validate.outputs.require_sign }}
+          GITHUB_REPO_FULL: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          find release-artifacts -type f ! -name 'updater-fragment-*.json' ! -name 'package-summary-*.json' -exec cp {} release-upload/ \;
+
+          owner="${GITHUB_REPO_FULL%%/*}"
+          repo="${GITHUB_REPO_FULL#*/}"
+          fragment_count="$(find release-artifacts -type f -name 'updater-fragment-*.json' | wc -l | xargs)"
+          if [[ "$fragment_count" -gt 0 ]]; then
+            bun scripts/desktop_rune_release_manifest.ts \
+              --in-dir release-artifacts \
+              --version "$RELEASE_VERSION" \
+              --tag "$RELEASE_TAG" \
+              --owner "$owner" \
+              --repo "$repo" \
+              --out release-upload/latest.json
+          elif [[ "$REQUIRE_SIGN" == "true" ]]; then
+            echo "No updater-fragment-*.json files produced while require_sign=true." >&2
+            exit 1
+          else
+            echo "No signed updater fragments present (unsigned manual build); skipping latest.json."
+          fi
+          ls -la release-upload
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ needs.validate.outputs.release_tag }}
+          name: "Cowork ${{ needs.validate.outputs.version }}"
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: release-upload/*

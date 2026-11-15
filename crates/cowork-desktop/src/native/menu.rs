@@ -19,6 +19,9 @@ pub enum DesktopMenuCommand {
     OpenSettings,
     OpenWorkspacesSettings,
     ToggleSidebar,
+    ResetZoom,
+    ZoomIn,
+    ZoomOut,
     OpenUpdates,
 }
 
@@ -31,6 +34,9 @@ impl DesktopMenuCommand {
             Self::OpenSettings => "settings",
             Self::OpenWorkspacesSettings => "open_workspaces_settings",
             Self::ToggleSidebar => "toggle_sidebar",
+            Self::ResetZoom => "reset_zoom",
+            Self::ZoomIn => "zoom_in",
+            Self::ZoomOut => "zoom_out",
             Self::OpenUpdates => "open_updates",
         }
     }
@@ -42,6 +48,20 @@ fn menu_shortcut(accel: &str) -> Option<Shortcut> {
 
 fn dispatch_menu_command(state: &mut AppState, cmd: DesktopMenuCommand) {
     state.apply_store_event(StoreEvent::MenuInvoked(cmd.as_id().to_string()));
+}
+
+fn build_command_item(
+    label: &str,
+    action: fn(&mut AppState, &mut rune::Tx),
+    id: &str,
+    menu: &str,
+    accel: Option<&str>,
+) -> MenuItem<AppState> {
+    let mut item = MenuItem::new(label, action).id(id).menu(menu);
+    if let Some(sc) = accel.and_then(menu_shortcut) {
+        item = item.keys_first().key_equivalent(sc);
+    }
+    item
 }
 
 /// Registers standard Edit/Window menus plus custom Cowork File/View/Help/App menu items.
@@ -57,67 +77,87 @@ pub fn install_application_menus(app: App<AppState>) -> App<AppState> {
     let _ = &mut check_updates_app;
     app = app.menu_item(check_updates_app);
 
-    let mut new_chat = MenuItem::new("New Chat", |state: &mut AppState, _| {
-        dispatch_menu_command(state, DesktopMenuCommand::NewChat);
-    })
-    .id("file.new_chat")
-    .menu("File")
-    .keys_first();
-    if let Some(sc) = menu_shortcut("mod+n") {
-        new_chat = new_chat.key_equivalent(sc);
-    }
+    let new_chat = build_command_item(
+        "New Chat",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::NewChat),
+        "file.new_chat",
+        "File",
+        Some("mod+n"),
+    );
 
     let open_quick_chat = MenuItem::new("Open Quick Chat", |state: &mut AppState, _| {
+        super::record_quick_chat_opened(
+            state.desktop_settings.quick_chat_icon_enabled,
+            state.desktop_settings.quick_chat_shortcut_enabled,
+        );
         state.apply_store_event(StoreEvent::QuickChatToggled);
     })
     .id("file.open_quick_chat")
     .menu("File");
 
-    let mut skills = MenuItem::new("Skills", |state: &mut AppState, _| {
-        dispatch_menu_command(state, DesktopMenuCommand::OpenSkills);
-    })
-    .id("file.open_skills")
-    .menu("File")
-    .keys_first();
-    if let Some(sc) = menu_shortcut("mod+shift+k") {
-        skills = skills.key_equivalent(sc);
-    }
+    let skills = build_command_item(
+        "Skills",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::OpenSkills),
+        "file.open_skills",
+        "File",
+        Some("mod+shift+k"),
+    );
 
-    let mut palette = MenuItem::new("Command Palette", |state: &mut AppState, _| {
-        dispatch_menu_command(state, DesktopMenuCommand::OpenCommandPalette);
-    })
-    .id("file.command_palette")
-    .menu("File")
-    .keys_first();
-    if let Some(sc) = menu_shortcut("mod+k") {
-        palette = palette.key_equivalent(sc);
-    }
+    let palette = build_command_item(
+        "Command Palette",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::OpenCommandPalette),
+        "file.command_palette",
+        "File",
+        Some("mod+k"),
+    );
 
-    let mut settings = MenuItem::new("Settings...", |state: &mut AppState, _| {
-        dispatch_menu_command(state, DesktopMenuCommand::OpenSettings);
-    })
-    .id("file.settings")
-    .menu("File")
-    .keys_first();
-    if let Some(sc) = menu_shortcut("mod+comma") {
-        settings = settings.key_equivalent(sc);
-    }
+    let settings = build_command_item(
+        "Settings...",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::OpenSettings),
+        "file.settings",
+        "File",
+        Some("mod+comma"),
+    );
 
-    let ws_settings = MenuItem::new("Workspace Settings", |state: &mut AppState, _| {
-        dispatch_menu_command(state, DesktopMenuCommand::OpenWorkspacesSettings);
-    })
-    .id("file.workspace_settings")
-    .menu("File");
+    let ws_settings = build_command_item(
+        "Workspace Settings",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::OpenWorkspacesSettings),
+        "file.workspace_settings",
+        "File",
+        None,
+    );
 
-    let mut toggle_sidebar = MenuItem::new("Toggle Sidebar", |state: &mut AppState, _| {
-        dispatch_menu_command(state, DesktopMenuCommand::ToggleSidebar);
-    })
-    .id("view.toggle_sidebar")
-    .menu("View")
-    .keys_first();
-    if let Some(sc) = menu_shortcut("mod+b") {
-        toggle_sidebar = toggle_sidebar.key_equivalent(sc);
-    }
+    let toggle_sidebar = build_command_item(
+        "Toggle Sidebar",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::ToggleSidebar),
+        "view.toggle_sidebar",
+        "View",
+        Some("mod+b"),
+    );
+
+    let reset_zoom = build_command_item(
+        "Actual Size",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::ResetZoom),
+        "view.reset_zoom",
+        "View",
+        Some("mod+0"),
+    );
+
+    let zoom_in = build_command_item(
+        "Zoom In",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::ZoomIn),
+        "view.zoom_in",
+        "View",
+        Some("mod+="),
+    );
+
+    let zoom_out = build_command_item(
+        "Zoom Out",
+        |state, _| dispatch_menu_command(state, DesktopMenuCommand::ZoomOut),
+        "view.zoom_out",
+        "View",
+        Some("mod+-"),
+    );
 
     let help_updates = MenuItem::new("Check for Updates...", |state: &mut AppState, _| {
         dispatch_menu_command(state, DesktopMenuCommand::OpenUpdates);
@@ -144,6 +184,10 @@ pub fn install_application_menus(app: App<AppState>) -> App<AppState> {
         .menu_item(settings)
         .menu_item(ws_settings)
         .menu_item(toggle_sidebar)
+        .menu_item(MenuItem::separator().menu("View"))
+        .menu_item(reset_zoom)
+        .menu_item(zoom_in)
+        .menu_item(zoom_out)
         .menu_item(help_updates)
         .menu_item(MenuItem::separator().menu("Help"))
         .menu_item(help_github)
@@ -173,8 +217,14 @@ mod tests {
         assert_eq!(DesktopMenuCommand::NewChat.as_id(), "new_chat");
         assert_eq!(DesktopMenuCommand::OpenSettings.as_id(), "settings");
         assert_eq!(DesktopMenuCommand::ToggleSidebar.as_id(), "toggle_sidebar");
+        assert_eq!(DesktopMenuCommand::ResetZoom.as_id(), "reset_zoom");
+        assert_eq!(DesktopMenuCommand::ZoomIn.as_id(), "zoom_in");
+        assert_eq!(DesktopMenuCommand::ZoomOut.as_id(), "zoom_out");
         assert!(menu_shortcut("mod+n").is_some());
         assert!(menu_shortcut("mod+shift+k").is_some());
         assert!(menu_shortcut("mod+comma").is_some());
+        assert!(menu_shortcut("mod+0").is_some());
+        assert!(menu_shortcut("mod+=").is_some());
+        assert!(menu_shortcut("mod+-").is_some());
     }
 }

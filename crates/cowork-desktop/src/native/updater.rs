@@ -1,12 +1,16 @@
 //! Clean native updater stub matching `apps/desktop/electron/services/updater.ts`
 //! until a signed native update feed/channel is wired for Rune builds.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+
+use serde_json::json;
 
 use crate::actions::StoreEvent;
 use crate::state::UpdaterState;
 
 use super::local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger};
+use super::product_analytics::ProductAnalyticsService;
 use super::shell_ops::open_external_url_os;
 
 pub const RELEASE_NOTES_URL: &str = "https://github.com/mweinbach/agent-coworker/releases/latest";
@@ -18,6 +22,7 @@ const UNAVAILABLE_MESSAGE: &str = "Automatic in-app updates are unavailable in n
 pub struct DesktopUpdaterService {
     state: Arc<Mutex<UpdaterState>>,
     logger: Option<Arc<LocalLogger>>,
+    analytics: Option<ProductAnalyticsService>,
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
 }
 
@@ -36,8 +41,14 @@ impl DesktopUpdaterService {
                 ..UpdaterState::default()
             })),
             logger,
+            analytics: None,
             emit,
         }
+    }
+
+    pub fn with_analytics(mut self, analytics: ProductAnalyticsService) -> Self {
+        self.analytics = Some(analytics);
+        self
     }
 
     pub fn get_state(&self) -> UpdaterState {
@@ -63,6 +74,13 @@ impl DesktopUpdaterService {
             );
         }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+        if let Some(analytics) = &self.analytics {
+            let mut props = BTreeMap::new();
+            props.insert("durationMs".into(), json!(0));
+            props.insert("status".into(), json!("unavailable"));
+            props.insert("updateAvailable".into(), json!(false));
+            analytics.capture_event("update_checked", &props);
+        }
         (self.emit)(StoreEvent::UpdaterChanged(next));
     }
 
@@ -85,6 +103,12 @@ impl DesktopUpdaterService {
             );
         }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+        if let Some(analytics) = &self.analytics {
+            let mut props = BTreeMap::new();
+            props.insert("durationMs".into(), json!(0));
+            props.insert("status".into(), json!("unavailable"));
+            analytics.capture_event("update_downloaded", &props);
+        }
         (self.emit)(StoreEvent::UpdaterChanged(next));
     }
 
@@ -107,6 +131,11 @@ impl DesktopUpdaterService {
             );
         }
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+        if let Some(analytics) = &self.analytics {
+            let mut props = BTreeMap::new();
+            props.insert("status".into(), json!("error"));
+            analytics.capture_event("update_install_started", &props);
+        }
         (self.emit)(StoreEvent::UpdaterChanged(next));
     }
 

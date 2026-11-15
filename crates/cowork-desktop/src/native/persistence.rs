@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -165,6 +165,97 @@ pub struct PersistenceService {
     logger: Option<std::sync::Arc<LocalLogger>>,
     lock: Mutex<()>,
     migrated: Mutex<bool>,
+}
+
+pub const TRANSCRIPT_BATCH_DEBOUNCE: Duration = Duration::from_millis(200);
+
+#[derive(Default)]
+struct TranscriptWriteBufferInner {
+    pending: Vec<TranscriptEvent>,
+    flush_scheduled: bool,
+}
+
+/// Debounced 200ms batch writer for local JSONL compatibility transcripts.
+#[derive(Clone)]
+pub struct TranscriptWriteBuffer {
+    persistence: Arc<PersistenceService>,
+    logger: Option<Arc<LocalLogger>>,
+    inner: Arc<Mutex<TranscriptWriteBufferInner>>,
+}
+
+impl TranscriptWriteBuffer {
+    pub fn new(persistence: Arc<PersistenceService>, logger: Option<Arc<LocalLogger>>) -> Self {
+        Self {
+            persistence,
+            logger,
+            inner: Arc::new(Mutex::new(TranscriptWriteBufferInner::default())),
+        }
+    }
+
+    /// Queues `event` and schedules a debounced 200ms flush on the active Tokio runtime, if any.
+    pub fn enqueue(&self, event: TranscriptEvent) {
+        let should_schedule = {
+            let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            guard.pending.push(event);
+            if guard.flush_scheduled {
+                false
+            } else if tokio::runtime::Handle::try_current().is_ok() {
+                guard.flush_scheduled = true;
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_schedule {
+            let buffer = self.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(TRANSCRIPT_BATCH_DEBOUNCE).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = buffer.flush();
+                })
+                .await;
+            });
+        }
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .len()
+    }
+
+    /// Flushes all currently queued transcript events to `<userData>/transcripts/<threadId>.jsonl`.
+    pub fn flush(&self) -> Result<usize, PersistenceError> {
+        let batch = {
+            let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            guard.flush_scheduled = false;
+            std::mem::take(&mut guard.pending)
+        };
+        let count = batch.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        if let Err(err) = self.persistence.append_transcript_batch(batch) {
+            if let Some(logger) = &self.logger {
+                let meta = json!({
+                    "count": count,
+                    "error": err.to_string(),
+                });
+                logger.write(
+                    LocalLogFileName::DesktopMain,
+                    LocalLogLevel::Warn,
+                    "persistence",
+                    "failed to flush buffered transcript events",
+                    Some(&meta),
+                );
+            }
+            return Err(err);
+        }
+        Ok(count)
+    }
 }
 
 impl PersistenceService {
@@ -364,6 +455,56 @@ impl PersistenceService {
         }
 
         Ok(())
+    }
+
+    /// Reads and chronologically merges local transcript JSONL events across `thread_id`
+    /// and any fallback `candidate_ids` (such as `sessionId` or `legacyTranscriptId`).
+    pub fn read_transcript_with_candidates(
+        &self,
+        thread_id: &str,
+        candidate_ids: &[String],
+    ) -> Result<Vec<TranscriptEvent>, PersistenceError> {
+        let primary = thread_id.trim();
+        assert_safe_id(primary, "threadId")?;
+
+        let mut seen = HashSet::new();
+        let mut ordered_ids = Vec::with_capacity(1 + candidate_ids.len());
+        seen.insert(primary.to_string());
+        ordered_ids.push(primary.to_string());
+
+        for candidate in candidate_ids {
+            let trimmed = candidate.trim();
+            if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+                ordered_ids.push(trimmed.to_string());
+            }
+        }
+
+        let mut combined = Vec::new();
+        let mut successful_reads = 0usize;
+        let mut first_error: Option<PersistenceError> = None;
+
+        for id in &ordered_ids {
+            match self.read_transcript(id) {
+                Ok(mut events) => {
+                    successful_reads += 1;
+                    combined.append(&mut events);
+                }
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+            }
+        }
+
+        if successful_reads == 0
+            && let Some(err) = first_error
+        {
+            return Err(err);
+        }
+
+        combined.sort_by(|left, right| left.ts.cmp(&right.ts));
+        Ok(combined)
     }
 
     /// Deletes `<userData>/transcripts/<threadId>.jsonl`, ignoring missing files.
@@ -1877,5 +2018,106 @@ mod tests {
             saved_doc["collapsedSidebarSections"],
             json!(["pinned", "workspaces"])
         );
+    }
+
+    #[test]
+    fn read_transcript_with_candidates_merges_chronologically_and_rejects_unsafe_primary() {
+        let tmp = tempdir().unwrap();
+        let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
+
+        service
+            .append_transcript_batch(vec![
+                TranscriptEvent {
+                    ts: "2026-01-01T00:00:03.000Z".into(),
+                    thread_id: "thread-main".into(),
+                    direction: TranscriptDirection::Server,
+                    payload: json!({ "seq": 3 }),
+                    extra: Map::new(),
+                },
+                TranscriptEvent {
+                    ts: "2026-01-01T00:00:01.000Z".into(),
+                    thread_id: "legacy-id".into(),
+                    direction: TranscriptDirection::Client,
+                    payload: json!({ "seq": 1 }),
+                    extra: Map::new(),
+                },
+                TranscriptEvent {
+                    ts: "2026-01-01T00:00:02.000Z".into(),
+                    thread_id: "session-id".into(),
+                    direction: TranscriptDirection::Server,
+                    payload: json!({ "seq": 2 }),
+                    extra: Map::new(),
+                },
+            ])
+            .unwrap();
+
+        let merged = service
+            .read_transcript_with_candidates(
+                "thread-main",
+                &[
+                    "session-id".into(),
+                    "legacy-id".into(),
+                    "missing-id".into(),
+                    "session-id".into(),
+                ],
+            )
+            .unwrap();
+        let seqs: Vec<i64> = merged
+            .iter()
+            .filter_map(|e| e.payload.get("seq").and_then(Value::as_i64))
+            .collect();
+        assert_eq!(seqs, vec![1, 2, 3]);
+
+        assert!(
+            service
+                .read_transcript_with_candidates("../escape", &["session-id".into()])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn transcript_write_buffer_batches_with_debounce_and_manual_flush() {
+        let tmp = tempdir().unwrap();
+        let service = Arc::new(PersistenceService::new(
+            tmp.path().join("Cowork"),
+            None,
+            true,
+            None,
+        ));
+        let buffer = TranscriptWriteBuffer::new(Arc::clone(&service), None);
+
+        // Without an active runtime, enqueue buffers until manual flush.
+        buffer.enqueue(TranscriptEvent {
+            ts: "2026-01-01T00:00:01.000Z".into(),
+            thread_id: "t-sync".into(),
+            direction: TranscriptDirection::Client,
+            payload: json!({ "step": "sync" }),
+            extra: Map::new(),
+        });
+        assert_eq!(buffer.pending_len(), 1);
+        assert_eq!(buffer.flush().unwrap(), 1);
+        assert_eq!(buffer.pending_len(), 0);
+        assert_eq!(service.read_transcript("t-sync").unwrap().len(), 1);
+
+        // Inside a Tokio runtime, events batch across the 200ms debounce timer.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            for idx in 1..=3 {
+                buffer.enqueue(TranscriptEvent {
+                    ts: format!("2026-01-01T00:00:0{idx}.000Z"),
+                    thread_id: "t-async".into(),
+                    direction: TranscriptDirection::Server,
+                    payload: json!({ "idx": idx }),
+                    extra: Map::new(),
+                });
+            }
+            tokio::time::sleep(TRANSCRIPT_BATCH_DEBOUNCE + Duration::from_millis(120)).await;
+            assert_eq!(buffer.pending_len(), 0);
+        });
+        let events = service.read_transcript("t-async").unwrap();
+        assert_eq!(events.len(), 3);
     }
 }

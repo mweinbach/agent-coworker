@@ -9,7 +9,7 @@ use crate::state::{PersistedDesktopState, PrivacyTelemetrySettings};
 
 const DEFAULT_LANGFUSE_BASE_URL: &str = "https://cloud.langfuse.com";
 
-fn normalize_env_value(value: Option<&String>) -> Option<String> {
+pub(crate) fn normalize_env_value(value: Option<&String>) -> Option<String> {
     value
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -24,7 +24,7 @@ fn parse_env_bool(value: Option<&String>) -> Option<bool> {
     }
 }
 
-fn coalesce_env(env: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
+pub(crate) fn coalesce_env(env: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Some(val) = normalize_env_value(env.get(*key)) {
             return Some(val);
@@ -33,7 +33,7 @@ fn coalesce_env(env: &HashMap<String, String>, keys: &[&str]) -> Option<String> 
     None
 }
 
-fn normalize_http_url(raw: Option<&String>) -> Option<String> {
+pub(crate) fn normalize_http_url(raw: Option<&String>) -> Option<String> {
     let candidate = normalize_env_value(raw)?;
     let parsed = url::Url::parse(&candidate).ok()?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
@@ -59,7 +59,7 @@ pub struct ResolvedTelemetryConsent {
     pub network_telemetry_disabled: bool,
 }
 
-fn resolve_packaging_mode(env: &HashMap<String, String>, is_packaged: bool) -> String {
+pub(crate) fn resolve_packaging_mode(env: &HashMap<String, String>, is_packaged: bool) -> String {
     if let Some(raw) = normalize_env_value(env.get("COWORK_TELEMETRY_MODE")) {
         let lower = raw.to_ascii_lowercase();
         if matches!(

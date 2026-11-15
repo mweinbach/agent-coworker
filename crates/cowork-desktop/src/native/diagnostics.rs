@@ -66,6 +66,7 @@ pub struct DiagnosticsService {
     logger: Arc<LocalLogger>,
     updater: Option<DesktopUpdaterService>,
     server_diagnostics: Arc<dyn Fn() -> ServerManagerDiagnostics + Send + Sync>,
+    recent_report_ids: Option<Arc<dyn Fn() -> Vec<String> + Send + Sync>>,
 }
 
 impl DiagnosticsService {
@@ -84,7 +85,17 @@ impl DiagnosticsService {
             logger,
             updater,
             server_diagnostics,
+            recent_report_ids: None,
         }
+    }
+
+    /// Attaches a provider supplying recent desktop crash report IDs for diagnostics bundles.
+    pub fn with_recent_report_ids_provider(
+        mut self,
+        provider: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    ) -> Self {
+        self.recent_report_ids = Some(provider);
+        self
     }
 
     pub fn diagnostics_dir(&self) -> PathBuf {
@@ -154,6 +165,11 @@ impl DiagnosticsService {
         let privacy_json =
             serde_json::to_value(&core.settings.privacy_telemetry).unwrap_or(Value::Null);
         let ff_json = serde_json::to_value(&core.feature_flags).unwrap_or_else(|_| json!({}));
+        let recent_ids: Vec<String> = self
+            .recent_report_ids
+            .as_ref()
+            .map(|provider| provider())
+            .unwrap_or_default();
 
         let bundle = json!({
             "schemaVersion": 1,
@@ -170,6 +186,10 @@ impl DiagnosticsService {
             "counts": {
                 "workspaceCount": core.workspaces.len(),
                 "threadCount": thread_count,
+            },
+            "crashReports": {
+                "enabled": core.settings.privacy_telemetry.crash_reports_enabled,
+                "recentReportIds": sanitize_log_meta(&json!(recent_ids), &context),
             },
             "updateState": sanitize_log_meta(&update_state_json, &context),
             "sidecarLifecycle": sanitize_log_meta(&server_diag_json, &context),
@@ -430,7 +450,8 @@ mod tests {
             logger,
             None,
             Arc::new(move || mgr.get_diagnostics()),
-        );
+        )
+        .with_recent_report_ids_provider(Arc::new(|| vec!["evt-abc-123".to_string()]));
         let created = svc.create_bundle().unwrap();
         let contents = fs::read_to_string(&created.path).unwrap();
 
@@ -440,5 +461,11 @@ mod tests {
         assert!(!contents.contains("do not include prompts in logs"));
         assert!(contents.contains("[redacted]"));
         assert!(contents.contains("[workspace-path]"));
+
+        let parsed: Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(
+            parsed["crashReports"]["recentReportIds"],
+            json!(["evt-abc-123"])
+        );
     }
 }

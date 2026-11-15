@@ -35,19 +35,27 @@ pub struct WorkArea {
     pub height: i32,
 }
 
-/// Clamps saved bounds to a visible region of `work_area`, keeping the titlebar reachable.
-pub fn clamp_bounds_to_work_area(saved: WindowBounds, work_area: WorkArea) -> WindowBounds {
+/// Clamps saved bounds to a visible region of `work_area` at the given scale factor,
+/// preserving a reachable titlebar and minimum window size.
+pub fn clamp_bounds_in_scale(saved: WindowBounds, work_area: WorkArea, scale: f64) -> WindowBounds {
+    let eff_scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let min_width = (f64::from(MAIN_WINDOW_MIN_WIDTH) * eff_scale).round() as i32;
+    let min_height = (f64::from(MAIN_WINDOW_MIN_HEIGHT) * eff_scale).round() as i32;
     let width = saved
         .width
-        .min(work_area.width.max(MAIN_WINDOW_MIN_WIDTH))
-        .max(MAIN_WINDOW_MIN_WIDTH);
+        .min(work_area.width.max(min_width))
+        .max(min_width);
     let height = saved
         .height
-        .min(work_area.height.max(MAIN_WINDOW_MIN_HEIGHT))
-        .max(MAIN_WINDOW_MIN_HEIGHT);
+        .min(work_area.height.max(min_height))
+        .max(min_height);
 
-    let min_visible_width = 200.min(width);
-    let min_visible_height = 120.min(height);
+    let min_visible_width = ((200.0 * eff_scale).round() as i32).min(width);
+    let min_visible_height = ((120.0 * eff_scale).round() as i32).min(height);
 
     let min_x = work_area.x - width + min_visible_width;
     let max_x = work_area.x + work_area.width - min_visible_width;
@@ -70,9 +78,15 @@ pub fn clamp_bounds_to_work_area(saved: WindowBounds, work_area: WorkArea) -> Wi
     }
 }
 
+/// Clamps saved bounds to a visible region of `work_area` at 1x scale.
+pub fn clamp_bounds_to_work_area(saved: WindowBounds, work_area: WorkArea) -> WindowBounds {
+    clamp_bounds_in_scale(saved, work_area, 1.0)
+}
+
 #[derive(Debug, Default)]
 struct StoreInner {
     pending: Option<WindowBounds>,
+    last_recorded: Option<WindowBounds>,
     last_written_json: Option<String>,
     deadline: Option<Instant>,
 }
@@ -118,6 +132,16 @@ impl WindowStateStore {
         })
     }
 
+    /// Returns the most recently recorded bounds if any, or falls back to `load_raw`.
+    pub fn last_recorded(&self) -> Option<WindowBounds> {
+        let cached = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_recorded;
+        cached.or_else(|| self.load_raw())
+    }
+
     /// Records updated window bounds and schedules a 300 ms debounced disk write.
     pub fn record_bounds(&self, bounds: WindowBounds) {
         if bounds.width <= 0 || bounds.height <= 0 {
@@ -125,7 +149,11 @@ impl WindowStateStore {
         }
         {
             let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.last_recorded == Some(bounds) {
+                return;
+            }
             guard.pending = Some(bounds);
+            guard.last_recorded = Some(bounds);
             guard.deadline = Some(Instant::now() + DEBOUNCE_DURATION);
         }
         self.notify.notify_one();
@@ -222,6 +250,162 @@ impl DeferredMaximize {
     }
 }
 
+/// Returns true when CLI flags indicate a headless Rune tooling/screenshot/tree invocation
+/// whose fixture viewport must remain deterministic.
+pub fn is_headless_cli_args<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let items: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    let has_native = items.iter().any(|a| a == "--native");
+    items.iter().any(|arg| {
+        let flag = arg.split('=').next().unwrap_or(arg.as_str());
+        matches!(
+            flag,
+            "--snap"
+                | "--snap-on-patch"
+                | "--tree"
+                | "--html"
+                | "--video"
+                | "--strip"
+                | "--list-scenes"
+                | "--first-pixels"
+                | "--list-windows"
+                | "--desktop"
+        ) || (!has_native
+            && matches!(
+                flag,
+                "--script" | "--trace" | "--frames" | "--duration" | "--out"
+            ))
+    })
+}
+
+/// Returns true when running under Rune headless mode or headless CLI flags.
+pub fn is_headless_invocation() -> bool {
+    rune::is_headless() || is_headless_cli_args(std::env::args())
+}
+
+/// Builds initial `rune::WindowOptions` and `maximized` flag from `window-state.json`.
+///
+/// Always returns `(WindowOptions::default(), false)` in headless/fixture runs so `--scene` and
+/// `--tree` maintain exact deterministic viewport dimensions.
+pub fn startup_window_options(
+    store: &WindowStateStore,
+    headless: bool,
+) -> (rune::WindowOptions, bool) {
+    if headless {
+        return (rune::WindowOptions::default(), false);
+    }
+    let Some(saved) = store.load_raw() else {
+        return (rune::WindowOptions::default(), false);
+    };
+    let opts = rune::WindowOptions {
+        position: Some((saved.x, saved.y)),
+        physical_size: Some((saved.width.max(1) as u32, saved.height.max(1) as u32)),
+        ..Default::default()
+    };
+    (opts, saved.is_maximized)
+}
+
+/// Converts a live `rune::WindowPlacement` into `WindowBounds`, preserving normal restore
+/// geometry when maximized or fullscreen and skipping invalid/minimized frames.
+pub fn bounds_from_placement(
+    placement: &rune::WindowPlacement,
+    prev: Option<WindowBounds>,
+) -> Option<WindowBounds> {
+    if placement.minimized {
+        return None;
+    }
+    if placement.maximized || placement.full_screen {
+        if let Some(((rx, ry), (rw, rh))) = placement.restore
+            && rw > 0
+            && rh > 0
+        {
+            return Some(WindowBounds {
+                x: rx,
+                y: ry,
+                width: rw.min(i32::MAX as u32) as i32,
+                height: rh.min(i32::MAX as u32) as i32,
+                is_maximized: placement.maximized,
+            });
+        }
+        return prev.map(|p| WindowBounds {
+            is_maximized: placement.maximized,
+            ..p
+        });
+    }
+    let (w, h) = placement.content_size;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(WindowBounds {
+        x: placement.position.0,
+        y: placement.position.1,
+        width: w.min(i32::MAX as u32) as i32,
+        height: h.min(i32::MAX as u32) as i32,
+        is_maximized: false,
+    })
+}
+
+/// Clamps an already-opened window handle against its active display work area on the UI thread
+/// and records initial bounds into `store`.
+pub fn reconcile_opened_window_placement(store: &WindowStateStore, handle: &rune::WindowHandle) {
+    let Some(placement) = handle.placement() else {
+        return;
+    };
+    if placement.maximized || placement.minimized || placement.full_screen {
+        if let Some(bounds) = bounds_from_placement(&placement, store.last_recorded()) {
+            store.record_bounds(bounds);
+        }
+        return;
+    }
+    let Some(((dx, dy), (dw, dh))) = placement.display else {
+        if let Some(bounds) = bounds_from_placement(&placement, store.last_recorded()) {
+            store.record_bounds(bounds);
+        }
+        return;
+    };
+    let area = WorkArea {
+        x: dx,
+        y: dy,
+        width: dw.min(i32::MAX as u32) as i32,
+        height: dh.min(i32::MAX as u32) as i32,
+    };
+    let Some(current) = bounds_from_placement(&placement, store.last_recorded()) else {
+        return;
+    };
+    let clamped = clamp_bounds_in_scale(current, area, placement.scale);
+    if clamped.x != current.x || clamped.y != current.y {
+        handle.set_position((clamped.x, clamped.y));
+    }
+    if clamped.width != current.width || clamped.height != current.height {
+        let scale = if placement.scale.is_finite() && placement.scale > 0.0 {
+            placement.scale
+        } else {
+            1.0
+        };
+        handle.resize_instant((
+            (f64::from(clamped.width) / scale) as f32,
+            (f64::from(clamped.height) / scale) as f32,
+        ));
+    }
+    store.record_bounds(clamped);
+}
+
+/// Samples a window's current `WindowPlacement` on the UI thread and schedules persistence.
+pub fn record_window_placement(store: &WindowStateStore, handle: &rune::WindowHandle) {
+    if is_headless_invocation() {
+        return;
+    }
+    let Some(placement) = handle.placement() else {
+        return;
+    };
+    if let Some(bounds) = bounds_from_placement(&placement, store.last_recorded()) {
+        store.record_bounds(bounds);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +457,76 @@ mod tests {
         let mut dm = DeferredMaximize::new(true);
         assert!(dm.take_ready_to_maximize());
         assert!(!dm.take_ready_to_maximize());
+    }
+
+    #[test]
+    fn headless_mode_ignores_persisted_bounds_and_placement_preserves_restore_geometry() {
+        let tmp = tempdir().unwrap();
+        let store = WindowStateStore::new(tmp.path());
+        store.record_bounds(WindowBounds {
+            x: 150,
+            y: 90,
+            width: 1400,
+            height: 920,
+            is_maximized: true,
+        });
+        store.flush().unwrap();
+
+        let (headless_opts, headless_max) = startup_window_options(&store, true);
+        assert!(headless_opts.position.is_none());
+        assert!(headless_opts.physical_size.is_none());
+        assert!(!headless_max);
+        assert!(is_headless_cli_args([
+            "cowork-desktop",
+            "--tree",
+            "out.txt",
+            "--scene",
+            "default"
+        ]));
+        assert!(!is_headless_cli_args([
+            "cowork-desktop",
+            "--scene",
+            "default",
+            "--native"
+        ]));
+
+        let (live_opts, live_max) = startup_window_options(&store, false);
+        assert_eq!(live_opts.position, Some((150, 90)));
+        assert_eq!(live_opts.physical_size, Some((1400, 920)));
+        assert!(live_max);
+
+        let normal_bounds = WindowBounds {
+            x: 100,
+            y: 120,
+            width: 1280,
+            height: 820,
+            is_maximized: false,
+        };
+        let max_placement = rune::WindowPlacement {
+            position: (0, 0),
+            content_position: (0, 0),
+            content_size: (2560, 1440),
+            scale: 2.0,
+            maximized: true,
+            minimized: false,
+            full_screen: false,
+            restore: None,
+            display: Some(((0, 0), (2560, 1440))),
+        };
+        let preserved = bounds_from_placement(&max_placement, Some(normal_bounds)).unwrap();
+        assert_eq!(preserved.width, 1280);
+        assert_eq!(preserved.height, 820);
+        assert!(preserved.is_maximized);
+
+        let win_restore = rune::WindowPlacement {
+            restore: Some(((30, 40), (1100, 760))),
+            ..max_placement
+        };
+        let from_restore = bounds_from_placement(&win_restore, Some(normal_bounds)).unwrap();
+        assert_eq!(from_restore.x, 30);
+        assert_eq!(from_restore.y, 40);
+        assert_eq!(from_restore.width, 1100);
+        assert_eq!(from_restore.height, 760);
+        assert!(from_restore.is_maximized);
     }
 }

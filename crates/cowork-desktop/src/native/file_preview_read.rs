@@ -374,6 +374,34 @@ pub fn load_file_preview_state(
     }
 }
 
+/// Result of a workspace-bounded raw byte preview read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthorizedPreviewRead {
+    pub safe_path: PathBuf,
+    pub kind: FilePreviewKind,
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+    pub file_size: u64,
+}
+
+/// Reads up to `max_bytes` from an authorized regular file inside `workspace_roots`.
+pub fn read_authorized_preview_bytes(
+    workspace_roots: &[PathBuf],
+    requested_path: &Path,
+    max_bytes: usize,
+) -> Result<AuthorizedPreviewRead> {
+    let safe_path = assert_path_within_roots(workspace_roots, requested_path, "path")?;
+    let kind = classify_file_preview_kind(&safe_path);
+    let capped = read_capped_file_preview(&safe_path, max_bytes, Some(&safe_path))?;
+    Ok(AuthorizedPreviewRead {
+        safe_path,
+        kind,
+        bytes: capped.bytes,
+        truncated: capped.truncated,
+        file_size: capped.version.size,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +467,32 @@ mod tests {
                 .unwrap_err()
                 .to_string();
         assert!(sibling_preview.contains("outside allowed workspace roots"));
+    }
+
+    #[test]
+    fn reads_authorized_preview_bytes_with_spreadsheet_kind_and_boundary_check() {
+        let ws = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let sheet = ws.path().join("budget.xlsx");
+        fs::write(&sheet, b"PK\x03\x04spreadsheet-bytes").unwrap();
+
+        let root = vec![ws.path().to_path_buf()];
+        let full = read_authorized_preview_bytes(&root, &sheet, 1024).unwrap();
+        assert_eq!(full.kind, FilePreviewKind::Xlsx);
+        assert_eq!(full.bytes, b"PK\x03\x04spreadsheet-bytes");
+        assert!(!full.truncated);
+        assert_eq!(full.file_size, b"PK\x03\x04spreadsheet-bytes".len() as u64);
+
+        let capped = read_authorized_preview_bytes(&root, &sheet, 4).unwrap();
+        assert_eq!(capped.bytes, b"PK\x03\x04");
+        assert!(capped.truncated);
+        assert_eq!(capped.file_size, full.file_size);
+
+        let escape = outside.path().join("secret.xlsx");
+        fs::write(&escape, b"nope").unwrap();
+        let err = read_authorized_preview_bytes(&root, &escape, 1024)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside allowed workspace roots"));
     }
 }

@@ -6,6 +6,7 @@
 
 pub mod appearance;
 pub mod apply_desktop_state;
+pub mod crash_reporting;
 pub mod diagnostics;
 pub mod dialogs;
 pub mod explorer;
@@ -17,6 +18,7 @@ pub mod menu;
 pub mod notifications;
 pub mod path_boundary;
 pub mod persistence;
+pub mod product_analytics;
 pub mod remote_access;
 pub mod security;
 pub mod server_manager;
@@ -33,11 +35,11 @@ pub mod window_chrome;
 pub mod window_lifecycle;
 pub mod window_state;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cowork_config::canonicalize_sync;
 use rune::{App, AppHandle};
@@ -51,15 +53,17 @@ use crate::state::{
 };
 use appearance::{AppearancePreferences, detect_system_dark};
 use apply_desktop_state::apply_desktop_state;
+use crash_reporting::CrashReportingService;
 use diagnostics::{CreatedDiagnosticsBundle, DiagnosticsService, UploadedDiagnosticsBundle};
 use explorer::list_workspace_directory;
 use file_preview_read::{DEFAULT_PREVIEW_MAX_BYTES, load_file_preview_state};
 use local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger, strip_url_secrets};
 use notifications::DesktopNotificationService;
 use persistence::{
-    PersistenceService, read_user_data_override_env, resolve_legacy_user_data_dir,
-    resolve_user_data_dir,
+    PersistenceService, TranscriptWriteBuffer, read_user_data_override_env,
+    resolve_legacy_user_data_dir, resolve_user_data_dir,
 };
+use product_analytics::{ProductAnalyticsService, read_persisted_product_analytics_state};
 use remote_access::RemoteAccessBridge;
 use security::{
     AuthorizedUploadRegistry, WorkspaceRootsController, assert_allowed_external_url,
@@ -78,16 +82,104 @@ use telemetry_status::resolve_desktop_telemetry_status;
 use tray::QuickChatTrayController;
 use updater::DesktopUpdaterService;
 use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
-use window_state::WindowStateStore;
+use window_lifecycle::{
+    WindowCloseCoordinator, complete_window_close_resolution, execute_window_close_hook,
+    get_window_handle, register_window_handle, reveal_and_activate_main_window,
+};
+use window_state::{
+    WindowStateStore, is_headless_invocation, reconcile_opened_window_placement,
+    record_window_placement, startup_window_options,
+};
 
 type ShutdownLatch = Arc<(Mutex<bool>, Condvar)>;
 
 const QUIT_SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const BOUNDS_SAMPLE_THROTTLE: Duration = Duration::from_millis(250);
 
 static APP_HANDLE: OnceLock<Mutex<Option<AppHandle<AppState>>>> = OnceLock::new();
 static WORKER_CMD_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<NativeCommand>>>> =
     OnceLock::new();
 static SHUTDOWN_LATCH: OnceLock<Mutex<Option<ShutdownLatch>>> = OnceLock::new();
+static WINDOW_STATE_STORE: OnceLock<WindowStateStore> = OnceLock::new();
+static WINDOW_CLOSE_COORDINATOR: OnceLock<WindowCloseCoordinator> = OnceLock::new();
+static LAST_BOUNDS_SAMPLE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static SHARED_ANALYTICS: OnceLock<Mutex<Option<ProductAnalyticsService>>> = OnceLock::new();
+
+fn shared_analytics_slot() -> &'static Mutex<Option<ProductAnalyticsService>> {
+    SHARED_ANALYTICS.get_or_init(|| Mutex::new(None))
+}
+
+fn set_shared_analytics(service: Option<ProductAnalyticsService>) {
+    let mut guard = shared_analytics_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = service;
+}
+
+pub(crate) fn record_quick_chat_opened(icon_enabled: bool, shortcut_enabled: bool) {
+    let svc = shared_analytics_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(analytics) = svc {
+        let mut props = BTreeMap::new();
+        props.insert("quickChatIconEnabled".into(), json!(icon_enabled));
+        props.insert("quickChatShortcutEnabled".into(), json!(shortcut_enabled));
+        analytics.capture_event("quick_chat_opened", &props);
+    }
+}
+
+fn resolve_desktop_user_data_dir(is_packaged: bool, env: &HashMap<String, String>) -> PathBuf {
+    resolve_user_data_dir(is_packaged, env).unwrap_or_else(|err| {
+        eprintln!("[native] falling back from userData resolution error: {err}");
+        cowork_config::resolve_home_dir(env, cowork_config::host_platform())
+            .join(".cowork")
+            .join("desktop")
+    })
+}
+
+fn shared_window_state_store() -> &'static WindowStateStore {
+    WINDOW_STATE_STORE.get_or_init(|| {
+        let env = cowork_config::env_map_from_process();
+        let user_data_dir = resolve_desktop_user_data_dir(is_packaged_build(), &env);
+        WindowStateStore::new(&user_data_dir)
+    })
+}
+
+fn shared_close_coordinator() -> &'static WindowCloseCoordinator {
+    WINDOW_CLOSE_COORDINATOR.get_or_init(WindowCloseCoordinator::new)
+}
+
+fn sample_open_window_placements() {
+    if is_headless_invocation() {
+        return;
+    }
+    let throttle = LAST_BOUNDS_SAMPLE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
+    {
+        let mut guard = throttle.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(prev) = *guard
+            && now.duration_since(prev) < BOUNDS_SAMPLE_THROTTLE
+        {
+            return;
+        }
+        *guard = Some(now);
+    }
+    if let Some(handle) = get_window_handle("main") {
+        record_window_placement(shared_window_state_store(), &handle);
+    }
+}
+
+fn flush_window_bounds_for(window_key: &str) {
+    if is_headless_invocation() || window_key != "main" {
+        return;
+    }
+    let store = shared_window_state_store();
+    if let Some(handle) = get_window_handle("main") {
+        record_window_placement(store, &handle);
+    }
+    let _ = store.flush();
+}
 
 fn app_handle_slot() -> &'static Mutex<Option<AppHandle<AppState>>> {
     APP_HANDLE.get_or_init(|| Mutex::new(None))
@@ -139,16 +231,87 @@ fn current_shutdown_latch() -> Option<ShutdownLatch> {
         .clone()
 }
 
-/// Configures OS-level menus, deep links, and synchronous quit coordination on `App`.
+/// Registers an opened window handle for bounds restoration/persistence on Rune's UI thread.
+pub fn on_window_opened(window_key: &str, handle: &rune::WindowHandle) {
+    if is_headless_invocation() {
+        return;
+    }
+    register_window_handle(window_key, handle.clone());
+    if window_key == "main" {
+        reconcile_opened_window_placement(shared_window_state_store(), handle);
+    }
+}
+
+/// Evaluates per-window close guards on Rune's UI thread, reopening & confirming when dirty/busy.
+pub fn on_window_close(window_key: &str, state: &mut AppState, tx: &mut rune::Tx) {
+    let key = window_key.to_string();
+    execute_window_close_hook(
+        shared_close_coordinator(),
+        window_key,
+        state,
+        tx,
+        current_app_handle().as_ref(),
+        move || flush_window_bounds_for(&key),
+    );
+}
+
+/// Completes a pending close confirmation dialog after user confirmation or cancellation.
+pub fn resolve_window_close_dialog(window_key: &str, request_id: &str, confirmed: bool) {
+    let Some(handle) = current_app_handle() else {
+        return;
+    };
+    let key = window_key.to_string();
+    let req_id = request_id.to_string();
+    handle.update(move |_state, tx| {
+        let key_for_flush = key.clone();
+        complete_window_close_resolution(
+            shared_close_coordinator(),
+            &key,
+            &req_id,
+            confirmed,
+            tx,
+            move || flush_window_bounds_for(&key_for_flush),
+        );
+    });
+}
+
+/// Configures OS-level menus, window bounds restore, close guards, deep links, and quit hooks.
 pub fn configure_app(app: App<AppState>) -> App<AppState> {
     let handle = app.handle();
     store_app_handle(handle);
 
-    menu::install_application_menus(app)
+    let headless = is_headless_invocation();
+    let (startup_opts, startup_max) = startup_window_options(shared_window_state_store(), headless);
+
+    let mut configured = menu::install_application_menus(app).keep_running();
+    if !headless {
+        configured = configured
+            .window_options(startup_opts)
+            .maximized(startup_max);
+    }
+
+    configured
+        .on_window(|window_handle| {
+            on_window_opened("main", window_handle);
+        })
+        .on_frame_drawn(|_rt| {
+            sample_open_window_placements();
+        })
+        .on_reopen(|_state, has_visible_windows, _tx| {
+            if !has_visible_windows && let Some(app_handle) = current_app_handle() {
+                reveal_and_activate_main_window(&app_handle);
+                return true;
+            }
+            false
+        })
         .on_open_url(|state, url, _tx| {
             state.apply_store_event(StoreEvent::DeepLink(url.to_string()));
         })
+        .on_close(|state, tx| {
+            on_window_close("main", state, tx);
+        })
         .on_quit(|state, _tx| {
+            flush_window_bounds_for("main");
             on_shutdown(state);
         })
 }
@@ -219,8 +382,14 @@ pub fn spawn_native_worker(
                 while let Some(cmd) = cmd_rx.recv().await {
                     match cmd {
                         NativeCommand::Shutdown => {
+                            set_shared_analytics(None);
+                            let _ = runtime_ctx.transcript_buffer.flush();
                             runtime_ctx.watcher.unwatch_all().await;
                             runtime_ctx.tray.teardown(current_app_handle().as_ref());
+                            runtime_ctx.crash_reporting.flush().await;
+                            runtime_ctx.product_analytics.flush().await;
+                            runtime_ctx.crash_reporting.shutdown();
+                            runtime_ctx.product_analytics.shutdown();
                             coordinator.shutdown().await;
                             break;
                         }
@@ -230,8 +399,14 @@ pub fn spawn_native_worker(
                     }
                 }
 
+                set_shared_analytics(None);
+                let _ = runtime_ctx.transcript_buffer.flush();
                 runtime_ctx.watcher.unwatch_all().await;
                 runtime_ctx.tray.teardown(current_app_handle().as_ref());
+                runtime_ctx.crash_reporting.flush().await;
+                runtime_ctx.product_analytics.flush().await;
+                runtime_ctx.crash_reporting.shutdown();
+                runtime_ctx.product_analytics.shutdown();
                 coordinator.shutdown().await;
                 let (lock, cvar) = &*latch;
                 *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
@@ -263,6 +438,7 @@ struct NativeWorkerContext {
     is_packaged: bool,
     logger: Arc<LocalLogger>,
     persistence: Arc<PersistenceService>,
+    transcript_buffer: TranscriptWriteBuffer,
     window_state: WindowStateStore,
     appearance: AppearancePreferences,
     roots: Arc<Mutex<WorkspaceRootsController>>,
@@ -273,6 +449,8 @@ struct NativeWorkerContext {
     notifications: DesktopNotificationService,
     updater: DesktopUpdaterService,
     diagnostics: DiagnosticsService,
+    crash_reporting: CrashReportingService,
+    product_analytics: ProductAnalyticsService,
     tray: QuickChatTrayController,
     last_feature_flags: HashMap<String, bool>,
     last_privacy: Option<PrivacyTelemetrySettings>,
@@ -286,12 +464,7 @@ impl NativeWorkerContext {
         let env = cowork_config::env_map_from_process();
         let is_packaged = is_packaged_build();
         let has_override = read_user_data_override_env(&env).is_some();
-        let user_data_dir = resolve_user_data_dir(is_packaged, &env).unwrap_or_else(|err| {
-            eprintln!("[native] falling back from userData resolution error: {err}");
-            cowork_config::resolve_home_dir(&env, cowork_config::host_platform())
-                .join(".cowork")
-                .join("desktop")
-        });
+        let user_data_dir = resolve_desktop_user_data_dir(is_packaged, &env);
         let legacy_dir = resolve_legacy_user_data_dir(&env);
 
         let logger = Arc::new(LocalLogger::new(&user_data_dir));
@@ -301,10 +474,40 @@ impl NativeWorkerContext {
             has_override,
             Some(logger.clone()),
         ));
-        let window_state = WindowStateStore::new(&user_data_dir);
+        let window_state = shared_window_state_store().clone();
         let appearance = AppearancePreferences::new(&user_data_dir);
         let roots = Arc::new(Mutex::new(WorkspaceRootsController::new()));
         let uploads = Arc::new(Mutex::new(AuthorizedUploadRegistry::new()));
+
+        let initial_doc = persistence.load_state_value().ok();
+        let initial_privacy = initial_doc
+            .as_ref()
+            .map(persistence::core_state_from_document)
+            .map(|c| c.settings.privacy_telemetry)
+            .unwrap_or_default();
+        let initial_roots = initial_doc
+            .as_ref()
+            .map(|doc| {
+                let mut guard = roots.lock().unwrap_or_else(|e| e.into_inner());
+                PersistenceService::sync_workspace_roots(doc, &mut guard);
+                guard.approved_roots()
+            })
+            .unwrap_or_default();
+        let initial_analytics = initial_doc
+            .as_ref()
+            .map(read_persisted_product_analytics_state);
+
+        let crash_reporting =
+            CrashReportingService::new(is_packaged, initial_roots, &initial_privacy, &env);
+        crash_reporting.install_panic_hook();
+
+        let product_analytics = ProductAnalyticsService::new(
+            is_packaged,
+            &initial_privacy,
+            initial_analytics,
+            Some(persistence.as_ref()),
+            &env,
+        );
 
         let current_exe_dir = std::env::current_exe()
             .ok()
@@ -333,10 +536,13 @@ impl NativeWorkerContext {
             Some(logger.clone()),
             Some(emit.clone()),
         );
+        server_manager.set_product_analytics_state(product_analytics.persisted_state());
 
         let notifications = DesktopNotificationService::new(Some(logger.clone()));
-        let updater = DesktopUpdaterService::new(Some(logger.clone()), emit.clone());
+        let updater = DesktopUpdaterService::new(Some(logger.clone()), emit.clone())
+            .with_analytics(product_analytics.clone());
         let diag_mgr = server_manager.clone();
+        let diag_crash = crash_reporting.clone();
         let diagnostics = DiagnosticsService::new(
             user_data_dir,
             is_packaged,
@@ -344,19 +550,25 @@ impl NativeWorkerContext {
             logger.clone(),
             Some(updater.clone()),
             Arc::new(move || diag_mgr.get_diagnostics()),
-        );
+        )
+        .with_recent_report_ids_provider(Arc::new(move || diag_crash.recent_report_ids()));
         let tray = QuickChatTrayController::new(Some(logger.clone()));
         let remote_access = RemoteAccessBridge::new(
             server_manager.clone(),
             Some(logger.clone()),
             emit.clone(),
             false,
-        );
+        )
+        .with_analytics(product_analytics.clone());
+        let transcript_buffer =
+            TranscriptWriteBuffer::new(persistence.clone(), Some(logger.clone()));
+        set_shared_analytics(Some(product_analytics.clone()));
 
         Self {
             is_packaged,
             logger,
             persistence,
+            transcript_buffer,
             window_state,
             appearance,
             roots,
@@ -367,6 +579,8 @@ impl NativeWorkerContext {
             notifications,
             updater,
             diagnostics,
+            crash_reporting,
+            product_analytics,
             tray,
             last_feature_flags: HashMap::new(),
             last_privacy: None,
@@ -447,6 +661,17 @@ impl NativeWorkerContext {
             state.active_workspace_id.as_deref(),
             &ws_targets,
         );
+        self.sync_telemetry_services(&state.settings.privacy_telemetry);
+    }
+
+    fn sync_telemetry_services(&self, privacy: &PrivacyTelemetrySettings) {
+        let env = cowork_config::env_map_from_process();
+        let approved = self.approved_roots_snapshot();
+        self.crash_reporting.reconfigure(privacy, approved, &env);
+        self.product_analytics
+            .reconfigure(privacy, Some(self.persistence.as_ref()), &env);
+        self.server_manager
+            .set_product_analytics_state(self.product_analytics.persisted_state());
     }
 
     fn server_feature_flags(&self) -> WorkspaceServerFeatureFlags {
@@ -604,6 +829,8 @@ impl NativeWorkerContext {
                 let remote = self.remote_access.clone();
                 let logger = self.logger.clone();
                 let emit = self.emit.clone();
+                let analytics = self.product_analytics.clone();
+                let crash = self.crash_reporting.clone();
                 let mobile_h3 = self.remote_access.desired_for_workspace(&workspace_id);
                 let opts = StartWorkspaceServerOptions {
                     workspace_id: workspace_id.clone(),
@@ -616,14 +843,48 @@ impl NativeWorkerContext {
                     privacy_telemetry: self.last_privacy.clone(),
                 };
                 tokio::spawn(async move {
+                    let started_at = Instant::now();
                     match mgr.start_workspace_server(opts).await {
                         Ok(started) => {
+                            let mut props = BTreeMap::new();
+                            props.insert(
+                                "durationMs".to_string(),
+                                json!(started_at.elapsed().as_millis() as u64),
+                            );
+                            let _ = analytics.capture_event("workspace_server_started", &props);
+                            crash.add_breadcrumb(
+                                "server",
+                                "info",
+                                "workspace server started",
+                                Some(json!({ "workspaceId": started.workspace_id })),
+                            );
                             remote.on_server_started(
                                 &started.workspace_id,
                                 started.mobile_h3.as_ref(),
                             );
                         }
                         Err(err) => {
+                            let mut props = BTreeMap::new();
+                            props.insert(
+                                "durationMs".to_string(),
+                                json!(started_at.elapsed().as_millis() as u64),
+                            );
+                            props.insert("errorCategory".to_string(), json!("startup_failed"));
+                            let _ = analytics.capture_event("workspace_server_failed", &props);
+                            crash.add_breadcrumb(
+                                "server",
+                                "error",
+                                "workspace server start failed",
+                                Some(json!({ "workspaceId": workspace_id })),
+                            );
+                            let mut tags = BTreeMap::new();
+                            tags.insert("workspaceId".to_string(), workspace_id.clone());
+                            let _ = crash.capture_exception(
+                                "WorkspaceServerStartError",
+                                &err,
+                                tags,
+                                None,
+                            );
                             let meta = json!({
                                 "workspaceId": workspace_id,
                                 "error": err,

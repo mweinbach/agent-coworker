@@ -78,6 +78,8 @@ pub struct ChatUiState {
     pub composer_height_override: Option<f32>,
     /// Confirmation modal when stopping a turn that has running subagents.
     pub cancel_subagents_open: bool,
+    /// Originating thread ID captured when opening the cancel-subagents modal.
+    pub cancel_subagents_thread_id: Option<String>,
     /// Number of tail feed items currently rendered per thread key.
     pub feed_visible_count_by_thread: HashMap<String, usize>,
     /// Latest `on_at_bottom` signal per thread key.
@@ -126,6 +128,7 @@ impl Default for ChatUiState {
             landing_target_open: false,
             composer_height_override: None,
             cancel_subagents_open: false,
+            cancel_subagents_thread_id: None,
             feed_visible_count_by_thread: HashMap::new(),
             feed_at_bottom_by_thread: HashMap::new(),
             feed_far_from_bottom_by_thread: HashMap::new(),

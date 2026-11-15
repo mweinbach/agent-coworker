@@ -16,6 +16,8 @@ pub mod interaction;
 pub mod landing;
 pub mod markdown;
 pub mod model;
+#[cfg(test)]
+mod parity_tests;
 pub mod state;
 
 pub use state::ChatUiState;
@@ -98,18 +100,17 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             },
         );
 
-        let mut feed_wrap = col()
+        let feed_wrap = col()
             .key("chat-feed-surface")
             .w_full()
             .grow(1.0)
             .min_h(0.0)
             .child(feed_el);
+        main_col = main_col.child(feed_wrap);
 
         if let Some(failure) = rt.and_then(|r| r.transcript_delivery_failure.as_ref()) {
-            feed_wrap =
-                feed_wrap.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
+            main_col = main_col.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
         }
-        main_col = main_col.child(feed_wrap);
 
         if let Some(lock) = rt
             .and_then(|r| r.source_task.as_ref())

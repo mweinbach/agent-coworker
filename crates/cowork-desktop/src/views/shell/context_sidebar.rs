@@ -535,9 +535,62 @@ fn build_explorer_rename_row(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Resolves a workspace-relative explorer entry path against the owning workspace root.
+pub(crate) fn resolve_explorer_fs_path(s: &AppState, workspace_id: &str, raw: &str) -> String {
+    let Some(root) = s
+        .workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .map(|w| w.path.as_str())
+    else {
+        return raw.to_string();
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || matches!(trimmed, "." | "./") {
+        return root.to_string();
+    }
+    let mut rel = trimmed;
+    while let Some(rest) = rel.strip_prefix("./") {
+        rel = rest;
+    }
+    if rel.is_empty() || rel == "." {
+        return root.to_string();
+    }
+    if std::path::Path::new(rel).is_absolute() {
+        raw.to_string()
+    } else {
+        std::path::Path::new(root)
+            .join(rel)
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+/// Computes the workspace-relative parent directory for refreshing `ListWorkspaceFiles`.
+pub(crate) fn explorer_parent_dir(s: &AppState, workspace_id: &str, raw: &str) -> String {
+    let trimmed = raw.trim();
+    let mut rel = trimmed;
+    while let Some(rest) = rel.strip_prefix("./") {
+        rel = rest;
+    }
+    let rel_path = if std::path::Path::new(rel).is_absolute() {
+        s.workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .and_then(|w| std::path::Path::new(rel).strip_prefix(&w.path).ok())
+            .unwrap_or_else(|| std::path::Path::new(""))
+    } else {
+        std::path::Path::new(rel)
+    };
+    rel_path
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| p != ".")
+        .unwrap_or_default()
+}
+
 fn build_explorer_context_menu(
-    menu: &ExplorerContextMenu,
+    menu: &super::state::ExplorerContextMenu,
     expanded: bool,
     trigger: Option<El>,
     k: &Kit,
@@ -551,9 +604,13 @@ fn build_explorer_context_menu(
     let path_rename = menu.path.clone();
     let name_rename = menu.name.clone();
 
+    let ws_reveal = menu.workspace_id.clone();
     let path_reveal = menu.path.clone();
+    let ws_copy = menu.workspace_id.clone();
     let path_copy = menu.path.clone();
+    let ws_trash = menu.workspace_id.clone();
     let path_trash = menu.path.clone();
+    let name_trash = menu.name.clone();
 
     let open_label = if is_dir {
         if expanded {
@@ -600,24 +657,31 @@ fn build_explorer_context_menu(
             .item(
                 MenuItem::new("Reveal in File Manager").on_select(move |s: &mut AppState| {
                     s.shell_ui.file_context_menu = None;
-                    s.dispatch(Action::Native(NativeAction::RevealInOs(
-                        path_reveal.clone(),
-                    )));
+                    let full_path = resolve_explorer_fs_path(s, &ws_reveal, &path_reveal);
+                    s.dispatch(Action::Native(NativeAction::RevealInOs(full_path)));
                 }),
             )
-            .item(MenuItem::new("Copy path").icon(&glyphs::COPY).on_select(
-                move |s: &mut AppState| {
-                    s.shell_ui.file_context_menu = None;
-                    s.dispatch(Action::Native(NativeAction::CopyText(path_copy.clone())));
-                },
-            ))
+            .item(
+                MenuItem::new("Copy Full Path")
+                    .icon(&glyphs::COPY)
+                    .on_select(move |s: &mut AppState| {
+                        s.shell_ui.file_context_menu = None;
+                        let full_path = resolve_explorer_fs_path(s, &ws_copy, &path_copy);
+                        s.dispatch(Action::Native(NativeAction::CopyText(full_path)));
+                    }),
+            )
             .separator()
             .item(
                 MenuItem::new("Move to Trash")
                     .danger(true)
                     .on_select(move |s: &mut AppState| {
                         s.shell_ui.file_context_menu = None;
-                        s.dispatch(Action::Native(NativeAction::TrashPath(path_trash.clone())));
+                        s.shell_ui.pending_trash_entry = Some(super::state::PendingTrashEntry {
+                            workspace_id: ws_trash.clone(),
+                            path: path_trash.clone(),
+                            name: name_trash.clone(),
+                            is_dir,
+                        });
                     }),
             )
             .build(k, layer);
@@ -962,5 +1026,50 @@ mod tests {
         commit_explorer_rename(&mut s, "ws-1", "/tmp/ws-1/notes.md", "notes.md");
         assert!(s.shell_ui.renaming_file_key.is_none());
         assert!(s.shell_ui.renaming_file_error.is_none());
+    }
+
+    #[test]
+    fn explorer_fs_path_resolution_and_parent_dir_handle_relative_and_absolute() {
+        let mut s = AppState::default();
+        s.workspaces.push(crate::state::WorkspaceRecord {
+            id: "ws-1".into(),
+            name: "Demo".into(),
+            path: "/tmp/demo-ws".into(),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            resolve_explorer_fs_path(&s, "ws-1", "src/main.rs"),
+            "/tmp/demo-ws/src/main.rs"
+        );
+        assert_eq!(
+            resolve_explorer_fs_path(&s, "ws-1", "./notes.md"),
+            "/tmp/demo-ws/notes.md"
+        );
+        assert_eq!(resolve_explorer_fs_path(&s, "ws-1", "."), "/tmp/demo-ws");
+        assert_eq!(
+            resolve_explorer_fs_path(&s, "ws-1", "/tmp/demo-ws/README.md"),
+            "/tmp/demo-ws/README.md"
+        );
+
+        assert_eq!(explorer_parent_dir(&s, "ws-1", "notes.md"), "");
+        assert_eq!(explorer_parent_dir(&s, "ws-1", "src/main.rs"), "src");
+        assert_eq!(
+            explorer_parent_dir(&s, "ws-1", "/tmp/demo-ws/src/nested/a.rs"),
+            "src/nested"
+        );
+        assert_eq!(
+            explorer_parent_dir(&s, "ws-1", "/tmp/demo-ws/README.md"),
+            ""
+        );
+
+        s.shell_ui.pending_trash_entry = Some(crate::views::shell::state::PendingTrashEntry {
+            workspace_id: "ws-1".into(),
+            path: "src/main.rs".into(),
+            name: "main.rs".into(),
+            is_dir: false,
+        });
+        assert!(crate::views::shell::state::handle_escape(&mut s));
+        assert!(s.shell_ui.pending_trash_entry.is_none());
     }
 }

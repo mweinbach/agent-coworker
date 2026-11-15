@@ -60,6 +60,7 @@ pub fn build_overlays(
         &mut subview_overlays,
     );
     push_delete_thread_confirm_dialog(s, k, t, &mut subview_overlays);
+    push_trash_entry_confirm_dialog(s, k, t, &mut subview_overlays);
     push_workflow_run_detail_dialog(s, k, t, &mut subview_overlays);
 
     if let Some(toasts) = build_toast_region(s, k, t) {
@@ -1052,6 +1053,77 @@ fn push_delete_thread_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens, lay
             s.shell_ui.pending_delete_thread_id = None;
         })
         .child(padded_dialog_body(Some(&desc), footer, t))
+        .build(k, layer);
+}
+
+fn push_trash_entry_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
+    let Some(entry) = s.shell_ui.pending_trash_entry.as_ref() else {
+        return;
+    };
+    let full_path =
+        super::context_sidebar::resolve_explorer_fs_path(s, &entry.workspace_id, &entry.path);
+    let parent_dir =
+        super::context_sidebar::explorer_parent_dir(s, &entry.workspace_id, &entry.path);
+    let ws_confirm = entry.workspace_id.clone();
+    let kind_label = if entry.is_dir { "directory" } else { "file" };
+    let desc = format!("Are you sure you want to move this {kind_label} to the trash?");
+
+    let body = col()
+        .w_full()
+        .gap(12.0)
+        .child(
+            el().w_full()
+                .px(10.0)
+                .py(8.0)
+                .radius(6.0)
+                .fill(t.elevated_bg)
+                .border(1.0, t.border_muted)
+                .child(
+                    text(full_path.clone())
+                        .font(t.code)
+                        .color(t.text_base)
+                        .wrap(),
+                ),
+        )
+        .child(
+            row()
+                .w_full()
+                .pt(4.0)
+                .gap(8.0)
+                .child(spacer())
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press_tx(|s: &mut AppState, _| {
+                            s.shell_ui.pending_trash_entry = None;
+                        })
+                        .build(k),
+                )
+                .child(
+                    Button::new("Move to Trash")
+                        .variant(ButtonVariant::Danger)
+                        .on_press_tx(move |s: &mut AppState, _| {
+                            s.shell_ui.pending_trash_entry = None;
+                            s.dispatch(Action::Native(NativeAction::TrashPath(full_path.clone())));
+                            s.dispatch(Action::Native(NativeAction::ListWorkspaceFiles {
+                                workspace_id: ws_confirm.clone(),
+                                dir: parent_dir.clone(),
+                            }));
+                        })
+                        .build(k)
+                        .key("trash-entry-confirm-btn"),
+                ),
+        );
+
+    Dialog::new("trash-entry-dialog", "Move to Trash")
+        .open(true)
+        .width(440.0)
+        .fit()
+        .click_outside(true)
+        .on_close(|s: &mut AppState| {
+            s.shell_ui.pending_trash_entry = None;
+        })
+        .child(padded_dialog_body(Some(&desc), body, t))
         .build(k, layer);
 }
 

@@ -20,6 +20,15 @@ pub struct ExplorerContextMenu {
     pub point: Option<PointerPress>,
 }
 
+/// Pending destructive confirmation target before trashing a workspace file or directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingTrashEntry {
+    pub workspace_id: String,
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
 /// Ephemeral UI state owned by `views/shell` (wired onto `AppState` when Step 2 integrates it).
 #[derive(Clone)]
 pub struct ShellUiState {
@@ -61,6 +70,7 @@ pub struct ShellUiState {
     pub renaming_file_edit: TextEdit,
     pub renaming_file_error: Option<String>,
     pub file_context_menu: Option<ExplorerContextMenu>,
+    pub pending_trash_entry: Option<PendingTrashEntry>,
     pub canvas_pane: PaneState,
     pub canvas_overlay_dismissed_key: Option<String>,
     pub last_canvas_key: Option<String>,
@@ -107,6 +117,7 @@ impl Default for ShellUiState {
             renaming_file_edit: TextEdit::new(""),
             renaming_file_error: None,
             file_context_menu: None,
+            pending_trash_entry: None,
             canvas_pane: PaneState::new(480.0).range(320.0, 900.0),
             canvas_overlay_dismissed_key: None,
             last_canvas_key: None,
@@ -353,6 +364,10 @@ pub fn handle_escape(s: &mut AppState) -> bool {
     }
     if s.shell_ui.pending_delete_thread_id.is_some() {
         s.shell_ui.pending_delete_thread_id = None;
+        return true;
+    }
+    if s.shell_ui.pending_trash_entry.is_some() {
+        s.shell_ui.pending_trash_entry = None;
         return true;
     }
     if s.shell_ui.context_menu_thread_id.is_some() {

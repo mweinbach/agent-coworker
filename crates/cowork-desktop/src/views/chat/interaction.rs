@@ -4,7 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use cowork_protocol::{JsonRpcLiteId, ServerRequestReceiptResponse};
-use rune::{Cursor, El, Key, TextEdit, Tx, col, icon, row, spacer, text, text_input};
+use rune::{
+    Cursor, Direction, El, Key, ScrollSpec, TextEdit, TextStyle, Tx, col, icon, row, spacer, text,
+    text_input,
+};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::Value;
 
@@ -316,6 +319,7 @@ fn build_command_approval_card(
     let mut card = col()
         .key(format!("interaction:{req_key}:{item_id}"))
         .w_full()
+        .min_w(0.0)
         .max_w(768.0)
         .gap(10.0)
         .px(16.0)
@@ -361,24 +365,13 @@ fn build_command_approval_card(
     }
 
     if let Some(cmd) = command.filter(|c| !c.trim().is_empty()) {
-        card = card.child(
-            col()
-                .w_full()
-                .gap(4.0)
-                .px(12.0)
-                .py(10.0)
-                .radius(8.0)
-                .fill(t.code_bg)
-                .border(1.0, t.border_muted)
-                .child(
-                    text(cmd.to_string())
-                        .font(k.ty.mono)
-                        .color(t.text_base)
-                        .wrap()
-                        .selectable(true)
-                        .w_full(),
-                ),
-        );
+        card = card.child(build_code_preview_box(
+            t,
+            format!("cmd-preview:{req_key}:{item_id}"),
+            cmd,
+            k.ty.mono,
+            10.0,
+        ));
     }
 
     if let Some(dir) = cwd.filter(|c| !c.trim().is_empty()) {
@@ -387,7 +380,8 @@ fn build_command_approval_card(
                 .font(k.ty.text_xsmall)
                 .color(t.text_faint)
                 .truncate()
-                .w_full(),
+                .w_full()
+                .min_w(0.0),
         );
     }
 
@@ -468,6 +462,7 @@ fn build_file_approval_card(
     let mut card = col()
         .key(format!("interaction:{req_key}:{item_id}"))
         .w_full()
+        .min_w(0.0)
         .max_w(768.0)
         .gap(10.0)
         .px(16.0)
@@ -493,24 +488,13 @@ fn build_file_approval_card(
         );
 
     if let Some(p) = path.filter(|v| !v.trim().is_empty()) {
-        card = card.child(
-            row()
-                .w_full()
-                .px(12.0)
-                .py(8.0)
-                .radius(8.0)
-                .fill(t.code_bg)
-                .border(1.0, t.border_muted)
-                .child(
-                    text(p.to_string())
-                        .font(k.ty.mono)
-                        .color(t.text_base)
-                        .wrap()
-                        .selectable(true)
-                        .grow(1.0)
-                        .min_w(0.0),
-                ),
-        );
+        card = card.child(build_code_preview_box(
+            t,
+            format!("file-preview:{req_key}:{item_id}"),
+            p,
+            k.ty.mono,
+            8.0,
+        ));
     }
 
     if let Some(r) = reason.filter(|v| !v.trim().is_empty()) {
@@ -604,6 +588,7 @@ fn build_user_input_card(
     let mut card = col()
         .key(format!("interaction:{req_key}:{item_id}"))
         .w_full()
+        .min_w(0.0)
         .max_w(768.0)
         .gap(10.0)
         .px(16.0)
@@ -1048,6 +1033,50 @@ fn build_card_header(
     hdr
 }
 
+/// Renders a monospace command or path preview clipped inside a layout-accounted rounded box
+/// so long or unbroken tokens wrap cleanly within generous inner padding.
+fn build_code_preview_box(
+    t: &ThemeTokens,
+    key: String,
+    content: &str,
+    font: TextStyle,
+    py: f32,
+) -> El {
+    col()
+        .key(key.clone())
+        .dir(Direction::Ltr)
+        .w_full()
+        .min_w(0.0)
+        .radius(8.0)
+        .fill(t.code_bg)
+        .border(1.0, t.border_muted)
+        .border_layout()
+        .clip_rounded(8.0)
+        .child(
+            col()
+                .key(format!("{key}:scroll"))
+                .w_full()
+                .min_w(0.0)
+                .max_h(160.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .scroll_edge_fade(12.0)
+                .child(
+                    col().w_full().min_w(0.0).px(14.0).py(py).child(
+                        text(content.to_string())
+                            .key(format!("{key}:text"))
+                            .font(font)
+                            .color(t.text_base)
+                            .wrap_anywhere()
+                            .selectable(true)
+                            .w_full()
+                            .min_w(0.0),
+                    ),
+                ),
+        )
+}
+
 fn build_error_strip(k: &Kit, t: &ThemeTokens, err: &str) -> El {
     row()
         .w_full()
@@ -1063,7 +1092,7 @@ fn build_error_strip(k: &Kit, t: &ThemeTokens, err: &str) -> El {
             text(err.to_string())
                 .font(k.ty.text_xsmall)
                 .color(t.danger)
-                .wrap()
+                .wrap_anywhere()
                 .grow(1.0)
                 .min_w(0.0),
         )

@@ -1,14 +1,22 @@
 //! Unit tests for Settings navigation, gating, target resolution, and primitives.
 
-use super::desktop::{DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label};
+use super::desktop::{
+    DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label,
+    parse_quick_chat_accelerator, shortcut_to_accelerator,
+};
 use super::experiments::{KNOWN_FEATURE_FLAGS, is_flag_enabled, resolve_flag_enabled};
-use super::primitives::{entity_palette_index, management_targets, name_initials};
+use super::primitives::{
+    entity_palette_index, format_byte_size, management_targets, name_initials,
+};
+use super::privacy_telemetry::apply_privacy_patch;
 use super::shell::{page_key, resolve_active_page, settings_groups};
 use super::updates::is_allowed_release_link;
 use super::usage::{aggregate_usage, format_estimated_cost, format_token_count};
 use crate::actions::{Action, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
-use crate::state::{AppState, ThreadRecord, ThreadRuntime, UsageSummary, WorkspaceRecord};
+use crate::state::{
+    AppState, PrivacyTelemetrySettings, ThreadRecord, ThreadRuntime, UsageSummary, WorkspaceRecord,
+};
 
 #[test]
 fn settings_groups_gate_remote_access_and_experiments() {
@@ -271,4 +279,37 @@ fn release_link_policy_restricts_to_safe_schemes() {
         "data:text/html,<script>alert(1)</script>"
     ));
     assert!(!is_allowed_release_link("not a url"));
+}
+
+#[test]
+fn privacy_patch_clears_payloads_when_trace_telemetry_disables() {
+    let active = PrivacyTelemetrySettings {
+        crash_reports_enabled: true,
+        product_analytics_enabled: false,
+        ai_trace_telemetry_enabled: true,
+        ai_trace_payloads_enabled: true,
+        diagnostics_upload_enabled: false,
+        cloud_sync_enabled: false,
+    };
+    let cleared = apply_privacy_patch(&active, |next| {
+        next.ai_trace_telemetry_enabled = false;
+    });
+    assert!(!cleared.ai_trace_telemetry_enabled);
+    assert!(!cleared.ai_trace_payloads_enabled);
+}
+
+#[test]
+fn shortcut_roundtrip_and_byte_formatting() {
+    let default_parsed = parse_quick_chat_accelerator(DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR)
+        .expect("default shortcut parses");
+    assert_eq!(
+        shortcut_to_accelerator(&default_parsed),
+        DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR
+    );
+    assert!(parse_quick_chat_accelerator("Option+Space").is_some());
+    assert!(parse_quick_chat_accelerator("").is_none());
+
+    assert_eq!(format_byte_size(512), "512 B");
+    assert_eq!(format_byte_size(2048), "2.0 KB");
+    assert_eq!(format_byte_size(3 * 1024 * 1024), "3.0 MB");
 }

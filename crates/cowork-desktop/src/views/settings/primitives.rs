@@ -1,11 +1,12 @@
 //! Shared layout primitives ported from `apps/desktop/src/ui/settings/SettingsPrimitives.tsx`.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use base64::Engine;
 use rune::{Color, El, Icon, ImageCache, Pixels, col, el, icon, row, text};
-use rune_kit::Kit;
+use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit};
 
 use crate::actions::{Action, SettingsAction};
 use crate::state::{AppState, DesktopSettings};
@@ -671,4 +672,83 @@ pub fn update_desktop_settings(s: &mut AppState, mutate: impl FnOnce(&mut Deskto
     s.dispatch(Action::Settings(SettingsAction::UpdateDesktopSettings(
         next,
     )));
+}
+
+/// Configuration for a confirmation modal rendered via `rune_kit::Dialog`.
+pub struct ConfirmDialogSpec {
+    pub key: &'static str,
+    pub open: bool,
+    pub title: &'static str,
+    pub description: String,
+    pub confirm_label: &'static str,
+    pub danger: bool,
+}
+
+/// Mounts a modal confirmation dialog into `overlays` when `spec.open` is true.
+pub fn confirm_dialog(
+    spec: ConfirmDialogSpec,
+    on_cancel: impl Fn(&mut AppState) + 'static,
+    on_confirm: impl Fn(&mut AppState) + 'static,
+    k: &Kit,
+    overlays: &mut Vec<El>,
+) {
+    let cancel_cb = Rc::new(on_cancel);
+    let cancel_for_btn = cancel_cb.clone();
+    let confirm_cb = Rc::new(on_confirm);
+
+    let footer = row()
+        .w_full()
+        .justify_end()
+        .gap(8.0)
+        .pt(8.0)
+        .child(
+            Button::new("Cancel")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    cancel_for_btn(s);
+                })
+                .build(k),
+        )
+        .child(
+            Button::new(spec.confirm_label)
+                .variant(if spec.danger {
+                    ButtonVariant::Danger
+                } else {
+                    ButtonVariant::Contrast
+                })
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    confirm_cb(s);
+                })
+                .build(k),
+        );
+
+    Dialog::new(spec.key, spec.title)
+        .open(spec.open)
+        .description(spec.description)
+        .width(440.0)
+        .fit()
+        .on_close(move |s: &mut AppState| {
+            cancel_cb(s);
+        })
+        .child(footer)
+        .build(k, overlays);
+}
+
+/// Formats a byte count into human-friendly units (`B`, `KB`, `MB`, `GB`).
+pub fn format_byte_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
 }

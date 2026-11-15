@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use rune::{El, row, text};
-use rune_kit::Kit;
+use rune::{El, col, row, text};
+use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit, SegmentedControl};
 
 use crate::state::AppState;
 use crate::theme::ThemeTokens;
@@ -13,6 +13,7 @@ use crate::views::settings::primitives::{
     settings_page, stat_tile, status_pill,
 };
 use crate::views::settings::shell::PageContent;
+use crate::views::settings::state::UsageViewTab;
 
 /// Formats large token counts compactly (`842`, `12.4K`, `3.2M`, `1.1B`).
 pub fn format_token_count(tokens: u64) -> String {
@@ -293,7 +294,88 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         t,
     );
 
-    let breakdown_el: El = if !agg.has_usage {
+    let active_tab_idx = match s.settings_ui.usage_tab {
+        UsageViewTab::Overview => 0,
+        UsageViewTab::Sessions => 1,
+        UsageViewTab::Models => 2,
+        UsageViewTab::Workspaces => 3,
+    };
+    let tabs_control = SegmentedControl::new(
+        &["Overview", "Sessions", "Models", "Workspaces"],
+        Some(active_tab_idx),
+    )
+    .label("Usage breakdown view")
+    .fit()
+    .on_pick(|s: &mut AppState, idx, _tx| {
+        s.settings_ui.usage_tab = match idx {
+            1 => UsageViewTab::Sessions,
+            2 => UsageViewTab::Models,
+            3 => UsageViewTab::Workspaces,
+            _ => UsageViewTab::Overview,
+        };
+    })
+    .build(k);
+
+    let breakdown_el: El = match s.settings_ui.usage_tab {
+        UsageViewTab::Models => build_models_section(s, &agg, k, t),
+        UsageViewTab::Sessions => build_sessions_section(s, k, t),
+        UsageViewTab::Workspaces => build_workspaces_section(s, k, t),
+        UsageViewTab::Overview => build_overview_section(s, &agg, k, t),
+    };
+
+    let info_btn = Button::new("How estimates work")
+        .variant(ButtonVariant::Outline)
+        .control_size(ControlSize::Regular)
+        .on_press(|s: &mut AppState| {
+            s.settings_ui.usage_estimates_dialog_open = true;
+        })
+        .build(k);
+
+    let mut overlays = Vec::new();
+    Dialog::new("usage-estimates-dialog", "How usage estimates work")
+        .open(s.settings_ui.usage_estimates_dialog_open)
+        .description("Estimated cost is computed locally from provider-reported input, output, and cached prompt tokens multiplied by Cowork's model pricing catalog.")
+        .width(460.0)
+        .fit()
+        .on_close(|s: &mut AppState| {
+            s.settings_ui.usage_estimates_dialog_open = false;
+        })
+        .child(
+            col()
+                .w_full()
+                .gap(12.0)
+                .child(
+                    text("Actual invoices may differ based on provider discounts, subscription tiers, cached-read pricing, or custom endpoints.")
+                        .font(k.ty.text_small)
+                        .color(t.text_muted)
+                        .wrap(),
+                )
+                .child(
+                    row().w_full().justify_end().child(
+                        Button::new("Close")
+                            .variant(ButtonVariant::Contrast)
+                            .control_size(ControlSize::Regular)
+                            .on_press(|s: &mut AppState| {
+                                s.settings_ui.usage_estimates_dialog_open = false;
+                            })
+                            .build(k),
+                    ),
+                ),
+        )
+        .build(k, &mut overlays);
+
+    PageContent::simple(settings_page(vec![
+        overview_grid,
+        estimate_notice,
+        row().w_full().child(tabs_control),
+        breakdown_el,
+    ]))
+    .with_header_actions(vec![info_btn])
+    .with_overlays(overlays)
+}
+
+fn build_overview_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTokens) -> El {
+    if !agg.has_usage {
         Section::new()
             .title("By provider")
             .description("Aggregated token and cost totals per provider.")
@@ -373,11 +455,231 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             );
         }
         section.build(k, t)
-    };
+    }
+}
 
-    PageContent::simple(settings_page(vec![
-        overview_grid,
-        estimate_notice,
-        breakdown_el,
-    ]))
+fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTokens) -> El {
+    let mut rows: Vec<(String, String, usize, u64, u64, u64, f64)> = Vec::new();
+    if let Some(summary) = &s.usage_summary
+        && !summary.by_model.is_empty()
+    {
+        for entry in summary.by_model.values() {
+            rows.push((
+                entry.model.clone(),
+                entry.provider.clone(),
+                entry.turns,
+                entry.input_tokens,
+                entry.output_tokens,
+                entry.cached_tokens,
+                entry.estimated_cost_usd,
+            ));
+        }
+    } else if agg.has_usage {
+        for thread in &s.threads {
+            let Some(usage) = s
+                .thread_runtime_by_id
+                .get(&thread.id)
+                .and_then(|rt| rt.usage.as_ref())
+            else {
+                continue;
+            };
+            let provider = thread.provider.as_deref().unwrap_or("unknown").to_string();
+            let model = thread.model.as_deref().unwrap_or("default").to_string();
+            if let Some(existing) = rows.iter_mut().find(|r| r.0 == model && r.1 == provider) {
+                existing.2 += 1;
+                existing.3 = existing.3.saturating_add(usage.input_tokens);
+                existing.4 = existing.4.saturating_add(usage.output_tokens);
+                existing.5 = existing.5.saturating_add(usage.cached_tokens);
+                if usage.estimated_cost_usd.is_finite() {
+                    existing.6 += usage.estimated_cost_usd;
+                }
+            } else {
+                rows.push((
+                    model,
+                    provider,
+                    1,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cached_tokens,
+                    usage.estimated_cost_usd,
+                ));
+            }
+        }
+    }
+
+    rows.sort_by(|a, b| b.6.total_cmp(&a.6).then_with(|| a.0.cmp(&b.0)));
+
+    let mut section = Section::new()
+        .title("By model")
+        .description("Token consumption and estimated cost across individual models.");
+    if rows.is_empty() {
+        section = section.child(
+            EmptyState::new("No per-model usage recorded")
+                .icon(&icons::BAR_CHART_3)
+                .description("Run a turn with a model to populate model-level usage totals.")
+                .build(k, t),
+        );
+    } else {
+        for (model, provider, turns, input, output, cached, cost) in rows {
+            let icon_el = entity_icon(s, None, &provider, EntityIconSize::Sm, k, t);
+            section = section.child(
+                SettingsRow::new(model)
+                    .leading(icon_el)
+                    .description(format!(
+                        "{provider} · {} tokens ({} in · {} out · {} cached) · {turns} turn/session{}",
+                        format_token_count(input.saturating_add(output)),
+                        format_token_count(input),
+                        format_token_count(output),
+                        format_token_count(cached),
+                        if turns == 1 { "" } else { "s" },
+                    ))
+                    .control(status_pill(
+                        format_estimated_cost(Some(cost)),
+                        StatusTone::Neutral,
+                        k,
+                        t,
+                    ))
+                    .build(k, t),
+            );
+        }
+    }
+    section.build(k, t)
+}
+
+fn build_sessions_section(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
+    let mut entries: Vec<_> = s
+        .threads
+        .iter()
+        .filter_map(|thread| {
+            let rt = s.thread_runtime_by_id.get(&thread.id)?;
+            let usage = rt.usage.as_ref()?;
+            let has_data = usage.input_tokens > 0
+                || usage.output_tokens > 0
+                || usage.cached_tokens > 0
+                || usage.estimated_cost_usd > 0.0;
+            has_data.then_some((thread, usage, rt.last_turn_usage.as_ref()))
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.1.estimated_cost_usd
+            .total_cmp(&a.1.estimated_cost_usd)
+            .then_with(|| b.0.updated_at.cmp(&a.0.updated_at))
+    });
+
+    let mut section = Section::new()
+        .title("By session")
+        .description("Top active sessions ordered by estimated spend.");
+    if entries.is_empty() {
+        section = section.child(
+            EmptyState::new("No session usage yet")
+                .icon(&icons::BAR_CHART_3)
+                .description("Session token and cost breakdowns appear as chats run.")
+                .build(k, t),
+        );
+    } else {
+        for (thread, usage, last_turn) in entries.into_iter().take(25) {
+            let title = if thread.title.trim().is_empty() {
+                "Untitled session"
+            } else {
+                thread.title.trim()
+            };
+            let model_label = thread
+                .model
+                .as_deref()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or("Default model");
+            let mut row_builder = SettingsRow::new(title).description(format!(
+                "{model_label} · {} tokens ({} in · {} out · {} cached)",
+                format_token_count(usage.input_tokens.saturating_add(usage.output_tokens)),
+                format_token_count(usage.input_tokens),
+                format_token_count(usage.output_tokens),
+                format_token_count(usage.cached_tokens),
+            ));
+            if let Some(last) = last_turn {
+                row_builder = row_builder.meta(format!(
+                    "Last turn: {} tokens ({})",
+                    format_token_count(last.input_tokens.saturating_add(last.output_tokens)),
+                    format_estimated_cost(Some(last.estimated_cost_usd))
+                ));
+            }
+            section = section.child(
+                row_builder
+                    .control(status_pill(
+                        format_estimated_cost(Some(usage.estimated_cost_usd)),
+                        StatusTone::Neutral,
+                        k,
+                        t,
+                    ))
+                    .build(k, t),
+            );
+        }
+    }
+    section.build(k, t)
+}
+
+fn build_workspaces_section(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
+    let mut by_ws: BTreeMap<String, (String, usize, u64, u64, f64)> = BTreeMap::new();
+    for thread in &s.threads {
+        let Some(usage) = s
+            .thread_runtime_by_id
+            .get(&thread.id)
+            .and_then(|rt| rt.usage.as_ref())
+        else {
+            continue;
+        };
+        let ws = s.workspaces.iter().find(|w| w.id == thread.workspace_id);
+        let label = match ws {
+            Some(w) if w.one_off_chat => "Chats".to_string(),
+            Some(w) if !w.name.trim().is_empty() => w.name.clone(),
+            Some(w) => w.path.clone(),
+            None => thread.workspace_id.clone(),
+        };
+        let key = if ws.is_some_and(|w| w.one_off_chat) {
+            "__chats__".to_string()
+        } else {
+            thread.workspace_id.clone()
+        };
+        let entry = by_ws.entry(key).or_insert((label, 0, 0, 0, 0.0));
+        entry.1 += 1;
+        entry.2 = entry.2.saturating_add(usage.input_tokens);
+        entry.3 = entry.3.saturating_add(usage.output_tokens);
+        if usage.estimated_cost_usd.is_finite() {
+            entry.4 += usage.estimated_cost_usd;
+        }
+    }
+    let mut rows: Vec<_> = by_ws.into_values().collect();
+    rows.sort_by(|a, b| b.4.total_cmp(&a.4).then_with(|| a.0.cmp(&b.0)));
+
+    let mut section = Section::new()
+        .title("By workspace")
+        .description("Aggregated spend and tokens grouped by workspace.");
+    if rows.is_empty() {
+        section = section.child(
+            EmptyState::new("No workspace usage yet")
+                .icon(&icons::BAR_CHART_3)
+                .description("Workspace totals will appear after sessions record usage.")
+                .build(k, t),
+        );
+    } else {
+        for (label, sessions, input, output, cost) in rows {
+            section = section.child(
+                SettingsRow::new(label)
+                    .description(format!(
+                        "{sessions} session{} · {} tokens ({} in · {} out)",
+                        if sessions == 1 { "" } else { "s" },
+                        format_token_count(input.saturating_add(output)),
+                        format_token_count(input),
+                        format_token_count(output),
+                    ))
+                    .control(status_pill(
+                        format_estimated_cost(Some(cost)),
+                        StatusTone::Neutral,
+                        k,
+                        t,
+                    ))
+                    .build(k, t),
+            );
+        }
+    }
+    section.build(k, t)
 }

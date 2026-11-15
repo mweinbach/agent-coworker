@@ -1,19 +1,83 @@
 //! Desktop settings page (`apps/desktop/src/ui/settings/pages/DesktopPage.tsx`).
 
-use rune::{El, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
+use std::str::FromStr;
+
+use rune::{El, Shortcut, col, row, text};
+use rune_kit::{
+    Button, ButtonVariant, ControlSize, Kit, ShortcutRecorder, ShortcutRecorderState, Switch,
+};
 
 use crate::actions::{Action, ShellAction};
 use crate::state::AppState;
 use crate::theme::{ThemePreference, ThemeTokens};
 use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::primitives::{
-    Section, SettingsRow, settings_page, update_desktop_settings,
+    Section, SettingsRow, StatusTone, callout_banner, settings_page, update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 
 /// Canonical default Quick Chat global accelerator matching Electron `quickChatShortcut.ts`.
 pub const DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR: &str = "CommandOrControl+Shift+Space";
+
+/// Parses an Electron-style or canonical Rune accelerator string into `rune::Shortcut`.
+pub fn parse_quick_chat_accelerator(raw: &str) -> Option<Shortcut> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = trimmed
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let lower = part.to_ascii_lowercase();
+            match lower.as_str() {
+                "commandorcontrol" | "cmdorctrl" => "mod".to_string(),
+                "command" | "cmd" => "super".to_string(),
+                _ => lower,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+");
+    Shortcut::from_str(&normalized).ok()
+}
+
+/// Converts a recorded `rune::Shortcut` into a normalized accelerator string compatible
+/// with both `parse_quick_chat_accelerator` and Electron's shortcut registry.
+pub fn shortcut_to_accelerator(shortcut: &Shortcut) -> String {
+    let mods = shortcut.modifiers();
+    let mut parts: Vec<String> = Vec::new();
+    if mods.cmd {
+        parts.push("CommandOrControl".to_string());
+    }
+    if mods.ctrl && (!mods.cmd || cfg!(target_os = "macos")) {
+        parts.push("Control".to_string());
+    }
+    if mods.logo && !cfg!(target_os = "macos") {
+        parts.push("Super".to_string());
+    }
+    if mods.alt {
+        parts.push("Option".to_string());
+    }
+    if mods.shift {
+        parts.push("Shift".to_string());
+    }
+    let raw = shortcut.to_string();
+    if let Some(key_part) = raw
+        .rsplit('+')
+        .next()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        let formatted_key = match key_part.to_ascii_lowercase().as_str() {
+            "space" => "Space".to_string(),
+            other if other.len() == 1 => other.to_ascii_uppercase(),
+            other => other.to_string(),
+        };
+        parts.push(formatted_key);
+    }
+    parts.join("+")
+}
 
 /// Formats an Electron accelerator string into a human-friendly platform shortcut badge.
 pub fn format_quick_chat_shortcut_label(accelerator: &str) -> String {
@@ -132,40 +196,94 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .build(k, t),
         );
 
-        let shortcut_chip = el()
-            .w_full()
-            .max_w(360.0)
-            .px(12.0)
-            .py(8.0)
-            .radius(8.0)
-            .fill(t.input_bg)
-            .border(1.0, t.border)
-            .child(text(shortcut_label.clone()).font(t.code).color(t.text_base));
+        let recorder_view = if s.settings_ui.quick_chat_recorder.is_recording()
+            || s.settings_ui.quick_chat_recorder.error().is_some()
+            || s.settings_ui.quick_chat_synced_accel.as_deref()
+                == Some(ds.quick_chat_shortcut.as_str())
+        {
+            s.settings_ui.quick_chat_recorder.clone()
+        } else {
+            ShortcutRecorderState::new(parse_quick_chat_accelerator(&ds.quick_chat_shortcut))
+        };
+
+        let recorder = ShortcutRecorder::new(
+            "quick-chat-shortcut-recorder",
+            &recorder_view,
+            |s: &mut AppState| &mut s.settings_ui.quick_chat_recorder,
+        )
+        .label("Quick chat global shortcut")
+        .width(260.0)
+        .on_change(|s: &mut AppState, next: Option<&Shortcut>, _tx| {
+            let accel = next.map(shortcut_to_accelerator).unwrap_or_default();
+            s.settings_ui.quick_chat_synced_accel = Some(accel.clone());
+            s.settings_ui.quick_chat_shortcut_error = None;
+            update_desktop_settings(s, |settings| {
+                settings.quick_chat_shortcut = accel.clone();
+            });
+            Ok(())
+        })
+        .build(k);
 
         let reset_btn = Button::new("Use default")
             .variant(ButtonVariant::Outline)
             .control_size(ControlSize::Regular)
             .disabled(is_default_shortcut)
             .on_press(|s: &mut AppState| {
+                let default_accel = DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR.to_string();
+                s.settings_ui.quick_chat_recorder =
+                    ShortcutRecorderState::new(parse_quick_chat_accelerator(&default_accel));
+                s.settings_ui.quick_chat_synced_accel = Some(default_accel.clone());
+                s.settings_ui.quick_chat_shortcut_error = None;
                 update_desktop_settings(s, |next| {
-                    next.quick_chat_shortcut = DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR.to_string();
+                    next.quick_chat_shortcut = default_accel;
                 });
             })
             .build(k);
 
-        let shortcut_body = col()
+        let clear_btn = Button::new("Clear")
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Regular)
+            .disabled(ds.quick_chat_shortcut.trim().is_empty())
+            .on_press(|s: &mut AppState| {
+                s.settings_ui.quick_chat_recorder = ShortcutRecorderState::new(None);
+                s.settings_ui.quick_chat_synced_accel = Some(String::new());
+                s.settings_ui.quick_chat_shortcut_error = None;
+                update_desktop_settings(s, |next| {
+                    next.quick_chat_shortcut.clear();
+                });
+            })
+            .build(k);
+
+        let mut shortcut_body = col()
             .w_full()
             .gap(10.0)
-            .child(shortcut_chip)
-            .child(row().gap(8.0).flex_wrap().child(reset_btn))
+            .child(
+                row()
+                    .w_full()
+                    .items_center()
+                    .gap(8.0)
+                    .flex_wrap()
+                    .child(recorder)
+                    .child(reset_btn)
+                    .child(clear_btn),
+            )
             .child(
                 text(
-                    "If macOS or Windows already uses the combination, Cowork may not receive it.",
+                    "Click the recorder and press a modifier combination. Press Escape to cancel or Backspace to clear.",
                 )
                 .font(k.ty.text_xsmall)
                 .color(t.text_muted)
                 .wrap(),
             );
+
+        if let Some(err) = s
+            .quick_chat_shortcut_error
+            .as_deref()
+            .or(s.settings_ui.quick_chat_shortcut_error.as_deref())
+            .filter(|msg| !msg.trim().is_empty())
+        {
+            shortcut_body = shortcut_body.child(callout_banner(StatusTone::Danger, err, k, t));
+        }
 
         quick_chat_section = quick_chat_section.child(
             SettingsRow::new("Change shortcut")

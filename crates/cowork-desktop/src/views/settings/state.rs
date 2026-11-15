@@ -82,13 +82,18 @@ pub struct SettingsUiState {
     // Desktop page
     pub quick_chat_recorder: ShortcutRecorderState,
     pub quick_chat_shortcut_error: Option<String>,
+    pub quick_chat_synced_accel: Option<String>,
 
     // Privacy & Telemetry page
     pub privacy_disable_all_confirm_open: bool,
+    pub privacy_trace_payloads_confirm_open: bool,
 
     // Diagnostics / Developer page
     pub diagnostics_status_banner: Option<String>,
     pub last_diagnostics_bundle_path: Option<String>,
+    pub developer_restart_onboarding_confirm_open: bool,
+    pub developer_overflow_threshold_edit: TextEdit,
+    pub developer_overflow_threshold_workspace: Option<String>,
 
     // Usage page
     pub usage_window: UsageTimeWindow,
@@ -96,6 +101,7 @@ pub struct SettingsUiState {
     pub usage_search_edit: TextEdit,
     pub usage_selected_thread_id: Option<String>,
     pub usage_detail_dialog_open: bool,
+    pub usage_estimates_dialog_open: bool,
 
     // Chats / Archived & Conversation import
     pub chats_search_edit: TextEdit,
@@ -185,14 +191,20 @@ impl Default for SettingsUiState {
             mobile_nav_open: false,
             quick_chat_recorder: ShortcutRecorderState::default(),
             quick_chat_shortcut_error: None,
+            quick_chat_synced_accel: None,
             privacy_disable_all_confirm_open: false,
+            privacy_trace_payloads_confirm_open: false,
             diagnostics_status_banner: None,
             last_diagnostics_bundle_path: None,
+            developer_restart_onboarding_confirm_open: false,
+            developer_overflow_threshold_edit: TextEdit::new("30000"),
+            developer_overflow_threshold_workspace: None,
             usage_window: UsageTimeWindow::All,
             usage_tab: UsageViewTab::Overview,
             usage_search_edit: TextEdit::new(""),
             usage_selected_thread_id: None,
             usage_detail_dialog_open: false,
+            usage_estimates_dialog_open: false,
             chats_search_edit: TextEdit::new(""),
             chats_confirm_delete_id: None,
             import_dialog_open: false,

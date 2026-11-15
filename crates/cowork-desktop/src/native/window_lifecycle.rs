@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use uuid::Uuid;
 
-use crate::actions::{Action, ShellAction};
+use crate::actions::StoreEvent;
 use crate::state::{AppState, ConfirmDialogRequest};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,28 +145,9 @@ pub fn get_window_handle(window_key: &str) -> Option<rune::WindowHandle> {
 /// Prefix used for confirm dialog IDs triggered by window close guards.
 pub const WINDOW_CLOSE_CONFIRM_PREFIX: &str = "window-close:";
 
-/// Returns true when the state holds unsent composer drafts, attachments, or busy/streaming turns.
+/// Returns true when closing the window risks losing unsent drafts, active turns, or dirty Canvas edits.
 pub fn has_unsaved_or_busy_work(state: &AppState) -> bool {
-    if !state.composer_edit.text.trim().is_empty() {
-        return true;
-    }
-    if state.composer_drafts.values().any(|draft| {
-        !draft.text.trim().is_empty()
-            || !draft.attachments.is_empty()
-            || !draft.references.is_empty()
-            || draft.submitting
-    }) {
-        return true;
-    }
-    if !state.pending_thread_messages.is_empty() {
-        return true;
-    }
-    state.thread_runtime_by_id.values().any(|rt| {
-        rt.streaming
-            || rt.active_turn_id.is_some()
-            || rt.pending_turn_count > 0
-            || !rt.pending_interactions.is_empty()
-    })
+    state.has_unsaved_or_busy_work()
 }
 
 /// Builds a destructive confirmation dialog prompt for closing a dirty or busy window.
@@ -225,6 +206,13 @@ pub fn evaluate_window_close(
         };
     }
 
+    // Secondary windows ("quick-chat", "utility") only hide while the main window keeps
+    // workspace drafts, active turns, and Canvas state open.
+    if window_key != "main" {
+        coordinator.clear_window(window_key);
+        return WindowCloseOutcome::AllowHideOnly;
+    }
+
     let needs_confirmation = has_unsaved_or_busy_work(state);
     match coordinator.begin_close(window_key, needs_confirmation, false) {
         CloseDecision::AllowImmediate => {
@@ -267,7 +255,7 @@ pub fn execute_window_close_hook(
                 tx.quit();
             }
         }
-        WindowCloseOutcome::PromptUser { dialog, .. } => {
+        WindowCloseOutcome::PromptUser { request_id, dialog } => {
             if let Some(handle) = get_window_handle(window_key) {
                 handle.open();
                 handle.focus();
@@ -276,7 +264,12 @@ pub fn execute_window_close_hook(
             {
                 reveal_and_activate_main_window(app);
             }
-            state.dispatch(Action::Shell(ShellAction::RequestConfirmDialog(dialog)));
+            state.apply_store_event(StoreEvent::ConfirmWindowClose {
+                window_id: window_key.to_string(),
+                request_id,
+                title: dialog.title,
+                message: dialog.message,
+            });
         }
     }
 }
@@ -444,6 +437,32 @@ mod tests {
         );
         assert_eq!(
             evaluate_window_close(&coord, "quick-chat", &busy_state, true, true),
+            WindowCloseOutcome::AllowHideOnly
+        );
+
+        // Dirty chat canvas UI also triggers the close guard for the main window, while secondary
+        // hide-only windows ("quick-chat", "utility") always hide without prompting.
+        let mut dirty_canvas = AppState::default();
+        dirty_canvas
+            .chat_ui
+            .canvas
+            .sync_session("ws:notes.md:gen1", 1, "before", true, false);
+        dirty_canvas
+            .chat_ui
+            .canvas
+            .source_edit
+            .replace_text("after");
+        assert!(has_unsaved_or_busy_work(&dirty_canvas));
+        assert!(matches!(
+            evaluate_window_close(&coord, "main", &dirty_canvas, false, false),
+            WindowCloseOutcome::PromptUser { .. }
+        ));
+        assert_eq!(
+            evaluate_window_close(&coord, "quick-chat", &dirty_canvas, false, false),
+            WindowCloseOutcome::AllowHideOnly
+        );
+        assert_eq!(
+            evaluate_window_close(&coord, "utility", &dirty_canvas, false, true),
             WindowCloseOutcome::AllowHideOnly
         );
     }

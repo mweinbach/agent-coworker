@@ -16,8 +16,9 @@ use serde_json::Value;
 use crate::router::{NavigationSnapshot, SettingsPageId, ViewId};
 use crate::state::{
     ConfirmDialogRequest, DesktopSettings, FilePreviewState, LmStudioStartModalState,
-    NotificationTone, PersistedDesktopState, ReasoningEffortValue, SubagentProfile,
-    ThreadBusyPolicy, UpdaterState, WindowMode, WorkspaceFileEntry, WorkspaceRecord,
+    NotificationTone, PersistedDesktopState, PrivacyTelemetrySettings, ReasoningEffortValue,
+    RemoteAccessState, SubagentProfile, ThreadBusyPolicy, UpdaterState, WindowMode,
+    WorkspaceFileEntry, WorkspaceRecord,
 };
 use crate::theme::ThemePreference;
 use crate::ws::{WsConnectionState, WsRpcError};
@@ -202,6 +203,13 @@ pub enum ChatAction {
     DismissTranscriptDeliveryFailure {
         thread_id: String,
     },
+    RetryFailedTurn {
+        thread_id: String,
+    },
+    StartLmStudioAndRetry {
+        workspace_id: String,
+        thread_id: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -278,18 +286,237 @@ pub enum SettingsAction {
         phone_id: String,
     },
     ExportDiagnosticsBundle,
+    CompleteProviderAuthCallback {
+        workspace_id: String,
+        provider: String,
+        method_id: String,
+        callback_input: String,
+    },
+    SetProviderConfig {
+        workspace_id: String,
+        provider: String,
+        config: Value,
+    },
+    AddCustomModel {
+        workspace_id: String,
+        provider: String,
+        model_id: String,
+        display_name: Option<String>,
+    },
+    DeleteCustomModel {
+        workspace_id: String,
+        provider: String,
+        model_id: String,
+    },
+    ResetProviderModelPreferences {
+        workspace_id: String,
+        provider: String,
+    },
+    CheckLmStudioStatus {
+        workspace_id: String,
+        base_url: Option<String>,
+    },
+    StartLmStudio {
+        workspace_id: String,
+        base_url: Option<String>,
+    },
+    SetLmStudioEnabled {
+        workspace_id: String,
+        enabled: bool,
+    },
+    SetLmStudioModelVisible {
+        workspace_id: String,
+        model: String,
+        visible: bool,
+    },
+    CheckCodexAppServer {
+        workspace_id: String,
+    },
+    UpdateCodexAppServer {
+        workspace_id: String,
+        force: bool,
+    },
+    UpdateWorkspaceDefaults {
+        workspace_id: String,
+        defaults: Value,
+    },
+    SetMcpServerEnabled {
+        workspace_id: String,
+        name: String,
+        source: String,
+        enabled: bool,
+    },
+    SetMcpServerApiKey {
+        workspace_id: String,
+        name: String,
+        source: String,
+        api_key: String,
+    },
+    ValidateMcpServer {
+        workspace_id: String,
+        name: String,
+        source: String,
+    },
+    AuthorizeMcpOAuth {
+        workspace_id: String,
+        name: String,
+        source: String,
+    },
+    CompleteMcpOAuthCallback {
+        workspace_id: String,
+        name: String,
+        source: String,
+        callback_url: String,
+    },
+    CopyAgentProfile {
+        workspace_id: String,
+        id: String,
+        target_scope: String,
+    },
+    UpsertAdvancedMemory {
+        workspace_id: String,
+        entry: Value,
+    },
+    DeleteAdvancedMemory {
+        workspace_id: String,
+        id: String,
+    },
+    RefreshSkillImprovementStatus {
+        workspace_id: String,
+    },
+    RunSkillImprovement {
+        workspace_id: String,
+    },
+    RestoreSkillImprovement {
+        workspace_id: String,
+        backup_id: String,
+    },
+    RefreshPluginsAndSkills {
+        workspace_id: String,
+    },
+    InstallPlugin {
+        workspace_id: String,
+        params: Value,
+    },
+    SetPluginEnabled {
+        workspace_id: String,
+        id: String,
+        enabled: bool,
+    },
+    DeletePlugin {
+        workspace_id: String,
+        id: String,
+    },
+    UpdatePlugin {
+        workspace_id: String,
+        id: String,
+    },
+    InstallSkill {
+        workspace_id: String,
+        params: Value,
+    },
+    SetSkillEnabled {
+        workspace_id: String,
+        name: String,
+        enabled: bool,
+    },
+    DeleteSkill {
+        workspace_id: String,
+        name: String,
+    },
+    AddMarketplace {
+        workspace_id: String,
+        url: String,
+    },
+    RemoveMarketplace {
+        workspace_id: String,
+        id: String,
+    },
+    RefreshOpenAiNativeConnectors {
+        workspace_id: String,
+    },
+    SetOpenAiNativeConnectorEnabled {
+        workspace_id: String,
+        connector_id: String,
+        enabled: bool,
+    },
+    DismissSettingsMutationError,
+    CreateBackup {
+        workspace_id: String,
+        target_session_id: String,
+    },
+    InspectBackup {
+        workspace_id: String,
+        target_session_id: String,
+        checkpoint_id: String,
+    },
+    DeleteBackup {
+        workspace_id: String,
+        target_session_id: String,
+        checkpoint_id: String,
+    },
+    PreviewConversationImport {
+        workspace_id: String,
+        params: Value,
+    },
+    ExecuteConversationImport {
+        workspace_id: String,
+        params: Value,
+    },
+    SetRemoteAccessEnabled(bool),
+    RotateRemoteAccessSession,
+    UpdateTrustedPhonePermissions {
+        phone_id: String,
+        permissions: String,
+    },
+    UpdatePrivacyTelemetry(PrivacyTelemetrySettings),
+    RefreshTelemetryStatus,
+    DownloadUpdate,
+    CheckLibreOfficeRuntime {
+        workspace_id: String,
+    },
+    RestartOnboarding,
 }
 
 #[derive(Clone, Debug)]
 pub enum NativeAction {
     PickWorkspaceFolder,
-    AddWorkspace { path: PathBuf, name: Option<String> },
+    PickFiles {
+        allow_multiple: bool,
+    },
+    PickComposerAttachments {
+        key: String,
+    },
+    IngestDroppedFiles {
+        key: String,
+        paths: Vec<PathBuf>,
+    },
+    PasteClipboardImage {
+        key: String,
+        bytes: Vec<u8>,
+        mime_type: String,
+        filename: Option<String>,
+    },
+    AddWorkspace {
+        path: PathBuf,
+        name: Option<String>,
+    },
     RemoveWorkspace(String),
     RestartWorkspaceServer(String),
     StopWorkspaceServer(String),
-    ListWorkspaceFiles { workspace_id: String, dir: String },
-    LoadFilePreview { workspace_id: String, path: String },
-    FetchImageBytes { request_id: String, url: String },
+    ListWorkspaceFiles {
+        workspace_id: String,
+        dir: String,
+    },
+    LoadFilePreview {
+        workspace_id: String,
+        path: String,
+    },
+    FetchImageBytes {
+        request_id: String,
+        url: String,
+    },
+    CopyText(String),
     OpenExternalUrl(String),
     RevealInOs(String),
     OpenInDefaultApp(String),
@@ -336,6 +563,15 @@ pub enum NativeCommand {
     RevealInOs(String),
     OpenInDefaultApp(String),
     TrashPath(String),
+    CopyText(String),
+    SetRemoteAccessEnabled(bool),
+    RotateRemoteAccessSession,
+    UpdateTrustedPhonePermissions {
+        phone_id: String,
+        permissions: String,
+    },
+    RefreshTelemetryStatus,
+    DownloadUpdate,
     ShowDesktopNotification {
         title: String,
         body: String,
@@ -427,6 +663,17 @@ pub enum StoreEvent {
         message: String,
     },
     UpdaterChanged(UpdaterState),
+    RemoteAccessChanged(RemoteAccessState),
+    TelemetryStatusChanged(Value),
+    QuickChatShortcutStatus {
+        error: Option<String>,
+    },
+    Toast {
+        key: String,
+        title: String,
+        description: Option<String>,
+        tone: NotificationTone,
+    },
     MenuInvoked(String),
     QuickChatToggled,
     DeepLink(String),

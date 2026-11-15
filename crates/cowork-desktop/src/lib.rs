@@ -92,6 +92,9 @@ fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         state.desktop_settings.reduced_transparency,
         state.desktop_settings.high_contrast,
     );
+    cx.foreground(tokens.text_base);
+    cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+    cx.web_focus();
     views::shell::view(state, cx, &kit, &tokens)
 }
 

@@ -145,12 +145,7 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
         );
     }
 
-    let tasks_enabled = s
-        .feature_flags
-        .get("tasks_enabled")
-        .copied()
-        .unwrap_or(true);
-    if tasks_enabled || !s.tasks.is_empty() {
+    if super::helpers::tasks_feature_enabled(s) {
         items.push(
             SidebarRow::new("Tasks")
                 .icon(&icons::CHECK_SQUARE)
@@ -234,6 +229,9 @@ fn build_tasks_section(
     query: &str,
     active_task_id: Option<&str>,
 ) -> Option<SidebarSection> {
+    if !super::helpers::tasks_feature_enabled(s) {
+        return None;
+    }
     let q = query.trim().to_lowercase();
     let visible: Vec<_> = s
         .tasks
@@ -286,20 +284,19 @@ fn build_chats_section(
         .key("section-chats")
         .count(chat_threads.len());
 
-    if let Some(one_off_ws) = primary_one_off.map(str::to_string) {
-        let new_btn = IconButton::new(&icons::PLUS)
-            .variant(IconButtonVariant::GhostMuted)
-            .control_size(ControlSize::Small)
-            .help("New chat")
-            .on_press_tx(move |s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                    workspace_id: Some(one_off_ws.clone()),
-                }));
-            })
-            .build(k)
-            .key("new-oneoff-chat");
-        sec = sec.action(new_btn);
-    }
+    let one_off_ws = primary_one_off.map(str::to_string);
+    let new_btn = IconButton::new(&icons::PLUS)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .help("New chat")
+        .on_press_tx(move |s: &mut AppState, _| {
+            s.dispatch(Action::Navigate(NavAction::OpenNewChat {
+                workspace_id: one_off_ws.clone(),
+            }));
+        })
+        .build(k)
+        .key("new-oneoff-chat");
+    sec = sec.action(new_btn);
 
     if chat_threads.is_empty() {
         let placeholder = row().key("chats-empty").px(12.0).py(6.0).child(

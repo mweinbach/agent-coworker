@@ -9,7 +9,7 @@ use rune_kit::{
 };
 
 use crate::actions::{Action, NativeAction, NavAction, SettingsAction, ShellAction};
-use crate::router::{SettingsPageId, ViewId};
+use crate::router::SettingsPageId;
 use crate::state::{AppState, FilePreviewState, ServerLifecycleState, WorkspaceRuntime};
 use crate::theme::ThemeTokens;
 use crate::ws::WsConnectionState;
@@ -23,10 +23,6 @@ pub fn build_primary_content(s: &AppState, k: &Kit, t: &ThemeTokens, main_subvie
         .active_workspace_id
         .as_deref()
         .and_then(|id| s.workspaces.iter().find(|ws| ws.id == id));
-
-    if active_ws.is_none() && s.route().view == ViewId::Chat {
-        return empty_workspace_gate(k, t);
-    }
 
     if let Some(ws) = active_ws
         && let Some(rt) = s.workspace_runtime_by_id.get(&ws.id)
@@ -120,49 +116,6 @@ pub fn build_primary_content(s: &AppState, k: &Kit, t: &ThemeTokens, main_subvie
                 .children(top_banners),
         )
         .child(body)
-}
-
-fn empty_workspace_gate(k: &Kit, t: &ThemeTokens) -> El {
-    let card = Card::new()
-        .accent(t.accent)
-        .title("Choose a project folder to begin", Some(&icons::FOLDER_PLUS))
-        .description(
-            "Open a local directory so Antigravity can start a workspace server, track threads, and run tasks.",
-        )
-        .action(
-            Button::new("Add project folder")
-                .variant(ButtonVariant::Contrast)
-                .icon(&icons::FOLDER_PLUS)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder));
-                })
-                .build(k),
-        )
-        .action(
-            Button::new("Settings")
-                .variant(ButtonVariant::Ghost)
-                .icon(&icons::SETTINGS)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
-                })
-                .build(k),
-        )
-        .build(k);
-
-    el().key("empty-workspace-gate")
-        .w_full()
-        .h_full()
-        .center()
-        .padding(24.0)
-        .child(
-            el().w(480.0)
-                .shrink()
-                .fill(t.card_bg)
-                .radius(12.0)
-                .border(1.0, t.border)
-                .padding(8.0)
-                .child(card),
-        )
 }
 
 fn workspace_runtime_progress_view(

@@ -133,3 +133,9 @@ pub static POPOUT: Icon = Icon {
     view: 16.0,
     body: r#"<rect x="2.5" y="4.5" width="9" height="9" rx="1.6" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M7.5 8.5L13.2 2.8M10 2.5H13.5V6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>"#,
 };
+
+pub static CHEVRON_RIGHT: Icon = Icon {
+    name: "cowork-chevron-right",
+    view: 16.0,
+    body: r#"<path d="M6.5 5L9.5 8L6.5 11" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
+};

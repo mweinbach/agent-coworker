@@ -6,7 +6,7 @@ use rune::{El, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::{Badge, Button, ButtonVariant, Card, ControlSize, Dialog, Kit, Toast, ToastRegion};
 
 use crate::actions::{Action, NativeAction, NavAction, ShellAction};
-use crate::router::SettingsPageId;
+use crate::router::{SettingsPageId, ViewId};
 use crate::state::{AppState, ConfirmDialogRequest, NotificationTone, dismiss_toast};
 use crate::theme::ThemeTokens;
 
@@ -88,14 +88,21 @@ fn build_toast_region(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
     Some(region.build(k))
 }
 
+pub(crate) fn extract_external_url_domain(raw_url: &str) -> String {
+    match url::Url::parse(raw_url) {
+        Ok(parsed) => parsed
+            .host_str()
+            .filter(|host| !host.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| parsed.scheme().to_owned()),
+        Err(_) => "unknown destination".to_owned(),
+    }
+}
+
 fn build_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens) -> Option<El> {
     let url = url?;
     let mut overlays = Vec::new();
-    let domain = url
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or(url);
+    let domain = extract_external_url_domain(url);
 
     Dialog::new("confirm-external-url-dialog", "Open external link?")
         .description(format!(
@@ -312,8 +319,15 @@ fn build_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<
     overlays.into_iter().next()
 }
 
+pub(crate) fn is_onboarding_visible(s: &AppState) -> bool {
+    !s.scene_mode
+        && s.route().view != ViewId::Settings
+        && !s.onboarding.completed
+        && !s.onboarding.dismissed
+}
+
 fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
-    if s.onboarding.completed || s.onboarding.dismissed {
+    if !is_onboarding_visible(s) {
         return None;
     }
 
@@ -523,4 +537,59 @@ fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El
             .modal(false, |_: &mut AppState| {})
             .child(card),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actions::{Action, NavAction};
+
+    #[test]
+    fn onboarding_hidden_in_scene_mode_and_settings() {
+        let mut s = AppState::default();
+        assert!(is_onboarding_visible(&s));
+
+        s.scene_mode = true;
+        assert!(!is_onboarding_visible(&s));
+        s.scene_mode = false;
+
+        s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Models,
+        ))));
+        assert!(!is_onboarding_visible(&s));
+
+        s.dispatch(Action::Navigate(NavAction::GoBack));
+        assert!(is_onboarding_visible(&s));
+
+        s.onboarding.dismissed = true;
+        assert!(!is_onboarding_visible(&s));
+    }
+
+    #[test]
+    fn external_url_domain_strips_userinfo_query_and_fragment() {
+        assert_eq!(
+            extract_external_url_domain("https://trusted.com@evil.com/path"),
+            "evil.com"
+        );
+        assert_eq!(
+            extract_external_url_domain("https://user:pass@evil.com:8443?next=trusted.com#frag"),
+            "evil.com"
+        );
+        assert_eq!(
+            extract_external_url_domain("https://example.org?redirect=evil.com"),
+            "example.org"
+        );
+        assert_eq!(
+            extract_external_url_domain("https://example.org#trusted.com"),
+            "example.org"
+        );
+        assert_eq!(
+            extract_external_url_domain("mailto:user@example.com"),
+            "mailto"
+        );
+        assert_eq!(
+            extract_external_url_domain("not a url"),
+            "unknown destination"
+        );
+    }
 }

@@ -304,23 +304,26 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .iter()
         .position(|p| *p == ds.accent_palette)
         .unwrap_or(2);
-    let accent_swatches = row()
-        .items_center()
-        .gap(5.0)
-        .children(AccentPalette::ALL.iter().map(|&palette| {
-            let swatch = theme::resolve_tokens_with_accent(t.dark, false, false, palette).accent;
-            let active = palette == ds.accent_palette;
-            el().size(
-                if active { 12.0 } else { 10.0 },
-                if active { 12.0 } else { 10.0 },
-            )
-            .radius(theme::layout::RADIUS_PILL)
-            .fill(swatch)
-            .border(1.0, if active { t.text_base } else { t.border_muted })
-            .on_press(move |s: &mut AppState| {
-                s.dispatch(Action::Settings(SettingsAction::SetAccentPalette(palette)));
-            })
-        }));
+    let accent_swatches =
+        row()
+            .items_center()
+            .gap(5.0)
+            .a11y_hidden()
+            .children(AccentPalette::ALL.iter().map(|&palette| {
+                let swatch = theme::resolve_tokens_with_accent(
+                    t.dark,
+                    ds.reduced_transparency,
+                    ds.high_contrast,
+                    palette,
+                )
+                .accent;
+                let active = palette == ds.accent_palette;
+                let dot_size = if active { 12.0 } else { 10.0 };
+                el().size(dot_size, dot_size)
+                    .radius(theme::layout::RADIUS_PILL)
+                    .fill(swatch)
+                    .border(1.0, if active { t.text_base } else { t.border_muted })
+            }));
     let accent_picker = row().items_center().gap(10.0).child(accent_swatches).child(
         SegmentedControl::new(&accent_labels, Some(accent_idx))
             .label("Accent color")

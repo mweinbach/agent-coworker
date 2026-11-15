@@ -225,6 +225,7 @@ pub fn view_tab(s: &AppState, workspace_id: Option<&str>, k: &Kit, t: &ThemeToke
         .w_full()
         .items_center()
         .justify_between()
+        .flex_wrap()
         .gap(12.0)
         .px(16.0)
         .py(12.0)

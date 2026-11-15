@@ -421,6 +421,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .w_full()
         .items_center()
         .justify_between()
+        .flex_wrap()
         .gap(10.0)
         .px(16.0)
         .py(12.0)

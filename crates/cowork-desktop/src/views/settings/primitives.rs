@@ -786,15 +786,24 @@ pub fn search_input(
     on_clear: impl Fn(&mut AppState, &mut Tx) + 'static,
     k: &Kit,
 ) -> El {
-    TextInput::new(edit)
+    let input = TextInput::new(edit)
         .label(label.into())
         .placeholder(placeholder.into())
         .leading_icon(&icons::SEARCH)
         .clear_button()
-        .width(width)
+        .width(None)
         .on_edit(on_edit)
         .on_action(on_clear)
-        .build(k)
+        .build(k);
+
+    match width {
+        Some(max_width) => el()
+            .grow(1.0)
+            .min_w(max_width.min(160.0))
+            .max_w(max_width)
+            .child(input),
+        None => input,
+    }
 }
 
 /// Shared compact toggle switch matching all boolean Settings controls.

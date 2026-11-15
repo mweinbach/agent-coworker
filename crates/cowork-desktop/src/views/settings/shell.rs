@@ -291,11 +291,12 @@ pub fn settings_layout(
         );
     }
 
-    // Instant page unmount matches the Electron settings shell and prevents
-    // outgoing page text from ghosting underneath the incoming page.
-    let main = if is_backup_page {
+    // Instant page and toolbar unmounts match the Electron settings shell and prevent
+    // outgoing controls or body copy from ghosting underneath the incoming page.
+    let inner_page_key = format!("settings-page-{}", page_key(active_page));
+    let main_body = if is_backup_page {
         col()
-            .key(format!("settings-page-{}", page_key(active_page)))
+            .key(inner_page_key)
             .grow(1.0)
             .min_h(0.0)
             .min_w(0.0)
@@ -309,7 +310,7 @@ pub fn settings_layout(
             .child(content.body)
     } else {
         let centered_intro = col().w_full().items_center().child(intro);
-        let scroll_body = k.scroll_bar(
+        k.scroll_bar(
             col()
                 .grow(1.0)
                 .min_h(0.0)
@@ -323,28 +324,37 @@ pub fn settings_layout(
                 })
                 .child(
                     col()
-                        .key(format!("settings-page-{}", page_key(active_page)))
+                        .key(inner_page_key)
                         .w_full()
                         .gap(16.0)
                         .transition(Transition::none())
                         .child(centered_intro)
                         .child(content.body),
                 ),
-        );
-        rune::el()
-            .key("settings-main-pane")
-            .grow(1.0)
-            .min_h(0.0)
-            .min_w(0.0)
-            .w_full()
-            .child(scroll_body)
+        )
+        .key("settings-scroll-body")
+        .transition(Transition::none())
     };
+    let main = rune::el()
+        .key("settings-main-pane")
+        .grow(1.0)
+        .min_h(0.0)
+        .min_w(0.0)
+        .w_full()
+        .transition(Transition::none())
+        .child(main_body);
+
+    let header_actions = content
+        .header_actions
+        .into_iter()
+        .map(|el| el.transition(Transition::none()))
+        .collect();
 
     SettingsLayout {
         sidebar: nav_pane(k, active_page, &groups),
         title: active_page.title().to_string(),
         workspace_badge: active_workspace_banner_label(s),
-        header_actions: content.header_actions,
+        header_actions,
         main,
         overlays: content.overlays,
     }

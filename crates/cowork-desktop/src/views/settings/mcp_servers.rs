@@ -354,6 +354,7 @@ pub fn view_tab(
         let filter_bar = row()
             .w_full()
             .items_center()
+            .flex_wrap()
             .gap(12.0)
             .px(16.0)
             .py(12.0)

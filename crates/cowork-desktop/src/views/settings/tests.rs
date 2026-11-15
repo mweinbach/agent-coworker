@@ -1045,7 +1045,12 @@ fn models_page_selects_expose_accessible_names_and_desktop_tray_label_mentions_l
     use crate::state::{ProviderModelSummary, ProviderSummary};
 
     fn render_root(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
-        let (kit, _) = crate::theme::build_kit(false, false, false);
+        let (kit, _) = crate::theme::build_kit_with_accent(
+            false,
+            false,
+            false,
+            s.desktop_settings.accent_palette,
+        );
         crate::views::settings::view(s, cx, &kit).content
     }
 
@@ -1177,7 +1182,12 @@ fn updater_status_meta_maps_disabled_by_packaging_mode() {
 #[test]
 fn updates_page_renders_disabled_status_and_disables_check_button() {
     fn render_root(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
-        let (kit, _) = crate::theme::build_kit(false, false, false);
+        let (kit, _) = crate::theme::build_kit_with_accent(
+            false,
+            false,
+            false,
+            s.desktop_settings.accent_palette,
+        );
         crate::views::settings::view(s, cx, &kit).content
     }
 
@@ -1375,5 +1385,156 @@ fn updates_page_renders_disabled_status_and_disables_check_button() {
     assert!(
         copied.starts_with(&expected_version),
         "Diagnostic summary `{copied}` must start with {expected_version}"
+    );
+}
+
+#[test]
+fn build_layout_and_desktop_accent_picker_behave_cleanly() {
+    use crate::theme::{self, AccentPalette};
+
+    fn render_from_layout(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
+        let dark = s.effective_dark(cx.system_dark());
+        let (kit, tokens) = theme::build_kit_with_accent(
+            dark,
+            s.desktop_settings.reduced_transparency,
+            s.desktop_settings.high_contrast,
+            s.desktop_settings.accent_palette,
+        );
+        let layout = super::build_layout(s, cx, &kit, &tokens);
+        rune::row()
+            .w_full()
+            .h_full()
+            .child(rune::el().w(268.0).h_full().child(layout.sidebar))
+            .child(
+                rune::col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .h_full()
+                    .child(rune::row().children(layout.header_actions))
+                    .child(layout.main),
+            )
+    }
+
+    fn render_shell_view(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
+        let (kit, _) =
+            theme::build_kit_with_accent(false, false, false, s.desktop_settings.accent_palette);
+        super::view(s, cx, &kit).content
+    }
+
+    fn make_state(page: SettingsPageId) -> AppState {
+        let mut s = AppState {
+            scene_mode: true,
+            active_workspace_id: Some("ws-1".to_string()),
+            ..Default::default()
+        };
+        s.workspaces.push(WorkspaceRecord {
+            id: "ws-1".to_string(),
+            name: "Demo".to_string(),
+            path: "/tmp/demo".to_string(),
+            ..Default::default()
+        });
+        s.provider_catalog.push(ProviderSummary {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            configured: true,
+            ..Default::default()
+        });
+        s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(page))));
+        s
+    }
+
+    // Verify narrow-viewport search box fits cleanly without overflowing past pane edges
+    // across both standalone `SplitView` and `build_layout`.
+    for (label, render_fn) in [
+        (
+            "build_layout",
+            render_from_layout as fn(&AppState, &mut rune::Cx<AppState>) -> rune::El,
+        ),
+        (
+            "settings::view",
+            render_shell_view as fn(&AppState, &mut rune::Cx<AppState>) -> rune::El,
+        ),
+    ] {
+        let mut rt_narrow = rune::Runtime::new(
+            make_state(SettingsPageId::Models),
+            render_fn,
+            (640.0, 820.0),
+            rune::Env::new(true, 1.0),
+        );
+        rt_narrow.frame(0.0);
+        let narrow_els = rt_narrow.elements();
+        assert!(
+            narrow_els
+                .iter()
+                .any(|e| e.key.as_deref() == Some("settings-main-pane")),
+            "{label} Models must use key `settings-main-pane`"
+        );
+        let search_el = narrow_els
+            .iter()
+            .find(|e| e.label.as_deref() == Some("Filter providers and models"))
+            .expect("Providers search input must render");
+        assert!(
+            search_el.rect[0] >= 268.0 && search_el.rect[0] + search_el.rect[2] <= 640.0 - 16.0,
+            "{label} search input rect {:?} overflows 640px narrow viewport",
+            search_el.rect
+        );
+    }
+
+    // Verify Backup keeps the invariant `settings-main-pane` key so pages do not crossfade/ghost.
+    let mut rt_backup = rune::Runtime::new(
+        make_state(SettingsPageId::Backup),
+        render_from_layout,
+        (1100.0, 820.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_backup.frame(0.0);
+    assert!(
+        rt_backup
+            .elements()
+            .iter()
+            .any(|e| e.key.as_deref() == Some("settings-main-pane")),
+        "Backup SettingsLayout.main must preserve invariant key `settings-main-pane`"
+    );
+
+    // Verify Desktop Accent color segmented picker updates `desktop_settings.accent_palette`
+    // and produces no unlabeled focusable button elements.
+    let mut rt_desktop = rune::Runtime::new(
+        make_state(SettingsPageId::Desktop),
+        render_from_layout,
+        (1100.0, 820.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_desktop.frame(0.0);
+    let desktop_els = rt_desktop.elements();
+    assert!(
+        !desktop_els
+            .iter()
+            .any(|e| e.focusable && e.role == "button" && e.label.is_none()),
+        "Desktop page must not expose unlabeled focusable buttons (e.g. accent swatch dots)"
+    );
+    let ochre_seg = desktop_els
+        .iter()
+        .find(|e| {
+            e.text.as_deref() == Some("Ochre Amber") || e.label.as_deref() == Some("Ochre Amber")
+        })
+        .expect("Ochre Amber segment must render on Desktop -> Accent color");
+    let [sx, sy] = [
+        ochre_seg.rect[0] + ochre_seg.rect[2] * 0.5,
+        ochre_seg.rect[1] + ochre_seg.rect[3] * 0.5,
+    ];
+    rt_desktop.pointer_move(sx, sy);
+    rt_desktop.pointer_down(sx, sy);
+    rt_desktop.pointer_up(sx, sy);
+    rt_desktop.frame(0.0);
+    assert_eq!(
+        rt_desktop.state.desktop_settings.accent_palette,
+        AccentPalette::OchreAmber
+    );
+    assert!(
+        rt_desktop
+            .elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some(AccentPalette::OchreAmber.description())),
+        "Desktop Accent color description must reflect updated palette"
     );
 }

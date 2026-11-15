@@ -1338,8 +1338,7 @@ pub fn resolve_math_formula(
 
     let layout = match katex_native::layout(&cache.ctx, trimmed, display) {
         Ok(layout) => Arc::new(layout),
-        Err(err) => {
-            eprintln!("[cowork-desktop][math] KaTeX parse error for `{trimmed}`: {err}");
+        Err(_) => {
             cache.insert_entry(key, CachedMathEntry::Failed);
             return MathRenderOutcome::Failed;
         }
@@ -1558,6 +1557,57 @@ fn apply_span_style(word: &str, bold: bool, italic: bool) -> Option<Vec<Span>> {
     Some(vec![sp])
 }
 
+#[allow(clippy::too_many_arguments)]
+fn append_inline_node_with_punct(
+    mut flow: El,
+    node: El,
+    spans: &[MathInlineSpan],
+    idx: usize,
+    key_prefix: &str,
+    base_font: TextStyle,
+    ink: Color,
+    carry_leading_space: &mut bool,
+) -> (El, usize) {
+    if let Some(MathInlineSpan::Text { text: next_t, .. }) = spans.get(idx + 1) {
+        if let Some(first_ch) = next_t.chars().next()
+            && matches!(first_ch, '.' | ',' | ';' | ':' | '!' | '?' | ')')
+        {
+            let punct_len = next_t.find(' ').unwrap_or(next_t.len());
+            let punct = &next_t[..punct_len];
+            let has_space_after = next_t[punct_len..].starts_with(' ');
+            let mut grouped = row()
+                .key(format!("{key_prefix}:g:{idx}"))
+                .items_center()
+                .child(node)
+                .child(text(punct.to_string()).font(base_font).color(ink));
+            if has_space_after {
+                grouped = grouped.mr(3.5);
+            }
+            flow = flow.child(grouped);
+            let rest = next_t[punct_len..].trim_start_matches(' ');
+            if !rest.is_empty()
+                && let MathInlineSpan::Text { bold, italic, .. } = &spans[idx + 1]
+            {
+                for (w_i, atom) in split_word_atoms(rest).into_iter().enumerate() {
+                    if atom.is_empty() {
+                        continue;
+                    }
+                    let mut w_el = text(atom.clone()).font(base_font).color(ink);
+                    if let Some(sp) = apply_span_style(&atom, *bold, *italic) {
+                        w_el = w_el.spans(sp);
+                    }
+                    flow = flow.child(w_el.key(format!("{key_prefix}:w:{}:{w_i}", idx + 1)));
+                }
+            }
+            return (flow, idx + 2);
+        } else if next_t.starts_with(' ') {
+            *carry_leading_space = true;
+            return (flow.child(node.mr(3.5)), idx + 1);
+        }
+    }
+    (flow.child(node), idx + 1)
+}
+
 /// Renders one paragraph/heading/list-item/blockquote containing inline `$$...$$` math
 /// using `row().flex_wrap()` with cached inline KaTeX `Pixels` images, formatted spans,
 /// clickable links/citations, and code-styled streaming/error fallbacks.
@@ -1638,9 +1688,10 @@ where
                     }
                     flow = flow.child(el_word.key(format!("{key_prefix}:w:{idx}:{w_i}")));
                 }
+                idx += 1;
             }
             MathInlineSpan::Code(code) => {
-                let mut pill = row()
+                let pill = row()
                     .key(format!("{key_prefix}:c:{idx}"))
                     .items_center()
                     .px(4.0)
@@ -1648,13 +1699,16 @@ where
                     .radius(4.0)
                     .fill(t.code_bg)
                     .child(text(code.clone()).font(t.code).color(t.text_base));
-                if let Some(MathInlineSpan::Text { text: next_t, .. }) = spans.get(idx + 1)
-                    && next_t.starts_with(' ')
-                {
-                    pill = pill.mr(3.5);
-                    carry_leading_space = true;
-                }
-                flow = flow.child(pill);
+                (flow, idx) = append_inline_node_with_punct(
+                    flow,
+                    pill,
+                    spans,
+                    idx,
+                    key_prefix,
+                    base_font,
+                    ink,
+                    &mut carry_leading_space,
+                );
             }
             MathInlineSpan::Link {
                 label,
@@ -1664,7 +1718,7 @@ where
             } => {
                 let url_owned = url.clone();
                 let handler = on_link.clone();
-                let mut link_el = if url.starts_with("cowork-citation:") {
+                let link_el = if url.starts_with("cowork-citation:") {
                     row()
                         .key(format!("{key_prefix}:a:{idx}"))
                         .items_center()
@@ -1701,13 +1755,16 @@ where
                             handler(s, url_owned.clone(), tx);
                         })
                 };
-                if let Some(MathInlineSpan::Text { text: next_t, .. }) = spans.get(idx + 1)
-                    && next_t.starts_with(' ')
-                {
-                    link_el = link_el.mr(3.5);
-                    carry_leading_space = true;
-                }
-                flow = flow.child(link_el);
+                (flow, idx) = append_inline_node_with_punct(
+                    flow,
+                    link_el,
+                    spans,
+                    idx,
+                    key_prefix,
+                    base_font,
+                    ink,
+                    &mut carry_leading_space,
+                );
             }
             MathInlineSpan::Math(tex) => {
                 let math_node = match resolve_math_formula(tex, false, ink, scale, em_pt, waker) {
@@ -1761,50 +1818,16 @@ where
                     ),
                 };
 
-                // Keep immediate trailing punctuation (e.g. `.` `,` `)`) grouped with the formula.
-                if let Some(MathInlineSpan::Text { text: next_t, .. }) = spans.get(idx + 1) {
-                    if let Some(first_ch) = next_t.chars().next()
-                        && matches!(first_ch, '.' | ',' | ';' | ':' | '!' | '?' | ')')
-                    {
-                        let punct_len = next_t.find(' ').unwrap_or(next_t.len());
-                        let punct = &next_t[..punct_len];
-                        let has_space_after = next_t[punct_len..].starts_with(' ');
-                        let mut grouped = row()
-                            .key(format!("{key_prefix}:mg:{idx}"))
-                            .items_center()
-                            .child(math_node)
-                            .child(text(punct.to_string()).font(base_font).color(ink));
-                        if has_space_after {
-                            grouped = grouped.mr(3.5);
-                        }
-                        flow = flow.child(grouped);
-                        // Advance carefully if entire next text was consumed by punct + space.
-                        let rest = next_t[punct_len..].trim_start_matches(' ');
-                        if !rest.is_empty()
-                            && let MathInlineSpan::Text { bold, italic, .. } = &spans[idx + 1]
-                        {
-                            for (w_i, atom) in split_word_atoms(rest).into_iter().enumerate() {
-                                if atom.is_empty() {
-                                    continue;
-                                }
-                                let mut w_el = text(atom.clone()).font(base_font).color(ink);
-                                if let Some(sp) = apply_span_style(&atom, *bold, *italic) {
-                                    w_el = w_el.spans(sp);
-                                }
-                                flow = flow
-                                    .child(w_el.key(format!("{key_prefix}:w:{}:{w_i}", idx + 1)));
-                            }
-                        }
-                        idx += 2;
-                        continue;
-                    } else if next_t.starts_with(' ') {
-                        carry_leading_space = true;
-                        flow = flow.child(math_node.mr(3.5));
-                        idx += 1;
-                        continue;
-                    }
-                }
-                flow = flow.child(math_node);
+                (flow, idx) = append_inline_node_with_punct(
+                    flow,
+                    math_node,
+                    spans,
+                    idx,
+                    key_prefix,
+                    base_font,
+                    ink,
+                    &mut carry_leading_space,
+                );
             }
             MathInlineSpan::StreamingMath(tex) => {
                 flow = flow.child(render_math_code_inline_fallback(
@@ -1814,9 +1837,9 @@ where
                     true,
                     &format!("{key_prefix}:sm:{idx}"),
                 ));
+                idx += 1;
             }
         }
-        idx += 1;
     }
 
     match kind {
@@ -1840,7 +1863,7 @@ where
                 text(marker.clone())
                     .font(base_font)
                     .color(t.text_muted)
-                    .w(14.0),
+                    .min_w(14.0),
             )
             .child(col().grow(1.0).min_w(0.0).child(flow)),
         MathParagraphKind::Blockquote => row()

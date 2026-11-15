@@ -1217,12 +1217,16 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
             &rgba,
             2.0,
         );
+        assert!(
+            rt.find("canvas-styling-toggle").is_none()
+                && rt.find("canvas-formatting-bar").is_none(),
+            "Styling toggle and formatting bar must stay hidden in Document tab (dark={dark})"
+        );
         let els = rt.elements();
         for key in [
             "canvas-pane",
             "canvas-header",
             "canvas-toolbar",
-            "canvas-formatting-bar",
             "canvas-document-tab",
             "canvas-prompt-footer",
         ] {
@@ -1238,7 +1242,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         }
     }
 
-    // 320px narrow right-rail bounds check: toolbar wraps cleanly inside 320px.
+    // 320px narrow right-rail bounds check (Document starts without Styling bar; Source tab shows Styling + formatting bar cleanly inside 320px).
     let mut s_narrow = build_populated_thread_state(false);
     s_narrow.feature_flags.insert("canvas".to_string(), true);
     s_narrow.active_file_preview = Some(FilePreviewState {
@@ -1259,10 +1263,18 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         Env::new(true, 1.0),
     );
     rt_narrow.frame(0.0);
+    assert!(
+        rt_narrow.find("canvas-styling-toggle").is_none()
+            && rt_narrow.find("canvas-formatting-bar").is_none(),
+        "narrow Document tab must hide Styling toggle and formatting bar"
+    );
+    click_canvas_key(&mut rt_narrow, "segment1");
+    assert_eq!(rt_narrow.state.chat_ui.canvas.active_tab, CanvasTab::Source);
     for key in [
         "canvas-pane",
         "canvas-header",
         "canvas-toolbar",
+        "canvas-styling-toggle",
         "canvas-formatting-bar",
         "canvas-save-btn",
         "canvas-save-as-btn",

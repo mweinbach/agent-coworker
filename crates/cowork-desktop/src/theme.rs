@@ -368,8 +368,8 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
             accent_on: srgb(0x10, 0x0d, 0x08),
             accent_hover_overlay,
             accent_pressed_overlay,
-            cta_bg: srgb(0x6e, 0x57, 0x30),
-            send_bg: srgb(0x64, 0x4e, 0x2b),
+            cta_bg: srgb(0x7a, 0x62, 0x38),
+            send_bg: srgb(0x70, 0x59, 0x33),
             cta_on: Color::WHITE,
             focus_ring: srgb(0xe0, 0xca, 0x98),
             soft_alpha,
@@ -420,8 +420,8 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
             accent_on: srgb(0x12, 0x0c, 0x03),
             accent_hover_overlay,
             accent_pressed_overlay,
-            cta_bg: srgb(0x88, 0x50, 0x09),
-            send_bg: srgb(0x7d, 0x49, 0x06),
+            cta_bg: srgb(0x95, 0x59, 0x0a),
+            send_bg: srgb(0x8a, 0x52, 0x08),
             cta_on: Color::WHITE,
             focus_ring: srgb(0xee, 0xb6, 0x55),
             soft_alpha,
@@ -472,8 +472,8 @@ pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) ->
             accent_on: srgb(0x11, 0x08, 0x05),
             accent_hover_overlay,
             accent_pressed_overlay,
-            cta_bg: srgb(0xa6, 0x42, 0x1d),
-            send_bg: srgb(0x9b, 0x3b, 0x18),
+            cta_bg: srgb(0xb1, 0x47, 0x1f),
+            send_bg: srgb(0xa5, 0x41, 0x1b),
             cta_on: Color::WHITE,
             focus_ring: srgb(0xf5, 0xa2, 0x7d),
             soft_alpha,
@@ -663,11 +663,20 @@ pub fn resolve_tokens_with_accent(
     accent_palette: AccentPalette,
 ) -> ThemeTokens {
     let mut tok = tokens_with_accent(dark, accent_palette);
-    if reduced_transparency {
-        tok.glass_bg = tok.panel_bg;
-    }
     if high_contrast {
         apply_accent_set(&mut tok, accent_tokens(accent_palette, dark, true));
+        if dark {
+            // Deepen dark HC background neutrals so saturated HC CTAs and switches maintain >= 3:1
+            // UI boundary contrast even on elevated cards without sacrificing button text contrast.
+            tok.app_bg = srgb(0x06, 0x06, 0x07);
+            tok.sidebar_bg = srgb(0x0c, 0x0c, 0x0d);
+            tok.panel_bg = srgb(0x11, 0x11, 0x12);
+            tok.elevated_bg = srgb(0x16, 0x16, 0x18);
+            tok.card_bg = tok.panel_bg;
+            tok.popover_bg = tok.elevated_bg;
+            tok.input_bg = srgb(0x0b, 0x0b, 0x0c);
+            tok.glass_bg = srgba(0x0c, 0x0c, 0x0d, 0.94);
+        }
         tok.border = if dark {
             srgba(0xff, 0xff, 0xff, 0.28)
         } else {
@@ -679,6 +688,9 @@ pub fn resolve_tokens_with_accent(
             srgba(0x1f, 0x1f, 0x1c, 0.50)
         };
         tok.text_muted = tok.text_base.alpha(0.88);
+    }
+    if reduced_transparency {
+        tok.glass_bg = tok.panel_bg;
     }
     tok
 }
@@ -844,11 +856,13 @@ mod tests {
                         );
                     }
 
-                    if !high_contrast {
-                        let ui_ratio = contrast_ratio(tok.cta_bg, tok.elevated_bg);
+                    for (surf_name, surface) in
+                        [("panel_bg", tok.panel_bg), ("elevated_bg", tok.elevated_bg)]
+                    {
+                        let ui_ratio = contrast_ratio(tok.cta_bg, surface);
                         assert!(
                             ui_ratio >= 3.0,
-                            "{palette:?} dark={dark} cta_bg on elevated_bg {ui_ratio:.2} < 3.0"
+                            "{palette:?} dark={dark} hc={high_contrast} cta_bg on {surf_name} {ui_ratio:.2} < 3.0"
                         );
                     }
 

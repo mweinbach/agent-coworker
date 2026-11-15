@@ -1031,12 +1031,16 @@ fn sanitize_workspaces(raw: Option<&Vec<Value>>, one_off_root: &Path) -> Vec<Val
         };
 
         let explicit_kind = map.get("workspaceKind").and_then(Value::as_str);
+        let one_off_canonical = cowork_config::canonicalize_sync(one_off_root);
+        let raw_lexical = cowork_config::normalize_lexical_path(Path::new(&raw_path));
         let is_one_off = if explicit_kind == Some("project") {
             false
         } else {
             explicit_kind == Some("oneOffChat")
                 || map.get("oneOffChat").and_then(Value::as_bool) == Some(true)
-                || cowork_config::is_inside(Path::new(&raw_path), one_off_root)
+                || (cowork_config::is_inside(one_off_root, Path::new(&raw_path))
+                    && raw_lexical != cowork_config::normalize_lexical_path(one_off_root)
+                    && cowork_config::canonicalize_sync(&raw_lexical) != one_off_canonical)
         };
 
         let Some(resolved_path) = resolve_workspace_path(&raw_path, is_one_off, one_off_root)
@@ -1111,13 +1115,22 @@ fn resolve_workspace_path(
 ) -> Option<PathBuf> {
     let lexical = cowork_config::normalize_lexical_path(Path::new(raw_path));
     if is_one_off {
-        if !cowork_config::is_inside(&lexical, one_off_root) {
+        let canonical_one_off_root = cowork_config::canonicalize_sync(one_off_root);
+        if !cowork_config::is_inside(one_off_root, &lexical)
+            || lexical == cowork_config::normalize_lexical_path(one_off_root)
+        {
             return None;
         }
         if cowork_config::ensure_private_dir_sync(&lexical).is_err() {
             return None;
         }
-        return Some(cowork_config::canonicalize_sync(&lexical));
+        let canonical = cowork_config::canonicalize_sync(&lexical);
+        if !cowork_config::is_inside(&canonical_one_off_root, &canonical)
+            || canonical == canonical_one_off_root
+        {
+            return None;
+        }
+        return Some(canonical);
     }
 
     match fs::metadata(&lexical) {
@@ -1690,5 +1703,50 @@ mod tests {
         assert!(service.read_transcript("../escape").is_err());
         service.delete_transcript("thread_1").unwrap();
         assert!(service.read_transcript("thread_1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn accepts_valid_one_off_chat_and_does_not_misclassify_ancestor_workspace() {
+        let tmp = tempdir().unwrap();
+        let user_data = tmp.path().join("Cowork");
+        let chats_root = tmp.path().join("chats");
+        let one_off_dir = chats_root.join("chat-42");
+        let ancestor_project = tmp.path().to_path_buf();
+
+        let service = PersistenceService::new(user_data, None, true, None)
+            .with_one_off_chats_root(chats_root.clone());
+
+        let doc = json!({
+            "version": 2,
+            "workspaces": [
+                {
+                    "id": "ws-oneoff",
+                    "name": "Quick Chat",
+                    "path": one_off_dir,
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-02T00:00:00.000Z"
+                },
+                {
+                    "id": "ws-ancestor",
+                    "name": "Ancestor Dir",
+                    "path": ancestor_project,
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-02T00:00:00.000Z"
+                }
+            ]
+        });
+
+        let saved = service.save_state_value(doc).unwrap();
+        let workspaces = saved["workspaces"].as_array().unwrap();
+        assert_eq!(workspaces.len(), 2);
+
+        let oneoff = workspaces.iter().find(|w| w["id"] == "ws-oneoff").unwrap();
+        assert_eq!(oneoff["workspaceKind"], "oneOffChat");
+
+        let ancestor = workspaces
+            .iter()
+            .find(|w| w["id"] == "ws-ancestor")
+            .unwrap();
+        assert_eq!(ancestor["workspaceKind"], "project");
     }
 }

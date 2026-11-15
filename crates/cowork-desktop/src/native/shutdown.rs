@@ -3,8 +3,9 @@
 //! Replaces `apps/desktop/electron/services/shutdown.ts`: stops all child workspace
 //! servers cleanly, drains debounced `WindowStateStore` writes, and flushes local logs.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use super::local_logs::LocalLogger;
 use super::server_manager::ServerManager;
@@ -18,6 +19,7 @@ pub struct ShutdownCoordinator {
     logger: Option<Arc<LocalLogger>>,
     shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     started: Arc<AtomicBool>,
+    done: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl ShutdownCoordinator {
@@ -33,7 +35,41 @@ impl ShutdownCoordinator {
             logger,
             shutdown_tx,
             started: Arc::new(AtomicBool::new(false)),
+            done: Arc::new((Mutex::new(false), Condvar::new())),
         }
+    }
+
+    pub fn completion_latch(&self) -> Arc<(Mutex<bool>, Condvar)> {
+        self.done.clone()
+    }
+
+    /// Blocks synchronously (up to `timeout`) until [`Self::shutdown`] completes.
+    /// Intended for Rune's `on_quit` hook, since Rune uses `fast_exit` after `on_quit` returns.
+    pub fn wait_until_done(latch: &(Mutex<bool>, Condvar), timeout: Duration) -> bool {
+        let (lock, cvar) = latch;
+        let deadline = Instant::now() + timeout;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while !*guard {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, wait_res) = cvar
+                .wait_timeout(guard, remaining)
+                .unwrap_or_else(|e| e.into_inner());
+            guard = next;
+            if wait_res.timed_out() && !*guard {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn mark_done(&self) {
+        let (lock, cvar) = &*self.done;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = true;
+        cvar.notify_all();
     }
 
     /// Runs cleanup idempotently across `server_manager`, `window_state`, and `logger`.
@@ -51,6 +87,7 @@ impl ShutdownCoordinator {
         if let Some(logger) = &self.logger {
             logger.flush_all();
         }
+        self.mark_done();
     }
 }
 

@@ -320,9 +320,6 @@ pub fn build_server_env(
     privacy: Option<&PrivacyTelemetrySettings>,
 ) -> HashMap<String, String> {
     let network_disabled = cowork_config::is_network_telemetry_globally_disabled(parent_env);
-    let ai_traces_enabled =
-        !network_disabled && privacy.is_some_and(|p| p.crash_reports_enabled || !network_disabled);
-    let _ = ai_traces_enabled; // Telemetry defaults are read below explicitly.
 
     // Determine effective telemetry toggles without letting inherited env vars override user opt-outs.
     let mut next: HashMap<String, String> = HashMap::new();

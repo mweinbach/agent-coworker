@@ -2,43 +2,80 @@
 //!
 //! Replaces `apps/desktop/electron/`: `cowork-server` child process manager, desktop JSON
 //! persistence, window state, menus/tray/shortcuts, native file/folder dialogs, path-bounded
-//! workspace file explorer & preview backend, notifications, and updater stubs.
+//! workspace file explorer & preview backend, notifications, diagnostics, and updater stubs.
 
+pub mod appearance;
+pub mod apply_desktop_state;
+pub mod diagnostics;
+pub mod dialogs;
+pub mod explorer;
+pub mod file_entry_rename;
+pub mod file_preview_read;
+pub mod launchable_files;
 pub mod local_logs;
+pub mod menu;
+pub mod notifications;
 pub mod path_boundary;
 pub mod persistence;
 pub mod security;
 pub mod server_manager;
 pub mod server_platform;
+pub mod shell_ops;
 pub mod shutdown;
 pub mod sidecar;
+pub mod tray;
+pub mod updater;
 pub mod validation;
+pub mod watcher;
+pub mod window_chrome;
+pub mod window_lifecycle;
 pub mod window_state;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
-use rune::{App, AppHandle, FileDialogOptions};
+use rune::{App, AppHandle};
 use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::actions::{NativeCommand, StoreEvent};
 use crate::state::{AppState, PersistedDesktopState};
+use appearance::{AppearancePreferences, detect_system_dark};
+use apply_desktop_state::apply_desktop_state;
+use diagnostics::DiagnosticsService;
+use explorer::list_workspace_directory;
+use file_preview_read::{DEFAULT_PREVIEW_MAX_BYTES, load_file_preview_state};
 use local_logs::{LocalLogFileName, LocalLogLevel, LocalLogger, strip_url_secrets};
+use notifications::DesktopNotificationService;
 use persistence::{
     PersistenceService, read_user_data_override_env, resolve_legacy_user_data_dir,
     resolve_user_data_dir,
 };
-use security::{WorkspaceRootsController, assert_allowed_external_url};
+use security::{AuthorizedUploadRegistry, WorkspaceRootsController, assert_allowed_external_url};
 use server_manager::{
     ServerManager, ServerManagerRuntime, StartWorkspaceServerOptions, WorkspaceServerFeatureFlags,
 };
+use shell_ops::{
+    DEFAULT_IMAGE_FETCH_MAX_BYTES, OpenInDefaultAppOutcome, fetch_image_bytes,
+    open_external_url_os, open_in_default_app, reveal_in_os, trash_workspace_entry,
+};
 use shutdown::ShutdownCoordinator;
 use sidecar::resolve_dev_repo_root;
+use tray::QuickChatTrayController;
+use updater::DesktopUpdaterService;
+use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
 use window_state::WindowStateStore;
 
+type ShutdownLatch = Arc<(Mutex<bool>, Condvar)>;
+
+const QUIT_SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+
 static APP_HANDLE: OnceLock<Mutex<Option<AppHandle<AppState>>>> = OnceLock::new();
+static WORKER_CMD_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<NativeCommand>>>> =
+    OnceLock::new();
+static SHUTDOWN_LATCH: OnceLock<Mutex<Option<ShutdownLatch>>> = OnceLock::new();
 
 fn app_handle_slot() -> &'static Mutex<Option<AppHandle<AppState>>> {
     APP_HANDLE.get_or_init(|| Mutex::new(None))
@@ -56,12 +93,46 @@ fn current_app_handle() -> Option<AppHandle<AppState>> {
         .clone()
 }
 
-/// Configures OS-level window chrome, menus, tray, focus/close/quit handlers on `App`.
+fn worker_cmd_slot() -> &'static Mutex<Option<mpsc::UnboundedSender<NativeCommand>>> {
+    WORKER_CMD_TX.get_or_init(|| Mutex::new(None))
+}
+
+fn store_worker_cmd_tx(tx: mpsc::UnboundedSender<NativeCommand>) {
+    let mut guard = worker_cmd_slot().lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(tx);
+}
+
+fn take_worker_cmd_tx() -> Option<mpsc::UnboundedSender<NativeCommand>> {
+    worker_cmd_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+fn shutdown_latch_slot() -> &'static Mutex<Option<ShutdownLatch>> {
+    SHUTDOWN_LATCH.get_or_init(|| Mutex::new(None))
+}
+
+fn store_shutdown_latch(latch: Option<ShutdownLatch>) {
+    let mut guard = shutdown_latch_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = latch;
+}
+
+fn current_shutdown_latch() -> Option<ShutdownLatch> {
+    shutdown_latch_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Configures OS-level menus, deep links, and synchronous quit coordination on `App`.
 pub fn configure_app(app: App<AppState>) -> App<AppState> {
     let handle = app.handle();
     store_app_handle(handle);
 
-    app.standard_menus()
+    menu::install_application_menus(app)
         .on_open_url(|state, url, _tx| {
             state.apply_store_event(StoreEvent::DeepLink(url.to_string()));
         })
@@ -70,7 +141,8 @@ pub fn configure_app(app: App<AppState>) -> App<AppState> {
         })
 }
 
-/// Spawns the background native runtime (`PersistenceService`, `ServerManager`, `WindowStateStore`)
+/// Spawns the background native runtime (`PersistenceService`, `ServerManager`, `WindowStateStore`,
+/// filesystem explorer/preview/watcher, tray/shortcuts, notifications, diagnostics, updater stub)
 /// on a dedicated OS thread hosting a Tokio runtime, delivering [`StoreEvent`] updates and
 /// waking the UI thread via `waker`.
 pub fn spawn_native_worker(
@@ -78,7 +150,11 @@ pub fn spawn_native_worker(
     waker: Option<rune::Waker>,
 ) -> mpsc::UnboundedSender<NativeCommand> {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<NativeCommand>();
-    let _ = std::thread::Builder::new()
+    store_worker_cmd_tx(cmd_tx.clone());
+    let latch = Arc::new((Mutex::new(false), Condvar::new()));
+    store_shutdown_latch(Some(latch.clone()));
+
+    let spawn_res = std::thread::Builder::new()
         .name("cowork-native-worker".into())
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -89,6 +165,9 @@ pub fn spawn_native_worker(
                 Ok(rt) => rt,
                 Err(err) => {
                     eprintln!("cowork-native-worker failed to build tokio runtime: {err}");
+                    let (lock, cvar) = &*latch;
+                    *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                    cvar.notify_all();
                     return;
                 }
             };
@@ -96,6 +175,7 @@ pub fn spawn_native_worker(
             rt.block_on(async move {
                 let emit = make_emitter(event_tx, waker);
                 let mut runtime_ctx = NativeWorkerContext::initialize(emit.clone());
+                runtime_ctx.notifications.initialize(current_app_handle());
 
                 let persisted = runtime_ctx.load_initial_state();
                 let is_packaged = runtime_ctx.is_packaged;
@@ -115,10 +195,14 @@ pub fn spawn_native_worker(
                     Some(runtime_ctx.logger.clone()),
                     Some(shutdown_tx),
                 );
+                let coord_latch = coordinator.completion_latch();
+                store_shutdown_latch(Some(coord_latch));
 
                 while let Some(cmd) = cmd_rx.recv().await {
                     match cmd {
                         NativeCommand::Shutdown => {
+                            runtime_ctx.watcher.unwatch_all().await;
+                            runtime_ctx.tray.teardown(current_app_handle().as_ref());
                             coordinator.shutdown().await;
                             break;
                         }
@@ -128,16 +212,33 @@ pub fn spawn_native_worker(
                     }
                 }
 
+                runtime_ctx.watcher.unwatch_all().await;
+                runtime_ctx.tray.teardown(current_app_handle().as_ref());
                 coordinator.shutdown().await;
+                let (lock, cvar) = &*latch;
+                *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                cvar.notify_all();
             });
         });
+
+    if spawn_res.is_err() {
+        store_shutdown_latch(None);
+    }
+
     cmd_tx
 }
 
-/// Flushes native state and triggers graceful sidecar shutdown.
+/// Signals native and WebSocket teardown and blocks briefly until sidecars/logs finish flushing,
+/// because Rune runs `fast_exit` immediately after `App::on_quit` returns.
 pub fn on_shutdown(state: &mut AppState) {
     state.send_native(NativeCommand::Shutdown);
     state.send_ws(crate::ws::WsCommand::Shutdown);
+    if let Some(tx) = take_worker_cmd_tx() {
+        let sent = tx.send(NativeCommand::Shutdown).is_ok();
+        if sent && let Some(latch) = current_shutdown_latch() {
+            let _ = ShutdownCoordinator::wait_until_done(&latch, QUIT_SHUTDOWN_WAIT_TIMEOUT);
+        }
+    }
 }
 
 struct NativeWorkerContext {
@@ -145,10 +246,18 @@ struct NativeWorkerContext {
     logger: Arc<LocalLogger>,
     persistence: Arc<PersistenceService>,
     window_state: WindowStateStore,
+    appearance: AppearancePreferences,
     roots: Arc<Mutex<WorkspaceRootsController>>,
+    uploads: Arc<Mutex<AuthorizedUploadRegistry>>,
     server_manager: ServerManager,
+    watcher: WorkspaceDirectoryWatcher,
+    notifications: DesktopNotificationService,
+    updater: DesktopUpdaterService,
+    diagnostics: DiagnosticsService,
+    tray: QuickChatTrayController,
     last_feature_flags: HashMap<String, bool>,
     last_privacy: Option<crate::state::PrivacyTelemetrySettings>,
+    show_hidden_files: bool,
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
 }
 
@@ -173,7 +282,9 @@ impl NativeWorkerContext {
             Some(logger.clone()),
         ));
         let window_state = WindowStateStore::new(&user_data_dir);
+        let appearance = AppearancePreferences::new(&user_data_dir);
         let roots = Arc::new(Mutex::new(WorkspaceRootsController::new()));
+        let uploads = Arc::new(Mutex::new(AuthorizedUploadRegistry::new()));
 
         let current_exe_dir = std::env::current_exe()
             .ok()
@@ -193,7 +304,7 @@ impl NativeWorkerContext {
 
         let server_manager = ServerManager::new(
             ServerManagerRuntime {
-                user_data_dir,
+                user_data_dir: user_data_dir.clone(),
                 resources_dir,
                 current_exe_dir,
                 repo_root,
@@ -203,15 +314,36 @@ impl NativeWorkerContext {
             Some(emit.clone()),
         );
 
+        let notifications = DesktopNotificationService::new(Some(logger.clone()));
+        let updater = DesktopUpdaterService::new(Some(logger.clone()), emit.clone());
+        let diag_mgr = server_manager.clone();
+        let diagnostics = DiagnosticsService::new(
+            user_data_dir,
+            is_packaged,
+            persistence.clone(),
+            logger.clone(),
+            Some(updater.clone()),
+            Arc::new(move || diag_mgr.get_diagnostics()),
+        );
+        let tray = QuickChatTrayController::new(Some(logger.clone()));
+
         Self {
             is_packaged,
             logger,
             persistence,
             window_state,
+            appearance,
             roots,
+            uploads,
             server_manager,
+            watcher: WorkspaceDirectoryWatcher::new(),
+            notifications,
+            updater,
+            diagnostics,
+            tray,
             last_feature_flags: HashMap::new(),
             last_privacy: None,
+            show_hidden_files: false,
             emit,
         }
     }
@@ -228,6 +360,16 @@ impl NativeWorkerContext {
                 let core = persistence::core_state_from_document(&doc);
                 self.last_feature_flags = core.feature_flags.clone();
                 self.last_privacy = Some(core.settings.privacy_telemetry.clone());
+                self.show_hidden_files = core.settings.show_hidden_files;
+                apply_desktop_state(
+                    &core,
+                    &self.roots,
+                    &self.logger,
+                    &self.appearance,
+                    &self.tray,
+                    current_app_handle().as_ref(),
+                    false,
+                );
                 core
             }
             Err(err) => {
@@ -244,6 +386,42 @@ impl NativeWorkerContext {
         }
     }
 
+    fn approved_roots_snapshot(&self) -> Vec<PathBuf> {
+        self.roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .approved_roots()
+    }
+
+    fn authorize_workspace_start(
+        &self,
+        workspace_id: &str,
+        raw_path: &Path,
+    ) -> Result<PathBuf, String> {
+        let mut guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(resolved) = guard.resolve_authorized_workspace_root(workspace_id, Some(raw_path))
+        {
+            return Ok(resolved);
+        }
+
+        // Allow newly created one-off chat directories strictly inside `~/.cowork/chats`.
+        let env = cowork_config::env_map_from_process();
+        let home = cowork_config::resolve_home_dir(&env, cowork_config::host_platform());
+        let chats_root = cowork_config::get_one_off_chats_root(&home);
+        let lexical = cowork_config::normalize_lexical_path(raw_path);
+        let chats_lexical = cowork_config::normalize_lexical_path(&chats_root);
+        if cowork_config::is_inside(&chats_lexical, &lexical) && lexical != chats_lexical {
+            return guard
+                .approve_one_off_chat_workspace(workspace_id, raw_path, &chats_root)
+                .map_err(|err| err.to_string());
+        }
+
+        Err(
+            "Workspace path is not approved. Select the folder with the desktop picker before starting."
+                .to_string(),
+        )
+    }
+
     async fn handle_command(&mut self, cmd: NativeCommand) {
         match cmd {
             NativeCommand::StartWorkspaceServer {
@@ -251,19 +429,72 @@ impl NativeWorkerContext {
                 path,
                 yolo,
             } => {
-                let approved = {
-                    let mut guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
-                    let _ = guard.register_workspace(&workspace_id, &PathBuf::from(&path));
-                    guard.approved_roots()
-                };
-                self.logger.set_workspace_paths(approved);
+                let requested = PathBuf::from(&path);
+                let authorized_path =
+                    match self.authorize_workspace_start(&workspace_id, &requested) {
+                        Ok(valid) => valid,
+                        Err(err) => {
+                            let meta = json!({
+                                "workspaceId": workspace_id,
+                                "error": err,
+                            });
+                            self.logger.write(
+                                LocalLogFileName::Server,
+                                LocalLogLevel::Warn,
+                                "security",
+                                "blocked server start for unapproved workspace root",
+                                Some(&meta),
+                            );
+                            (self.emit)(StoreEvent::ServerExited {
+                                workspace_id,
+                                code: None,
+                                message: Some(err),
+                            });
+                            return;
+                        }
+                    };
+                self.logger
+                    .set_workspace_paths(self.approved_roots_snapshot());
+
+                // Watch workspace files to keep explorer listings synchronized on external edits.
+                let emit_watch = self.emit.clone();
+                let roots_for_watch = self.roots.clone();
+                let show_hidden = self.show_hidden_files;
+                let watch_ws_id = workspace_id.clone();
+                let _ = self
+                    .watcher
+                    .watch(
+                        &watch_ws_id,
+                        &authorized_path,
+                        Arc::new(move |batch| {
+                            if batch.kind == WatchChangeKind::Error {
+                                return;
+                            }
+                            let approved = roots_for_watch
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .approved_roots();
+                            for dir in batch.affected_dirs {
+                                if let Ok(entries) =
+                                    list_workspace_directory(&approved, &dir, show_hidden)
+                                {
+                                    emit_watch(StoreEvent::WorkspaceFilesListed {
+                                        workspace_id: batch.workspace_id.clone(),
+                                        dir: dir.to_string_lossy().into_owned(),
+                                        entries,
+                                    });
+                                }
+                            }
+                        }),
+                    )
+                    .await;
 
                 let mgr = self.server_manager.clone();
                 let logger = self.logger.clone();
                 let emit = self.emit.clone();
                 let opts = StartWorkspaceServerOptions {
                     workspace_id: workspace_id.clone(),
-                    workspace_path: PathBuf::from(&path),
+                    workspace_path: authorized_path,
                     yolo,
                     force_restart: false,
                     mobile_h3: None,
@@ -295,6 +526,15 @@ impl NativeWorkerContext {
                 });
             }
             NativeCommand::StopWorkspaceServer { workspace_id } => {
+                let root = {
+                    let guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
+                    guard
+                        .resolve_authorized_workspace_root(&workspace_id, None)
+                        .ok()
+                };
+                if let Some(root) = root {
+                    self.watcher.unwatch(&workspace_id, &root).await;
+                }
                 if let Err(err) = self
                     .server_manager
                     .stop_workspace_server(&workspace_id)
@@ -308,7 +548,7 @@ impl NativeWorkerContext {
                         LocalLogFileName::Server,
                         LocalLogLevel::Warn,
                         "server-manager",
-                        "failed to stop workspace server cleanly",
+                        "failed to stop workspace server",
                         Some(&meta),
                     );
                 }
@@ -316,26 +556,27 @@ impl NativeWorkerContext {
             NativeCommand::SavePersistedState(snapshot) => {
                 self.last_feature_flags = snapshot.feature_flags.clone();
                 self.last_privacy = Some(snapshot.settings.privacy_telemetry.clone());
-                match self.persistence.merge_and_save_core_snapshot(&snapshot) {
-                    Ok(doc) => {
-                        let approved = {
-                            let mut guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
-                            PersistenceService::sync_workspace_roots(&doc, &mut guard);
-                            guard.approved_roots()
-                        };
-                        self.logger.set_workspace_paths(approved);
-                    }
-                    Err(err) => {
-                        let meta = json!({ "error": err.to_string() });
-                        self.logger.write(
-                            LocalLogFileName::Server,
-                            LocalLogLevel::Error,
-                            "persistence",
-                            "failed to persist desktop state",
-                            Some(&meta),
-                        );
-                    }
+                self.show_hidden_files = snapshot.settings.show_hidden_files;
+
+                if let Err(err) = self.persistence.merge_and_save_core_snapshot(&snapshot) {
+                    let meta = json!({ "error": err.to_string() });
+                    self.logger.write(
+                        LocalLogFileName::Server,
+                        LocalLogLevel::Error,
+                        "persistence",
+                        "failed to persist desktop snapshot",
+                        Some(&meta),
+                    );
                 }
+                apply_desktop_state(
+                    &snapshot,
+                    &self.roots,
+                    &self.logger,
+                    &self.appearance,
+                    &self.tray,
+                    current_app_handle().as_ref(),
+                    true,
+                );
             }
             NativeCommand::PickFolder { request_id } => {
                 self.dispatch_pick_folder(request_id);
@@ -346,61 +587,258 @@ impl NativeWorkerContext {
             } => {
                 self.dispatch_pick_files(request_id, allow_multiple);
             }
-            NativeCommand::OpenExternalUrl(url) => {
-                if let Err(err) = assert_allowed_external_url(&url) {
+            NativeCommand::ListWorkspaceFiles {
+                request_id: _,
+                workspace_id,
+                workspace_root,
+                dir,
+                show_hidden,
+            } => {
+                let roots = {
+                    let guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
+                    let candidate =
+                        (!workspace_root.trim().is_empty()).then(|| PathBuf::from(&workspace_root));
+                    match guard
+                        .resolve_authorized_workspace_root(&workspace_id, candidate.as_deref())
+                    {
+                        Ok(valid) => vec![valid],
+                        Err(_) => guard.approved_roots(),
+                    }
+                };
+                let target_dir = if dir.trim().is_empty() {
+                    PathBuf::from(&workspace_root)
+                } else {
+                    PathBuf::from(&dir)
+                };
+                let emit = self.emit.clone();
+                let logger = self.logger.clone();
+                let dir_str = dir;
+                tokio::spawn(async move {
+                    let res = tokio::task::spawn_blocking(move || {
+                        list_workspace_directory(&roots, &target_dir, show_hidden)
+                    })
+                    .await;
+                    let entries = match res {
+                        Ok(Ok(entries)) => entries,
+                        Ok(Err(err)) => {
+                            let meta =
+                                json!({ "workspaceId": workspace_id, "error": err.to_string() });
+                            logger.warn(
+                                "explorer",
+                                "failed to list workspace directory",
+                                Some(&meta),
+                            );
+                            Vec::new()
+                        }
+                        Err(err) => {
+                            let meta =
+                                json!({ "workspaceId": workspace_id, "error": err.to_string() });
+                            logger.error("explorer", "explorer task panicked", Some(&meta));
+                            Vec::new()
+                        }
+                    };
+                    emit(StoreEvent::WorkspaceFilesListed {
+                        workspace_id,
+                        dir: dir_str,
+                        entries,
+                    });
+                });
+            }
+            NativeCommand::ReadFilePreview {
+                request_id: _,
+                workspace_id,
+                workspace_root,
+                path,
+            } => {
+                let roots = {
+                    let guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
+                    let candidate =
+                        (!workspace_root.trim().is_empty()).then(|| PathBuf::from(&workspace_root));
+                    match guard
+                        .resolve_authorized_workspace_root(&workspace_id, candidate.as_deref())
+                    {
+                        Ok(valid) => vec![valid],
+                        Err(_) => guard.approved_roots(),
+                    }
+                };
+                let emit = self.emit.clone();
+                let ws_id = workspace_id.clone();
+                let path_clone = path.clone();
+                tokio::spawn(async move {
+                    let res = tokio::task::spawn_blocking(move || {
+                        load_file_preview_state(
+                            &roots,
+                            &ws_id,
+                            Path::new(&path_clone),
+                            DEFAULT_PREVIEW_MAX_BYTES,
+                        )
+                    })
+                    .await;
+                    let result = match res {
+                        Ok(Ok(preview)) => Ok(preview),
+                        Ok(Err(err)) => Err(err.to_string()),
+                        Err(err) => Err(format!("Preview reader failed: {err}")),
+                    };
+                    emit(StoreEvent::FilePreviewLoaded {
+                        workspace_id,
+                        path,
+                        result,
+                    });
+                });
+            }
+            NativeCommand::FetchImageBytes { request_id, url } => {
+                let emit = self.emit.clone();
+                let logger = self.logger.clone();
+                tokio::spawn(async move {
+                    match fetch_image_bytes(&url, DEFAULT_IMAGE_FETCH_MAX_BYTES).await {
+                        Ok((mime_type, bytes)) => {
+                            emit(StoreEvent::ImageBytesLoaded {
+                                request_id,
+                                mime_type,
+                                result: Ok(bytes),
+                            });
+                        }
+                        Err(err) => {
+                            let meta = json!({
+                                "url": strip_url_secrets(&url),
+                                "error": err.to_string(),
+                            });
+                            logger.warn("images", "failed to fetch image bytes", Some(&meta));
+                            emit(StoreEvent::ImageBytesLoaded {
+                                request_id,
+                                mime_type: None,
+                                result: Err(err.to_string()),
+                            });
+                        }
+                    }
+                });
+            }
+            NativeCommand::OpenExternalUrl(url) => match assert_allowed_external_url(&url) {
+                Ok(parsed) => {
+                    let url_str = parsed.to_string();
+                    if let Some(handle) = current_app_handle() {
+                        let fallback = url_str.clone();
+                        handle.update(move |_state, tx| {
+                            if tx.open_url(&url_str).is_err() {
+                                let _ = open_external_url_os(&fallback);
+                            }
+                        });
+                    } else if let Err(err) = open_external_url_os(&url_str) {
+                        let meta =
+                            json!({ "url": strip_url_secrets(&url_str), "error": err.to_string() });
+                        self.logger
+                            .warn("security", "failed to open external url", Some(&meta));
+                    }
+                }
+                Err(err) => {
                     let meta = json!({
                         "url": strip_url_secrets(&url),
                         "error": err.to_string(),
                     });
-                    self.logger.write(
-                        LocalLogFileName::Server,
-                        LocalLogLevel::Warn,
-                        "security",
-                        "blocked disallowed external URL",
-                        Some(&meta),
-                    );
-                    return;
+                    self.logger
+                        .warn("security", "blocked invalid external url", Some(&meta));
                 }
-                if let Some(handle) = current_app_handle() {
-                    handle.update(move |_state, tx| {
-                        let _ = tx.open_url(&url);
-                    });
+            },
+            NativeCommand::RevealInOs(path) => {
+                let roots = self.approved_roots_snapshot();
+                if let Err(err) = reveal_in_os(&roots, Path::new(&path)) {
+                    let meta = json!({ "error": err.to_string() });
+                    self.logger
+                        .warn("shell", "failed to reveal path in OS", Some(&meta));
                 }
             }
-            // Slice 2 platform services (file explorer, watcher, preview, notifications,
-            // diagnostics, updater) will be wired in the second native slice commit.
-            NativeCommand::ListWorkspaceFiles {
-                workspace_id, dir, ..
-            } => {
-                (self.emit)(StoreEvent::WorkspaceFilesListed {
-                    workspace_id,
-                    dir,
-                    entries: Vec::new(),
+            NativeCommand::OpenInDefaultApp(path) => {
+                let roots = self.approved_roots_snapshot();
+                match open_in_default_app(&roots, Path::new(&path), false) {
+                    Ok(OpenInDefaultAppOutcome::Opened) => {}
+                    Ok(OpenInDefaultAppOutcome::ConfirmationRequired {
+                        path: safe_path,
+                        reason,
+                    }) => {
+                        let meta = json!({
+                            "fileName": safe_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                            "reason": reason,
+                        });
+                        self.logger.warn(
+                            "security",
+                            "blocked opening launchable file in default app without explicit confirmation",
+                            Some(&meta),
+                        );
+                    }
+                    Err(err) => {
+                        let meta = json!({ "error": err.to_string() });
+                        self.logger.warn(
+                            "shell",
+                            "failed to open path in default app",
+                            Some(&meta),
+                        );
+                    }
+                }
+            }
+            NativeCommand::TrashPath(path) => {
+                let roots = self.approved_roots_snapshot();
+                if let Err(err) = trash_workspace_entry(&roots, Path::new(&path)) {
+                    let meta = json!({ "error": err.to_string() });
+                    self.logger
+                        .warn("explorer", "failed to trash workspace entry", Some(&meta));
+                }
+            }
+            NativeCommand::ShowDesktopNotification { title, body } => {
+                let id = uuid::Uuid::new_v4().to_string();
+                self.notifications.show(&id, &title, &body);
+            }
+            NativeCommand::ExportDiagnosticsBundle => {
+                let diagnostics = self.diagnostics.clone();
+                let logger = self.logger.clone();
+                let notifications = self.notifications.clone();
+                tokio::spawn(async move {
+                    let res = tokio::task::spawn_blocking(move || {
+                        let created = diagnostics.create_bundle()?;
+                        let _ = diagnostics.reveal_bundle(&created.path);
+                        Ok::<_, anyhow::Error>(created)
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(bundle)) => {
+                            let msg = format!(
+                                "Diagnostics saved to {}",
+                                bundle
+                                    .path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("diagnostics folder")
+                            );
+                            notifications.show(
+                                "diagnostics-bundle",
+                                "Diagnostics Bundle Created",
+                                &msg,
+                            );
+                        }
+                        Ok(Err(err)) => {
+                            let meta = json!({ "error": err.to_string() });
+                            logger.error(
+                                "diagnostics",
+                                "failed to export diagnostics bundle",
+                                Some(&meta),
+                            );
+                        }
+                        Err(err) => {
+                            let meta = json!({ "error": err.to_string() });
+                            logger.error(
+                                "diagnostics",
+                                "diagnostics export task panicked",
+                                Some(&meta),
+                            );
+                        }
+                    }
                 });
             }
-            NativeCommand::ReadFilePreview {
-                workspace_id, path, ..
-            } => {
-                (self.emit)(StoreEvent::FilePreviewLoaded {
-                    workspace_id,
-                    path,
-                    result: Err("Native file preview service is queued for Slice 2".into()),
-                });
+            NativeCommand::CheckForUpdates => {
+                self.updater.check_for_updates();
             }
-            NativeCommand::FetchImageBytes { request_id, .. } => {
-                (self.emit)(StoreEvent::ImageBytesLoaded {
-                    request_id,
-                    mime_type: None,
-                    result: Err("Native image fetcher is queued for Slice 2".into()),
-                });
+            NativeCommand::QuitAndInstallUpdate => {
+                self.updater.quit_and_install();
             }
-            NativeCommand::RevealInOs(_)
-            | NativeCommand::OpenInDefaultApp(_)
-            | NativeCommand::TrashPath(_)
-            | NativeCommand::ShowDesktopNotification { .. }
-            | NativeCommand::ExportDiagnosticsBundle
-            | NativeCommand::CheckForUpdates
-            | NativeCommand::QuitAndInstallUpdate => {}
             NativeCommand::Shutdown => {}
         }
     }
@@ -418,10 +856,7 @@ impl NativeWorkerContext {
         handle.update(move |_state, tx| {
             let roots_inner = roots.clone();
             let id_inner = req_id.clone();
-            let options = FileDialogOptions {
-                title: "Open Workspace Folder".into(),
-                ..Default::default()
-            };
+            let options = dialogs::build_open_folder_dialog(None);
             tx.open_folder(options, move |state: &mut AppState, result, _tx| {
                 let picked = result.ok().flatten();
                 if let Some(ref p) = picked {
@@ -436,7 +871,7 @@ impl NativeWorkerContext {
         });
     }
 
-    fn dispatch_pick_files(&self, request_id: String, _allow_multiple: bool) {
+    fn dispatch_pick_files(&self, request_id: String, allow_multiple: bool) {
         let Some(handle) = current_app_handle() else {
             (self.emit)(StoreEvent::FilesPicked {
                 request_id,
@@ -444,23 +879,32 @@ impl NativeWorkerContext {
             });
             return;
         };
-        let roots = self.roots.clone();
+        let uploads = self.uploads.clone();
+        let logger = self.logger.clone();
         let req_id = request_id.clone();
         handle.update(move |_state, tx| {
-            let roots_inner = roots.clone();
+            let uploads_inner = uploads.clone();
+            let logger_inner = logger.clone();
             let id_inner = req_id.clone();
-            // Note: Rune's native FileDialogOptions currently supports single-file open_file;
-            // multi-select falls back to single file selection cleanly until Rune exposes `.multiple`.
-            let options = FileDialogOptions {
-                title: "Select Files".into(),
-                ..Default::default()
-            };
+            // Rune's FileDialogOptions currently supports single-file open_file; multi-select
+            // returns at most one selected file until Rune exposes multi-selection.
+            let options = dialogs::build_open_files_dialog(None, allow_multiple);
             tx.open_file(options, move |state: &mut AppState, result, _tx| {
                 let paths = match result.ok().flatten() {
                     Some(p) => {
-                        let mut guard = roots_inner.lock().unwrap_or_else(|e| e.into_inner());
-                        guard.approve_root(&p, false);
-                        vec![p]
+                        let mut reg = uploads_inner.lock().unwrap_or_else(|e| e.into_inner());
+                        match reg.authorize_file(&p) {
+                            Ok(_token) => vec![p],
+                            Err(err) => {
+                                let meta = json!({ "error": err.to_string() });
+                                logger_inner.warn(
+                                    "security",
+                                    "picked upload source failed file authorization",
+                                    Some(&meta),
+                                );
+                                Vec::new()
+                            }
+                        }
                     }
                     None => Vec::new(),
                 };
@@ -478,17 +922,22 @@ fn make_emitter(
     waker: Option<rune::Waker>,
 ) -> Arc<dyn Fn(StoreEvent) + Send + Sync> {
     Arc::new(move |event| {
-        if event_tx.send(event).is_ok()
-            && let Some(ref w) = waker
-        {
+        let _ = event_tx.send(event);
+        if let Some(ref w) = waker {
             (w)();
         }
     })
 }
 
 fn is_packaged_build() -> bool {
-    if std::env::var("COWORK_DESKTOP_PACKAGED").as_deref() == Ok("1") {
-        return true;
+    if let Ok(raw) = std::env::var("COWORK_IS_PACKAGED") {
+        let trimmed = raw.trim().to_ascii_lowercase();
+        if matches!(trimmed.as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
+        if matches!(trimmed.as_str(), "0" | "false" | "no" | "off") {
+            return false;
+        }
     }
     #[cfg(target_os = "macos")]
     if let Ok(exe) = std::env::current_exe()
@@ -497,8 +946,4 @@ fn is_packaged_build() -> bool {
         return true;
     }
     false
-}
-
-fn detect_system_dark() -> Option<bool> {
-    None
 }

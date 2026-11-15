@@ -38,6 +38,134 @@ pub struct MentionPopoverState {
     pub item: MentionItem,
 }
 
+/// Active view mode inside the Canvas pane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CanvasTab {
+    #[default]
+    Document,
+    Source,
+}
+
+/// Lifecycle phase displayed by a Canvas fixture or document session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CanvasLifecycleKind {
+    Loading,
+    #[default]
+    Ready,
+    Saving,
+    Conflict,
+    LoadError,
+    SaveError,
+}
+
+/// Self-contained fixture/override state allowing headless tests and stories to render every Canvas state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanvasFixtureState {
+    pub workspace_id: String,
+    pub path: String,
+    pub title: String,
+    pub content: String,
+    pub is_markdown: bool,
+    pub truncated: bool,
+    pub lifecycle: CanvasLifecycleKind,
+    pub message: Option<String>,
+}
+
+/// Ephemeral UI & editor state for the right-rail Canvas document pane.
+pub struct CanvasUiState {
+    /// Active tab (`Document` prose preview vs `Source` raw text editor).
+    pub active_tab: CanvasTab,
+    /// Whether the Markdown formatting toolbar (`B`, `I`, `H1-H3`, lists) is shown.
+    pub show_formatting_bar: bool,
+    /// Whether Canvas is expanded over the primary chat area instead of docked right.
+    pub maximized: bool,
+    /// Confirmation modal asking whether to discard local edits and reload from disk.
+    pub reload_confirm_open: bool,
+    /// Live `TextEdit` buffer for the Canvas source editor.
+    pub source_edit: TextEdit,
+    /// Bottom collaborative prompt `TextEdit` ("Ask model to edit this document...").
+    pub prompt_edit: TextEdit,
+    /// Identity key (`"{workspace_id}\0{path}\0{generation}"`) of the currently synced buffer.
+    pub synced_session_key: Option<String>,
+    /// Hash of the disk content snapshot currently synced in `synced_disk_content`.
+    pub synced_disk_hash: Option<u64>,
+    /// Last synced disk snapshot text used to compute dirty state.
+    pub synced_disk_content: String,
+    /// Local UI error notice (e.g. Save As canceled/failed validation).
+    pub local_error: Option<String>,
+    /// Optional explicit fixture override used by headless verification and scenes.
+    pub fixture: Option<CanvasFixtureState>,
+}
+
+impl Default for CanvasUiState {
+    fn default() -> Self {
+        Self {
+            active_tab: CanvasTab::Document,
+            show_formatting_bar: true,
+            maximized: false,
+            reload_confirm_open: false,
+            source_edit: TextEdit::default(),
+            prompt_edit: TextEdit::default(),
+            synced_session_key: None,
+            synced_disk_hash: None,
+            synced_disk_content: String::new(),
+            local_error: None,
+            fixture: None,
+        }
+    }
+}
+
+impl CanvasUiState {
+    /// Returns true when the live Source buffer differs from the last synced disk content.
+    pub fn is_dirty(&self) -> bool {
+        self.synced_session_key.is_some() && self.source_edit.text != self.synced_disk_content
+    }
+
+    /// Synchronizes editor buffer and default tab for an opened or reloaded Canvas session.
+    pub fn sync_session(
+        &mut self,
+        session_key: &str,
+        disk_hash: u64,
+        content: &str,
+        is_markdown: bool,
+        force_reset: bool,
+    ) {
+        let same_session = self.synced_session_key.as_deref() == Some(session_key);
+        let needs_seed = force_reset
+            || !same_session
+            || (!self.is_dirty() && self.synced_disk_hash != Some(disk_hash));
+        if !needs_seed {
+            return;
+        }
+        self.synced_session_key = Some(session_key.to_string());
+        self.synced_disk_hash = Some(disk_hash);
+        self.synced_disk_content = content.to_string();
+        self.source_edit.replace_text(content);
+        if !same_session || force_reset {
+            self.active_tab = if is_markdown {
+                CanvasTab::Document
+            } else {
+                CanvasTab::Source
+            };
+            self.reload_confirm_open = false;
+            self.local_error = None;
+        }
+    }
+
+    /// Clears transient Canvas buffers and overlays when closing the document.
+    pub fn clear(&mut self) {
+        self.synced_session_key = None;
+        self.synced_disk_hash = None;
+        self.synced_disk_content.clear();
+        self.source_edit.clear();
+        self.prompt_edit.clear();
+        self.reload_confirm_open = false;
+        self.local_error = None;
+        self.maximized = false;
+        self.fixture = None;
+    }
+}
+
 /// Local UI state for the chat view, landing composer, feed, tool cards, and chat dialogs.
 pub struct ChatUiState {
     /// Explicit open/closed overrides for grouped activity cards, keyed by group ID.
@@ -104,6 +232,8 @@ pub struct ChatUiState {
     pub synced_composer_key: Option<String>,
     /// Cached `TextEdit` snapshot per composer key so thread switching keeps local cursor/drafts.
     pub cached_composer_edits: HashMap<String, TextEdit>,
+    /// Right-rail Canvas document view/edit UI state.
+    pub canvas: CanvasUiState,
 }
 
 impl Default for ChatUiState {
@@ -141,6 +271,7 @@ impl Default for ChatUiState {
             ask_active_question_idx: HashMap::new(),
             synced_composer_key: None,
             cached_composer_edits: HashMap::new(),
+            canvas: CanvasUiState::default(),
         }
     }
 }

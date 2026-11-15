@@ -194,6 +194,46 @@ pub static PENCIL: Icon = stroke_icon!(
     r#"<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>"#
 );
 
+pub static SAVE: Icon = stroke_icon!(
+    "chat-save",
+    r#"<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>"#
+);
+
+pub static FILE_PLUS: Icon = stroke_icon!(
+    "chat-file-plus",
+    r#"<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>"#
+);
+
+pub static MAXIMIZE_2: Icon = stroke_icon!(
+    "chat-maximize-2",
+    r#"<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/>"#
+);
+
+pub static MINIMIZE_2: Icon = stroke_icon!(
+    "chat-minimize-2",
+    r#"<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/>"#
+);
+
+pub static BOLD: Icon = stroke_icon!(
+    "chat-bold",
+    r#"<path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/>"#
+);
+
+pub static ITALIC: Icon = stroke_icon!(
+    "chat-italic",
+    r#"<line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/>"#
+);
+
+pub static LIST: Icon = stroke_icon!(
+    "chat-list",
+    r#"<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>"#
+);
+
+pub static LIST_ORDERED: Icon = stroke_icon!(
+    "chat-list-ordered",
+    r#"<line x1="10" x2="21" y1="6" y2="6"/><line x1="10" x2="21" y1="12" y2="12"/><line x1="10" x2="21" y1="18" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>"#
+);
+
 /// Maps a tool category into its matching Lucide timeline icon.
 pub fn tool_icon(category: ToolIconCategory) -> &'static Icon {
     match category {

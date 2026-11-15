@@ -6,6 +6,7 @@
 pub mod activity;
 pub mod agent_run_viewer;
 pub mod attachments;
+pub mod canvas;
 pub mod components;
 pub mod composer;
 pub mod dialogs;
@@ -20,6 +21,7 @@ pub mod model;
 mod parity_tests;
 pub mod state;
 
+pub use canvas::{canvas_pane, is_canvas_maximized};
 pub use state::ChatUiState;
 
 use rune::{Cx, col, row};

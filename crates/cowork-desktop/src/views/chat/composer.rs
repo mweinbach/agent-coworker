@@ -1212,11 +1212,7 @@ pub fn resolve_composer_workspace<'a>(
 }
 
 pub fn is_hidden_lmstudio_model(provider_id: &str, model: &ProviderModelSummary) -> bool {
-    if !provider_id.eq_ignore_ascii_case("lmstudio") {
-        return false;
-    }
-    let lower = model.id.to_ascii_lowercase();
-    lower.contains("embed") || lower.contains("rerank") || lower.contains("whisper")
+    crate::state::is_hidden_lmstudio_model_id(provider_id, &model.id)
 }
 
 pub fn build_model_options(providers: &[ProviderSummary]) -> Vec<ComboboxOption> {
@@ -1247,59 +1243,8 @@ pub fn resolve_composer_model(
     draft: Option<&ComposerDraft>,
     ws: Option<&WorkspaceRecord>,
 ) -> Option<ResolvedComposerModel> {
-    let preferred_provider = draft
-        .and_then(|d| d.provider.as_deref())
-        .or_else(|| thread.and_then(|t| t.provider.as_deref()))
-        .or_else(|| ws.and_then(|w| w.default_provider.as_deref()))
-        .filter(|s| !s.trim().is_empty());
-
-    let preferred_model = draft
-        .and_then(|d| d.model.as_deref())
-        .or_else(|| thread.and_then(|t| t.model.as_deref()))
-        .or_else(|| ws.and_then(|w| w.default_model.as_deref()))
-        .filter(|s| !s.trim().is_empty());
-
-    if let (Some(pid), Some(mid)) = (preferred_provider, preferred_model) {
-        return Some(lookup_or_fallback_model(&s.provider_catalog, pid, mid));
-    }
-
-    if let Some(pid) = preferred_provider
-        && let Some(prov) = s.provider_catalog.iter().find(|p| p.id == pid)
-    {
-        let fallback_mid = s
-            .default_model_by_provider
-            .get(pid)
-            .map(String::as_str)
-            .or_else(|| {
-                prov.models
-                    .iter()
-                    .find(|m| m.enabled && !is_hidden_lmstudio_model(&prov.id, m))
-                    .map(|m| m.id.as_str())
-            });
-        if let Some(mid) = fallback_mid {
-            return Some(lookup_or_fallback_model(&s.provider_catalog, pid, mid));
-        }
-    }
-
-    for provider in s.provider_catalog.iter().filter(|p| p.configured) {
-        if let Some(mid) = s.default_model_by_provider.get(&provider.id)
-            && let Some(m) = provider
-                .models
-                .iter()
-                .find(|m| m.id == *mid && m.enabled && !is_hidden_lmstudio_model(&provider.id, m))
-        {
-            return Some(resolved_from_summary(provider, m));
-        }
-        if let Some(m) = provider
-            .models
-            .iter()
-            .find(|m| m.enabled && !is_hidden_lmstudio_model(&provider.id, m))
-        {
-            return Some(resolved_from_summary(provider, m));
-        }
-    }
-
-    None
+    let (pid, mid) = s.resolve_submission_model(thread, draft, ws)?;
+    Some(lookup_or_fallback_model(&s.provider_catalog, &pid, &mid))
 }
 
 fn lookup_or_fallback_model(

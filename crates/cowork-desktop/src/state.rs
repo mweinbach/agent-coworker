@@ -4755,11 +4755,10 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let client_thread_id = Some(self.next_tag("client-thread"));
+                let ws = self.workspaces.iter().find(|w| w.id == workspace_id);
                 let (provider, model) = self
-                    .workspaces
-                    .iter()
-                    .find(|w| w.id == workspace_id)
-                    .map(|w| (w.default_provider.clone(), w.default_model.clone()))
+                    .resolve_submission_model(None, None, ws)
+                    .map(|(p, m)| (Some(p), Some(m)))
                     .unwrap_or((None, None));
                 let params = ThreadStartParams {
                     cwd,
@@ -5463,7 +5462,8 @@ impl AppState {
         .or_else(|| self.resolve_workspace_display_targets().into_iter().next())
     }
 
-    /// Resolves the `(provider, model)` to submit on `thread/start`, matching `resolve_composer_model`.
+    /// Resolves `(provider, model)` from draft, thread, workspace, or provider catalog defaults.
+    /// Shared by submission flows, `CreateThread`, and `views::chat::composer::resolve_composer_model`.
     pub fn resolve_submission_model(
         &self,
         thread: Option<&ThreadRecord>,
@@ -9470,7 +9470,7 @@ impl AppState {
     }
 }
 
-fn is_hidden_lmstudio_model_id(provider_id: &str, model_id: &str) -> bool {
+pub(crate) fn is_hidden_lmstudio_model_id(provider_id: &str, model_id: &str) -> bool {
     if !provider_id.eq_ignore_ascii_case("lmstudio") {
         return false;
     }

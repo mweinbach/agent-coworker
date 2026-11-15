@@ -54,11 +54,11 @@ pub fn build_overlays(
         subview_overlays.push(ext);
     }
 
-    if let Some(confirm) = build_confirm_dialog(s.pending_confirm_dialog.as_ref(), k) {
+    if let Some(confirm) = build_confirm_dialog(s.pending_confirm_dialog.as_ref(), k, t) {
         subview_overlays.push(confirm);
     }
 
-    if let Some(delete_dialog) = build_delete_thread_confirm_dialog(s, k) {
+    if let Some(delete_dialog) = build_delete_thread_confirm_dialog(s, k, t) {
         subview_overlays.push(delete_dialog);
     }
 
@@ -126,23 +126,34 @@ pub(crate) fn extract_external_url_domain(raw_url: &str) -> String {
     }
 }
 
+/// Wraps modal content (and optional description) with padding matching `Dialog`'s header
+/// so wrapped descriptions and footers never clip or sit flush against modal borders.
+fn padded_dialog_body(desc: Option<&str>, content: El, t: &ThemeTokens) -> El {
+    let mut wrap = col().w_full().px(16.0).pb(16.0).gap(12.0);
+    if let Some(text_str) = desc.filter(|d| !d.trim().is_empty()) {
+        wrap = wrap.child(text(text_str).font(t.body).color(t.text_muted).wrap());
+    }
+    wrap.child(content)
+}
+
 fn build_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens) -> Option<El> {
     let url = url?;
     let mut overlays = Vec::new();
     let domain = extract_external_url_domain(url);
+    let desc = format!("Review the destination domain ({domain}) before opening in your browser.");
 
     Dialog::new("confirm-external-url-dialog", "Open external link?")
-        .description(format!(
-            "Review the destination domain ({domain}) before opening in your browser."
-        ))
         .open(true)
         .width(440.0)
+        .fit()
         .click_outside(true)
         .on_close(|s: &mut AppState| {
             s.dispatch(Action::Shell(ShellAction::DismissExternalUrl));
         })
-        .child(
+        .child(padded_dialog_body(
+            Some(&desc),
             col()
+                .w_full()
                 .gap(12.0)
                 .child(
                     el().w_full()
@@ -176,13 +187,18 @@ fn build_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens) -> Opt
                                 .build(k),
                         ),
                 ),
-        )
+            t,
+        ))
         .build(k, &mut overlays);
 
     overlays.into_iter().next()
 }
 
-fn build_confirm_dialog(pending: Option<&ConfirmDialogRequest>, k: &Kit) -> Option<El> {
+fn build_confirm_dialog(
+    pending: Option<&ConfirmDialogRequest>,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> Option<El> {
     let pending = pending?;
     let mut overlays = Vec::new();
     let confirm_variant = if pending.destructive {
@@ -204,10 +220,12 @@ fn build_confirm_dialog(pending: Option<&ConfirmDialogRequest>, k: &Kit) -> Opti
     let id_close = pending.id.clone();
     let id_cancel = pending.id.clone();
     let id_confirm = pending.id.clone();
+    let msg = (!pending.message.trim().is_empty()).then_some(pending.message.as_str());
 
-    let mut dlg = Dialog::new("shell-confirm-dialog", pending.title.clone())
+    Dialog::new("shell-confirm-dialog", pending.title.clone())
         .open(true)
         .width(420.0)
+        .fit()
         .click_outside(true)
         .on_close(move |s: &mut AppState| {
             s.dispatch(Action::Shell(ShellAction::ResolveConfirmDialog {
@@ -215,10 +233,11 @@ fn build_confirm_dialog(pending: Option<&ConfirmDialogRequest>, k: &Kit) -> Opti
                 confirmed: false,
             }));
         })
-        .child(
+        .child(padded_dialog_body(
+            msg,
             row()
                 .w_full()
-                .pt(8.0)
+                .pt(4.0)
                 .gap(8.0)
                 .child(spacer())
                 .child(
@@ -243,13 +262,9 @@ fn build_confirm_dialog(pending: Option<&ConfirmDialogRequest>, k: &Kit) -> Opti
                         })
                         .build(k),
                 ),
-        );
-
-    if !pending.message.is_empty() {
-        dlg = dlg.description(pending.message.clone());
-    }
-
-    dlg.build(k, &mut overlays);
+            t,
+        ))
+        .build(k, &mut overlays);
     overlays.into_iter().next()
 }
 
@@ -333,14 +348,14 @@ fn build_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<
     );
 
     Dialog::new("lmstudio-start-dialog", "Start LM Studio server?")
-        .description(desc)
         .open(true)
         .width(440.0)
+        .fit()
         .click_outside(true)
         .on_close(|s: &mut AppState| {
             s.dispatch(Action::Shell(ShellAction::DismissLmStudioStartModal));
         })
-        .child(body)
+        .child(padded_dialog_body(Some(&desc), body, t))
         .build(k, &mut overlays);
 
     overlays.into_iter().next()
@@ -994,7 +1009,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
     )
 }
 
-fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit) -> Option<El> {
+fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
     let thread_id = s.shell_ui.pending_delete_thread_id.as_deref()?;
     let title = s
         .threads
@@ -1004,10 +1019,12 @@ fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit) -> Option<El> {
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("this conversation");
     let tid_for_confirm = thread_id.to_owned();
+    let desc =
+        format!("Delete \"{title}\"? All messages and artifacts in this chat will be removed.");
 
     let footer = row()
         .w_full()
-        .pt(8.0)
+        .pt(4.0)
         .gap(8.0)
         .child(spacer())
         .child(
@@ -1032,16 +1049,14 @@ fn build_delete_thread_confirm_dialog(s: &AppState, k: &Kit) -> Option<El> {
 
     let mut overlays = Vec::new();
     Dialog::new("delete-thread-dialog", "Delete chat permanently?")
-        .description(format!(
-            "Delete \"{title}\"? All messages and artifacts in this chat will be removed."
-        ))
         .open(true)
         .width(420.0)
+        .fit()
         .click_outside(true)
         .on_close(|s: &mut AppState| {
             s.shell_ui.pending_delete_thread_id = None;
         })
-        .child(footer)
+        .child(padded_dialog_body(Some(&desc), footer, t))
         .build(k, &mut overlays);
 
     overlays.into_iter().next()
@@ -1134,14 +1149,18 @@ fn build_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens) -> O
 
     let mut overlays = Vec::new();
     Dialog::new("workflow-run-detail-dialog", run.workflow_name.as_str())
-        .description("Workflow execution summary and runtime metadata.")
         .open(true)
         .width(500.0)
+        .fit()
         .click_outside(true)
         .on_close(|s: &mut AppState| {
             s.shell_ui.selected_workflow_run_id = None;
         })
-        .child(body)
+        .child(padded_dialog_body(
+            Some("Workflow execution summary and runtime metadata."),
+            body,
+            t,
+        ))
         .build(k, &mut overlays);
 
     overlays.into_iter().next()

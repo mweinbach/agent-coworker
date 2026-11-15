@@ -11,7 +11,7 @@ use crate::state::{AppState, PersistedDesktopState};
 
 use super::appearance::AppearancePreferences;
 use super::local_logs::LocalLogger;
-use super::security::WorkspaceRootsController;
+use super::security::{WorkspaceRootsController, resolve_effective_feature_flags};
 use super::tray::QuickChatTrayController;
 
 /// Coordinates side effects whenever desktop settings/workspaces are loaded or saved.
@@ -24,6 +24,7 @@ pub fn apply_desktop_state(
     tray: &QuickChatTrayController,
     app_handle: Option<&AppHandle<AppState>>,
     apply_workspace_roots: bool,
+    is_packaged: bool,
 ) {
     if apply_workspace_roots {
         let approved = {
@@ -40,6 +41,8 @@ pub fn apply_desktop_state(
     }
 
     let _ = appearance_prefs.save_theme_preference(state.settings.theme);
-    let menu_bar_enabled = state.feature_flags.get("menuBar").copied().unwrap_or(true);
+    let env = cowork_config::env_map_from_process();
+    let effective_flags = resolve_effective_feature_flags(&state.feature_flags, &env, is_packaged);
+    let menu_bar_enabled = effective_flags.get("menuBar").copied().unwrap_or(true);
     tray.sync_from_settings(&state.settings, menu_bar_enabled, app_handle);
 }

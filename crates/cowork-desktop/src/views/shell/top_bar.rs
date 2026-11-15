@@ -174,32 +174,51 @@ pub fn build_toolbar(
         .control_size(ControlSize::Regular)
         .help("Quick Chat")
         .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::ToggleQuickChat));
+            s.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
         })
         .build(k)
         .key("topbar-quick-chat");
 
-    let inspector_open = if narrow {
-        s.shell_ui.right_overlay_open
+    let right_overlay_mode = super::state::right_rail_uses_overlay(s);
+    let canvas_key = super::state::active_canvas_target_key(s);
+    let canvas_active = canvas_key.is_some();
+    let canvas_max = canvas_active && crate::views::chat::is_canvas_maximized(s);
+    let inspector_open = if right_overlay_mode {
+        super::state::is_right_overlay_visible(s)
+    } else if canvas_active {
+        s.shell_ui.canvas_pane.is_open()
     } else {
         s.context_sidebar.is_open()
     };
     let inspector_btn = IconButton::new(&shell::INSPECTOR)
         .variant(IconButtonVariant::GhostMuted)
         .control_size(ControlSize::Regular)
-        .expanded(inspector_open)
-        .help(if inspector_open {
+        .expanded(inspector_open && !canvas_max)
+        .help(if canvas_active {
+            if inspector_open {
+                "Hide canvas"
+            } else {
+                "Show canvas"
+            }
+        } else if inspector_open {
             "Hide context sidebar"
         } else {
             "Show context sidebar"
         })
         .shortcut("⌥⌘I")
         .on_press_tx(move |s: &mut AppState, _| {
-            if narrow {
-                s.shell_ui.right_overlay_open = !s.shell_ui.right_overlay_open;
-                if s.shell_ui.right_overlay_open {
+            if super::state::right_rail_uses_overlay(s) {
+                let next_open = !super::state::is_right_overlay_visible(s);
+                s.shell_ui.right_overlay_open = next_open;
+                if next_open {
                     s.shell_ui.left_overlay_open = false;
+                    s.shell_ui.canvas_overlay_dismissed_key = None;
+                } else {
+                    s.shell_ui.canvas_overlay_dismissed_key =
+                        super::state::active_canvas_target_key(s);
                 }
+            } else if super::state::active_canvas_target_key(s).is_some() {
+                s.shell_ui.canvas_pane.toggle();
             } else {
                 s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
             }

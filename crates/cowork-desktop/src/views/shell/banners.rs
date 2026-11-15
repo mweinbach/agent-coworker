@@ -18,7 +18,13 @@ use super::{helpers, icons};
 
 /// Wrap the active center subview (`chat::view`, `tasks`, etc.) with workspace
 /// readiness banners, runtime startup/recovery gates, and optional inline file preview.
-pub fn build_primary_content(s: &AppState, k: &Kit, t: &ThemeTokens, main_subview: El) -> El {
+pub fn build_primary_content(
+    s: &AppState,
+    k: &Kit,
+    t: &ThemeTokens,
+    main_subview: El,
+    suppress_file_preview: bool,
+) -> El {
     let active_ws = s
         .active_workspace_id
         .as_deref()
@@ -70,7 +76,7 @@ pub fn build_primary_content(s: &AppState, k: &Kit, t: &ThemeTokens, main_subvie
         top_banners.push(updater_banner);
     }
 
-    let body = if let Some(preview) = s.active_file_preview.as_ref() {
+    let body = if !suppress_file_preview && let Some(preview) = s.active_file_preview.as_ref() {
         if s.shell_ui.preview_maximized {
             el().key("primary-preview-maximized")
                 .w_full()
@@ -650,6 +656,8 @@ fn build_inline_file_preview(
             .h_full()
             .padding(16.0)
             .child(text(err).font(t.body).color(t.danger).wrap())
+    } else if let Some(spreadsheet) = preview.spreadsheet.as_ref() {
+        crate::views::preview::render_spreadsheet_preview(s, preview, spreadsheet, k, t)
     } else if preview.is_binary {
         el().w_full().h_full().center().padding(16.0).child(
             text("Binary file preview is not supported inline. Use Open in default app.")

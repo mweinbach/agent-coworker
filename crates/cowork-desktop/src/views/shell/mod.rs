@@ -39,7 +39,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     }
 
     let route = s.route().clone();
-    let mut subview = match route.view {
+    let subview = match route.view {
         ViewId::Chat => crate::views::chat::view(s, cx, k),
         ViewId::Task => SubviewOutput {
             content: tasks::build_task_view(s, k, t),
@@ -48,29 +48,31 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
         ViewId::Settings => crate::views::settings::view(s, cx, k),
     };
 
-    if s.quick_chat_open {
-        let qc_out = crate::views::chat::view(s, cx, k);
-        if let Some(inline_quick_chat) =
-            windows::build_inline_quick_chat_overlay(s, k, t, qc_out.content)
-        {
-            subview.overlays.push(inline_quick_chat);
-        }
-    }
-
+    let mut layer = subview.overlays;
     let base = if route.view == ViewId::Settings {
         build_settings_frame(t, subview.content)
     } else {
-        build_workspace_split_frame(s, cx, k, t, subview.content, &mut subview.overlays)
+        build_workspace_split_frame(s, cx, k, t, subview.content, &mut layer)
     };
 
-    rune_kit::root(base, overlays::build_overlays(s, k, t, subview.overlays)).on_layout::<AppState>(
+    rune_kit::root(base, overlays::build_overlays(s, k, t, layer)).on_layout::<AppState>(
         |s, rect| {
             let width = rect[2];
             if width > 0.0 && (width - s.shell_ui.viewport_width).abs() > 1.0 {
                 s.shell_ui.viewport_width = width;
                 if width >= helpers::NARROW_BREAKPOINT {
                     s.shell_ui.left_overlay_open = false;
+                }
+                if !state::right_rail_uses_overlay(s) {
                     s.shell_ui.right_overlay_open = false;
+                }
+            }
+            let next_canvas_key = state::active_canvas_target_key(s);
+            if next_canvas_key != s.shell_ui.last_canvas_key {
+                s.shell_ui.last_canvas_key = next_canvas_key.clone();
+                s.shell_ui.canvas_overlay_dismissed_key = None;
+                if next_canvas_key.is_some() {
+                    s.shell_ui.canvas_pane.set_open(true);
                 }
             }
         },
@@ -97,23 +99,58 @@ fn build_workspace_split_frame(
     layer: &mut Vec<El>,
 ) -> El {
     let sidebar_el = sidebar::build_sidebar(s, k, t, layer);
-    let inspector_el = context_sidebar::build_context_sidebar(s, k, t);
+    let (canvas_content, canvas_overlays) = match crate::views::chat::canvas_pane(s, cx, k) {
+        Some(out) => (Some(out.content), out.overlays),
+        None => (None, Vec::new()),
+    };
+    let canvas_active = canvas_content.is_some();
+    let canvas_maximized = canvas_active && crate::views::chat::is_canvas_maximized(s);
+    layer.extend(canvas_overlays);
+
     let toolbar = top_bar::build_toolbar(s, cx, k, t, layer);
-    let primary_el = banners::build_primary_content(s, k, t, main_subview);
+    let (primary_el, right_panel_el) = if canvas_maximized {
+        (
+            el().key("primary-canvas-maximized")
+                .w_full()
+                .h_full()
+                .grow(1.0)
+                .shrink()
+                .min_h(0.0)
+                .children(canvas_content),
+            None,
+        )
+    } else {
+        let primary = banners::build_primary_content(s, k, t, main_subview, canvas_active);
+        let right = canvas_content
+            .unwrap_or_else(|| context_sidebar::build_context_sidebar(s, k, t, layer));
+        (primary, Some(right))
+    };
 
     let route_view = s.route().view;
-    let right_kind = if route_view == ViewId::Task {
+    let right_kind = if canvas_active {
+        helpers::RightRailKind::Canvas
+    } else if route_view == ViewId::Task {
         helpers::RightRailKind::Task
     } else {
         helpers::RightRailKind::Context
+    };
+    let right_open = if canvas_active {
+        !canvas_maximized && s.shell_ui.canvas_pane.is_open()
+    } else {
+        s.context_sidebar.is_open()
+    };
+    let right_width_pref = if canvas_active {
+        s.shell_ui.canvas_pane.width()
+    } else {
+        s.context_sidebar.width()
     };
     let adaptive = helpers::resolve_adaptive_layout(
         s.shell_ui.viewport_width,
         s.sidebar.is_open(),
         s.sidebar.width(),
-        route_view != ViewId::Settings,
-        s.context_sidebar.is_open(),
-        s.context_sidebar.width(),
+        route_view != ViewId::Settings && !canvas_maximized,
+        right_open,
+        right_width_pref,
         right_kind,
     );
 
@@ -158,35 +195,61 @@ fn build_workspace_split_frame(
             .sidebar_peek(SidebarPeek::new());
     }
 
-    if adaptive.tier == helpers::AdaptiveTier::Narrow || adaptive.right_overlay {
-        if s.shell_ui.right_overlay_open {
-            layer.push(
-                col()
-                    .key("adaptive-right-drawer-backdrop")
-                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                    .fill(t.scrim)
-                    .items_end()
-                    .modal(true, |s: &mut AppState| {
-                        s.shell_ui.right_overlay_open = false;
-                    })
-                    .child(
-                        el().key("adaptive-right-drawer-panel")
-                            .w(300.0)
-                            .h_full()
-                            .min_h(0.0)
-                            .pt(cx.titlebar_inset())
-                            .fill(t.popover_bg)
-                            .border(1.0, t.border_strong)
-                            .child(inspector_el),
-                    ),
+    if let Some(right_panel_el) = right_panel_el {
+        if adaptive.tier == helpers::AdaptiveTier::Narrow || adaptive.right_overlay {
+            let show_overlay = if canvas_active {
+                state::is_right_overlay_visible(s)
+            } else {
+                s.shell_ui.right_overlay_open
+            };
+            if show_overlay {
+                let drawer_width = if canvas_active {
+                    s.shell_ui
+                        .canvas_pane
+                        .width()
+                        .clamp(320.0, (s.shell_ui.viewport_width - 24.0).max(320.0))
+                } else {
+                    300.0
+                };
+                let dismiss_canvas_key = state::active_canvas_target_key(s);
+                layer.push(
+                    col()
+                        .key("adaptive-right-drawer-backdrop")
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .fill(t.scrim)
+                        .items_end()
+                        .modal(true, move |s: &mut AppState| {
+                            s.shell_ui.right_overlay_open = false;
+                            if dismiss_canvas_key.is_some() {
+                                s.shell_ui.canvas_overlay_dismissed_key =
+                                    dismiss_canvas_key.clone();
+                            }
+                        })
+                        .child(
+                            el().key("adaptive-right-drawer-panel")
+                                .w(drawer_width)
+                                .h_full()
+                                .min_h(0.0)
+                                .pt(cx.titlebar_inset())
+                                .fill(t.popover_bg)
+                                .border(1.0, t.border_strong)
+                                .child(right_panel_el),
+                        ),
+                );
+            }
+        } else if canvas_active {
+            split = split.inspector(
+                &s.shell_ui.canvas_pane,
+                |s: &mut AppState| &mut s.shell_ui.canvas_pane,
+                right_panel_el,
+            );
+        } else {
+            split = split.inspector(
+                &s.context_sidebar,
+                |s: &mut AppState| &mut s.context_sidebar,
+                right_panel_el,
             );
         }
-    } else {
-        split = split.inspector(
-            &s.context_sidebar,
-            |s: &mut AppState| &mut s.context_sidebar,
-            inspector_el,
-        );
     }
 
     split
@@ -196,4 +259,159 @@ fn build_workspace_split_frame(
         .pane_motion(PaneMotion::new().spring(Spring::new(0.3, 0.0)))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rune::{Env, Runtime};
+
+    use super::*;
+    use crate::actions::{Action, ShellAction};
+    use crate::state::{ConfirmDialogRequest, FilePreviewState};
+    use crate::theme;
+
+    fn test_shell_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+        cx.zoom(state.ui_scale);
+        let dark = state.effective_dark(cx.system_dark());
+        let (kit, tokens) = theme::build_kit(
+            dark,
+            state.desktop_settings.reduced_transparency,
+            state.desktop_settings.high_contrast,
+        );
+        cx.foreground(tokens.text_base);
+        cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+        cx.web_focus();
+        view(state, cx, &kit, &tokens)
+    }
+
+    #[test]
+    fn canvas_mounts_in_right_rail_suppresses_inline_preview_and_supports_maximize() {
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.feature_flags.insert("canvas".into(), true);
+        s.dispatch(Action::Shell(ShellAction::OpenFilePreview(
+            FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "/tmp/ws-1/notes.md".into(),
+                title: "notes.md".into(),
+                content: Some("# Heading\n\nBody copy".into()),
+                is_markdown: true,
+                ..Default::default()
+            },
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(
+            rt.find("canvas-pane").is_some(),
+            "Canvas pane should mount in the right rail when canvas flag is true"
+        );
+        assert!(
+            rt.find("primary-split-with-preview").is_none(),
+            "Inline split preview must stay hidden while Canvas handles the document"
+        );
+
+        let (mx, my) = rt
+            .find("canvas-maximize-btn")
+            .expect("canvas maximize button should be mounted");
+        rt.pointer_move(mx, my);
+        rt.pointer_down(mx, my);
+        rt.pointer_up(mx, my);
+        rt.frame(0.0);
+        assert!(
+            rt.find("primary-canvas-maximized").is_some(),
+            "Maximizing Canvas should expand into primary-canvas-maximized"
+        );
+        assert!(rt.find("canvas-pane").is_some());
+    }
+
+    #[test]
+    fn canvas_mounts_as_compact_overlay_below_full_breakpoint() {
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.shell_ui.viewport_width = 900.0;
+        s.feature_flags.insert("canvas".into(), true);
+        s.dispatch(Action::Shell(ShellAction::OpenFilePreview(
+            FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "/tmp/ws-1/notes.md".into(),
+                title: "notes.md".into(),
+                content: Some("# Compact\n\nOverlay canvas".into()),
+                is_markdown: true,
+                ..Default::default()
+            },
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (900.0, 700.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(
+            rt.find("adaptive-right-drawer-panel").is_some(),
+            "Compact viewport should host Canvas inside adaptive-right-drawer-panel"
+        );
+        assert!(rt.find("canvas-pane").is_some());
+    }
+
+    #[test]
+    fn spreadsheet_preview_mounts_in_inline_split_even_with_canvas_flag_enabled() {
+        let spreadsheet = crate::views::preview::decode_spreadsheet_preview(
+            Path::new("budget.csv"),
+            b"item,cost\nCoffee,4\nTea,3\n",
+            false,
+        )
+        .expect("csv should decode cleanly");
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.feature_flags.insert("canvas".into(), true);
+        s.dispatch(Action::Shell(ShellAction::OpenFilePreview(
+            FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "/tmp/ws-1/budget.csv".into(),
+                title: "budget.csv".into(),
+                content: Some("item,cost\nCoffee,4\nTea,3\n".into()),
+                spreadsheet: Some(spreadsheet),
+                ..Default::default()
+            },
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("primary-split-with-preview").is_some());
+        assert!(rt.find("spreadsheet-preview-root").is_some());
+        assert!(rt.find("canvas-pane").is_none());
+    }
+
+    #[test]
+    fn quick_chat_window_mounts_shell_overlays_for_confirm_dialog() {
+        let mut s = AppState {
+            scene_mode: true,
+            window_mode: WindowMode::QuickChat,
+            pending_confirm_dialog: Some(ConfirmDialogRequest {
+                id: "qc-confirm-1".into(),
+                title: "Open launchable file?".into(),
+                message: "Proceed outside sandbox?".into(),
+                confirm_label: "Open Anyway".into(),
+                cancel_label: "Cancel".into(),
+                destructive: true,
+            }),
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+
+        let mut rt = Runtime::new(s, test_shell_root, (440.0, 560.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("quick-chat-shell").is_some());
+        assert!(rt.find("shell-confirm-dialog-dialog").is_some());
+    }
 }

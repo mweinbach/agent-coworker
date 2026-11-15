@@ -571,4 +571,41 @@ mod tests {
             chat_rect[2]
         );
     }
+
+    #[test]
+    fn quick_chat_pop_out_switches_main_window_to_new_chat_from_landing() {
+        let mut s = AppState {
+            scene_mode: true,
+            window_mode: WindowMode::QuickChat,
+            active_workspace_id: Some("ws-1".into()),
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.workspaces.push(crate::state::WorkspaceRecord {
+            id: "ws-1".into(),
+            name: "Alpha".into(),
+            path: "/tmp/alpha".into(),
+            ..Default::default()
+        });
+
+        let mut rt = Runtime::new(s, test_shell_root, (440.0, 560.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+
+        let (px, py) = rt
+            .find("quick-chat-pop-out")
+            .expect("Pop out button must render in Quick Chat");
+        rt.pointer_move(px, py);
+        rt.pointer_down(px, py);
+        rt.pointer_up(px, py);
+        rt.frame(0.0);
+
+        assert!(!rt.state.quick_chat_open);
+        assert!(matches!(
+            rt.state.services.emitted_window_commands.last(),
+            Some(crate::state::WindowCommand::FocusMain {
+                open_new_chat_workspace: Some(ws),
+                open_thread_id: None,
+            }) if ws == "ws-1"
+        ));
+    }
 }

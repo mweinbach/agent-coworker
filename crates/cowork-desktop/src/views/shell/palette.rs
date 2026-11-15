@@ -20,6 +20,37 @@ pub(crate) struct PaletteItem {
     pub(crate) action: Action,
 }
 
+/// Open the Command Palette with a clean search query and focused input.
+pub(crate) fn open_command_palette(s: &mut AppState) {
+    s.shell_ui.command_palette_selected = 0;
+    s.command_palette_edit = rune::TextEdit::new("");
+    s.command_palette_edit.focused = true;
+    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteQuery(
+        String::new(),
+    )));
+    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(true)));
+}
+
+/// Close the Command Palette and clear its search query/selection state.
+pub(crate) fn close_command_palette(s: &mut AppState) {
+    s.shell_ui.command_palette_selected = 0;
+    s.command_palette_edit = rune::TextEdit::new("");
+    s.command_palette_edit.focused = false;
+    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteQuery(
+        String::new(),
+    )));
+    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+}
+
+/// Toggle the Command Palette, resetting query/selection on both open and close.
+pub(crate) fn toggle_command_palette(s: &mut AppState) {
+    if s.command_palette_open {
+        close_command_palette(s);
+    } else {
+        open_command_palette(s);
+    }
+}
+
 /// Build the floating Command Palette modal overlay when `s.command_palette_open` is true.
 pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
     if !s.command_palette_open {
@@ -70,8 +101,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
                     true
                 }
                 rune::Key::Escape => {
-                    s.shell_ui.command_palette_selected = 0;
-                    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+                    close_command_palette(s);
                     true
                 }
                 _ => false,
@@ -79,8 +109,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         })
         .on_action(move |s: &mut AppState, _| {
             if let Some(act) = selected_action.as_ref() {
-                s.shell_ui.command_palette_selected = 0;
-                s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+                close_command_palette(s);
                 s.dispatch(act.clone());
             }
         })
@@ -148,7 +177,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
                         .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Small)
                         .on_press_tx(|s: &mut AppState, _| {
-                            s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+                            close_command_palette(s);
                         })
                         .build(k),
                 ),
@@ -178,7 +207,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
             .px(16.0)
             .items_center()
             .modal(true, |s: &mut AppState| {
-                s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+                close_command_palette(s);
             })
             .child(card),
     )
@@ -224,7 +253,7 @@ fn palette_row(item: PaletteItem, highlighted: bool, k: &Kit, t: &ThemeTokens) -
         .fill(row_bg)
         .hover(t.hover)
         .on_press_tx(move |s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+            close_command_palette(s);
             s.dispatch(act.clone());
         })
         .child(r)

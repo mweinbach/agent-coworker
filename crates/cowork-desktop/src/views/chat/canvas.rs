@@ -857,10 +857,11 @@ fn save_badge_meta(doc: &ResolvedCanvasDoc, dirty: bool) -> (&'static str, Statu
 pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<SubviewOutput> {
     let doc = resolve_active_canvas_doc(s)?;
     let dark = s.effective_dark(cx.system_dark());
-    let t = theme::resolve_tokens(
+    let t = theme::resolve_tokens_with_accent(
         dark,
         s.desktop_settings.reduced_transparency,
         s.desktop_settings.high_contrast,
+        s.desktop_settings.accent_palette,
     );
 
     let synced = s.chat_ui.canvas.synced_session_key.as_deref() == Some(doc.session_key.as_str());

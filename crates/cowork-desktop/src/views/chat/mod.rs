@@ -42,10 +42,11 @@ use self::model::workspace_is_reconnecting;
 /// Renders the active chat landing view or thread transcript + composer + subagent drawer + overlays.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
     let dark = s.effective_dark(cx.system_dark());
-    let t = theme::resolve_tokens(
+    let t = theme::resolve_tokens_with_accent(
         dark,
         s.desktop_settings.reduced_transparency,
         s.desktop_settings.high_contrast,
+        s.desktop_settings.accent_palette,
     );
 
     let chat_view_width = cx.layout_size("chat-view").map(|[w, _]| w);

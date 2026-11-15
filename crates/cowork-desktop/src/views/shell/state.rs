@@ -345,7 +345,103 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     }
 
+    if route_active_presentation_key(s, ev, tx) {
+        return true;
+    }
+
     false
+}
+
+fn has_blocking_overlay_or_focused_input(s: &AppState) -> bool {
+    s.command_palette_open
+        || s.shell_ui.search_overlay_open
+        || super::overlays::is_onboarding_visible(s)
+        || s.lmstudio_start_modal.is_some()
+        || s.pending_external_url.is_some()
+        || s.pending_confirm_dialog.is_some()
+        || s.shell_ui.pending_delete_thread_id.is_some()
+        || s.shell_ui.pending_trash_entry.is_some()
+        || s.shell_ui.selected_workflow_run_id.is_some()
+        || s.shell_ui.context_menu_thread_id.is_some()
+        || s.shell_ui.file_context_menu.is_some()
+        || s.shell_ui.usage_popover_open
+        || s.shell_ui.task_question_dialog_open
+        || s.shell_ui.task_feedback_open
+        || s.shell_ui.task_create_open
+        || s.shell_ui.renaming_thread_id.is_some()
+        || s.shell_ui.renaming_file_key.is_some()
+        || s.shell_ui.left_overlay_open
+        || s.shell_ui.right_overlay_open
+        || s.shell_ui.onboarding_confirm_discard
+        || s.agent_viewer.is_some()
+        || s.chat_ui.cancel_subagents_open
+        || s.chat_ui.reasoning_open
+        || s.chat_ui.landing_target_open
+        || s.chat_ui.model_combobox.is_open()
+        || s.chat_ui.active_citation_popover.is_some()
+        || s.chat_ui.active_mention_popover.is_some()
+        || s.composer_edit.focused
+        || s.sidebar_search_edit.focused
+        || s.command_palette_edit.focused
+        || s.shell_ui.search_edit.focused
+        || s.shell_ui.rename_edit.focused
+        || s.shell_ui.renaming_file_edit.focused
+        || s.shell_ui.task_create_title_edit.focused
+        || s.shell_ui.task_create_objective_edit.focused
+        || s.shell_ui.task_feedback_edit.focused
+        || s.shell_ui.task_question_reply_edit.focused
+        || s.chat_ui.canvas.source_edit.focused
+        || s.chat_ui.canvas.prompt_edit.focused
+        || s.chat_ui.ask_text_edits.values().any(|e| e.focused)
+}
+
+fn is_inline_presentation_preview_visible(s: &AppState) -> bool {
+    if s.window_mode != WindowMode::Main || s.route().view == ViewId::Settings {
+        return false;
+    }
+    if let Some(ws_id) = s.active_workspace_id.as_deref()
+        && let Some(rt) = s.workspace_runtime_by_id.get(ws_id)
+        && !matches!(
+            rt.server_state,
+            crate::state::ServerLifecycleState::Running { .. }
+        )
+    {
+        return false;
+    }
+    active_canvas_target_key(s).is_none()
+}
+
+fn route_active_presentation_key(s: &mut AppState, ev: &KeyEvent, tx: &Tx) -> bool {
+    if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt {
+        return false;
+    }
+    // `pptx-preview-root`'s `.on_key` handles slide navigation directly when focus is inside the deck.
+    if tx
+        .focused()
+        .is_some_and(|key| key == "pptx-preview-root" || key.starts_with("pptx-"))
+    {
+        return false;
+    }
+    if has_blocking_overlay_or_focused_input(s) || !is_inline_presentation_preview_visible(s) {
+        return false;
+    }
+    let Some(preview) = s.active_file_preview.as_ref() else {
+        return false;
+    };
+    if preview.error.is_some() {
+        return false;
+    }
+    let Some(presentation) = preview.presentation.as_deref() else {
+        return false;
+    };
+    if presentation.loading
+        || presentation.error_message.is_some()
+        || presentation.slides.is_empty()
+    {
+        return false;
+    }
+    s.preview_ui
+        .handle_presentation_key(&ev.key, presentation.slides.len())
 }
 
 /// Dismisses the highest-precedence overlay, preview, or modal route cleanly.
@@ -654,5 +750,105 @@ mod tests {
         assert!(s.command_palette_open);
         assert!(s.command_palette_query.is_empty());
         assert!(s.command_palette_edit.text.is_empty());
+    }
+
+    fn presentation_preview_state() -> AppState {
+        use crate::views::preview::{PresentationPreviewData, PresentationSlideData};
+
+        let mut s = AppState::default();
+        s.onboarding.completed = true;
+        s.active_file_preview = Some(crate::state::FilePreviewState {
+            workspace_id: "ws-1".into(),
+            path: "/tmp/ws-1/deck.pptx".into(),
+            title: "deck.pptx".into(),
+            is_binary: true,
+            presentation: Some(Box::new(PresentationPreviewData {
+                loading: false,
+                slides: (0..3)
+                    .map(|idx| PresentationSlideData {
+                        slide_index: idx,
+                        slide_id: Some(format!("s-{idx}")),
+                        title: Some(format!("Slide {}", idx + 1)),
+                        png_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=".into(),
+                    })
+                    .collect(),
+                rendering_mode: Some("rendered".into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        s
+    }
+
+    #[test]
+    fn handle_key_routes_presentation_navigation_unless_overlay_or_input_focused() {
+        let mut s = presentation_preview_state();
+        let mut tx = Tx::default();
+        let right = KeyEvent {
+            key: Key::Right,
+            mods: rune::Mods::default(),
+        };
+        let left = KeyEvent {
+            key: Key::Left,
+            mods: rune::Mods::default(),
+        };
+        let end = KeyEvent {
+            key: Key::End,
+            mods: rune::Mods::default(),
+        };
+        let home = KeyEvent {
+            key: Key::Home,
+            mods: rune::Mods::default(),
+        };
+        let cmd_right = KeyEvent {
+            key: Key::Right,
+            mods: rune::Mods {
+                cmd: true,
+                ..Default::default()
+            },
+        };
+
+        assert!(handle_key(&mut s, &right, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 1);
+
+        assert!(handle_key(&mut s, &end, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 2);
+
+        assert!(handle_key(&mut s, &left, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 1);
+
+        assert!(handle_key(&mut s, &home, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 0);
+
+        assert!(!handle_key(&mut s, &cmd_right, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 0);
+
+        // Focused text input must block slide routing.
+        s.composer_edit.focused = true;
+        assert!(!handle_key(&mut s, &right, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 0);
+        s.composer_edit.focused = false;
+
+        // Open overlay/dialog/onboarding must block slide routing.
+        s.command_palette_open = true;
+        assert!(!handle_key(&mut s, &right, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 0);
+        s.command_palette_open = false;
+
+        s.pending_confirm_dialog = Some(ConfirmDialogRequest {
+            id: "c1".into(),
+            title: "Confirm".into(),
+            message: "Proceed?".into(),
+            confirm_label: "Yes".into(),
+            cancel_label: "No".into(),
+            destructive: false,
+        });
+        assert!(!handle_key(&mut s, &right, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 0);
+        s.pending_confirm_dialog = None;
+
+        s.onboarding.completed = false;
+        assert!(!handle_key(&mut s, &right, &mut tx));
+        assert_eq!(s.preview_ui.active_slide, 0);
     }
 }

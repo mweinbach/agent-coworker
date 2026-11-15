@@ -608,4 +608,91 @@ mod tests {
             }) if ws == "ws-1"
         ));
     }
+
+    #[test]
+    fn inline_presentation_preview_mounts_and_handles_keys_without_double_dispatch() {
+        use crate::views::preview::{PresentationPreviewData, PresentationSlideData};
+        use rune::{Key, KeyEvent, Mods};
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.dispatch(Action::Shell(ShellAction::SetContextSidebarOpen(false)));
+        s.dispatch(Action::Shell(ShellAction::OpenFilePreview(
+            FilePreviewState {
+                workspace_id: "ws-1".into(),
+                path: "/tmp/ws-1/deck.pptx".into(),
+                title: "deck.pptx".into(),
+                is_binary: true,
+                presentation: Some(Box::new(PresentationPreviewData {
+                    loading: false,
+                    slides: (0..3)
+                        .map(|idx| PresentationSlideData {
+                            slide_index: idx,
+                            slide_id: Some(format!("s-{idx}")),
+                            title: Some(format!("Slide {}", idx + 1)),
+                            png_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=".into(),
+                        })
+                        .collect(),
+                    rendering_mode: Some("rendered".into()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.on_key = Some(handle_key);
+        rt.frame(0.0);
+
+        assert!(
+            rt.find("pptx-preview-root").is_some(),
+            "inline presentation preview must mount instead of binary fallback"
+        );
+        let (preview_rect, _) = rt
+            .presented("inline-file-preview")
+            .expect("inline preview pane should be mounted");
+        assert!(preview_rect[2] >= 550.0);
+        assert_eq!(rt.state.preview_ui.active_slide, 0);
+
+        // Unfocused key goes through shell::handle_key once (0 -> 1).
+        rt.key(KeyEvent {
+            key: Key::Right,
+            mods: Mods::default(),
+        });
+        rt.frame(0.0);
+        assert_eq!(rt.state.preview_ui.active_slide, 1);
+
+        // Focus pptx-preview-root: element .on_key handles once without double-dispatch (1 -> 2).
+        let (rx, ry) = rt
+            .find("pptx-preview-root")
+            .expect("pptx-preview-root must be clickable");
+        rt.pointer_move(rx, ry);
+        rt.pointer_down(rx, ry);
+        rt.pointer_up(rx, ry);
+        rt.frame(0.0);
+        rt.key(KeyEvent {
+            key: Key::Right,
+            mods: Mods::default(),
+        });
+        rt.frame(0.0);
+        assert_eq!(rt.state.preview_ui.active_slide, 2);
+
+        // Focus a non-preview text input (composer_edit): slide keys must not hijack it.
+        rt.state.composer_edit.focused = true;
+        if let Some((cx, cy)) = rt.find("composer-input") {
+            rt.pointer_move(cx, cy);
+            rt.pointer_down(cx, cy);
+            rt.pointer_up(cx, cy);
+            rt.frame(0.0);
+        }
+        rt.key(KeyEvent {
+            key: Key::Left,
+            mods: Mods::default(),
+        });
+        rt.frame(0.0);
+        assert_eq!(rt.state.preview_ui.active_slide, 2);
+    }
 }

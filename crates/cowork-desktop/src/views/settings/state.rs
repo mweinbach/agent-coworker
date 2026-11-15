@@ -105,15 +105,18 @@ pub struct SettingsUiState {
 
     // Chats / Archived & Conversation import
     pub chats_search_edit: TextEdit,
+    pub chats_workspace_filter: Option<String>,
     pub chats_confirm_delete_id: Option<String>,
     pub import_dialog_open: bool,
     pub import_source: String,
+    pub import_selected_sources: HashSet<String>,
     pub import_path_edit: TextEdit,
 
     // Backups page
     pub backup_selected_id: Option<String>,
     pub backup_file_query_edit: TextEdit,
     pub backup_restore_confirm_open: bool,
+    pub backup_delete_confirm_id: Option<String>,
     pub backup_file_tree: TreeModel<String>,
 
     // Models / Providers page & ManageModelsDialog
@@ -160,6 +163,7 @@ pub struct SettingsUiState {
     // Remote Access page
     pub forget_phone_id: Option<String>,
     pub forget_all_phones_open: bool,
+    pub remote_access_copied_url: Option<String>,
 
     // Tool Access & MCP server editor
     pub tool_access_tab: ToolAccessTab,
@@ -206,13 +210,19 @@ impl Default for SettingsUiState {
             usage_detail_dialog_open: false,
             usage_estimates_dialog_open: false,
             chats_search_edit: TextEdit::new(""),
+            chats_workspace_filter: None,
             chats_confirm_delete_id: None,
             import_dialog_open: false,
             import_source: "chatgpt".to_string(),
+            import_selected_sources: HashSet::from([
+                "codex".to_string(),
+                "claude-code".to_string(),
+            ]),
             import_path_edit: TextEdit::new(""),
             backup_selected_id: None,
             backup_file_query_edit: TextEdit::new(""),
             backup_restore_confirm_open: false,
+            backup_delete_confirm_id: None,
             backup_file_tree: TreeModel::new(),
             expanded_provider_id: None,
             manage_models_provider_id: None,
@@ -249,6 +259,7 @@ impl Default for SettingsUiState {
             skill_improvement_expanded: false,
             forget_phone_id: None,
             forget_all_phones_open: false,
+            remote_access_copied_url: None,
             tool_access_tab: ToolAccessTab::Plugins,
             tool_search_edit: TextEdit::new(""),
             mcp_search_edit: TextEdit::new(""),

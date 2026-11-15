@@ -752,3 +752,22 @@ pub fn format_byte_size(bytes: u64) -> String {
         format!("{bytes} B")
     }
 }
+
+/// Formats a Unix timestamp in seconds or milliseconds into local `YYYY-MM-DD HH:MM`.
+pub fn format_timestamp_friendly(ts: i64) -> String {
+    if ts <= 0 {
+        return "—".to_string();
+    }
+    let dt = if ts > 1_000_000_000_000 {
+        chrono::DateTime::from_timestamp_millis(ts)
+    } else {
+        chrono::DateTime::from_timestamp(ts, 0)
+    };
+    match dt {
+        Some(utc) => utc
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        None => "—".to_string(),
+    }
+}

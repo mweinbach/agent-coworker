@@ -2,12 +2,17 @@
 //!
 //! Ported from `apps/desktop/src/ui/settings/` and `apps/desktop/src/ui/settings/pages/`.
 
+pub mod backup;
+pub mod chats;
 pub mod desktop;
 pub mod developer;
 pub mod experiments;
 pub mod icons;
+pub mod mcp_server_draft;
 pub mod primitives;
 pub mod privacy_telemetry;
+pub mod providers_utils;
+pub mod remote_access;
 pub mod shell;
 pub mod state;
 pub mod updates;
@@ -137,6 +142,9 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, _k: &Kit) -> SubviewOutput {
 
     let active_page = resolve_active_page(s);
     let content = match active_page {
+        SettingsPageId::RemoteAccess => remote_access::view(s, &resolved_k, &t),
+        SettingsPageId::Backup => backup::view(s, &resolved_k, &t),
+        SettingsPageId::Chats => chats::view(s, &resolved_k, &t),
         SettingsPageId::Desktop => desktop::view(s, &resolved_k, &t),
         SettingsPageId::Diagnostics => developer::view(s, &resolved_k, &t),
         SettingsPageId::Experiments => experiments::view(s, &resolved_k, &t),

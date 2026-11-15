@@ -13,8 +13,8 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, callout_banner,
-    confirm_dialog, format_timestamp_friendly, management_targets, settings_page, status_pill,
-    update_desktop_settings,
+    confirm_dialog, format_timestamp_friendly, management_targets, search_input, settings_page,
+    status_pill, update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -135,7 +135,7 @@ fn build_import_dialog(
 
     let preview_summary = if preview_items.is_empty() {
         text("Choose one or more conversation sources above and click Scan & preview.")
-            .font(k.ty.text_xsmall)
+            .font(k.ty.small)
             .color(t.text_muted)
             .wrap()
     } else {
@@ -146,7 +146,7 @@ fn build_import_dialog(
                 preview_items.len(),
                 importable_selected.len()
             ))
-            .font(k.ty.body_medium)
+            .font(k.ty.ui_medium)
             .color(t.text_base),
         );
         for item in preview_items.iter().take(6) {
@@ -170,10 +170,10 @@ fn build_import_dialog(
                     .gap(8.0)
                     .px(10.0)
                     .py(6.0)
-                    .radius(8.0)
+                    .radius(k.radius.md)
                     .fill(t.panel_bg)
                     .border(1.0, t.border_muted)
-                    .child(text(title).font(k.ty.text_small).color(t.text_base).wrap())
+                    .child(text(title).font(k.ty.ui).color(t.text_base).wrap())
                     .child(status_pill(
                         if already { "Imported" } else { source },
                         if already {
@@ -226,7 +226,7 @@ fn build_import_dialog(
                 .gap(8.0)
                 .child(
                     Button::new("Cancel")
-                        .variant(ButtonVariant::Outline)
+                        .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Regular)
                         .on_press(|s: &mut AppState| {
                             s.settings_ui.import_dialog_open = false;
@@ -278,7 +278,7 @@ fn build_import_dialog(
                 .gap(12.0)
                 .child(
                     text("Bring existing transcripts from Codex, Claude Code, or another Cowork backup into this workspace.")
-                        .font(k.ty.text_small)
+                        .font(k.ty.ui)
                         .color(t.text_muted)
                         .wrap(),
                 )
@@ -421,22 +421,21 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .w_full()
         .items_center()
         .justify_between()
+        .flex_wrap()
         .gap(10.0)
         .px(16.0)
         .py(12.0)
-        .child(
-            TextInput::new(&s.settings_ui.chats_search_edit)
-                .label("Filter archived chats")
-                .placeholder("Search archived titles...")
-                .leading_icon(&icons::SEARCH)
-                .clear_button()
-                .width(Some(320.0))
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.chats_search_edit)
-                .on_action(|s: &mut AppState, _tx| {
-                    s.settings_ui.chats_search_edit = rune::TextEdit::new("");
-                })
-                .build(k),
-        )
+        .child(search_input(
+            &s.settings_ui.chats_search_edit,
+            "Filter archived chats",
+            "Search archived titles...",
+            Some(320.0),
+            |s: &mut AppState| &mut s.settings_ui.chats_search_edit,
+            |s: &mut AppState, _tx| {
+                s.settings_ui.chats_search_edit = rune::TextEdit::new("");
+            },
+            k,
+        ))
         .child(status_pill(
             format!("{} archived", filtered.len()),
             StatusTone::Neutral,

@@ -348,13 +348,13 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .gap(12.0)
                 .child(
                     text("Estimated cost is computed locally from provider-reported input, output, and cached prompt tokens multiplied by Cowork's model pricing catalog.")
-                        .font(k.ty.text_small)
+                        .font(k.ty.ui)
                         .color(t.text_muted)
                         .wrap(),
                 )
                 .child(
                     text("Actual invoices may differ based on provider discounts, subscription tiers, cached-read pricing, or custom endpoints.")
-                        .font(k.ty.text_small)
+                        .font(k.ty.ui)
                         .color(t.text_muted)
                         .wrap(),
                 )
@@ -445,7 +445,7 @@ fn build_overview_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &Theme
                             .gap(8.0)
                             .child(
                                 text(format_estimated_cost(Some(group.estimated_cost_usd)))
-                                    .font(k.ty.body_medium)
+                                    .font(k.ty.ui_medium)
                                     .color(t.text_base),
                             )
                             .child(status_pill(

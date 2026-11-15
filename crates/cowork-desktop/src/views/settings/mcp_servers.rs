@@ -3,9 +3,7 @@
 use std::cmp::Ordering;
 
 use rune::{El, ScrollSpec, TextEdit, col, el, icon, row, text};
-use rune_kit::{
-    Button, ButtonVariant, ControlSize, Dialog, Kit, SegmentedControl, Switch, TextArea, TextInput,
-};
+use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit, TextArea, TextInput};
 use serde_json::Value;
 
 use crate::actions::{Action, SettingsAction};
@@ -18,7 +16,7 @@ use crate::views::settings::mcp_server_draft::{
 };
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
-    confirm_dialog, entity_icon, status_pill,
+    compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input, status_pill,
 };
 
 fn source_rank(source: Option<&str>) -> u8 {
@@ -356,16 +354,21 @@ pub fn view_tab(
         let filter_bar = row()
             .w_full()
             .items_center()
+            .flex_wrap()
             .gap(12.0)
             .px(16.0)
             .py(12.0)
-            .child(
-                TextInput::new(&s.settings_ui.mcp_search_edit)
-                    .placeholder("Search connectors...")
-                    .width(Some(280.0))
-                    .on_edit(|s: &mut AppState| &mut s.settings_ui.mcp_search_edit)
-                    .build(k),
-            )
+            .child(search_input(
+                &s.settings_ui.mcp_search_edit,
+                "Search connectors",
+                "Search connectors...",
+                Some(280.0),
+                |s: &mut AppState| &mut s.settings_ui.mcp_search_edit,
+                |s: &mut AppState, _tx| {
+                    s.settings_ui.mcp_search_edit = TextEdit::new("");
+                },
+                k,
+            ))
             .child(el().grow(1.0))
             .child(status_pill(
                 format!("{} of {}", visible.len(), servers.len()),
@@ -425,7 +428,7 @@ fn render_server_row(
         .min_w(0.0)
         .items_center()
         .gap(10.0)
-        .radius(6.0)
+        .radius(k.radius.md)
         .px(4.0)
         .py(4.0)
         .hover(t.hover)
@@ -447,7 +450,7 @@ fn render_server_row(
         .child(entity_icon(s, None, &srv.name, EntityIconSize::Sm, k, t))
         .child(
             text(&srv.name)
-                .font(k.ty.body_medium)
+                .font(k.ty.ui_medium)
                 .color(t.text_base)
                 .min_w(0.0),
         )
@@ -500,21 +503,20 @@ fn render_server_row(
         );
     }
 
-    controls = controls.child(
-        Switch::new(srv.enabled)
-            .label(format!("Enable {}", srv.name))
-            .hide_label()
-            .control_size(ControlSize::Mini)
-            .on_toggle(move |s: &mut AppState| {
-                s.dispatch(Action::Settings(SettingsAction::SetMcpServerEnabled {
-                    workspace_id: ws_enable.clone(),
-                    name: srv_name_enable.clone(),
-                    source: srv_source_enable.clone(),
-                    enabled: enabled_next,
-                }));
-            })
-            .build(k),
-    );
+    controls = controls.child(mini_switch(
+        srv.enabled,
+        format!("Enable {}", srv.name),
+        false,
+        move |s: &mut AppState| {
+            s.dispatch(Action::Settings(SettingsAction::SetMcpServerEnabled {
+                workspace_id: ws_enable.clone(),
+                name: srv_name_enable.clone(),
+                source: srv_source_enable.clone(),
+                enabled: enabled_next,
+            }));
+        },
+        k,
+    ));
 
     if can_edit {
         let srv_snapshot = srv.clone();
@@ -741,14 +743,14 @@ fn kv_line(label: &str, value: &str, k: &Kit, t: &ThemeTokens) -> El {
         .gap(12.0)
         .child(
             text(label)
-                .font(k.ty.text_xsmall_medium)
+                .font(k.ty.small_medium)
                 .color(t.text_muted)
                 .w(110.0)
                 .shrink(),
         )
         .child(
             text(value)
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_base)
                 .grow(1.0)
                 .min_w(0.0)
@@ -761,7 +763,7 @@ fn labeled_dialog_field(label: &str, child: El, k: &Kit, t: &ThemeTokens) -> El 
         .w_full()
         .min_w(0.0)
         .gap(4.0)
-        .child(text(label).font(k.ty.text_xsmall).color(t.text_muted))
+        .child(text(label).font(k.ty.small_medium).color(t.text_muted))
         .child(child)
 }
 
@@ -784,10 +786,11 @@ fn append_editor_dialog(
     };
 
     let scope_idx = usize::from(s.settings_ui.mcp_editing_source.as_deref() == Some("workspace"));
-    let scope_seg = SegmentedControl::new(&["User (all workspaces)", "Workspace"], Some(scope_idx))
-        .label("Connector scope")
-        .fit()
-        .on_pick(|s: &mut AppState, idx, _tx| {
+    let scope_seg = compact_tabs(
+        &["User (all workspaces)", "Workspace"],
+        scope_idx,
+        "Connector scope",
+        |s: &mut AppState, idx, _tx| {
             if s.settings_ui.mcp_editing_name.is_none() {
                 s.settings_ui.mcp_editing_source = Some(if idx == 1 {
                     "workspace".to_string()
@@ -795,33 +798,33 @@ fn append_editor_dialog(
                     "user".to_string()
                 });
             }
-        })
-        .build(k);
+        },
+        k,
+    );
 
     let transport_idx = match s.settings_ui.mcp_transport.as_str() {
         "sse" => 1,
         "stdio" => 2,
         _ => 0,
     };
-    let transport_seg = SegmentedControl::new(
+    let transport_seg = compact_tabs(
         &["Remote (HTTP)", "Legacy SSE", "Local (stdio)"],
-        Some(transport_idx),
-    )
-    .label("Connector transport")
-    .fit()
-    .on_pick(|s: &mut AppState, idx, _tx| {
-        s.settings_ui.mcp_transport = match idx {
-            1 => "sse".to_string(),
-            2 => "stdio".to_string(),
-            _ => "http".to_string(),
-        };
-        s.settings_ui.mcp_editor_error = None;
-    })
-    .build(k);
+        transport_idx,
+        "Connector transport",
+        |s: &mut AppState, idx, _tx| {
+            s.settings_ui.mcp_transport = match idx {
+                1 => "sse".to_string(),
+                2 => "stdio".to_string(),
+                _ => "http".to_string(),
+            };
+            s.settings_ui.mcp_editor_error = None;
+        },
+        k,
+    );
 
     let mut fields = col().w_full().min_w(0.0).gap(10.0).child(
         text("Configure a remote MCP endpoint or a local command-line connector.")
-            .font(k.ty.text_small)
+            .font(k.ty.ui)
             .color(t.text_muted)
             .wrap(),
     );
@@ -899,17 +902,19 @@ fn append_editor_dialog(
                         "oauth" => 2,
                         _ => 0,
                     };
-                    SegmentedControl::new(&["None", "API key", "OAuth"], Some(auth_idx))
-                        .label("Authentication")
-                        .fit()
-                        .on_pick(|s: &mut AppState, idx, _tx| {
+                    compact_tabs(
+                        &["None", "API key", "OAuth"],
+                        auth_idx,
+                        "Authentication",
+                        |s: &mut AppState, idx, _tx| {
                             s.settings_ui.mcp_auth_type = match idx {
                                 1 => "api_key".to_string(),
                                 2 => "oauth".to_string(),
                                 _ => "none".to_string(),
                             };
-                        })
-                        .build(k)
+                        },
+                        k,
+                    )
                 },
                 k,
                 t,
@@ -988,7 +993,7 @@ fn append_editor_dialog(
                                 .gap(4.0)
                                 .child(
                                     text("Prefix (optional)")
-                                        .font(k.ty.text_xsmall)
+                                        .font(k.ty.small_medium)
                                         .color(t.text_muted),
                                 )
                                 .child(
@@ -1009,7 +1014,7 @@ fn append_editor_dialog(
                                 .gap(4.0)
                                 .child(
                                     text("Key ID (optional)")
-                                        .font(k.ty.text_xsmall)
+                                        .font(k.ty.small_medium)
                                         .color(t.text_muted),
                                 )
                                 .child(
@@ -1029,17 +1034,19 @@ fn append_editor_dialog(
             adv = adv
                 .child(labeled_dialog_field(
                     "OAuth flow mode",
-                    SegmentedControl::new(&["Automatic", "Paste a code"], Some(mode_idx))
-                        .label("OAuth flow mode")
-                        .fit()
-                        .on_pick(|s: &mut AppState, idx, _tx| {
+                    compact_tabs(
+                        &["Automatic", "Paste a code"],
+                        mode_idx,
+                        "OAuth flow mode",
+                        |s: &mut AppState, idx, _tx| {
                             s.settings_ui.mcp_oauth_mode = if idx == 1 {
                                 "code".to_string()
                             } else {
                                 "auto".to_string()
                             };
-                        })
-                        .build(k),
+                        },
+                        k,
+                    ),
                     k,
                     t,
                 ))
@@ -1054,7 +1061,7 @@ fn append_editor_dialog(
                                 .gap(4.0)
                                 .child(
                                     text("OAuth scope (optional)")
-                                        .font(k.ty.text_xsmall)
+                                        .font(k.ty.small_medium)
                                         .color(t.text_muted),
                                 )
                                 .child(
@@ -1075,7 +1082,7 @@ fn append_editor_dialog(
                                 .gap(4.0)
                                 .child(
                                     text("OAuth resource (optional)")
-                                        .font(k.ty.text_xsmall)
+                                        .font(k.ty.small_medium)
                                         .color(t.text_muted),
                                 )
                                 .child(
@@ -1104,7 +1111,7 @@ fn append_editor_dialog(
                             .gap(4.0)
                             .child(
                                 text("Icon URL (optional)")
-                                    .font(k.ty.text_xsmall)
+                                    .font(k.ty.small_medium)
                                     .color(t.text_muted),
                             )
                             .child(
@@ -1122,7 +1129,7 @@ fn append_editor_dialog(
                             .gap(4.0)
                             .child(
                                 text("Retries (optional)")
-                                    .font(k.ty.text_xsmall)
+                                    .font(k.ty.small_medium)
                                     .color(t.text_muted),
                             )
                             .child(
@@ -1145,26 +1152,25 @@ fn append_editor_dialog(
                             .grow(1.0)
                             .min_w(0.0)
                             .gap(2.0)
-                            .child(text("Required").font(k.ty.text_small).color(t.text_base))
+                            .child(text("Required").font(k.ty.ui_medium).color(t.text_base))
                             .child(
                                 text(
                                     "Treat sessions as broken when this connector fails to start.",
                                 )
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small)
                                 .color(t.text_muted)
                                 .wrap(),
                             ),
                     )
-                    .child(
-                        Switch::new(s.settings_ui.mcp_required)
-                            .label("Required")
-                            .hide_label()
-                            .control_size(ControlSize::Mini)
-                            .on_toggle(|s: &mut AppState| {
-                                s.settings_ui.mcp_required = !s.settings_ui.mcp_required;
-                            })
-                            .build(k),
-                    ),
+                    .child(mini_switch(
+                        s.settings_ui.mcp_required,
+                        "Required",
+                        false,
+                        |s: &mut AppState| {
+                            s.settings_ui.mcp_required = !s.settings_ui.mcp_required;
+                        },
+                        k,
+                    )),
             );
         fields = fields.child(adv);
     }
@@ -1176,19 +1182,18 @@ fn append_editor_dialog(
             .justify_between()
             .child(
                 text("Enable connector immediately")
-                    .font(k.ty.text_small)
+                    .font(k.ty.ui_medium)
                     .color(t.text_base),
             )
-            .child(
-                Switch::new(s.settings_ui.mcp_enabled)
-                    .label("Enabled")
-                    .hide_label()
-                    .control_size(ControlSize::Mini)
-                    .on_toggle(|s: &mut AppState| {
-                        s.settings_ui.mcp_enabled = !s.settings_ui.mcp_enabled;
-                    })
-                    .build(k),
-            ),
+            .child(mini_switch(
+                s.settings_ui.mcp_enabled,
+                "Enabled",
+                false,
+                |s: &mut AppState| {
+                    s.settings_ui.mcp_enabled = !s.settings_ui.mcp_enabled;
+                },
+                k,
+            )),
     );
 
     if let Some(err) = s.settings_ui.mcp_editor_error.as_deref() {
@@ -1203,7 +1208,7 @@ fn append_editor_dialog(
         .pt(6.0)
         .child(
             Button::new("Cancel")
-                .variant(ButtonVariant::Outline)
+                .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     close_editor(s);

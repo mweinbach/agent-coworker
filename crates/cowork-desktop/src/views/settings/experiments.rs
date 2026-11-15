@@ -3,13 +3,13 @@
 use std::collections::BTreeSet;
 
 use rune::{El, row, text};
-use rune_kit::{Kit, Switch};
+use rune_kit::Kit;
 
 use crate::actions::{Action, SettingsAction};
 use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
-    Section, SettingsRow, StatusTone, callout_banner, settings_page, status_pill,
+    Section, SettingsRow, StatusTone, callout_banner, mini_switch, settings_page, status_pill,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -147,18 +147,19 @@ fn render_flag_row(spec: FlagRowSpec<'_>, k: &Kit, t: &ThemeTokens) -> El {
 
     let enabled = spec.enabled;
     let toggle_id = spec.id.clone();
-    let toggle = Switch::new(enabled)
-        .label(spec.label)
-        .hide_label()
-        .disabled(spec.disabled)
-        .on_toggle(move |s: &mut AppState| {
+    let toggle = mini_switch(
+        enabled,
+        spec.label,
+        spec.disabled,
+        move |s: &mut AppState| {
             let next = !enabled;
             s.dispatch(Action::Settings(SettingsAction::SetFeatureFlag {
                 flag_id: toggle_id.clone(),
                 enabled: next,
             }));
-        })
-        .build(k);
+        },
+        k,
+    );
 
     let control = row()
         .items_center()
@@ -257,7 +258,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     "{} experimental flags configured",
                     KNOWN_FEATURE_FLAGS.len()
                 ))
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_faint),
             ),
         );

@@ -5,8 +5,7 @@
 
 use rune::{El, TextEdit, col, el, row, text};
 use rune_kit::{
-    Button, ButtonVariant, ControlSize, Dialog, Kit, SegmentedControl, Select, SelectAppearance,
-    Switch, TextArea, TextInput,
+    Button, ButtonVariant, ControlSize, Dialog, Kit, Select, SelectAppearance, TextArea, TextInput,
 };
 use serde_json::{Value, json};
 
@@ -16,7 +15,8 @@ use crate::state::{AppState, PluginSummary, ProviderStatusSummary, WorkspaceReco
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
-    confirm_dialog, entity_icon, settings_page, stat_tile, status_pill,
+    compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input, settings_page, stat_tile,
+    status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::shell::PageContent;
@@ -534,16 +534,18 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .unwrap_or(0);
     let tab_targets: Vec<ToolAccessTab> = tabs.iter().map(|(_, tab)| *tab).collect();
 
-    let tab_strip = SegmentedControl::new(&labels, Some(active_idx))
-        .label("Tool access tabs")
-        .fit()
-        .on_pick(move |s: &mut AppState, idx, _tx| {
+    let tab_strip = compact_tabs(
+        &labels,
+        active_idx,
+        "Tool access tabs",
+        move |s: &mut AppState, idx, _tx| {
             if let Some(&picked) = tab_targets.get(idx) {
                 s.settings_ui.tool_access_tab = picked;
                 s.settings_ui.tool_access_synced_tab = s.nav.current().settings_tab.clone();
             }
-        })
-        .build(k);
+        },
+        k,
+    );
 
     children.push(tab_strip);
 
@@ -700,16 +702,21 @@ fn plugins_tab_view(
             row()
                 .w_full()
                 .items_center()
+                .flex_wrap()
                 .gap(12.0)
                 .px(16.0)
                 .py(12.0)
-                .child(
-                    TextInput::new(&s.settings_ui.tool_search_edit)
-                        .placeholder("Search installed plugins...")
-                        .width(Some(300.0))
-                        .on_edit(|s: &mut AppState| &mut s.settings_ui.tool_search_edit)
-                        .build(k),
-                )
+                .child(search_input(
+                    &s.settings_ui.tool_search_edit,
+                    "Search installed plugins",
+                    "Search installed plugins...",
+                    Some(300.0),
+                    |s: &mut AppState| &mut s.settings_ui.tool_search_edit,
+                    |s: &mut AppState, _tx| {
+                        s.settings_ui.tool_search_edit = TextEdit::new("");
+                    },
+                    k,
+                ))
                 .child(el().grow(1.0))
                 .child(status_pill(
                     format!("{} of {}", visible.len(), plugins.len()),
@@ -804,18 +811,17 @@ fn plugins_tab_view(
             })
             .map(str::to_string);
 
-        let mut title_row = row().items_center().gap(8.0).child(
-            text(&display_name)
-                .font(k.ty.body_medium)
-                .color(t.text_base),
-        );
+        let mut title_row = row()
+            .items_center()
+            .gap(8.0)
+            .child(text(&display_name).font(k.ty.ui_medium).color(t.text_base));
         if let Some(mkt) = marketplace_name {
             title_row = title_row.child(status_pill(mkt, StatusTone::Neutral, k, t));
         }
 
         let mut info = col().grow(1.0).min_w(0.0).gap(3.0).child(title_row);
         if !desc.is_empty() {
-            info = info.child(text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap());
+            info = info.child(text(desc).font(k.ty.small).color(t.text_muted).wrap());
         }
 
         let action_btn = if let Some(src) = install_source {
@@ -889,7 +895,7 @@ fn render_plugin_row(
     let mut header = row()
         .items_center()
         .gap(8.0)
-        .child(text(&plugin.name).font(k.ty.body_medium).color(t.text_base));
+        .child(text(&plugin.name).font(k.ty.ui_medium).color(t.text_base));
     if plugin.update_available {
         header = header.child(status_pill("Update available", StatusTone::Warning, k, t));
     }
@@ -917,7 +923,7 @@ fn render_plugin_row(
         .grow(1.0)
         .min_w(0.0)
         .gap(3.0)
-        .radius(6.0)
+        .radius(k.radius.md)
         .hover(t.hover)
         .role("button")
         .label(format!("Inspect plugin {}", plugin.name))
@@ -929,16 +935,12 @@ fn render_plugin_row(
     if !plugin.description.trim().is_empty() {
         info_col = info_col.child(
             text(&plugin.description)
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted)
                 .wrap(),
         );
     }
-    info_col = info_col.child(
-        text(summary_line)
-            .font(k.ty.text_xsmall)
-            .color(t.text_muted),
-    );
+    info_col = info_col.child(text(summary_line).font(k.ty.small).color(t.text_muted));
 
     let ws_toggle = ws_id.to_string();
     let pid_toggle = plugin.id.clone();
@@ -966,21 +968,20 @@ fn render_plugin_row(
     }
 
     actions = actions
-        .child(
-            Switch::new(plugin.enabled)
-                .label(format!("Enable {}", plugin.name))
-                .hide_label()
-                .control_size(ControlSize::Mini)
-                .on_toggle(move |s: &mut AppState| {
-                    s.dispatch(Action::Settings(SettingsAction::SetPluginEnabledScoped {
-                        workspace_id: ws_toggle.clone(),
-                        id: pid_toggle.clone(),
-                        scope: scope_toggle.clone(),
-                        enabled: next_enabled,
-                    }));
-                })
-                .build(k),
-        )
+        .child(mini_switch(
+            plugin.enabled,
+            format!("Enable {}", plugin.name),
+            false,
+            move |s: &mut AppState| {
+                s.dispatch(Action::Settings(SettingsAction::SetPluginEnabledScoped {
+                    workspace_id: ws_toggle.clone(),
+                    id: pid_toggle.clone(),
+                    scope: scope_toggle.clone(),
+                    enabled: next_enabled,
+                }));
+            },
+            k,
+        ))
         .child(
             Button::new("Details")
                 .variant(ButtonVariant::Ghost)
@@ -1035,20 +1036,19 @@ fn append_install_plugin_dialog(
     }
 
     let scope_idx = usize::from(s.settings_ui.plugin_install_scope == "workspace");
-    let scope_seg = SegmentedControl::new(
+    let scope_seg = compact_tabs(
         &["Library (all projects)", "Workspace only"],
-        Some(scope_idx),
-    )
-    .label("Install plugin scope")
-    .fit()
-    .on_pick(|s: &mut AppState, idx, _tx| {
-        s.settings_ui.plugin_install_scope = if idx == 1 {
-            "workspace".to_string()
-        } else {
-            "user".to_string()
-        };
-    })
-    .build(k);
+        scope_idx,
+        "Install plugin scope",
+        |s: &mut AppState, idx, _tx| {
+            s.settings_ui.plugin_install_scope = if idx == 1 {
+                "workspace".to_string()
+            } else {
+                "user".to_string()
+            };
+        },
+        k,
+    );
 
     let ws_install = ws_id.to_string();
     let can_install = !s.settings_ui.install_target_edit.text.trim().is_empty();
@@ -1061,7 +1061,7 @@ fn append_install_plugin_dialog(
         .gap(12.0)
         .child(
             text("Install a plugin from a GitHub repo slug, repository URL, or local directory.")
-                .font(k.ty.text_small)
+                .font(k.ty.ui)
                 .color(t.text_muted)
                 .wrap(),
         )
@@ -1083,7 +1083,7 @@ fn append_install_plugin_dialog(
                 .pt(6.0)
                 .child(
                     Button::new("Cancel")
-                        .variant(ButtonVariant::Outline)
+                        .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Regular)
                         .on_press(|s: &mut AppState| {
                             s.settings_ui.install_plugin_open = false;
@@ -1186,15 +1186,15 @@ fn append_plugin_detail_dialog(
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(2.0)
-                    .child(text(&plugin.name).font(k.ty.body_medium).color(t.text_base))
-                    .child(text(&plugin.id).font(k.ty.text_xsmall).color(t.text_muted)),
+                    .child(text(&plugin.name).font(k.ty.ui_medium).color(t.text_base))
+                    .child(text(&plugin.id).font(k.ty.small).color(t.text_muted)),
             ),
     );
 
     if !plugin.description.trim().is_empty() {
         content = content.child(
             text(&plugin.description)
-                .font(k.ty.text_small)
+                .font(k.ty.ui)
                 .color(t.text_muted)
                 .wrap(),
         );
@@ -1268,7 +1268,7 @@ fn append_plugin_detail_dialog(
         )
         .child(
             Button::new("Close")
-                .variant(ButtonVariant::Outline)
+                .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     s.settings_ui.selected_plugin_id = None;
@@ -1435,16 +1435,21 @@ fn skills_tab_view(
             row()
                 .w_full()
                 .items_center()
+                .flex_wrap()
                 .gap(12.0)
                 .px(16.0)
                 .py(12.0)
-                .child(
-                    TextInput::new(&s.settings_ui.tool_search_edit)
-                        .placeholder("Search skills...")
-                        .width(Some(300.0))
-                        .on_edit(|s: &mut AppState| &mut s.settings_ui.tool_search_edit)
-                        .build(k),
-                )
+                .child(search_input(
+                    &s.settings_ui.tool_search_edit,
+                    "Search skills",
+                    "Search skills...",
+                    Some(300.0),
+                    |s: &mut AppState| &mut s.settings_ui.tool_search_edit,
+                    |s: &mut AppState, _tx| {
+                        s.settings_ui.tool_search_edit = TextEdit::new("");
+                    },
+                    k,
+                ))
                 .child(el().grow(1.0))
                 .child(status_pill(
                     format!("{} of {}", visible.len(), skills.len()),
@@ -1515,16 +1520,16 @@ fn skills_tab_view(
                 .gap(3.0)
                 .child(
                     text(&mkt.display_name)
-                        .font(k.ty.body_medium)
+                        .font(k.ty.ui_medium)
                         .color(t.text_base),
                 )
                 .child(
                     text(meta_parts.join(" · "))
-                        .font(k.ty.text_xsmall)
+                        .font(k.ty.small)
                         .color(t.text_muted),
                 );
             if let Some(err) = mkt.fetch_error.as_deref() {
-                info = info.child(text(err).font(k.ty.text_xsmall).color(t.danger).wrap());
+                info = info.child(text(err).font(k.ty.small).color(t.danger).wrap());
             }
 
             let mkt_id_rm = mkt.id.clone();
@@ -1620,17 +1625,16 @@ fn skills_tab_view(
                 })
                 .map(str::to_string);
 
-            let mut title_row = row().items_center().gap(8.0).child(
-                text(&display_name)
-                    .font(k.ty.body_medium)
-                    .color(t.text_base),
-            );
+            let mut title_row = row()
+                .items_center()
+                .gap(8.0)
+                .child(text(&display_name).font(k.ty.ui_medium).color(t.text_base));
             if let Some(mkt) = mkt_name {
                 title_row = title_row.child(status_pill(mkt, StatusTone::Neutral, k, t));
             }
             let mut info = col().grow(1.0).min_w(0.0).gap(3.0).child(title_row);
             if !desc.is_empty() {
-                info = info.child(text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap());
+                info = info.child(text(desc).font(k.ty.small).color(t.text_muted).wrap());
             }
             let install_action = if let Some(src) = install_source {
                 let ws_inst = ws_id.to_string();
@@ -1695,7 +1699,7 @@ fn render_skill_row(s: &AppState, sk: &SkillRowEntry, ws_id: &str, k: &Kit, t: &
         .gap(8.0)
         .child(
             text(&sk.display_name)
-                .font(k.ty.body_medium)
+                .font(k.ty.ui_medium)
                 .color(t.text_base),
         )
         .child(status_pill(
@@ -1733,7 +1737,7 @@ fn render_skill_row(s: &AppState, sk: &SkillRowEntry, ws_id: &str, k: &Kit, t: &
         .grow(1.0)
         .min_w(0.0)
         .gap(3.0)
-        .radius(6.0)
+        .radius(k.radius.md)
         .hover(t.hover)
         .role("button")
         .label(format!("Inspect skill {}", sk.display_name))
@@ -1744,7 +1748,7 @@ fn render_skill_row(s: &AppState, sk: &SkillRowEntry, ws_id: &str, k: &Kit, t: &
     if !sk.description.trim().is_empty() {
         info = info.child(
             text(&sk.description)
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted)
                 .wrap(),
         );
@@ -1778,31 +1782,29 @@ fn render_skill_row(s: &AppState, sk: &SkillRowEntry, ws_id: &str, k: &Kit, t: &
     }
 
     actions = actions
-        .child(
-            Switch::new(sk.enabled)
-                .label(format!("Enable {}", sk.display_name))
-                .hide_label()
-                .disabled(!can_toggle)
-                .control_size(ControlSize::Mini)
-                .on_toggle(move |s: &mut AppState| {
-                    if let Some(id) = inst_id_toggle.as_ref() {
-                        s.dispatch(Action::Settings(
-                            SettingsAction::SetSkillInstallationEnabled {
-                                workspace_id: ws_toggle.clone(),
-                                installation_id: id.clone(),
-                                enabled: next_enabled,
-                            },
-                        ));
-                    } else {
-                        s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+        .child(mini_switch(
+            sk.enabled,
+            format!("Enable {}", sk.display_name),
+            !can_toggle,
+            move |s: &mut AppState| {
+                if let Some(id) = inst_id_toggle.as_ref() {
+                    s.dispatch(Action::Settings(
+                        SettingsAction::SetSkillInstallationEnabled {
                             workspace_id: ws_toggle.clone(),
-                            name: name_toggle.clone(),
+                            installation_id: id.clone(),
                             enabled: next_enabled,
-                        }));
-                    }
-                })
-                .build(k),
-        )
+                        },
+                    ));
+                } else {
+                    s.dispatch(Action::Settings(SettingsAction::SetSkillEnabled {
+                        workspace_id: ws_toggle.clone(),
+                        name: name_toggle.clone(),
+                        enabled: next_enabled,
+                    }));
+                }
+            },
+            k,
+        ))
         .child(
             Button::new("Details")
                 .variant(ButtonVariant::Ghost)
@@ -1874,17 +1876,19 @@ fn append_install_skill_dialog(
     }
 
     let scope_idx = usize::from(s.settings_ui.skill_install_scope == "project");
-    let scope_seg = SegmentedControl::new(&["Cowork Library", "This workspace"], Some(scope_idx))
-        .label("Install skill scope")
-        .fit()
-        .on_pick(|s: &mut AppState, idx, _tx| {
+    let scope_seg = compact_tabs(
+        &["Cowork Library", "This workspace"],
+        scope_idx,
+        "Install skill scope",
+        |s: &mut AppState, idx, _tx| {
             s.settings_ui.skill_install_scope = if idx == 1 {
                 "project".to_string()
             } else {
                 "global".to_string()
             };
-        })
-        .build(k);
+        },
+        k,
+    );
 
     let ws_install = ws_id.to_string();
     let can_install = !s.settings_ui.install_target_edit.text.trim().is_empty();
@@ -1897,7 +1901,7 @@ fn append_install_skill_dialog(
         .gap(12.0)
         .child(
             text("Install a skill from GitHub (owner/repo), a URL, or a local folder containing SKILL.md.")
-                .font(k.ty.text_small)
+                .font(k.ty.ui)
                 .color(t.text_muted)
                 .wrap(),
         )
@@ -1919,7 +1923,7 @@ fn append_install_skill_dialog(
                 .pt(6.0)
                 .child(
                     Button::new("Cancel")
-                        .variant(ButtonVariant::Outline)
+                        .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Regular)
                         .on_press(|s: &mut AppState| {
                             s.settings_ui.install_skill_open = false;
@@ -2014,7 +2018,7 @@ fn append_skill_detail_dialog(
                     .gap(4.0)
                     .child(
                         text(&sk.display_name)
-                            .font(k.ty.body_medium)
+                            .font(k.ty.ui_medium)
                             .color(t.text_base),
                     )
                     .child(
@@ -2041,7 +2045,7 @@ fn append_skill_detail_dialog(
     if !sk.description.trim().is_empty() {
         content = content.child(
             text(&sk.description)
-                .font(k.ty.text_small)
+                .font(k.ty.ui)
                 .color(t.text_muted)
                 .wrap(),
         );
@@ -2063,7 +2067,7 @@ fn append_skill_detail_dialog(
     if let Some(src) = sk.source.as_deref().filter(|v| !v.trim().is_empty()) {
         content = content.child(
             text(format!("Source: {src}"))
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted)
                 .wrap(),
         );
@@ -2143,7 +2147,7 @@ fn append_skill_detail_dialog(
     }
     right_actions = right_actions.child(
         Button::new("Close")
-            .variant(ButtonVariant::Outline)
+            .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Regular)
             .on_press(|s: &mut AppState| {
                 s.settings_ui.selected_skill_id = None;
@@ -2243,7 +2247,7 @@ fn append_add_marketplace_dialog(
         .gap(12.0)
         .child(
             text("Add a GitHub repo (owner/repo) or marketplace URL to browse installable skills and plugins.")
-                .font(k.ty.text_small)
+                .font(k.ty.ui)
                 .color(t.text_muted)
                 .wrap(),
         )
@@ -2263,7 +2267,7 @@ fn append_add_marketplace_dialog(
                 .pt(6.0)
                 .child(
                     Button::new("Cancel")
-                        .variant(ButtonVariant::Outline)
+                        .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Regular)
                         .on_press(|s: &mut AppState| {
                             s.settings_ui.marketplace_dialog_open = false;
@@ -2426,7 +2430,7 @@ fn search_tab_view(
                         .gap(3.0)
                         .child(
                             text("Search provider")
-                                .font(k.ty.body_medium)
+                                .font(k.ty.ui_medium)
                                 .color(t.text_base),
                         )
                         .child(
@@ -2435,7 +2439,7 @@ fn search_tab_view(
                             } else {
                                 "Use the local webSearch tool for models without built-in search."
                             })
-                            .font(k.ty.text_xsmall)
+                            .font(k.ty.small)
                             .color(t.text_muted)
                             .wrap(),
                         ),
@@ -2504,12 +2508,12 @@ fn search_tab_view(
                         .gap(3.0)
                         .child(
                             text("Fallback local search tool")
-                                .font(k.ty.body_medium)
+                                .font(k.ty.ui_medium)
                                 .color(t.text_base),
                         )
                         .child(
                             text("Used for non-Codex models without provider-native web search.")
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small)
                                 .color(t.text_muted)
                                 .wrap(),
                         ),
@@ -2566,12 +2570,12 @@ fn search_tab_view(
                     .gap(3.0)
                     .child(
                         text("Codex web search mode")
-                            .font(k.ty.body_medium)
+                            .font(k.ty.ui_medium)
                             .color(t.text_base),
                     )
                     .child(
                         text("Controls Codex app-server native search behavior when native search is enabled.")
-                            .font(k.ty.text_xsmall)
+                            .font(k.ty.small)
                             .color(t.text_muted)
                             .wrap(),
                     ),
@@ -2651,8 +2655,8 @@ fn tool_providers_section(s: &AppState, ws: &WorkspaceRecord, k: &Kit, t: &Theme
                                 .grow(1.0)
                                 .min_w(0.0)
                                 .gap(2.0)
-                                .child(text(name).font(k.ty.body_medium).color(t.text_base))
-                                .child(text(subtitle).font(k.ty.text_xsmall).color(t.text_muted)),
+                                .child(text(name).font(k.ty.ui_medium).color(t.text_base))
+                                .child(text(subtitle).font(k.ty.small).color(t.text_muted)),
                         ),
                 )
                 .child(status_pill(

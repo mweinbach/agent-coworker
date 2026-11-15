@@ -5,8 +5,8 @@
 
 use rune::{El, ScrollSpec, TextEdit, col, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, SegmentedControl, Select,
-    SelectAppearance, Switch, TextArea, TextInput,
+    Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, Select, SelectAppearance, TextArea,
+    TextInput,
 };
 use serde_json::{Value, json};
 
@@ -15,8 +15,9 @@ use crate::state::{AppState, MemoryEntry, ScopedMemoryEntry, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
-    ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, confirm_dialog,
-    format_timestamp_friendly, management_targets, settings_page, status_pill,
+    ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, compact_tabs, confirm_dialog,
+    format_timestamp_friendly, management_targets, mini_switch, search_input, settings_page,
+    status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_providers};
@@ -353,7 +354,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             col()
                 .w_full()
                 .gap(4.0)
-                .child(text("Your name").font(k.ty.body_medium).color(t.text_base))
+                .child(text("Your name").font(k.ty.ui_medium).color(t.text_base))
                 .child(
                     TextInput::new(name_edit)
                         .label("Your name")
@@ -373,7 +374,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .gap(4.0)
                 .child(
                     text("Role or work context")
-                        .font(k.ty.body_medium)
+                        .font(k.ty.ui_medium)
                         .color(t.text_base),
                 )
                 .child(
@@ -394,11 +395,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             col()
                 .w_full()
                 .gap(4.0)
-                .child(
-                    text("Instructions")
-                        .font(k.ty.body_medium)
-                        .color(t.text_base),
-                )
+                .child(text("Instructions").font(k.ty.ui_medium).color(t.text_base))
                 .child(
                     TextArea::new(inst_edit)
                         .label("Profile instructions")
@@ -419,7 +416,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .gap(4.0)
                 .child(
                     text("Background details")
-                        .font(k.ty.body_medium)
+                        .font(k.ty.ui_medium)
                         .color(t.text_base),
                 )
                 .child(
@@ -461,19 +458,18 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .description(
                     "Replaces the manual remembered-facts list with agent-maintained memory files.",
                 )
-                .control(
-                    Switch::new(adv_mem_enabled)
-                        .label("Advanced memory")
-                        .hide_label()
-                        .control_size(ControlSize::Mini)
-                        .on_toggle(move |s: &mut AppState| {
-                            s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
-                                workspace_id: ws_id_adv.clone(),
-                                defaults: json!({ "advancedMemory": !adv_mem_enabled }),
-                            }));
-                        })
-                        .build(k),
-                )
+                .control(mini_switch(
+                    adv_mem_enabled,
+                    "Advanced memory",
+                    false,
+                    move |s: &mut AppState| {
+                        s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                            workspace_id: ws_id_adv.clone(),
+                            defaults: json!({ "advancedMemory": !adv_mem_enabled }),
+                        }));
+                    },
+                    k,
+                ))
                 .build(k, t),
         );
 
@@ -608,19 +604,18 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .description(
                     "Queues improvement runs after skill usage and keeps a restore backup for each changed skill.",
                 )
-                .control(
-                    Switch::new(si_enabled)
-                        .label("Skill improvement")
-                        .hide_label()
-                        .control_size(ControlSize::Mini)
-                        .on_toggle(move |s: &mut AppState| {
-                            s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
-                                workspace_id: ws_si_en.clone(),
-                                defaults: json!({ "skillImprovementEnabled": !si_enabled }),
-                            }));
-                        })
-                        .build(k),
-                )
+                .control(mini_switch(
+                    si_enabled,
+                    "Skill improvement",
+                    false,
+                    move |s: &mut AppState| {
+                        s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+                            workspace_id: ws_si_en.clone(),
+                            defaults: json!({ "skillImprovementEnabled": !si_enabled }),
+                        }));
+                    },
+                    k,
+                ))
                 .build(k, t),
         );
 
@@ -782,12 +777,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .gap(10.0)
                         .px(10.0)
                         .py(10.0)
-                        .radius(8.0)
+                        .radius(k.radius.md)
                         .border(1.0, t.border_muted)
                         .children(checks)
                 }
                 _ => text("No eligible skills found for this scope.")
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted),
             };
 
@@ -825,7 +820,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         let uses = job.get("usageCount").and_then(Value::as_u64).unwrap_or(1);
                         Some(
                             text(format!("{name} · {uses} use(s)"))
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small)
                                 .color(t.text_muted),
                         )
                     })
@@ -833,7 +828,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 col().gap(4.0).children(lines)
             } else {
                 text("No queued skill jobs.")
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted)
             };
 
@@ -885,7 +880,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                                 .gap(8.0)
                                 .child(
                                     text(format!("{skill}: {msg}"))
-                                        .font(k.ty.text_xsmall)
+                                        .font(k.ty.small)
                                         .color(t.text_muted)
                                         .wrap(),
                                 )
@@ -896,7 +891,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 col().w_full().gap(6.0).children(items)
             } else {
                 text("No skill improvement runs yet.")
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted)
             };
             si_section = si_section.child(
@@ -924,7 +919,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             .gap(8.0)
                             .child(
                                 text(skill_name.to_string())
-                                    .font(k.ty.text_xsmall)
+                                    .font(k.ty.small)
                                     .color(t.text_base),
                             )
                             .child(
@@ -944,7 +939,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             col().w_full().gap(6.0).children(items)
         } else {
             text("No restore backups available.")
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted)
         };
         si_section = si_section.child(
@@ -1111,7 +1106,7 @@ fn build_advanced_memory_section(
                             )
                             .child(status_pill(kind.to_uppercase(), StatusTone::Neutral, k, t)),
                     )
-                    .child(text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap()),
+                    .child(text(desc).font(k.ty.small).color(t.text_muted).wrap()),
             );
 
             if expanded {
@@ -1121,9 +1116,9 @@ fn build_advanced_memory_section(
                             .w_full()
                             .px(12.0)
                             .py(12.0)
-                            .radius(8.0)
+                            .radius(k.radius.md)
                             .fill(t.elevated_bg)
-                            .child(text(body).font(k.ty.text_xsmall).color(t.text_base).wrap()),
+                            .child(text(body).font(k.ty.ui).color(t.text_base).wrap()),
                     )
                     .child(
                         row()
@@ -1214,7 +1209,7 @@ fn build_advanced_memory_section(
             .pt(8.0)
             .child(
                 Button::new("Cancel")
-                    .variant(ButtonVariant::Outline)
+                    .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
                         s.settings_ui.advanced_memory_dialog_open = false;
@@ -1271,7 +1266,7 @@ fn build_advanced_memory_section(
                     col()
                         .w_full()
                         .gap(4.0)
-                        .child(text("Name").font(k.ty.text_xsmall).color(t.text_muted))
+                        .child(text("Name").font(k.ty.small_medium).color(t.text_muted))
                         .child(
                             TextInput::new(&s.settings_ui.advanced_memory_key_edit)
                                 .label("Name")
@@ -1287,7 +1282,7 @@ fn build_advanced_memory_section(
                     col()
                         .w_full()
                         .gap(4.0)
-                        .child(text("Type").font(k.ty.text_xsmall).color(t.text_muted))
+                        .child(text("Type").font(k.ty.small_medium).color(t.text_muted))
                         .child(type_select),
                 )
                 .child(
@@ -1296,7 +1291,7 @@ fn build_advanced_memory_section(
                         .gap(4.0)
                         .child(
                             text("Description")
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small_medium)
                                 .color(t.text_muted),
                         )
                         .child(
@@ -1314,7 +1309,7 @@ fn build_advanced_memory_section(
                     col()
                         .w_full()
                         .gap(4.0)
-                        .child(text("Content").font(k.ty.text_xsmall).color(t.text_muted))
+                        .child(text("Content").font(k.ty.small_medium).color(t.text_muted))
                         .child(
                             TextArea::new(&s.settings_ui.advanced_memory_content_edit)
                                 .label("Content")
@@ -1435,27 +1430,31 @@ fn build_legacy_memory_section(
         .items_center()
         .flex_wrap()
         .gap(8.0)
-        .child(
-            SegmentedControl::new(&["All", "Workspace", "Everywhere"], Some(scope_idx))
-                .label("Memory scope filter")
-                .fit()
-                .on_pick(|s: &mut AppState, idx, _tx| {
-                    s.settings_ui.memory_scope_filter = match idx {
-                        1 => "workspace",
-                        2 => "user",
-                        _ => "all",
-                    }
-                    .to_string();
-                })
-                .build(k),
-        )
-        .child(
-            TextInput::new(&s.settings_ui.memory_filter_edit)
-                .placeholder("Filter facts…")
-                .width(Some(160.0))
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.memory_filter_edit)
-                .build(k),
-        )
+        .child(compact_tabs(
+            &["All", "Workspace", "Everywhere"],
+            scope_idx,
+            "Memory scope filter",
+            |s: &mut AppState, idx, _tx| {
+                s.settings_ui.memory_scope_filter = match idx {
+                    1 => "workspace",
+                    2 => "user",
+                    _ => "all",
+                }
+                .to_string();
+            },
+            k,
+        ))
+        .child(search_input(
+            &s.settings_ui.memory_filter_edit,
+            "Filter facts",
+            "Filter facts…",
+            Some(180.0),
+            |s: &mut AppState| &mut s.settings_ui.memory_filter_edit,
+            |s: &mut AppState, _tx| {
+                s.settings_ui.memory_filter_edit = TextEdit::new("");
+            },
+            k,
+        ))
         .child(
             Button::new("Refresh")
                 .variant(ButtonVariant::Outline)
@@ -1596,11 +1595,7 @@ fn build_legacy_memory_section(
                                 t,
                             )),
                     )
-                    .child(
-                        text(updated_label)
-                            .font(k.ty.text_xsmall)
-                            .color(t.text_muted),
-                    ),
+                    .child(text(updated_label).font(k.ty.small).color(t.text_muted)),
             );
 
             if expanded {
@@ -1610,11 +1605,11 @@ fn build_legacy_memory_section(
                             .w_full()
                             .px(12.0)
                             .py(12.0)
-                            .radius(8.0)
+                            .radius(k.radius.md)
                             .fill(t.elevated_bg)
                             .child(
                                 text(entry.content.clone())
-                                    .font(k.ty.text_xsmall)
+                                    .font(k.ty.ui)
                                     .color(t.text_base)
                                     .wrap(),
                             ),
@@ -1705,7 +1700,7 @@ fn build_legacy_memory_section(
             .pt(8.0)
             .child(
                 Button::new("Cancel")
-                    .variant(ButtonVariant::Outline)
+                    .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
                         s.settings_ui.memory_dialog_open = false;
@@ -1780,14 +1775,14 @@ fn build_legacy_memory_section(
                         col()
                             .w_full()
                             .gap(4.0)
-                            .child(text("Scope").font(k.ty.text_xsmall).color(t.text_muted))
+                            .child(text("Scope").font(k.ty.small_medium).color(t.text_muted))
                             .child(scope_select),
                     )
                     .child(
                         col()
                             .w_full()
                             .gap(4.0)
-                            .child(text("Title").font(k.ty.text_xsmall).color(t.text_muted))
+                            .child(text("Title").font(k.ty.small_medium).color(t.text_muted))
                             .child(
                                 TextInput::new(&s.settings_ui.memory_key_edit)
                                     .label("Title")
@@ -1802,7 +1797,7 @@ fn build_legacy_memory_section(
                         col()
                             .w_full()
                             .gap(4.0)
-                            .child(text("Content").font(k.ty.text_xsmall).color(t.text_muted))
+                            .child(text("Content").font(k.ty.small_medium).color(t.text_muted))
                             .child(
                                 TextArea::new(&s.settings_ui.memory_content_edit)
                                     .label("Content")

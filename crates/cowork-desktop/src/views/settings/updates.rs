@@ -142,7 +142,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     } else if status == "downloaded" {
         install_control = install_control.child(
             Button::new("Restart & Install")
-                .variant(ButtonVariant::Submit)
+                .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::QuitAndInstallUpdate));
@@ -158,7 +158,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             } else {
                 "No pending restart"
             })
-            .font(k.ty.text_xsmall)
+            .font(k.ty.small)
             .color(t.text_muted),
         );
     }

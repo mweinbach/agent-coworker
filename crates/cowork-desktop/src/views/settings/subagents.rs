@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use rune::{El, ScrollSpec, TextEdit, col, el, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, Select, SelectAppearance, Switch,
-    TextArea, TextInput,
+    Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, Select, SelectAppearance, TextArea,
+    TextInput,
 };
 use serde_json::{Value, json};
 
@@ -20,7 +20,8 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, SettingsRow, StatusTone,
-    callout_banner, confirm_dialog, entity_icon, settings_page, status_pill,
+    callout_banner, compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input,
+    settings_page, status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_providers};
@@ -468,49 +469,30 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .justify_between()
         .flex_wrap()
         .gap(12.0)
-        .child(
-            row()
-                .items_center()
-                .gap(4.0)
-                .px(3.0)
-                .py(3.0)
-                .radius(8.0)
-                .fill(t.elevated_bg)
-                .border(1.0, t.border_muted)
-                .child(
-                    Button::new("Global")
-                        .variant(if current_scope == "global" {
-                            ButtonVariant::Outline
-                        } else {
-                            ButtonVariant::Ghost
-                        })
-                        .control_size(ControlSize::Small)
-                        .on_press(|s: &mut AppState| {
-                            s.settings_ui.subagent_scope = "global".to_string();
-                        })
-                        .build(k),
-                )
-                .child(
-                    Button::new("Workspace")
-                        .variant(if current_scope == "workspace" {
-                            ButtonVariant::Outline
-                        } else {
-                            ButtonVariant::Ghost
-                        })
-                        .control_size(ControlSize::Small)
-                        .on_press(|s: &mut AppState| {
-                            s.settings_ui.subagent_scope = "workspace".to_string();
-                        })
-                        .build(k),
-                ),
-        )
-        .child(
-            TextInput::new(&s.settings_ui.subagent_search_edit)
-                .placeholder("Search subagents…")
-                .width(Some(240.0))
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.subagent_search_edit)
-                .build(k),
-        );
+        .child(compact_tabs(
+            &["Global", "Workspace"],
+            usize::from(current_scope != "global"),
+            "Subagent scope",
+            |s: &mut AppState, idx, _tx| {
+                s.settings_ui.subagent_scope = if idx == 0 {
+                    "global".to_string()
+                } else {
+                    "workspace".to_string()
+                };
+            },
+            k,
+        ))
+        .child(search_input(
+            &s.settings_ui.subagent_search_edit,
+            "Search subagents",
+            "Search subagents…",
+            Some(240.0),
+            |s: &mut AppState| &mut s.settings_ui.subagent_search_edit,
+            |s: &mut AppState, _tx| {
+                s.settings_ui.subagent_search_edit = TextEdit::new("");
+            },
+            k,
+        ));
 
     let scope_note = if current_scope == "global" {
         "Global subagents are available in every workspace and chat."
@@ -518,12 +500,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         "Workspace subagents only apply to the selected workspace. One-off chats always use global subagents."
     };
 
-    let mut controls_col = col().w_full().gap(8.0).child(scope_bar).child(
-        text(scope_note)
-            .font(k.ty.text_xsmall)
-            .color(t.text_muted)
-            .wrap(),
-    );
+    let mut controls_col = col()
+        .w_full()
+        .gap(8.0)
+        .child(scope_bar)
+        .child(text(scope_note).font(k.ty.small).color(t.text_muted).wrap());
 
     let choices = subagent_workspace_choices(s);
     if current_scope == "workspace" {
@@ -726,7 +707,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .gap(8.0)
                 .child(
                     text(profile.display_name.clone())
-                        .font(k.ty.body_medium)
+                        .font(k.ty.ui_medium)
                         .color(t.text_base),
                 )
                 .children(badge_pills);
@@ -743,22 +724,21 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
             let mut actions = row().items_center().gap(6.0);
             if p_scope == "global" && !is_locked_default {
-                actions = actions.child(
-                    Switch::new(!ws_disabled)
-                        .label(format!("Enable {} in workspace", profile.display_name))
-                        .hide_label()
-                        .control_size(ControlSize::Mini)
-                        .on_toggle(move |s: &mut AppState| {
-                            s.dispatch(Action::Settings(
-                                SettingsAction::SetAgentProfileWorkspaceAvailability {
-                                    workspace_id: ws_avail.clone(),
-                                    id: p_id_avail.clone(),
-                                    disabled: !ws_disabled,
-                                },
-                            ));
-                        })
-                        .build(k),
-                );
+                actions = actions.child(mini_switch(
+                    !ws_disabled,
+                    format!("Enable {} in workspace", profile.display_name),
+                    false,
+                    move |s: &mut AppState| {
+                        s.dispatch(Action::Settings(
+                            SettingsAction::SetAgentProfileWorkspaceAvailability {
+                                workspace_id: ws_avail.clone(),
+                                id: p_id_avail.clone(),
+                                disabled: !ws_disabled,
+                            },
+                        ));
+                    },
+                    k,
+                ));
             }
             if !is_locked_default {
                 actions = actions.child(
@@ -806,33 +786,37 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .build(k),
                 );
 
-            let row_card =
-                row()
-                    .w_full()
-                    .px(16.0)
-                    .py(14.0)
-                    .items_center()
-                    .justify_between()
-                    .gap(12.0)
-                    .child(
-                        row()
-                            .grow(1.0)
-                            .min_w(0.0)
-                            .items_center()
-                            .gap(12.0)
-                            .child(entity_icon(
-                                s,
-                                None,
-                                &profile.display_name,
-                                EntityIconSize::Sm,
-                                k,
-                                t,
-                            ))
-                            .child(col().grow(1.0).min_w(0.0).gap(4.0).child(title_row).child(
-                                text(desc).font(k.ty.text_xsmall).color(t.text_muted).wrap(),
-                            )),
-                    )
-                    .child(el().shrink().child(actions));
+            let row_card = row()
+                .w_full()
+                .px(16.0)
+                .py(14.0)
+                .items_center()
+                .justify_between()
+                .gap(12.0)
+                .child(
+                    row()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .items_center()
+                        .gap(12.0)
+                        .child(entity_icon(
+                            s,
+                            None,
+                            &profile.display_name,
+                            EntityIconSize::Sm,
+                            k,
+                            t,
+                        ))
+                        .child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(4.0)
+                                .child(title_row)
+                                .child(text(desc).font(k.ty.small).color(t.text_muted).wrap()),
+                        ),
+                )
+                .child(el().shrink().child(actions));
 
             list_section = list_section.child(row_card);
         }
@@ -998,13 +982,13 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .child(
                 col()
                     .gap(4.0)
-                    .child(text("Scope").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(text("Scope").font(k.ty.small_medium).color(t.text_muted))
                     .child(scope_select),
             )
             .child(
                 col()
                     .gap(4.0)
-                    .child(text("Template").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(text("Template").font(k.ty.small_medium).color(t.text_muted))
                     .child(role_select),
             )
             .child(
@@ -1012,17 +996,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .items_center()
                     .gap(8.0)
                     .pb(4.0)
-                    .child(text("Enabled").font(k.ty.text_xsmall).color(t.text_muted))
-                    .child(
-                        Switch::new(s.settings_ui.subagent_enabled)
-                            .label("Enabled")
-                            .hide_label()
-                            .control_size(ControlSize::Mini)
-                            .on_toggle(|s: &mut AppState| {
-                                s.settings_ui.subagent_enabled = !s.settings_ui.subagent_enabled;
-                            })
-                            .build(k),
-                    ),
+                    .child(text("Enabled").font(k.ty.small_medium).color(t.text_muted))
+                    .child(mini_switch(
+                        s.settings_ui.subagent_enabled,
+                        "Enabled",
+                        false,
+                        |s: &mut AppState| {
+                            s.settings_ui.subagent_enabled = !s.settings_ui.subagent_enabled;
+                        },
+                        k,
+                    )),
             );
 
         let id_preview = if draft_id.is_empty() {
@@ -1040,7 +1023,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(4.0)
-                    .child(text("Name").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(text("Name").font(k.ty.small_medium).color(t.text_muted))
                     .child(
                         TextInput::new(&s.settings_ui.subagent_name_edit)
                             .label("Name")
@@ -1056,17 +1039,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .gap(4.0)
                     .child(
                         text("Subagent id")
-                            .font(k.ty.text_xsmall)
+                            .font(k.ty.small_medium)
                             .color(t.text_muted),
                     )
                     .child(
                         row()
                             .h(32.0)
                             .px(10.0)
-                            .radius(6.0)
+                            .radius(k.radius.md)
                             .fill(t.elevated_bg)
                             .items_center()
-                            .child(text(id_preview).font(k.ty.text_xsmall).color(t.text_muted)),
+                            .child(text(id_preview).font(k.ty.small).color(t.text_muted)),
                     ),
             );
 
@@ -1075,7 +1058,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .gap(4.0)
                 .child(
                     text("Model target")
-                        .font(k.ty.text_xsmall)
+                        .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
                 .child(model_select),
@@ -1124,7 +1107,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             model_row = model_row.child(
                 col()
                     .gap(4.0)
-                    .child(text("Reasoning").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(
+                        text("Reasoning")
+                            .font(k.ty.small_medium)
+                            .color(t.text_muted),
+                    )
                     .child(eff_select),
             );
         }
@@ -1164,7 +1151,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .gap(8.0)
                     .child(
                         text("Built-in tools")
-                            .font(k.ty.text_xsmall)
+                            .font(k.ty.small_medium)
                             .color(t.text_muted),
                     )
                     .child(status_pill(
@@ -1181,7 +1168,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .gap(10.0)
                     .px(10.0)
                     .py(10.0)
-                    .radius(8.0)
+                    .radius(k.radius.lg)
                     .border(1.0, t.border_muted)
                     .children(tool_checks),
             );
@@ -1239,7 +1226,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 text(
                     "One-off chats can only use global profiles. Choose Global if this subagent should be available there.",
                 )
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted)
                 .wrap(),
             )
@@ -1249,7 +1236,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 col()
                     .w_full()
                     .gap(4.0)
-                    .child(text("Description").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(text("Description").font(k.ty.small_medium).color(t.text_muted))
                     .child(
                         TextInput::new(&s.settings_ui.subagent_desc_edit)
                             .label("Description")
@@ -1263,7 +1250,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 col()
                     .w_full()
                     .gap(4.0)
-                    .child(text("Prompt").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(text("Prompt").font(k.ty.small_medium).color(t.text_muted))
                     .child(
                         TextArea::new(&s.settings_ui.subagent_prompt_edit)
                             .label("Prompt")
@@ -1284,7 +1271,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .gap(6.0)
                     .child(
                         text("MCP servers")
-                            .font(k.ty.text_xsmall)
+                            .font(k.ty.small_medium)
                             .color(t.text_muted),
                     )
                     .child(
@@ -1294,7 +1281,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             .gap(10.0)
                             .px(10.0)
                             .py(10.0)
-                            .radius(8.0)
+                            .radius(k.radius.lg)
                             .border(1.0, t.border_muted)
                             .children(mcp_checks),
                     ),
@@ -1306,7 +1293,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 col()
                     .w_full()
                     .gap(6.0)
-                    .child(text("Skills").font(k.ty.text_xsmall).color(t.text_muted))
+                    .child(text("Skills").font(k.ty.small_medium).color(t.text_muted))
                     .child(
                         row()
                             .w_full()
@@ -1314,7 +1301,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             .gap(10.0)
                             .px(10.0)
                             .py(10.0)
-                            .radius(8.0)
+                            .radius(k.radius.lg)
                             .border(1.0, t.border_muted)
                             .children(skill_checks),
                     ),
@@ -1329,7 +1316,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .pt(8.0)
             .child(
                 Button::new("Cancel")
-                    .variant(ButtonVariant::Outline)
+                    .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
                         s.settings_ui.subagent_dialog_open = false;

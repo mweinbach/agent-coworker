@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rune::TextEdit;
+use rune_kit::shell::PaneState;
 use rune_kit::{ShortcutRecorderState, TreeModel};
 use serde_json::Value;
 
@@ -92,6 +93,7 @@ pub struct SettingsUiState {
     // Shared control state
     pub open_select_key: Option<String>,
     pub mobile_nav_open: bool,
+    pub nav_pane: PaneState,
 
     // Desktop page
     pub quick_chat_recorder: ShortcutRecorderState,
@@ -287,6 +289,10 @@ impl Default for SettingsUiState {
         Self {
             open_select_key: None,
             mobile_nav_open: false,
+            nav_pane: PaneState::new(crate::theme::layout::SIDEBAR_DEFAULT_WIDTH).range(
+                crate::theme::layout::SIDEBAR_MIN_WIDTH,
+                crate::theme::layout::SIDEBAR_MAX_WIDTH,
+            ),
             quick_chat_recorder: ShortcutRecorderState::default(),
             quick_chat_shortcut_error: None,
             quick_chat_synced_accel: None,

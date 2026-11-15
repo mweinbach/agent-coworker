@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use rune::{El, ScrollSpec, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, Checkbox, ControlSize, Dialog, IconButton, IconButtonVariant, Kit,
-    Switch, TextInput,
+    TextInput,
 };
 use serde_json::Value;
 
@@ -18,7 +18,8 @@ use crate::views::settings::icons;
 use crate::views::settings::manage_models_dialog;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
-    confirm_dialog, entity_icon, management_targets, settings_page, status_pill,
+    confirm_dialog, entity_icon, management_targets, mini_switch, search_input, settings_page,
+    status_pill,
 };
 use crate::views::settings::providers_utils::{
     extract_rate_limit_hint, format_auth_method_label, model_display_name, provider_status_badge,
@@ -207,8 +208,8 @@ fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &
                 .justify_between()
                 .items_center()
                 .child(
-                    text("CODEX RUNTIME")
-                        .font(k.ty.text_xsmall)
+                    text("Codex runtime")
+                        .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
                 .child(status_pill(source_label, StatusTone::Neutral, k, t)),
@@ -217,18 +218,18 @@ fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &
     if let Some(ver) = version {
         card = card.child(
             text(format!("Installed version: {ver}"))
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_base),
         );
     }
     if let Some(req) = pinned {
         card = card.child(
             text(format!("Pinned version: {req}"))
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted),
         );
     }
-    card = card.child(text(msg).font(k.ty.text_xsmall).color(t.text_muted).wrap());
+    card = card.child(text(msg).font(k.ty.small).color(t.text_muted).wrap());
 
     if let Some(ws_id) = active_ws_id {
         let ws_check = ws_id.to_string();
@@ -299,31 +300,32 @@ fn lmstudio_section(
                         .gap(2.0)
                         .child(
                             text("Enable LM Studio integration")
-                                .font(k.ty.body_medium)
+                                .font(k.ty.ui_medium)
                                 .color(t.text_base),
                         )
                         .child(
                             text("Connect local LM Studio models into the chat model picker.")
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small)
                                 .color(t.text_muted)
                                 .wrap(),
                         ),
                 )
                 .child({
                     let ws_toggle = active_ws.map(|w| w.id.clone());
-                    Switch::new(lm_enabled)
-                        .label("Enable LM Studio")
-                        .hide_label()
-                        .disabled(!can_mutate)
-                        .on_toggle(move |s: &mut AppState| {
+                    mini_switch(
+                        lm_enabled,
+                        "Enable LM Studio",
+                        !can_mutate,
+                        move |s: &mut AppState| {
                             if let Some(ws_id) = &ws_toggle {
                                 s.dispatch(Action::Settings(SettingsAction::SetLmStudioEnabled {
                                     workspace_id: ws_id.clone(),
                                     enabled: !lm_enabled,
                                 }));
                             }
-                        })
-                        .build(k)
+                        },
+                        k,
+                    )
                 }),
         );
 
@@ -390,8 +392,8 @@ fn lmstudio_section(
     if !summary.models.is_empty() {
         let mut models_list = col().w_full().gap(6.0);
         models_list = models_list.child(
-            text("MODELS SHOWN IN CHAT")
-                .font(k.ty.text_xsmall)
+            text("Models shown in chat")
+                .font(k.ty.small_medium)
                 .color(t.text_muted),
         );
         for model in &summary.models {
@@ -406,7 +408,7 @@ fn lmstudio_section(
                     .gap(10.0)
                     .px(10.0)
                     .py(6.0)
-                    .radius(8.0)
+                    .radius(k.radius.md)
                     .fill(t.elevated_bg)
                     .child(
                         col()
@@ -414,7 +416,7 @@ fn lmstudio_section(
                             .min_w(0.0)
                             .child(
                                 text(model_display_name(model))
-                                    .font(k.ty.text_small)
+                                    .font(k.ty.ui)
                                     .color(t.text_base)
                                     .truncate(),
                             )
@@ -491,7 +493,7 @@ fn expanded_provider_body(
                 .w_full()
                 .justify_between()
                 .items_center()
-                .child(text("API KEY").font(k.ty.text_xsmall).color(t.text_muted));
+                .child(text("API key").font(k.ty.small_medium).color(t.text_muted));
             if let Some(mask) = saved_mask {
                 label_row = label_row.child(status_pill(
                     format!("Saved ({mask})"),
@@ -590,8 +592,8 @@ fn expanded_provider_body(
                 .pt(10.0)
                 .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
                 .child(
-                    text("OAUTH SIGN-IN")
-                        .font(k.ty.text_xsmall)
+                    text("OAuth sign-in")
+                        .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
                 .child(
@@ -660,12 +662,8 @@ fn expanded_provider_body(
                     .unwrap_or(
                         "Complete authorization in your browser, then paste the code above.",
                     );
-                oauth_col = oauth_col.child(
-                    text(instr)
-                        .font(k.ty.text_xsmall)
-                        .color(t.text_muted)
-                        .wrap(),
-                );
+                oauth_col =
+                    oauth_col.child(text(instr).font(k.ty.small).color(t.text_muted).wrap());
                 if let Some(safe_url) = ch
                     .get("challenge")
                     .unwrap_or(ch)
@@ -714,8 +712,8 @@ fn expanded_provider_body(
                     .items_center()
                     .gap(8.0)
                     .child(
-                        text("AVAILABLE MODELS")
-                            .font(k.ty.text_xsmall)
+                        text("Available models")
+                            .font(k.ty.small_medium)
                             .color(t.text_muted),
                     )
                     .child(
@@ -728,7 +726,7 @@ fn expanded_provider_body(
                                 } else {
                                     format!("{enabled_count} of {} enabled", summary.models.len())
                                 })
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small)
                                 .color(t.text_muted),
                             )
                             .child(
@@ -785,7 +783,7 @@ fn expanded_provider_body(
                 .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
                 .child(
                     Button::new("Disconnect provider")
-                        .variant(ButtonVariant::Outline)
+                        .variant(ButtonVariant::Danger)
                         .control_size(ControlSize::Small)
                         .disabled(!can_mutate)
                         .on_press(move |s: &mut AppState| {
@@ -854,13 +852,13 @@ fn provider_card(
                         .gap(2.0)
                         .child(
                             text(title)
-                                .font(k.ty.body_medium)
+                                .font(k.ty.ui_medium)
                                 .color(t.text_base)
                                 .truncate(),
                         )
                         .child(
                             text(subtitle)
-                                .font(k.ty.text_xsmall)
+                                .font(k.ty.small)
                                 .color(t.text_muted)
                                 .truncate(),
                         ),
@@ -1000,19 +998,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .gap(10.0)
         .px(16.0)
         .py(12.0)
-        .child(
-            TextInput::new(&s.settings_ui.provider_search_edit)
-                .label("Filter providers and models")
-                .placeholder("Search providers or model IDs...")
-                .leading_icon(&icons::SEARCH)
-                .clear_button()
-                .width(Some(320.0))
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.provider_search_edit)
-                .on_action(|s: &mut AppState, _tx| {
-                    s.settings_ui.provider_search_edit = rune::TextEdit::new("");
-                })
-                .build(k),
-        )
+        .child(search_input(
+            &s.settings_ui.provider_search_edit,
+            "Filter providers and models",
+            "Search providers or model IDs...",
+            Some(320.0),
+            |s: &mut AppState| &mut s.settings_ui.provider_search_edit,
+            |s: &mut AppState, _tx| {
+                s.settings_ui.provider_search_edit = rune::TextEdit::new("");
+            },
+            k,
+        ))
         .child(status_pill(
             format!("{} of {} connected", connected_total.len(), catalog.len()),
             if connected_total.is_empty() {
@@ -1081,7 +1077,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         if disconnected_all.is_empty() {
             picker_list = picker_list.child(
                 text("All providers in the catalog are already connected.")
-                    .font(k.ty.text_small)
+                    .font(k.ty.ui)
                     .color(t.text_muted),
             );
         } else {
@@ -1097,7 +1093,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .gap(10.0)
                         .px(12.0)
                         .py(8.0)
-                        .radius(8.0)
+                        .radius(k.radius.lg)
                         .fill(t.panel_bg)
                         .border(1.0, t.border_muted)
                         .child(
@@ -1105,7 +1101,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                                 .items_center()
                                 .gap(10.0)
                                 .child(entity_icon(s, None, &title, EntityIconSize::Sm, k, t))
-                                .child(text(&title).font(k.ty.body_medium).color(t.text_base)),
+                                .child(text(&title).font(k.ty.ui_medium).color(t.text_base)),
                         )
                         .child(
                             Button::new("Configure")
@@ -1157,7 +1153,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .gap(12.0)
                     .child(
                         text("Choose a provider to expand and configure credentials or OAuth sign-in.")
-                            .font(k.ty.text_small)
+                            .font(k.ty.ui)
                             .color(t.text_muted)
                             .wrap(),
                     )

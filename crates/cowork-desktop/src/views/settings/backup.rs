@@ -1,7 +1,7 @@
 //! Backups & Checkpoints settings page (`apps/desktop/src/ui/settings/pages/BackupPage.tsx`).
 
-use rune::{El, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch, TextInput};
+use rune::{El, TextEdit, col, el, icon, row, text};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::json;
 
 use crate::actions::{Action, SettingsAction};
@@ -10,8 +10,8 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, confirm_dialog,
-    format_byte_size, format_timestamp_friendly, management_targets, settings_page, stat_tile,
-    status_pill,
+    format_byte_size, format_timestamp_friendly, management_targets, mini_switch, search_input,
+    settings_page, stat_tile, status_pill,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -36,7 +36,7 @@ fn backup_list_item(entry: &BackupSummary, selected: bool, k: &Kit, t: &ThemeTok
         .px(12.0)
         .py(10.0)
         .gap(4.0)
-        .radius(8.0)
+        .radius(k.radius.lg)
         .fill(if selected { t.accent_soft } else { t.panel_bg })
         .border(1.0, if selected { t.accent } else { t.border_muted })
         .on_press(move |s: &mut AppState| {
@@ -55,17 +55,17 @@ fn backup_list_item(entry: &BackupSummary, selected: bool, k: &Kit, t: &ThemeTok
                         .grow(1.0)
                         .min_w(0.0)
                         .child(icon(&icons::ARCHIVE_RESTORE, 14.0).color(t.text_base))
-                        .child(text(label).font(k.ty.body_medium).color(t.text_base)),
+                        .child(text(label).font(k.ty.ui_medium).color(t.text_base)),
                 )
                 .child(
                     text(format_byte_size(entry.size_bytes))
-                        .font(k.ty.text_xsmall)
+                        .font(k.ty.small)
                         .color(t.text_muted),
                 ),
         )
         .child(
             text(format_timestamp_friendly(entry.created_at))
-                .font(k.ty.text_xsmall)
+                .font(k.ty.small)
                 .color(t.text_muted),
         )
 }
@@ -132,22 +132,22 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .child(
                     SettingsRow::new(format!("Automatic backups for {}", target.label))
                         .description(target.path.clone())
-                        .control(
-                            Switch::new(backups_enabled)
-                                .label("Enable automatic backups")
-                                .hide_label()
-                                .on_toggle(move |s: &mut AppState| {
-                                    s.dispatch(Action::Settings(
-                                        SettingsAction::UpdateWorkspaceDefaults {
-                                            workspace_id: ws_toggle.clone(),
-                                            defaults: json!({
-                                                "defaultBackupsEnabled": !backups_enabled
-                                            }),
-                                        },
-                                    ));
-                                })
-                                .build(k),
-                        )
+                        .control(mini_switch(
+                            backups_enabled,
+                            "Enable automatic backups",
+                            false,
+                            move |s: &mut AppState| {
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::UpdateWorkspaceDefaults {
+                                        workspace_id: ws_toggle.clone(),
+                                        defaults: json!({
+                                            "defaultBackupsEnabled": !backups_enabled
+                                        }),
+                                    },
+                                ));
+                            },
+                            k,
+                        ))
                         .build(k, t),
                 )
                 .build(k, t),
@@ -190,7 +190,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .w_full()
                 .justify_between()
                 .items_center()
-                .child(text("SNAPSHOTS").font(k.ty.text_xsmall).color(t.text_muted))
+                .child(
+                    text("Snapshots")
+                        .font(k.ty.small_medium)
+                        .color(t.text_muted),
+                )
                 .child(status_pill(
                     format!("{}", visible_backups.len()),
                     StatusTone::Neutral,
@@ -198,20 +202,22 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     t,
                 )),
         )
-        .child(
-            TextInput::new(&s.settings_ui.backup_file_query_edit)
-                .label("Filter snapshots")
-                .placeholder("Search snapshots...")
-                .leading_icon(&icons::SEARCH)
-                .width(None)
-                .on_edit(|s: &mut AppState| &mut s.settings_ui.backup_file_query_edit)
-                .build(k),
-        );
+        .child(search_input(
+            &s.settings_ui.backup_file_query_edit,
+            "Filter snapshots",
+            "Search snapshots...",
+            None,
+            |s: &mut AppState| &mut s.settings_ui.backup_file_query_edit,
+            |s: &mut AppState, _tx| {
+                s.settings_ui.backup_file_query_edit = TextEdit::new("");
+            },
+            k,
+        ));
 
     if visible_backups.is_empty() {
         rail = rail.child(
             text("No snapshots loaded.")
-                .font(k.ty.text_small)
+                .font(k.ty.small)
                 .color(t.text_muted)
                 .wrap(),
         );
@@ -297,8 +303,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     col()
                         .gap(4.0)
                         .child(
-                            text("SELECTED BACKUP")
-                                .font(k.ty.text_xsmall)
+                            text("Selected backup")
+                                .font(k.ty.small_medium)
                                 .color(t.text_muted),
                         )
                         .child(text(title).font(t.title).color(t.text_base))
@@ -330,7 +336,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .child(actions)
                 .child(
                     text("Restoring overwrites modified workspace files with this snapshot while recording a safety checkpoint.")
-                        .font(k.ty.text_xsmall)
+                        .font(k.ty.small)
                         .color(t.text_muted)
                         .wrap(),
                 )
@@ -339,9 +345,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let split_card = el()
         .w_full()
-        .radius(12.0)
+        .radius(k.radius.lg)
         .fill(t.panel_bg)
-        .border(1.0, t.border)
+        .border(1.0, t.border_muted)
         .child(
             row()
                 .w_full()

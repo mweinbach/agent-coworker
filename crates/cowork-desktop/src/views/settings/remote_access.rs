@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use qrcode::{Color as QrColor, QrCode};
 use rune::{Color, El, Pixels, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::{Map, Value};
 
 use crate::actions::{Action, NativeAction, SettingsAction};
@@ -15,7 +15,8 @@ use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, callout_banner,
-    confirm_dialog, format_timestamp_friendly, management_targets, settings_page, status_pill,
+    confirm_dialog, format_timestamp_friendly, management_targets, mini_switch, settings_page,
+    status_pill,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -168,7 +169,7 @@ fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
                             } else {
                                 device.name.trim()
                             })
-                            .font(k.ty.body_medium)
+                            .font(k.ty.ui_medium)
                             .color(t.text_base),
                         ),
                 )
@@ -182,13 +183,13 @@ fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
                         "Paired: {}",
                         format_timestamp_friendly(device.paired_at)
                     ))
-                    .font(k.ty.text_xsmall)
+                    .font(k.ty.small)
                     .color(t.text_muted),
                 ),
         )
         .child(
             Button::new("Forget")
-                .variant(ButtonVariant::Outline)
+                .variant(ButtonVariant::Danger)
                 .icon(&icons::TRASH)
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut AppState| {
@@ -199,8 +200,8 @@ fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
 
     let mut perm_rows = col().w_full().gap(8.0).pt(10.0);
     perm_rows = perm_rows.child(
-        text("PERMISSIONS")
-            .font(k.ty.text_xsmall)
+        text("Permissions")
+            .font(k.ty.small_medium)
             .color(t.text_muted),
     );
 
@@ -215,23 +216,22 @@ fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
                 .items_center()
                 .justify_between()
                 .gap(12.0)
-                .child(text(*perm_label).font(k.ty.text_small).color(t.text_muted))
-                .child(
-                    Switch::new(checked)
-                        .label(*perm_label)
-                        .hide_label()
-                        .on_toggle(move |s: &mut AppState| {
-                            let next_perms =
-                                update_phone_permission_string(&raw_perms, &pk, !checked);
-                            s.dispatch(Action::Settings(
-                                SettingsAction::UpdateTrustedPhonePermissions {
-                                    phone_id: pid.clone(),
-                                    permissions: next_perms,
-                                },
-                            ));
-                        })
-                        .build(k),
-                ),
+                .child(text(*perm_label).font(k.ty.small).color(t.text_muted))
+                .child(mini_switch(
+                    checked,
+                    *perm_label,
+                    false,
+                    move |s: &mut AppState| {
+                        let next_perms = update_phone_permission_string(&raw_perms, &pk, !checked);
+                        s.dispatch(Action::Settings(
+                            SettingsAction::UpdateTrustedPhonePermissions {
+                                phone_id: pid.clone(),
+                                permissions: next_perms,
+                            },
+                        ));
+                    },
+                    k,
+                )),
         );
     }
 
@@ -342,7 +342,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             qr_col = qr_col.child(
                 el().px(10.0)
                     .py(10.0)
-                    .radius(12.0)
+                    .radius(k.radius.lg)
                     .fill(Color::WHITE)
                     .border(1.0, t.border)
                     .child(el().w(200.0).h(200.0).pixels(&px)),
@@ -387,7 +387,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     if !ra.trusted_phones.is_empty() {
         devices_section = devices_section.action(
             Button::new("Forget all devices")
-                .variant(ButtonVariant::Outline)
+                .variant(ButtonVariant::Danger)
                 .icon(&icons::TRASH)
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut AppState| {

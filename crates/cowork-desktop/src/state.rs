@@ -774,6 +774,185 @@ pub struct MemoryEntry {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ScopedMemoryEntry {
+    #[serde(alias = "key")]
+    pub id: String,
+    #[serde(default)]
+    pub scope: String,
+    pub content: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileDefinitionWire {
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true_bool")]
+    pub enabled: bool,
+    #[serde(default = "default_base_role_value")]
+    pub base_role: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub allowed_built_in_tools: Vec<String>,
+    #[serde(default)]
+    pub allowed_mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub skill_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_context_mode: Option<String>,
+}
+
+fn default_profile_version() -> u32 {
+    1
+}
+
+fn default_true_bool() -> bool {
+    true
+}
+
+fn default_base_role_value() -> String {
+    "default".to_string()
+}
+
+impl Default for AgentProfileDefinitionWire {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            id: String::new(),
+            display_name: String::new(),
+            description: String::new(),
+            enabled: true,
+            base_role: "default".to_string(),
+            prompt: String::new(),
+            allowed_built_in_tools: Vec::new(),
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model: None,
+            reasoning_effort: None,
+            default_task_type: None,
+            default_context_mode: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileCatalogEntry {
+    pub scope: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub built_in: Option<bool>,
+    #[serde(default)]
+    pub locked: Option<bool>,
+    #[serde(default)]
+    pub effective: bool,
+    #[serde(default)]
+    pub shadowed: bool,
+    #[serde(default)]
+    pub workspace_disabled: Option<bool>,
+    pub profile: AgentProfileDefinitionWire,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileDiagnostic {
+    pub scope: String,
+    pub path: String,
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfilesRoots {
+    pub global_dir: String,
+    pub workspace_dir: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfilesCatalogState {
+    #[serde(default)]
+    pub profiles: Vec<AgentProfileCatalogEntry>,
+    #[serde(default)]
+    pub effective_profiles: Vec<AgentProfileCatalogEntry>,
+    #[serde(default)]
+    pub diagnostics: Vec<AgentProfileDiagnostic>,
+    #[serde(default)]
+    pub roots: Option<AgentProfilesRoots>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileUpsertInputWire {
+    pub scope: String,
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true_bool")]
+    pub enabled: bool,
+    #[serde(default = "default_base_role_value")]
+    pub base_role: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub allowed_built_in_tools: Vec<String>,
+    #[serde(default)]
+    pub allowed_mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub skill_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_context_mode: Option<String>,
+}
+
+impl Default for AgentProfileUpsertInputWire {
+    fn default() -> Self {
+        Self {
+            scope: "workspace".to_string(),
+            id: String::new(),
+            display_name: String::new(),
+            description: String::new(),
+            enabled: true,
+            base_role: "default".to_string(),
+            prompt: String::new(),
+            allowed_built_in_tools: Vec::new(),
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model: None,
+            reasoning_effort: None,
+            default_task_type: None,
+            default_context_mode: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskSummaryView {
     pub id: String,
     pub workspace_id: String,
@@ -1288,10 +1467,19 @@ pub struct AppState {
     pub marketplaces: Vec<Value>,
     pub openai_native_connectors: Vec<Value>,
     pub skills: Vec<SkillSummary>,
+    pub skill_installations: Vec<Value>,
+    pub available_skills: Vec<Value>,
+    pub effective_skills: Vec<Value>,
+    pub skill_scopes: Vec<Value>,
     pub plugins: Vec<PluginSummary>,
+    pub installed_plugin_entries: Vec<Value>,
+    pub available_plugins: Vec<Value>,
+    pub plugin_catalog_warnings: Vec<String>,
     pub skill_improvement_status: Option<Value>,
     pub subagents: Vec<SubagentProfile>,
+    pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub memory_entries: Vec<MemoryEntry>,
+    pub scoped_memories: Vec<ScopedMemoryEntry>,
     pub advanced_memories: Vec<Value>,
     pub archived_threads: Vec<ArchivedThreadSummary>,
     pub backups: Vec<BackupSummary>,
@@ -1391,10 +1579,19 @@ impl Default for AppState {
             marketplaces: Vec::new(),
             openai_native_connectors: Vec::new(),
             skills: Vec::new(),
+            skill_installations: Vec::new(),
+            available_skills: Vec::new(),
+            effective_skills: Vec::new(),
+            skill_scopes: Vec::new(),
             plugins: Vec::new(),
+            installed_plugin_entries: Vec::new(),
+            available_plugins: Vec::new(),
+            plugin_catalog_warnings: Vec::new(),
             skill_improvement_status: None,
             subagents: Vec::new(),
+            agent_profiles_catalog: AgentProfilesCatalogState::default(),
             memory_entries: Vec::new(),
+            scoped_memories: Vec::new(),
             advanced_memories: Vec::new(),
             archived_threads: Vec::new(),
             backups: Vec::new(),
@@ -4065,22 +4262,93 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let mut server_obj = config.as_object().cloned().unwrap_or_default();
+                let source = server_obj
+                    .remove("source")
+                    .and_then(|v| v.as_str().map(str::to_string));
+                let previous_name = server_obj
+                    .remove("previousName")
+                    .and_then(|v| v.as_str().map(str::to_string));
                 server_obj
                     .entry("name".to_string())
                     .or_insert_with(|| Value::String(name));
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("server".to_string(), Value::Object(server_obj));
+                if let Some(src) = source {
+                    body.insert("source".to_string(), Value::String(src));
+                }
+                if let Some(prev) = previous_name {
+                    body.insert("previousName".to_string(), Value::String(prev));
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/upsert",
-                    json!({ "cwd": cwd, "server": server_obj }),
+                    Value::Object(body),
                     false,
                 );
             }
             SettingsAction::DeleteMcpServer { workspace_id, name } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let matching_sources: Vec<String> = self
+                    .mcp_servers
+                    .iter()
+                    .filter(|s| s.name == name)
+                    .filter_map(|s| s.source.clone())
+                    .collect();
+                let source = if matching_sources.len() == 1 {
+                    Some(matching_sources[0].clone())
+                } else {
+                    None
+                };
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("name".to_string(), Value::String(name));
+                if let Some(src) = source {
+                    body.insert("source".to_string(), Value::String(src));
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/delete",
-                    json!({ "cwd": cwd, "name": name }),
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::UpsertScopedMcpServer {
+                workspace_id,
+                name,
+                source,
+                previous_name,
+                server,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut server_obj = server.as_object().cloned().unwrap_or_default();
+                server_obj
+                    .entry("name".to_string())
+                    .or_insert_with(|| Value::String(name));
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("source".to_string(), Value::String(source));
+                body.insert("server".to_string(), Value::Object(server_obj));
+                if let Some(prev) = previous_name.filter(|s| !s.trim().is_empty()) {
+                    body.insert("previousName".to_string(), Value::String(prev));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/mcp/server/upsert",
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::DeleteScopedMcpServer {
+                workspace_id,
+                name,
+                source,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/mcp/server/delete",
+                    json!({ "cwd": cwd, "name": name, "source": source }),
                     false,
                 );
             }
@@ -4157,25 +4425,112 @@ impl AppState {
                 profile,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let scope = profile
+                    .scope
+                    .clone()
+                    .filter(|s| s == "global" || s == "workspace")
+                    .unwrap_or_else(|| "workspace".to_string());
+                let base_role = profile
+                    .tool_preset
+                    .clone()
+                    .filter(|r| {
+                        matches!(
+                            r.as_str(),
+                            "default" | "explorer" | "research" | "worker" | "reviewer"
+                        )
+                    })
+                    .unwrap_or_else(|| "default".to_string());
+                let input = AgentProfileUpsertInputWire {
+                    scope,
+                    id: profile.id,
+                    display_name: profile.name,
+                    description: profile.description,
+                    enabled: true,
+                    base_role,
+                    prompt: profile.system_prompt,
+                    allowed_built_in_tools: profile.allowed_tools,
+                    allowed_mcp_servers: Vec::new(),
+                    skill_names: Vec::new(),
+                    model: profile.model.filter(|m| !m.trim().is_empty()),
+                    reasoning_effort: profile.reasoning_effort.filter(|r| !r.trim().is_empty()),
+                    default_task_type: None,
+                    default_context_mode: None,
+                };
+                let profile_payload = build_agent_profile_upsert_payload(&input);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/agentProfiles/upsert",
-                    json!({ "cwd": cwd, "profile": profile }),
+                    json!({ "cwd": cwd, "profile": profile_payload }),
                     false,
                 );
             }
             SettingsAction::DeleteSubagent { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let scope = self
-                    .subagents
+                    .agent_profiles_catalog
+                    .profiles
                     .iter()
-                    .find(|p| p.id == id)
-                    .and_then(|p| p.scope.clone())
+                    .find(|p| p.profile.id == id)
+                    .map(|p| p.scope.clone())
+                    .or_else(|| {
+                        self.subagents
+                            .iter()
+                            .find(|p| p.id == id)
+                            .and_then(|p| p.scope.clone())
+                    })
                     .unwrap_or_else(|| "workspace".to_string());
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/agentProfiles/delete",
                     json!({ "cwd": cwd, "scope": scope, "id": id }),
+                    false,
+                );
+            }
+            SettingsAction::ReadAgentProfilesCatalog { workspace_id } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/catalog/read",
+                    json!({ "cwd": cwd }),
+                    true,
+                );
+            }
+            SettingsAction::UpsertAgentProfile {
+                workspace_id,
+                input,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let profile_payload = build_agent_profile_upsert_payload(&input);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/upsert",
+                    json!({ "cwd": cwd, "profile": profile_payload }),
+                    false,
+                );
+            }
+            SettingsAction::DeleteAgentProfile {
+                workspace_id,
+                scope,
+                id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/delete",
+                    json!({ "cwd": cwd, "scope": scope, "id": id }),
+                    false,
+                );
+            }
+            SettingsAction::SetAgentProfileWorkspaceAvailability {
+                workspace_id,
+                id,
+                disabled,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/workspaceAvailability/set",
+                    json!({ "cwd": cwd, "id": id, "disabled": disabled }),
                     false,
                 );
             }
@@ -4192,27 +4547,116 @@ impl AppState {
                     false,
                 );
             }
+            SettingsAction::CopyAgentProfileNamed {
+                workspace_id,
+                source_ref,
+                target_scope,
+                target_id,
+                target_display_name,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut copy = serde_json::Map::new();
+                copy.insert("sourceRef".to_string(), Value::String(source_ref));
+                copy.insert("targetScope".to_string(), Value::String(target_scope));
+                if let Some(tid) = target_id.filter(|s| !s.trim().is_empty()) {
+                    copy.insert("targetId".to_string(), Value::String(tid));
+                }
+                if let Some(tdn) = target_display_name.filter(|s| !s.trim().is_empty()) {
+                    copy.insert("targetDisplayName".to_string(), Value::String(tdn));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/copy",
+                    json!({ "cwd": cwd, "copy": copy }),
+                    false,
+                );
+            }
             SettingsAction::UpsertMemory {
                 workspace_id,
                 key,
                 content,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let scope = self
+                    .scoped_memories
+                    .iter()
+                    .find(|m| m.id == key && !m.scope.is_empty())
+                    .map(|m| m.scope.clone())
+                    .unwrap_or_else(|| "workspace".to_string());
                 let params = MemoryUpsertParams {
                     cwd,
-                    scope: "workspace".to_string(),
+                    scope,
                     id: (!key.is_empty()).then_some(key),
                     content,
-                    mode: Some("replace".to_string()),
+                    mode: Some("upsert".to_string()),
                 };
                 let _ = self.send_ws_typed(&workspace_id, "cowork/memory/upsert", &params, false);
             }
             SettingsAction::DeleteMemory { workspace_id, key } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let scope = self
+                    .scoped_memories
+                    .iter()
+                    .find(|m| m.id == key && !m.scope.is_empty())
+                    .map(|m| m.scope.clone())
+                    .unwrap_or_else(|| "workspace".to_string());
                 let params = MemoryDeleteParams {
                     cwd,
-                    scope: "workspace".to_string(),
+                    scope,
                     id: key,
+                };
+                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/delete", &params, false);
+            }
+            SettingsAction::ReadMemories {
+                workspace_id,
+                scope,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let params = MemoryListParams { cwd, scope };
+                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/list", &params, true);
+            }
+            SettingsAction::UpsertScopedMemory {
+                workspace_id,
+                scope,
+                id,
+                content,
+                mode,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let normalized_scope = if scope == "user" {
+                    "user".to_string()
+                } else {
+                    "workspace".to_string()
+                };
+                let normalized_mode = match mode.as_deref() {
+                    Some("create") => Some("create".to_string()),
+                    Some("upsert") => Some("upsert".to_string()),
+                    _ => Some("upsert".to_string()),
+                };
+                let params = MemoryUpsertParams {
+                    cwd,
+                    scope: normalized_scope,
+                    id: id.filter(|s| !s.trim().is_empty()),
+                    content,
+                    mode: normalized_mode,
+                };
+                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/upsert", &params, false);
+            }
+            SettingsAction::DeleteScopedMemory {
+                workspace_id,
+                scope,
+                id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let normalized_scope = if scope == "user" {
+                    "user".to_string()
+                } else {
+                    "workspace".to_string()
+                };
+                let params = MemoryDeleteParams {
+                    cwd,
+                    scope: normalized_scope,
+                    id,
                 };
                 let _ = self.send_ws_typed(&workspace_id, "cowork/memory/delete", &params, false);
             }
@@ -4309,28 +4753,126 @@ impl AppState {
                 } else {
                     "cowork/plugins/disable"
                 };
-                let _ = self.send_ws_request(
-                    &workspace_id,
-                    method,
-                    json!({ "cwd": cwd, "pluginId": id }),
-                    false,
-                );
+                let matching_scopes: Vec<String> = self
+                    .plugins
+                    .iter()
+                    .filter(|p| p.id == id)
+                    .filter_map(|p| p.scope.clone())
+                    .collect();
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if matching_scopes.len() == 1 {
+                    body.insert(
+                        "scope".to_string(),
+                        Value::String(matching_scopes[0].clone()),
+                    );
+                }
+                let _ = self.send_ws_request(&workspace_id, method, Value::Object(body), false);
+            }
+            SettingsAction::SetPluginEnabledScoped {
+                workspace_id,
+                id,
+                scope,
+                enabled,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let method = if enabled {
+                    "cowork/plugins/enable"
+                } else {
+                    "cowork/plugins/disable"
+                };
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+                    body.insert("scope".to_string(), Value::String(s));
+                }
+                let _ = self.send_ws_request(&workspace_id, method, Value::Object(body), false);
             }
             SettingsAction::DeletePlugin { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let matching_scopes: Vec<String> = self
+                    .plugins
+                    .iter()
+                    .filter(|p| p.id == id)
+                    .filter_map(|p| p.scope.clone())
+                    .collect();
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if matching_scopes.len() == 1 {
+                    body.insert(
+                        "scope".to_string(),
+                        Value::String(matching_scopes[0].clone()),
+                    );
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/plugins/delete",
-                    json!({ "cwd": cwd, "pluginId": id }),
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::DeletePluginScoped {
+                workspace_id,
+                id,
+                scope,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+                    body.insert("scope".to_string(), Value::String(s));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/plugins/delete",
+                    Value::Object(body),
                     false,
                 );
             }
             SettingsAction::UpdatePlugin { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let matching_scopes: Vec<String> = self
+                    .plugins
+                    .iter()
+                    .filter(|p| p.id == id)
+                    .filter_map(|p| p.scope.clone())
+                    .collect();
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if matching_scopes.len() == 1 {
+                    body.insert(
+                        "scope".to_string(),
+                        Value::String(matching_scopes[0].clone()),
+                    );
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/plugins/update",
-                    json!({ "cwd": cwd, "pluginId": id }),
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::UpdatePluginScoped {
+                workspace_id,
+                id,
+                scope,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+                    body.insert("scope".to_string(), Value::String(s));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/plugins/update",
+                    Value::Object(body),
                     false,
                 );
             }
@@ -4365,6 +4907,48 @@ impl AppState {
                     &workspace_id,
                     "cowork/skills/delete",
                     json!({ "cwd": cwd, "skillName": name }),
+                    false,
+                );
+            }
+            SettingsAction::SetSkillInstallationEnabled {
+                workspace_id,
+                installation_id,
+                enabled,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let method = if enabled {
+                    "cowork/skills/installation/enable"
+                } else {
+                    "cowork/skills/installation/disable"
+                };
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    method,
+                    json!({ "cwd": cwd, "installationId": installation_id }),
+                    false,
+                );
+            }
+            SettingsAction::DeleteSkillInstallation {
+                workspace_id,
+                installation_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/skills/installation/delete",
+                    json!({ "cwd": cwd, "installationId": installation_id }),
+                    false,
+                );
+            }
+            SettingsAction::UpdateSkillInstallation {
+                workspace_id,
+                installation_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/skills/installation/update",
+                    json!({ "cwd": cwd, "installationId": installation_id }),
                     false,
                 );
             }
@@ -4857,7 +5441,13 @@ impl AppState {
         let _ = self.send_ws_typed(
             workspace_id,
             "cowork/memory/advanced/list",
-            &MemoryAdvancedListParams { cwd },
+            &MemoryAdvancedListParams { cwd: cwd.clone() },
+            true,
+        );
+        let _ = self.send_ws_request(
+            workspace_id,
+            "cowork/agentProfiles/catalog/read",
+            json!({ "cwd": cwd }),
             true,
         );
 
@@ -5688,16 +6278,19 @@ impl AppState {
                 }
             }
             "agent_profiles_catalog" => {
-                if let Some(profiles) = evt
-                    .get("catalog")
-                    .and_then(|c| c.get("profiles"))
-                    .and_then(Value::as_array)
-                {
-                    self.subagents = profiles
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
-                        .collect();
-                }
+                self.apply_agent_profiles_catalog_event(evt);
+            }
+            "memory_list" => {
+                self.apply_memory_list_event(evt);
+            }
+            "plugins_catalog" => {
+                self.apply_plugins_catalog_event(evt);
+            }
+            "skills_catalog" => {
+                self.apply_skills_catalog_event(evt);
+            }
+            "skills_list" => {
+                self.apply_skills_list_event(evt);
             }
             "mcp_servers" => {
                 self.update_mcp_servers_from_event(evt);
@@ -5955,27 +6548,14 @@ impl AppState {
             "cowork/agentProfiles/catalog/read"
             | "cowork/agentProfiles/upsert"
             | "cowork/agentProfiles/delete"
-            | "cowork/agentProfiles/copy" => {
+            | "cowork/agentProfiles/copy"
+            | "cowork/agentProfiles/workspaceAvailability/set" => {
                 let evt = payload.get("event").unwrap_or(&payload);
-                if let Some(profiles) = evt
-                    .get("catalog")
-                    .and_then(|c| c.get("profiles"))
-                    .and_then(Value::as_array)
-                {
-                    self.subagents = profiles
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
-                        .collect();
-                }
+                self.apply_agent_profiles_catalog_event(evt);
             }
             "cowork/memory/list" | "cowork/memory/upsert" | "cowork/memory/delete" => {
                 let target = payload.get("event").unwrap_or(&payload);
-                if let Some(entries) = target.get("entries").and_then(Value::as_array) {
-                    self.memory_entries = entries
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<MemoryEntry>(v.clone()).ok())
-                        .collect();
-                }
+                self.apply_memory_list_event(target);
             }
             "cowork/memory/advanced/list"
             | "cowork/memory/advanced/upsert"
@@ -6004,12 +6584,14 @@ impl AppState {
             | "cowork/plugins/delete"
             | "cowork/plugins/install"
             | "cowork/plugins/update" => {
-                let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target.get("plugins").and_then(Value::as_array) {
-                    self.plugins = arr
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<PluginSummary>(v.clone()).ok())
-                        .collect();
+                if let Some(events) = payload.get("events").and_then(Value::as_array) {
+                    let now_ms = (self.now_secs * 1000.0) as i64;
+                    for ev in events {
+                        self.reduce_cowork_event(workspace_id, ev, now_ms);
+                    }
+                } else {
+                    let target = payload.get("event").unwrap_or(&payload);
+                    self.apply_plugins_catalog_event(target);
                 }
             }
             "cowork/skills/list"
@@ -6017,13 +6599,17 @@ impl AppState {
             | "cowork/skills/enable"
             | "cowork/skills/disable"
             | "cowork/skills/delete"
-            | "cowork/skills/install" => {
+            | "cowork/skills/install"
+            | "cowork/skills/installation/enable"
+            | "cowork/skills/installation/disable"
+            | "cowork/skills/installation/delete"
+            | "cowork/skills/installation/update"
+            | "cowork/skills/installation/copy" => {
                 let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target.get("skills").and_then(Value::as_array) {
-                    self.skills = arr
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<SkillSummary>(v.clone()).ok())
-                        .collect();
+                if target.get("catalog").is_some() {
+                    self.apply_skills_catalog_event(target);
+                } else {
+                    self.apply_skills_list_event(target);
                 }
             }
             "cowork/marketplaces/read"
@@ -6433,6 +7019,167 @@ impl AppState {
             .filter(|v| !v.is_null())
         {
             rt.usage = Some(parse_usage_summary(usage_val));
+        }
+    }
+
+    fn apply_agent_profiles_catalog_event(&mut self, evt: &Value) {
+        let Some(catalog_val) = evt.get("catalog") else {
+            return;
+        };
+        if let Ok(catalog) =
+            serde_json::from_value::<AgentProfilesCatalogState>(catalog_val.clone())
+        {
+            self.agent_profiles_catalog = catalog;
+            if !self.agent_profiles_catalog.profiles.is_empty() {
+                self.subagents = self
+                    .agent_profiles_catalog
+                    .profiles
+                    .iter()
+                    .map(|entry| SubagentProfile {
+                        id: entry.profile.id.clone(),
+                        name: entry.profile.display_name.clone(),
+                        description: entry.profile.description.clone(),
+                        provider: entry
+                            .profile
+                            .model
+                            .as_deref()
+                            .and_then(|m| m.split_once('/').map(|(p, _)| p.to_string())),
+                        model: entry.profile.model.clone(),
+                        system_prompt: entry.profile.prompt.clone(),
+                        tool_preset: Some(entry.profile.base_role.clone()),
+                        allowed_tools: entry.profile.allowed_built_in_tools.clone(),
+                        denied_tools: Vec::new(),
+                        builtin: entry.built_in.unwrap_or(false),
+                        reasoning_effort: entry.profile.reasoning_effort.clone(),
+                        scope: Some(entry.scope.clone()),
+                    })
+                    .collect();
+                return;
+            }
+        }
+        if let Some(profiles) = catalog_val.get("profiles").and_then(Value::as_array) {
+            self.subagents = profiles
+                .iter()
+                .filter_map(|v| {
+                    serde_json::from_value::<AgentProfileCatalogEntry>(v.clone())
+                        .ok()
+                        .map(|entry| SubagentProfile {
+                            id: entry.profile.id,
+                            name: entry.profile.display_name,
+                            description: entry.profile.description,
+                            provider: entry
+                                .profile
+                                .model
+                                .as_deref()
+                                .and_then(|m| m.split_once('/').map(|(p, _)| p.to_string())),
+                            model: entry.profile.model,
+                            system_prompt: entry.profile.prompt,
+                            tool_preset: Some(entry.profile.base_role),
+                            allowed_tools: entry.profile.allowed_built_in_tools,
+                            denied_tools: Vec::new(),
+                            builtin: entry.built_in.unwrap_or(false),
+                            reasoning_effort: entry.profile.reasoning_effort,
+                            scope: Some(entry.scope),
+                        })
+                        .or_else(|| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
+                })
+                .collect();
+        }
+    }
+
+    fn apply_memory_list_event(&mut self, evt: &Value) {
+        let Some(arr) = evt
+            .get("memories")
+            .or_else(|| evt.get("entries"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        let parsed: Vec<ScopedMemoryEntry> =
+            arr.iter().filter_map(parse_scoped_memory_entry).collect();
+        let scoped_only = (evt.get("entry").is_none() && evt.get("deleted").is_none())
+            .then(|| {
+                evt.get("scope")
+                    .and_then(Value::as_str)
+                    .filter(|s| *s == "user" || *s == "workspace")
+            })
+            .flatten();
+        if let Some(target_scope) = scoped_only {
+            self.scoped_memories.retain(|m| m.scope != target_scope);
+            self.scoped_memories.extend(parsed);
+        } else {
+            self.scoped_memories = parsed;
+        }
+        self.memory_entries = self
+            .scoped_memories
+            .iter()
+            .map(|m| MemoryEntry {
+                key: m.id.clone(),
+                content: m.content.clone(),
+                updated_at: m.updated_at_ms,
+            })
+            .collect();
+    }
+
+    fn apply_plugins_catalog_event(&mut self, evt: &Value) {
+        let catalog = evt.get("catalog");
+        if let Some(arr) = evt
+            .get("plugins")
+            .or_else(|| {
+                catalog.and_then(|c| c.get("plugins").or_else(|| c.get("installedPlugins")))
+            })
+            .and_then(Value::as_array)
+        {
+            self.installed_plugin_entries = arr.clone();
+            self.plugins = arr.iter().filter_map(parse_plugin_summary).collect();
+        }
+        if let Some(avail) = catalog
+            .and_then(|c| c.get("availablePlugins"))
+            .or_else(|| evt.get("availablePlugins"))
+            .and_then(Value::as_array)
+        {
+            self.available_plugins = avail.clone();
+        }
+        if let Some(warnings) = catalog
+            .and_then(|c| c.get("warnings"))
+            .or_else(|| evt.get("warnings"))
+            .and_then(Value::as_array)
+        {
+            self.plugin_catalog_warnings = warnings
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+        }
+    }
+
+    fn apply_skills_catalog_event(&mut self, evt: &Value) {
+        let catalog = evt.get("catalog").unwrap_or(evt);
+        if let Some(scopes) = catalog.get("scopes").and_then(Value::as_array) {
+            self.skill_scopes = scopes.clone();
+        }
+        if let Some(installations) = catalog.get("installations").and_then(Value::as_array) {
+            self.skill_installations = installations.clone();
+        }
+        if let Some(avail) = catalog.get("availableSkills").and_then(Value::as_array) {
+            self.available_skills = avail.clone();
+        }
+        if let Some(effective) = catalog.get("effectiveSkills").and_then(Value::as_array) {
+            self.effective_skills = effective.clone();
+            self.skills = effective.iter().filter_map(parse_skill_summary).collect();
+        } else if let Some(installations) = catalog.get("installations").and_then(Value::as_array)
+            && self.skills.is_empty()
+        {
+            self.skills = installations
+                .iter()
+                .filter_map(parse_skill_summary)
+                .collect();
+        }
+    }
+
+    fn apply_skills_list_event(&mut self, evt: &Value) {
+        if let Some(arr) = evt.get("skills").and_then(Value::as_array) {
+            self.skills = arr.iter().filter_map(parse_skill_summary).collect();
         }
     }
 
@@ -6975,6 +7722,264 @@ fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRec
         threads: val.get("threads").cloned().unwrap_or(Value::Null),
         requirements: val.get("requirements").cloned().unwrap_or(Value::Null),
         activity,
+    })
+}
+
+fn build_agent_profile_upsert_payload(input: &AgentProfileUpsertInputWire) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("version".to_string(), json!(1));
+    map.insert(
+        "scope".to_string(),
+        Value::String(if input.scope == "global" {
+            "global".to_string()
+        } else {
+            "workspace".to_string()
+        }),
+    );
+    map.insert("id".to_string(), Value::String(input.id.clone()));
+    map.insert(
+        "displayName".to_string(),
+        Value::String(input.display_name.clone()),
+    );
+    map.insert(
+        "description".to_string(),
+        Value::String(input.description.clone()),
+    );
+    map.insert("enabled".to_string(), Value::Bool(input.enabled));
+    map.insert(
+        "baseRole".to_string(),
+        Value::String(
+            if matches!(
+                input.base_role.as_str(),
+                "default" | "explorer" | "research" | "worker" | "reviewer"
+            ) {
+                input.base_role.clone()
+            } else {
+                "default".to_string()
+            },
+        ),
+    );
+    map.insert("prompt".to_string(), Value::String(input.prompt.clone()));
+    map.insert(
+        "allowedBuiltInTools".to_string(),
+        json!(input.allowed_built_in_tools),
+    );
+    map.insert(
+        "allowedMcpServers".to_string(),
+        json!(input.allowed_mcp_servers),
+    );
+    map.insert("skillNames".to_string(), json!(input.skill_names));
+    if let Some(model) = input.model.as_deref().filter(|s| !s.trim().is_empty()) {
+        map.insert("model".to_string(), Value::String(model.to_string()));
+    }
+    if let Some(effort) = input
+        .reasoning_effort
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        map.insert(
+            "reasoningEffort".to_string(),
+            Value::String(effort.to_string()),
+        );
+    }
+    if let Some(task_type) = input
+        .default_task_type
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        map.insert(
+            "defaultTaskType".to_string(),
+            Value::String(task_type.to_string()),
+        );
+    }
+    if let Some(ctx_mode) = input
+        .default_context_mode
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        map.insert(
+            "defaultContextMode".to_string(),
+            Value::String(ctx_mode.to_string()),
+        );
+    }
+    Value::Object(map)
+}
+
+fn parse_scoped_memory_entry(v: &Value) -> Option<ScopedMemoryEntry> {
+    let id = v
+        .get("id")
+        .or_else(|| v.get("key"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let scope = v
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("workspace")
+        .to_string();
+    let content = v
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let created_at = v
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let updated_at = v
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let updated_at_ms = v.get("updatedAt").and_then(|val| {
+        val.as_i64().or_else(|| {
+            val.as_str().and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.timestamp_millis())
+            })
+        })
+    });
+    Some(ScopedMemoryEntry {
+        id,
+        scope,
+        content,
+        created_at,
+        updated_at,
+        updated_at_ms,
+    })
+}
+
+fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
+    let id = v.get("id").and_then(Value::as_str)?.to_string();
+    let name = v
+        .get("displayName")
+        .or_else(|| v.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or(&id)
+        .to_string();
+    let description = v
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let version = v.get("version").and_then(Value::as_str).map(str::to_string);
+    let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let scope = v.get("scope").and_then(Value::as_str).map(str::to_string);
+    let source = v
+        .get("source")
+        .or_else(|| v.get("discoveryKind"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let icon = v
+        .get("icon")
+        .or_else(|| v.get("interface").and_then(|i| i.get("icon")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let update_available = v
+        .get("updateAvailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let error = v
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("warnings")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let skill_count = v
+        .get("skillCount")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .or_else(|| v.get("skills").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    let mcp_count = v
+        .get("mcpCount")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .or_else(|| v.get("mcpServers").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    let subagent_count = v
+        .get("subagentCount")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    Some(PluginSummary {
+        id,
+        name,
+        description,
+        version,
+        enabled,
+        scope,
+        source,
+        icon,
+        update_available,
+        error,
+        skill_count,
+        mcp_count,
+        subagent_count,
+    })
+}
+
+fn parse_skill_summary(v: &Value) -> Option<SkillSummary> {
+    let name = v.get("name").and_then(Value::as_str)?.to_string();
+    let id = v.get("id").and_then(Value::as_str).map(str::to_string);
+    let installation_id = v
+        .get("installationId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let description = v
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let scope = v
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("workspace")
+        .to_string();
+    let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let source = v
+        .get("source")
+        .or_else(|| v.get("origin").and_then(|o| o.get("kind")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let icon = v
+        .get("icon")
+        .or_else(|| v.get("interface").and_then(|i| i.get("icon")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let version = v.get("version").and_then(Value::as_str).map(str::to_string);
+    let update_available = v
+        .get("updateAvailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let error = v
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("diagnostics")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(|d| d.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    Some(SkillSummary {
+        id,
+        name,
+        description,
+        scope,
+        enabled,
+        source,
+        icon,
+        version,
+        update_available,
+        error,
+        installation_id,
     })
 }
 
@@ -9157,5 +10162,403 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, NativeCommand::RevokeAllTrustedPhones))
         );
+    }
+
+    #[test]
+    fn agent_profiles_and_memory_schemas_match_server() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 1,
+            method: "cowork/agentProfiles/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "agent_profiles_catalog",
+                    "sessionId": "s-1",
+                    "catalog": {
+                        "profiles": [
+                            {
+                                "scope": "global",
+                                "builtIn": false,
+                                "locked": false,
+                                "effective": true,
+                                "shadowed": false,
+                                "workspaceDisabled": true,
+                                "profile": {
+                                    "version": 1,
+                                    "id": "reviewer",
+                                    "displayName": "Code Reviewer",
+                                    "description": "Checks correctness",
+                                    "enabled": true,
+                                    "baseRole": "reviewer",
+                                    "prompt": "Review carefully.",
+                                    "allowedBuiltInTools": ["read_file"],
+                                    "allowedMcpServers": ["github"],
+                                    "skillNames": ["rust-audit"],
+                                    "model": "anthropic/claude-sonnet-4-5",
+                                    "reasoningEffort": "high"
+                                }
+                            }
+                        ],
+                        "effectiveProfiles": [],
+                        "diagnostics": [
+                            {
+                                "scope": "workspace",
+                                "path": "/tmp/demo/.cowork/agent-profiles/bad.json",
+                                "severity": "warning",
+                                "message": "Invalid profile JSON"
+                            }
+                        ],
+                        "roots": {
+                            "globalDir": "/tmp/.cowork/agent-profiles",
+                            "workspaceDir": "/tmp/demo/.cowork/agent-profiles"
+                        }
+                    }
+                }
+            })),
+        });
+
+        assert_eq!(state.agent_profiles_catalog.profiles.len(), 1);
+        assert_eq!(
+            state.agent_profiles_catalog.profiles[0].workspace_disabled,
+            Some(true)
+        );
+        assert_eq!(state.agent_profiles_catalog.diagnostics.len(), 1);
+        assert_eq!(
+            state
+                .agent_profiles_catalog
+                .roots
+                .as_ref()
+                .map(|r| r.workspace_dir.as_str()),
+            Some("/tmp/demo/.cowork/agent-profiles")
+        );
+        assert_eq!(state.subagents.len(), 1);
+        assert_eq!(state.subagents[0].name, "Code Reviewer");
+        assert_eq!(state.subagents[0].scope.as_deref(), Some("global"));
+        assert_eq!(state.subagents[0].tool_preset.as_deref(), Some("reviewer"));
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertAgentProfile {
+            workspace_id: "ws-1".to_string(),
+            input: AgentProfileUpsertInputWire {
+                scope: "workspace".to_string(),
+                id: "auditor".to_string(),
+                display_name: "Security Auditor".to_string(),
+                description: "Finds security issues".to_string(),
+                enabled: true,
+                base_role: "explorer".to_string(),
+                prompt: "Audit carefully".to_string(),
+                allowed_built_in_tools: vec!["read_file".to_string()],
+                allowed_mcp_servers: vec![],
+                skill_names: vec!["sec".to_string()],
+                model: None,
+                reasoning_effort: Some("medium".to_string()),
+                default_task_type: None,
+                default_context_mode: None,
+            },
+        }));
+        let upsert_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/agentProfiles/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(upsert_params["profile"]["version"], 1);
+        assert_eq!(upsert_params["profile"]["displayName"], "Security Auditor");
+        assert_eq!(upsert_params["profile"]["baseRole"], "explorer");
+        assert!(upsert_params["profile"].get("model").is_none());
+
+        state.dispatch(Action::Settings(
+            SettingsAction::SetAgentProfileWorkspaceAvailability {
+                workspace_id: "ws-1".to_string(),
+                id: "reviewer".to_string(),
+                disabled: false,
+            },
+        ));
+        let avail_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/agentProfiles/workspaceAvailability/set" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(avail_params["id"], "reviewer");
+        assert_eq!(avail_params["disabled"], false);
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 2,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "scope": null,
+                    "memories": [
+                        {
+                            "id": "mem-ws",
+                            "scope": "workspace",
+                            "content": "Use Bun in this repo",
+                            "createdAt": "2026-11-15T00:00:00Z",
+                            "updatedAt": "2026-11-15T01:00:00Z"
+                        },
+                        {
+                            "id": "mem-user",
+                            "scope": "user",
+                            "content": "Prefer concise answers",
+                            "createdAt": "2026-11-15T00:00:00Z",
+                            "updatedAt": "2026-11-15T02:00:00Z"
+                        }
+                    ]
+                }
+            })),
+        });
+        assert_eq!(state.scoped_memories.len(), 2);
+        assert_eq!(state.memory_entries.len(), 2);
+        assert_eq!(state.memory_entries[0].key, "mem-ws");
+        assert!(state.memory_entries[0].updated_at.is_some());
+
+        // Scoped list for "user" updates user entries without dropping workspace entries.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 3,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "scope": "user",
+                    "memories": [
+                        {
+                            "id": "mem-user",
+                            "scope": "user",
+                            "content": "Updated user preference",
+                            "createdAt": "2026-11-15T00:00:00Z",
+                            "updatedAt": "2026-11-15T03:00:00Z"
+                        }
+                    ]
+                }
+            })),
+        });
+        assert_eq!(state.scoped_memories.len(), 2);
+        assert!(state.scoped_memories.iter().any(|m| m.id == "mem-ws"));
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertMemory {
+            workspace_id: "ws-1".to_string(),
+            key: "mem-user".to_string(),
+            content: "New user memory".to_string(),
+        }));
+        let mem_upsert = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/memory/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mem_upsert["scope"], "user");
+        assert_eq!(mem_upsert["mode"], "upsert");
+        assert_eq!(mem_upsert["id"], "mem-user");
+    }
+
+    #[test]
+    fn plugins_skills_and_mcp_schemas_match_server() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "cowork/plugins/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "plugins_catalog",
+                    "sessionId": "s-1",
+                    "catalog": {
+                        "plugins": [
+                            {
+                                "id": "plug-a",
+                                "name": "plug-a",
+                                "displayName": "Plugin Alpha",
+                                "description": "Tools for alpha",
+                                "scope": "user",
+                                "discoveryKind": "marketplace",
+                                "installed": true,
+                                "enabled": true,
+                                "version": "1.2.0",
+                                "updateAvailable": null,
+                                "skills": [{ "name": "alpha-skill" }],
+                                "mcpServers": ["alpha-mcp"],
+                                "apps": [],
+                                "warnings": []
+                            }
+                        ],
+                        "availablePlugins": [
+                            {
+                                "id": "plug-b",
+                                "name": "plug-b",
+                                "displayName": "Plugin Beta"
+                            }
+                        ],
+                        "warnings": ["partial refresh"]
+                    }
+                }
+            })),
+        });
+        assert_eq!(state.plugins.len(), 1);
+        assert_eq!(state.plugins[0].name, "Plugin Alpha");
+        assert_eq!(state.plugins[0].scope.as_deref(), Some("user"));
+        assert_eq!(state.plugins[0].skill_count, 1);
+        assert_eq!(state.plugins[0].mcp_count, 1);
+        assert_eq!(state.available_plugins.len(), 1);
+        assert_eq!(state.plugin_catalog_warnings, vec!["partial refresh"]);
+
+        // Scoped plugin disable inherits "user" scope from parsed plugin summary.
+        state.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+            workspace_id: "ws-1".to_string(),
+            id: "plug-a".to_string(),
+            enabled: false,
+        }));
+        let plugin_disable = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/plugins/disable" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(plugin_disable["pluginId"], "plug-a");
+        assert_eq!(plugin_disable["scope"], "user");
+
+        // Plugin mutation multi-event array updates plugins, skills_catalog, and mcp_servers together.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 11,
+            method: "cowork/plugins/disable".to_string(),
+            result: Ok(json!({
+                "events": [
+                    {
+                        "type": "plugins_catalog",
+                        "catalog": {
+                            "plugins": [
+                                {
+                                    "id": "plug-a",
+                                    "name": "plug-a",
+                                    "displayName": "Plugin Alpha",
+                                    "description": "Tools for alpha",
+                                    "scope": "user",
+                                    "enabled": false,
+                                    "skills": [],
+                                    "mcpServers": [],
+                                    "warnings": []
+                                }
+                            ],
+                            "availablePlugins": [],
+                            "warnings": []
+                        }
+                    },
+                    {
+                        "type": "skills_catalog",
+                        "catalog": {
+                            "scopes": [{ "scope": "workspace", "writable": true, "readable": true }],
+                            "installations": [
+                                {
+                                    "installationId": "inst-1",
+                                    "name": "custom-skill",
+                                    "description": "Custom skill",
+                                    "scope": "user",
+                                    "enabled": true,
+                                    "diagnostics": []
+                                }
+                            ],
+                            "effectiveSkills": [
+                                {
+                                    "installationId": "inst-1",
+                                    "name": "custom-skill",
+                                    "description": "Custom skill",
+                                    "scope": "user",
+                                    "enabled": true,
+                                    "diagnostics": []
+                                }
+                            ],
+                            "availableSkills": [{ "id": "avail-1", "name": "avail-skill" }]
+                        }
+                    },
+                    {
+                        "type": "mcp_servers",
+                        "userServers": [
+                            {
+                                "name": "github",
+                                "transport": "http",
+                                "enabled": true
+                            }
+                        ],
+                        "workspaceServers": []
+                    }
+                ]
+            })),
+        });
+        assert!(!state.plugins[0].enabled);
+        assert_eq!(state.skill_installations.len(), 1);
+        assert_eq!(state.available_skills.len(), 1);
+        assert_eq!(state.skills.len(), 1);
+        assert_eq!(state.skills[0].installation_id.as_deref(), Some("inst-1"));
+        assert_eq!(state.mcp_servers.len(), 1);
+        assert_eq!(state.mcp_servers[0].source.as_deref(), Some("user"));
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertScopedMcpServer {
+            workspace_id: "ws-1".to_string(),
+            name: "github-enterprise".to_string(),
+            source: "user".to_string(),
+            previous_name: Some("github".to_string()),
+            server: json!({ "transport": { "type": "http", "url": "https://example.com" } }),
+        }));
+        let mcp_upsert = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/mcp/server/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mcp_upsert["source"], "user");
+        assert_eq!(mcp_upsert["previousName"], "github");
+        assert_eq!(mcp_upsert["server"]["name"], "github-enterprise");
     }
 }

@@ -1199,6 +1199,10 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         &mut overlays,
     );
 
+    blocks.extend(
+        crate::views::settings::workspaces::models_defaults_sections(s, k, t, &mut overlays),
+    );
+
     PageContent::simple(settings_page(blocks))
         .with_header_actions(header_actions)
         .with_overlays(overlays)

@@ -685,3 +685,69 @@ fn developer_libreoffice_and_overflow_config_parse_runtime_shapes() {
         (false, false, false, 48000)
     );
 }
+
+#[test]
+fn slice5_workspace_subagent_and_memory_helpers_match_server_contracts() {
+    use crate::views::settings::memory::{
+        HOT_MEMORY_ID, build_advanced_memory_payload, resolve_draft_memory_id, resolve_user_profile,
+    };
+    use crate::views::settings::subagents::{
+        clamp_workflow_concurrency, model_supports_reasoning, profile_id_from_name,
+    };
+    use crate::views::settings::workspaces::resolve_workspace_tool_calling;
+
+    let ws = WorkspaceRecord {
+        id: "ws-1".to_string(),
+        user_name: Some("Maya".to_string()),
+        user_profile: Some(serde_json::json!({
+            "work": "Staff Engineer",
+            "instructions": "Be concise",
+            "details": "Prefers Rust"
+        })),
+        defaults: serde_json::json!({
+            "defaultToolCalling": {
+                "deferredToolSearch": true,
+                "codeMode": false,
+                "strategy": "native"
+            }
+        }),
+        ..Default::default()
+    };
+    let tc = resolve_workspace_tool_calling(&ws, None);
+    assert!(tc.deferred_tool_search);
+    assert!(!tc.code_mode);
+    assert_eq!(tc.strategy, "native");
+
+    assert_eq!(
+        resolve_user_profile(&ws),
+        (
+            "Maya".to_string(),
+            "Staff Engineer".to_string(),
+            "Be concise".to_string(),
+            "Prefers Rust".to_string(),
+        )
+    );
+
+    assert_eq!(clamp_workflow_concurrency("0", 12), 1);
+    assert_eq!(clamp_workflow_concurrency("99", 12), 16);
+    assert_eq!(clamp_workflow_concurrency("bad", 8), 8);
+    assert_eq!(
+        profile_id_from_name("  Code Reviewer!! 2  "),
+        "code-reviewer-2"
+    );
+    assert!(model_supports_reasoning("openai:gpt-5"));
+    assert!(model_supports_reasoning("codex-cli:gpt-5-codex"));
+    assert!(!model_supports_reasoning("anthropic:claude-sonnet-4-5"));
+
+    assert_eq!(resolve_draft_memory_id("   "), HOT_MEMORY_ID);
+    assert_eq!(resolve_draft_memory_id("build-notes"), "build-notes");
+    assert_eq!(
+        build_advanced_memory_payload(None, " Build Notes ", " Short ", "project", " Use bun "),
+        serde_json::json!({
+            "name": "Build Notes",
+            "description": "Short",
+            "type": "project",
+            "body": "Use bun"
+        })
+    );
+}

@@ -674,6 +674,7 @@ pub enum NativeCommand {
         phone_id: String,
         permissions: String,
     },
+    ForgetTrustedPhone(String),
     RefreshTelemetryStatus,
     DownloadUpdate,
     ShowDesktopNotification {

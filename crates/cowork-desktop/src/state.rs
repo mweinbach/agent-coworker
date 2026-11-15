@@ -3877,6 +3877,7 @@ impl AppState {
                 self.remote_access
                     .trusted_phones
                     .retain(|p| p.id != phone_id);
+                self.send_native(NativeCommand::ForgetTrustedPhone(phone_id));
             }
             SettingsAction::UpdatePrivacyTelemetry(privacy) => {
                 self.desktop_settings.privacy_telemetry = privacy;

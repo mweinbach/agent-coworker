@@ -843,6 +843,7 @@ impl NativeWorkerContext {
             | NativeCommand::SetRemoteAccessEnabled(_)
             | NativeCommand::RotateRemoteAccessSession
             | NativeCommand::UpdateTrustedPhonePermissions { .. }
+            | NativeCommand::ForgetTrustedPhone(_)
             | NativeCommand::RefreshTelemetryStatus
             | NativeCommand::DownloadUpdate => {}
             NativeCommand::Shutdown => {}

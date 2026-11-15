@@ -85,7 +85,9 @@ pub struct CanvasUiState {
     pub source_edit: TextEdit,
     /// Bottom collaborative prompt `TextEdit` ("Ask model to edit this document...").
     pub prompt_edit: TextEdit,
-    /// Identity key (`"{workspace_id}\0{path}\0{generation}"`) of the currently synced buffer.
+    /// Stable document identity (`"{kind}\0{workspace_id}\0{id_or_path}"`) across `Loading -> Ready`, reload, and Save As.
+    pub synced_doc_identity: Option<String>,
+    /// Snapshot/revision key (`"{workspace_id}\0{path_or_id}\0{generation}\0{phase}"`) of the currently synced buffer.
     pub synced_session_key: Option<String>,
     /// Hash of the disk content snapshot currently synced in `synced_disk_content`.
     pub synced_disk_hash: Option<u64>,
@@ -106,6 +108,7 @@ impl Default for CanvasUiState {
             reload_confirm_open: false,
             source_edit: TextEdit::default(),
             prompt_edit: TextEdit::default(),
+            synced_doc_identity: None,
             synced_session_key: None,
             synced_disk_hash: None,
             synced_disk_content: String::new(),
@@ -122,26 +125,43 @@ impl CanvasUiState {
     }
 
     /// Synchronizes editor buffer and default tab for an opened or reloaded Canvas session.
+    #[allow(clippy::too_many_arguments)]
     pub fn sync_session(
         &mut self,
+        doc_identity: &str,
         session_key: &str,
         disk_hash: u64,
-        content: &str,
+        disk_content: &str,
+        initial_text: &str,
         is_markdown: bool,
+        is_live: bool,
         force_reset: bool,
     ) {
+        let same_document = self.synced_doc_identity.as_deref() == Some(doc_identity);
         let same_session = self.synced_session_key.as_deref() == Some(session_key);
-        let needs_seed = force_reset
-            || !same_session
-            || (!self.is_dirty() && self.synced_disk_hash != Some(disk_hash));
-        if !needs_seed {
+
+        if !force_reset && same_session {
+            if self.synced_disk_hash != Some(disk_hash) {
+                if is_live {
+                    // Save/SaveAs updates `disk_content` without bumping `generation`; refresh
+                    // the clean disk baseline in place so caret and in-flight typing stay intact.
+                    self.synced_disk_hash = Some(disk_hash);
+                    self.synced_disk_content = disk_content.to_string();
+                } else if !self.is_dirty() {
+                    self.synced_disk_hash = Some(disk_hash);
+                    self.synced_disk_content = disk_content.to_string();
+                    self.source_edit.replace_text(initial_text);
+                }
+            }
             return;
         }
+
+        self.synced_doc_identity = Some(doc_identity.to_string());
         self.synced_session_key = Some(session_key.to_string());
         self.synced_disk_hash = Some(disk_hash);
-        self.synced_disk_content = content.to_string();
-        self.source_edit.replace_text(content);
-        if !same_session || force_reset {
+        self.synced_disk_content = disk_content.to_string();
+        self.source_edit.replace_text(initial_text);
+        if !same_document || force_reset {
             self.active_tab = if is_markdown {
                 CanvasTab::Document
             } else {
@@ -149,11 +169,14 @@ impl CanvasUiState {
             };
             self.reload_confirm_open = false;
             self.local_error = None;
+        } else {
+            self.reload_confirm_open = false;
         }
     }
 
     /// Clears transient Canvas buffers and overlays when closing the document.
     pub fn clear(&mut self) {
+        self.synced_doc_identity = None;
         self.synced_session_key = None;
         self.synced_disk_hash = None;
         self.synced_disk_content.clear();

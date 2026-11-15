@@ -21,7 +21,7 @@ pub mod model;
 mod parity_tests;
 pub mod state;
 
-pub use canvas::{canvas_pane, is_canvas_maximized};
+pub use canvas::{canvas_pane, is_canvas_document_path, is_canvas_maximized};
 pub use state::ChatUiState;
 
 use rune::{Cx, col, row};

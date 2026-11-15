@@ -464,10 +464,18 @@ struct NativeWorkerContext {
 impl NativeWorkerContext {
     fn initialize(emit: Arc<dyn Fn(StoreEvent) + Send + Sync>) -> Self {
         let env = cowork_config::env_map_from_process();
-        let is_packaged = is_packaged_build();
-        let has_override = read_user_data_override_env(&env).is_some();
-        let user_data_dir = resolve_desktop_user_data_dir(is_packaged, &env);
-        let legacy_dir = resolve_legacy_user_data_dir(&env);
+        Self::initialize_with_env(emit, is_packaged_build(), &env, true)
+    }
+
+    fn initialize_with_env(
+        emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
+        is_packaged: bool,
+        env: &HashMap<String, String>,
+        register_globals: bool,
+    ) -> Self {
+        let has_override = read_user_data_override_env(env).is_some();
+        let user_data_dir = resolve_desktop_user_data_dir(is_packaged, env);
+        let legacy_dir = resolve_legacy_user_data_dir(env);
 
         let logger = Arc::new(LocalLogger::new(&user_data_dir));
         let persistence = Arc::new(PersistenceService::new(
@@ -476,7 +484,11 @@ impl NativeWorkerContext {
             has_override,
             Some(logger.clone()),
         ));
-        let window_state = shared_window_state_store().clone();
+        let window_state = if register_globals {
+            shared_window_state_store().clone()
+        } else {
+            WindowStateStore::new(&user_data_dir)
+        };
         let appearance = AppearancePreferences::new(&user_data_dir);
         let roots = Arc::new(Mutex::new(WorkspaceRootsController::new()));
         let uploads = Arc::new(Mutex::new(AuthorizedUploadRegistry::new()));
@@ -500,22 +512,24 @@ impl NativeWorkerContext {
             .map(read_persisted_product_analytics_state);
 
         let crash_reporting =
-            CrashReportingService::new(is_packaged, initial_roots, &initial_privacy, &env);
-        crash_reporting.install_panic_hook();
+            CrashReportingService::new(is_packaged, initial_roots, &initial_privacy, env);
+        if register_globals {
+            crash_reporting.install_panic_hook();
+        }
 
         let product_analytics = ProductAnalyticsService::new(
             is_packaged,
             &initial_privacy,
             initial_analytics,
             Some(persistence.as_ref()),
-            &env,
+            env,
         );
 
         let current_exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
         let cwd = std::env::current_dir().ok();
-        let repo_root = resolve_dev_repo_root(&env, current_exe_dir.as_deref(), cwd.as_deref());
+        let repo_root = resolve_dev_repo_root(env, current_exe_dir.as_deref(), cwd.as_deref());
         let resources_dir = current_exe_dir.as_ref().and_then(|dir| {
             #[cfg(target_os = "macos")]
             {
@@ -564,7 +578,9 @@ impl NativeWorkerContext {
         .with_analytics(product_analytics.clone());
         let transcript_buffer =
             TranscriptWriteBuffer::new(persistence.clone(), Some(logger.clone()));
-        set_shared_analytics(Some(product_analytics.clone()));
+        if register_globals {
+            set_shared_analytics(Some(product_analytics.clone()));
+        }
 
         Self {
             is_packaged,
@@ -645,6 +661,15 @@ impl NativeWorkerContext {
     }
 
     fn sync_runtime_caches(&mut self, state: &PersistedDesktopState) {
+        let env = cowork_config::env_map_from_process();
+        self.sync_runtime_caches_with_env(state, &env);
+    }
+
+    fn sync_runtime_caches_with_env(
+        &mut self,
+        state: &PersistedDesktopState,
+        env: &HashMap<String, String>,
+    ) {
         self.last_feature_flags = state.feature_flags.clone();
         self.last_privacy = Some(state.settings.privacy_telemetry.clone());
         self.show_hidden_files
@@ -666,7 +691,7 @@ impl NativeWorkerContext {
             state.active_workspace_id.as_deref(),
             &ws_targets,
         );
-        self.sync_telemetry_services(&state.settings.privacy_telemetry);
+        self.sync_telemetry_services_with_env(&state.settings.privacy_telemetry, env);
     }
 
     fn product_analytics_value(&self) -> Option<Value> {
@@ -677,13 +702,16 @@ impl NativeWorkerContext {
         serde_json::to_value(&state).ok().filter(|v| v.is_object())
     }
 
-    fn sync_telemetry_services(&self, privacy: &PrivacyTelemetrySettings) {
-        let env = cowork_config::env_map_from_process();
+    fn sync_telemetry_services_with_env(
+        &self,
+        privacy: &PrivacyTelemetrySettings,
+        env: &HashMap<String, String>,
+    ) {
         let approved = self.approved_roots_snapshot();
-        self.crash_reporting.reconfigure(privacy, approved, &env);
+        self.crash_reporting.reconfigure(privacy, approved, env);
         let before = self.product_analytics.persisted_state();
         self.product_analytics
-            .reconfigure(privacy, Some(self.persistence.as_ref()), &env);
+            .reconfigure(privacy, Some(self.persistence.as_ref()), env);
         let after = self.product_analytics.persisted_state();
         self.server_manager
             .set_product_analytics_state(after.clone());
@@ -694,18 +722,55 @@ impl NativeWorkerContext {
         }
     }
 
+    fn save_persisted_state_with_env(
+        &mut self,
+        snapshot: &PersistedDesktopState,
+        env: &HashMap<String, String>,
+    ) -> PersistedDesktopState {
+        // Persist user/core state first (keeping the live analytics IDs if the UI snapshot is older),
+        // then reconfigure telemetry services so newly generated `anonymousInstallationId` values
+        // written by `reconfigure` are never clobbered by the pre-reconfigure snapshot.
+        let mut snapshot_to_save = snapshot.clone();
+        if let Some(current_analytics) = self.product_analytics_value() {
+            snapshot_to_save.product_analytics = Some(current_analytics);
+        }
+        if let Err(err) = self
+            .persistence
+            .merge_and_save_core_snapshot(&snapshot_to_save)
+        {
+            let meta = json!({ "error": err.to_string() });
+            self.logger.write(
+                LocalLogFileName::Server,
+                LocalLogLevel::Error,
+                "persistence",
+                "failed to persist desktop snapshot",
+                Some(&meta),
+            );
+        }
+
+        let mut runtime_snapshot = snapshot.clone();
+        runtime_snapshot.feature_flags =
+            resolve_effective_feature_flags(&snapshot.feature_flags, env, self.is_packaged);
+        self.sync_runtime_caches_with_env(&runtime_snapshot, env);
+        runtime_snapshot
+    }
+
     fn server_feature_flags(&self) -> WorkspaceServerFeatureFlags {
         WorkspaceServerFeatureFlags::from_feature_flag_map(&self.last_feature_flags)
     }
 
     fn compute_telemetry_status(&self) -> Value {
+        let env = cowork_config::env_map_from_process();
+        self.compute_telemetry_status_with_env(&env)
+    }
+
+    fn compute_telemetry_status_with_env(&self, env: &HashMap<String, String>) -> Value {
         let mut snapshot = PersistedDesktopState::default();
         if let Some(ref privacy) = self.last_privacy {
             snapshot.settings.privacy_telemetry = privacy.clone();
         }
         let raw_doc = self.persistence.load_state_value().ok();
-        let env = cowork_config::env_map_from_process();
-        resolve_desktop_telemetry_status(&snapshot, raw_doc.as_ref(), &env, self.is_packaged)
+        resolve_desktop_telemetry_status(&snapshot, raw_doc.as_ref(), env, self.is_packaged)
     }
 
     fn authorize_explorer_workspace_root(
@@ -957,24 +1022,7 @@ impl NativeWorkerContext {
             }
             NativeCommand::SavePersistedState(snapshot) => {
                 let env = cowork_config::env_map_from_process();
-                let mut runtime_snapshot = (*snapshot).clone();
-                runtime_snapshot.feature_flags = resolve_effective_feature_flags(
-                    &snapshot.feature_flags,
-                    &env,
-                    self.is_packaged,
-                );
-                self.sync_runtime_caches(&runtime_snapshot);
-
-                if let Err(err) = self.persistence.merge_and_save_core_snapshot(&snapshot) {
-                    let meta = json!({ "error": err.to_string() });
-                    self.logger.write(
-                        LocalLogFileName::Server,
-                        LocalLogLevel::Error,
-                        "persistence",
-                        "failed to persist desktop snapshot",
-                        Some(&meta),
-                    );
-                }
+                let runtime_snapshot = self.save_persisted_state_with_env(&snapshot, &env);
                 apply_desktop_state(
                     &runtime_snapshot,
                     &self.roots,
@@ -986,7 +1034,7 @@ impl NativeWorkerContext {
                     self.is_packaged,
                 );
                 (self.emit)(StoreEvent::TelemetryStatusChanged(
-                    self.compute_telemetry_status(),
+                    self.compute_telemetry_status_with_env(&env),
                 ));
             }
             NativeCommand::PickFolder { request_id } => {
@@ -2145,5 +2193,80 @@ mod tests {
         assert_eq!(btree.get("workspaceCount"), Some(&json!(2)));
         assert_eq!(btree.get("eventSource"), Some(&json!("renderer")));
         assert!(json_properties_to_btree(&json!("not-an-object")).is_empty());
+    }
+
+    #[test]
+    fn save_persisted_state_preserves_newly_generated_product_analytics_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user_data_dir = tmp.path().join("Cowork");
+        let mut env = HashMap::new();
+        env.insert(
+            "HOME".to_string(),
+            tmp.path().join("home").to_string_lossy().to_string(),
+        );
+        env.insert(
+            "COWORK_USER_DATA_DIR".to_string(),
+            user_data_dir.to_string_lossy().to_string(),
+        );
+
+        let persistence = PersistenceService::new(user_data_dir, None, true, None);
+        let stale_analytics = json!({ "lastAppVersion": "0.9.0" });
+        persistence
+            .merge_and_save_core_snapshot(&PersistedDesktopState {
+                product_analytics: Some(stale_analytics.clone()),
+                ..PersistedDesktopState::default()
+            })
+            .unwrap();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let emit: Arc<dyn Fn(StoreEvent) + Send + Sync> = Arc::new(move |ev| {
+            captured.lock().unwrap().push(ev);
+        });
+        let mut ctx = NativeWorkerContext::initialize_with_env(emit, false, &env, false);
+
+        // Saving while opting in triggers `reconfigure` to mint `anonymousInstallationId` on disk;
+        // the save path must not overwrite disk state with the pre-reconfigure snapshot.
+        let mut opt_in_snapshot = PersistedDesktopState {
+            product_analytics: Some(stale_analytics.clone()),
+            ..PersistedDesktopState::default()
+        };
+        opt_in_snapshot
+            .settings
+            .privacy_telemetry
+            .product_analytics_enabled = true;
+        ctx.save_persisted_state_with_env(&opt_in_snapshot, &env);
+
+        let disk_after_first = ctx.persistence.load_core_state().unwrap();
+        let generated_id = disk_after_first
+            .product_analytics
+            .as_ref()
+            .and_then(|v| v.get("anonymousInstallationId"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .expect("expected generated anonymousInstallationId on disk");
+        assert!(generated_id.starts_with("anon_"));
+
+        let recorded = events.lock().unwrap();
+        assert!(recorded.iter().any(|ev| matches!(
+            ev,
+            StoreEvent::ProductAnalyticsStateUpdated(Some(v))
+                if v.get("anonymousInstallationId").and_then(Value::as_str)
+                    == Some(generated_id.as_str())
+        )));
+        drop(recorded);
+
+        // Even if a subsequent save arrives carrying the older snapshot before UI applies the
+        // `ProductAnalyticsStateUpdated` event, the generated installation ID stays preserved.
+        ctx.save_persisted_state_with_env(&opt_in_snapshot, &env);
+        let disk_after_second = ctx.persistence.load_core_state().unwrap();
+        assert_eq!(
+            disk_after_second
+                .product_analytics
+                .as_ref()
+                .and_then(|v| v.get("anonymousInstallationId"))
+                .and_then(Value::as_str),
+            Some(generated_id.as_str())
+        );
     }
 }

@@ -22,14 +22,14 @@ use super::providers_utils::{
 };
 use super::remote_access::{parse_phone_permissions, update_phone_permission_string};
 use super::shell::{page_key, resolve_active_page, settings_groups};
-use super::updates::is_allowed_release_link;
+use super::updates::{is_allowed_release_link, updater_status_meta};
 use super::usage::{aggregate_usage, format_estimated_cost, format_token_count};
-use crate::actions::{Action, NavAction, SettingsAction};
+use crate::actions::{Action, NativeCommand, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
 use crate::state::{
     AppState, McpServerSummary, PrivacyTelemetrySettings, ProviderModelSummary,
-    ProviderStatusSummary, ProviderSummary, ThreadRecord, ThreadRuntime, UsageSummary,
-    WorkspaceRecord,
+    ProviderStatusSummary, ProviderSummary, ThreadRecord, ThreadRuntime, UpdaterState,
+    UsageSummary, WorkspaceRecord,
 };
 
 #[test]
@@ -1139,5 +1139,174 @@ fn models_page_selects_expose_accessible_names_and_desktop_tray_label_mentions_l
                     .is_some_and(|l| l.contains("Windows/Linux system tray"))
         }),
         "Settings -> Desktop Quick Chat tray description must mention Windows/Linux system tray"
+    );
+}
+
+#[test]
+fn updater_status_meta_maps_disabled_by_packaging_mode() {
+    assert_eq!(
+        updater_status_meta("disabled", false),
+        ("Not available in dev mode", StatusTone::Neutral)
+    );
+    assert_eq!(
+        updater_status_meta("disabled", true),
+        ("Unavailable", StatusTone::Neutral)
+    );
+    assert_eq!(
+        updater_status_meta("unavailable", false),
+        ("Unavailable", StatusTone::Neutral)
+    );
+    assert_eq!(
+        updater_status_meta("up-to-date", true),
+        ("Up to date", StatusTone::Success)
+    );
+    assert_eq!(
+        updater_status_meta("error", true),
+        ("Error", StatusTone::Danger)
+    );
+    assert_eq!(
+        updater_status_meta("idle", false),
+        ("Idle", StatusTone::Neutral)
+    );
+    assert_eq!(
+        updater_status_meta("", false),
+        ("Idle", StatusTone::Neutral)
+    );
+}
+
+#[test]
+fn updates_page_renders_disabled_status_and_disables_check_button() {
+    fn render_root(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
+        let (kit, _) = crate::theme::build_kit(false, false, false);
+        crate::views::settings::view(s, cx, &kit).content
+    }
+
+    fn has_text(rt: &rune::Runtime<AppState>, needle: &str) -> bool {
+        rt.elements().iter().any(|e| {
+            e.text.as_deref().is_some_and(|t| t.contains(needle))
+                || e.label.as_deref().is_some_and(|l| l.contains(needle))
+        })
+    }
+
+    fn click_check_btn(rt: &mut rune::Runtime<AppState>) -> bool {
+        let els = rt.elements();
+        let btn = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("updates-check-btn"))
+            .expect("updates-check-btn must render on Settings -> Updates");
+        let was_focusable = btn.focusable;
+        let [cx, cy] = [
+            btn.rect[0] + btn.rect[2] * 0.5,
+            btn.rect[1] + btn.rect[3] * 0.5,
+        ];
+        rt.pointer_move(cx, cy);
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.0);
+        was_focusable
+    }
+
+    // 1) Dev mode with status == "disabled" -> "Not available in dev mode" + disabled check action.
+    let mut dev_state = AppState {
+        scene_mode: true,
+        is_packaged: false,
+        updater: UpdaterState {
+            status: "disabled".to_string(),
+            current_version: "1.2.3".to_string(),
+            ..UpdaterState::default()
+        },
+        ..Default::default()
+    };
+    dev_state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Updates,
+    ))));
+    let mut rt_dev = rune::Runtime::new(
+        dev_state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_dev.frame(0.0);
+    assert!(has_text(&rt_dev, "Not available in dev mode"));
+    assert!(has_text(
+        &rt_dev,
+        "This is a development build, so in-app update checks are disabled."
+    ));
+    assert!(!click_check_btn(&mut rt_dev));
+    assert!(
+        rt_dev.state.services.emitted_native_commands.is_empty(),
+        "disabled Check for updates button must not emit CheckForUpdates in dev mode"
+    );
+
+    // 2) Packaged mode (.deb / missing pubkey) with status == "disabled" -> "Unavailable" + disabled check action.
+    let mut pkg_disabled_state = AppState {
+        scene_mode: true,
+        is_packaged: true,
+        updater: UpdaterState {
+            status: "disabled".to_string(),
+            packaged: true,
+            current_version: "1.2.3".to_string(),
+            ..UpdaterState::default()
+        },
+        ..Default::default()
+    };
+    pkg_disabled_state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Updates,
+    ))));
+    let mut rt_pkg_disabled = rune::Runtime::new(
+        pkg_disabled_state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_pkg_disabled.frame(0.0);
+    assert!(has_text(&rt_pkg_disabled, "Unavailable"));
+    assert!(!has_text(&rt_pkg_disabled, "Not available in dev mode"));
+    assert!(has_text(
+        &rt_pkg_disabled,
+        "Automatic in-app updates are unavailable for this build."
+    ));
+    assert!(!click_check_btn(&mut rt_pkg_disabled));
+    assert!(
+        rt_pkg_disabled
+            .state
+            .services
+            .emitted_native_commands
+            .is_empty(),
+        "disabled Check for updates button must not emit CheckForUpdates in packaged disabled mode"
+    );
+
+    // 3) Packaged mode with status == "idle" keeps Check for updates interactive.
+    let mut pkg_idle_state = AppState {
+        scene_mode: true,
+        is_packaged: true,
+        updater: UpdaterState {
+            status: "idle".to_string(),
+            packaged: true,
+            current_version: "1.2.3".to_string(),
+            ..UpdaterState::default()
+        },
+        ..Default::default()
+    };
+    pkg_idle_state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Updates,
+    ))));
+    let mut rt_pkg_idle = rune::Runtime::new(
+        pkg_idle_state,
+        render_root,
+        (1100.0, 900.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt_pkg_idle.frame(0.0);
+    assert!(has_text(&rt_pkg_idle, "Idle"));
+    assert!(click_check_btn(&mut rt_pkg_idle));
+    assert!(
+        rt_pkg_idle
+            .state
+            .services
+            .emitted_native_commands
+            .iter()
+            .any(|cmd| matches!(cmd, NativeCommand::CheckForUpdates)),
+        "interactive Check for updates button must emit NativeCommand::CheckForUpdates"
     );
 }

@@ -906,31 +906,25 @@ fn preview_ui_state_tracks_slide_navigation_layout_and_resets_on_path_change() {
     assert!(ui.active_path.is_empty());
 }
 
-thread_local! {
-    static TEST_PRESENTATION_DATA: std::cell::RefCell<
-        Option<super::state::PresentationPreviewData>,
-    > = const { std::cell::RefCell::new(None) };
-}
-
 fn render_test_presentation_root(s: &AppState, cx: &mut rune::Cx<AppState>) -> rune::El {
     let dark = s.effective_dark(cx.system_dark());
     let (kit, tokens) = theme::build_kit(dark, false, false);
     cx.foreground(tokens.text_base);
     cx.focus_ring(2.0, 2.5, tokens.focus_ring);
     let preview = s.active_file_preview.as_ref().expect("preview present");
-    TEST_PRESENTATION_DATA.with(|slot| {
-        let borrow = slot.borrow();
-        let data = borrow.as_ref().expect("TEST_PRESENTATION_DATA set");
-        rune::el().w_full().h_full().fill(tokens.panel_bg).child(
-            super::presentation::render_presentation_preview(s, preview, data, &kit, &tokens),
-        )
-    })
+    let data = preview
+        .presentation
+        .as_deref()
+        .expect("presentation preview payload present");
+    rune::el().w_full().h_full().fill(tokens.panel_bg).child(
+        super::presentation::render_presentation_preview(s, preview, data, &kit, &tokens),
+    )
 }
 
 #[test]
 fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_dark() {
     use super::state::{PresentationLayoutMode, PresentationPreviewData};
-    use crate::actions::NativeCommand;
+    use crate::ws::WsCommand;
     use rune::{Key, KeyEvent, Mods};
 
     const PRES_VIEWPORT: (f32, f32) = (760.0, 560.0);
@@ -987,12 +981,12 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
 
     // 1) Deck view in Light and Dark themes + PNG/SVG slide decoding + interactive navigation.
     for dark in [false, true] {
-        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(rendered_data.clone()));
         let preview = FilePreviewState {
             workspace_id: "ws-1".to_string(),
             path: "/ws/quarterly_review.pptx".to_string(),
             title: "quarterly_review.pptx".to_string(),
             is_binary: true,
+            presentation: Some(Box::new(rendered_data.clone())),
             ..Default::default()
         };
         let mut state = AppState {
@@ -1137,7 +1131,6 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
 
     // 2) Text-only fallback warning banner in light mode.
     {
-        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(text_notice_data.clone()));
         let mut state = AppState {
             scene_mode: true,
             system_dark_override: Some(false),
@@ -1146,6 +1139,7 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
                 path: "/ws/text_fallback.pptx".to_string(),
                 title: "text_fallback.pptx".to_string(),
                 is_binary: true,
+                presentation: Some(Box::new(text_notice_data)),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1175,7 +1169,6 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
 
     // 3) Compact width (<520pt estimated preview width) in dark mode renders bottom strip cleanly.
     {
-        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(rendered_data.clone()));
         let mut state = AppState {
             scene_mode: true,
             system_dark_override: Some(true),
@@ -1184,6 +1177,7 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
                 path: "/ws/compact_deck.pptx".to_string(),
                 title: "compact_deck.pptx".to_string(),
                 is_binary: true,
+                presentation: Some(Box::new(rendered_data)),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1226,9 +1220,8 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
         );
     }
 
-    // 4) Error fallback card renders cleanly and "Try again" dispatches LoadFilePreview.
+    // 4) Error fallback card renders cleanly and "Try again" dispatches presentation RPC reload.
     {
-        TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = Some(error_data));
         let mut state = AppState {
             scene_mode: true,
             system_dark_override: Some(false),
@@ -1237,6 +1230,7 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
                 path: "/ws/legacy.ppt".to_string(),
                 title: "legacy.ppt".to_string(),
                 is_binary: true,
+                presentation: Some(Box::new(error_data)),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1279,9 +1273,17 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
         );
         rt.frame(0.02);
         assert!(matches!(
-            rt.state.services.emitted_native_commands.last(),
-            Some(NativeCommand::ReadFilePreview { path, .. }) if path == "/ws/legacy.ppt"
+            rt.state.services.emitted_ws_commands.last(),
+            Some(WsCommand::SendRequest { method, params, .. })
+                if method == "cowork/workspace/presentation/preview"
+                    && params.get("path").and_then(|v| v.as_str()) == Some("/ws/legacy.ppt")
         ));
+        assert!(
+            rt.state
+                .active_file_preview
+                .as_ref()
+                .and_then(|p| p.presentation.as_deref())
+                .is_some_and(|p| p.loading)
+        );
     }
-    TEST_PRESENTATION_DATA.with(|slot| *slot.borrow_mut() = None);
 }

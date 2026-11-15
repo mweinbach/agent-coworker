@@ -144,10 +144,15 @@ fn build_new_task_landing(
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
-    let ws_name = active_ws_id
+    let description = match active_ws_id
         .and_then(|id| s.workspaces.iter().find(|w| w.id == id))
-        .map(|w| w.name.as_str())
-        .unwrap_or("No workspace selected");
+    {
+        Some(w) => format!(
+            "Track multi-step deliverables, review artifacts, and inspect automated workflow runs in {}.",
+            w.name
+        ),
+        None => "Select or add a workspace folder to track multi-step deliverables, review artifacts, and automated workflow runs.".to_owned(),
+    };
 
     let ws_for_btn = active_ws_id.map(str::to_owned);
     let hero_actions = row()
@@ -182,9 +187,7 @@ fn build_new_task_landing(
     let hero = Card::new()
         .accent(t.accent)
         .title("Tasks & Structured Workflows", Some(&icons::CHECK_SQUARE))
-        .description(format!(
-            "Track multi-step deliverables, review artifacts, and inspect automated workflow runs in {ws_name}."
-        ))
+        .description(description)
         .action(hero_actions)
         .build(k);
 
@@ -300,7 +303,7 @@ fn build_task_create_card(
             .child(spacer())
             .child(
                 Button::new("Cancel")
-                    .variant(ButtonVariant::Ghost)
+                    .variant(ButtonVariant::Outline)
                     .control_size(ControlSize::Small)
                     .on_press_tx(|s: &mut AppState, _| {
                         s.shell_ui.task_create_open = false;
@@ -309,12 +312,9 @@ fn build_task_create_card(
             )
             .child(
                 Button::new("Create task")
-                    .variant(if can_submit {
-                        ButtonVariant::Contrast
-                    } else {
-                        ButtonVariant::Ghost
-                    })
+                    .variant(ButtonVariant::Contrast)
                     .control_size(ControlSize::Small)
+                    .disabled(!can_submit)
                     .on_press_tx(move |s: &mut AppState, _| {
                         let Some(ws_id) = ws_for_submit.clone() else {
                             return;

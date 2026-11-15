@@ -74,6 +74,8 @@ pub struct ShellUiState {
     pub canvas_pane: PaneState,
     pub canvas_overlay_dismissed_key: Option<String>,
     pub last_canvas_key: Option<String>,
+    pub sidebar_resize_start_width: Option<f32>,
+    pub inspector_resize_start_width: Option<f32>,
 }
 
 impl Default for ShellUiState {
@@ -121,6 +123,8 @@ impl Default for ShellUiState {
             canvas_pane: PaneState::new(480.0).range(320.0, 900.0),
             canvas_overlay_dismissed_key: None,
             last_canvas_key: None,
+            sidebar_resize_start_width: None,
+            inspector_resize_start_width: None,
         }
     }
 }

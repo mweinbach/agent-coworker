@@ -8,6 +8,7 @@ pub mod icons;
 pub mod overlays;
 pub mod palette;
 pub mod sidebar;
+pub mod split_frame;
 pub mod state;
 pub mod tasks;
 pub mod top_bar;
@@ -16,12 +17,12 @@ pub mod windows;
 pub use state::{ShellUiState, handle_key};
 
 use rune::{Cx, El, Spring, col, el};
-use rune_kit::shell::{PaneMotion, SidebarPeek, SidebarToggle, SplitView};
-use rune_kit::{ControlSize, Kit};
+use rune_kit::Kit;
 
 use crate::router::ViewId;
 use crate::state::{AppState, WindowMode};
 use crate::theme::ThemeTokens;
+use split_frame::FullBleedSplit;
 
 /// Root view of `cowork-desktop`, mounted by `lib.rs` inside the Rune window.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El {
@@ -34,7 +35,11 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
             let chat_out = crate::views::chat::view(s, cx, k);
             return windows::build_quick_chat_window(s, cx, k, t, chat_out);
         }
-        WindowMode::Main => {}
+        WindowMode::Main => {
+            let tb_height = rune_kit::shell::TOOLBAR_HEIGHT * s.ui_scale;
+            let tl_y = ((tb_height - 14.0) / 2.0).max(0.0).round();
+            cx.set_titlebar(rune::Titlebar::new(tb_height).traffic_lights(16.0, tl_y));
+        }
     }
 
     let route = s.route().clone();
@@ -83,12 +88,13 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
 fn push_left_drawer_overlay(
     layer: &mut Vec<El>,
     chrome: rune::ChromeInsets,
+    leading_lights: f32,
     t: &ThemeTokens,
     sidebar_el: El,
     on_close: fn(&mut AppState),
 ) {
-    let left_drawer_top = if chrome.leading > 0.0 {
-        chrome.height
+    let left_drawer_top = if leading_lights > 0.0 {
+        chrome.height.max(rune_kit::shell::TOOLBAR_HEIGHT)
     } else {
         0.0
     };
@@ -106,8 +112,14 @@ fn push_left_drawer_overlay(
                     .min_h(0.0)
                     .pt(left_drawer_top)
                     .fill(t.popover_bg)
-                    .border(1.0, t.border_strong)
-                    .child(sidebar_el),
+                    .child(sidebar_el)
+                    .child(
+                        el().key("adaptive-left-drawer-divider")
+                            .pin(None, Some(0.0), Some(0.0), Some(0.0))
+                            .w(1.0)
+                            .fill(t.border_strong)
+                            .a11y_hidden(),
+                    ),
             ),
     );
 }
@@ -121,6 +133,7 @@ fn build_settings_frame(
     layer: &mut Vec<El>,
 ) -> El {
     let chrome = cx.chrome_insets();
+    let leading_lights = chrome.leading.max(cx.titlebar_inset());
     layer.extend(layout.overlays);
     let adaptive = helpers::resolve_adaptive_layout(
         s.shell_ui.viewport_width,
@@ -143,10 +156,10 @@ fn build_settings_frame(
         layout.header_actions,
     );
 
-    let mut split = SplitView::new(layout.main).toolbar(toolbar);
+    let mut split = FullBleedSplit::new(layout.main).toolbar(toolbar);
     if narrow {
         if s.settings_ui.mobile_nav_open {
-            push_left_drawer_overlay(layer, chrome, t, layout.sidebar, |s| {
+            push_left_drawer_overlay(layer, chrome, leading_lights, t, layout.sidebar, |s| {
                 s.settings_ui.mobile_nav_open = false;
             });
         }
@@ -154,7 +167,9 @@ fn build_settings_frame(
         split = split
             .sidebar(
                 &s.settings_ui.nav_pane,
+                s.shell_ui.sidebar_resize_start_width.is_some(),
                 |s: &mut AppState| &mut s.settings_ui.nav_pane,
+                |s: &mut AppState| &mut s.shell_ui.sidebar_resize_start_width,
                 layout.sidebar,
             )
             .sidebar_padding(12.0, 8.0);
@@ -162,10 +177,8 @@ fn build_settings_frame(
 
     split
         .hide_sidebar_toggle()
-        .titlebar_inset(cx.titlebar_inset())
-        .frame_inset(8.0)
-        .toolbar_in_panel()
-        .pane_motion(PaneMotion::new().spring(Spring::new(0.3, 0.0)))
+        .titlebar_inset(leading_lights)
+        .spring(Spring::new(0.3, 0.0))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
         .key("settings-shell-frame")
@@ -235,8 +248,9 @@ fn build_workspace_split_frame(
         right_kind,
     );
 
-    let mut split = SplitView::new(primary_el).toolbar(toolbar);
+    let mut split = FullBleedSplit::new(primary_el).toolbar(toolbar);
     let chrome = cx.chrome_insets();
+    let leading_lights = chrome.leading.max(cx.titlebar_inset());
     let right_drawer_top = if chrome.trailing > 0.0 {
         chrome.height
     } else {
@@ -245,24 +259,22 @@ fn build_workspace_split_frame(
 
     if adaptive.left_overlay {
         if s.shell_ui.left_overlay_open {
-            push_left_drawer_overlay(layer, chrome, t, sidebar_el, |s| {
+            push_left_drawer_overlay(layer, chrome, leading_lights, t, sidebar_el, |s| {
                 s.shell_ui.left_overlay_open = false;
             });
         }
     } else {
         split = split
-            .sidebar(&s.sidebar, |s: &mut AppState| &mut s.sidebar, sidebar_el)
-            .sidebar_padding(12.0, 8.0)
-            .sidebar_toggle(
-                SidebarToggle::new()
-                    .size(ControlSize::Large)
-                    .past_lights(16.0)
-                    .edge(18.0)
-                    .gap(4.0)
-                    .in_header()
-                    .unread(helpers::any_background_unread(s)),
+            .sidebar(
+                &s.sidebar,
+                s.shell_ui.sidebar_resize_start_width.is_some(),
+                |s: &mut AppState| &mut s.sidebar,
+                |s: &mut AppState| &mut s.shell_ui.sidebar_resize_start_width,
+                sidebar_el,
             )
-            .sidebar_peek(SidebarPeek::new());
+            .sidebar_padding(12.0, 8.0)
+            .unread(helpers::any_background_unread(s))
+            .toggle_shortcut(crate::shortcut_label("Cmd+Shift+B"));
     }
 
     if let Some(right_panel_el) = right_panel_el {
@@ -302,31 +314,39 @@ fn build_workspace_split_frame(
                                 .min_h(0.0)
                                 .pt(right_drawer_top)
                                 .fill(t.popover_bg)
-                                .border(1.0, t.border_strong)
-                                .child(right_panel_el),
+                                .child(right_panel_el)
+                                .child(
+                                    el().key("adaptive-right-drawer-divider")
+                                        .pin(Some(0.0), Some(0.0), None, Some(0.0))
+                                        .w(1.0)
+                                        .fill(t.border_strong)
+                                        .a11y_hidden(),
+                                ),
                         ),
                 );
             }
         } else if canvas_active {
             split = split.inspector(
                 &s.shell_ui.canvas_pane,
+                s.shell_ui.inspector_resize_start_width.is_some(),
                 |s: &mut AppState| &mut s.shell_ui.canvas_pane,
+                |s: &mut AppState| &mut s.shell_ui.inspector_resize_start_width,
                 right_panel_el,
             );
         } else {
             split = split.inspector(
                 &s.context_sidebar,
+                s.shell_ui.inspector_resize_start_width.is_some(),
                 |s: &mut AppState| &mut s.context_sidebar,
+                |s: &mut AppState| &mut s.shell_ui.inspector_resize_start_width,
                 right_panel_el,
             );
         }
     }
 
     split
-        .titlebar_inset(cx.titlebar_inset())
-        .frame_inset(8.0)
-        .toolbar_in_panel()
-        .pane_motion(PaneMotion::new().spring(Spring::new(0.3, 0.0)))
+        .titlebar_inset(leading_lights)
+        .spring(Spring::new(0.3, 0.0))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
 }

@@ -3,7 +3,7 @@
 //! Ported from `apps/desktop/src/ui/layout/AppTopBar.tsx` and `PlatformTopBarChrome.tsx`.
 
 use rune::{Cx, El, col, el, row, spacer, text};
-use rune_kit::shell::{self, Toolbar};
+use rune_kit::shell;
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, IconButton,
     IconButtonVariant, Kit, Placement, Popover, Spinner,
@@ -17,8 +17,9 @@ use crate::views::shell::helpers::{
     COMPACT_BREAKPOINT, NARROW_BREAKPOINT, format_cost_usd, format_tokens,
 };
 use crate::views::shell::icons;
+use crate::views::shell::split_frame::ShellToolbar;
 
-fn append_caption_reserve(toolbar: Toolbar, chrome: rune::ChromeInsets) -> Toolbar {
+fn append_caption_reserve(toolbar: ShellToolbar, chrome: rune::ChromeInsets) -> ShellToolbar {
     if chrome.trailing > 0.0 {
         toolbar.trailing(
             el().key("topbar-caption-reserve")
@@ -31,7 +32,7 @@ fn append_caption_reserve(toolbar: Toolbar, chrome: rune::ChromeInsets) -> Toolb
     }
 }
 
-/// Builds the Settings surface toolbar hosted inside `SplitView` (`panel-bg` card header).
+/// Builds the Settings surface toolbar hosted inside the full-bleed split frame.
 #[allow(clippy::too_many_arguments)]
 pub fn build_settings_toolbar(
     s: &AppState,
@@ -42,9 +43,9 @@ pub fn build_settings_toolbar(
     title: &str,
     workspace_badge: Option<&str>,
     header_actions: Vec<El>,
-) -> Toolbar {
+) -> ShellToolbar {
     let chrome = cx.chrome_insets();
-    let mut toolbar = Toolbar::new();
+    let mut toolbar = ShellToolbar::new();
 
     if narrow {
         let drawer_open = s.settings_ui.mobile_nav_open;
@@ -95,14 +96,14 @@ pub fn build_settings_toolbar(
     append_caption_reserve(toolbar, chrome)
 }
 
-/// Builds the main pane top toolbar matching `SplitView`'s 48pt unified drag band.
+/// Builds the main pane top toolbar matching the full-bleed `48`pt titlebar band.
 pub fn build_toolbar(
     s: &AppState,
     cx: &Cx<AppState>,
     k: &Kit,
     t: &ThemeTokens,
     layer: &mut Vec<El>,
-) -> Toolbar {
+) -> ShellToolbar {
     let chrome = cx.chrome_insets();
     let narrow = s.shell_ui.viewport_width < NARROW_BREAKPOINT;
     let compact = s.shell_ui.viewport_width < COMPACT_BREAKPOINT;
@@ -206,9 +207,9 @@ pub fn build_toolbar(
         }
     }
 
-    let mut toolbar = Toolbar::new();
+    let mut toolbar = ShellToolbar::new();
     if narrow {
-        // `SplitView` already pads leading toolbar items by `titlebar_inset` when the sidebar is collapsed.
+        // `FullBleedSplit` already pads leading toolbar items past traffic lights on narrow viewports.
         let drawer_open = s.shell_ui.left_overlay_open;
         let narrow_sidebar_btn = IconButton::new(&shell::SIDEBAR)
             .variant(IconButtonVariant::GhostMuted)

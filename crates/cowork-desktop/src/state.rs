@@ -2168,6 +2168,7 @@ impl AppState {
         self.canvas_document
             .as_ref()
             .is_some_and(CanvasDocumentSession::dirty)
+            || self.chat_ui.canvas.is_dirty()
     }
 
     fn clamp_ui_scale(scale: f32) -> f32 {

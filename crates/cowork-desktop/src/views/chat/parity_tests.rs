@@ -1155,6 +1155,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         is_markdown: true,
         truncated: false,
         error: None,
+        ..Default::default()
     });
     let mut rt_off = Runtime::new(
         gated,
@@ -1179,6 +1180,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
             is_markdown: false,
             truncated: false,
             error: None,
+            ..Default::default()
         });
     });
     rt_off.frame(0.0);
@@ -1200,6 +1202,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
             is_markdown: true,
             truncated: false,
             error: None,
+            ..Default::default()
         });
         let mut rt = Runtime::new(s, test_canvas_500_root, SNAP_VIEWPORT, Env::new(true, 2.0));
         rt.frame(0.0);
@@ -1246,6 +1249,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         is_markdown: true,
         truncated: false,
         error: None,
+        ..Default::default()
     });
     let mut rt_narrow = Runtime::new(
         s_narrow,
@@ -1288,6 +1292,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         is_markdown: true,
         truncated: false,
         error: None,
+        ..Default::default()
     });
     let mut rt_edit = Runtime::new(
         s_edit,
@@ -1335,6 +1340,7 @@ fn canvas_pane_gating_tabs_formatting_narrow_bounds_and_prompt_submission() {
         is_markdown: true,
         truncated: false,
         error: None,
+        ..Default::default()
     });
     let mut rt_edit_dark = Runtime::new(
         s_edit_dark,

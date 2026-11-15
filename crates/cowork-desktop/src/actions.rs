@@ -15,10 +15,10 @@ use serde_json::Value;
 
 use crate::router::{NavigationSnapshot, SettingsPageId, ViewId};
 use crate::state::{
-    ConfirmDialogRequest, DesktopSettings, FilePreviewState, LmStudioStartModalState,
-    NotificationTone, PersistedDesktopState, PrivacyTelemetrySettings, ReasoningEffortValue,
-    RemoteAccessState, SubagentProfile, ThreadBusyPolicy, UpdaterState, WindowMode,
-    WorkspaceFileEntry, WorkspaceRecord,
+    AgentProfileUpsertInputWire, ConfirmDialogRequest, DesktopSettings, DiagnosticsBundleState,
+    FilePreviewState, LmStudioStartModalState, NotificationTone, PersistedDesktopState,
+    PrivacyTelemetrySettings, ReasoningEffortValue, RemoteAccessState, SubagentProfile,
+    ThreadBusyPolicy, UpdaterState, WindowMode, WorkspaceFileEntry, WorkspaceRecord,
 };
 use crate::theme::ThemePreference;
 use crate::ws::{WsConnectionState, WsRpcError};
@@ -95,6 +95,7 @@ pub enum ShellAction {
     OpenFilePreview(FilePreviewState),
     CloseFilePreview,
     SetLandingWorkspace(Option<String>),
+    SelectLandingQuickChat,
     RequestExternalUrl(String),
     ConfirmExternalUrl,
     DismissExternalUrl,
@@ -248,6 +249,18 @@ pub enum SettingsAction {
         workspace_id: String,
         name: String,
     },
+    UpsertScopedMcpServer {
+        workspace_id: String,
+        name: String,
+        source: String,
+        previous_name: Option<String>,
+        server: Value,
+    },
+    DeleteScopedMcpServer {
+        workspace_id: String,
+        name: String,
+        source: String,
+    },
     UpsertSubagent {
         workspace_id: String,
         profile: SubagentProfile,
@@ -255,6 +268,23 @@ pub enum SettingsAction {
     DeleteSubagent {
         workspace_id: String,
         id: String,
+    },
+    ReadAgentProfilesCatalog {
+        workspace_id: String,
+    },
+    UpsertAgentProfile {
+        workspace_id: String,
+        input: AgentProfileUpsertInputWire,
+    },
+    DeleteAgentProfile {
+        workspace_id: String,
+        scope: String,
+        id: String,
+    },
+    SetAgentProfileWorkspaceAvailability {
+        workspace_id: String,
+        id: String,
+        disabled: bool,
     },
     UpsertMemory {
         workspace_id: String,
@@ -264,6 +294,22 @@ pub enum SettingsAction {
     DeleteMemory {
         workspace_id: String,
         key: String,
+    },
+    ReadMemories {
+        workspace_id: String,
+        scope: Option<String>,
+    },
+    UpsertScopedMemory {
+        workspace_id: String,
+        scope: String,
+        id: Option<String>,
+        content: String,
+        mode: Option<String>,
+    },
+    DeleteScopedMemory {
+        workspace_id: String,
+        scope: String,
+        id: String,
     },
     SetFeatureFlag {
         flag_id: String,
@@ -284,10 +330,24 @@ pub enum SettingsAction {
         workspace_id: String,
         backup_id: String,
     },
+    RestoreBackupCheckpoint {
+        workspace_id: String,
+        target_session_id: String,
+        checkpoint_id: Option<String>,
+    },
     ForgetTrustedPhone {
         phone_id: String,
     },
+    RevokeAllTrustedPhones,
     ExportDiagnosticsBundle,
+    OpenLogsFolder,
+    RevealDiagnosticsBundle {
+        path: Option<String>,
+    },
+    UploadDiagnosticsBundle {
+        path: Option<String>,
+        confirmed: bool,
+    },
     CompleteProviderAuthCallback {
         workspace_id: String,
         provider: String,
@@ -375,6 +435,13 @@ pub enum SettingsAction {
         id: String,
         target_scope: String,
     },
+    CopyAgentProfileNamed {
+        workspace_id: String,
+        source_ref: String,
+        target_scope: String,
+        target_id: Option<String>,
+        target_display_name: Option<String>,
+    },
     UpsertAdvancedMemory {
         workspace_id: String,
         entry: Value,
@@ -405,13 +472,29 @@ pub enum SettingsAction {
         id: String,
         enabled: bool,
     },
+    SetPluginEnabledScoped {
+        workspace_id: String,
+        id: String,
+        scope: Option<String>,
+        enabled: bool,
+    },
     DeletePlugin {
         workspace_id: String,
         id: String,
     },
+    DeletePluginScoped {
+        workspace_id: String,
+        id: String,
+        scope: Option<String>,
+    },
     UpdatePlugin {
         workspace_id: String,
         id: String,
+    },
+    UpdatePluginScoped {
+        workspace_id: String,
+        id: String,
+        scope: Option<String>,
     },
     InstallSkill {
         workspace_id: String,
@@ -425,6 +508,19 @@ pub enum SettingsAction {
     DeleteSkill {
         workspace_id: String,
         name: String,
+    },
+    SetSkillInstallationEnabled {
+        workspace_id: String,
+        installation_id: String,
+        enabled: bool,
+    },
+    DeleteSkillInstallation {
+        workspace_id: String,
+        installation_id: String,
+    },
+    UpdateSkillInstallation {
+        workspace_id: String,
+        installation_id: String,
     },
     AddMarketplace {
         workspace_id: String,
@@ -456,6 +552,10 @@ pub enum SettingsAction {
         workspace_id: String,
         target_session_id: String,
         checkpoint_id: String,
+    },
+    DeleteBackupEntry {
+        workspace_id: String,
+        target_session_id: String,
     },
     PreviewConversationImport {
         workspace_id: String,
@@ -678,6 +778,7 @@ pub enum NativeCommand {
         permissions: String,
     },
     ForgetTrustedPhone(String),
+    RevokeAllTrustedPhones,
     RefreshTelemetryStatus,
     DownloadUpdate,
     ShowDesktopNotification {
@@ -685,6 +786,12 @@ pub enum NativeCommand {
         body: String,
     },
     ExportDiagnosticsBundle,
+    OpenLogsFolder,
+    RevealDiagnosticsBundle(Option<String>),
+    UploadDiagnosticsBundle {
+        path: Option<String>,
+        confirmed: bool,
+    },
     CheckForUpdates,
     QuitAndInstallUpdate,
     Shutdown,
@@ -766,10 +873,17 @@ pub enum StoreEvent {
         method: String,
         result: Result<Value, WsRpcError>,
     },
+    WsServerResponseResult {
+        workspace_id: String,
+        request_id: JsonRpcLiteId,
+        ok: bool,
+        error: Option<String>,
+    },
     WsInvalidMessage {
         workspace_id: String,
         message: String,
     },
+    DiagnosticsBundleUpdated(Option<DiagnosticsBundleState>),
     UpdaterChanged(UpdaterState),
     RemoteAccessChanged(RemoteAccessState),
     TelemetryStatusChanged(Value),

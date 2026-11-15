@@ -11,13 +11,13 @@ use crate::theme::{ThemePreference, ThemeTokens};
 
 use super::icons;
 
-struct PaletteItem {
-    key: String,
-    section: &'static str,
-    title: String,
-    subtitle: String,
-    icon_glyph: &'static Icon,
-    action: Action,
+pub(crate) struct PaletteItem {
+    pub(crate) key: String,
+    pub(crate) section: &'static str,
+    pub(crate) title: String,
+    pub(crate) subtitle: String,
+    pub(crate) icon_glyph: &'static Icon,
+    pub(crate) action: Action,
 }
 
 /// Build the floating Command Palette modal overlay when `s.command_palette_open` is true.
@@ -29,7 +29,11 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
     let query = s.command_palette_query.trim().to_ascii_lowercase();
     let tasks_enabled = super::helpers::tasks_feature_enabled(s);
     let items = collect_palette_items(s, &query);
-    let first_action = items.first().map(|item| item.action.clone());
+    let selected_idx = s
+        .shell_ui
+        .command_palette_selected
+        .min(items.len().saturating_sub(1));
+    let selected_action = items.get(selected_idx).map(|item| item.action.clone());
 
     let placeholder = if tasks_enabled {
         "Jump to workspace, thread, task, command, or settings..."
@@ -45,10 +49,37 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         .on_edit(|s: &mut AppState| &mut s.command_palette_edit)
         .on_change(|s: &mut AppState, _| {
             let val = s.command_palette_edit.text.clone();
+            s.shell_ui.command_palette_selected = 0;
             s.dispatch(Action::Shell(ShellAction::SetCommandPaletteQuery(val)));
         })
+        .on_key(|s: &mut AppState, ev, _| {
+            let query = s.command_palette_query.trim().to_ascii_lowercase();
+            let items = collect_palette_items(s, &query);
+            let max_idx = items.len().saturating_sub(1);
+            match ev.key {
+                rune::Key::Up => {
+                    s.shell_ui.command_palette_selected =
+                        s.shell_ui.command_palette_selected.saturating_sub(1);
+                    true
+                }
+                rune::Key::Down => {
+                    if !items.is_empty() {
+                        s.shell_ui.command_palette_selected =
+                            (s.shell_ui.command_palette_selected + 1).min(max_idx);
+                    }
+                    true
+                }
+                rune::Key::Escape => {
+                    s.shell_ui.command_palette_selected = 0;
+                    s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
+                    true
+                }
+                _ => false,
+            }
+        })
         .on_action(move |s: &mut AppState, _| {
-            if let Some(act) = first_action.as_ref() {
+            if let Some(act) = selected_action.as_ref() {
+                s.shell_ui.command_palette_selected = 0;
                 s.dispatch(Action::Shell(ShellAction::SetCommandPaletteOpen(false)));
                 s.dispatch(act.clone());
             }
@@ -78,7 +109,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
                         .child(text(item.section).font(t.caption).color(t.text_faint)),
                 );
             }
-            list_children.push(palette_row(item, idx == 0, k, t));
+            list_children.push(palette_row(item, idx == selected_idx, k, t));
         }
     }
 
@@ -91,7 +122,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         .center_y()
         .fill(t.panel_bg)
         .child(
-            text("Enter to run top match")
+            text("↑↓ navigate · Enter run · Esc close")
                 .font(t.caption)
                 .color(t.text_faint),
         )
@@ -205,7 +236,7 @@ fn matches_query(query: &str, title: &str, subtitle: &str) -> bool {
         || subtitle.to_ascii_lowercase().contains(query)
 }
 
-fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteItem> {
+pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteItem> {
     let mut out = Vec::new();
     let tasks_enabled = super::helpers::tasks_feature_enabled(s);
     let active_ws_id = s

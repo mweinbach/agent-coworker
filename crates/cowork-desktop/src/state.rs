@@ -23,10 +23,11 @@ use cowork_protocol::{
     ProviderLmStudioLocalStatusParams, ProviderModelPreferencePatch,
     ProviderModelResetEnabledParams, ProviderModelSetEnabledParams, ProviderStatusRefreshParams,
     RuntimeDiagnosticsReadParams, RuntimeDiagnosticsReadResult, RuntimeLibreOfficeCheckParams,
-    SessionConfigSetParams, SessionDefaultsApplyParams, SessionDeleteParams, SessionModelSetParams,
-    SessionTitleSetParams, ThreadArchivedSetParams, ThreadForkParams, ThreadHydrateParams,
-    ThreadListParams, ThreadPinnedSetParams, ThreadStartParams, TurnAttachmentInputPart, TurnInput,
-    TurnInterruptParams, TurnReference, TurnStartParams, TurnSteerParams,
+    RuntimeLibreOfficeCheckResult, SessionConfigSetParams, SessionDefaultsApplyParams,
+    SessionDeleteParams, SessionModelSetParams, SessionTitleSetParams, ThreadArchivedSetParams,
+    ThreadForkParams, ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams,
+    ThreadStartParams, TurnAttachmentInputPart, TurnInput, TurnInterruptParams, TurnReference,
+    TurnRetrySpec, TurnStartParams, TurnSteerParams,
 };
 use rune::TextEdit;
 use rune_kit::PaneState;
@@ -47,6 +48,9 @@ use crate::ws::{PendingRpcMeta, WsCommand, WsConnectionState, WsRpcError};
 pub const WINDOW_MAIN: &str = "main";
 pub const WINDOW_QUICK_CHAT: &str = "quick-chat";
 pub const WINDOW_UTILITY: &str = "utility";
+
+/// Hidden synthetic prompt used when retrying failed tool calls via `TurnRetrySpec`.
+pub const HIDDEN_RETRY_TURN_PROMPT: &str = "Continue from where the previous turn stopped. Retry the failed step only if it is still necessary, then finish the user's request.";
 
 /// Active window surface mode (Electron multi-window equivalent).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -615,6 +619,20 @@ pub struct FilePreviewState {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderAuthMethodSpec {
+    pub id: String,
+    #[serde(rename = "type", default)]
+    pub method_type: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<String>,
+    #[serde(default)]
+    pub oauth_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderModelSummary {
     pub id: String,
     pub name: String,
@@ -756,6 +774,185 @@ pub struct MemoryEntry {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ScopedMemoryEntry {
+    #[serde(alias = "key")]
+    pub id: String,
+    #[serde(default)]
+    pub scope: String,
+    pub content: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileDefinitionWire {
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true_bool")]
+    pub enabled: bool,
+    #[serde(default = "default_base_role_value")]
+    pub base_role: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub allowed_built_in_tools: Vec<String>,
+    #[serde(default)]
+    pub allowed_mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub skill_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_context_mode: Option<String>,
+}
+
+fn default_profile_version() -> u32 {
+    1
+}
+
+fn default_true_bool() -> bool {
+    true
+}
+
+fn default_base_role_value() -> String {
+    "default".to_string()
+}
+
+impl Default for AgentProfileDefinitionWire {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            id: String::new(),
+            display_name: String::new(),
+            description: String::new(),
+            enabled: true,
+            base_role: "default".to_string(),
+            prompt: String::new(),
+            allowed_built_in_tools: Vec::new(),
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model: None,
+            reasoning_effort: None,
+            default_task_type: None,
+            default_context_mode: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileCatalogEntry {
+    pub scope: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub built_in: Option<bool>,
+    #[serde(default)]
+    pub locked: Option<bool>,
+    #[serde(default)]
+    pub effective: bool,
+    #[serde(default)]
+    pub shadowed: bool,
+    #[serde(default)]
+    pub workspace_disabled: Option<bool>,
+    pub profile: AgentProfileDefinitionWire,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileDiagnostic {
+    pub scope: String,
+    pub path: String,
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfilesRoots {
+    pub global_dir: String,
+    pub workspace_dir: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfilesCatalogState {
+    #[serde(default)]
+    pub profiles: Vec<AgentProfileCatalogEntry>,
+    #[serde(default)]
+    pub effective_profiles: Vec<AgentProfileCatalogEntry>,
+    #[serde(default)]
+    pub diagnostics: Vec<AgentProfileDiagnostic>,
+    #[serde(default)]
+    pub roots: Option<AgentProfilesRoots>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfileUpsertInputWire {
+    pub scope: String,
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true_bool")]
+    pub enabled: bool,
+    #[serde(default = "default_base_role_value")]
+    pub base_role: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub allowed_built_in_tools: Vec<String>,
+    #[serde(default)]
+    pub allowed_mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub skill_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_context_mode: Option<String>,
+}
+
+impl Default for AgentProfileUpsertInputWire {
+    fn default() -> Self {
+        Self {
+            scope: "workspace".to_string(),
+            id: String::new(),
+            display_name: String::new(),
+            description: String::new(),
+            enabled: true,
+            base_role: "default".to_string(),
+            prompt: String::new(),
+            allowed_built_in_tools: Vec::new(),
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model: None,
+            reasoning_effort: None,
+            default_task_type: None,
+            default_context_mode: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskSummaryView {
     pub id: String,
     pub workspace_id: String,
@@ -846,13 +1043,100 @@ pub struct ArchivedThreadSummary {
     pub archived_at: i64,
 }
 
+/// Sentinel stored in `landing_workspace_id` when "Quick chat" is selected on the landing page
+/// before a backing `one_off_chat` workspace record exists on disk.
+pub const ONE_OFF_LANDING_SENTINEL: &str = "__one_off__";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupCheckpointSummary {
+    pub id: String,
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub trigger: String,
+    #[serde(default)]
+    pub changed: bool,
+    #[serde(default)]
+    pub patch_bytes: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupSummary {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub label: String,
+    #[serde(default)]
     pub created_at: i64,
+    #[serde(default)]
     pub size_bytes: u64,
+    #[serde(default)]
+    pub target_session_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub lifecycle: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub working_directory: String,
+    #[serde(default)]
+    pub backup_directory: Option<String>,
+    #[serde(default)]
+    pub original_snapshot_kind: String,
+    #[serde(default)]
+    pub original_snapshot_bytes: Option<u64>,
+    #[serde(default)]
+    pub checkpoint_bytes_total: Option<u64>,
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    pub checkpoints: Vec<BackupCheckpointSummary>,
+    #[serde(default)]
+    pub created_at_iso: String,
+    #[serde(default)]
+    pub updated_at_iso: String,
+    #[serde(default)]
+    pub closed_at_iso: Option<String>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupDeltaFileView {
+    pub path: String,
+    pub change: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupDeltaView {
+    pub target_session_id: String,
+    pub checkpoint_id: String,
+    #[serde(default)]
+    pub baseline_label: String,
+    #[serde(default)]
+    pub current_label: String,
+    #[serde(default)]
+    pub added: usize,
+    #[serde(default)]
+    pub modified: usize,
+    #[serde(default)]
+    pub deleted: usize,
+    #[serde(default)]
+    pub files: Vec<BackupDeltaFileView>,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -922,6 +1206,28 @@ pub struct UpdaterState {
     pub bytes_per_second: Option<u64>,
     #[serde(default)]
     pub packaged: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsBundleState {
+    pub path: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub upload_configured: bool,
+    #[serde(default)]
+    pub upload_enabled: bool,
+    #[serde(default)]
+    pub uploaded: bool,
+    #[serde(default)]
+    pub diagnostic_id: Option<String>,
+    #[serde(default)]
+    pub upload_url: Option<String>,
+    #[serde(default)]
+    pub upload_message: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1152,23 +1458,38 @@ pub struct AppState {
     pub explorer_expanded_dirs: HashSet<String>,
     pub provider_catalog: Vec<ProviderSummary>,
     pub provider_auth_methods: HashMap<String, Vec<String>>,
+    pub provider_auth_method_specs: HashMap<String, Vec<ProviderAuthMethodSpec>>,
     pub default_model_by_provider: HashMap<String, String>,
     pub last_auth_challenge: Option<Value>,
+    pub last_auth_result: Option<Value>,
     pub codex_app_server_status: Option<Value>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub marketplaces: Vec<Value>,
     pub openai_native_connectors: Vec<Value>,
     pub skills: Vec<SkillSummary>,
+    pub skill_installations: Vec<Value>,
+    pub available_skills: Vec<Value>,
+    pub effective_skills: Vec<Value>,
+    pub skill_scopes: Vec<Value>,
     pub plugins: Vec<PluginSummary>,
+    pub installed_plugin_entries: Vec<Value>,
+    pub available_plugins: Vec<Value>,
+    pub plugin_catalog_warnings: Vec<String>,
     pub skill_improvement_status: Option<Value>,
     pub subagents: Vec<SubagentProfile>,
+    pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub memory_entries: Vec<MemoryEntry>,
+    pub scoped_memories: Vec<ScopedMemoryEntry>,
     pub advanced_memories: Vec<Value>,
     pub archived_threads: Vec<ArchivedThreadSummary>,
     pub backups: Vec<BackupSummary>,
+    pub backup_delta: Option<BackupDeltaView>,
+    pub last_backup_restore: Option<Value>,
     pub usage_summary: Option<UsageSummary>,
     pub usage_by_thread: HashMap<String, Value>,
     pub runtime_diagnostics: Option<RuntimeDiagnosticsReadResult>,
+    pub diagnostics_bundle: Option<DiagnosticsBundleState>,
+    pub libreoffice_check: Option<RuntimeLibreOfficeCheckResult>,
     pub libreoffice_status: Option<Value>,
     pub telemetry_status: Option<Value>,
     pub settings_mutation_error: Option<String>,
@@ -1249,23 +1570,38 @@ impl Default for AppState {
             explorer_expanded_dirs: HashSet::new(),
             provider_catalog: Vec::new(),
             provider_auth_methods: HashMap::new(),
+            provider_auth_method_specs: HashMap::new(),
             default_model_by_provider: HashMap::new(),
             last_auth_challenge: None,
+            last_auth_result: None,
             codex_app_server_status: None,
             mcp_servers: Vec::new(),
             marketplaces: Vec::new(),
             openai_native_connectors: Vec::new(),
             skills: Vec::new(),
+            skill_installations: Vec::new(),
+            available_skills: Vec::new(),
+            effective_skills: Vec::new(),
+            skill_scopes: Vec::new(),
             plugins: Vec::new(),
+            installed_plugin_entries: Vec::new(),
+            available_plugins: Vec::new(),
+            plugin_catalog_warnings: Vec::new(),
             skill_improvement_status: None,
             subagents: Vec::new(),
+            agent_profiles_catalog: AgentProfilesCatalogState::default(),
             memory_entries: Vec::new(),
+            scoped_memories: Vec::new(),
             advanced_memories: Vec::new(),
             archived_threads: Vec::new(),
             backups: Vec::new(),
+            backup_delta: None,
+            last_backup_restore: None,
             usage_summary: None,
             usage_by_thread: HashMap::new(),
             runtime_diagnostics: None,
+            diagnostics_bundle: None,
+            libreoffice_check: None,
             libreoffice_status: None,
             telemetry_status: None,
             settings_mutation_error: None,
@@ -1411,6 +1747,164 @@ impl AppState {
                     .insert(dir.clone(), entries.clone());
             }
         }
+    }
+
+    fn ensure_or_create_quick_chat_workspace(&mut self) -> String {
+        if let Some(existing) = self
+            .workspaces
+            .iter()
+            .find(|w| w.one_off_chat && !w.archived)
+            .map(|w| w.id.clone())
+        {
+            return existing;
+        }
+        let env = cowork_config::env_map_from_process();
+        let home = cowork_config::resolve_home_dir(&env, cowork_config::host_platform());
+        let chats_root = cowork_config::get_one_off_chats_root(&home);
+        let id = format!("oneoff-{}", uuid::Uuid::new_v4());
+        let path = chats_root.join(&id).to_string_lossy().into_owned();
+        let now = (self.now_secs * 1000.0) as i64;
+        let mut ws = WorkspaceRecord::new(id.clone(), "Quick chat".to_string(), path.clone(), now);
+        ws.one_off_chat = true;
+        let yolo = ws.yolo;
+        self.workspaces.push(ws);
+        self.workspace_order.push(id.clone());
+        self.persist_state();
+        self.send_native(NativeCommand::StartWorkspaceServer {
+            workspace_id: id.clone(),
+            path,
+            yolo,
+        });
+        id
+    }
+
+    fn apply_session_config_event(&mut self, workspace_id: &str, evt: &Value) {
+        let Some(cfg) = evt.get("config") else {
+            return;
+        };
+        let rt = self
+            .workspace_runtime_by_id
+            .entry(workspace_id.to_string())
+            .or_default();
+        rt.control_session_config = Some(cfg.clone());
+        if let Some(obj) = cfg.as_object()
+            && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
+        {
+            apply_defaults_obj_to_workspace(ws, obj);
+        }
+        if let Some(tid) = evt
+            .get("sessionId")
+            .or_else(|| evt.get("threadId"))
+            .and_then(Value::as_str)
+            && let Some(t) = self.threads.iter_mut().find(|t| t.id == tid)
+        {
+            if let Some(p) = cfg.get("provider").and_then(Value::as_str) {
+                t.provider = Some(p.to_string());
+            }
+            if let Some(m) = cfg.get("model").and_then(Value::as_str) {
+                t.model = Some(m.to_string());
+            }
+        }
+    }
+
+    fn resolve_provider_oauth_method(&self, provider: &str) -> String {
+        if let Some(specs) = self.provider_auth_method_specs.get(provider)
+            && let Some(m) = specs.iter().find(|m| m.method_type == "oauth")
+        {
+            return m.id.clone();
+        }
+        if let Some(ids) = self.provider_auth_methods.get(provider)
+            && let Some(id) = ids.iter().find(|id| id.contains("oauth"))
+        {
+            return id.clone();
+        }
+        if provider == "codex-cli" {
+            "oauth_cli".to_string()
+        } else {
+            "oauth".to_string()
+        }
+    }
+
+    fn resolve_provider_api_key_method(&self, provider: &str) -> Option<String> {
+        let specs = self.provider_auth_method_specs.get(provider)?;
+        specs
+            .iter()
+            .find(|m| m.method_type == "api" && m.fields.is_empty())
+            .or_else(|| specs.iter().find(|m| m.method_type == "api"))
+            .map(|m| m.id.clone())
+    }
+
+    fn resolve_provider_config_method(&self, provider: &str) -> Result<String, String> {
+        if let Some(specs) = self.provider_auth_method_specs.get(provider)
+            && !specs.is_empty()
+        {
+            if let Some(m) = specs
+                .iter()
+                .find(|m| m.method_type == "api" && !m.fields.is_empty())
+            {
+                return Ok(m.id.clone());
+            }
+            return Err(format!(
+                "Provider \"{provider}\" does not support structured configuration."
+            ));
+        }
+        if let Some(ids) = self.provider_auth_methods.get(provider)
+            && !ids.is_empty()
+        {
+            if let Some(id) = ids
+                .iter()
+                .find(|id| *id != "api_key" && !id.contains("oauth"))
+            {
+                return Ok(id.clone());
+            }
+            return Err(format!(
+                "Provider \"{provider}\" does not support structured configuration."
+            ));
+        }
+        Ok("config".to_string())
+    }
+
+    fn send_interaction_server_response(
+        &mut self,
+        workspace_id: String,
+        thread_id: &str,
+        id: JsonRpcLiteId,
+        result: Value,
+    ) {
+        let req_key = request_id_key(&id);
+        let item_id = self.thread_runtime_by_id.get(thread_id).and_then(|rt| {
+            rt.pending_interactions
+                .iter()
+                .find(|item| interaction_request_id(item) == &id)
+                .map(|item| interaction_item_id(item).to_string())
+        });
+        if self.services.ws_tx.is_some()
+            && !matches!(
+                self.workspace_socket_by_id.get(&workspace_id),
+                Some(WsConnectionState::Connected)
+            )
+        {
+            let rt = self
+                .thread_runtime_by_id
+                .entry(thread_id.to_string())
+                .or_default();
+            rt.interaction_errors.insert(
+                req_key,
+                "The response could not be sent. Reconnect and retry.".to_string(),
+            );
+            return;
+        }
+        if let Some(rt) = self.thread_runtime_by_id.get_mut(thread_id) {
+            rt.interaction_errors.remove(&req_key);
+            if let Some(iid) = item_id {
+                rt.interaction_errors.remove(&iid);
+            }
+        }
+        self.send_ws(WsCommand::SendServerResponse {
+            workspace_id,
+            id,
+            result,
+        });
     }
 
     /// Returns workspaces ordered for display (non-archived, respecting `workspace_order`).
@@ -1927,6 +2421,37 @@ impl AppState {
                 self.pending_rpc_meta.remove(&request_id);
                 self.apply_ws_response(&workspace_id, request_id, &method, result);
             }
+            StoreEvent::WsServerResponseResult {
+                workspace_id: _,
+                request_id,
+                ok,
+                error,
+            } => {
+                let req_key = request_id_key(&request_id);
+                for rt in self.thread_runtime_by_id.values_mut() {
+                    let matched_item_id = rt.pending_interactions.iter().find_map(|item| {
+                        (interaction_request_id(item) == &request_id)
+                            .then(|| interaction_item_id(item).to_string())
+                    });
+                    let had_error = rt.interaction_errors.contains_key(&req_key);
+                    if matched_item_id.is_none() && !had_error {
+                        continue;
+                    }
+                    if ok {
+                        rt.pending_interactions
+                            .retain(|item| interaction_request_id(item) != &request_id);
+                        rt.interaction_errors.remove(&req_key);
+                        if let Some(iid) = matched_item_id {
+                            rt.interaction_errors.remove(&iid);
+                        }
+                    } else {
+                        let msg = error.clone().unwrap_or_else(|| {
+                            "The response could not be sent. Reconnect and retry.".to_string()
+                        });
+                        rt.interaction_errors.insert(req_key.clone(), msg);
+                    }
+                }
+            }
             StoreEvent::WsInvalidMessage {
                 workspace_id,
                 message,
@@ -1936,6 +2461,9 @@ impl AppState {
                     .entry(workspace_id)
                     .or_default();
                 rt.last_error = Some(message);
+            }
+            StoreEvent::DiagnosticsBundleUpdated(bundle) => {
+                self.diagnostics_bundle = bundle;
             }
             StoreEvent::UpdaterChanged(updater) => {
                 self.updater = updater;
@@ -2247,6 +2775,15 @@ impl AppState {
             }
             ShellAction::SetLandingWorkspace(ws_id) => {
                 self.landing_workspace_id = ws_id;
+            }
+            ShellAction::SelectLandingQuickChat => {
+                let existing = self
+                    .workspaces
+                    .iter()
+                    .find(|w| w.one_off_chat && !w.archived)
+                    .map(|w| w.id.clone());
+                self.landing_workspace_id =
+                    Some(existing.unwrap_or_else(|| ONE_OFF_LANDING_SENTINEL.to_string()));
             }
             ShellAction::RequestExternalUrl(url) => {
                 self.pending_external_url = Some(url);
@@ -2832,19 +3369,8 @@ impl AppState {
                 id,
                 response,
             } => {
-                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
-                    rt.pending_interactions.retain(|item| match item {
-                        ChatInteraction::CommandApproval { request_id, .. }
-                        | ChatInteraction::FileChangeApproval { request_id, .. }
-                        | ChatInteraction::UserInput { request_id, .. } => request_id != &id,
-                    });
-                }
                 if let Ok(result) = serde_json::to_value(response) {
-                    self.send_ws(WsCommand::SendServerResponse {
-                        workspace_id,
-                        id,
-                        result,
-                    });
+                    self.send_interaction_server_response(workspace_id, &thread_id, id, result);
                 }
             }
             ChatAction::SubmitUserInput {
@@ -2853,18 +3379,8 @@ impl AppState {
                 id,
                 answers,
             } => {
-                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
-                    rt.pending_interactions.retain(|item| match item {
-                        ChatInteraction::UserInput { request_id, .. } => request_id != &id,
-                        _ => true,
-                    });
-                }
                 let result = json!({ "answers": answers });
-                self.send_ws(WsCommand::SendServerResponse {
-                    workspace_id,
-                    id,
-                    result,
-                });
+                self.send_interaction_server_response(workspace_id, &thread_id, id, result);
             }
             ChatAction::OpenAgentViewer { agent_id, title }
             | ChatAction::OpenAgentThread { agent_id, title } => {
@@ -2912,27 +3428,75 @@ impl AppState {
                         };
                         let _ = self.send_ws_typed(&ws_id, "turn/start", &params, false);
                     }
-                } else {
-                    let last_user_text = self.thread_runtime_by_id.get(&thread_id).and_then(|rt| {
-                        rt.feed.iter().rev().find_map(|item| match item {
-                            FeedItem::Message {
-                                role: FeedMessageRole::User,
-                                content,
-                                ..
-                            } => Some(content.clone()),
-                            _ => None,
-                        })
+                } else if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
+                    let supports_retry_lineage = self
+                        .workspace_runtime_by_id
+                        .get(&ws_id)
+                        .and_then(|w| w.capabilities.as_ref())
+                        .and_then(|c| c.get("toolRetryLineage"))
+                        .and_then(Value::as_bool)
+                        != Some(false);
+                    let retry_plan = self.thread_runtime_by_id.get(&thread_id).and_then(|rt| {
+                        let last_user_idx = rt.feed.iter().rposition(|item| {
+                            matches!(
+                                item,
+                                FeedItem::Message {
+                                    role: FeedMessageRole::User,
+                                    content,
+                                    ..
+                                } if content.trim() != HIDDEN_RETRY_TURN_PROMPT
+                            )
+                        });
+                        let tail_start = last_user_idx.map(|i| i + 1).unwrap_or(0);
+                        let failed_tool_ids: Vec<String> = rt.feed[tail_start..]
+                            .iter()
+                            .filter_map(|item| match item {
+                                FeedItem::Tool {
+                                    id,
+                                    status: ToolRunStatus::Failed,
+                                    ..
+                                } => Some(id.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if supports_retry_lineage && !failed_tool_ids.is_empty() {
+                            return Some((
+                                TurnInput::Text(HIDDEN_RETRY_TURN_PROMPT.to_string()),
+                                None,
+                                Some(TurnRetrySpec {
+                                    tool_item_ids: failed_tool_ids,
+                                }),
+                            ));
+                        }
+                        let user_idx = last_user_idx?;
+                        if let FeedItem::Message {
+                            content,
+                            attachments,
+                            references,
+                            ..
+                        } = &rt.feed[user_idx]
+                        {
+                            if content.trim().is_empty() && attachments.is_empty() {
+                                return None;
+                            }
+                            let refs = (!references.is_empty()).then(|| {
+                                references
+                                    .iter()
+                                    .filter_map(|r| serde_json::to_value(r).ok())
+                                    .collect()
+                            });
+                            return Some((build_turn_input(content, attachments), refs, None));
+                        }
+                        None
                     });
-                    if let (Some(ws_id), Some(text)) =
-                        (self.workspace_for_thread(&thread_id), last_user_text)
-                    {
+                    if let Some((input, references, retry)) = retry_plan {
                         let cid = self.next_tag("retry");
                         let params = TurnStartParams {
                             thread_id,
                             client_message_id: Some(cid),
-                            input: TurnInput::Text(text),
-                            references: None,
-                            retry: None,
+                            input,
+                            references,
+                            retry,
                             tools: None,
                         };
                         let _ = self.send_ws_typed(&ws_id, "turn/start", &params, false);
@@ -3145,14 +3709,31 @@ impl AppState {
                 }
             }
             None => {
-                let Some(ws_id) = self
-                    .landing_workspace_id
-                    .clone()
-                    .or_else(|| self.active_workspace_id.clone())
-                    .or_else(|| self.resolve_management_workspace_id().map(str::to_string))
-                else {
-                    return;
-                };
+                let ws_id =
+                    if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
+                        let id = self.ensure_or_create_quick_chat_workspace();
+                        self.landing_workspace_id = Some(id.clone());
+                        id
+                    } else {
+                        match self
+                            .landing_workspace_id
+                            .clone()
+                            .filter(|id| self.workspaces.iter().any(|w| &w.id == id && !w.archived))
+                            .or_else(|| {
+                                self.active_workspace_id.clone().filter(|id| {
+                                    self.workspaces.iter().any(|w| &w.id == id && !w.archived)
+                                })
+                            })
+                            .or_else(|| self.resolve_management_workspace_id().map(str::to_string))
+                        {
+                            Some(id) => id,
+                            None => {
+                                let id = self.ensure_or_create_quick_chat_workspace();
+                                self.landing_workspace_id = Some(id.clone());
+                                id
+                            }
+                        }
+                    };
                 let draft_thread_id = self.next_tag("__draft");
                 let title = derive_thread_title(&trimmed);
                 let new_draft_model = self
@@ -3307,10 +3888,11 @@ impl AppState {
                 api_key,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let method_id = self.resolve_provider_api_key_method(&provider);
                 let params = ProviderAuthSetApiKeyParams {
                     cwd,
                     provider,
-                    method_id: None,
+                    method_id,
                     api_key,
                 };
                 let _ = self.send_ws_typed(
@@ -3325,12 +3907,7 @@ impl AppState {
                 provider,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let method_id = self
-                    .provider_auth_methods
-                    .get(&provider)
-                    .and_then(|m| m.first())
-                    .cloned()
-                    .unwrap_or_else(|| "oauth".to_string());
+                let method_id = self.resolve_provider_oauth_method(&provider);
                 let params = ProviderAuthAuthorizeParams {
                     cwd,
                     provider,
@@ -3368,6 +3945,18 @@ impl AppState {
                 provider,
                 config,
             } => {
+                let method_id = match self.resolve_provider_config_method(&provider) {
+                    Ok(id) => id,
+                    Err(message) => {
+                        self.last_auth_result = Some(json!({
+                            "ok": false,
+                            "provider": provider,
+                            "message": message.clone(),
+                        }));
+                        self.settings_mutation_error = Some(message);
+                        return;
+                    }
+                };
                 let cwd = self.workspace_path(&workspace_id);
                 let values: HashMap<String, String> = config
                     .as_object()
@@ -3381,12 +3970,6 @@ impl AppState {
                             .collect()
                     })
                     .unwrap_or_default();
-                let method_id = self
-                    .provider_auth_methods
-                    .get(&provider)
-                    .and_then(|m| m.first())
-                    .cloned()
-                    .unwrap_or_else(|| "config".to_string());
                 let params = ProviderAuthSetConfigParams {
                     cwd,
                     provider,
@@ -3568,56 +4151,47 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let mut restart_for_yolo = None;
+                let clear_overflow = defaults.as_object().is_some_and(|obj| {
+                    obj.get("clearDefaultToolOutputOverflowChars")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                        || obj
+                            .get("clearToolOutputOverflowChars")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                });
                 if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
                     && let Some(obj) = defaults.as_object()
                 {
-                    if !ws.defaults.is_object() {
-                        ws.defaults = json!({});
-                    }
-                    if let Some(dst) = ws.defaults.as_object_mut() {
-                        for (k, v) in obj {
-                            dst.insert(k.clone(), v.clone());
-                        }
-                    }
-                    if let Some(yolo) = obj.get("yolo").and_then(Value::as_bool)
-                        && ws.yolo != yolo
-                    {
-                        ws.yolo = yolo;
-                        restart_for_yolo = Some((ws.path.clone(), yolo));
-                    }
-                    if let Some(p) = obj.get("defaultProvider").and_then(Value::as_str) {
-                        ws.default_provider = Some(p.to_string());
-                    }
-                    if let Some(m) = obj.get("defaultModel").and_then(Value::as_str) {
-                        ws.default_model = Some(m.to_string());
-                    }
-                    if let Some(mcp) = obj.get("defaultEnableMcp").and_then(Value::as_bool) {
-                        ws.default_enable_mcp = mcp;
-                    }
-                    if let Some(b) = obj.get("defaultBackupsEnabled").and_then(Value::as_bool) {
-                        ws.default_backups_enabled = b;
-                    }
-                    if let Some(un) = obj.get("userName").and_then(Value::as_str) {
-                        ws.user_name = Some(un.to_string());
-                    }
-                    if let Some(up) = obj.get("userProfile") {
-                        ws.user_profile = Some(up.clone());
+                    let prev_yolo = ws.yolo;
+                    apply_defaults_obj_to_workspace(ws, obj);
+                    if ws.yolo != prev_yolo {
+                        restart_for_yolo = Some((ws.path.clone(), ws.yolo));
                     }
                 }
                 self.persist_state();
+                let config_map = defaults
+                    .as_object()
+                    .map(|obj| build_session_defaults_config_map(obj, clear_overflow))
+                    .filter(|m| !m.is_empty());
                 let params = SessionDefaultsApplyParams {
                     cwd,
                     thread_id: self.nav.current().active_thread_id.clone(),
                     provider: defaults
                         .get("defaultProvider")
+                        .or_else(|| defaults.get("provider"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     model: defaults
                         .get("defaultModel")
+                        .or_else(|| defaults.get("model"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    enable_mcp: defaults.get("defaultEnableMcp").and_then(Value::as_bool),
-                    config: defaults.as_object().cloned(),
+                    enable_mcp: defaults
+                        .get("defaultEnableMcp")
+                        .or_else(|| defaults.get("enableMcp"))
+                        .and_then(Value::as_bool),
+                    config: config_map,
                 };
                 let _ = self.send_ws_typed(
                     &workspace_id,
@@ -3643,22 +4217,93 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let mut server_obj = config.as_object().cloned().unwrap_or_default();
+                let source = server_obj
+                    .remove("source")
+                    .and_then(|v| v.as_str().map(str::to_string));
+                let previous_name = server_obj
+                    .remove("previousName")
+                    .and_then(|v| v.as_str().map(str::to_string));
                 server_obj
                     .entry("name".to_string())
                     .or_insert_with(|| Value::String(name));
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("server".to_string(), Value::Object(server_obj));
+                if let Some(src) = source {
+                    body.insert("source".to_string(), Value::String(src));
+                }
+                if let Some(prev) = previous_name {
+                    body.insert("previousName".to_string(), Value::String(prev));
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/upsert",
-                    json!({ "cwd": cwd, "server": server_obj }),
+                    Value::Object(body),
                     false,
                 );
             }
             SettingsAction::DeleteMcpServer { workspace_id, name } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let matching_sources: Vec<String> = self
+                    .mcp_servers
+                    .iter()
+                    .filter(|s| s.name == name)
+                    .filter_map(|s| s.source.clone())
+                    .collect();
+                let source = if matching_sources.len() == 1 {
+                    Some(matching_sources[0].clone())
+                } else {
+                    None
+                };
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("name".to_string(), Value::String(name));
+                if let Some(src) = source {
+                    body.insert("source".to_string(), Value::String(src));
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/delete",
-                    json!({ "cwd": cwd, "name": name }),
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::UpsertScopedMcpServer {
+                workspace_id,
+                name,
+                source,
+                previous_name,
+                server,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut server_obj = server.as_object().cloned().unwrap_or_default();
+                server_obj
+                    .entry("name".to_string())
+                    .or_insert_with(|| Value::String(name));
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("source".to_string(), Value::String(source));
+                body.insert("server".to_string(), Value::Object(server_obj));
+                if let Some(prev) = previous_name.filter(|s| !s.trim().is_empty()) {
+                    body.insert("previousName".to_string(), Value::String(prev));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/mcp/server/upsert",
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::DeleteScopedMcpServer {
+                workspace_id,
+                name,
+                source,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/mcp/server/delete",
+                    json!({ "cwd": cwd, "name": name, "source": source }),
                     false,
                 );
             }
@@ -3735,25 +4380,120 @@ impl AppState {
                 profile,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let scope = profile
+                    .scope
+                    .clone()
+                    .filter(|s| s == "global" || s == "workspace")
+                    .unwrap_or_else(|| "workspace".to_string());
+                let base_role = profile
+                    .tool_preset
+                    .clone()
+                    .filter(|r| {
+                        matches!(
+                            r.as_str(),
+                            "default" | "explorer" | "research" | "worker" | "reviewer"
+                        )
+                    })
+                    .unwrap_or_else(|| "default".to_string());
+                let existing = self
+                    .agent_profiles_catalog
+                    .profiles
+                    .iter()
+                    .find(|e| e.profile.id == profile.id && e.scope == scope)
+                    .map(|e| &e.profile);
+                let input = AgentProfileUpsertInputWire {
+                    scope,
+                    id: profile.id,
+                    display_name: profile.name,
+                    description: profile.description,
+                    enabled: existing.map(|e| e.enabled).unwrap_or(true),
+                    base_role,
+                    prompt: profile.system_prompt,
+                    allowed_built_in_tools: profile.allowed_tools,
+                    allowed_mcp_servers: existing
+                        .map(|e| e.allowed_mcp_servers.clone())
+                        .unwrap_or_default(),
+                    skill_names: existing.map(|e| e.skill_names.clone()).unwrap_or_default(),
+                    model: profile.model.filter(|m| !m.trim().is_empty()),
+                    reasoning_effort: profile.reasoning_effort.filter(|r| !r.trim().is_empty()),
+                    default_task_type: existing.and_then(|e| e.default_task_type.clone()),
+                    default_context_mode: existing.and_then(|e| e.default_context_mode.clone()),
+                };
+                let profile_payload = build_agent_profile_upsert_payload(&input);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/agentProfiles/upsert",
-                    json!({ "cwd": cwd, "profile": profile }),
+                    json!({ "cwd": cwd, "profile": profile_payload }),
                     false,
                 );
             }
             SettingsAction::DeleteSubagent { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let scope = self
-                    .subagents
+                    .agent_profiles_catalog
+                    .profiles
                     .iter()
-                    .find(|p| p.id == id)
-                    .and_then(|p| p.scope.clone())
+                    .find(|p| p.profile.id == id)
+                    .map(|p| p.scope.clone())
+                    .or_else(|| {
+                        self.subagents
+                            .iter()
+                            .find(|p| p.id == id)
+                            .and_then(|p| p.scope.clone())
+                    })
                     .unwrap_or_else(|| "workspace".to_string());
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/agentProfiles/delete",
                     json!({ "cwd": cwd, "scope": scope, "id": id }),
+                    false,
+                );
+            }
+            SettingsAction::ReadAgentProfilesCatalog { workspace_id } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/catalog/read",
+                    json!({ "cwd": cwd }),
+                    true,
+                );
+            }
+            SettingsAction::UpsertAgentProfile {
+                workspace_id,
+                input,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let profile_payload = build_agent_profile_upsert_payload(&input);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/upsert",
+                    json!({ "cwd": cwd, "profile": profile_payload }),
+                    false,
+                );
+            }
+            SettingsAction::DeleteAgentProfile {
+                workspace_id,
+                scope,
+                id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/delete",
+                    json!({ "cwd": cwd, "scope": scope, "id": id }),
+                    false,
+                );
+            }
+            SettingsAction::SetAgentProfileWorkspaceAvailability {
+                workspace_id,
+                id,
+                disabled,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/workspaceAvailability/set",
+                    json!({ "cwd": cwd, "id": id, "disabled": disabled }),
                     false,
                 );
             }
@@ -3770,27 +4510,116 @@ impl AppState {
                     false,
                 );
             }
+            SettingsAction::CopyAgentProfileNamed {
+                workspace_id,
+                source_ref,
+                target_scope,
+                target_id,
+                target_display_name,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut copy = serde_json::Map::new();
+                copy.insert("sourceRef".to_string(), Value::String(source_ref));
+                copy.insert("targetScope".to_string(), Value::String(target_scope));
+                if let Some(tid) = target_id.filter(|s| !s.trim().is_empty()) {
+                    copy.insert("targetId".to_string(), Value::String(tid));
+                }
+                if let Some(tdn) = target_display_name.filter(|s| !s.trim().is_empty()) {
+                    copy.insert("targetDisplayName".to_string(), Value::String(tdn));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/agentProfiles/copy",
+                    json!({ "cwd": cwd, "copy": copy }),
+                    false,
+                );
+            }
             SettingsAction::UpsertMemory {
                 workspace_id,
                 key,
                 content,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let scope = self
+                    .scoped_memories
+                    .iter()
+                    .find(|m| m.id == key && !m.scope.is_empty())
+                    .map(|m| m.scope.clone())
+                    .unwrap_or_else(|| "workspace".to_string());
                 let params = MemoryUpsertParams {
                     cwd,
-                    scope: "workspace".to_string(),
+                    scope,
                     id: (!key.is_empty()).then_some(key),
                     content,
-                    mode: Some("replace".to_string()),
+                    mode: Some("upsert".to_string()),
                 };
                 let _ = self.send_ws_typed(&workspace_id, "cowork/memory/upsert", &params, false);
             }
             SettingsAction::DeleteMemory { workspace_id, key } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let scope = self
+                    .scoped_memories
+                    .iter()
+                    .find(|m| m.id == key && !m.scope.is_empty())
+                    .map(|m| m.scope.clone())
+                    .unwrap_or_else(|| "workspace".to_string());
                 let params = MemoryDeleteParams {
                     cwd,
-                    scope: "workspace".to_string(),
+                    scope,
                     id: key,
+                };
+                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/delete", &params, false);
+            }
+            SettingsAction::ReadMemories {
+                workspace_id,
+                scope,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let params = MemoryListParams { cwd, scope };
+                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/list", &params, true);
+            }
+            SettingsAction::UpsertScopedMemory {
+                workspace_id,
+                scope,
+                id,
+                content,
+                mode,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let normalized_scope = if scope == "user" {
+                    "user".to_string()
+                } else {
+                    "workspace".to_string()
+                };
+                let normalized_mode = match mode.as_deref() {
+                    Some("create") => Some("create".to_string()),
+                    Some("upsert") => Some("upsert".to_string()),
+                    _ => Some("upsert".to_string()),
+                };
+                let params = MemoryUpsertParams {
+                    cwd,
+                    scope: normalized_scope,
+                    id: id.filter(|s| !s.trim().is_empty()),
+                    content,
+                    mode: normalized_mode,
+                };
+                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/upsert", &params, false);
+            }
+            SettingsAction::DeleteScopedMemory {
+                workspace_id,
+                scope,
+                id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let normalized_scope = if scope == "user" {
+                    "user".to_string()
+                } else {
+                    "workspace".to_string()
+                };
+                let params = MemoryDeleteParams {
+                    cwd,
+                    scope: normalized_scope,
+                    id,
                 };
                 let _ = self.send_ws_typed(&workspace_id, "cowork/memory/delete", &params, false);
             }
@@ -3887,28 +4716,126 @@ impl AppState {
                 } else {
                     "cowork/plugins/disable"
                 };
-                let _ = self.send_ws_request(
-                    &workspace_id,
-                    method,
-                    json!({ "cwd": cwd, "pluginId": id }),
-                    false,
-                );
+                let matching_scopes: Vec<String> = self
+                    .plugins
+                    .iter()
+                    .filter(|p| p.id == id)
+                    .filter_map(|p| p.scope.clone())
+                    .collect();
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if matching_scopes.len() == 1 {
+                    body.insert(
+                        "scope".to_string(),
+                        Value::String(matching_scopes[0].clone()),
+                    );
+                }
+                let _ = self.send_ws_request(&workspace_id, method, Value::Object(body), false);
+            }
+            SettingsAction::SetPluginEnabledScoped {
+                workspace_id,
+                id,
+                scope,
+                enabled,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let method = if enabled {
+                    "cowork/plugins/enable"
+                } else {
+                    "cowork/plugins/disable"
+                };
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+                    body.insert("scope".to_string(), Value::String(s));
+                }
+                let _ = self.send_ws_request(&workspace_id, method, Value::Object(body), false);
             }
             SettingsAction::DeletePlugin { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let matching_scopes: Vec<String> = self
+                    .plugins
+                    .iter()
+                    .filter(|p| p.id == id)
+                    .filter_map(|p| p.scope.clone())
+                    .collect();
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if matching_scopes.len() == 1 {
+                    body.insert(
+                        "scope".to_string(),
+                        Value::String(matching_scopes[0].clone()),
+                    );
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/plugins/delete",
-                    json!({ "cwd": cwd, "pluginId": id }),
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::DeletePluginScoped {
+                workspace_id,
+                id,
+                scope,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+                    body.insert("scope".to_string(), Value::String(s));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/plugins/delete",
+                    Value::Object(body),
                     false,
                 );
             }
             SettingsAction::UpdatePlugin { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let matching_scopes: Vec<String> = self
+                    .plugins
+                    .iter()
+                    .filter(|p| p.id == id)
+                    .filter_map(|p| p.scope.clone())
+                    .collect();
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if matching_scopes.len() == 1 {
+                    body.insert(
+                        "scope".to_string(),
+                        Value::String(matching_scopes[0].clone()),
+                    );
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/plugins/update",
-                    json!({ "cwd": cwd, "pluginId": id }),
+                    Value::Object(body),
+                    false,
+                );
+            }
+            SettingsAction::UpdatePluginScoped {
+                workspace_id,
+                id,
+                scope,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut body = serde_json::Map::new();
+                body.insert("cwd".to_string(), json!(cwd));
+                body.insert("pluginId".to_string(), Value::String(id));
+                if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+                    body.insert("scope".to_string(), Value::String(s));
+                }
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/plugins/update",
+                    Value::Object(body),
                     false,
                 );
             }
@@ -3943,6 +4870,48 @@ impl AppState {
                     &workspace_id,
                     "cowork/skills/delete",
                     json!({ "cwd": cwd, "skillName": name }),
+                    false,
+                );
+            }
+            SettingsAction::SetSkillInstallationEnabled {
+                workspace_id,
+                installation_id,
+                enabled,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let method = if enabled {
+                    "cowork/skills/installation/enable"
+                } else {
+                    "cowork/skills/installation/disable"
+                };
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    method,
+                    json!({ "cwd": cwd, "installationId": installation_id }),
+                    false,
+                );
+            }
+            SettingsAction::DeleteSkillInstallation {
+                workspace_id,
+                installation_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/skills/installation/delete",
+                    json!({ "cwd": cwd, "installationId": installation_id }),
+                    false,
+                );
+            }
+            SettingsAction::UpdateSkillInstallation {
+                workspace_id,
+                installation_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/skills/installation/update",
+                    json!({ "cwd": cwd, "installationId": installation_id }),
                     false,
                 );
             }
@@ -4015,7 +4984,7 @@ impl AppState {
                 let cwd = self.workspace_path(&workspace_id);
                 let params = RuntimeLibreOfficeCheckParams {
                     cwd,
-                    smoke: Some(false),
+                    smoke: Some(true),
                 };
                 let _ = self.send_ws_typed(
                     &workspace_id,
@@ -4089,19 +5058,48 @@ impl AppState {
                     false,
                 );
             }
+            SettingsAction::DeleteBackupEntry {
+                workspace_id,
+                target_session_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let _ = self.send_ws_request(
+                    &workspace_id,
+                    "cowork/backups/workspace/deleteEntry",
+                    json!({ "cwd": cwd, "targetSessionId": target_session_id }),
+                    false,
+                );
+            }
             SettingsAction::RestoreBackup {
                 workspace_id,
                 backup_id,
             } => {
-                let cwd = self.workspace_path(&workspace_id);
                 let (target_session_id, checkpoint_id) = match backup_id.split_once("::") {
                     Some((sid, cp)) => (sid.to_string(), Some(cp.to_string())),
                     None => (backup_id, None),
                 };
+                self.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
+                    workspace_id,
+                    target_session_id,
+                    checkpoint_id,
+                }));
+            }
+            SettingsAction::RestoreBackupCheckpoint {
+                workspace_id,
+                target_session_id,
+                checkpoint_id,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let mut params = Map::new();
+                params.insert("cwd".to_string(), json!(cwd));
+                params.insert("targetSessionId".to_string(), json!(target_session_id));
+                if let Some(cp) = checkpoint_id.filter(|s| !s.is_empty()) {
+                    params.insert("checkpointId".to_string(), json!(cp));
+                }
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/backups/workspace/restore",
-                    json!({ "cwd": cwd, "targetSessionId": target_session_id, "checkpointId": checkpoint_id }),
+                    Value::Object(params),
                     false,
                 );
             }
@@ -4156,6 +5154,10 @@ impl AppState {
                     .retain(|p| p.id != phone_id);
                 self.send_native(NativeCommand::ForgetTrustedPhone(phone_id));
             }
+            SettingsAction::RevokeAllTrustedPhones => {
+                self.remote_access.trusted_phones.clear();
+                self.send_native(NativeCommand::RevokeAllTrustedPhones);
+            }
             SettingsAction::UpdatePrivacyTelemetry(privacy) => {
                 self.desktop_settings.privacy_telemetry = privacy;
                 self.persist_state();
@@ -4165,6 +5167,22 @@ impl AppState {
             }
             SettingsAction::ExportDiagnosticsBundle => {
                 self.send_native(NativeCommand::ExportDiagnosticsBundle);
+            }
+            SettingsAction::OpenLogsFolder => {
+                self.send_native(NativeCommand::OpenLogsFolder);
+            }
+            SettingsAction::RevealDiagnosticsBundle { path } => {
+                let target =
+                    path.or_else(|| self.diagnostics_bundle.as_ref().map(|b| b.path.clone()));
+                self.send_native(NativeCommand::RevealDiagnosticsBundle(target));
+            }
+            SettingsAction::UploadDiagnosticsBundle { path, confirmed } => {
+                let target =
+                    path.or_else(|| self.diagnostics_bundle.as_ref().map(|b| b.path.clone()));
+                self.send_native(NativeCommand::UploadDiagnosticsBundle {
+                    path: target,
+                    confirmed,
+                });
             }
             SettingsAction::RestartOnboarding => {
                 self.onboarding = OnboardingState::default();
@@ -4386,7 +5404,13 @@ impl AppState {
         let _ = self.send_ws_typed(
             workspace_id,
             "cowork/memory/advanced/list",
-            &MemoryAdvancedListParams { cwd },
+            &MemoryAdvancedListParams { cwd: cwd.clone() },
+            true,
+        );
+        let _ = self.send_ws_request(
+            workspace_id,
+            "cowork/agentProfiles/catalog/read",
+            json!({ "cwd": cwd }),
             true,
         );
 
@@ -4996,40 +6020,28 @@ impl AppState {
         let Some(tid) = params.get("threadId").and_then(Value::as_str) else {
             return;
         };
-        let req_id_val = params.get("requestId").cloned();
+        let req_id = params
+            .get("requestId")
+            .and_then(|v| serde_json::from_value::<JsonRpcLiteId>(v.clone()).ok());
         let item_id = params.get("itemId").and_then(Value::as_str);
         if let Some(rt) = self.thread_runtime_by_id.get_mut(tid) {
-            rt.pending_interactions
-                .retain(|interaction| match interaction {
-                    ChatInteraction::CommandApproval {
-                        request_id,
-                        item_id: iid,
-                        ..
-                    }
-                    | ChatInteraction::FileChangeApproval {
-                        request_id,
-                        item_id: iid,
-                        ..
-                    }
-                    | ChatInteraction::UserInput {
-                        request_id,
-                        item_id: iid,
-                        ..
-                    } => {
-                        let id_matches = req_id_val.as_ref().is_some_and(|v| {
-                            serde_json::from_value::<JsonRpcLiteId>(v.clone())
-                                .ok()
-                                .as_ref()
-                                == Some(request_id)
-                        });
-                        let item_matches = item_id.is_some_and(|i| i == iid);
-                        !(id_matches || item_matches)
-                    }
-                });
+            rt.pending_interactions.retain(|interaction| {
+                let id_matches = req_id
+                    .as_ref()
+                    .is_some_and(|id| id == interaction_request_id(interaction));
+                let item_matches = item_id.is_some_and(|i| i == interaction_item_id(interaction));
+                !(id_matches || item_matches)
+            });
+            if let Some(ref id) = req_id {
+                rt.interaction_errors.remove(&request_id_key(id));
+            }
+            if let Some(iid) = item_id {
+                rt.interaction_errors.remove(iid);
+            }
         }
     }
 
-    fn reduce_cowork_event(&mut self, _workspace_id: &str, evt: &Value, now_ms: i64) {
+    fn reduce_cowork_event(&mut self, workspace_id: &str, evt: &Value, now_ms: i64) {
         let evt_type = evt.get("type").and_then(Value::as_str).unwrap_or_default();
         let tid = evt
             .get("sessionId")
@@ -5229,21 +6241,37 @@ impl AppState {
                 }
             }
             "agent_profiles_catalog" => {
-                if let Some(profiles) = evt
-                    .get("catalog")
-                    .and_then(|c| c.get("profiles"))
-                    .and_then(Value::as_array)
-                {
-                    self.subagents = profiles
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
-                        .collect();
-                }
+                self.apply_agent_profiles_catalog_event(evt);
+            }
+            "memory_list" => {
+                self.apply_memory_list_event(evt);
+            }
+            "plugins_catalog" => {
+                self.apply_plugins_catalog_event(evt);
+            }
+            "skills_catalog" => {
+                self.apply_skills_catalog_event(evt);
+            }
+            "skills_list" => {
+                self.apply_skills_list_event(evt);
             }
             "mcp_servers" => {
                 self.update_mcp_servers_from_event(evt);
             }
+            "session_config" => {
+                self.apply_session_config_event(workspace_id, evt);
+            }
+            "workspace_backups" => {
+                if let Some(arr) = evt
+                    .get("entries")
+                    .or_else(|| evt.get("backups"))
+                    .and_then(Value::as_array)
+                {
+                    self.backups = arr.iter().filter_map(parse_backup_summary).collect();
+                }
+            }
             "session_info" | "session_settings" | "config_updated" => {
+                self.apply_session_config_event(workspace_id, evt);
                 if let Some(id) = tid
                     && let Some(t) = self.threads.iter_mut().find(|t| t.id == id)
                 {
@@ -5391,7 +6419,19 @@ impl AppState {
                 }
             }
             "cowork/runtime/libreoffice/check" => {
-                self.libreoffice_status = Some(payload);
+                let target = payload.get("event").unwrap_or(&payload);
+                if let Ok(parsed) =
+                    serde_json::from_value::<RuntimeLibreOfficeCheckResult>(target.clone())
+                {
+                    self.libreoffice_status = serde_json::to_value(&parsed).ok();
+                    self.libreoffice_check = Some(parsed);
+                } else {
+                    self.libreoffice_status = Some(payload);
+                }
+            }
+            "cowork/session/defaults/apply" | "cowork/session/config/set" => {
+                let target = payload.get("event").unwrap_or(&payload);
+                self.apply_session_config_event(workspace_id, target);
             }
             "cowork/provider/catalog/read" => {
                 let target = payload.get("event").unwrap_or(&payload);
@@ -5411,16 +6451,13 @@ impl AppState {
                 if let Some(obj) = target.get("methodsByProvider").and_then(Value::as_object) {
                     for (prov, val) in obj {
                         if let Some(arr) = val.as_array() {
-                            let ids: Vec<String> = arr
+                            let specs: Vec<ProviderAuthMethodSpec> = arr
                                 .iter()
-                                .filter_map(|m| {
-                                    m.get("id")
-                                        .and_then(Value::as_str)
-                                        .or_else(|| m.as_str())
-                                        .map(str::to_string)
-                                })
+                                .filter_map(parse_provider_auth_method_spec)
                                 .collect();
+                            let ids: Vec<String> = specs.iter().map(|m| m.id.clone()).collect();
                             self.provider_auth_methods.insert(prov.clone(), ids);
+                            self.provider_auth_method_specs.insert(prov.clone(), specs);
                         }
                     }
                 }
@@ -5443,6 +6480,17 @@ impl AppState {
             "cowork/provider/auth/authorize" => {
                 self.last_auth_challenge = Some(payload);
             }
+            "cowork/provider/auth/callback"
+            | "cowork/provider/auth/setApiKey"
+            | "cowork/provider/auth/setConfig" => {
+                let evt = payload.get("event").unwrap_or(&payload);
+                self.last_auth_result = Some(evt.clone());
+                if evt.get("ok").and_then(Value::as_bool) == Some(false)
+                    && let Some(msg) = evt.get("message").and_then(Value::as_str)
+                {
+                    self.settings_mutation_error = Some(msg.to_string());
+                }
+            }
             "cowork/provider/codexAppServer/status" | "cowork/provider/codexAppServer/update" => {
                 self.codex_app_server_status = Some(payload);
             }
@@ -5463,27 +6511,14 @@ impl AppState {
             "cowork/agentProfiles/catalog/read"
             | "cowork/agentProfiles/upsert"
             | "cowork/agentProfiles/delete"
-            | "cowork/agentProfiles/copy" => {
+            | "cowork/agentProfiles/copy"
+            | "cowork/agentProfiles/workspaceAvailability/set" => {
                 let evt = payload.get("event").unwrap_or(&payload);
-                if let Some(profiles) = evt
-                    .get("catalog")
-                    .and_then(|c| c.get("profiles"))
-                    .and_then(Value::as_array)
-                {
-                    self.subagents = profiles
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
-                        .collect();
-                }
+                self.apply_agent_profiles_catalog_event(evt);
             }
             "cowork/memory/list" | "cowork/memory/upsert" | "cowork/memory/delete" => {
                 let target = payload.get("event").unwrap_or(&payload);
-                if let Some(entries) = target.get("entries").and_then(Value::as_array) {
-                    self.memory_entries = entries
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<MemoryEntry>(v.clone()).ok())
-                        .collect();
-                }
+                self.apply_memory_list_event(target);
             }
             "cowork/memory/advanced/list"
             | "cowork/memory/advanced/upsert"
@@ -5512,12 +6547,14 @@ impl AppState {
             | "cowork/plugins/delete"
             | "cowork/plugins/install"
             | "cowork/plugins/update" => {
-                let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target.get("plugins").and_then(Value::as_array) {
-                    self.plugins = arr
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<PluginSummary>(v.clone()).ok())
-                        .collect();
+                if let Some(events) = payload.get("events").and_then(Value::as_array) {
+                    let now_ms = (self.now_secs * 1000.0) as i64;
+                    for ev in events {
+                        self.reduce_cowork_event(workspace_id, ev, now_ms);
+                    }
+                } else {
+                    let target = payload.get("event").unwrap_or(&payload);
+                    self.apply_plugins_catalog_event(target);
                 }
             }
             "cowork/skills/list"
@@ -5525,13 +6562,17 @@ impl AppState {
             | "cowork/skills/enable"
             | "cowork/skills/disable"
             | "cowork/skills/delete"
-            | "cowork/skills/install" => {
+            | "cowork/skills/install"
+            | "cowork/skills/installation/enable"
+            | "cowork/skills/installation/disable"
+            | "cowork/skills/installation/delete"
+            | "cowork/skills/installation/update"
+            | "cowork/skills/installation/copy" => {
                 let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target.get("skills").and_then(Value::as_array) {
-                    self.skills = arr
-                        .iter()
-                        .filter_map(|v| serde_json::from_value::<SkillSummary>(v.clone()).ok())
-                        .collect();
+                if target.get("catalog").is_some() {
+                    self.apply_skills_catalog_event(target);
+                } else {
+                    self.apply_skills_list_event(target);
                 }
             }
             "cowork/marketplaces/read"
@@ -5549,17 +6590,34 @@ impl AppState {
             }
             "cowork/backups/workspace/read"
             | "cowork/backups/workspace/checkpoint"
-            | "cowork/backups/workspace/deleteCheckpoint" => {
+            | "cowork/backups/workspace/deleteCheckpoint"
+            | "cowork/backups/workspace/deleteEntry"
+            | "cowork/backups/workspace/restore" => {
                 let target = payload.get("event").unwrap_or(&payload);
                 if let Some(arr) = target
                     .get("entries")
                     .or_else(|| target.get("backups"))
                     .and_then(Value::as_array)
                 {
-                    self.backups = arr
+                    self.backups = arr.iter().filter_map(parse_backup_summary).collect();
+                }
+                if method == "cowork/backups/workspace/deleteEntry"
+                    && let Some(ref delta) = self.backup_delta
+                    && !self
+                        .backups
                         .iter()
-                        .filter_map(|v| serde_json::from_value::<BackupSummary>(v.clone()).ok())
-                        .collect();
+                        .any(|b| b.target_session_id == delta.target_session_id)
+                {
+                    self.backup_delta = None;
+                }
+                if method == "cowork/backups/workspace/restore" {
+                    self.last_backup_restore = Some(payload);
+                }
+            }
+            "cowork/backups/workspace/delta/read" => {
+                let target = payload.get("event").unwrap_or(&payload);
+                if let Some(delta) = parse_backup_delta(target) {
+                    self.backup_delta = Some(delta);
                 }
             }
             "cowork/conversationImport/sources/list" => {
@@ -5753,6 +6811,12 @@ impl AppState {
         };
 
         let draft_id = self.pending_draft_threads_by_rpc_id.remove(&request_id);
+        let draft_reasoning_effort = draft_id.as_ref().and_then(|old_id| {
+            self.threads
+                .iter()
+                .find(|t| t.id == *old_id)
+                .and_then(|t| t.reasoning_effort.clone())
+        });
         if let Some(ref old_id) = draft_id {
             self.rekey_thread_runtime_maps(old_id, &server_id);
             self.threads.retain(|t| t.id != *old_id);
@@ -5783,7 +6847,11 @@ impl AppState {
                 .get("model")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            reasoning_effort: None,
+            reasoning_effort: thread_val
+                .get("reasoningEffort")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or(draft_reasoning_effort),
             preview: None,
             updated_at: parse_timestamp_ms(thread_val.get("updatedAt")),
             created_at: parse_timestamp_ms(thread_val.get("createdAt")),
@@ -5914,6 +6982,160 @@ impl AppState {
             .filter(|v| !v.is_null())
         {
             rt.usage = Some(parse_usage_summary(usage_val));
+        }
+    }
+
+    fn apply_agent_profiles_catalog_event(&mut self, evt: &Value) {
+        let Some(catalog_val) = evt.get("catalog") else {
+            return;
+        };
+        if let Ok(catalog) =
+            serde_json::from_value::<AgentProfilesCatalogState>(catalog_val.clone())
+        {
+            self.agent_profiles_catalog = catalog;
+            if !self.agent_profiles_catalog.profiles.is_empty() {
+                self.subagents = self
+                    .agent_profiles_catalog
+                    .profiles
+                    .iter()
+                    .map(catalog_entry_to_subagent_profile)
+                    .collect();
+                return;
+            }
+        }
+        if let Some(profiles) = catalog_val.get("profiles").and_then(Value::as_array) {
+            self.subagents = profiles
+                .iter()
+                .filter_map(|v| {
+                    serde_json::from_value::<AgentProfileCatalogEntry>(v.clone())
+                        .ok()
+                        .map(|entry| catalog_entry_to_subagent_profile(&entry))
+                        .or_else(|| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
+                })
+                .collect();
+        }
+    }
+
+    fn apply_memory_list_event(&mut self, evt: &Value) {
+        let Some(arr) = evt
+            .get("memories")
+            .or_else(|| evt.get("entries"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        let parsed: Vec<ScopedMemoryEntry> =
+            arr.iter().filter_map(parse_scoped_memory_entry).collect();
+        let scoped_only = (evt.get("entry").is_none() && evt.get("deleted").is_none())
+            .then(|| {
+                evt.get("scope")
+                    .and_then(Value::as_str)
+                    .filter(|s| *s == "user" || *s == "workspace")
+            })
+            .flatten();
+        if let Some(target_scope) = scoped_only {
+            self.scoped_memories.retain(|m| m.scope != target_scope);
+            self.scoped_memories.extend(parsed);
+        } else {
+            self.scoped_memories = parsed;
+        }
+        self.memory_entries = self
+            .scoped_memories
+            .iter()
+            .map(|m| MemoryEntry {
+                key: m.id.clone(),
+                content: m.content.clone(),
+                updated_at: m.updated_at_ms,
+            })
+            .collect();
+    }
+
+    fn apply_plugins_catalog_event(&mut self, evt: &Value) {
+        let catalog = evt.get("catalog");
+        if let Some(arr) = evt
+            .get("plugins")
+            .or_else(|| {
+                catalog.and_then(|c| c.get("plugins").or_else(|| c.get("installedPlugins")))
+            })
+            .and_then(Value::as_array)
+        {
+            self.installed_plugin_entries = arr.clone();
+            self.plugins = arr.iter().filter_map(parse_plugin_summary).collect();
+        }
+        let available_partial =
+            evt.get("availablePluginsPartial").and_then(Value::as_bool) == Some(true);
+        if let Some(avail) = catalog
+            .and_then(|c| c.get("availablePlugins"))
+            .or_else(|| evt.get("availablePlugins"))
+            .and_then(Value::as_array)
+        {
+            if available_partial && avail.is_empty() && !self.available_plugins.is_empty() {
+                let installed_ids: HashSet<&str> =
+                    self.plugins.iter().map(|p| p.id.as_str()).collect();
+                self.available_plugins.retain(|p| {
+                    p.get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| !installed_ids.contains(id))
+                });
+            } else {
+                self.available_plugins = avail.clone();
+            }
+        }
+        if let Some(warnings) = catalog
+            .and_then(|c| c.get("warnings"))
+            .or_else(|| evt.get("warnings"))
+            .and_then(Value::as_array)
+        {
+            self.plugin_catalog_warnings = warnings
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+        }
+    }
+
+    fn apply_skills_catalog_event(&mut self, evt: &Value) {
+        let catalog = evt.get("catalog").unwrap_or(evt);
+        if let Some(scopes) = catalog.get("scopes").and_then(Value::as_array) {
+            self.skill_scopes = scopes.clone();
+        }
+        if let Some(installations) = catalog.get("installations").and_then(Value::as_array) {
+            self.skill_installations = installations.clone();
+        }
+        let available_partial =
+            evt.get("availableSkillsPartial").and_then(Value::as_bool) == Some(true);
+        if let Some(avail) = catalog.get("availableSkills").and_then(Value::as_array) {
+            if available_partial && avail.is_empty() && !self.available_skills.is_empty() {
+                let installed_names: HashSet<&str> = self
+                    .skill_installations
+                    .iter()
+                    .filter_map(|s| s.get("name").and_then(Value::as_str))
+                    .collect();
+                self.available_skills.retain(|s| {
+                    s.get("name")
+                        .and_then(Value::as_str)
+                        .is_none_or(|name| !installed_names.contains(name))
+                });
+            } else {
+                self.available_skills = avail.clone();
+            }
+        }
+        if let Some(effective) = catalog.get("effectiveSkills").and_then(Value::as_array) {
+            self.effective_skills = effective.clone();
+            self.skills = effective.iter().filter_map(parse_skill_summary).collect();
+        } else if let Some(installations) = catalog.get("installations").and_then(Value::as_array)
+            && self.skills.is_empty()
+        {
+            self.skills = installations
+                .iter()
+                .filter_map(parse_skill_summary)
+                .collect();
+        }
+    }
+
+    fn apply_skills_list_event(&mut self, evt: &Value) {
+        if let Some(arr) = evt.get("skills").and_then(Value::as_array) {
+            self.skills = arr.iter().filter_map(parse_skill_summary).collect();
         }
     }
 
@@ -6457,6 +7679,673 @@ fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRec
         requirements: val.get("requirements").cloned().unwrap_or(Value::Null),
         activity,
     })
+}
+
+fn build_agent_profile_upsert_payload(input: &AgentProfileUpsertInputWire) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("version".to_string(), json!(1));
+    map.insert(
+        "scope".to_string(),
+        Value::String(if input.scope == "global" {
+            "global".to_string()
+        } else {
+            "workspace".to_string()
+        }),
+    );
+    map.insert("id".to_string(), Value::String(input.id.clone()));
+    map.insert(
+        "displayName".to_string(),
+        Value::String(input.display_name.clone()),
+    );
+    map.insert(
+        "description".to_string(),
+        Value::String(input.description.clone()),
+    );
+    map.insert("enabled".to_string(), Value::Bool(input.enabled));
+    map.insert(
+        "baseRole".to_string(),
+        Value::String(
+            if matches!(
+                input.base_role.as_str(),
+                "default" | "explorer" | "research" | "worker" | "reviewer"
+            ) {
+                input.base_role.clone()
+            } else {
+                "default".to_string()
+            },
+        ),
+    );
+    map.insert("prompt".to_string(), Value::String(input.prompt.clone()));
+    map.insert(
+        "allowedBuiltInTools".to_string(),
+        json!(input.allowed_built_in_tools),
+    );
+    map.insert(
+        "allowedMcpServers".to_string(),
+        json!(input.allowed_mcp_servers),
+    );
+    map.insert("skillNames".to_string(), json!(input.skill_names));
+    if let Some(model) = input.model.as_deref().filter(|s| !s.trim().is_empty()) {
+        map.insert("model".to_string(), Value::String(model.to_string()));
+    }
+    if let Some(effort) = input
+        .reasoning_effort
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        map.insert(
+            "reasoningEffort".to_string(),
+            Value::String(effort.to_string()),
+        );
+    }
+    if let Some(task_type) = input
+        .default_task_type
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        map.insert(
+            "defaultTaskType".to_string(),
+            Value::String(task_type.to_string()),
+        );
+    }
+    if let Some(ctx_mode) = input
+        .default_context_mode
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        map.insert(
+            "defaultContextMode".to_string(),
+            Value::String(ctx_mode.to_string()),
+        );
+    }
+    Value::Object(map)
+}
+
+fn parse_scoped_memory_entry(v: &Value) -> Option<ScopedMemoryEntry> {
+    let id = v
+        .get("id")
+        .or_else(|| v.get("key"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let scope = v
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("workspace")
+        .to_string();
+    let content = v
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let created_at = v
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let updated_at = v
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let updated_at_ms = v.get("updatedAt").and_then(|val| {
+        val.as_i64().or_else(|| {
+            val.as_str().and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.timestamp_millis())
+            })
+        })
+    });
+    Some(ScopedMemoryEntry {
+        id,
+        scope,
+        content,
+        created_at,
+        updated_at,
+        updated_at_ms,
+    })
+}
+
+fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, Value>) {
+    let clear_overflow = obj
+        .get("clearDefaultToolOutputOverflowChars")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || obj
+            .get("clearToolOutputOverflowChars")
+            .and_then(Value::as_bool)
+            == Some(true);
+    if !ws.defaults.is_object() {
+        ws.defaults = json!({});
+    }
+    if let Some(dst) = ws.defaults.as_object_mut() {
+        for (k, v) in obj {
+            dst.insert(k.clone(), v.clone());
+        }
+        if clear_overflow {
+            dst.remove("defaultToolOutputOverflowChars");
+            dst.remove("toolOutputOverflowChars");
+            dst.remove("clearDefaultToolOutputOverflowChars");
+            dst.remove("clearToolOutputOverflowChars");
+        } else if let Some(val) = obj
+            .get("defaultToolOutputOverflowChars")
+            .or_else(|| obj.get("toolOutputOverflowChars"))
+        {
+            dst.insert("defaultToolOutputOverflowChars".to_string(), val.clone());
+            dst.remove("clearDefaultToolOutputOverflowChars");
+            dst.remove("clearToolOutputOverflowChars");
+        }
+    }
+    if let Some(yolo) = obj.get("yolo").and_then(Value::as_bool) {
+        ws.yolo = yolo;
+    }
+    if let Some(p) = obj
+        .get("defaultProvider")
+        .or_else(|| obj.get("provider"))
+        .and_then(Value::as_str)
+    {
+        ws.default_provider = (!p.trim().is_empty()).then(|| p.to_string());
+    }
+    if let Some(m) = obj
+        .get("defaultModel")
+        .or_else(|| obj.get("model"))
+        .and_then(Value::as_str)
+    {
+        ws.default_model = (!m.trim().is_empty()).then(|| m.to_string());
+    }
+    if let Some(val) = obj
+        .get("defaultPreferredChildModel")
+        .or_else(|| obj.get("preferredChildModel"))
+    {
+        ws.default_preferred_child_model = val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(val) = obj
+        .get("defaultChildModelRoutingMode")
+        .or_else(|| obj.get("childModelRoutingMode"))
+    {
+        ws.default_child_model_routing_mode = val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(val) = obj
+        .get("defaultPreferredChildModelRef")
+        .or_else(|| obj.get("preferredChildModelRef"))
+    {
+        ws.default_preferred_child_model_ref = val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(arr) = obj
+        .get("defaultAllowedChildModelRefs")
+        .or_else(|| obj.get("allowedChildModelRefs"))
+        .and_then(Value::as_array)
+    {
+        ws.default_allowed_child_model_refs = arr
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(mcp) = obj
+        .get("defaultEnableMcp")
+        .or_else(|| obj.get("enableMcp"))
+        .and_then(Value::as_bool)
+    {
+        ws.default_enable_mcp = mcp;
+    }
+    if let Some(b) = obj
+        .get("defaultBackupsEnabled")
+        .or_else(|| obj.get("backupsEnabled"))
+        .and_then(Value::as_bool)
+    {
+        ws.default_backups_enabled = b;
+    }
+    if let Some(un) = obj.get("userName").and_then(Value::as_str) {
+        ws.user_name = Some(un.to_string());
+    }
+    if let Some(up) = obj.get("userProfile") {
+        ws.user_profile = Some(up.clone());
+    }
+    if let Some(po) = obj.get("providerOptions") {
+        ws.provider_options = Some(po.clone());
+    }
+}
+
+fn build_session_defaults_config_map(
+    raw: &Map<String, Value>,
+    clear_overflow: bool,
+) -> Map<String, Value> {
+    let mut map = raw.clone();
+    for (desktop_key, server_key) in [
+        ("defaultToolOutputOverflowChars", "toolOutputOverflowChars"),
+        (
+            "clearDefaultToolOutputOverflowChars",
+            "clearToolOutputOverflowChars",
+        ),
+        ("defaultPreferredChildModel", "preferredChildModel"),
+        ("defaultChildModelRoutingMode", "childModelRoutingMode"),
+        ("defaultPreferredChildModelRef", "preferredChildModelRef"),
+        ("defaultAllowedChildModelRefs", "allowedChildModelRefs"),
+        ("defaultBackupsEnabled", "backupsEnabled"),
+        (
+            "defaultWorkflowMaxConcurrentAgents",
+            "workflowMaxConcurrentAgents",
+        ),
+        ("defaultToolCalling", "toolCalling"),
+        ("advancedMemoryEnabled", "advancedMemory"),
+    ] {
+        if let Some(val) = map.remove(desktop_key)
+            && !map.contains_key(server_key)
+        {
+            map.insert(server_key.to_string(), val);
+        }
+    }
+    if clear_overflow {
+        map.remove("toolOutputOverflowChars");
+        map.insert("clearToolOutputOverflowChars".to_string(), json!(true));
+    } else if map.contains_key("toolOutputOverflowChars") {
+        map.remove("clearToolOutputOverflowChars");
+    }
+    map
+}
+
+fn parse_profile_model_provider(model_ref: &str) -> Option<String> {
+    cowork_config::parse_child_model_ref(model_ref, None)
+        .and_then(|(prov, _, _, explicit)| explicit.then(|| prov.as_str().to_string()))
+}
+
+fn catalog_entry_to_subagent_profile(entry: &AgentProfileCatalogEntry) -> SubagentProfile {
+    SubagentProfile {
+        id: entry.profile.id.clone(),
+        name: entry.profile.display_name.clone(),
+        description: entry.profile.description.clone(),
+        provider: entry
+            .profile
+            .model
+            .as_deref()
+            .and_then(parse_profile_model_provider),
+        model: entry.profile.model.clone(),
+        system_prompt: entry.profile.prompt.clone(),
+        tool_preset: Some(entry.profile.base_role.clone()),
+        allowed_tools: entry.profile.allowed_built_in_tools.clone(),
+        denied_tools: Vec::new(),
+        builtin: entry.built_in.unwrap_or(false),
+        reasoning_effort: entry.profile.reasoning_effort.clone(),
+        scope: Some(entry.scope.clone()),
+    }
+}
+
+fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
+    let id = v.get("id").and_then(Value::as_str)?.to_string();
+    let name = v
+        .get("displayName")
+        .or_else(|| v.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or(&id)
+        .to_string();
+    let description = v
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let version = v.get("version").and_then(Value::as_str).map(str::to_string);
+    let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let scope = v.get("scope").and_then(Value::as_str).map(str::to_string);
+    let source = v
+        .get("source")
+        .or_else(|| v.get("discoveryKind"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let icon = v
+        .get("icon")
+        .or_else(|| v.get("interface").and_then(|i| i.get("icon")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let update_available = v
+        .get("updateAvailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let error = v
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("warnings")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let skill_count = v
+        .get("skillCount")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .or_else(|| v.get("skills").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    let mcp_count = v
+        .get("mcpCount")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .or_else(|| v.get("mcpServers").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    let subagent_count = v
+        .get("subagentCount")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    Some(PluginSummary {
+        id,
+        name,
+        description,
+        version,
+        enabled,
+        scope,
+        source,
+        icon,
+        update_available,
+        error,
+        skill_count,
+        mcp_count,
+        subagent_count,
+    })
+}
+
+fn parse_skill_summary(v: &Value) -> Option<SkillSummary> {
+    let name = v.get("name").and_then(Value::as_str)?.to_string();
+    let id = v.get("id").and_then(Value::as_str).map(str::to_string);
+    let installation_id = v
+        .get("installationId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let description = v
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let scope = v
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("workspace")
+        .to_string();
+    let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let source = v
+        .get("source")
+        .or_else(|| v.get("origin").and_then(|o| o.get("kind")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let icon = v
+        .get("icon")
+        .or_else(|| v.get("interface").and_then(|i| i.get("icon")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let version = v.get("version").and_then(Value::as_str).map(str::to_string);
+    let update_available = v
+        .get("updateAvailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let error = v
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("diagnostics")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(|d| d.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    Some(SkillSummary {
+        id,
+        name,
+        description,
+        scope,
+        enabled,
+        source,
+        icon,
+        version,
+        update_available,
+        error,
+        installation_id,
+    })
+}
+
+fn parse_backup_summary(v: &Value) -> Option<BackupSummary> {
+    let target_session_id = v
+        .get("targetSessionId")
+        .or_else(|| v.get("id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let id = v
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| target_session_id.clone());
+    let title = v.get("title").and_then(Value::as_str).map(str::to_string);
+    let label = v
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            title
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| target_session_id.clone());
+    let created_at = parse_timestamp_ms(v.get("createdAt"));
+    let created_at_iso = v
+        .get("createdAtIso")
+        .or_else(|| v.get("createdAt"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let updated_at_iso = v
+        .get("updatedAtIso")
+        .or_else(|| v.get("updatedAt"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let closed_at_iso = v
+        .get("closedAtIso")
+        .or_else(|| v.get("closedAt"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let original_snapshot_bytes = v.get("originalSnapshotBytes").and_then(Value::as_u64);
+    let checkpoint_bytes_total = v.get("checkpointBytesTotal").and_then(Value::as_u64);
+    let total_bytes = v.get("totalBytes").and_then(Value::as_u64);
+    let size_bytes = v
+        .get("sizeBytes")
+        .and_then(Value::as_u64)
+        .or(total_bytes)
+        .or(original_snapshot_bytes)
+        .unwrap_or(0);
+    let checkpoints = v
+        .get("checkpoints")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| serde_json::from_value::<BackupCheckpointSummary>(c.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(BackupSummary {
+        id,
+        label,
+        created_at,
+        size_bytes,
+        target_session_id,
+        title,
+        provider: v
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        model: v.get("model").and_then(Value::as_str).map(str::to_string),
+        lifecycle: v
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: v
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        working_directory: v
+            .get("workingDirectory")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        backup_directory: v
+            .get("backupDirectory")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        original_snapshot_kind: v
+            .get("originalSnapshotKind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        original_snapshot_bytes,
+        checkpoint_bytes_total,
+        total_bytes,
+        checkpoints,
+        created_at_iso,
+        updated_at_iso,
+        closed_at_iso,
+        failure_reason: v
+            .get("failureReason")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn parse_backup_delta(v: &Value) -> Option<BackupDeltaView> {
+    let target_session_id = v
+        .get("targetSessionId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let checkpoint_id = v
+        .get("checkpointId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let counts = v.get("counts");
+    let count_field = |k: &str| {
+        counts
+            .and_then(|c| c.get(k))
+            .and_then(Value::as_u64)
+            .or_else(|| v.get(k).and_then(Value::as_u64))
+            .unwrap_or(0) as usize
+    };
+    let files = v
+        .get("files")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| serde_json::from_value::<BackupDeltaFileView>(f.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(BackupDeltaView {
+        target_session_id,
+        checkpoint_id,
+        baseline_label: v
+            .get("baselineLabel")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        current_label: v
+            .get("currentLabel")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        added: count_field("added"),
+        modified: count_field("modified"),
+        deleted: count_field("deleted"),
+        files,
+        truncated: v.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+fn parse_provider_auth_method_spec(v: &Value) -> Option<ProviderAuthMethodSpec> {
+    if let Some(s) = v.as_str() {
+        return (!s.is_empty()).then(|| ProviderAuthMethodSpec {
+            id: s.to_string(),
+            method_type: String::new(),
+            label: None,
+            fields: Vec::new(),
+            oauth_mode: None,
+        });
+    }
+    let id = v.get("id").and_then(Value::as_str)?.to_string();
+    let method_type = v
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let label = v.get("label").and_then(Value::as_str).map(str::to_string);
+    let fields = v
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    f.get("id")
+                        .or_else(|| f.get("key"))
+                        .or_else(|| f.get("name"))
+                        .and_then(Value::as_str)
+                        .or_else(|| f.as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let oauth_mode = v
+        .get("oauthMode")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(ProviderAuthMethodSpec {
+        id,
+        method_type,
+        label,
+        fields,
+        oauth_mode,
+    })
+}
+
+fn interaction_request_id(item: &ChatInteraction) -> &JsonRpcLiteId {
+    match item {
+        ChatInteraction::CommandApproval { request_id, .. }
+        | ChatInteraction::FileChangeApproval { request_id, .. }
+        | ChatInteraction::UserInput { request_id, .. } => request_id,
+    }
+}
+
+fn interaction_item_id(item: &ChatInteraction) -> &str {
+    match item {
+        ChatInteraction::CommandApproval { item_id, .. }
+        | ChatInteraction::FileChangeApproval { item_id, .. }
+        | ChatInteraction::UserInput { item_id, .. } => item_id.as_str(),
+    }
+}
+
+fn request_id_key(id: &JsonRpcLiteId) -> String {
+    match id {
+        JsonRpcLiteId::String(s) => s.clone(),
+        JsonRpcLiteId::Number(n) => n.to_string(),
+    }
 }
 
 fn parse_timestamp_ms(val: Option<&Value>) -> i64 {
@@ -7659,5 +9548,1380 @@ mod tests {
             }
             other => panic!("expected UserInput, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn update_workspace_defaults_remaps_overflow_and_updates_control_session_config() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "defaultToolOutputOverflowChars": 32768 }),
+        }));
+
+        let (rpc_id, params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id: id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/session/defaults/apply" => Some((*id, params.clone())),
+                _ => None,
+            })
+            .expect("expected cowork/session/defaults/apply request");
+        assert_eq!(params["config"]["toolOutputOverflowChars"], 32768);
+        assert!(
+            params["config"]
+                .get("defaultToolOutputOverflowChars")
+                .is_none()
+        );
+
+        let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+        assert_eq!(ws.defaults["defaultToolOutputOverflowChars"], 32768);
+        assert!(
+            ws.defaults
+                .get("clearDefaultToolOutputOverflowChars")
+                .is_none()
+        );
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: rpc_id,
+            method: "cowork/session/defaults/apply".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "toolOutputOverflowChars": 32768,
+                        "defaultToolOutputOverflowChars": 32768
+                    }
+                }
+            })),
+        });
+        assert_eq!(
+            state
+                .workspace_runtime_by_id
+                .get("ws-1")
+                .and_then(|rt| rt.control_session_config.as_ref())
+                .and_then(|c| c.get("toolOutputOverflowChars")),
+            Some(&json!(32768))
+        );
+
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({
+                "clearDefaultToolOutputOverflowChars": true,
+                "defaultToolOutputOverflowChars": 999
+            }),
+        }));
+        let clear_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            clear_params["config"]["clearToolOutputOverflowChars"],
+            json!(true)
+        );
+        assert!(
+            clear_params["config"]
+                .get("toolOutputOverflowChars")
+                .is_none()
+        );
+        let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+        assert!(ws.defaults.get("defaultToolOutputOverflowChars").is_none());
+        assert!(ws.defaults.get("toolOutputOverflowChars").is_none());
+    }
+
+    #[test]
+    fn check_libreoffice_runtime_sends_smoke_true_and_parses_typed_result() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.dispatch(Action::Settings(SettingsAction::CheckLibreOfficeRuntime {
+            workspace_id: "ws-1".to_string(),
+        }));
+        let (rpc_id, params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id: id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/runtime/libreoffice/check" => Some((*id, params.clone())),
+                _ => None,
+            })
+            .expect("expected libreoffice check request");
+        assert_eq!(params["cwd"], "/tmp/demo");
+        assert_eq!(params["smoke"], json!(true));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: rpc_id,
+            method: "cowork/runtime/libreoffice/check".to_string(),
+            result: Ok(json!({
+                "status": {
+                    "status": "available",
+                    "checkedAt": "2026-11-15T00:00:00Z",
+                    "message": "LibreOffice 24.8 ready",
+                    "version": "24.8.1",
+                    "resolvedPath": "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                    "smoke": {
+                        "ok": true,
+                        "durationMs": 42,
+                        "sizeBytes": 1234
+                    }
+                }
+            })),
+        });
+        let parsed = state
+            .libreoffice_check
+            .as_ref()
+            .expect("expected parsed RuntimeLibreOfficeCheckResult");
+        assert_eq!(parsed.status.status, "available");
+        assert_eq!(parsed.status.smoke.as_ref().map(|s| s.ok), Some(true));
+        assert!(state.libreoffice_status.is_some());
+    }
+
+    #[test]
+    fn backup_entries_delta_delete_entry_and_restore_round_trip() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 1,
+            method: "cowork/backups/workspace/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "entries": [{
+                        "targetSessionId": "sess-1",
+                        "title": "Refactor store",
+                        "lifecycle": "active",
+                        "status": "ready",
+                        "workingDirectory": "/tmp/demo",
+                        "originalSnapshotKind": "tar",
+                        "totalBytes": 4096,
+                        "createdAt": "2026-11-15T00:00:00Z",
+                        "updatedAt": "2026-11-15T00:05:00Z",
+                        "checkpoints": [{
+                            "id": "cp-1",
+                            "index": 1,
+                            "createdAt": "2026-11-15T00:05:00Z",
+                            "trigger": "turn_end",
+                            "changed": true,
+                            "patchBytes": 512
+                        }]
+                    }]
+                }
+            })),
+        });
+        assert_eq!(state.backups.len(), 1);
+        assert_eq!(state.backups[0].target_session_id, "sess-1");
+        assert_eq!(state.backups[0].label, "Refactor store");
+        assert_eq!(state.backups[0].size_bytes, 4096);
+        assert_eq!(state.backups[0].checkpoints.len(), 1);
+        assert_eq!(state.backups[0].checkpoints[0].id, "cp-1");
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 2,
+            method: "cowork/backups/workspace/delta/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "targetSessionId": "sess-1",
+                    "checkpointId": "cp-1",
+                    "baselineLabel": "Baseline",
+                    "currentLabel": "Checkpoint #1",
+                    "counts": { "added": 1, "modified": 2, "deleted": 0 },
+                    "files": [
+                        { "path": "src/main.rs", "change": "modified", "kind": "file" }
+                    ],
+                    "truncated": false
+                }
+            })),
+        });
+        let delta = state.backup_delta.as_ref().expect("expected backup delta");
+        assert_eq!(delta.added, 1);
+        assert_eq!(delta.modified, 2);
+        assert_eq!(delta.files.len(), 1);
+
+        state.dispatch(Action::Settings(SettingsAction::DeleteBackupEntry {
+            workspace_id: "ws-1".to_string(),
+            target_session_id: "sess-1".to_string(),
+        }));
+        let delete_req = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id: id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/backups/workspace/deleteEntry" => {
+                    Some((*id, params.clone()))
+                }
+                _ => None,
+            });
+        let (del_id, del_params) = delete_req.expect("expected deleteEntry request");
+        assert_eq!(del_params["targetSessionId"], "sess-1");
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: del_id,
+            method: "cowork/backups/workspace/deleteEntry".to_string(),
+            result: Ok(json!({ "event": { "entries": [] } })),
+        });
+        assert!(state.backups.is_empty());
+        assert!(state.backup_delta.is_none());
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 99,
+            method: "cowork/backups/workspace/restore".to_string(),
+            result: Ok(json!({ "restoredCount": 3 })),
+        });
+        assert_eq!(
+            state
+                .last_backup_restore
+                .as_ref()
+                .and_then(|v| v.get("restoredCount")),
+            Some(&json!(3))
+        );
+    }
+
+    #[test]
+    fn select_landing_quick_chat_defers_workspace_creation_until_submit() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-work", "Work", "/tmp/work", 1));
+        state.active_workspace_id = Some("ws-work".to_string());
+
+        state.dispatch(Action::Shell(ShellAction::SelectLandingQuickChat));
+        assert_eq!(
+            state.landing_workspace_id.as_deref(),
+            Some(ONE_OFF_LANDING_SENTINEL)
+        );
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-work"));
+
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "Quick question".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+
+        let qc_ws = state
+            .workspaces
+            .iter()
+            .find(|w| w.one_off_chat)
+            .expect("expected quick-chat workspace created on submit");
+        let qc_id = qc_ws.id.clone();
+        assert_eq!(state.landing_workspace_id.as_deref(), Some(qc_id.as_str()));
+        assert!(state.services.emitted_native_commands.iter().any(|cmd| {
+            matches!(
+                cmd,
+                NativeCommand::StartWorkspaceServer { workspace_id, .. } if workspace_id == &qc_id
+            )
+        }));
+        let start_ws = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    ..
+                } if method == "thread/start" => Some(workspace_id.clone()),
+                _ => None,
+            });
+        assert_eq!(start_ws.as_deref(), Some(qc_id.as_str()));
+    }
+
+    #[test]
+    fn thread_start_response_preserves_reasoning_effort() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftEffort {
+            key: "__new__".to_string(),
+            effort: Some(ReasoningEffortValue::High),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "First draft".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+        let rpc_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id: id,
+                    method,
+                    ..
+                } if method == "thread/start" => Some(*id),
+                _ => None,
+            })
+            .expect("expected thread/start request");
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: rpc_id,
+            method: "thread/start".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-server-1",
+                    "title": "First draft"
+                }
+            })),
+        });
+        let th1 = state
+            .threads
+            .iter()
+            .find(|t| t.id == "th-server-1")
+            .expect("expected server thread");
+        assert_eq!(th1.reasoning_effort.as_deref(), Some("high"));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 888,
+            method: "thread/start".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-server-2",
+                    "title": "Second",
+                    "reasoningEffort": "xhigh"
+                }
+            })),
+        });
+        let th2 = state
+            .threads
+            .iter()
+            .find(|t| t.id == "th-server-2")
+            .expect("expected second server thread");
+        assert_eq!(th2.reasoning_effort.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn start_provider_auth_and_set_provider_config_respect_method_specs() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "cowork/provider/authMethods/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "methodsByProvider": {
+                        "anthropic": [
+                            { "id": "api_key", "type": "api", "label": "API key" },
+                            { "id": "claude-oauth", "type": "oauth", "label": "Claude Pro/Max" }
+                        ],
+                        "codex-cli": [
+                            { "id": "oauth_cli", "type": "oauth", "label": "Codex CLI" }
+                        ],
+                        "bedrock": [
+                            {
+                                "id": "aws_profile",
+                                "type": "api",
+                                "label": "AWS Profile",
+                                "fields": [{ "id": "profile", "label": "Profile" }]
+                            }
+                        ]
+                    }
+                }
+            })),
+        });
+
+        state.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+            workspace_id: "ws-1".to_string(),
+            provider: "anthropic".to_string(),
+        }));
+        let auth_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/provider/auth/authorize" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected authorize request for anthropic");
+        assert_eq!(auth_params["methodId"], "claude-oauth");
+
+        state.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+            workspace_id: "ws-1".to_string(),
+            provider: "codex-cli".to_string(),
+        }));
+        let codex_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/provider/auth/authorize" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(codex_params["methodId"], "oauth_cli");
+
+        state.dispatch(Action::Settings(SettingsAction::SetProviderConfig {
+            workspace_id: "ws-1".to_string(),
+            provider: "bedrock".to_string(),
+            config: json!({ "profile": "prod" }),
+        }));
+        let bedrock_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/provider/auth/setConfig" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected setConfig for bedrock");
+        assert_eq!(bedrock_params["methodId"], "aws_profile");
+
+        let before_invalid = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Settings(SettingsAction::SetProviderConfig {
+            workspace_id: "ws-1".to_string(),
+            provider: "anthropic".to_string(),
+            config: json!({ "baseUrl": "https://example.test" }),
+        }));
+        assert_eq!(state.services.emitted_ws_commands.len(), before_invalid);
+        assert_eq!(
+            state.last_auth_result.as_ref().and_then(|r| r.get("ok")),
+            Some(&json!(false))
+        );
+    }
+
+    #[test]
+    fn retry_failed_turn_preserves_attachments_references_and_tool_retry_lineage() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            ..Default::default()
+        });
+        let rt = state
+            .thread_runtime_by_id
+            .entry("th-1".to_string())
+            .or_default();
+        rt.feed.push(FeedItem::Message {
+            id: "u-1".to_string(),
+            role: FeedMessageRole::User,
+            content: "Check attachment and skill".to_string(),
+            client_message_id: Some("cm-1".to_string()),
+            attachments: vec![TurnAttachmentInputPart::UploadedFile {
+                filename: "spec.txt".to_string(),
+                path: "/tmp/demo/spec.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+            }],
+            references: vec![TurnReference {
+                kind: "skill".to_string(),
+                name: "rust-review".to_string(),
+            }],
+            citations: Vec::new(),
+            streaming: false,
+            timestamp_ms: 1,
+        });
+        rt.feed.push(FeedItem::Error {
+            id: "err-1".to_string(),
+            message: "Network timeout".to_string(),
+            code: None,
+            timestamp_ms: 2,
+        });
+
+        state.dispatch(Action::Chat(ChatAction::RetryFailedTurn {
+            thread_id: "th-1".to_string(),
+        }));
+        let retry_full = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "turn/start" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected full-turn retry turn/start");
+        let parts = retry_full["input"].as_array().expect("multipart input");
+        assert!(parts.iter().any(|p| p["type"] == "uploadedFile"));
+        assert_eq!(retry_full["references"][0]["name"], "rust-review");
+        assert!(retry_full["retry"].is_null());
+
+        state
+            .thread_runtime_by_id
+            .get_mut("th-1")
+            .unwrap()
+            .feed
+            .push(FeedItem::Tool {
+                id: "tool-fail-1".to_string(),
+                tool_name: "read_file".to_string(),
+                title: None,
+                call_id: None,
+                status: ToolRunStatus::Failed,
+                input: json!({}),
+                output: None,
+                error: Some("EACCES".to_string()),
+                diff: None,
+                streaming: false,
+                timestamp_ms: 3,
+                completed_at_ms: Some(4),
+                output_truncated: false,
+            });
+        state.dispatch(Action::Chat(ChatAction::RetryFailedTurn {
+            thread_id: "th-1".to_string(),
+        }));
+        let retry_tool = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "turn/start" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected tool-retry turn/start");
+        assert_eq!(retry_tool["input"], HIDDEN_RETRY_TURN_PROMPT);
+        assert_eq!(retry_tool["retry"]["toolItemIds"], json!(["tool-fail-1"]));
+    }
+
+    #[test]
+    fn resolve_server_request_retains_pending_on_failure_and_populates_interaction_errors() {
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::WsServerRequest {
+            workspace_id: "ws-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            method: "item/commandExecution/requestApproval".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "itemId": "cmd-1",
+                "command": "cargo check"
+            }),
+        });
+        assert_eq!(
+            state.thread_runtime_by_id["th-1"]
+                .pending_interactions
+                .len(),
+            1
+        );
+
+        state.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
+            workspace_id: "ws-1".to_string(),
+            thread_id: "th-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            response: cowork_protocol::ServerRequestReceiptResponse::Approval { approved: true },
+        }));
+        assert_eq!(
+            state.thread_runtime_by_id["th-1"]
+                .pending_interactions
+                .len(),
+            1
+        );
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: JsonRpcLiteId::Number(77),
+            ok: false,
+            error: Some("WebSocket write failed".to_string()),
+        });
+        let rt = &state.thread_runtime_by_id["th-1"];
+        assert_eq!(rt.pending_interactions.len(), 1);
+        assert_eq!(
+            rt.interaction_errors.get("77").map(String::as_str),
+            Some("WebSocket write failed")
+        );
+
+        state.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
+            workspace_id: "ws-1".to_string(),
+            thread_id: "th-1".to_string(),
+            id: JsonRpcLiteId::Number(77),
+            response: cowork_protocol::ServerRequestReceiptResponse::Approval { approved: true },
+        }));
+        assert!(
+            state.thread_runtime_by_id["th-1"]
+                .interaction_errors
+                .is_empty()
+        );
+
+        state.apply_store_event(StoreEvent::WsServerResponseResult {
+            workspace_id: "ws-1".to_string(),
+            request_id: JsonRpcLiteId::Number(77),
+            ok: true,
+            error: None,
+        });
+        assert!(
+            state.thread_runtime_by_id["th-1"]
+                .pending_interactions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn restore_backup_checkpoint_and_diagnostics_actions_emit_expected_commands() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
+            workspace_id: "ws-1".to_string(),
+            target_session_id: "sess-1".to_string(),
+            checkpoint_id: None,
+        }));
+        let restore_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/backups/workspace/restore" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(restore_params["targetSessionId"], "sess-1");
+        assert!(restore_params.get("checkpointId").is_none());
+
+        let bundle = DiagnosticsBundleState {
+            path: "/tmp/diag.json".to_string(),
+            created_at: "2026-11-15T00:00:00Z".to_string(),
+            summary: "ok".to_string(),
+            upload_configured: true,
+            upload_enabled: true,
+            ..Default::default()
+        };
+        state.apply_store_event(StoreEvent::DiagnosticsBundleUpdated(Some(bundle.clone())));
+        assert_eq!(state.diagnostics_bundle, Some(bundle));
+
+        state.dispatch(Action::Settings(SettingsAction::OpenLogsFolder));
+        state.dispatch(Action::Settings(SettingsAction::UploadDiagnosticsBundle {
+            path: None,
+            confirmed: true,
+        }));
+        state.dispatch(Action::Settings(SettingsAction::RevokeAllTrustedPhones));
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|c| matches!(c, NativeCommand::OpenLogsFolder))
+        );
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    NativeCommand::UploadDiagnosticsBundle {
+                        path: Some(p),
+                        confirmed: true,
+                    } if p == "/tmp/diag.json"
+                ))
+        );
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|c| matches!(c, NativeCommand::RevokeAllTrustedPhones))
+        );
+    }
+
+    #[test]
+    fn agent_profiles_and_memory_schemas_match_server() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 1,
+            method: "cowork/agentProfiles/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "agent_profiles_catalog",
+                    "sessionId": "s-1",
+                    "catalog": {
+                        "profiles": [
+                            {
+                                "scope": "global",
+                                "builtIn": false,
+                                "locked": false,
+                                "effective": true,
+                                "shadowed": false,
+                                "workspaceDisabled": true,
+                                "profile": {
+                                    "version": 1,
+                                    "id": "reviewer",
+                                    "displayName": "Code Reviewer",
+                                    "description": "Checks correctness",
+                                    "enabled": true,
+                                    "baseRole": "reviewer",
+                                    "prompt": "Review carefully.",
+                                    "allowedBuiltInTools": ["read_file"],
+                                    "allowedMcpServers": ["github"],
+                                    "skillNames": ["rust-audit"],
+                                    "model": "anthropic/claude-sonnet-4-5",
+                                    "reasoningEffort": "high"
+                                }
+                            }
+                        ],
+                        "effectiveProfiles": [],
+                        "diagnostics": [
+                            {
+                                "scope": "workspace",
+                                "path": "/tmp/demo/.cowork/agent-profiles/bad.json",
+                                "severity": "warning",
+                                "message": "Invalid profile JSON"
+                            }
+                        ],
+                        "roots": {
+                            "globalDir": "/tmp/.cowork/agent-profiles",
+                            "workspaceDir": "/tmp/demo/.cowork/agent-profiles"
+                        }
+                    }
+                }
+            })),
+        });
+
+        assert_eq!(state.agent_profiles_catalog.profiles.len(), 1);
+        assert_eq!(
+            state.agent_profiles_catalog.profiles[0].workspace_disabled,
+            Some(true)
+        );
+        assert_eq!(state.agent_profiles_catalog.diagnostics.len(), 1);
+        assert_eq!(
+            state
+                .agent_profiles_catalog
+                .roots
+                .as_ref()
+                .map(|r| r.workspace_dir.as_str()),
+            Some("/tmp/demo/.cowork/agent-profiles")
+        );
+        assert_eq!(state.subagents.len(), 1);
+        assert_eq!(state.subagents[0].name, "Code Reviewer");
+        assert_eq!(state.subagents[0].scope.as_deref(), Some("global"));
+        assert_eq!(state.subagents[0].tool_preset.as_deref(), Some("reviewer"));
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertAgentProfile {
+            workspace_id: "ws-1".to_string(),
+            input: AgentProfileUpsertInputWire {
+                scope: "workspace".to_string(),
+                id: "auditor".to_string(),
+                display_name: "Security Auditor".to_string(),
+                description: "Finds security issues".to_string(),
+                enabled: true,
+                base_role: "explorer".to_string(),
+                prompt: "Audit carefully".to_string(),
+                allowed_built_in_tools: vec!["read_file".to_string()],
+                allowed_mcp_servers: vec![],
+                skill_names: vec!["sec".to_string()],
+                model: None,
+                reasoning_effort: Some("medium".to_string()),
+                default_task_type: None,
+                default_context_mode: None,
+            },
+        }));
+        let upsert_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/agentProfiles/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(upsert_params["profile"]["version"], 1);
+        assert_eq!(upsert_params["profile"]["displayName"], "Security Auditor");
+        assert_eq!(upsert_params["profile"]["baseRole"], "explorer");
+        assert!(upsert_params["profile"].get("model").is_none());
+
+        state.dispatch(Action::Settings(
+            SettingsAction::SetAgentProfileWorkspaceAvailability {
+                workspace_id: "ws-1".to_string(),
+                id: "reviewer".to_string(),
+                disabled: false,
+            },
+        ));
+        let avail_params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/agentProfiles/workspaceAvailability/set" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(avail_params["id"], "reviewer");
+        assert_eq!(avail_params["disabled"], false);
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 2,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "scope": null,
+                    "memories": [
+                        {
+                            "id": "mem-ws",
+                            "scope": "workspace",
+                            "content": "Use Bun in this repo",
+                            "createdAt": "2026-11-15T00:00:00Z",
+                            "updatedAt": "2026-11-15T01:00:00Z"
+                        },
+                        {
+                            "id": "mem-user",
+                            "scope": "user",
+                            "content": "Prefer concise answers",
+                            "createdAt": "2026-11-15T00:00:00Z",
+                            "updatedAt": "2026-11-15T02:00:00Z"
+                        }
+                    ]
+                }
+            })),
+        });
+        assert_eq!(state.scoped_memories.len(), 2);
+        assert_eq!(state.memory_entries.len(), 2);
+        assert_eq!(state.memory_entries[0].key, "mem-ws");
+        assert!(state.memory_entries[0].updated_at.is_some());
+
+        // Scoped list for "user" updates user entries without dropping workspace entries.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 3,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "scope": "user",
+                    "memories": [
+                        {
+                            "id": "mem-user",
+                            "scope": "user",
+                            "content": "Updated user preference",
+                            "createdAt": "2026-11-15T00:00:00Z",
+                            "updatedAt": "2026-11-15T03:00:00Z"
+                        }
+                    ]
+                }
+            })),
+        });
+        assert_eq!(state.scoped_memories.len(), 2);
+        assert!(state.scoped_memories.iter().any(|m| m.id == "mem-ws"));
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertMemory {
+            workspace_id: "ws-1".to_string(),
+            key: "mem-user".to_string(),
+            content: "New user memory".to_string(),
+        }));
+        let mem_upsert = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/memory/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mem_upsert["scope"], "user");
+        assert_eq!(mem_upsert["mode"], "upsert");
+        assert_eq!(mem_upsert["id"], "mem-user");
+    }
+
+    #[test]
+    fn plugins_skills_and_mcp_schemas_match_server() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "cowork/plugins/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "plugins_catalog",
+                    "sessionId": "s-1",
+                    "catalog": {
+                        "plugins": [
+                            {
+                                "id": "plug-a",
+                                "name": "plug-a",
+                                "displayName": "Plugin Alpha",
+                                "description": "Tools for alpha",
+                                "scope": "user",
+                                "discoveryKind": "marketplace",
+                                "installed": true,
+                                "enabled": true,
+                                "version": "1.2.0",
+                                "updateAvailable": null,
+                                "skills": [{ "name": "alpha-skill" }],
+                                "mcpServers": ["alpha-mcp"],
+                                "apps": [],
+                                "warnings": []
+                            }
+                        ],
+                        "availablePlugins": [
+                            {
+                                "id": "plug-b",
+                                "name": "plug-b",
+                                "displayName": "Plugin Beta"
+                            }
+                        ],
+                        "warnings": ["partial refresh"]
+                    }
+                }
+            })),
+        });
+        assert_eq!(state.plugins.len(), 1);
+        assert_eq!(state.plugins[0].name, "Plugin Alpha");
+        assert_eq!(state.plugins[0].scope.as_deref(), Some("user"));
+        assert_eq!(state.plugins[0].skill_count, 1);
+        assert_eq!(state.plugins[0].mcp_count, 1);
+        assert_eq!(state.available_plugins.len(), 1);
+        assert_eq!(state.plugin_catalog_warnings, vec!["partial refresh"]);
+
+        // Scoped plugin disable inherits "user" scope from parsed plugin summary.
+        state.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+            workspace_id: "ws-1".to_string(),
+            id: "plug-a".to_string(),
+            enabled: false,
+        }));
+        let plugin_disable = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/plugins/disable" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(plugin_disable["pluginId"], "plug-a");
+        assert_eq!(plugin_disable["scope"], "user");
+
+        // Plugin mutation multi-event array updates plugins, skills_catalog, and mcp_servers together.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 11,
+            method: "cowork/plugins/disable".to_string(),
+            result: Ok(json!({
+                "events": [
+                    {
+                        "type": "plugins_catalog",
+                        "catalog": {
+                            "plugins": [
+                                {
+                                    "id": "plug-a",
+                                    "name": "plug-a",
+                                    "displayName": "Plugin Alpha",
+                                    "description": "Tools for alpha",
+                                    "scope": "user",
+                                    "enabled": false,
+                                    "skills": [],
+                                    "mcpServers": [],
+                                    "warnings": []
+                                }
+                            ],
+                            "availablePlugins": [],
+                            "warnings": []
+                        }
+                    },
+                    {
+                        "type": "skills_catalog",
+                        "catalog": {
+                            "scopes": [{ "scope": "workspace", "writable": true, "readable": true }],
+                            "installations": [
+                                {
+                                    "installationId": "inst-1",
+                                    "name": "custom-skill",
+                                    "description": "Custom skill",
+                                    "scope": "user",
+                                    "enabled": true,
+                                    "diagnostics": []
+                                }
+                            ],
+                            "effectiveSkills": [
+                                {
+                                    "installationId": "inst-1",
+                                    "name": "custom-skill",
+                                    "description": "Custom skill",
+                                    "scope": "user",
+                                    "enabled": true,
+                                    "diagnostics": []
+                                }
+                            ],
+                            "availableSkills": [{ "id": "avail-1", "name": "avail-skill" }]
+                        }
+                    },
+                    {
+                        "type": "mcp_servers",
+                        "userServers": [
+                            {
+                                "name": "github",
+                                "transport": "http",
+                                "enabled": true
+                            }
+                        ],
+                        "workspaceServers": []
+                    }
+                ]
+            })),
+        });
+        assert!(!state.plugins[0].enabled);
+        assert_eq!(state.skill_installations.len(), 1);
+        assert_eq!(state.available_skills.len(), 1);
+        assert_eq!(state.skills.len(), 1);
+        assert_eq!(state.skills[0].installation_id.as_deref(), Some("inst-1"));
+        assert_eq!(state.mcp_servers.len(), 1);
+        assert_eq!(state.mcp_servers[0].source.as_deref(), Some("user"));
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertScopedMcpServer {
+            workspace_id: "ws-1".to_string(),
+            name: "github-enterprise".to_string(),
+            source: "user".to_string(),
+            previous_name: Some("github".to_string()),
+            server: json!({ "transport": { "type": "http", "url": "https://example.com" } }),
+        }));
+        let mcp_upsert = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/mcp/server/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mcp_upsert["source"], "user");
+        assert_eq!(mcp_upsert["previousName"], "github");
+        assert_eq!(mcp_upsert["server"]["name"], "github-enterprise");
+    }
+
+    #[test]
+    fn child_routing_defaults_subagent_colon_delimiter_and_partial_catalogs() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        // 1. UpdateWorkspaceDefaults syncs child model routing fields + remaps server keys.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({
+                "defaultChildModelRoutingMode": "custom",
+                "defaultPreferredChildModel": "claude-haiku-4-5",
+                "defaultPreferredChildModelRef": "anthropic:claude-haiku-4-5",
+                "defaultAllowedChildModelRefs": ["anthropic:claude-haiku-4-5", "openai:gpt-4.1-mini"],
+                "defaultBackupsEnabled": false
+            }),
+        }));
+        let params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(params["config"]["childModelRoutingMode"], "custom");
+        assert_eq!(params["config"]["preferredChildModel"], "claude-haiku-4-5");
+        assert_eq!(
+            params["config"]["preferredChildModelRef"],
+            "anthropic:claude-haiku-4-5"
+        );
+        assert_eq!(
+            params["config"]["allowedChildModelRefs"],
+            json!(["anthropic:claude-haiku-4-5", "openai:gpt-4.1-mini"])
+        );
+        assert_eq!(params["config"]["backupsEnabled"], false);
+        assert!(
+            params["config"]
+                .get("defaultPreferredChildModelRef")
+                .is_none()
+        );
+        let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+        assert_eq!(
+            ws.default_child_model_routing_mode.as_deref(),
+            Some("custom")
+        );
+        assert_eq!(
+            ws.default_preferred_child_model.as_deref(),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(
+            ws.default_preferred_child_model_ref.as_deref(),
+            Some("anthropic:claude-haiku-4-5")
+        );
+        assert_eq!(
+            ws.default_allowed_child_model_refs,
+            vec![
+                "anthropic:claude-haiku-4-5".to_string(),
+                "openai:gpt-4.1-mini".to_string()
+            ]
+        );
+        assert!(!ws.default_backups_enabled);
+
+        // Incoming session_config syncs updated defaults back onto WorkspaceRecord.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "cowork/controlEvent".to_string(),
+            params: json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "childModelRoutingMode": "inherit",
+                        "preferredChildModel": "gpt-4.1",
+                        "preferredChildModelRef": "openai:gpt-4.1",
+                        "allowedChildModelRefs": ["openai:gpt-4.1"],
+                        "backupsEnabled": true
+                    }
+                }
+            }),
+        });
+        let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
+        assert_eq!(
+            ws.default_child_model_routing_mode.as_deref(),
+            Some("inherit")
+        );
+        assert_eq!(ws.default_preferred_child_model.as_deref(), Some("gpt-4.1"));
+        assert_eq!(
+            ws.default_preferred_child_model_ref.as_deref(),
+            Some("openai:gpt-4.1")
+        );
+        assert_eq!(
+            ws.default_allowed_child_model_refs,
+            vec!["openai:gpt-4.1".to_string()]
+        );
+        assert!(ws.default_backups_enabled);
+
+        // 2. Colon provider delimiter parsing + UpsertSubagent preservation of existing fields.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 21,
+            method: "cowork/agentProfiles/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "agent_profiles_catalog",
+                    "catalog": {
+                        "profiles": [
+                            {
+                                "scope": "workspace",
+                                "builtIn": false,
+                                "locked": false,
+                                "effective": true,
+                                "shadowed": false,
+                                "profile": {
+                                    "version": 1,
+                                    "id": "reviewer",
+                                    "displayName": "Reviewer",
+                                    "description": "Review code",
+                                    "enabled": false,
+                                    "baseRole": "reviewer",
+                                    "prompt": "Old prompt",
+                                    "allowedBuiltInTools": ["read_file"],
+                                    "allowedMcpServers": ["github"],
+                                    "skillNames": ["rust-audit"],
+                                    "model": "anthropic:claude-sonnet-4-5"
+                                }
+                            },
+                            {
+                                "scope": "workspace",
+                                "effective": true,
+                                "shadowed": false,
+                                "profile": {
+                                    "version": 1,
+                                    "id": "local-ollama",
+                                    "displayName": "Local",
+                                    "description": "",
+                                    "enabled": true,
+                                    "baseRole": "worker",
+                                    "prompt": "",
+                                    "allowedBuiltInTools": [],
+                                    "allowedMcpServers": [],
+                                    "skillNames": [],
+                                    "model": "llama3:8b"
+                                }
+                            }
+                        ]
+                    }
+                }
+            })),
+        });
+        assert_eq!(state.subagents[0].provider.as_deref(), Some("anthropic"));
+        assert_eq!(state.subagents[1].provider, None);
+
+        let mut updated = state.subagents[0].clone();
+        updated.system_prompt = "New prompt".to_string();
+        state.dispatch(Action::Settings(SettingsAction::UpsertSubagent {
+            workspace_id: "ws-1".to_string(),
+            profile: updated,
+        }));
+        let subagent_upsert = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/agentProfiles/upsert" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(subagent_upsert["profile"]["enabled"], false);
+        assert_eq!(
+            subagent_upsert["profile"]["allowedMcpServers"],
+            json!(["github"])
+        );
+        assert_eq!(
+            subagent_upsert["profile"]["skillNames"],
+            json!(["rust-audit"])
+        );
+
+        // 3. Partial marketplace responses preserve un-installed entries.
+        state.available_plugins = vec![json!({ "id": "plug-a" }), json!({ "id": "plug-keep" })];
+        state.available_skills = vec![
+            json!({ "name": "skill-a" }),
+            json!({ "name": "skill-keep" }),
+        ];
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 22,
+            method: "cowork/plugins/install".to_string(),
+            result: Ok(json!({
+                "events": [
+                    {
+                        "type": "plugins_catalog",
+                        "availablePluginsPartial": true,
+                        "catalog": {
+                            "plugins": [{ "id": "plug-a", "name": "plug-a" }],
+                            "availablePlugins": [],
+                            "warnings": []
+                        }
+                    },
+                    {
+                        "type": "skills_catalog",
+                        "availableSkillsPartial": true,
+                        "catalog": {
+                            "scopes": [],
+                            "installations": [{ "installationId": "i1", "name": "skill-a" }],
+                            "effectiveSkills": [],
+                            "availableSkills": []
+                        }
+                    }
+                ]
+            })),
+        });
+        assert_eq!(state.available_plugins, vec![json!({ "id": "plug-keep" })]);
+        assert_eq!(
+            state.available_skills,
+            vec![json!({ "name": "skill-keep" })]
+        );
     }
 }

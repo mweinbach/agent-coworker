@@ -274,6 +274,7 @@ fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
 
     let mut list = col().w_full().gap(6.0);
     for run in runs.into_iter().take(6) {
+        let run_id = run.id.clone();
         list = list.child(
             col()
                 .key(format!("workflow-run-{}", run.id))
@@ -281,7 +282,11 @@ fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
                 .padding(8.0)
                 .radius(k.radius.md)
                 .fill(k.c.layer_02)
+                .hover(k.c.hover)
                 .gap(4.0)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.shell_ui.selected_workflow_run_id = Some(run_id.clone());
+                })
                 .child(
                     row()
                         .w_full()

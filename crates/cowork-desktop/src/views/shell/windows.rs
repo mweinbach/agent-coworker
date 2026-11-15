@@ -36,7 +36,7 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         .gap(8.0)
         .center_y()
         .child(icon(&icons::SPARKLES, 15.0).color(t.accent))
-        .child(text("Antigravity").font(t.label).color(t.text_base));
+        .child(text("Cowork").font(t.label).color(t.text_base));
     if busy_count > 0 {
         header = header.child(Badge::new(format!("{busy_count} active")).build(k));
     }
@@ -82,8 +82,12 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         .gap(8.0)
         .child({
             let ws_id = active_ws.map(|w| w.id.clone());
+            let mut primary_kit = k.clone();
+            primary_kit.c.bg_icon_button_contrast = t.accent;
+            primary_kit.c.submit_fg = t.primary_fg;
+            primary_kit.c.submit_icon = t.primary_fg;
             Button::new("New chat")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .icon(&icons::PLUS)
                 .on_press_tx(move |s: &mut AppState, _| {
@@ -92,7 +96,7 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
                         workspace_id: ws_id.clone(),
                     }));
                 })
-                .build(k)
+                .build(&primary_kit)
         })
         .child(
             Button::new("Quick Chat")
@@ -200,9 +204,8 @@ pub fn build_quick_chat_window(
     let ws_name = s
         .active_workspace_id
         .as_deref()
-        .and_then(|id| s.workspaces.iter().find(|w| w.id == id))
-        .map(|w| w.name.as_str())
-        .unwrap_or("Quick Chat");
+        .and_then(|id| s.workspaces.iter().find(|w| w.id == id && !w.one_off_chat))
+        .map(|w| w.name.as_str());
 
     let header = row()
         .key("quick-chat-header")
@@ -215,7 +218,7 @@ pub fn build_quick_chat_window(
         .fill(t.panel_bg)
         .child(icon(&icons::SPARKLES, 14.0).color(t.accent))
         .child(text("Quick Chat").font(t.label).color(t.text_base))
-        .child(Badge::new(ws_name).build(k))
+        .children(ws_name.map(|name| Badge::new(name).build(k)))
         .child(spacer())
         .child(
             Button::new("Pop out")
@@ -262,9 +265,8 @@ pub fn build_inline_quick_chat_overlay(
     let ws_name = s
         .active_workspace_id
         .as_deref()
-        .and_then(|id| s.workspaces.iter().find(|w| w.id == id))
-        .map(|w| w.name.as_str())
-        .unwrap_or("Quick Chat");
+        .and_then(|id| s.workspaces.iter().find(|w| w.id == id && !w.one_off_chat))
+        .map(|w| w.name.as_str());
 
     let sheet = col()
         .key("inline-quick-chat-sheet")
@@ -284,7 +286,7 @@ pub fn build_inline_quick_chat_overlay(
                 .fill(t.elevated_bg)
                 .child(icon(&icons::SPARKLES, 14.0).color(t.accent))
                 .child(text("Quick Chat").font(t.label).color(t.text_base))
-                .child(Badge::new(ws_name).build(k))
+                .children(ws_name.map(|name| Badge::new(name).build(k)))
                 .child(spacer())
                 .child(
                     Button::new("Close")

@@ -1,6 +1,6 @@
 //! Unit tests for Settings navigation, gating, target resolution, and primitives.
 
-use super::chats::build_import_source_params;
+use super::conversation_import::build_import_source_params;
 use super::desktop::{
     DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR, format_quick_chat_shortcut_label,
     parse_quick_chat_accelerator, shortcut_to_accelerator,
@@ -1699,4 +1699,250 @@ fn desktop_show_menu_bar_toggle_visibility_and_action() {
             "{platform:?} clicking Show menu bar again must re-enable desktop_settings.show_menu_bar"
         );
     }
+}
+
+fn conversation_import_fixture() -> AppState {
+    let mut s = AppState {
+        scene_mode: true,
+        workspaces: vec![
+            WorkspaceRecord::new("source", "Current", "/current", 1),
+            WorkspaceRecord::new("dest", "Destination", "/destination", 1),
+        ],
+        active_workspace_id: Some("source".into()),
+        ..Default::default()
+    };
+    s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Chats,
+    ))));
+    super::conversation_import::open(&mut s);
+    s
+}
+
+fn import_request(s: &AppState, method: &str) -> Option<(u64, serde_json::Value)> {
+    s.services
+        .emitted_ws_commands
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            crate::ws::WsCommand::SendRequest {
+                method: sent,
+                request_id,
+                params,
+                ..
+            } if sent == method => Some((*request_id, params.clone())),
+            _ => None,
+        })
+}
+
+fn import_response(
+    s: &mut AppState,
+    workspace: &str,
+    id: u64,
+    method: &str,
+    payload: serde_json::Value,
+) {
+    s.apply_store_event(crate::actions::StoreEvent::WsResponse {
+        workspace_id: workspace.into(),
+        request_id: id,
+        method: method.into(),
+        result: Ok(payload),
+    });
+}
+
+fn preview_seven() -> serde_json::Value {
+    serde_json::json!({"conversations": (0..7).map(|i| serde_json::json!({
+        "source": "codex", "fingerprint": format!("fp{i}"), "title": format!("Conversation {i}"),
+        "mapping": { "status": if i == 0 { "missing" } else { "matched" } },
+        "alreadyImportedThreadId": if (2..6).contains(&i) { Some("existing") } else { None },
+    })).collect::<Vec<_>>()})
+}
+
+#[test]
+fn conversation_import_selects_from_all_rows_and_requires_a_valid_destination() {
+    use super::conversation_import::{IMPORT, PREVIEW};
+    use crate::ws::WsConnectionState;
+    use rune::{El, Runtime};
+
+    fn render(s: &AppState, cx: &mut rune::Cx<AppState>) -> El {
+        let (kit, _) = crate::theme::build_kit_with_accent(
+            false,
+            false,
+            false,
+            s.desktop_settings.accent_palette,
+        );
+        let out = crate::views::settings::view(s, cx, &kit);
+        rune::el()
+            .w_full()
+            .h_full()
+            .child(rune_kit::root(out.content, out.overlays))
+    }
+    fn click(rt: &mut Runtime<AppState>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+    }
+
+    let mut s = conversation_import_fixture();
+    s.workspace_socket_by_id
+        .insert("dest".into(), WsConnectionState::Connected);
+    let (old, _) = import_request(&s, PREVIEW).unwrap();
+    let mut rt = Runtime::new(s, render, (1100.0, 820.0), rune::Env::new(true, 1.0));
+    rt.settle_all();
+    rt.frame(0.0);
+    click(&mut rt, "import-source-codex");
+    import_response(&mut rt.state, "source", old, PREVIEW, preview_seven());
+    rt.invalidate();
+    rt.frame(0.0);
+    assert!(rt.find("import-check-fp0").is_none());
+    click(&mut rt, "import-source-codex");
+    rt.state
+        .dispatch(Action::Settings(SettingsAction::PreviewConversationImport));
+    let (id, _) = import_request(&rt.state, PREVIEW).unwrap();
+    import_response(&mut rt.state, "source", id, PREVIEW, preview_seven());
+    rt.invalidate();
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.role == "checkbox" && e.label.as_deref() == Some("Conversation 6"))
+    );
+    click(&mut rt, "conversation-import-submit");
+    assert!(import_request(&rt.state, IMPORT).is_none());
+
+    click(&mut rt, "import-check-fp1");
+    click(&mut rt, "import-map-fp0");
+    click(&mut rt, "import-destination-fp0-item1");
+    click(&mut rt, "conversation-import-submit");
+    let (id, params) = import_request(&rt.state, IMPORT).expect("valid selection should submit");
+    assert_eq!(
+        params,
+        serde_json::json!({
+            "includeCodex": true, "includeClaudeCode": true, "includeCowork": false,
+            "selected": [{"source":"codex","fingerprint":"fp0"},{"source":"codex","fingerprint":"fp6"}],
+            "mappings": {"fp0":{"kind":"fallback","workspaceId":"dest"}}, "mode":"skip-existing"
+        })
+    );
+    let sent = rt.state.services.emitted_ws_commands.len();
+    rt.state
+        .dispatch(Action::Settings(SettingsAction::ExecuteConversationImport));
+    assert_eq!(rt.state.services.emitted_ws_commands.len(), sent);
+    import_response(
+        &mut rt.state,
+        "source",
+        id,
+        IMPORT,
+        serde_json::json!({
+            "imported":[{"fingerprint":"fp0","threadId":"new","workspaceId":"dest","workspacePath":"/destination"}],
+            "skipped":[], "failed":[{"fingerprint":"fp6","message":"Source file moved"}], "createdWorkspaces":[]
+        }),
+    );
+    assert!(rt.state.services.emitted_ws_commands.iter().any(|cmd| matches!(cmd,
+        crate::ws::WsCommand::SendRequest { method, workspace_id, .. } if method == "thread/list" && workspace_id == "dest")));
+    rt.invalidate();
+    rt.frame(0.0);
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Imported 1, skipped 0, failed 1."))
+    );
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Conversation 6 — Source file moved"))
+    );
+}
+
+#[test]
+fn conversation_import_discards_outdated_scans_and_closed_dialog_replies() {
+    use super::conversation_import::{IMPORT, PREVIEW};
+    let ready = serde_json::json!({"conversations":[{
+        "source":"codex","fingerprint":"stale","title":"Stale","mapping":{"status":"matched"}
+    }]});
+    let mut s = conversation_import_fixture();
+    let (first, _) = import_request(&s, PREVIEW).unwrap();
+    s.dispatch(Action::Settings(SettingsAction::PreviewConversationImport));
+    let (latest, _) = import_request(&s, PREVIEW).unwrap();
+    import_response(&mut s, "source", first, PREVIEW, ready.clone());
+    import_response(&mut s, "dest", latest, PREVIEW, ready.clone());
+    s.dispatch(Action::Settings(SettingsAction::ExecuteConversationImport));
+    assert!(import_request(&s, IMPORT).is_none());
+
+    s.dispatch(Action::Navigate(NavAction::SelectWorkspace("dest".into())));
+    super::conversation_import::open(&mut s);
+    import_response(&mut s, "source", latest, PREVIEW, ready.clone());
+    s.dispatch(Action::Settings(SettingsAction::ExecuteConversationImport));
+    assert!(import_request(&s, IMPORT).is_none());
+    let (dest_id, _) = import_request(&s, PREVIEW).unwrap();
+    import_response(
+        &mut s,
+        "dest",
+        dest_id,
+        PREVIEW,
+        serde_json::json!({"conversations":[{
+            "source":"codex","fingerprint":"fresh","title":"Current","mapping":{"status":"matched"}
+        }]}),
+    );
+    s.dispatch(Action::Settings(SettingsAction::ExecuteConversationImport));
+    let (_, params) = import_request(&s, IMPORT).unwrap();
+    assert_eq!(
+        params["selected"],
+        serde_json::json!([{"source":"codex","fingerprint":"fresh"}])
+    );
+}
+
+#[test]
+fn conversation_import_loads_new_destinations_after_leaving_settings() {
+    use super::conversation_import::{IMPORT, PREVIEW};
+    use crate::actions::StoreEvent;
+    use crate::router::ViewId;
+
+    let mut s = conversation_import_fixture();
+    let (id, _) = import_request(&s, PREVIEW).unwrap();
+    import_response(
+        &mut s,
+        "source",
+        id,
+        PREVIEW,
+        serde_json::json!({"conversations":[{
+            "source":"codex","fingerprint":"fp","title":"New project","mapping":{"status":"create"}
+        }]}),
+    );
+    s.dispatch(Action::Settings(SettingsAction::ExecuteConversationImport));
+    let (id, _) = import_request(&s, IMPORT).unwrap();
+    s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
+    import_response(
+        &mut s,
+        "source",
+        id,
+        IMPORT,
+        serde_json::json!({
+            "imported":[{"workspaceId":"new-project","workspacePath":"/registered"}],
+            "createdWorkspaces":[{"workspaceId":"new-project","path":"/registered","name":"New project"}],
+            "skipped":[], "failed":[]
+        }),
+    );
+    assert!(s.workspaces.iter().all(|w| w.id != "new-project"));
+    assert!(
+        s.services
+            .emitted_native_commands
+            .iter()
+            .any(|cmd| matches!(
+                cmd, NativeCommand::LoadImportedWorkspaces(ids) if ids == &["new-project"]
+            ))
+    );
+    s.apply_store_event(StoreEvent::ImportedWorkspacesLoaded(vec![
+        WorkspaceRecord::new("new-project", "New project", "/registered", 1),
+    ]));
+    assert!(s.workspaces.iter().any(|w| w.id == "new-project"));
+    assert_eq!(s.active_workspace_id.as_deref(), Some("source"));
+    assert!(s.settings_ui.conversation_import.is_none());
+    assert!(s.services.emitted_native_commands.iter().any(|cmd| matches!(
+        cmd, NativeCommand::StartWorkspaceServer { workspace_id, path, .. } if workspace_id == "new-project" && path == "/registered"
+    )));
 }

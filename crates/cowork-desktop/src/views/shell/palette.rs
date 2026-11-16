@@ -385,7 +385,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
     out.extend(actions);
 
     let mut thread_count = 0usize;
-    for th in s.threads.iter().filter(|t| !t.archived) {
+    for th in s.threads.iter().filter(|t| t.is_standard_chat()) {
         if thread_count >= 8 {
             break;
         }

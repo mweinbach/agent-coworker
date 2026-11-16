@@ -224,6 +224,8 @@ pub enum ChatAction {
     RetryFailedTurn {
         thread_id: String,
     },
+    RetryComposerSubmission(String),
+    DismissComposerFailure(String),
     StartLmStudioAndRetry {
         workspace_id: String,
         thread_id: String,
@@ -591,14 +593,8 @@ pub enum SettingsAction {
         workspace_id: String,
         target_session_id: String,
     },
-    PreviewConversationImport {
-        workspace_id: String,
-        params: Value,
-    },
-    ExecuteConversationImport {
-        workspace_id: String,
-        params: Value,
-    },
+    PreviewConversationImport,
+    ExecuteConversationImport,
     SetRemoteAccessEnabled(bool),
     RotateRemoteAccessSession,
     UpdateTrustedPhonePermissions {
@@ -792,6 +788,7 @@ pub enum NativeCommand {
         workspace_id: String,
     },
     SavePersistedState(Box<PersistedDesktopState>),
+    LoadImportedWorkspaces(Vec<String>),
     PickFolder {
         request_id: String,
     },
@@ -892,6 +889,7 @@ pub enum StoreEvent {
         paths: Vec<PathBuf>,
     },
     WorkspaceAdded(WorkspaceRecord),
+    ImportedWorkspacesLoaded(Vec<WorkspaceRecord>),
     WorkspaceFilesListed {
         workspace_id: String,
         dir: String,

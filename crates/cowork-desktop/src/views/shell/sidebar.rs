@@ -457,7 +457,8 @@ fn build_workspaces_section(
     for (idx, ws) in projects.iter().enumerate() {
         let ws_id = ws.id.clone();
         let ws_id_new = ws.id.clone();
-        let collapsed = s.collapsed_workspace_ids.contains(&ws.id);
+        let search_active = !s.sidebar_search.trim().is_empty();
+        let collapsed = !search_active && s.collapsed_workspace_ids.contains(&ws.id);
         let is_active_ws = s.active_workspace_id.as_deref() == Some(ws.id.as_str());
         let ws_threads: Vec<&ThreadRecord> = threads
             .iter()
@@ -465,8 +466,30 @@ fn build_workspaces_section(
             .filter(|tr| tr.workspace_id == ws.id)
             .collect();
 
+        let ws_id_toggle = ws.id.clone();
+        let disclosure = IconButton::new(if collapsed {
+            &rune_kit::glyphs::FOLDER
+        } else {
+            &rune_kit::glyphs::FOLDER_OPEN
+        })
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Regular)
+        .disabled(search_active)
+        .help(format!(
+            "{} {}",
+            if collapsed { "Expand" } else { "Collapse" },
+            ws.name
+        ))
+        .on_press(move |s: &mut AppState| {
+            s.dispatch(Action::Shell(ShellAction::ToggleWorkspaceCollapsed(
+                ws_id_toggle.clone(),
+            )));
+        })
+        .build(k)
+        .expanded(!collapsed)
+        .key(format!("ws-toggle-{}", ws.id));
+
         let ws_row = SidebarRow::new(ws.name.clone())
-            .icon(&icons::FOLDER)
             .height(ROW_H)
             .selected(is_active_ws && active_thread_id.is_none())
             .trailing(hover_add_button(
@@ -492,17 +515,25 @@ fn build_workspaces_section(
                 },
             )
             .on_select(move |s: &mut AppState, _| {
-                s.dispatch(Action::Shell(ShellAction::ToggleWorkspaceCollapsed(
-                    ws_id.clone(),
-                )));
+                s.dispatch(Action::Navigate(NavAction::SelectWorkspace(ws_id.clone())));
             })
             .build(k)
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0)
+            .pl(2.0)
             .key(format!("ws-{}", ws.id));
 
-        projects_header = projects_header.row(ws_row);
+        projects_header = projects_header.row(
+            row()
+                .w_full()
+                .pl(4.0)
+                .center_y()
+                .child(disclosure)
+                .child(ws_row),
+        );
 
         if !collapsed {
-            let search_active = !s.sidebar_search.trim().is_empty();
             let expanded = s.shell_ui.expanded_thread_workspaces.contains(&ws.id);
             let show_count = if search_active || expanded {
                 ws_threads.len()

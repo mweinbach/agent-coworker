@@ -116,7 +116,24 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             main_col = main_col.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
         }
 
-        if let Some(lock) = rt
+        if let Some(task) = s.active_task.as_ref().filter(|task| {
+            thread.source_task_id.as_ref() == Some(&task.summary.id) && task.summary.is_terminal()
+        }) {
+            main_col = main_col.child(
+                read_only_notice_bar(
+                    k,
+                    &t,
+                    "This task conversation is read-only.",
+                    if task.summary.status == "failed" {
+                        "Retry the task to continue this conversation."
+                    } else {
+                        "Reopen the task to continue this conversation."
+                    },
+                    None,
+                )
+                .key("task-conversation-read-only"),
+            );
+        } else if let Some(lock) = rt
             .and_then(|r| r.source_task.as_ref())
             .filter(|l| l.read_only)
         {

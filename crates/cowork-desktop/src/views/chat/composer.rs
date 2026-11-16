@@ -11,8 +11,8 @@ use rune_kit::{
 
 use crate::actions::{Action, ChatAction, NativeAction};
 use crate::state::{
-    AppState, ComposerDraft, ProviderModelSummary, ProviderSummary, ReasoningEffortValue,
-    ThreadBusyPolicy, ThreadRecord, ThreadRuntime, WorkspaceRecord,
+    AppState, ComposerDraft, ComposerSubmissionStatus, ProviderModelSummary, ProviderSummary,
+    ReasoningEffortValue, ThreadBusyPolicy, ThreadRecord, ThreadRuntime, WorkspaceRecord,
 };
 use crate::theme::ThemeTokens;
 use crate::ws::WsConnectionState;
@@ -121,6 +121,7 @@ pub fn build_composer(
         !is_landing && streaming && !is_draft && (thread_disconnected || session_missing);
     let can_submit = !input_disabled
         && !stream_submit_blocked
+        && !runtime.is_some_and(ThreadRuntime::sending_composer_message)
         && composer_can_submit(
             &s.composer_edit.text,
             draft,
@@ -1005,18 +1006,11 @@ fn build_submission_feedback(
         );
     }
 
-    let sub = rt.composer_submission.as_ref()?;
-    if sub.phase != "failed" {
+    let ComposerSubmissionStatus::Failed(error) = &rt.composer_submission.as_ref()?.status else {
         return None;
-    }
-
-    let retry_tid = tid;
-    let err_msg = sub
-        .error
-        .as_deref()
-        .filter(|e| !e.trim().is_empty())
-        .unwrap_or("Message could not be delivered.")
-        .to_string();
+    };
+    let retry_tid = tid.clone();
+    let err_msg = format!("Message wasn’t sent. {error}");
 
     Some(
         row()
@@ -1038,16 +1032,32 @@ fn build_submission_feedback(
                     .truncate(),
             )
             .child(
-                Button::new("Retry")
+                Button::new("Retry exact message")
                     .variant(ButtonVariant::Danger)
                     .control_size(ControlSize::Small)
                     .icon(&icons::ROTATE_CCW)
+                    .disabled(rt.streaming)
                     .on_press(move |s: &mut AppState| {
-                        s.dispatch(Action::Chat(ChatAction::RetryFailedTurn {
-                            thread_id: retry_tid.clone(),
-                        }));
+                        s.dispatch(Action::Chat(ChatAction::RetryComposerSubmission(
+                            retry_tid.clone(),
+                        )));
                     })
-                    .build(k),
+                    .build(k)
+                    .key("composer-retry-submission"),
+            )
+            .child(
+                IconButton::new(k.glyph.close)
+                    .variant(IconButtonVariant::GhostMuted)
+                    .control_size(ControlSize::Small)
+                    .label("Dismiss send failure")
+                    .help("Dismiss send failure")
+                    .on_press(move |s: &mut AppState| {
+                        s.dispatch(Action::Chat(ChatAction::DismissComposerFailure(
+                            tid.clone(),
+                        )));
+                    })
+                    .build(k)
+                    .key("composer-dismiss-failure"),
             ),
     )
 }
@@ -1129,7 +1139,9 @@ pub fn submit_composer_message(s: &mut AppState) {
     let rt_ref = thread_id
         .as_deref()
         .and_then(|id| s.thread_runtime_by_id.get(id));
-    if rt_ref.is_some_and(|rt| rt.read_only_notice.is_some() || rt.source_task.is_some()) {
+    if rt_ref.is_some_and(|rt| {
+        rt.read_only_notice.is_some() || rt.source_task.is_some() || rt.sending_composer_message()
+    }) {
         return;
     }
     let streaming = rt_ref.is_some_and(|rt| rt.streaming);

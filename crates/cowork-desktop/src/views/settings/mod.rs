@@ -5,6 +5,7 @@
 pub mod backup;
 pub mod chats;
 pub mod connectors;
+pub(crate) mod conversation_import;
 pub mod desktop;
 pub mod developer;
 pub mod experiments;

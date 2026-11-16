@@ -43,6 +43,7 @@ use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
 };
 use crate::theme::{self, AccentPalette, ThemePreference};
+use crate::views::settings::conversation_import;
 use crate::ws::{PendingRpcMeta, WsCommand, WsConnectionState, WsRpcError};
 
 pub const WINDOW_MAIN: &str = "main";
@@ -356,6 +357,12 @@ pub struct ThreadRecord {
     pub last_event_seq: u64,
 }
 
+impl ThreadRecord {
+    pub fn is_standard_chat(&self) -> bool {
+        !self.archived && self.source_task_id.is_none()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ThreadBusyPolicy {
@@ -611,24 +618,16 @@ pub struct PendingThreadMessage {
     pub draft_submission: Option<DraftSubmissionRef>,
 }
 
-/// Pending in-flight `turn/start` state tracked on `ThreadRuntime`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadPendingTurnStart {
-    pub client_message_id: String,
-    pub text: String,
-    pub status: String,
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComposerSubmissionState {
+    pub message: PendingThreadMessage,
+    pub status: ComposerSubmissionStatus,
 }
 
-/// Submission status shown by composer feedback banners.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComposerSubmissionState {
-    pub submission_id: String,
-    pub client_message_id: String,
-    pub phase: String,
-    pub delivery: String,
-    pub error: Option<String>,
+#[derive(Clone, Debug, PartialEq)]
+pub enum ComposerSubmissionStatus {
+    Sending(u64),
+    Failed(String),
 }
 
 /// Optional read-only notice banner shown inside task-owned or read-only threads.
@@ -651,8 +650,8 @@ pub struct ThreadRuntime {
     pub streaming: bool,
     pub active_turn_id: Option<String>,
     pub pending_turn_count: usize,
-    pub pending_turn_start: Option<ThreadPendingTurnStart>,
     pub pending_steer: Option<PendingSteerState>,
+    #[serde(skip)]
     pub composer_submission: Option<ComposerSubmissionState>,
     pub attachment_ingesting: bool,
     pub feed: Vec<FeedItem>,
@@ -676,6 +675,15 @@ pub struct ThreadRuntime {
     pub last_event_seq: u64,
 }
 
+impl ThreadRuntime {
+    pub fn sending_composer_message(&self) -> bool {
+        matches!(
+            self.composer_submission.as_ref().map(|s| &s.status),
+            Some(ComposerSubmissionStatus::Sending(_))
+        )
+    }
+}
+
 /// Draft state for a thread composer or new-chat composer.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -688,7 +696,6 @@ pub struct ComposerDraft {
     pub references: Vec<TurnReference>,
     pub busy_policy: ThreadBusyPolicy,
     pub submission_error: Option<String>,
-    pub submitting: bool,
 }
 
 /// LM Studio quick-start modal state used from model/chat flows.
@@ -1158,6 +1165,15 @@ pub struct TaskSummaryView {
     pub updated_at: String,
 }
 
+impl TaskSummaryView {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status.as_str(),
+            "completed" | "cancelled" | "failed" | "accepted"
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskArtifactView {
@@ -1181,6 +1197,13 @@ pub struct TaskArtifactView {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TaskThreadView {
+    pub session_id: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskRecordView {
     pub summary: TaskSummaryView,
     pub prompt: String,
@@ -1196,7 +1219,7 @@ pub struct TaskRecordView {
     #[serde(default)]
     pub work_items: Value,
     #[serde(default)]
-    pub threads: Value,
+    pub threads: Vec<TaskThreadView>,
     #[serde(default)]
     pub requirements: Value,
     #[serde(default)]
@@ -1692,8 +1715,6 @@ pub struct AppState {
     pub telemetry_status: Option<Value>,
     pub settings_mutation_error: Option<String>,
     pub quick_chat_shortcut_error: Option<String>,
-    pub conversation_import_sources: Vec<Value>,
-    pub conversation_import_preview: Option<Value>,
     pub commands_by_workspace: HashMap<String, Vec<CommandInfo>>,
     pub attachment_previews_by_key: HashMap<String, Vec<AttachmentPreviewMeta>>,
     pub image_bytes_by_request: HashMap<String, (Option<String>, Vec<u8>)>,
@@ -1833,8 +1854,6 @@ impl Default for AppState {
             telemetry_status: None,
             settings_mutation_error: None,
             quick_chat_shortcut_error: None,
-            conversation_import_sources: Vec::new(),
-            conversation_import_preview: None,
             commands_by_workspace: HashMap::new(),
             attachment_previews_by_key: HashMap::new(),
             image_bytes_by_request: HashMap::new(),
@@ -2318,10 +2337,7 @@ impl AppState {
             return true;
         }
         if self.composer_drafts.values().any(|d| {
-            !d.text.trim().is_empty()
-                || !d.attachments.is_empty()
-                || !d.references.is_empty()
-                || d.submitting
+            !d.text.trim().is_empty() || !d.attachments.is_empty() || !d.references.is_empty()
         }) {
             return true;
         }
@@ -2329,6 +2345,7 @@ impl AppState {
             rt.streaming
                 || rt.active_turn_id.is_some()
                 || rt.pending_turn_count > 0
+                || rt.composer_submission.is_some()
                 || !rt.pending_interactions.is_empty()
         }) {
             return true;
@@ -4017,6 +4034,22 @@ impl AppState {
                     self.ingest_composer_paths(&key, paths);
                 }
             }
+            StoreEvent::ImportedWorkspacesLoaded(workspaces) => {
+                let ids: Vec<_> = workspaces.iter().map(|ws| ws.id.clone()).collect();
+                for workspace in workspaces {
+                    if !self.workspaces.iter().any(|w| w.id == workspace.id) {
+                        self.workspace_order.push(workspace.id.clone());
+                        self.workspaces.push(workspace);
+                    }
+                }
+                // Apply the merged, persisted registry to the host before starting its sidecars.
+                if !ids.is_empty() && !self.scene_mode {
+                    self.persist_state();
+                }
+                for id in ids {
+                    conversation_import::refresh_threads(self, &id);
+                }
+            }
             StoreEvent::WorkspaceAdded(workspace) => {
                 let workspace_id = workspace.id.clone();
                 let path = workspace.path.clone();
@@ -4181,6 +4214,16 @@ impl AppState {
                 method,
                 result,
             } => {
+                if matches!(
+                    method.as_str(),
+                    conversation_import::PREVIEW | conversation_import::IMPORT
+                ) && !self
+                    .pending_rpc_meta
+                    .get(&request_id)
+                    .is_some_and(|meta| meta.workspace_id == workspace_id && meta.method == method)
+                {
+                    return;
+                }
                 self.pending_rpc_meta.remove(&request_id);
                 self.apply_ws_response(&workspace_id, request_id, &method, result);
             }
@@ -4473,17 +4516,74 @@ impl AppState {
         let prev_view = self.nav.current().view;
         let prev_ws = self.active_workspace_id.clone();
         let prev_landing = self.landing_workspace_id.clone();
+        let restore_task = matches!(
+            action,
+            NavAction::OpenThread(_)
+                | NavAction::GoBack
+                | NavAction::GoForward
+                | NavAction::Replace(_)
+        );
         let mut already_persisted = false;
+
+        if let NavAction::SelectWorkspace(id) = &action
+            && self.workspace_runtime_by_id.get(id).is_none_or(|rt| {
+                matches!(
+                    rt.server_state,
+                    ServerLifecycleState::Stopped | ServerLifecycleState::Failed { .. }
+                )
+            })
+            && let Some(ws) = self
+                .workspaces
+                .iter()
+                .find(|ws| ws.id == *id && !ws.archived)
+        {
+            self.send_native(NativeCommand::StartWorkspaceServer {
+                workspace_id: id.clone(),
+                path: ws.path.clone(),
+                yolo: ws.yolo,
+            });
+        }
+
+        // Use the ordinary chat navigation paths so hydration and draft switching also
+        // run when the user reaches a conversation by selecting its project.
+        let action = match action {
+            NavAction::OpenView(ViewId::Chat)
+                if self
+                    .active_thread()
+                    .is_some_and(|thread| thread.source_task_id.is_some()) =>
+            {
+                NavAction::OpenNewChat {
+                    workspace_id: prev_ws.clone(),
+                }
+            }
+            NavAction::SelectWorkspace(id) if prev_view == ViewId::Chat => {
+                let preferred = self
+                    .threads
+                    .iter()
+                    .filter(|t| t.workspace_id == id && t.is_standard_chat())
+                    .max_by_key(|t| (prev_tid.as_ref() == Some(&t.id), t.updated_at));
+                match preferred {
+                    Some(thread) => NavAction::OpenThread(thread.id.clone()),
+                    None => NavAction::OpenNewChat {
+                        workspace_id: Some(id),
+                    },
+                }
+            }
+            action => action,
+        };
 
         match action {
             NavAction::OpenView(view) => {
                 if view == ViewId::Task {
                     self.active_task = None;
+                    let old_key = self.composer_key();
                     self.nav.update(NavigationPatch {
                         view: Some(view),
                         active_task_id: Some(None),
+                        active_thread_id: Some(None),
                         ..Default::default()
                     });
+                    self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
                     if let Some(ws_id) = self.active_workspace_id.clone() {
                         self.send_task_ws(&ws_id, "task/list", json!({}));
                     }
@@ -4500,23 +4600,39 @@ impl AppState {
             }
             NavAction::OpenThread(thread_id) => {
                 let old_key = self.composer_key();
-                if let Some(ws_id) = self
-                    .threads
-                    .iter()
-                    .find(|t| t.id == thread_id)
-                    .map(|t| t.workspace_id.clone())
-                {
-                    self.active_workspace_id = Some(ws_id);
+                let record = self.threads.iter().find(|t| t.id == thread_id);
+                let task_id = record.and_then(|t| t.source_task_id.clone());
+                if let Some(thread) = record {
+                    self.active_workspace_id = Some(thread.workspace_id.clone());
                     self.sync_active_explorer_dir();
+                }
+                if task_id.is_some() {
+                    self.shell_ui.task_conversation_open = true;
                 }
                 if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
                     rt.unread = false;
                 }
-                self.nav.update(NavigationPatch {
-                    view: Some(ViewId::Chat),
-                    active_thread_id: Some(Some(thread_id.clone())),
-                    ..Default::default()
-                });
+                if self.route().view == ViewId::Task
+                    && task_id.is_some()
+                    && self.route().active_task_id == task_id
+                    && self.route().active_thread_id.is_none()
+                {
+                    // Hydrating the initial conversation completes the existing task location.
+                    let mut snapshot = self.route().clone();
+                    snapshot.active_thread_id = Some(thread_id.clone());
+                    self.nav.replace_current(snapshot);
+                } else {
+                    self.nav.update(NavigationPatch {
+                        view: Some(if task_id.is_some() {
+                            ViewId::Task
+                        } else {
+                            ViewId::Chat
+                        }),
+                        active_task_id: Some(task_id),
+                        active_thread_id: Some(Some(thread_id.clone())),
+                        ..Default::default()
+                    });
+                }
                 let new_key = self.composer_key();
                 self.sync_composer_edit_across_switch(&old_key, &new_key);
                 if !self.scene_mode && self.window_mode == WindowMode::Main {
@@ -4546,6 +4662,7 @@ impl AppState {
                 }
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Chat),
+                    active_task_id: Some(None),
                     active_thread_id: Some(None),
                     ..Default::default()
                 });
@@ -4554,6 +4671,15 @@ impl AppState {
                 self.refresh_creation_preflight();
             }
             NavAction::OpenTask(task_id) => {
+                let old_key = self.composer_key();
+                if let Some(summary) = self.tasks.iter().find(|task| task.id == task_id) {
+                    self.active_workspace_id = Some(summary.workspace_id.clone());
+                    self.sync_active_explorer_dir();
+                }
+                let selected = self
+                    .active_thread()
+                    .filter(|thread| thread.source_task_id.as_deref() == Some(task_id.as_str()))
+                    .map(|thread| thread.id.clone());
                 if self
                     .active_task
                     .as_ref()
@@ -4564,8 +4690,10 @@ impl AppState {
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Task),
                     active_task_id: Some(Some(task_id.clone())),
+                    active_thread_id: Some(selected),
                     ..Default::default()
                 });
+                self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
                 if let Some(ws_id) = self.active_workspace_id.clone() {
                     self.send_task_ws(&ws_id, "task/read", json!({ "taskId": task_id }));
                 }
@@ -4604,6 +4732,19 @@ impl AppState {
                 }
             }
             NavAction::SelectWorkspace(workspace_id) => {
+                if prev_view == ViewId::Task && prev_ws.as_ref() != Some(&workspace_id) {
+                    let old_key = self.composer_key();
+                    self.nav.update(NavigationPatch {
+                        active_task_id: Some(None),
+                        active_thread_id: Some(None),
+                        ..Default::default()
+                    });
+                    self.active_task = None;
+                    self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
+                    if self.is_workspace_ws_connected(&workspace_id) {
+                        self.send_task_ws(&workspace_id, "task/list", json!({}));
+                    }
+                }
                 self.active_workspace_id = Some(workspace_id);
                 self.sync_active_explorer_dir();
                 self.refresh_creation_preflight();
@@ -4633,6 +4774,29 @@ impl AppState {
             }
         }
 
+        // History and direct session links can restore a task whose details are no longer loaded.
+        if restore_task
+            && self.route().view == ViewId::Task
+            && let Some(id) = self.route().active_task_id.clone()
+            && self
+                .active_task
+                .as_ref()
+                .is_none_or(|task| task.summary.id != id)
+            && let Some(workspace_id) = self
+                .tasks
+                .iter()
+                .find(|task| task.id == id)
+                .map(|task| task.workspace_id.clone())
+                .or_else(|| self.active_workspace_id.clone())
+        {
+            self.active_workspace_id = Some(workspace_id.clone());
+            self.sync_active_explorer_dir();
+            self.send_task_ws(&workspace_id, "task/read", json!({ "taskId": id }));
+        }
+        if self.settings_ui.conversation_import.is_some() && !conversation_import::is_current(self)
+        {
+            self.settings_ui.conversation_import = None;
+        }
         if self.active_workspace_id != prev_ws || self.landing_workspace_id != prev_landing {
             self.shared_dirty = true;
         }
@@ -5562,6 +5726,33 @@ impl AppState {
             ChatAction::RetryTranscriptDelivery { thread_id } => {
                 self.dispatch(Action::Chat(ChatAction::HydrateThread(thread_id)));
             }
+            ChatAction::RetryComposerSubmission(thread_id) => {
+                let Some(workspace_id) = self.workspace_for_thread(&thread_id) else {
+                    return;
+                };
+                let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) else {
+                    return;
+                };
+                if rt.streaming
+                    || rt.usage_hard_cap_reached
+                    || rt.source_task.is_some()
+                    || rt.read_only_notice.is_some()
+                {
+                    return;
+                }
+                if let Some(submission) = rt
+                    .composer_submission
+                    .take_if(|sub| matches!(sub.status, ComposerSubmissionStatus::Failed(_)))
+                {
+                    self.send_composer_turn(&workspace_id, &thread_id, submission.message);
+                }
+            }
+            ChatAction::DismissComposerFailure(thread_id) => {
+                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
+                    rt.composer_submission
+                        .take_if(|sub| matches!(sub.status, ComposerSubmissionStatus::Failed(_)));
+                }
+            }
             ChatAction::DismissTranscriptDeliveryFailure { thread_id } => {
                 if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
                     rt.transcript_delivery_failure = None;
@@ -5756,11 +5947,18 @@ impl AppState {
         if trimmed.is_empty() && attachments.is_empty() {
             return;
         }
-        let client_message_id = self.next_tag("msg");
+        let client_message_id = uuid::Uuid::new_v4().to_string();
         let timestamp_ms = self.wall_clock_ms();
 
         match thread_id {
             Some(tid) => {
+                if self
+                    .thread_runtime_by_id
+                    .get(&tid)
+                    .is_some_and(ThreadRuntime::sending_composer_message)
+                {
+                    return;
+                }
                 let is_draft = self
                     .threads
                     .iter()
@@ -5876,58 +6074,29 @@ impl AppState {
                     return;
                 }
 
-                let optimistic_id = format!("optimistic-{client_message_id}");
-                let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
-                rt.pending_turn_count += 1;
-                rt.pending_turn_start = Some(ThreadPendingTurnStart {
-                    client_message_id: client_message_id.clone(),
-                    text: trimmed.clone(),
-                    status: "sending".to_string(),
-                });
-                rt.feed.push(FeedItem::Message {
-                    id: optimistic_id,
-                    role: FeedMessageRole::User,
-                    content: trimmed.clone(),
-                    client_message_id: Some(client_message_id.clone()),
-                    attachments: attachments.clone(),
-                    references: references.clone(),
-                    citations: Vec::new(),
-                    streaming: false,
-                    timestamp_ms,
-                });
+                let Some(ws_id) = self.workspace_for_thread(&tid) else {
+                    return;
+                };
+                self.send_composer_turn(
+                    &ws_id,
+                    &tid,
+                    PendingThreadMessage {
+                        text: trimmed,
+                        client_message_id: Some(client_message_id),
+                        attachments,
+                        references,
+                        draft_submission: None,
+                    },
+                );
                 if let Some(draft) = self.composer_drafts.get_mut(&tid) {
                     draft.text.clear();
                     draft.attachments.clear();
                     draft.references.clear();
-                    draft.submitting = true;
                     draft.submission_error = None;
                 }
                 self.attachment_previews_by_key.remove(&tid);
                 if self.composer_key() == tid {
                     self.composer_edit = TextEdit::new("");
-                }
-
-                if let Some(ws_id) = self.workspace_for_thread(&tid) {
-                    let input = build_turn_input(&trimmed, &attachments);
-                    let params = TurnStartParams {
-                        thread_id: tid.clone(),
-                        client_message_id: Some(client_message_id.clone()),
-                        input,
-                        references: (!references.is_empty()).then(|| {
-                            references
-                                .iter()
-                                .filter_map(|r| serde_json::to_value(r).ok())
-                                .collect()
-                        }),
-                        retry: None,
-                        tools: None,
-                    };
-                    let _ = self.send_ws_typed(&ws_id, "turn/start", &params, false);
-                    self.emit_client_transcript_user_message(
-                        &tid,
-                        &trimmed,
-                        Some(&client_message_id),
-                    );
                 }
             }
             None => {
@@ -5944,7 +6113,6 @@ impl AppState {
                             .composer_drafts
                             .entry("__new__".to_string())
                             .or_default();
-                        draft.submitting = false;
                         draft.submission_error = Some(message.clone());
                         let toast_ts = self.wall_clock_secs();
                         self.toasts.retain(|t| t.key != "no-configured-model");
@@ -6019,11 +6187,6 @@ impl AppState {
                     .entry(draft_thread_id.clone())
                     .or_default();
                 rt.pending_turn_count += 1;
-                rt.pending_turn_start = Some(ThreadPendingTurnStart {
-                    client_message_id: client_message_id.clone(),
-                    text: trimmed.clone(),
-                    status: "sending".to_string(),
-                });
                 rt.feed.push(FeedItem::Message {
                     id: format!("optimistic-{client_message_id}"),
                     role: FeedMessageRole::User,
@@ -6039,7 +6202,6 @@ impl AppState {
                     draft.text.clear();
                     draft.attachments.clear();
                     draft.references.clear();
-                    draft.submitting = true;
                     draft.submission_error = None;
                 }
                 self.attachment_previews_by_key.remove("__new__");
@@ -6235,6 +6397,19 @@ impl AppState {
         let Some(pending) = self.shift_pending_thread_message(thread_id) else {
             return;
         };
+        self.send_composer_turn(workspace_id, thread_id, pending);
+    }
+
+    fn send_composer_turn(
+        &mut self,
+        workspace_id: &str,
+        thread_id: &str,
+        mut pending: PendingThreadMessage,
+    ) {
+        let client_id = pending
+            .client_message_id
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
         let input = build_turn_input(&pending.text, &pending.attachments);
         let references = (!pending.references.is_empty()).then(|| {
             pending
@@ -6251,12 +6426,78 @@ impl AppState {
             retry: None,
             tools: None,
         };
-        let _ = self.send_ws_typed(workspace_id, "turn/start", &params, false);
-        self.emit_client_transcript_user_message(
-            thread_id,
-            &pending.text,
-            pending.client_message_id.as_deref(),
-        );
+        let Some(request_id) = self.send_ws_typed(workspace_id, "turn/start", &params, false)
+        else {
+            return;
+        };
+        let timestamp_ms = self.wall_clock_ms();
+        let rt = self
+            .thread_runtime_by_id
+            .entry(thread_id.to_string())
+            .or_default();
+        let optimistic_id = format!("optimistic-{client_id}");
+        if !rt
+            .feed
+            .iter()
+            .any(|item| feed_item_id(item) == optimistic_id)
+        {
+            rt.pending_turn_count += 1;
+            rt.feed.push(FeedItem::Message {
+                id: optimistic_id,
+                role: FeedMessageRole::User,
+                content: pending.text.clone(),
+                client_message_id: Some(client_id),
+                attachments: pending.attachments.clone(),
+                references: pending.references.clone(),
+                citations: Vec::new(),
+                streaming: false,
+                timestamp_ms,
+            });
+        }
+        rt.composer_submission = Some(ComposerSubmissionState {
+            message: pending,
+            status: ComposerSubmissionStatus::Sending(request_id),
+        });
+    }
+
+    fn finish_composer_turn(&mut self, request_id: u64, result: &Result<Value, WsRpcError>) {
+        let Some((thread_id, rt, mut submission)) =
+            self.thread_runtime_by_id.iter_mut().find_map(|(id, rt)| {
+                let submission = rt
+                    .composer_submission
+                    .take_if(|sub| sub.status == ComposerSubmissionStatus::Sending(request_id))?;
+                Some((id, rt, submission))
+            })
+        else {
+            return;
+        };
+        let cid = submission.message.client_message_id.as_deref();
+        let optimistic_id = format!("optimistic-{}", cid.unwrap_or_default());
+        let optimistic_index = rt
+            .feed
+            .iter()
+            .position(|item| feed_item_id(item) == optimistic_id);
+        if let Err(error) = result {
+            if let Some(index) = optimistic_index {
+                rt.feed.remove(index);
+            }
+            rt.pending_turn_count = rt.pending_turn_count.saturating_sub(1);
+            submission.status = ComposerSubmissionStatus::Failed(error.message.clone());
+            rt.composer_submission = Some(submission);
+        } else {
+            let replayed = result.as_ref().is_ok_and(|v| v["replayed"] == true);
+            if replayed {
+                // An idempotent replay returns a receipt without broadcasting another turn.
+                rt.pending_turn_count = rt.pending_turn_count.saturating_sub(1);
+            }
+            let thread_id = thread_id.clone();
+            if optimistic_index.is_some() {
+                self.emit_client_transcript_user_message(&thread_id, &submission.message.text, cid);
+            }
+            if replayed {
+                self.dispatch(Action::Chat(ChatAction::HydrateThread(thread_id)));
+            }
+        }
     }
 
     fn reduce_settings(&mut self, action: SettingsAction) {
@@ -7529,28 +7770,8 @@ impl AppState {
                     false,
                 );
             }
-            SettingsAction::PreviewConversationImport {
-                workspace_id,
-                params,
-            } => {
-                let _ = self.send_ws_request(
-                    &workspace_id,
-                    "cowork/conversationImport/preview",
-                    params,
-                    false,
-                );
-            }
-            SettingsAction::ExecuteConversationImport {
-                workspace_id,
-                params,
-            } => {
-                let _ = self.send_ws_request(
-                    &workspace_id,
-                    "cowork/conversationImport/import",
-                    params,
-                    false,
-                );
-            }
+            SettingsAction::PreviewConversationImport => conversation_import::scan(self),
+            SettingsAction::ExecuteConversationImport => conversation_import::submit(self),
             SettingsAction::SetRemoteAccessEnabled(enabled) => {
                 self.send_native(NativeCommand::SetRemoteAccessEnabled(enabled));
             }
@@ -7845,6 +8066,11 @@ impl AppState {
         };
         let _ = self.send_ws_typed(workspace_id, "thread/list", &list_params, true);
 
+        if self.route().view == ViewId::Task
+            && self.active_workspace_id.as_deref() == Some(workspace_id)
+        {
+            self.send_task_ws(workspace_id, "task/list", json!({}));
+        }
         self.refresh_creation_preflight();
         if self.latest_creation_preflight_rpc_id.is_none()
             && self.workspaces.iter().all(|w| w.id != workspace_id)
@@ -8041,7 +8267,7 @@ impl AppState {
             }
             "task/created" | "task/updated" => {
                 let task_val = params.get("task").unwrap_or(&params);
-                self.apply_task_record_update(workspace_id, task_val, false);
+                self.apply_task_record_update(workspace_id, task_val);
             }
             "task/activity" => {
                 if let (Some(task_id), Some(activity)) = (
@@ -8178,6 +8404,15 @@ impl AppState {
                     .get("clientMessageId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                if client_message_id.is_some()
+                    && rt
+                        .composer_submission
+                        .as_ref()
+                        .is_some_and(|sub| sub.message.client_message_id == client_message_id)
+                {
+                    // A user-message echo proves acceptance even if the RPC reply is lost.
+                    rt.composer_submission = None;
+                }
                 let matched_existing = if let Some(ref cid) = client_message_id {
                     rt.feed.iter_mut().find(|f| {
                         matches!(
@@ -8215,6 +8450,13 @@ impl AppState {
                         *id = item_id;
                         if !text.is_empty() {
                             *content = text;
+                        }
+                        if client_message_id.is_none()
+                            && let Some(submission) = &rt.composer_submission
+                            && submission.message.client_message_id.as_ref()
+                                == existing_cid.as_ref()
+                        {
+                            rt.composer_submission = None;
                         }
                         *existing_cid = None;
                         *streaming = false;
@@ -8956,6 +9198,16 @@ impl AppState {
         method: &str,
         result: Result<Value, WsRpcError>,
     ) {
+        if matches!(
+            method,
+            conversation_import::PREVIEW | conversation_import::IMPORT
+        ) {
+            conversation_import::receive(self, workspace_id, request_id, method, result);
+            return;
+        }
+        if method == "turn/start" {
+            self.finish_composer_turn(request_id, &result);
+        }
         let payload = match result {
             Ok(v) => v,
             Err(err) => {
@@ -8991,11 +9243,6 @@ impl AppState {
                     } else if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
                         rt.hydrating = false;
                     }
-                }
-            }
-            "turn/start" => {
-                for draft in self.composer_drafts.values_mut() {
-                    draft.submitting = false;
                 }
             }
             "cowork/creation/preflight" => {
@@ -9212,21 +9459,13 @@ impl AppState {
                     self.backup_delta = Some(delta);
                 }
             }
-            "cowork/conversationImport/sources/list" => {
-                let target = payload.get("event").unwrap_or(&payload);
-                if let Some(arr) = target.get("sources").and_then(Value::as_array) {
-                    self.conversation_import_sources = arr.clone();
-                }
-            }
-            "cowork/conversationImport/preview" => {
-                self.conversation_import_preview = Some(payload);
-            }
             "task/list" => {
                 if let Some(arr) = payload.get("tasks").and_then(Value::as_array) {
-                    self.tasks = arr
-                        .iter()
-                        .filter_map(|v| parse_task_summary(v, workspace_id))
-                        .collect();
+                    self.tasks.retain(|task| task.workspace_id != workspace_id);
+                    self.tasks.extend(
+                        arr.iter()
+                            .filter_map(|v| parse_task_summary(v, workspace_id)),
+                    );
                 }
             }
             "task/read"
@@ -9240,29 +9479,53 @@ impl AppState {
             | "task/retry"
             | "task/thread/create" => {
                 let task_val = payload.get("task").unwrap_or(&payload);
-                let select_active = matches!(method, "task/read" | "task/create");
-                self.apply_task_record_update(workspace_id, task_val, select_active);
                 if method == "task/create"
                     && let Some(tid) = task_val.get("id").and_then(Value::as_str)
                 {
+                    let old_key = self.composer_key();
                     self.nav.update(NavigationPatch {
                         view: Some(ViewId::Task),
                         active_task_id: Some(Some(tid.to_string())),
+                        active_thread_id: Some(None),
                         ..Default::default()
                     });
+                    self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
                 }
-                if method == "task/thread/create"
-                    && let Some(thread_val) = payload.get("thread")
-                    && let Some(thread_id) = self.upsert_thread_from_value(workspace_id, thread_val)
+                self.apply_task_record_update(workspace_id, task_val);
+                if matches!(method, "task/read" | "task/create" | "task/thread/create")
+                    && self.route().view == ViewId::Task
+                    && let Some(task) = self.active_task.as_ref()
+                    && self.route().active_task_id.as_deref() == Some(task.summary.id.as_str())
+                    && task_val.get("id").and_then(Value::as_str) == Some(task.summary.id.as_str())
                 {
-                    self.dispatch(Action::Navigate(NavAction::OpenThread(thread_id)));
+                    let selected = if method == "task/thread/create" {
+                        payload
+                            .get("thread")
+                            .and_then(|v| v.get("id"))
+                            .and_then(Value::as_str)
+                    } else {
+                        self.route().active_thread_id.as_deref()
+                    };
+                    let next = task
+                        .threads
+                        .iter()
+                        .find(|t| Some(t.session_id.as_str()) == selected)
+                        .or_else(|| task.threads.first());
+                    if let Some(thread) = next
+                        && (self.route().active_thread_id.as_ref() != Some(&thread.session_id)
+                            || method == "task/thread/create")
+                    {
+                        self.dispatch(Action::Navigate(NavAction::OpenThread(
+                            thread.session_id.clone(),
+                        )));
+                    }
                 }
             }
             "task/artifact/read"
             | "task/artifact/version/accept"
             | "task/artifact/version/restore" => {
                 if let Some(task_val) = payload.get("task") {
-                    self.apply_task_record_update(workspace_id, task_val, false);
+                    self.apply_task_record_update(workspace_id, task_val);
                 }
                 let detail = payload.get("detail").cloned().unwrap_or(payload.clone());
                 let artifact_id = detail
@@ -9327,15 +9590,7 @@ impl AppState {
         if method.starts_with("cowork/workspace/document/") {
             self.apply_canvas_rpc_error(request_id, method, &err);
         }
-        if method == "turn/start" {
-            for draft in self.composer_drafts.values_mut() {
-                if draft.submitting {
-                    draft.submitting = false;
-                    draft.submission_error = Some(err.message.clone());
-                }
-            }
-        } else if method.starts_with("cowork/") && !method.starts_with("cowork/workspace/document/")
-        {
+        if method.starts_with("cowork/") && !method.starts_with("cowork/workspace/document/") {
             self.settings_mutation_error = Some(err.message.clone());
         }
         let rt = self
@@ -9349,14 +9604,14 @@ impl AppState {
         let Some(arr) = payload.get("threads").and_then(Value::as_array) else {
             return;
         };
-        let drafts: Vec<ThreadRecord> = self
+        self.threads
+            .retain(|t| t.workspace_id != workspace_id || t.draft || t.source_task_id.is_some());
+        let retained: HashSet<String> = self
             .threads
             .iter()
-            .filter(|t| t.workspace_id == workspace_id && t.draft)
-            .cloned()
+            .filter(|t| t.workspace_id == workspace_id)
+            .map(|t| t.id.clone())
             .collect();
-        self.threads
-            .retain(|t| t.workspace_id != workspace_id || t.draft);
 
         let mut archived = Vec::new();
         for v in arr {
@@ -9411,7 +9666,7 @@ impl AppState {
                     archived_at: record.updated_at,
                 });
             }
-            if !drafts.iter().any(|d| d.id == id) {
+            if !retained.contains(id) {
                 self.threads.push(record);
             }
         }
@@ -10223,7 +10478,7 @@ impl AppState {
             self.threads
                 .iter()
                 .find(|t| &t.id == tid)
-                .is_none_or(|t| !t.draft)
+                .is_none_or(|t| !t.draft && t.source_task_id.is_none())
         });
         if self.window_mode == WindowMode::Main {
             self.persisted_active_thread_id = active_thread_id.clone();
@@ -10252,7 +10507,7 @@ impl AppState {
         }
     }
 
-    fn apply_task_record_update(&mut self, workspace_id: &str, val: &Value, select_active: bool) {
+    fn apply_task_record_update(&mut self, workspace_id: &str, val: &Value) {
         let Some(mut task) = parse_task_record(val, workspace_id) else {
             return;
         };
@@ -10274,51 +10529,35 @@ impl AppState {
             }
         }
         self.upsert_task_summary(task.summary.clone());
+        // The server deliberately leaves these sessions out of ordinary thread/list responses.
+        for linked in &task.threads {
+            if let Some(thread) = self
+                .threads
+                .iter_mut()
+                .find(|thread| thread.id == linked.session_id)
+            {
+                thread.source_task_id = Some(task.summary.id.clone());
+                thread.title.clone_from(&linked.title);
+            } else {
+                self.threads.push(ThreadRecord {
+                    id: linked.session_id.clone(),
+                    session_id: Some(linked.session_id.clone()),
+                    workspace_id: workspace_id.to_owned(),
+                    source_task_id: Some(task.summary.id.clone()),
+                    title: linked.title.clone(),
+                    ..Default::default()
+                });
+            }
+        }
         let viewing_this_task = self.nav.current().active_task_id.as_deref()
             == Some(task.summary.id.as_str())
             || self
                 .active_task
                 .as_ref()
                 .is_some_and(|t| t.summary.id == task.summary.id);
-        if select_active || viewing_this_task {
+        if viewing_this_task {
             self.active_task = Some(task);
         }
-    }
-
-    fn upsert_thread_from_value(&mut self, workspace_id: &str, v: &Value) -> Option<String> {
-        let id = v.get("id").and_then(Value::as_str)?;
-        let title = v
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("New Chat")
-            .to_string();
-        let archived = v.get("archived").and_then(Value::as_bool).unwrap_or(false);
-        let pinned = v.get("pinned").and_then(Value::as_bool).unwrap_or(false);
-        let record = ThreadRecord {
-            id: id.to_string(),
-            workspace_id: workspace_id.to_string(),
-            title,
-            status: ThreadStatus::Active,
-            session_id: Some(id.to_string()),
-            pinned,
-            archived,
-            draft: false,
-            provider: v
-                .get("modelProvider")
-                .or_else(|| v.get("provider"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            model: v.get("model").and_then(Value::as_str).map(str::to_string),
-            updated_at: parse_timestamp_ms(v.get("updatedAt").or_else(|| v.get("createdAt"))),
-            preview: v.get("preview").and_then(Value::as_str).map(str::to_string),
-            ..Default::default()
-        };
-        if let Some(existing) = self.threads.iter_mut().find(|t| t.id == id) {
-            *existing = record;
-        } else {
-            self.threads.push(record);
-        }
-        Some(id.to_string())
     }
 }
 
@@ -10700,7 +10939,13 @@ fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRec
         artifact_details_by_id: HashMap::new(),
         blockers: val.get("blockers").cloned().unwrap_or(Value::Null),
         work_items: val.get("workItems").cloned().unwrap_or(Value::Null),
-        threads: val.get("threads").cloned().unwrap_or(Value::Null),
+        threads: val
+            .get("threads")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|thread| serde_json::from_value(thread.clone()).ok())
+            .collect(),
         requirements: val.get("requirements").cloned().unwrap_or(Value::Null),
         activity,
     })
@@ -12718,34 +12963,6 @@ mod tests {
                 assert_eq!(method, "cowork/mcp/server/auth/callback");
                 assert_eq!(params["code"], "http://127.0.0.1/cb?code=abc");
                 assert!(params.get("callbackUrl").is_none());
-            }
-            other => panic!("expected SendRequest, got {other:?}"),
-        }
-
-        state.dispatch(Action::Settings(
-            SettingsAction::PreviewConversationImport {
-                workspace_id: "ws-1".to_string(),
-                params: json!({ "source": "claude", "sourcePath": "/tmp/export.json" }),
-            },
-        ));
-        match state.services.emitted_ws_commands.last().unwrap() {
-            WsCommand::SendRequest { method, params, .. } => {
-                assert_eq!(method, "cowork/conversationImport/preview");
-                assert!(params.get("cwd").is_none());
-            }
-            other => panic!("expected SendRequest, got {other:?}"),
-        }
-
-        state.dispatch(Action::Settings(
-            SettingsAction::ExecuteConversationImport {
-                workspace_id: "ws-1".to_string(),
-                params: json!({ "source": "claude", "sourcePath": "/tmp/export.json" }),
-            },
-        ));
-        match state.services.emitted_ws_commands.last().unwrap() {
-            WsCommand::SendRequest { method, params, .. } => {
-                assert_eq!(method, "cowork/conversationImport/import");
-                assert!(params.get("cwd").is_none());
             }
             other => panic!("expected SendRequest, got {other:?}"),
         }

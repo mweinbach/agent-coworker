@@ -33,7 +33,12 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         .and_then(|id| s.workspaces.iter().find(|w| w.id == id))
         .or_else(|| s.workspaces.first());
 
-    let recent_threads: Vec<_> = s.threads.iter().filter(|th| !th.archived).take(6).collect();
+    let recent_threads: Vec<_> = s
+        .threads
+        .iter()
+        .filter(|th| th.is_standard_chat())
+        .take(6)
+        .collect();
     let busy_count = s
         .thread_runtime_by_id
         .values()

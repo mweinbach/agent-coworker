@@ -56,7 +56,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
             build_workspace_split_frame(s, cx, k, t, subview.content, &mut layer)
         }
         ViewId::Task => {
-            let content = tasks::build_task_view(s, k, t);
+            let content = tasks::build_task_view(s, cx, k, t, &mut layer);
             build_workspace_split_frame(s, cx, k, t, content, &mut layer)
         }
     };
@@ -442,6 +442,184 @@ mod tests {
         cx.focus_ring(2.0, 2.5, tokens.focus_ring);
         cx.web_focus();
         view(state, cx, &kit, &tokens)
+    }
+
+    #[test]
+    fn task_tabs_open_and_create_sessions_inside_the_task_conversation() {
+        use crate::actions::{NavAction, StoreEvent};
+        use crate::state::WorkspaceRecord;
+        use crate::ws::WsCommand;
+        use serde_json::json;
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.workspaces.push(WorkspaceRecord::new(
+            "project",
+            "Project",
+            "/tmp/project",
+            1,
+        ));
+        s.active_workspace_id = Some("project".into());
+        s.dispatch(Action::Navigate(NavAction::OpenTask("task".into())));
+        let mut task = json!({
+            "id": "task", "title": "Review", "status": "working", "revision": 1,
+            "threads": [
+                {"id": "link-a", "sessionId": "session-a", "title": "Main"},
+                {"id": "link-b", "sessionId": "session-b", "title": "Review"}
+            ]
+        });
+        let response = |method: &str, result| StoreEvent::WsResponse {
+            workspace_id: "project".into(),
+            request_id: 91,
+            method: method.into(),
+            result: Ok(result),
+        };
+        s.apply_store_event(response("task/read", json!({"task": task})));
+        s.apply_store_event(response(
+            "thread/hydrate",
+            json!({
+                "coworkSnapshot": {"sessionId": "session-a", "feed": [
+                    {"id":"answer", "kind":"assistant", "content":"Task transcript"}
+                ]}
+            }),
+        ));
+        let mut rt = Runtime::new(s, test_shell_root, (1440.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.settle_all();
+        assert_eq!(
+            rt.state.route().active_thread_id.as_deref(),
+            Some("session-a")
+        );
+        assert!(rt.find("chat-feed-frame").is_some());
+        assert!(rt.find("composer-input").is_some());
+        let (header, _) = rt.presented("task-workspace-header").unwrap();
+        let (transcript, _) = rt.presented("chat-view").unwrap();
+        assert!(
+            transcript[1] - (header[1] + header[3]) <= 40.0,
+            "the conversation tabs must leave the rest of the pane to the transcript"
+        );
+        rt.set_viewport((840.0, 560.0), 1.0);
+        rt.frame(0.0);
+        rt.settle_all();
+        let (all_tasks, _) = rt.presented("task-all-tasks").unwrap();
+        assert!(all_tasks[0] + all_tasks[2] <= 840.0);
+        let (x, y) = rt
+            .find("t-session-b")
+            .expect("second task conversation tab");
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.route().view, ViewId::Task);
+        assert_eq!(
+            rt.state.route().active_thread_id.as_deref(),
+            Some("session-b")
+        );
+        assert!(rt.state.services.emitted_ws_commands.iter().any(|cmd| matches!(cmd,
+            WsCommand::SendRequest { method, workspace_id, params, .. }
+            if method == "thread/hydrate" && workspace_id == "project" && params["threadId"] == "session-b"
+        )));
+
+        task["threads"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "link-c", "sessionId": "session-c", "title": "Follow-up"}));
+        rt.state.apply_store_event(response(
+            "task/thread/create",
+            json!({"task": task, "thread": {"id": "session-c"}}),
+        ));
+        rt.state
+            .apply_store_event(response("thread/list", json!({"threads": []})));
+        assert_eq!(rt.state.route().active_task_id.as_deref(), Some("task"));
+        assert_eq!(rt.state.active_thread().unwrap().id, "session-c");
+        assert!(
+            rt.state
+                .threads
+                .iter()
+                .all(|thread| !thread.is_standard_chat())
+        );
+        task["status"] = json!("failed");
+        rt.update(|state, _| {
+            state.apply_store_event(StoreEvent::WsNotification {
+                workspace_id: "project".into(),
+                method: "task/updated".into(),
+                params: json!({"task": task}),
+            })
+        });
+        rt.frame(0.0);
+        rt.settle_all();
+        assert!(rt.find("task-conversation-read-only").is_some());
+        assert!(rt.find("composer-input").is_none());
+    }
+
+    #[test]
+    fn project_disclosure_preserves_draft_and_selection_targets_its_own_chat_or_landing() {
+        use crate::actions::NavAction;
+        use crate::state::{ThreadRecord, WorkspaceRecord};
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        for id in ["alpha", "beta", "empty"] {
+            s.workspaces
+                .push(WorkspaceRecord::new(id, id, format!("/tmp/{id}"), 1));
+        }
+        for (id, workspace, updated_at) in [
+            ("current", "alpha", 1),
+            ("other", "alpha", 2),
+            ("older", "beta", 3),
+            ("recent", "beta", 4),
+            ("archived", "beta", 5),
+            ("task", "beta", 6),
+        ] {
+            s.threads.push(ThreadRecord {
+                id: id.into(),
+                workspace_id: workspace.into(),
+                title: id.into(),
+                updated_at,
+                archived: id == "archived",
+                source_task_id: (id == "task").then(|| "task-id".into()),
+                ..Default::default()
+            });
+        }
+        s.dispatch(Action::Navigate(NavAction::OpenThread("current".into())));
+        s.composer_edit = rune::TextEdit::new("Unsent in alpha");
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let click = |rt: &mut Runtime<AppState>, key: &str| {
+            let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(0.0);
+            rt.settle_all();
+        };
+        click(&mut rt, "ws-toggle-beta");
+        assert!(rt.state.collapsed_workspace_ids.contains("beta"));
+        assert_eq!(rt.state.active_workspace_id.as_deref(), Some("alpha"));
+        assert_eq!(rt.state.composer_edit.text, "Unsent in alpha");
+        click(&mut rt, "ws-alpha");
+        assert_eq!(
+            rt.state.route().active_thread_id.as_deref(),
+            Some("current")
+        );
+        click(&mut rt, "ws-beta");
+        assert_eq!(rt.state.route().active_thread_id.as_deref(), Some("recent"));
+        assert_eq!(rt.state.active_workspace_id.as_deref(), Some("beta"));
+        assert!(rt.state.collapsed_workspace_ids.contains("beta"));
+        assert!(rt.state.services.emitted_native_commands.iter().any(|command| matches!(
+            command, crate::actions::NativeCommand::StartWorkspaceServer { workspace_id, .. } if workspace_id == "beta"
+        )));
+        assert_eq!(rt.state.composer_drafts["current"].text, "Unsent in alpha");
+        click(&mut rt, "ws-empty");
+        assert!(rt.state.route().active_thread_id.is_none());
+        assert_eq!(rt.state.landing_workspace_id.as_deref(), Some("empty"));
+        assert_eq!(rt.state.threads.len(), 6);
     }
 
     #[test]

@@ -212,7 +212,7 @@ pub fn thread_row_status(s: &AppState, thread_id: &str) -> Option<RowStatus> {
 pub fn pending_input_count(s: &AppState) -> usize {
     s.threads
         .iter()
-        .filter(|t| !t.archived)
+        .filter(|t| t.is_standard_chat())
         .filter_map(|t| s.thread_runtime_by_id.get(&t.id))
         .map(|rt| rt.pending_interactions.len())
         .sum()
@@ -238,7 +238,7 @@ pub fn filtered_threads<'a>(
     let mut threads: Vec<&ThreadRecord> = s
         .threads
         .iter()
-        .filter(|t| !t.archived)
+        .filter(|t| t.is_standard_chat())
         .filter(|t| {
             if needs_input_only {
                 s.thread_runtime_by_id

@@ -5,7 +5,7 @@ use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
 use rune::{Cx, El, Env, Runtime, TextEdit, el, row};
 use serde_json::json;
 
-use crate::actions::{Action, NavAction, StoreEvent};
+use crate::actions::{Action, ChatAction, NavAction, StoreEvent};
 use crate::state::{
     AgentViewerState, AppState, ChatInteraction, ChatViewReadOnlyNotice, CitationSource,
     ComposerDraft, FeedItem, FeedMessageRole, FilePreviewState, ONE_OFF_LANDING_SENTINEL,
@@ -16,7 +16,7 @@ use crate::state::{
 use crate::theme::{self, AccentPalette, ThemePreference};
 use crate::views::chat;
 use crate::views::chat::state::{CanvasFixtureState, CanvasLifecycleKind, CanvasTab};
-use crate::ws::{WsCommand, WsConnectionState};
+use crate::ws::{WsCommand, WsConnectionState, WsRpcError};
 
 const SNAP_VIEWPORT: (f32, f32) = (1280.0, 820.0);
 
@@ -559,6 +559,123 @@ fn interactive_runtime_clicks_and_disabled_gates_work() {
         rt_ro.state.composer_drafts, draft_before,
         "submit_composer_message must be a no-op under read_only_notice"
     );
+}
+
+#[test]
+fn failed_composer_retry_uses_the_original_submission_and_preserves_other_drafts() {
+    fn last_turn(s: &AppState) -> (u64, serde_json::Value) {
+        s.services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "turn/start" => Some((*request_id, params.clone())),
+                _ => None,
+            })
+            .unwrap()
+    }
+    fn respond(rt: &mut Runtime<AppState>, id: u64, result: Result<serde_json::Value, WsRpcError>) {
+        rt.update(move |s, _| {
+            s.apply_store_event(StoreEvent::WsResponse {
+                workspace_id: "ws-demo".into(),
+                request_id: id,
+                method: "turn/start".into(),
+                result,
+            })
+        });
+        rt.frame(0.0);
+        // Inserting the recovery banner moves the composer. Click its settled position.
+        rt.settle_all();
+        rt.frame(0.0);
+    }
+    let rejected = || WsRpcError {
+        code: -32602,
+        message: "Model is unavailable".into(),
+        data: None,
+    };
+    let mut s = build_populated_thread_state(false);
+    let owner = "th-demo";
+    let feed_count = s.thread_runtime_by_id[owner].feed.len();
+    let mut other = s.active_thread().unwrap().clone();
+    other.id = "th-other".into();
+    other.session_id = Some(other.id.clone());
+    s.threads.push(other);
+    s.dispatch(Action::Chat(ChatAction::SetComposerDraftText {
+        key: owner.into(),
+        text: "Review @code-review".into(),
+    }));
+    s.dispatch(Action::Chat(ChatAction::AddComposerAttachment {
+        key: owner.into(),
+        attachment: TurnAttachmentInputPart::InlineFile {
+            filename: "notes.txt".into(),
+            content_base64: "YWJj".into(),
+            mime_type: "text/plain".into(),
+        },
+    }));
+    chat::composer::submit_composer_message(&mut s);
+    let (original_id, original) = last_turn(&s);
+    assert_eq!(original["references"][0]["name"], "code-review");
+    assert_eq!(original["input"][1]["filename"], "notes.txt");
+
+    s.dispatch(Action::Chat(ChatAction::SetComposerDraftText {
+        key: owner.into(),
+        text: "A newer draft".into(),
+    }));
+    chat::composer::submit_composer_message(&mut s);
+    assert_eq!(
+        last_turn(&s).0,
+        original_id,
+        "A second send must wait for the first receipt"
+    );
+    s.dispatch(Action::Chat(ChatAction::SendMessage {
+        thread_id: Some("th-other".into()),
+        text: "Independent request".into(),
+        busy_policy: Default::default(),
+        attachments: vec![],
+        references: vec![],
+    }));
+    let (other_id, _) = last_turn(&s);
+    let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt.frame(0.0);
+    respond(&mut rt, original_id, Err(rejected()));
+    assert!(rt.state.thread_runtime_by_id["th-other"].sending_composer_message());
+    assert_eq!(rt.state.thread_runtime_by_id[owner].pending_turn_count, 0);
+    assert_eq!(rt.state.thread_runtime_by_id[owner].feed.len(), feed_count);
+    respond(&mut rt, other_id, Ok(json!({})));
+    click_key(&mut rt, "composer-retry-submission");
+    let (retry_id, retry) = last_turn(&rt.state);
+    assert_ne!(retry_id, original_id);
+    assert_eq!(retry, original);
+    assert_eq!(rt.state.composer_edit.text, "A newer draft");
+    assert_eq!(rt.state.composer_drafts[owner].text, "A newer draft");
+
+    // A server that accepted an earlier attempt may only replay its receipt on retry.
+    respond(&mut rt, retry_id, Ok(json!({ "replayed": true })));
+    assert!(
+        rt.state.thread_runtime_by_id[owner]
+            .composer_submission
+            .is_none()
+    );
+    assert_eq!(rt.state.thread_runtime_by_id[owner].pending_turn_count, 0);
+    assert!(rt.find("composer-retry-submission").is_none());
+    rt.update(|s, _| chat::composer::submit_composer_message(s));
+    let (next_id, next) = last_turn(&rt.state);
+    assert_eq!(next["input"], "A newer draft");
+    assert_ne!(next["clientMessageId"], original["clientMessageId"]);
+    respond(&mut rt, next_id, Err(rejected()));
+    click_key(&mut rt, "composer-dismiss-failure");
+    assert!(
+        rt.state.thread_runtime_by_id[owner]
+            .composer_submission
+            .is_none()
+    );
+    assert!(rt.find("composer-retry-submission").is_none());
+    assert_eq!(last_turn(&rt.state).0, next_id);
 }
 
 #[test]

@@ -939,6 +939,34 @@ impl NativeWorkerContext {
 
     async fn handle_command(&mut self, cmd: NativeCommand) {
         match cmd {
+            NativeCommand::LoadImportedWorkspaces(ids) => {
+                let result = self.persistence.load_core_state().map(|state| {
+                    state
+                        .workspaces
+                        .into_iter()
+                        .filter(|w| ids.contains(&w.id) && !w.archived)
+                        .collect::<Vec<_>>()
+                });
+                match result {
+                    Ok(workspaces) => {
+                        if workspaces.len() != ids.len() {
+                            (self.emit)(StoreEvent::Toast {
+                                key: "import-workspaces-missing".into(),
+                                title: "Some import destinations are no longer available".into(),
+                                description: None,
+                                tone: NotificationTone::Warning,
+                            });
+                        }
+                        (self.emit)(StoreEvent::ImportedWorkspacesLoaded(workspaces));
+                    }
+                    Err(error) => (self.emit)(StoreEvent::Toast {
+                        key: "import-workspaces-error".into(),
+                        title: "Could not refresh imported workspaces".into(),
+                        description: Some(error.to_string()),
+                        tone: NotificationTone::Error,
+                    }),
+                }
+            }
             NativeCommand::StartWorkspaceServer {
                 workspace_id,
                 path,

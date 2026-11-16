@@ -1,7 +1,8 @@
 //! Tasks & Workflow Runs views (`TaskView`, `NewTaskLanding`, `TaskQuestionsCard`,
 //! `ArtifactReviewCard`, `TaskContextSidebar`, `WorkflowRunsPanel`).
 
-use rune::{El, ScrollSpec, col, el, icon, row, spacer, text};
+use rune::{Cx, El, ScrollSpec, col, el, icon, row, spacer, text};
+use rune_kit::shell::{TabItem, TabOrientation, TabStrip};
 use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Kit, TextInput};
 use serde_json::Value;
 
@@ -125,14 +126,62 @@ pub(crate) fn extract_task_questions(value: &Value) -> Vec<TaskQuestionItem> {
 
 /// Render the `ViewId::Task` primary view: either the active `TaskView` workspace
 /// or the `NewTaskLanding` overview with inline task creation and workflow runs.
-pub fn build_task_view(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
+pub fn build_task_view(
+    s: &AppState,
+    cx: &mut Cx<AppState>,
+    k: &Kit,
+    t: &ThemeTokens,
+    layer: &mut Vec<El>,
+) -> El {
     let active_ws_id = s
         .active_workspace_id
         .as_deref()
         .or_else(|| s.workspaces.first().map(|w| w.id.as_str()));
 
-    if let Some(task) = s.active_task.as_ref() {
-        return build_active_task_workspace(s, task, k, t);
+    if let Some(id) = s.route().active_task_id.as_deref() {
+        if let Some(task) = s.active_task.as_ref().filter(|task| task.summary.id == id) {
+            let conversation = if s.shell_ui.task_conversation_open
+                && s.active_thread()
+                    .is_some_and(|th| th.source_task_id.as_deref() == Some(id))
+            {
+                let chat = crate::views::chat::view(s, cx, k);
+                layer.extend(chat.overlays);
+                let tabs = TabStrip::new("task-conversation-tabs", TabOrientation::Horizontal)
+                    .label("Task conversations")
+                    .active(s.route().active_thread_id.as_deref())
+                    .viewport_width(
+                        cx.layout_size("task-conversation-tabs")
+                            .map(|[width, _]| width),
+                    )
+                    .tabs(task.threads.iter().map(|thread| {
+                        TabItem::new(thread.session_id.as_str(), thread.title.as_str())
+                            .icon(&icons::MESSAGE)
+                            .closable(false)
+                    }))
+                    .on_select(|s: &mut AppState, session_id, _| {
+                        s.dispatch(Action::Navigate(NavAction::OpenThread(
+                            session_id.to_owned(),
+                        )));
+                    })
+                    .build(k);
+                Some(
+                    col()
+                        .key("task-conversation")
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .min_h(0.0)
+                        .child(row().w_full().h(36.0).px(8.0).center_y().child(tabs))
+                        .child(chat.content),
+                )
+            } else {
+                None
+            };
+            return build_active_task_workspace(s, task, conversation, k, t);
+        }
+        return col()
+            .grow(1.0)
+            .center()
+            .child(text("Loading task…").color(t.text_muted));
     }
 
     build_new_task_landing(s, active_ws_id, k, t)
@@ -154,41 +203,24 @@ fn build_new_task_landing(
         None => "Select or add a workspace folder to track multi-step deliverables, review artifacts, and automated workflow runs.".to_owned(),
     };
 
-    let ws_for_btn = active_ws_id.map(str::to_owned);
-    let hero_actions = row()
-        .gap(8.0)
-        .center_y()
-        .child(
-            Button::new(if s.shell_ui.task_create_open {
-                "Hide task form"
-            } else {
-                "New task"
-            })
-            .variant(ButtonVariant::Contrast)
-            .icon(&icons::CHECK_SQUARE)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.shell_ui.task_create_open = !s.shell_ui.task_create_open;
-                s.shell_ui.task_create_title_edit.focused = s.shell_ui.task_create_open;
-            })
-            .build(k),
-        )
-        .child(
-            Button::new("Start task chat")
-                .variant(ButtonVariant::Ghost)
-                .icon(&icons::PLUS)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                        workspace_id: ws_for_btn.clone(),
-                    }));
-                })
-                .build(k),
-        );
+    let new_task = Button::new(if s.shell_ui.task_create_open {
+        "Hide task form"
+    } else {
+        "New task"
+    })
+    .variant(ButtonVariant::Contrast)
+    .icon(&icons::CHECK_SQUARE)
+    .on_press_tx(|s: &mut AppState, _| {
+        s.shell_ui.task_create_open = !s.shell_ui.task_create_open;
+        s.shell_ui.task_create_title_edit.focused = s.shell_ui.task_create_open;
+    })
+    .build(k);
 
     let hero = Card::new()
         .accent(t.accent)
         .title("Tasks & Structured Workflows", Some(&icons::CHECK_SQUARE))
         .description(description)
-        .action(hero_actions)
+        .action(new_task)
         .build(k);
 
     let create_form = s
@@ -196,7 +228,12 @@ fn build_new_task_landing(
         .task_create_open
         .then(|| build_task_create_card(s, active_ws_id, k, t));
 
-    let tasks_section = if s.tasks.is_empty() {
+    let mut tasks = s
+        .tasks
+        .iter()
+        .filter(|task| Some(task.workspace_id.as_str()) == active_ws_id)
+        .peekable();
+    let tasks_section = if tasks.peek().is_none() {
         el().w_full()
             .padding(14.0)
             .radius(8.0)
@@ -212,7 +249,7 @@ fn build_new_task_landing(
             .key("task-landing-list")
             .w_full()
             .gap(6.0)
-            .children(s.tasks.iter().map(|task| task_list_row(s, task, k, t)))
+            .children(tasks.map(|task| task_list_row(s, task, k, t)))
     };
 
     let runs_section = build_workflow_runs_panel(s, k, t);
@@ -418,6 +455,7 @@ fn task_list_row(s: &AppState, task: &TaskSummaryView, k: &Kit, t: &ThemeTokens)
 fn build_active_task_workspace(
     s: &AppState,
     task: &TaskRecordView,
+    conversation: Option<El>,
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
@@ -425,12 +463,9 @@ fn build_active_task_workspace(
     let task_id = task.summary.id.clone();
     let rev = task.summary.revision;
     let status_lower = task.summary.status.to_ascii_lowercase();
-    let is_terminal = matches!(
-        status_lower.as_str(),
-        "completed" | "accepted" | "cancelled"
-    );
+    let is_terminal = task.summary.is_terminal();
 
-    let mut header_meta = col().grow(1.0).shrink().gap(2.0).child(
+    let mut header_meta = col().grow(1.0).min_w(140.0).shrink().gap(2.0).child(
         text(&task.summary.title)
             .font(t.title)
             .color(t.text_base)
@@ -467,6 +502,7 @@ fn build_active_task_workspace(
     let mut header = row()
         .key("task-workspace-header")
         .w_full()
+        .flex_wrap()
         .px(20.0)
         .py(12.0)
         .gap(8.0)
@@ -490,6 +526,7 @@ fn build_active_task_workspace(
         )
         .child(
             Button::new("New chat")
+                .disabled(is_terminal)
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
                 .icon(&icons::MESSAGE)
@@ -527,6 +564,7 @@ fn build_active_task_workspace(
                     .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Small)
                     .on_press_tx(|s: &mut AppState, _| {
+                        s.shell_ui.task_conversation_open = false;
                         s.shell_ui.task_feedback_open = !s.shell_ui.task_feedback_open;
                         s.shell_ui.task_feedback_edit.focused = s.shell_ui.task_feedback_open;
                     })
@@ -546,7 +584,7 @@ fn build_active_task_workspace(
                     })
                     .build(k),
             );
-    } else {
+    } else if status_lower != "failed" {
         header = header.child(
             Button::new("Reopen")
                 .variant(ButtonVariant::Ghost)
@@ -563,7 +601,7 @@ fn build_active_task_workspace(
         );
     }
 
-    if matches!(status_lower.as_str(), "failed" | "cancelled") {
+    if status_lower == "failed" {
         header = header.child(
             Button::new("Retry")
                 .variant(ButtonVariant::Ghost)
@@ -579,6 +617,24 @@ fn build_active_task_workspace(
         );
     }
 
+    if !task.threads.is_empty() {
+        let showing_thread = conversation.is_some();
+        header = header.child(
+            Button::new(if showing_thread {
+                "Task details"
+            } else {
+                "Conversation"
+            })
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .on_press_tx(move |s: &mut AppState, _| {
+                s.shell_ui.task_conversation_open = !showing_thread;
+            })
+            .build(k)
+            .key("task-toggle-conversation"),
+        );
+    }
+
     header = header.child(
         Button::new("All tasks")
             .variant(ButtonVariant::Ghost)
@@ -586,13 +642,31 @@ fn build_active_task_workspace(
             .on_press_tx(|s: &mut AppState, _| {
                 s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
             })
-            .build(k),
+            .build(k)
+            .key("task-all-tasks"),
     );
 
-    let runs_to_show: Vec<WorkflowRunView> = if task.runs.is_empty() {
-        s.workflow_runs.clone()
+    let body = if let Some(conversation) = conversation {
+        conversation
     } else {
-        task.runs.clone()
+        build_task_details(s, task, k, t)
+    };
+
+    col()
+        .key("active-task-view")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(header)
+        .child(el().w_full().h(1.0).fill(t.border_muted))
+        .child(body)
+}
+
+fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -> El {
+    let runs_to_show = if task.runs.is_empty() {
+        &s.workflow_runs
+    } else {
+        &task.runs
     };
 
     let mut main_pane = col()
@@ -608,8 +682,9 @@ fn build_active_task_workspace(
         .gap(16.0);
 
     if s.shell_ui.task_feedback_open {
-        let ws_fb = ws_id.clone();
-        let tid_fb = task_id.clone();
+        let rev = task.summary.revision;
+        let ws_fb = task.summary.workspace_id.clone();
+        let tid_fb = task.summary.id.clone();
         main_pane = main_pane.child(
             row()
                 .key("task-feedback-bar")
@@ -696,27 +771,15 @@ fn build_active_task_workspace(
         main_pane = main_pane.child(work_graph);
     }
 
-    main_pane = main_pane.child(render_runs_list(s, &runs_to_show, k, t));
-
-    let side_inspector = build_task_inspector_sidebar(s, task, k, t);
-
-    col()
-        .key("active-task-view")
-        .w_full()
-        .h_full()
+    main_pane = main_pane.child(render_runs_list(s, runs_to_show, k, t));
+    row()
+        .grow(1.0)
+        .shrink()
         .min_h(0.0)
-        .child(header)
-        .child(el().w_full().h(1.0).fill(t.border_muted))
-        .child(
-            row()
-                .grow(1.0)
-                .shrink()
-                .min_h(0.0)
-                .w_full()
-                .child(main_pane)
-                .child(el().w(1.0).h_full().fill(t.border_muted))
-                .child(side_inspector),
-        )
+        .w_full()
+        .child(main_pane)
+        .child(el().w(1.0).h_full().fill(t.border_muted))
+        .child(build_task_inspector_sidebar(s, task, t))
 }
 
 fn build_task_questions_card(
@@ -1236,43 +1299,7 @@ fn build_work_graph_card(
     Some(card)
 }
 
-fn build_task_inspector_sidebar(
-    s: &AppState,
-    task: &TaskRecordView,
-    k: &Kit,
-    t: &ThemeTokens,
-) -> El {
-    let tab = s.shell_ui.task_inspector_tab;
-    let tabs = row()
-        .w_full()
-        .gap(4.0)
-        .child(
-            Button::new("Context")
-                .variant(if tab == 0 {
-                    ButtonVariant::Contrast
-                } else {
-                    ButtonVariant::Ghost
-                })
-                .control_size(ControlSize::Small)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.shell_ui.task_inspector_tab = 0;
-                })
-                .build(k),
-        )
-        .child(
-            Button::new("Threads")
-                .variant(if tab == 1 {
-                    ButtonVariant::Contrast
-                } else {
-                    ButtonVariant::Ghost
-                })
-                .control_size(ControlSize::Small)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.shell_ui.task_inspector_tab = 1;
-                })
-                .build(k),
-        );
-
+fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTokens) -> El {
     let mut side = col()
         .key("task-context-summary")
         .w(290.0)
@@ -1283,132 +1310,62 @@ fn build_task_inspector_sidebar(
         })
         .padding(14.0)
         .gap(12.0)
-        .fill(t.panel_bg)
-        .child(tabs);
+        .fill(t.panel_bg);
+    let mut summary_card = col()
+        .w_full()
+        .padding(10.0)
+        .radius(8.0)
+        .fill(t.card_bg)
+        .border(1.0, t.border_muted)
+        .gap(4.0)
+        .child(text("Status").font(t.caption).color(t.text_faint))
+        .child(
+            text(format!(
+                "{} (rev {})",
+                task_status_label(&task.summary.status),
+                task.summary.revision
+            ))
+            .font(t.body)
+            .color(t.text_base),
+        );
+    if let Some(sched) = task.summary.schedule.as_deref() {
+        summary_card = summary_card
+            .child(text("Schedule").font(t.caption).color(t.text_faint))
+            .child(text(sched).font(t.caption).color(t.text_muted));
+    }
+    if let Some(ts) = task.summary.last_run_at {
+        summary_card = summary_card
+            .child(text("Last run").font(t.caption).color(t.text_faint))
+            .child(
+                text(helpers::format_relative_age(ts, s.now_secs))
+                    .font(t.caption)
+                    .color(t.text_muted),
+            );
+    }
+    side = side.child(summary_card);
 
-    if tab == 0 {
-        let mut summary_card = col()
+    if let Some(blockers) = task.blockers.as_array()
+        && !blockers.is_empty()
+    {
+        let mut b_card = col()
             .w_full()
             .padding(10.0)
             .radius(8.0)
             .fill(t.card_bg)
-            .border(1.0, t.border_muted)
+            .border(1.0, t.danger)
             .gap(4.0)
-            .child(text("Status").font(t.caption).color(t.text_faint))
-            .child(
-                text(format!(
-                    "{} (rev {})",
-                    task_status_label(&task.summary.status),
-                    task.summary.revision
-                ))
-                .font(t.body)
-                .color(t.text_base),
-            );
-        if let Some(sched) = task.summary.schedule.as_deref() {
-            summary_card = summary_card
-                .child(text("Schedule").font(t.caption).color(t.text_faint))
-                .child(text(sched).font(t.caption).color(t.text_muted));
+            .child(text("Active Blockers").font(t.label).color(t.danger));
+        for b in blockers.iter().take(6) {
+            let msg = b
+                .get("message")
+                .or_else(|| b.get("reason"))
+                .or_else(|| b.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or("Blocked");
+            b_card = b_card.child(text(msg).font(t.caption).color(t.text_base).wrap());
         }
-        if let Some(ts) = task.summary.last_run_at {
-            summary_card = summary_card
-                .child(text("Last run").font(t.caption).color(t.text_faint))
-                .child(
-                    text(helpers::format_relative_age(ts, s.now_secs))
-                        .font(t.caption)
-                        .color(t.text_muted),
-                );
-        }
-        side = side.child(summary_card);
-
-        if let Some(blockers) = task.blockers.as_array()
-            && !blockers.is_empty()
-        {
-            let mut b_card = col()
-                .w_full()
-                .padding(10.0)
-                .radius(8.0)
-                .fill(t.card_bg)
-                .border(1.0, t.danger)
-                .gap(4.0)
-                .child(text("Active Blockers").font(t.label).color(t.danger));
-            for b in blockers.iter().take(6) {
-                let msg = b
-                    .get("message")
-                    .or_else(|| b.get("reason"))
-                    .or_else(|| b.get("title"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Blocked");
-                b_card = b_card.child(text(msg).font(t.caption).color(t.text_base).wrap());
-            }
-            side = side.child(b_card);
-        }
-    } else {
-        let ws_id = task.summary.workspace_id.clone();
-        let tid = task.summary.id.clone();
-        let rev = task.summary.revision;
-        let title = format!("{} chat", task.summary.title);
-        side = side.child(
-            Button::new("New task thread")
-                .variant(ButtonVariant::Contrast)
-                .control_size(ControlSize::Small)
-                .icon(&icons::PLUS)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Task(TaskAction::CreateTaskThread {
-                        workspace_id: ws_id.clone(),
-                        task_id: tid.clone(),
-                        expected_revision: rev,
-                        title: title.clone(),
-                        work_item_id: None,
-                        provider: None,
-                        model: None,
-                    }));
-                })
-                .build(k),
-        );
-
-        let linked = task.threads.as_array().cloned().unwrap_or_default();
-        if linked.is_empty() {
-            side = side.child(
-                text("No task conversations linked yet.")
-                    .font(t.caption)
-                    .color(t.text_muted),
-            );
-        } else {
-            for (idx, th) in linked.iter().enumerate() {
-                let Some(th_id) = th
-                    .get("id")
-                    .or_else(|| th.get("threadId"))
-                    .and_then(Value::as_str)
-                else {
-                    continue;
-                };
-                let label = th
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|n| !n.trim().is_empty())
-                    .unwrap_or("Task thread");
-                let nav_id = th_id.to_owned();
-                side = side.child(
-                    row()
-                        .key(format!("task-th-{idx}"))
-                        .w_full()
-                        .padding(8.0)
-                        .radius(6.0)
-                        .fill(t.card_bg)
-                        .border(1.0, t.border_muted)
-                        .hover(t.hover)
-                        .gap(6.0)
-                        .center_y()
-                        .on_press_tx(move |s: &mut AppState, _| {
-                            s.dispatch(Action::Navigate(NavAction::OpenThread(nav_id.clone())));
-                        })
-                        .child(icon(&icons::MESSAGE, 13.0).color(t.text_muted))
-                        .child(text(label).font(t.caption).color(t.text_base).truncate()),
-                );
-            }
-        }
+        side = side.child(b_card);
     }
-
     side
 }
 

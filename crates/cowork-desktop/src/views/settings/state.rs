@@ -124,8 +124,7 @@ pub struct SettingsUiState {
     pub chats_search_edit: TextEdit,
     pub chats_workspace_filter: Option<String>,
     pub chats_confirm_delete_id: Option<String>,
-    pub import_dialog_open: bool,
-    pub import_source: String,
+    pub(crate) conversation_import: Option<super::conversation_import::ImportDialog>,
     pub import_selected_sources: HashSet<String>,
     pub import_path_edit: TextEdit,
 
@@ -313,8 +312,7 @@ impl Default for SettingsUiState {
             chats_search_edit: TextEdit::new(""),
             chats_workspace_filter: None,
             chats_confirm_delete_id: None,
-            import_dialog_open: false,
-            import_source: "chatgpt".to_string(),
+            conversation_import: None,
             import_selected_sources: HashSet::from([
                 "codex".to_string(),
                 "claude-code".to_string(),

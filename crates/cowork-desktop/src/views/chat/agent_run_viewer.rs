@@ -11,7 +11,7 @@ use crate::state::{AppState, FeedItem, ThreadAgentSummary};
 use crate::theme::ThemeTokens;
 
 use super::components::{StatusPillTone, status_pill};
-use super::feed::{ChatFeedProps, build_chat_feed};
+use super::feed::{ChatFeedProps, FeedSource, build_chat_feed};
 use super::icons;
 use super::model::is_active_child_agent;
 
@@ -138,15 +138,16 @@ pub fn build_agent_run_drawer(
             t,
             &ChatFeedProps {
                 thread_key: &agent_feed_key,
-                raw_feed,
+                source: FeedSource::AgentRun {
+                    thread_id: viewer.thread_id.clone(),
+                    agent_id: viewer.agent_id.clone(),
+                },
                 thread_busy: is_active,
                 hydrating: is_active && raw_feed.is_empty(),
                 transcript_only: false,
                 disconnected: false,
                 reconnecting: false,
-                pending_interactions: &[],
                 interaction_errors: &EMPTY_ERRORS,
-                agents: &[],
                 workspace_id,
                 workspace_path,
                 external_cache: None,

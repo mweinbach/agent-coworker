@@ -2532,3 +2532,57 @@ fn chat_and_canvas_views_respect_selected_accent_palette() {
         }
     }
 }
+
+#[test]
+fn long_transcript_builds_only_the_rows_near_the_viewport() {
+    let mut s = build_populated_thread_state(true);
+    s.thread_runtime_by_id
+        .get_mut("th-demo")
+        .expect("demo thread")
+        .pending_interactions
+        .clear();
+    let feed = &mut s
+        .thread_runtime_by_id
+        .get_mut("th-demo")
+        .expect("demo thread")
+        .feed;
+    for i in 0..300 {
+        let role = if i % 2 == 0 {
+            FeedMessageRole::User
+        } else {
+            FeedMessageRole::Assistant
+        };
+        feed.push(FeedItem::Message {
+            id: format!("msg-long-{i}"),
+            role,
+            content: format!("Message {i}: a paragraph long enough to wrap onto a second line."),
+            client_message_id: None,
+            attachments: vec![],
+            references: vec![],
+            citations: vec![],
+            streaming: false,
+            timestamp_ms: 1_763_100_020_000 + i as i64 * 1_000,
+        });
+    }
+    let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt.frame(0.0);
+    for _ in 0..10 {
+        rt.frame(1.0 / 120.0);
+    }
+    let built: Vec<String> = rt
+        .elements()
+        .into_iter()
+        .filter_map(|e| e.key)
+        .filter(|k| k.starts_with("row:msg-long-"))
+        .collect();
+    assert!(
+        built.iter().any(|k| k == "row:msg-long-299"),
+        "the newest row is built at the bottom: {built:?}"
+    );
+    // The loaded page is the newest 80 items; the oldest of them sit many viewports up.
+    assert!(
+        !built.iter().any(|k| k == "row:msg-long-220"),
+        "a row far above the viewport isn't built: {built:?}"
+    );
+    assert!(built.len() < 60, "built {} transcript rows", built.len());
+}

@@ -389,7 +389,7 @@ impl ReasoningEffortValue {
 }
 
 /// Message author role inside a thread feed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FeedMessageRole {
     User,
@@ -399,7 +399,7 @@ pub enum FeedMessageRole {
 }
 
 /// Tool call lifecycle state inside `FeedItem::Tool`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolRunStatus {
     #[default]
@@ -420,7 +420,7 @@ impl ToolRunStatus {
 }
 
 /// One Todo item inside `FeedItem::Todos`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoItemView {
     pub id: String,
@@ -434,7 +434,7 @@ fn default_reasoning_mode() -> String {
 }
 
 /// Resolved citation / external source entry attached to an assistant message.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CitationSource {
     pub label: Option<String>,
@@ -547,7 +547,7 @@ pub enum ChatInteraction {
 }
 
 /// Summary of a child subagent attached to a thread.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadAgentSummary {
     pub agent_id: String,

@@ -20,6 +20,7 @@ mod math;
 pub mod model;
 #[cfg(test)]
 mod parity_tests;
+mod row_version;
 pub mod state;
 
 pub use canvas::{canvas_pane, is_canvas_document_path, is_canvas_maximized};
@@ -35,7 +36,7 @@ use crate::views::SubviewOutput;
 use self::agent_run_viewer::build_agent_run_drawer;
 use self::components::{locked_task_bar, read_only_notice_bar};
 use self::dialogs::{build_cancel_subagents_dialog, build_transcript_recovery_banner};
-use self::feed::{ChatFeedProps, build_chat_feed};
+use self::feed::{ChatFeedProps, FeedSource, build_chat_feed};
 use self::feed_row::render_active_feed_popovers;
 use self::model::workspace_is_reconnecting;
 
@@ -84,17 +85,15 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             &t,
             &ChatFeedProps {
                 thread_key: &thread.id,
-                raw_feed: rt.map(|r| r.feed.as_slice()).unwrap_or(&[]),
+                source: FeedSource::Thread(thread.id.clone()),
                 thread_busy,
                 hydrating: rt.is_some_and(|r| r.hydrating),
                 transcript_only: rt.is_some_and(|r| r.transcript_only),
                 disconnected,
                 reconnecting,
-                pending_interactions: rt.map(|r| r.pending_interactions.as_slice()).unwrap_or(&[]),
                 interaction_errors: rt
                     .map(|r| &r.interaction_errors)
                     .unwrap_or(&EMPTY_INTERACTION_ERRORS),
-                agents: rt.map(|r| r.agents.as_slice()).unwrap_or(&[]),
                 workspace_id: Some(thread.workspace_id.as_str()),
                 workspace_path: ws.map(|w| w.path.as_str()),
                 external_cache: None,

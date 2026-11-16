@@ -180,6 +180,30 @@ fn parse_question_object(val: &Value, idx: usize) -> Option<AskQuestionSpec> {
     })
 }
 
+/// The element key of `interaction`'s card, which the feed also uses as the card's row key.
+pub(super) fn interaction_card_key(interaction: &ChatInteraction) -> String {
+    let (ChatInteraction::CommandApproval {
+        request_id,
+        item_id,
+        ..
+    }
+    | ChatInteraction::FileChangeApproval {
+        request_id,
+        item_id,
+        ..
+    }
+    | ChatInteraction::UserInput {
+        request_id,
+        item_id,
+        ..
+    }) = interaction;
+    card_key(&request_id_key(request_id), item_id)
+}
+
+fn card_key(req_key: &str, item_id: &str) -> String {
+    format!("interaction:{req_key}:{item_id}")
+}
+
 fn request_id_key(id: &JsonRpcLiteId) -> String {
     match id {
         JsonRpcLiteId::String(s) => s.clone(),
@@ -317,7 +341,7 @@ fn build_command_approval_card(
     };
 
     let mut card = col()
-        .key(format!("interaction:{req_key}:{item_id}"))
+        .key(card_key(&req_key, item_id))
         .w_full()
         .min_w(0.0)
         .max_w(768.0)
@@ -460,7 +484,7 @@ fn build_file_approval_card(
 ) -> El {
     let req_key = request_id_key(request_id);
     let mut card = col()
-        .key(format!("interaction:{req_key}:{item_id}"))
+        .key(card_key(&req_key, item_id))
         .w_full()
         .min_w(0.0)
         .max_w(768.0)
@@ -586,7 +610,7 @@ fn build_user_input_card(
     let q_state_key = format!("{req_key}:{}", q.id);
 
     let mut card = col()
-        .key(format!("interaction:{req_key}:{item_id}"))
+        .key(card_key(&req_key, item_id))
         .w_full()
         .min_w(0.0)
         .max_w(768.0)

@@ -212,7 +212,7 @@ fn is_compact_progress_assistant(item: &FeedItem) -> bool {
     !trimmed.is_empty() && trimmed.chars().count() <= COMPACT_PROGRESS_ASSISTANT_CHARS
 }
 
-fn item_id(item: &FeedItem) -> &str {
+pub(super) fn item_id(item: &FeedItem) -> &str {
     match item {
         FeedItem::Message { id, .. }
         | FeedItem::Reasoning { id, .. }
@@ -964,14 +964,14 @@ pub fn extract_tool_diff(
 }
 
 /// Category of an interactive `@`-mention target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MentionKind {
     Skill,
     Plugin,
 }
 
 /// Entry inside the composer `@`-mention catalog.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MentionItem {
     pub kind: MentionKind,
     pub name: String,

@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use katex_native::katex::KatexContext;
@@ -1297,6 +1298,16 @@ struct MathRasterCache {
     worker_tx: mpsc::Sender<RasterJob>,
 }
 
+/// Bumped each time the raster worker finishes a formula. A memoized feed row that drew a
+/// formula's pending placeholder (estimated size) puts this in its version so it builds again
+/// at the final size.
+static RASTER_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// How many background rasterizations have finished; see [`RASTER_GENERATION`].
+pub fn raster_generation() -> u64 {
+    RASTER_GENERATION.load(Ordering::Acquire)
+}
+
 fn global_math_cache() -> &'static MathRasterCache {
     static CACHE: OnceLock<MathRasterCache> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -1315,6 +1326,7 @@ fn global_math_cache() -> &'static MathRasterCache {
                     if let Some(cache) = CACHE.get() {
                         cache.insert_entry(job.key, entry);
                     }
+                    RASTER_GENERATION.fetch_add(1, Ordering::Release);
                     (job.waker)();
                 }
             });

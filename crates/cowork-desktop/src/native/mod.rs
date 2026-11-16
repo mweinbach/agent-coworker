@@ -265,7 +265,6 @@ pub fn on_window_opened(window_key: &str, handle: &rune::WindowHandle) {
     }
     register_window_handle(window_key, handle.clone());
     if window_key == "main" {
-        menu::sync_unbundled_macos_display_name();
         reconcile_opened_window_placement(shared_window_state_store(), handle);
     }
 }

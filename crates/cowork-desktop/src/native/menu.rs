@@ -934,11 +934,6 @@ mod macos_app_identity {
             encoding: u32,
             is_external_representation: u8,
         ) -> *const c_void;
-        fn CFBundleGetMainBundle() -> *const c_void;
-        fn CFBundleGetValueForInfoDictionaryKey(
-            bundle: *const c_void,
-            key: *const c_void,
-        ) -> *const c_void;
         fn CFRelease(cf: *const c_void);
     }
 
@@ -1007,64 +1002,6 @@ mod macos_app_identity {
             );
         }
     }
-
-    pub(super) fn has_bundled_cf_bundle_name() -> bool {
-        let Some(key) = CfRef::from_str("CFBundleName") else {
-            return false;
-        };
-        // SAFETY: `CFBundleGetMainBundle` and `CFBundleGetValueForInfoDictionaryKey` return borrowed references.
-        unsafe {
-            let bundle = CFBundleGetMainBundle();
-            !bundle.is_null()
-                && !CFBundleGetValueForInfoDictionaryKey(bundle, key.as_ptr()).is_null()
-        }
-    }
-
-    pub(super) fn set_launchservices_display_name(name: &str) {
-        let Some(cf_name) = CfRef::from_str(name) else {
-            return;
-        };
-        type LsGetCurrAsnFn = unsafe extern "C" fn() -> *mut c_void;
-        type LsSetAppInfoFn = unsafe extern "C" fn(
-            i32,
-            *mut c_void,
-            *const c_void,
-            *const c_void,
-            *mut c_void,
-        ) -> i32;
-
-        // SAFETY: Dynamically updates LaunchServices display name for unbundled dev builds;
-        // every resolved pointer is null-checked before dereferencing and the handle is closed.
-        unsafe {
-            let cs = libc::dlopen(
-                c"/System/Library/Frameworks/CoreServices.framework/CoreServices".as_ptr(),
-                libc::RTLD_LAZY,
-            );
-            if cs.is_null() {
-                return;
-            }
-            let get_asn_sym = libc::dlsym(cs, c"_LSGetCurrentApplicationASN".as_ptr());
-            let set_info_sym = libc::dlsym(cs, c"_LSSetApplicationInformationItem".as_ptr());
-            let key_sym = libc::dlsym(cs, c"_kLSDisplayNameKey".as_ptr());
-            if !get_asn_sym.is_null() && !set_info_sym.is_null() && !key_sym.is_null() {
-                let get_asn: LsGetCurrAsnFn = std::mem::transmute(get_asn_sym);
-                let set_info: LsSetAppInfoFn = std::mem::transmute(set_info_sym);
-                let display_name_key = *(key_sym as *const *const c_void);
-                let asn = get_asn();
-                if !asn.is_null() && !display_name_key.is_null() {
-                    const K_LS_DEFAULT_SESSION_ID: i32 = -2;
-                    let _ = set_info(
-                        K_LS_DEFAULT_SESSION_ID,
-                        asn,
-                        display_name_key,
-                        cf_name.as_ptr(),
-                        std::ptr::null_mut(),
-                    );
-                }
-            }
-            let _ = libc::dlclose(cs);
-        }
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1074,26 +1011,6 @@ fn configure_macos_app_identity() {
     }
     rune::set_labels(macos_app_label);
     macos_app_identity::set_process_name(APP_DISPLAY_NAME);
-}
-
-/// Ensures unbundled macOS dev builds display `"Cowork"` instead of `"cowork-desktop"`
-/// in the bold app menu bar title, standard app menu items (`About/Hide/Quit Cowork`),
-/// and `NSRunningApplication.localizedName`.
-/// Note: unbundled executables on macOS still show their on-disk binary name in the Dock;
-/// packaged `.app` bundles get their Dock name from `Info.plist`.
-/// No-op inside packaged `.app` bundles (for LaunchServices overrides), non-macOS hosts,
-/// and headless/test runs.
-pub fn sync_unbundled_macos_display_name() {
-    #[cfg(target_os = "macos")]
-    {
-        if super::is_headless_invocation() || cfg!(test) {
-            return;
-        }
-        macos_app_identity::set_process_name(APP_DISPLAY_NAME);
-        if !macos_app_identity::has_bundled_cf_bundle_name() {
-            macos_app_identity::set_launchservices_display_name(APP_DISPLAY_NAME);
-        }
-    }
 }
 
 /// Registers standard macOS Edit/Window menus plus the Cowork declarative menu hierarchy.

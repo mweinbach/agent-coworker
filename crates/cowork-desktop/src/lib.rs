@@ -661,6 +661,24 @@ fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
     views::shell::view(state, cx, &kit, &tokens)
 }
 
+/// Entry points for the headless UI perf harness (`benches/ui_perf.rs`). Not a stable API.
+#[doc(hidden)]
+pub mod perf_hooks {
+    use rune::{Cx, El, Tx};
+
+    use crate::state::AppState;
+
+    /// The Main window's real `view`, as the native loop runs it.
+    pub fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
+        super::root_view(state, cx)
+    }
+
+    /// The Main window's real `poll`, as the native loop runs it before each frame.
+    pub fn poll(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
+        super::poll_app(state, now, tx)
+    }
+}
+
 /// Builds the Rune `AppSpec<AppState>` (also reusable for headless tests).
 pub fn app_spec() -> AppSpec<AppState> {
     app_spec_for_mode(state::WindowMode::Main)

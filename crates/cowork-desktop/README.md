@@ -64,6 +64,19 @@ cargo test -p cowork-desktop
 cargo build -p cowork-server --bin cowork-server && cargo test -p cowork-desktop --test e2e_roundtrip -- --ignored
 ```
 
+### UI performance harness
+
+`benches/ui_perf.rs` drives the Main window's real `view` and `poll` in a headless Rune runtime over a long-thread fixture (60 threads, two with 400 feed items each, 40 skills). It reports per-step CPU frame time: the input or state change, `poll`, and the commit/layout/paint-instance build. It does not measure GPU upload or presentation. Scenarios: `open_thread`, `switch_thread`, `streaming`, `typing`, `scroll`, `settings`, `resize`, `idle`.
+
+```bash
+cargo bench -p cowork-desktop --bench ui_perf                         # optimized, all scenarios
+cargo bench -p cowork-desktop --bench ui_perf -- typing scroll        # a subset
+cargo bench -p cowork-desktop --bench ui_perf -- --items 600 --json /tmp/ui-perf.json
+cargo bench --profile dev -p cowork-desktop --bench ui_perf           # the `cargo run` profile
+```
+
+`idle` should report zero commits. If it reports more, something in `poll` claims a change that no view reads. `settle` and `frames` are the median CPU time and frame count from the end of a navigation step until the runtime rests; a pane swap should rest within a frame or two. For a per-commit view/layout/text/apply breakdown, set `RUNE_COMMIT_BUDGET_MS=1`. Compare builds with paired, alternating runs on a quiet machine, using the median.
+
 ## Module Ownership Layout
 
 All product/session/tool logic lives in `crates/cowork-server` and `crates/cowork-harness`. Within `crates/cowork-desktop/`:

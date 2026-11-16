@@ -49,3 +49,7 @@ tray-icon = { version = "0.26", default-features = false }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[bench]]
+name = "ui_perf"
+harness = false

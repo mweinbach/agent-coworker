@@ -18,6 +18,13 @@ members = [
 ]
 exclude = ["crates/cowork-win-sandbox"]
 
+# `cargo run` (and `bun run desktop:rune`) builds the dev profile. Rune's layout, text shaping and
+# paint run every frame and are roughly 3x slower unoptimized (see `crates/cowork-desktop/benches/
+# ui_perf.rs`), so optimize dependencies only: workspace crates stay at opt-level 0 for fast
+# incremental rebuilds, and binaries keep their `target/debug` paths.
+[profile.dev.package."*"]
+opt-level = 3
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

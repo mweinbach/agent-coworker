@@ -77,6 +77,8 @@ cargo bench --profile dev -p cowork-desktop --bench ui_perf           # the `car
 
 `idle` should report zero commits. If it reports more, something in `poll` claims a change that no view reads. `settle` and `frames` are the median CPU time and frame count from the end of a navigation step until the runtime rests; a pane swap should rest within a frame or two. For a per-commit view/layout/text/apply breakdown, set `RUNE_COMMIT_BUDGET_MS=1`. Compare builds with paired, alternating runs on a quiet machine, using the median.
 
+The dev profile (`cargo run`, `bun run desktop:rune`) builds dependencies at `opt-level = 3` (root `Cargo.toml`) because Rune's per-frame layout, text and paint are about 3x slower unoptimized; workspace crates stay unoptimized for fast rebuilds.
+
 ## Module Ownership Layout
 
 All product/session/tool logic lives in `crates/cowork-server` and `crates/cowork-harness`. Within `crates/cowork-desktop/`:

@@ -595,6 +595,12 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
             tx.wake_at(state.app_elapsed_secs + delay);
         }
     }
+    // After everything above that can navigate. A handler's navigation lands here on the next
+    // frame, a poll's on this one: either way the pane stops animating at once (`Tx::settle`).
+    if std::mem::take(&mut state.settle_after_navigation) {
+        tx.settle();
+        changed = true;
+    }
     changed
 }
 

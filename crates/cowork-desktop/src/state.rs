@@ -1712,6 +1712,9 @@ pub struct AppState {
     pub menu_platform_override: Option<DesktopPlatformOverride>,
     /// Deferred menu command ID dispatched on the next `poll_app` after popup/modal focus returns.
     pub pending_menu_command: Option<String>,
+    /// Set when navigation swaps the main pane (another thread or view); `poll_app` answers with
+    /// `Tx::settle` so the new pane lands on one frame instead of animating its rows in.
+    pub(crate) settle_after_navigation: bool,
     /// True when started under a static Rune `--scene`; prevents `NativeReady` from overwriting scene state.
     pub scene_mode: bool,
     /// Wall-clock Unix epoch seconds for timestamps, relative age labels, and timers.
@@ -1848,6 +1851,7 @@ impl Default for AppState {
             system_dark_override: None,
             menu_platform_override: None,
             pending_menu_command: None,
+            settle_after_navigation: false,
             scene_mode: false,
             now_secs: 0.0,
             app_elapsed_secs: 0.0,
@@ -4466,6 +4470,7 @@ impl AppState {
 
     fn reduce_nav(&mut self, action: NavAction) {
         let prev_tid = self.nav.current().active_thread_id.clone();
+        let prev_view = self.nav.current().view;
         let prev_ws = self.active_workspace_id.clone();
         let prev_landing = self.landing_workspace_id.clone();
         let mut already_persisted = false;
@@ -4630,6 +4635,12 @@ impl AppState {
 
         if self.active_workspace_id != prev_ws || self.landing_workspace_id != prev_landing {
             self.shared_dirty = true;
+        }
+        // Another thread or view replaces the whole pane. Animating that swap keeps a long
+        // transcript in motion for about a second, with full layout and paint every frame;
+        // land it settled instead (`poll_app`).
+        if self.nav.current().view != prev_view || self.nav.current().active_thread_id != prev_tid {
+            self.settle_after_navigation = true;
         }
         if !already_persisted
             && !self.scene_mode
@@ -4951,6 +4962,10 @@ impl AppState {
         std::mem::swap(
             &mut self.pending_menu_command,
             &mut other.pending_menu_command,
+        );
+        std::mem::swap(
+            &mut self.settle_after_navigation,
+            &mut other.settle_after_navigation,
         );
         std::mem::swap(&mut self.now_secs, &mut other.now_secs);
         std::mem::swap(&mut self.app_elapsed_secs, &mut other.app_elapsed_secs);

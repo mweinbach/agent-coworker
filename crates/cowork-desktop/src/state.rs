@@ -2636,8 +2636,9 @@ impl AppState {
         let should_poll =
             poll_ws_ready && (self.now_secs >= doc.last_poll_secs + CANVAS_REVISION_POLL_SECS);
         if should_poll {
+            // Only touches poll bookkeeping (`last_poll_secs`, `pending_canvas_rpcs`) that no view
+            // reads; the response arrives as a store event and repaints then if anything changed.
             self.request_canvas_revision();
-            return true;
         }
         false
     }
@@ -3874,6 +3875,13 @@ impl AppState {
     pub fn drain_events(&mut self) -> bool {
         let mut changed = false;
         while let Ok(event) = self.services.event_rx.try_recv() {
+            // The native worker re-emits the telemetry snapshot after every persisted-state save;
+            // an identical snapshot changes nothing a view reads, so it must not force a rebuild.
+            if let StoreEvent::TelemetryStatusChanged(status) = &event
+                && self.telemetry_status.as_ref() == Some(status)
+            {
+                continue;
+            }
             self.apply_store_event(event);
             changed = true;
         }
@@ -15570,7 +15578,8 @@ mod tests {
             doc.dirty_since_secs = Some(state.now_secs);
             doc.last_poll_secs = state.now_secs - CANVAS_REVISION_POLL_SECS;
         }
-        assert!(state.drain_events());
+        // The poll only sends the request; nothing a view reads changes until the response.
+        assert!(!state.drain_events());
         let Some(WsCommand::SendRequest {
             request_id: rev_id,
             method: rev_method,

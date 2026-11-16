@@ -382,6 +382,16 @@ fn active_suggestion_meta(
 }
 
 fn handle_composer_key(s: &mut AppState, ev: &rune::KeyEvent) -> bool {
+    // Plain typing never interacts with the suggestion popup; skip rebuilding the mention catalog
+    // on every keystroke.
+    let navigates = match &ev.key {
+        Key::Down | Key::Up | Key::Escape | Key::Tab => true,
+        Key::Enter => !ev.mods.shift && !ev.mods.alt,
+        _ => false,
+    };
+    if !navigates {
+        return false;
+    }
     let Some((count, dismiss_key, pick)) =
         active_suggestion_meta(s, s.chat_ui.mention_active_index)
     else {

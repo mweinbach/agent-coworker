@@ -133,13 +133,13 @@ scraper = { version = "0.29", default-features = false, features = ["errors"] }
 similar = "3"
 walkdir = "2"
 
-rune = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91", features = ["native-file-dialog", "tooling"] }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91", features = ["markdown", "mermaid"] }
-rune-notify = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1", features = ["native-file-dialog", "tooling"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1", features = ["markdown", "mermaid"] }
+rune-notify = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1" }
 
 [patch.crates-io]
-winit = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91" }
-parley_engine = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91" }
-wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91" }
-accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91" }
-accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "2c4cf4d91a1a696408a5dc2d4d4699a18fa25b91" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "55ef5268f22038a95344b3e9d2b4a25ddba731b1" }

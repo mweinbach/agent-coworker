@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { __internal } from "../scripts/build_desktop_resources";
+import { extractZipArchive } from "../scripts/releaseBuildUtils";
 import {
   computeSourceFingerprint,
   WIN_SANDBOX_PREBUILT_LOCK_NAME,
@@ -282,23 +283,24 @@ describe("desktop resource build helpers", () => {
         const destination = path.join(root, "extracted");
         await fs.writeFile(archive, buildStoredZipBuffer({ "helper.txt": "fixture contents" }));
 
-        const helperUrl = new URL("../scripts/releaseBuildUtils.ts", import.meta.url).href;
-        const env = Object.fromEntries(
-          Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"),
+        const previousModulePath = Object.entries(process.env).find(
+          ([key]) => key.toLowerCase() === "psmodulepath",
         );
-        const child = Bun.spawn(
-          [
-            process.execPath,
-            "--eval",
-            `import { extractZipArchive } from ${JSON.stringify(helperUrl)}; await extractZipArchive(process.argv[1], process.argv[2]);`,
-            "--",
-            archive,
-            destination,
-          ],
-          { env: { ...env, PsModulePath: modules }, stderr: "inherit" },
-        );
+        let extraction: Promise<void>;
+        try {
+          if (previousModulePath) delete process.env[previousModulePath[0]];
+          process.env.PsModulePath = modules;
+          extraction = extractZipArchive(archive, destination);
+        } finally {
+          // The helper snapshots the environment before awaiting the PowerShell process.
+          delete process.env.PsModulePath;
+          if (previousModulePath) {
+            const [key, value] = previousModulePath;
+            process.env[key] = value;
+          }
+        }
 
-        expect(await child.exited).toBe(0);
+        await expect(extraction).resolves.toBeUndefined();
         await expect(fs.readFile(path.join(destination, "helper.txt"), "utf8")).resolves.toBe(
           "fixture contents",
         );

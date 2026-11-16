@@ -1,14 +1,18 @@
 //! Full-bleed desktop split shell replacing inset card chrome so panes meet window edges cleanly.
 
 use rune::{Anim, Color, Cursor, Curve, Easing, El, Phase, Spring, Transition, Tx, col, el, row};
-use rune_kit::shell::{PaneState, SIDEBAR, TOOLBAR_HEIGHT};
+use rune_kit::shell::{PaneState, SIDEBAR};
 use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit};
 
 use crate::state::AppState;
+use crate::theme::layout::SHELL_TOOLBAR_HEIGHT as TOOLBAR_HEIGHT;
 
 const GRIP_WIDTH: f32 = 6.0;
 const GRIP_STEP: f32 = 8.0;
 const TOGGLE_SIDE: f32 = 28.0;
+/// Back and forward beside the sidebar toggle (`ControlSize::Regular` icon buttons).
+pub(crate) const NAV_BUTTON_SIDE: f32 = 24.0;
+const CLUSTER_GAP: f32 = 2.0;
 const TOOLBAR_EDGE_PAD: f32 = 12.0;
 const POST_LIGHTS_GAP: f32 = 14.0;
 const TOGGLE_CONTENT_GAP: f32 = 8.0;
@@ -100,6 +104,8 @@ pub struct FullBleedSplit {
     toggle_shortcut: Option<String>,
     reduced_motion: bool,
     spring: Spring,
+    sidebar_vibrancy: Option<f32>,
+    sidebar_nav: Vec<El>,
 }
 
 impl FullBleedSplit {
@@ -116,7 +122,25 @@ impl FullBleedSplit {
             toggle_shortcut: None,
             reduced_motion: false,
             spring: Spring::new(0.3, 0.0),
+            sidebar_vibrancy: None,
+            sidebar_nav: Vec::new(),
         }
+    }
+
+    /// Buttons that sit beside the sidebar toggle (back and forward), in the sidebar's title
+    /// bar while it is open and at the start of the toolbar while it is collapsed. The cluster
+    /// never moves, so nothing jumps as the sidebar opens or closes.
+    pub fn sidebar_nav(mut self, buttons: Vec<El>) -> Self {
+        self.sidebar_nav = buttons;
+        self
+    }
+
+    /// Backs the sidebar with the platform's vibrancy material (macOS `NSVisualEffectView`)
+    /// under a tint of the sidebar colour at `tint_alpha`, so a little of the desktop shows
+    /// through the window chrome. Elsewhere, and in opaque windows, the opaque sidebar fill draws.
+    pub fn sidebar_vibrancy(mut self, tint_alpha: Option<f32>) -> Self {
+        self.sidebar_vibrancy = tint_alpha.map(|a| a.clamp(0.0, 1.0));
+        self
     }
 
     /// Sets the main pane's top toolbar.
@@ -213,7 +237,7 @@ impl FullBleedSplit {
     }
 
     /// Builds the full-bleed split view tree.
-    pub fn build(self, k: &Kit) -> El {
+    pub fn build(mut self, k: &Kit) -> El {
         let width_spring = if self.reduced_motion {
             Spring::NONE
         } else {
@@ -235,14 +259,16 @@ impl FullBleedSplit {
         let sidebar_open = self.sidebar.as_ref().is_some_and(|sb| sb.state.is_open());
         let toggle_visible = self.show_toggle && has_sidebar;
 
+        let nav = std::mem::take(&mut self.sidebar_nav);
+        let cluster_width = TOGGLE_SIDE + nav.len() as f32 * (NAV_BUTTON_SIDE + CLUSTER_GAP);
         let floating_toggle = self.sidebar.as_ref().filter(|_| toggle_visible).map(|sb| {
             build_floating_toggle(
                 k,
                 sb,
-                width_spring,
                 collapsed_toggle_x,
                 self.unread,
                 self.toggle_shortcut.as_deref(),
+                nav,
             )
         });
 
@@ -250,7 +276,7 @@ impl FullBleedSplit {
             if sidebar_open {
                 TOOLBAR_EDGE_PAD
             } else {
-                collapsed_toggle_x + TOGGLE_SIDE + TOGGLE_CONTENT_GAP
+                collapsed_toggle_x + cluster_width + TOGGLE_CONTENT_GAP
             }
         } else if has_sidebar {
             TOOLBAR_EDGE_PAD
@@ -258,12 +284,29 @@ impl FullBleedSplit {
             collapsed_toggle_x
         };
 
-        let sidebar_el = self
-            .sidebar
-            .map(|sb| build_pane_slot("sidebar-pane", sb, true, width_spring, fade_anim, k));
-        let inspector_el = self
-            .inspector
-            .map(|insp| build_pane_slot("inspector-pane", insp, false, width_spring, fade_anim, k));
+        let vibrancy = self.sidebar_vibrancy;
+        let sidebar_el = self.sidebar.map(|sb| {
+            build_pane_slot(
+                "sidebar-pane",
+                sb,
+                true,
+                width_spring,
+                fade_anim,
+                vibrancy,
+                k,
+            )
+        });
+        let inspector_el = self.inspector.map(|insp| {
+            build_pane_slot(
+                "inspector-pane",
+                insp,
+                false,
+                width_spring,
+                fade_anim,
+                None,
+                k,
+            )
+        });
 
         let toolbar_el = self.toolbar.build(toolbar_pl, width_spring);
         let main_pane = col()
@@ -301,11 +344,18 @@ impl FullBleedSplit {
             split = split.child(sb);
         }
 
+        // With a vibrant sidebar the window is transparent: leave the root unpainted so the
+        // material shows, and let the main column and panes paint their own opaque fills.
+        let root_fill = if vibrancy.is_some() {
+            Color::TRANSPARENT
+        } else {
+            k.c.bg_base
+        };
         let mut root = el()
             .key("shell")
             .w_full()
             .h_full()
-            .fill(k.c.bg_base)
+            .fill(root_fill)
             .child(split.child(main_column));
         if let Some(toggle) = floating_toggle {
             root = root.child(toggle);
@@ -317,10 +367,10 @@ impl FullBleedSplit {
 fn build_floating_toggle(
     k: &Kit,
     sb: &SplitPaneSpec,
-    motion: Spring,
-    collapsed_x: f32,
+    x: f32,
     unread: bool,
     shortcut: Option<&str>,
+    nav: Vec<El>,
 ) -> El {
     let open = sb.state.is_open();
     let access = sb.access;
@@ -338,7 +388,8 @@ fn build_floating_toggle(
             access(s).toggle();
         })
         .build(k)
-        .expanded(open);
+        .expanded(open)
+        .key("sidebar-toggle");
 
     if unread {
         let dot = el()
@@ -354,17 +405,16 @@ fn build_floating_toggle(
         );
     }
 
-    let toggle_x = if open {
-        (sb.state.width() - 8.0 - TOGGLE_SIDE).max(collapsed_x)
-    } else {
-        collapsed_x
-    };
-    let toggle_y = (TOOLBAR_HEIGHT - TOGGLE_SIDE) / 2.0;
-
-    toggle_el
-        .key("sidebar-toggle")
-        .absolute(toggle_x, toggle_y)
-        .motion(motion)
+    let y = (TOOLBAR_HEIGHT - TOGGLE_SIDE) / 2.0;
+    row()
+        .key("sidebar-toolbar-cluster")
+        .role("toolbar")
+        .label("Sidebar and navigation")
+        .gap(CLUSTER_GAP)
+        .center_y()
+        .absolute(x, y)
+        .child(toggle_el)
+        .children(nav)
 }
 
 fn build_pane_slot(
@@ -373,6 +423,7 @@ fn build_pane_slot(
     leading: bool,
     width_spring: Spring,
     fade_anim: Anim,
+    vibrancy: Option<f32>,
     k: &Kit,
 ) -> El {
     let s = pane.state;
@@ -400,8 +451,20 @@ fn build_pane_slot(
         content_col = content_col
             .fill(k.c.bg_deep)
             .pin(None, Some(0.0), Some(0.0), Some(0.0))
-            .motion(width_spring)
-            .child(titlebar);
+            .motion(width_spring);
+        if let Some(alpha) = vibrancy {
+            // The material replaces the fill where the platform draws it natively; the tint
+            // over it keeps the sidebar's colour and contrast with only a hint of the desktop.
+            content_col = content_col
+                .system_material(rune::SystemMaterial::Popover)
+                .child(
+                    el().key("sidebar-vibrancy-tint")
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .fill(k.c.bg_deep.alpha(alpha))
+                        .a11y_hidden(),
+                );
+        }
+        content_col = content_col.child(titlebar);
     } else {
         content_col = content_col
             .fill(k.c.bg_base)
@@ -603,15 +666,25 @@ mod tests {
         assert_eq!(main_rect[1], 0.0);
         assert!((main_rect[0] + main_rect[2] - 1280.0).abs() < 0.5);
         assert!((main_rect[3] - 820.0).abs() < 0.5);
-        assert!((toggle_rect[1] - 10.0).abs() < 0.5);
+        let band = crate::theme::layout::SHELL_TOOLBAR_HEIGHT;
+        let toggle_y = (band - super::TOGGLE_SIDE) / 2.0;
+        assert!((toggle_rect[1] - toggle_y).abs() < 0.5);
         let toggle_center_y = toggle_rect[1] + toggle_rect[3] * 0.5;
         let back_center_y = back_rect[1] + back_rect[3] * 0.5;
         assert!(
-            (toggle_center_y - 24.0).abs() < 0.5 && (back_center_y - 24.0).abs() < 0.5,
-            "sidebar toggle ({toggle_center_y}) and toolbar nav ({back_center_y}) must both center in 48pt band"
+            (toggle_center_y - band / 2.0).abs() < 0.5 && (back_center_y - band / 2.0).abs() < 0.5,
+            "sidebar toggle ({toggle_center_y}) and nav ({back_center_y}) must both center in the toolbar band"
         );
+        // Back and forward sit in the sidebar's title bar, right after the toggle.
+        assert!(
+            back_rect[0] >= toggle_rect[0] + toggle_rect[2]
+                && back_rect[0] + back_rect[2] <= sidebar_rect[2],
+            "back must sit beside the toggle inside the open sidebar: toggle={toggle_rect:?}, back={back_rect:?}"
+        );
+        let open_toggle_x = toggle_rect[0];
+        let open_back_x = back_rect[0];
 
-        // Collapse sidebar and verify smooth horizontal glide without vertical jump or overlap.
+        // Collapse: the toggle/nav cluster stays put while the sidebar slides away.
         rt.state.sidebar.set_open(false);
         rt.frame(0.0);
         for _ in 0..15 {
@@ -619,12 +692,10 @@ mod tests {
             let (mid_toggle, _) = rt.presented("sidebar-toggle").unwrap();
             let (mid_back, _) = rt.presented("topbar-back").unwrap();
             assert!(
-                (mid_toggle[1] - 10.0).abs() < 0.5,
-                "toggle y must not jump vertically mid-collapse: {mid_toggle:?}"
-            );
-            assert!(
-                mid_back[0] >= mid_toggle[0] + mid_toggle[2] + 4.0,
-                "back button must clear toggle throughout animation: toggle={mid_toggle:?}, back={mid_back:?}"
+                (mid_toggle[1] - toggle_y).abs() < 0.5
+                    && (mid_toggle[0] - open_toggle_x).abs() < 0.5
+                    && (mid_back[0] - open_back_x).abs() < 0.5,
+                "toggle and nav must not move mid-collapse: toggle={mid_toggle:?}, back={mid_back:?}"
             );
         }
         for _ in 0..90 {
@@ -633,7 +704,8 @@ mod tests {
 
         let (collapsed_main, _) = rt.presented("main-column").unwrap();
         let (collapsed_toggle, _) = rt.presented("sidebar-toggle").unwrap();
-        let (collapsed_back, _) = rt.presented("topbar-back").unwrap();
+        let (collapsed_fwd, _) = rt.presented("topbar-forward").unwrap();
+        let (collapsed_title, _) = rt.presented("topbar-title").unwrap();
         assert!(
             collapsed_main[0].abs() < 0.5
                 && collapsed_main[1].abs() < 0.5
@@ -642,12 +714,12 @@ mod tests {
             "collapsed main column must go full-bleed edge-to-edge: {collapsed_main:?}"
         );
         assert!(
-            collapsed_toggle[0] >= 88.0 && (collapsed_toggle[1] - 10.0).abs() < 0.5,
+            collapsed_toggle[0] >= 88.0 && (collapsed_toggle[1] - toggle_y).abs() < 0.5,
             "collapsed toggle must sit past 76pt leading chrome, centered vertically: {collapsed_toggle:?}"
         );
         assert!(
-            collapsed_back[0] >= collapsed_toggle[0] + collapsed_toggle[2] + 6.0,
-            "collapsed nav buttons must sit neatly after sidebar toggle: {collapsed_back:?}"
+            collapsed_title[0] >= collapsed_fwd[0] + collapsed_fwd[2] + 6.0,
+            "toolbar title must clear the toggle/nav cluster when collapsed: fwd={collapsed_fwd:?}, title={collapsed_title:?}"
         );
     }
 

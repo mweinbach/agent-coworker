@@ -1467,7 +1467,7 @@ mod tests {
             cx.web_focus();
             let mut layer = Vec::new();
             let toolbar = crate::views::shell::top_bar::build_toolbar(
-                s, cx, &kit, &tokens, 1040.0, &mut layer,
+                s, cx, &kit, &tokens, 1040.0, true, &mut layer,
             );
             let input = rune::text_input(&s.composer_edit, tokens.body)
                 .key("composer-input")

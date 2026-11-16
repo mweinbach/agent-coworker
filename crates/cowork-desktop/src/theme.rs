@@ -109,6 +109,12 @@ pub struct AccentTokenSet {
 /// Standard spacing and layout constants used across views.
 pub mod layout {
     pub const TITLEBAR_HEIGHT: f32 = 38.0;
+    /// Main window toolbar band (traffic lights, sidebar toggle, nav, title, actions).
+    pub const SHELL_TOOLBAR_HEIGHT: f32 = 40.0;
+    /// How much of the sidebar's tint sits over the native vibrancy material: high enough to
+    /// keep text legible and the look restrained, low enough that the desktop shows through.
+    pub const SIDEBAR_TINT_ALPHA_LIGHT: f32 = 0.82;
+    pub const SIDEBAR_TINT_ALPHA_DARK: f32 = 0.84;
     pub const SIDEBAR_DEFAULT_WIDTH: f32 = 268.0;
     pub const SIDEBAR_MIN_WIDTH: f32 = 210.0;
     pub const SIDEBAR_MAX_WIDTH: f32 = 420.0;

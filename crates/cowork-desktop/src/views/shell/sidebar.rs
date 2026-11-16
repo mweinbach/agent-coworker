@@ -4,32 +4,39 @@
 
 use std::collections::HashSet;
 
-use rune::{Color, El, TextStyle, col, el, row, text};
+use rune::{El, col, el, row, text};
 use rune_kit::shell::{RowStatus, Sidebar, SidebarRow, SidebarSection};
-use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem, TextInput};
+use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem};
 
 use crate::actions::{Action, ChatAction, NativeAction, NavAction, ShellAction, SidebarSectionKey};
 use crate::router::{SettingsPageId, ViewId};
 use crate::state::{AppState, ThreadRecord, WorkspaceRecord};
-use crate::theme::{ThemeTokens, contrast_ratio};
+use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{
-    filtered_threads, format_relative_age, pending_input_count, split_workspaces,
-    thread_row_status, workspace_badge_color,
+    filtered_threads, pending_input_count, split_workspaces, thread_row_status,
 };
 use crate::views::shell::icons;
 
 const MAX_THREADS_PER_WORKSPACE: usize = 5;
+/// Row height for every sidebar row: one quiet line of text.
+const ROW_H: f32 = 28.0;
+/// Space between sections, so each reads as its own group without dividers.
+const SECTION_GAP: f32 = 10.0;
 
-/// Renders the left application sidebar with quick actions, search filter, and ordered sections.
-pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
+/// Renders the left application sidebar with quick actions and ordered sections.
+///
+/// Deliberately quiet: rows are a single line of text, chat rows carry no icons, ages or
+/// counts, and per-row actions only appear under the pointer. Live state (working, needs input,
+/// unread) still shows as a small status mark at the row's end.
+pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El>) -> El {
     let mut sb = Sidebar::new()
         .label("Workspace navigation")
-        .inset(8.0)
-        .header_gap(3.0)
-        .header_padding(0.0, 8.0)
-        .row_gap(2.0);
+        .inset(4.0)
+        .header_gap(1.0)
+        .header_padding(0.0, SECTION_GAP)
+        .row_gap(1.0);
 
-    for item in build_header_items(s, k, t) {
+    for item in build_header_items(s, k) {
         sb = sb.header(item);
     }
 
@@ -40,24 +47,31 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>
     let active_thread_id = s.route().active_thread_id.as_deref();
     let active_task_id = s.route().active_task_id.as_deref();
 
+    let mut first_section = true;
+    let mut gap = |sb: Sidebar| -> Sidebar {
+        if std::mem::take(&mut first_section) {
+            sb
+        } else {
+            sb.child(el().h(SECTION_GAP).a11y_hidden())
+        }
+    };
+
     for section_key in &s.desktop_settings.sidebar_section_order {
         match section_key {
             SidebarSectionKey::Pinned => {
-                if let Some(sec) = build_pinned_section(s, k, t, layer, &threads, active_thread_id)
-                {
-                    sb = sb.section(sec);
+                if let Some(sec) = build_pinned_section(s, k, layer, &threads, active_thread_id) {
+                    sb = gap(sb).section(sec);
                 }
             }
             SidebarSectionKey::Tasks => {
                 if let Some(sec) = build_tasks_section(s, k, query, active_task_id) {
-                    sb = sb.section(sec);
+                    sb = gap(sb).section(sec);
                 }
             }
             SidebarSectionKey::Chats => {
-                sb = sb.section(build_chats_section(
+                sb = gap(sb).section(build_chats_section(
                     s,
                     k,
-                    t,
                     layer,
                     &threads,
                     &one_off_ids,
@@ -69,9 +83,8 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>
                 sb = build_workspaces_section(
                     s,
                     k,
-                    t,
                     layer,
-                    sb,
+                    gap(sb),
                     &projects,
                     &threads,
                     active_thread_id,
@@ -80,40 +93,26 @@ pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>
         }
     }
 
-    let footer = col()
-        .key("sidebar-footer-actions")
-        .w_full()
-        .gap(2.0)
-        .child(
-            SidebarRow::new("Add project")
-                .icon(&icons::FOLDER_PLUS)
-                .height(30.0)
-                .on_select(|s: &mut AppState, _| {
-                    s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder));
-                })
-                .build(k)
-                .key("sidebar-add-project"),
-        )
-        .child(
-            SidebarRow::new("Settings")
-                .icon(&icons::SETTINGS)
-                .height(30.0)
-                .selected(s.route().view == ViewId::Settings)
-                .on_select(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
-                })
-                .build(k)
-                .key("sidebar-settings"),
-        );
+    let footer = col().key("sidebar-footer-actions").w_full().child(
+        SidebarRow::new("Settings")
+            .icon(&icons::SETTINGS)
+            .height(ROW_H)
+            .selected(s.route().view == ViewId::Settings)
+            .on_select(|s: &mut AppState, _| {
+                s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
+            })
+            .build(k)
+            .key("sidebar-settings"),
+    );
 
     sb.footer(footer).build(k)
 }
 
-fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
+fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
     let new_chat = SidebarRow::new("New chat")
         .icon(&icons::PLUS)
         .detail(crate::shortcut_label("Cmd+N"))
-        .height(30.0)
+        .height(ROW_H)
         .on_select(|s: &mut AppState, _| {
             let ws = s.active_workspace_id.clone();
             s.dispatch(Action::Navigate(NavAction::OpenNewChat {
@@ -123,37 +122,19 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
         .build(k)
         .key("sidebar-new-chat");
 
-    let command_palette = SidebarRow::new("Search & commands")
+    let search = SidebarRow::new("Search")
         .icon(&icons::SEARCH)
-        .detail(crate::shortcut_label("Cmd+K"))
-        .height(30.0)
+        .height(ROW_H)
         .on_select(|s: &mut AppState, _| {
             super::palette::open_command_palette(s);
         })
         .build(k)
         .key("sidebar-command-palette");
 
-    let mut items = vec![new_chat, command_palette];
+    let mut items = vec![new_chat, search];
 
     let pending = pending_input_count(s);
     if pending > 0 {
-        let jump_btn = IconButton::new(&icons::ARROW_RIGHT)
-            .variant(IconButtonVariant::GhostMuted)
-            .control_size(ControlSize::Mini)
-            .help("Jump to next chat needing input")
-            .on_press_tx(|s: &mut AppState, _| {
-                if let Some(tid) = s.threads.iter().find_map(|tr| {
-                    s.thread_runtime_by_id
-                        .get(&tr.id)
-                        .is_some_and(|rt| !rt.pending_interactions.is_empty())
-                        .then(|| tr.id.clone())
-                }) {
-                    s.dispatch(Action::Navigate(NavAction::OpenThread(tid)));
-                }
-            })
-            .build(k)
-            .key("sidebar-needs-input-jump");
-
         items.push(
             SidebarRow::new(if s.shell_ui.needs_input_only {
                 "Showing needs input"
@@ -161,11 +142,10 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
                 "Needs input"
             })
             .icon(&icons::ALERT_TRIANGLE)
-            .badge(pending.to_string())
+            .detail(pending.to_string())
             .status(RowStatus::Attention)
             .selected(s.shell_ui.needs_input_only)
-            .trailing(jump_btn)
-            .height(30.0)
+            .height(ROW_H)
             .on_select(|s: &mut AppState, _| {
                 s.shell_ui.needs_input_only = !s.shell_ui.needs_input_only;
             })
@@ -178,7 +158,7 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
         items.push(
             SidebarRow::new("Tasks")
                 .icon(&icons::CHECK_SQUARE)
-                .height(30.0)
+                .height(ROW_H)
                 .selected(s.route().view == ViewId::Task)
                 .on_select(|s: &mut AppState, _| {
                     s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
@@ -191,7 +171,7 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
     items.push(
         SidebarRow::new("Plugins & tools")
             .icon(&icons::PLUGINS)
-            .height(30.0)
+            .height(ROW_H)
             .on_select(|s: &mut AppState, _| {
                 s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
                     SettingsPageId::ToolAccess,
@@ -201,54 +181,64 @@ fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens) -> Vec<El> {
             .key("sidebar-plugins-link"),
     );
 
-    let search_input = TextInput::new(&s.sidebar_search_edit)
-        .placeholder("Filter chats…")
-        .label("Filter sidebar threads and tasks")
-        .leading_icon(&icons::SEARCH)
-        .width(None)
-        .clear_button()
-        .on_edit(|s: &mut AppState| &mut s.sidebar_search_edit)
-        .on_change(|s: &mut AppState, _| {
-            let q = s.sidebar_search_edit.text.clone();
-            s.dispatch(Action::Shell(ShellAction::SetSidebarSearch(q)));
-        })
-        .on_action(|s: &mut AppState, _| {
-            s.sidebar_search_edit.clear();
-            s.dispatch(Action::Shell(ShellAction::SetSidebarSearch(String::new())));
-        })
-        .build(k)
-        .key("sidebar-filter-input")
-        .border(1.0, t.border_muted);
-
-    items.push(
-        row()
-            .w_full()
-            .pt(4.0)
-            .gap(4.0)
-            .center_y()
-            .child(el().grow(1.0).shrink().child(search_input))
-            .child(
-                IconButton::new(&icons::EXTERNAL_LINK)
-                    .variant(IconButtonVariant::GhostMuted)
-                    .control_size(ControlSize::Small)
-                    .help("Open full search")
-                    .shortcut(crate::shortcut_label("Cmd+Shift+F"))
-                    .on_press_tx(|s: &mut AppState, _| {
-                        s.shell_ui.search_overlay_open = true;
-                        s.shell_ui.search_selected = 0;
-                        s.shell_ui.search_edit.focused = true;
-                    })
-                    .build(k)
-                    .key("sidebar-open-search-overlay"),
-            ),
-    );
     items
+}
+
+/// A small "+" that only shows while the pointer is on its row or section header.
+fn hover_add_button(
+    k: &Kit,
+    help: &'static str,
+    key: String,
+    on_press: impl Fn(&mut AppState) + 'static,
+) -> El {
+    IconButton::new(&icons::PLUS)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Mini)
+        .help(help)
+        .on_press_tx(move |s: &mut AppState, _| on_press(s))
+        .build(k)
+        .key(key)
+        .group_opacity(0.0, 1.0)
+}
+
+/// Where a thread row sits: at a section's top level, or nested under a project row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThreadIndent {
+    /// Label aligned with the section title, like the chats list.
+    TopLevel,
+    /// Label aligned with its project's name (past the project's folder icon).
+    UnderProject,
+}
+
+fn toggle_section(key: SidebarSectionKey) -> impl Fn(&mut AppState, &mut rune::Tx) + 'static {
+    move |s: &mut AppState, _| {
+        s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
+            key,
+        )));
+    }
+}
+
+/// A faint "Show N more" / "Show less" row under a list.
+fn show_more_row(
+    k: &Kit,
+    label: String,
+    indent: ThreadIndent,
+    key: String,
+    on_select: impl Fn(&mut AppState, &mut rune::Tx) + 'static,
+) -> El {
+    let mut r = SidebarRow::new(label)
+        .title_style(k.ty.small)
+        .height(24.0)
+        .on_select(on_select);
+    if indent == ThreadIndent::UnderProject {
+        r = r.avatar(el().size(16.0, 16.0));
+    }
+    r.build(k).key(key)
 }
 
 fn build_pinned_section(
     s: &AppState,
     k: &Kit,
-    t: &ThemeTokens,
     layer: &mut Vec<El>,
     threads: &[&ThreadRecord],
     active_thread_id: Option<&str>,
@@ -262,23 +252,16 @@ fn build_pinned_section(
         .contains(&SidebarSectionKey::Pinned);
     let mut sec = SidebarSection::new("Pinned")
         .key("section-pinned")
-        .count(pinned.len())
         .collapsed(collapsed)
-        .on_toggle(|s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
-                SidebarSectionKey::Pinned,
-            )));
-        });
+        .on_toggle(toggle_section(SidebarSectionKey::Pinned));
     for tr in pinned {
         sec = sec.row(build_thread_row(
             s,
             k,
-            t,
             layer,
             tr,
             active_thread_id == Some(tr.id.as_str()),
-            true,
-            0,
+            ThreadIndent::TopLevel,
         ));
     }
     Some(sec)
@@ -307,13 +290,8 @@ fn build_tasks_section(
         .contains(&SidebarSectionKey::Tasks);
     let mut sec = SidebarSection::new("Tasks")
         .key("section-tasks")
-        .count(visible.len())
         .collapsed(collapsed)
-        .on_toggle(|s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
-                SidebarSectionKey::Tasks,
-            )));
-        });
+        .on_toggle(toggle_section(SidebarSectionKey::Tasks));
     for task in visible {
         let task_id = task.id.clone();
         let status = match task.status.as_str() {
@@ -322,8 +300,7 @@ fn build_tasks_section(
             _ => None,
         };
         let mut r = SidebarRow::new(task.title.clone())
-            .icon(&icons::CHECK_SQUARE)
-            .detail(task.status.clone())
+            .height(ROW_H)
             .selected(s.route().view == ViewId::Task && active_task_id == Some(task.id.as_str()))
             .on_select(move |s: &mut AppState, _| {
                 s.dispatch(Action::Navigate(NavAction::OpenTask(task_id.clone())));
@@ -340,7 +317,6 @@ fn build_tasks_section(
 fn build_chats_section(
     s: &AppState,
     k: &Kit,
-    t: &ThemeTokens,
     layer: &mut Vec<El>,
     threads: &[&ThreadRecord],
     one_off_ids: &HashSet<&str>,
@@ -356,36 +332,29 @@ fn build_chats_section(
     let collapsed = s
         .collapsed_sidebar_sections
         .contains(&SidebarSectionKey::Chats);
+    let one_off_ws = primary_one_off.map(str::to_string);
     let mut sec = SidebarSection::new("Chats")
         .key("section-chats")
-        .count(chat_threads.len())
         .collapsed(collapsed)
-        .on_toggle(|s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
-                SidebarSectionKey::Chats,
-            )));
-        });
-
-    let one_off_ws = primary_one_off.map(str::to_string);
-    let new_btn = IconButton::new(&icons::PLUS)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Small)
-        .help("New chat")
-        .on_press_tx(move |s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                workspace_id: one_off_ws.clone(),
-            }));
-        })
-        .build(k)
-        .key("new-oneoff-chat");
-    sec = sec.action(new_btn);
+        .on_toggle(toggle_section(SidebarSectionKey::Chats))
+        .action(section_add_button(
+            k,
+            "New chat",
+            "new-oneoff-chat",
+            move |s| {
+                s.dispatch(Action::Navigate(NavAction::OpenNewChat {
+                    workspace_id: one_off_ws.clone(),
+                }));
+            },
+        ));
 
     if chat_threads.is_empty() {
-        let placeholder = row().key("chats-empty").px(12.0).py(6.0).child(
-            text("No quick chats yet")
-                .font(k.ty.small)
-                .color(k.c.text_faint),
-        );
+        let placeholder = row()
+            .key("chats-empty")
+            .px(8.0)
+            .h(ROW_H)
+            .center_y()
+            .child(text("No chats yet").font(k.ty.small).color(k.c.text_faint));
         return sec.row(placeholder);
     }
 
@@ -400,12 +369,10 @@ fn build_chats_section(
         sec = sec.row(build_thread_row(
             s,
             k,
-            t,
             layer,
             tr,
             active_thread_id == Some(tr.id.as_str()),
-            false,
-            0,
+            ThreadIndent::TopLevel,
         ));
     }
 
@@ -418,25 +385,40 @@ fn build_chats_section(
                 chat_threads.len() - MAX_THREADS_PER_WORKSPACE
             )
         };
-        sec = sec.row(
-            SidebarRow::new(label)
-                .depth(0)
-                .height(26.0)
-                .on_select(|s: &mut AppState, _| {
-                    s.shell_ui.chats_expanded = !s.shell_ui.chats_expanded;
-                })
-                .build(k)
-                .key("chats-show-more"),
-        );
+        sec = sec.row(show_more_row(
+            k,
+            label,
+            ThreadIndent::TopLevel,
+            "chats-show-more".into(),
+            |s: &mut AppState, _| {
+                s.shell_ui.chats_expanded = !s.shell_ui.chats_expanded;
+            },
+        ));
     }
     sec
+}
+
+/// A small "+" on a section header. Section headers don't track hover, so it stays visible,
+/// but faint and mini-sized so it doesn't compete with the rows.
+fn section_add_button(
+    k: &Kit,
+    help: &'static str,
+    key: &'static str,
+    on_press: impl Fn(&mut AppState) + 'static,
+) -> El {
+    IconButton::new(&icons::PLUS)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Mini)
+        .help(help)
+        .on_press_tx(move |s: &mut AppState, _| on_press(s))
+        .build(k)
+        .key(key)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_workspaces_section(
     s: &AppState,
     k: &Kit,
-    t: &ThemeTokens,
     layer: &mut Vec<El>,
     mut sb: Sidebar,
     projects: &[&WorkspaceRecord],
@@ -446,48 +428,30 @@ fn build_workspaces_section(
     let section_collapsed = s
         .collapsed_sidebar_sections
         .contains(&SidebarSectionKey::Workspaces);
-    if projects.is_empty() {
-        let empty = SidebarSection::new("Projects")
-            .key("section-projects")
-            .count(0)
-            .collapsed(section_collapsed)
-            .on_toggle(|s: &mut AppState, _| {
-                s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
-                    SidebarSectionKey::Workspaces,
-                )));
-            })
-            .row(
-                SidebarRow::new("Open project folder…")
-                    .icon(&icons::FOLDER_PLUS)
-                    .on_select(|s: &mut AppState, _| {
-                        s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder));
-                    })
-                    .build(k)
-                    .key("projects-empty-add"),
-            );
-        return sb.section(empty);
-    }
-
     let mut projects_header = SidebarSection::new("Projects")
         .key("section-projects")
-        .count(projects.len())
         .collapsed(section_collapsed)
-        .on_toggle(|s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::ToggleSidebarSectionCollapsed(
-                SidebarSectionKey::Workspaces,
-            )));
-        })
-        .action(
-            IconButton::new(&icons::PLUS)
-                .variant(IconButtonVariant::GhostMuted)
-                .control_size(ControlSize::Small)
-                .help("Add project folder")
-                .on_press_tx(|s: &mut AppState, _| {
+        .on_toggle(toggle_section(SidebarSectionKey::Workspaces))
+        .action(section_add_button(
+            k,
+            "Add project folder",
+            "projects-add-btn",
+            |s| s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder)),
+        ));
+
+    if projects.is_empty() {
+        let empty = projects_header.row(
+            SidebarRow::new("Add a project folder…")
+                .icon(&icons::FOLDER_PLUS)
+                .height(ROW_H)
+                .on_select(|s: &mut AppState, _| {
                     s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder));
                 })
                 .build(k)
-                .key("projects-add-btn"),
+                .key("projects-empty-add"),
         );
+        return sb.section(empty);
+    }
 
     let project_count = projects.len();
     for (idx, ws) in projects.iter().enumerate() {
@@ -495,7 +459,6 @@ fn build_workspaces_section(
         let ws_id_new = ws.id.clone();
         let collapsed = s.collapsed_workspace_ids.contains(&ws.id);
         let is_active_ws = s.active_workspace_id.as_deref() == Some(ws.id.as_str());
-        let badge_col = workspace_badge_color(&ws.id, t);
         let ws_threads: Vec<&ThreadRecord> = threads
             .iter()
             .copied()
@@ -503,22 +466,19 @@ fn build_workspaces_section(
             .collect();
 
         let ws_row = SidebarRow::new(ws.name.clone())
-            .avatar(workspace_avatar(&ws.name, badge_col, k, t))
-            .detail(ws_threads.len().to_string())
+            .icon(&icons::FOLDER)
+            .height(ROW_H)
             .selected(is_active_ws && active_thread_id.is_none())
-            .trailing(
-                IconButton::new(&icons::PLUS)
-                    .variant(IconButtonVariant::GhostMuted)
-                    .control_size(ControlSize::Mini)
-                    .help("New chat in workspace")
-                    .on_press_tx(move |s: &mut AppState, _| {
-                        s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                            workspace_id: Some(ws_id_new.clone()),
-                        }));
-                    })
-                    .build(k)
-                    .key(format!("ws-new-chat-{}", ws.id)),
-            )
+            .trailing(hover_add_button(
+                k,
+                "New chat in project",
+                format!("ws-new-chat-{}", ws.id),
+                move |s| {
+                    s.dispatch(Action::Navigate(NavAction::OpenNewChat {
+                        workspace_id: Some(ws_id_new.clone()),
+                    }));
+                },
+            ))
             .reorder(
                 &s.shell_ui.sidebar_reorder,
                 idx,
@@ -553,12 +513,10 @@ fn build_workspaces_section(
                 projects_header = projects_header.row(build_thread_row(
                     s,
                     k,
-                    t,
                     layer,
                     tr,
                     active_thread_id == Some(tr.id.as_str()),
-                    false,
-                    1,
+                    ThreadIndent::UnderProject,
                 ));
             }
             if !search_active && ws_threads.len() > MAX_THREADS_PER_WORKSPACE {
@@ -568,20 +526,19 @@ fn build_workspaces_section(
                 } else {
                     format!("Show {} more", ws_threads.len() - MAX_THREADS_PER_WORKSPACE)
                 };
-                projects_header = projects_header.row(
-                    SidebarRow::new(label)
-                        .depth(1)
-                        .height(26.0)
-                        .on_select(move |s: &mut AppState, _| {
-                            if !s.shell_ui.expanded_thread_workspaces.remove(&ws_toggle) {
-                                s.shell_ui
-                                    .expanded_thread_workspaces
-                                    .insert(ws_toggle.clone());
-                            }
-                        })
-                        .build(k)
-                        .key(format!("ws-more-{}", ws.id)),
-                );
+                projects_header = projects_header.row(show_more_row(
+                    k,
+                    label,
+                    ThreadIndent::UnderProject,
+                    format!("ws-more-{}", ws.id),
+                    move |s: &mut AppState, _| {
+                        if !s.shell_ui.expanded_thread_workspaces.remove(&ws_toggle) {
+                            s.shell_ui
+                                .expanded_thread_workspaces
+                                .insert(ws_toggle.clone());
+                        }
+                    },
+                ));
             }
         }
     }
@@ -608,61 +565,27 @@ pub(crate) fn reorder_project_workspaces(s: &AppState, from: usize, to: usize) -
     project_ids
 }
 
-/// Selects whichever foreground (white or theme dark ink) maximizes contrast against a badge fill.
-fn workspace_avatar_fg(fill: Color, t: &ThemeTokens) -> Color {
-    let dark_ink = if t.dark { t.app_bg } else { t.text_base };
-    if contrast_ratio(Color::WHITE, fill) >= contrast_ratio(dark_ink, fill) {
-        Color::WHITE
-    } else {
-        dark_ink
-    }
-}
-
-fn workspace_avatar(name: &str, fill: Color, k: &Kit, t: &ThemeTokens) -> El {
-    let ch = name
-        .chars()
-        .find(|c| !c.is_whitespace())
-        .unwrap_or('W')
-        .to_ascii_uppercase()
-        .to_string();
-    row()
-        .size(16.0, 16.0)
-        .radius(4.0)
-        .center()
-        .fill(fill)
-        .child(
-            text(ch)
-                .font(TextStyle {
-                    size: 10.0,
-                    ..k.ty.small_medium
-                })
-                .color(workspace_avatar_fg(fill, t)),
-        )
-}
-
-#[allow(clippy::too_many_arguments)]
+/// One chat: its title, plus a status mark only while it is working, waiting on the user or
+/// unread. Archive appears under the pointer; everything else is on the context menu.
 fn build_thread_row(
     s: &AppState,
     k: &Kit,
-    t: &ThemeTokens,
     layer: &mut Vec<El>,
     tr: &ThreadRecord,
     selected: bool,
-    show_workspace_avatar: bool,
-    depth: u8,
+    indent: ThreadIndent,
 ) -> El {
     let title = if tr.title.trim().is_empty() {
         "Untitled chat".to_string()
     } else {
         tr.title.clone()
     };
-    let age = format_relative_age(tr.updated_at, s.now_secs);
     let tid_select = tr.id.clone();
     let tid_archive = tr.id.clone();
     let tid_ctx = tr.id.clone();
 
     let mut r = SidebarRow::new(title.clone())
-        .depth(depth)
+        .height(ROW_H)
         .selected(selected)
         .on_select(move |s: &mut AppState, _| {
             s.dispatch(Action::Navigate(NavAction::OpenThread(tid_select.clone())));
@@ -670,6 +593,10 @@ fn build_thread_row(
         .on_close(move |s: &mut AppState, _| {
             s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_archive.clone())));
         });
+    if indent == ThreadIndent::UnderProject {
+        // An empty lead slot lines the title up with the project name above it.
+        r = r.avatar(el().size(16.0, 16.0));
+    }
 
     if s.shell_ui.renaming_thread_id.as_deref() == Some(tr.id.as_str()) {
         let tid_commit = tr.id.clone();
@@ -692,24 +619,6 @@ fn build_thread_row(
         );
     }
 
-    if show_workspace_avatar {
-        if let Some(ws) = s.workspaces.iter().find(|w| w.id == tr.workspace_id) {
-            r = r.avatar(workspace_avatar(
-                &ws.name,
-                workspace_badge_color(&ws.id, t),
-                k,
-                t,
-            ));
-        } else {
-            r = r.icon(&icons::PIN);
-        }
-    } else {
-        r = r.icon(&icons::MESSAGE);
-    }
-
-    if !age.is_empty() {
-        r = r.detail(age);
-    }
     if let Some(status) = thread_row_status(s, &tr.id) {
         r = r.status(status);
     }
@@ -825,21 +734,5 @@ mod tests {
 
         let next = reorder_project_workspaces(&s, 0, 1);
         assert_eq!(next, vec!["ws-b", "ws-a", "oneoff"]);
-    }
-
-    #[test]
-    fn workspace_avatar_fg_picks_contrast_safe_ink_across_badges() {
-        for dark in [false, true] {
-            let tok = crate::theme::tokens(dark);
-            for (idx, badge) in tok.search_badges.iter().enumerate() {
-                let fg = workspace_avatar_fg(*badge, &tok);
-                let chosen = contrast_ratio(fg, *badge);
-                let white_only = contrast_ratio(Color::WHITE, *badge);
-                assert!(
-                    chosen >= white_only && chosen >= 3.9,
-                    "badge[{idx}] dark={dark} chosen contrast {chosen:.2} (white={white_only:.2})"
-                );
-            }
-        }
     }
 }

@@ -719,7 +719,7 @@ pub fn run() {
         .try_init()
         .ok();
 
-    let main_titlebar_h = rune_kit::shell::TOOLBAR_HEIGHT;
+    let main_titlebar_h = crate::theme::layout::SHELL_TOOLBAR_HEIGHT;
     let main_tl_y = ((main_titlebar_h - 14.0) / 2.0).max(0.0).round();
     let mut app = App::new(app_spec())
         .modifier_keys()

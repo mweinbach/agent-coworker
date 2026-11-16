@@ -302,13 +302,30 @@ pub fn resolve_window_close_dialog(window_key: &str, request_id: &str, confirmed
     });
 }
 
+/// Whether the main window was created transparent so its sidebar can show the native
+/// vibrancy material (macOS only; decided once at launch).
+static MAIN_WINDOW_VIBRANCY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// True when the main window is transparent and backs the sidebar with a system material.
+pub fn main_window_uses_vibrancy() -> bool {
+    MAIN_WINDOW_VIBRANCY.get().copied().unwrap_or(false)
+}
+
 /// Configures OS-level menus, window bounds restore, close guards, deep links, and quit hooks.
 pub fn configure_app(app: App<AppState>) -> App<AppState> {
     let handle = app.handle();
     store_app_handle(handle);
 
     let headless = is_headless_invocation();
-    let (startup_opts, startup_max) = startup_window_options(shared_window_state_store(), headless);
+    let (mut startup_opts, startup_max) =
+        startup_window_options(shared_window_state_store(), headless);
+    let vibrancy = !headless
+        && window_chrome::recommended_rune_system_material(
+            appearance::detect_reduced_transparency(),
+        )
+        .is_some();
+    let _ = MAIN_WINDOW_VIBRANCY.set(vibrancy);
+    startup_opts.transparent = vibrancy;
 
     let mut configured = menu::install_application_menus(app).keep_running();
     if !headless {

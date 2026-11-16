@@ -37,7 +37,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
             return windows::build_quick_chat_window(s, cx, k, t, chat_out);
         }
         WindowMode::Main => {
-            let tb_height = rune_kit::shell::TOOLBAR_HEIGHT * s.ui_scale;
+            let tb_height = crate::theme::layout::SHELL_TOOLBAR_HEIGHT * s.ui_scale;
             let tl_y = ((tb_height - 14.0) / 2.0).max(0.0).round();
             cx.set_titlebar(rune::Titlebar::new(tb_height).traffic_lights(16.0, tl_y));
         }
@@ -86,6 +86,26 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
     )
 }
 
+/// Tint alpha over the sidebar's native vibrancy material, or `None` for an opaque sidebar.
+///
+/// Only macOS composites a material behind the window (Rune's `El::system_material`), and only
+/// when the main window was created transparent (`native::main_window_uses_vibrancy`). Reduce
+/// Transparency, high contrast and the `COWORK_MACOS_NATIVE_GLASS=0` opt-out keep it opaque.
+pub(crate) fn sidebar_vibrancy_alpha(s: &AppState, t: &ThemeTokens) -> Option<f32> {
+    if !crate::native::main_window_uses_vibrancy()
+        || s.desktop_settings.reduced_transparency
+        || s.desktop_settings.high_contrast
+        || s.scene_mode
+    {
+        return None;
+    }
+    Some(if t.dark {
+        crate::theme::layout::SIDEBAR_TINT_ALPHA_DARK
+    } else {
+        crate::theme::layout::SIDEBAR_TINT_ALPHA_LIGHT
+    })
+}
+
 fn push_left_drawer_overlay(
     layer: &mut Vec<El>,
     chrome: rune::ChromeInsets,
@@ -95,7 +115,9 @@ fn push_left_drawer_overlay(
     on_close: fn(&mut AppState),
 ) {
     let left_drawer_top = if leading_lights > 0.0 {
-        chrome.height.max(rune_kit::shell::TOOLBAR_HEIGHT)
+        chrome
+            .height
+            .max(crate::theme::layout::SHELL_TOOLBAR_HEIGHT)
     } else {
         0.0
     };
@@ -213,7 +235,7 @@ fn build_settings_frame(
                 |s: &mut AppState| &mut s.shell_ui.sidebar_resize_start_width,
                 layout.sidebar,
             )
-            .sidebar_padding(12.0, 8.0);
+            .sidebar_padding(4.0, 4.0);
     }
 
     menu_bar::push_menu_bar_overlay(
@@ -228,6 +250,7 @@ fn build_settings_frame(
     split
         .hide_sidebar_toggle()
         .titlebar_inset(leading_lights)
+        .sidebar_vibrancy(sidebar_vibrancy_alpha(s, t))
         .spring(Spring::new(0.3, 0.0))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
@@ -253,7 +276,16 @@ fn build_workspace_split_frame(
 
     let adaptive = resolve_shell_adaptive_layout(s, canvas_active);
 
-    let toolbar = top_bar::build_toolbar(s, cx, k, t, adaptive.primary_width, layer);
+    // Back and forward live beside the sidebar toggle unless the sidebar is a drawer.
+    let toolbar = top_bar::build_toolbar(
+        s,
+        cx,
+        k,
+        t,
+        adaptive.primary_width,
+        adaptive.left_overlay,
+        layer,
+    );
     let (primary_el, right_panel_el) = if canvas_maximized {
         (
             el().key("primary-canvas-maximized")
@@ -296,7 +328,8 @@ fn build_workspace_split_frame(
                 |s: &mut AppState| &mut s.shell_ui.sidebar_resize_start_width,
                 sidebar_el,
             )
-            .sidebar_padding(12.0, 8.0)
+            .sidebar_padding(4.0, 4.0)
+            .sidebar_nav(top_bar::build_nav_buttons(s, k))
             .unread(helpers::any_background_unread(s))
             .toggle_shortcut(crate::shortcut_label("Cmd+Shift+B"));
     }
@@ -379,6 +412,7 @@ fn build_workspace_split_frame(
 
     split
         .titlebar_inset(leading_lights)
+        .sidebar_vibrancy(sidebar_vibrancy_alpha(s, t))
         .spring(Spring::new(0.3, 0.0))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)

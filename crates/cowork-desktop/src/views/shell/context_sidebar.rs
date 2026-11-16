@@ -36,7 +36,7 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
     let header = row()
         .key("context-sidebar-header")
         .w_full()
-        .h(48.0)
+        .h(crate::theme::layout::SHELL_TOOLBAR_HEIGHT)
         .px(12.0)
         .items_center()
         .justify_between()

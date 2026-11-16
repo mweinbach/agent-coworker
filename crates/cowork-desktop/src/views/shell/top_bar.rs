@@ -110,12 +110,40 @@ pub fn build_settings_toolbar(
 }
 
 /// Builds the main pane top toolbar matching the full-bleed `48`pt titlebar band.
+/// Back and forward history buttons. They sit beside the sidebar toggle in the sidebar's title
+/// bar, or in the toolbar when the sidebar is a drawer (narrow windows).
+pub fn build_nav_buttons(s: &AppState, k: &Kit) -> Vec<El> {
+    let back_btn = IconButton::new(&icons::ARROW_LEFT)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Regular)
+        .disabled(!s.nav.can_go_back())
+        .help("Back")
+        .on_press_tx(|s: &mut AppState, _| {
+            s.dispatch(Action::Navigate(NavAction::GoBack));
+        })
+        .build(k)
+        .key("topbar-back");
+
+    let forward_btn = IconButton::new(&icons::ARROW_RIGHT)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Regular)
+        .disabled(!s.nav.can_go_forward())
+        .help("Forward")
+        .on_press_tx(|s: &mut AppState, _| {
+            s.dispatch(Action::Navigate(NavAction::GoForward));
+        })
+        .build(k)
+        .key("topbar-forward");
+    vec![back_btn, forward_btn]
+}
+
 pub fn build_toolbar(
     s: &AppState,
     cx: &Cx<AppState>,
     k: &Kit,
     t: &ThemeTokens,
     primary_width: f32,
+    include_nav: bool,
     layer: &mut Vec<El>,
 ) -> ShellToolbar {
     let chrome = cx.chrome_insets();
@@ -148,28 +176,6 @@ pub fn build_toolbar(
     let active_rt = s.active_thread_runtime();
     let is_busy = active_rt
         .is_some_and(|rt| rt.streaming || rt.pending_turn_count > 0 || rt.active_turn_id.is_some());
-
-    let back_btn = IconButton::new(&icons::ARROW_LEFT)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Regular)
-        .disabled(!s.nav.can_go_back())
-        .help("Back")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::GoBack));
-        })
-        .build(k)
-        .key("topbar-back");
-
-    let forward_btn = IconButton::new(&icons::ARROW_RIGHT)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Regular)
-        .disabled(!s.nav.can_go_forward())
-        .help("Forward")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::GoForward));
-        })
-        .build(k)
-        .key("topbar-forward");
 
     let mut heading = row()
         .key("topbar-thread-meta")
@@ -254,10 +260,12 @@ pub fn build_toolbar(
         );
     }
 
-    toolbar = toolbar
-        .leading(back_btn)
-        .leading(forward_btn)
-        .leading(heading);
+    if include_nav {
+        for btn in build_nav_buttons(s, k) {
+            toolbar = toolbar.leading(btn);
+        }
+    }
+    toolbar = toolbar.leading(heading);
 
     if let Some(rt) = active_rt
         && let Some(usage) = &rt.usage

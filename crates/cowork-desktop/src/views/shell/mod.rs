@@ -6,6 +6,7 @@ pub mod context_sidebar;
 pub mod helpers;
 pub mod icons;
 pub mod menu_bar;
+pub mod onboarding;
 pub mod overlays;
 pub mod palette;
 pub mod sidebar;

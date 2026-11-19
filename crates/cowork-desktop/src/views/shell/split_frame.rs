@@ -436,9 +436,7 @@ fn build_pane_slot(
         .w(w)
         .h_full()
         .pl(pane.padding[0])
-        .pr(pane.padding[1])
-        .opacity(if open { 1.0 } else { 0.0 })
-        .opacity_motion(fade_anim);
+        .pr(pane.padding[1]);
 
     if leading {
         let titlebar = row()
@@ -448,25 +446,19 @@ fn build_pane_slot(
             .center_y()
             .window_drag()
             .child(el().key("sidebar-titlebar-fill").grow(1.0).a11y_hidden());
+        // The leading sidebar slides out under the slot's clip at full opacity instead of fading
+        // to zero; `inert()` keeps collapsed content out of focus and pointer hit-testing.
         content_col = content_col
-            .fill(k.c.bg_deep)
             .pin(None, Some(0.0), Some(0.0), Some(0.0))
-            .motion(width_spring);
-        if let Some(alpha) = vibrancy {
-            // The material replaces the fill where the platform draws it natively; the tint
-            // over it keeps the sidebar's colour and contrast with only a hint of the desktop.
-            content_col = content_col
-                .system_material(rune::SystemMaterial::Popover)
-                .child(
-                    el().key("sidebar-vibrancy-tint")
-                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                        .fill(k.c.bg_deep.alpha(alpha))
-                        .a11y_hidden(),
-                );
+            .motion(width_spring)
+            .child(titlebar);
+        if !open && !pane.dragging {
+            content_col = content_col.inert();
         }
-        content_col = content_col.child(titlebar);
     } else {
         content_col = content_col
+            .opacity(if open { 1.0 } else { 0.0 })
+            .opacity_motion(fade_anim)
             .fill(k.c.bg_base)
             .pin(Some(0.0), Some(0.0), None, Some(0.0));
     }
@@ -501,8 +493,25 @@ fn build_pane_slot(
         .w(s.shown_width())
         .h_full()
         .motion(width_spring)
-        .clip_soft(0.0)
-        .child(body);
+        .clip_soft(0.0);
+
+    if leading {
+        // Keep the sidebar fill, native vibrancy material, and tint on the slot rather than on
+        // the sliding content column: the slot always sits at x = 0 with opacity 1.0 and matches
+        // the exact visible width on every animation frame.
+        slot = slot.fill(k.c.bg_deep);
+        if let Some(alpha) = vibrancy {
+            slot = slot.system_material(rune::SystemMaterial::Popover).child(
+                el().key("sidebar-vibrancy-tint")
+                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                    .motion(width_spring)
+                    .fill(k.c.bg_deep.alpha(alpha))
+                    .a11y_hidden(),
+            );
+        }
+    }
+
+    slot = slot.child(body);
 
     if !open && !pane.dragging {
         slot = slot.a11y_hidden();
@@ -721,6 +730,113 @@ mod tests {
             collapsed_title[0] >= collapsed_fwd[0] + collapsed_fwd[2] + 6.0,
             "toolbar title must clear the toggle/nav cluster when collapsed: fwd={collapsed_fwd:?}, title={collapsed_title:?}"
         );
+    }
+
+    #[test]
+    fn vibrant_sidebar_stays_visible_and_aligned_throughout_collapse_and_expand() {
+        use rune::{El, Spring, col, el};
+
+        fn vibrant_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+            let (kit, _) = theme::build_kit_with_accent(
+                true,
+                false,
+                false,
+                state.desktop_settings.accent_palette,
+            );
+            cx.web_focus();
+            super::FullBleedSplit::new(el().key("main-body").w_full().h_full())
+                .sidebar(
+                    &state.sidebar,
+                    false,
+                    |s: &mut AppState| &mut s.sidebar,
+                    |s: &mut AppState| &mut s.shell_ui.sidebar_resize_start_width,
+                    col().key("sb-items").w_full().h_full().child(
+                        rune_kit::Button::new("New chat")
+                            .on_press(|_: &mut AppState| {})
+                            .build(&kit)
+                            .key("sb-item-btn"),
+                    ),
+                )
+                .sidebar_vibrancy(Some(crate::theme::layout::SIDEBAR_TINT_ALPHA_DARK))
+                .spring(Spring::new(0.3, 0.0))
+                .build(&kit)
+        }
+
+        let mut s = AppState::default();
+        s.sidebar.set_width(240.0);
+        s.sidebar.set_open(true);
+
+        let mut rt = Runtime::new(s, vibrant_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+
+        let assert_frame_coherent = |rt: &Runtime<AppState>, phase: &str| {
+            let (slot, slot_op) = rt.presented("sidebar-pane").expect("sidebar-pane");
+            let (tint, tint_op) = rt
+                .presented("sidebar-vibrancy-tint")
+                .expect("sidebar-vibrancy-tint");
+            let (content, content_op) = rt.presented("pane-content").expect("pane-content");
+            let (main, _) = rt.presented("main-column").expect("main-column");
+
+            assert!(
+                slot[0].abs() < 0.5 && (slot_op - 1.0).abs() < 1e-3,
+                "{phase}: slot must stay at x=0 and full opacity: rect={slot:?}, op={slot_op}"
+            );
+            assert!(
+                (main[0] - slot[2]).abs() < 0.5,
+                "{phase}: main column must track slot width: slot={slot:?}, main={main:?}"
+            );
+            assert!(
+                tint[0].abs() < 0.5
+                    && (tint[2] - slot[2]).abs() < 0.5
+                    && (tint_op - 1.0).abs() < 1e-3,
+                "{phase}: vibrancy tint must cover slot at full opacity: slot={slot:?}, tint={tint:?}, op={tint_op}"
+            );
+            assert!(
+                (content_op - 1.0).abs() < 1e-3
+                    && ((content[0] + content[2]) - slot[2]).abs() < 0.5,
+                "{phase}: sliding content must stay at full opacity pinned to slot edge: slot={slot:?}, content={content:?}, op={content_op}"
+            );
+        };
+
+        assert_frame_coherent(&rt, "open-rest");
+
+        // Collapse and inspect mid-animation frames.
+        rt.update(|s, _| s.sidebar.set_open(false));
+        let mut saw_mid_collapse = false;
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+            let (slot, _) = rt.presented("sidebar-pane").unwrap();
+            if slot[2] > 20.0 && slot[2] < 220.0 {
+                saw_mid_collapse = true;
+                assert_frame_coherent(&rt, "mid-collapse");
+            }
+        }
+        assert!(saw_mid_collapse, "expected mid-collapse frames");
+        for _ in 0..90 {
+            rt.frame(1.0 / 60.0);
+        }
+        let (collapsed_slot, _) = rt.presented("sidebar-pane").unwrap();
+        assert!(
+            collapsed_slot[2] < 0.5,
+            "sidebar slot should reach 0 width when collapsed: {collapsed_slot:?}"
+        );
+
+        // Expand and inspect mid-animation frames.
+        rt.update(|s, _| s.sidebar.set_open(true));
+        let mut saw_mid_expand = false;
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+            let (slot, _) = rt.presented("sidebar-pane").unwrap();
+            if slot[2] > 20.0 && slot[2] < 220.0 {
+                saw_mid_expand = true;
+                assert_frame_coherent(&rt, "mid-expand");
+            }
+        }
+        assert!(saw_mid_expand, "expected mid-expand frames");
+        for _ in 0..90 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert_frame_coherent(&rt, "reopened-rest");
     }
 
     #[test]

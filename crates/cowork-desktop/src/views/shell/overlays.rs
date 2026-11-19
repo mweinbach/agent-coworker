@@ -5,18 +5,19 @@
 use cowork_protocol::CreationRepairAction;
 use rune::{El, Icon, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Dialog, Kit, TextInput, Toast,
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Dialog, Kit, TextInput, Toast,
     ToastRegion,
 };
 
 use crate::actions::{Action, ChatAction, NativeAction, NavAction, ShellAction};
-use crate::router::{SettingsPageId, ViewId};
+use crate::router::SettingsPageId;
 use crate::state::{
     AppState, ConfirmDialogRequest, NotificationTone, WorkflowRunView, dismiss_toast,
 };
 use crate::theme::ThemeTokens;
 
-use super::{helpers, icons, palette};
+pub(crate) use super::onboarding::is_onboarding_visible;
+use super::{helpers, icons, onboarding, palette};
 
 pub(crate) struct SearchOverlayItem {
     pub(crate) key: String,
@@ -42,9 +43,7 @@ pub fn build_overlays(
         subview_overlays.push(search);
     }
 
-    if let Some(onboarding) = build_onboarding_overlay(s, k, t) {
-        subview_overlays.push(onboarding);
-    }
+    onboarding::push_onboarding_overlays(s, k, t, &mut subview_overlays);
 
     push_lmstudio_start_modal(s, k, t, &mut subview_overlays);
     push_external_url_dialog(
@@ -356,304 +355,6 @@ fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
         .build(k, layer);
 }
 
-pub(crate) fn is_onboarding_visible(s: &AppState) -> bool {
-    !s.scene_mode
-        && s.route().view != ViewId::Settings
-        && !s.onboarding.completed
-        && !s.onboarding.dismissed
-}
-
-fn build_onboarding_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
-    if !is_onboarding_visible(s) {
-        return None;
-    }
-
-    let step_idx = s.shell_ui.onboarding_step.min(4);
-    let step_titles = [
-        ("1. Choose a project folder", &icons::FOLDER_PLUS),
-        ("2. Connect a model provider", &icons::SPARKLES),
-        ("3. Explore skills & tools", &icons::PLUGINS),
-        ("4. Quick Chat & palette shortcuts", &icons::TERMINAL),
-        ("5. Ready to work together", &icons::CHECK_CIRCLE),
-    ];
-
-    let has_ws = !s.workspaces.is_empty();
-    let configured_providers = s.provider_catalog.iter().filter(|p| p.configured).count();
-    let setup_incomplete = !has_ws || configured_providers == 0;
-
-    let (title, glyph) = step_titles[step_idx];
-    let step_cards = row()
-        .w_full()
-        .gap(6.0)
-        .children(step_titles.iter().enumerate().map(|(i, _)| {
-            let active = i == step_idx;
-            let step_key = format!("step-{}", i + 1);
-            let done = s.onboarding.completed_steps.contains(&step_key) || i < step_idx;
-            let badge_txt = if done {
-                format!("✓ {}", i + 1)
-            } else {
-                format!("{}", i + 1)
-            };
-            el().key(format!("ob-step-{i}"))
-                .grow(1.0)
-                .h(26.0)
-                .radius(6.0)
-                .center()
-                .fill(if active { t.accent_soft } else { t.elevated_bg })
-                .hover(t.hover)
-                .border(1.0, if active { t.accent } else { t.border_muted })
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.shell_ui.onboarding_step = i;
-                    s.shell_ui.onboarding_confirm_discard = false;
-                })
-                .child(text(badge_txt).font(t.caption).color(if active {
-                    t.text_base
-                } else {
-                    t.text_muted
-                }))
-        }));
-
-    let mut content_col = col().gap(12.0).child(step_cards);
-
-    let step_body = match step_idx {
-        0 => Card::new()
-            .accent(t.accent)
-            .title(title, Some(glyph))
-            .description(
-                "Add a folder from your computer so Cowork can launch an isolated workspace runtime.",
-            )
-            .child(
-                row()
-                    .gap(8.0)
-                    .center_y()
-                    .child(Badge::new(if has_ws {
-                        "Workspace added"
-                    } else {
-                        "No folder selected yet"
-                    })
-                    .build(k)),
-            )
-            .action(
-                Button::new("Add project folder")
-                    .variant(ButtonVariant::Contrast)
-                    .icon(&icons::FOLDER_PLUS)
-                    .on_press_tx(|s: &mut AppState, _| {
-                        s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder));
-                    })
-                    .build(k),
-            )
-            .build(k),
-        1 => Card::new()
-            .accent(t.accent)
-            .title(title, Some(glyph))
-            .description(
-                "Sign in with OpenAI, Anthropic, Google, or a local model server such as LM Studio.",
-            )
-            .child(
-                row()
-                    .gap(8.0)
-                    .center_y()
-                    .child(
-                        Badge::new(format!("{configured_providers} configured provider(s)"))
-                            .build(k)
-                            .key("onboarding-provider-badge"),
-                    ),
-            )
-            .action(
-                Button::new("Configure providers")
-                    .variant(ButtonVariant::Contrast)
-                    .icon(&icons::SETTINGS)
-                    .on_press_tx(|s: &mut AppState, _| {
-                        s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                            page: SettingsPageId::Models,
-                            tab: None,
-                            section: None,
-                            new_provider: false,
-                        }));
-                    })
-                    .build(k),
-            )
-            .build(k),
-        2 => Card::new()
-            .accent(t.accent)
-            .title(title, Some(glyph))
-            .description(
-                "Connect MCP servers, skills, and plugins anytime from Tool Access settings.",
-            )
-            .action(
-                Button::new("Browse Tool Access")
-                    .variant(ButtonVariant::Ghost)
-                    .icon(&icons::PLUGINS)
-                    .on_press_tx(|s: &mut AppState, _| {
-                        s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                            page: SettingsPageId::ToolAccess,
-                            tab: None,
-                            section: None,
-                            new_provider: false,
-                        }));
-                    })
-                    .build(k),
-            )
-            .build(k),
-        3 => Card::new()
-            .accent(t.accent)
-            .title(title, Some(glyph))
-            .description(format!(
-                "Press {} anywhere for the Command Palette, {} for sidebar, and {} for Quick Chat.",
-                crate::shortcut_label("Cmd+K"),
-                crate::shortcut_label("Cmd+B"),
-                crate::shortcut_label("CmdOrCtrl+Shift+Space"),
-            ))
-            .build(k),
-        _ => Card::new()
-            .accent(t.success)
-            .title(title, Some(glyph))
-            .description(
-                "Your native Rust workspace shell is ready. Open a new chat or create a task whenever you're ready.",
-            )
-            .build(k),
-    };
-
-    content_col = content_col.child(step_body);
-
-    let step_name = format!("step-{}", step_idx + 1);
-    let next_btn = if step_idx >= 4 {
-        Button::new("Finish setup")
-            .variant(ButtonVariant::Contrast)
-            .on_press_tx(move |s: &mut AppState, _| {
-                s.shell_ui.onboarding_confirm_discard = false;
-                s.dispatch(Action::Shell(ShellAction::CompleteOnboardingStep(
-                    step_name.clone(),
-                )));
-                s.dispatch(Action::Shell(ShellAction::CompleteOnboarding));
-            })
-            .build(k)
-            .key("onboarding-finish-setup")
-    } else {
-        Button::new("Next")
-            .variant(ButtonVariant::Contrast)
-            .on_press_tx(move |s: &mut AppState, _| {
-                s.shell_ui.onboarding_step = (step_idx + 1).min(4);
-                s.shell_ui.onboarding_confirm_discard = false;
-                s.dispatch(Action::Shell(ShellAction::CompleteOnboardingStep(
-                    step_name.clone(),
-                )));
-            })
-            .build(k)
-    };
-
-    let mut footer = row().w_full().pt(8.0).gap(8.0);
-    if step_idx > 0 {
-        footer = footer.child(
-            Button::new("Back")
-                .variant(ButtonVariant::Ghost)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.shell_ui.onboarding_step = step_idx.saturating_sub(1);
-                    s.shell_ui.onboarding_confirm_discard = false;
-                })
-                .build(k),
-        );
-    }
-    footer = footer
-        .child(
-            Button::new("Skip onboarding")
-                .variant(ButtonVariant::Ghost)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    if setup_incomplete && !s.shell_ui.onboarding_confirm_discard {
-                        s.shell_ui.onboarding_confirm_discard = true;
-                    } else {
-                        s.shell_ui.onboarding_confirm_discard = false;
-                        s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
-                    }
-                })
-                .build(k),
-        )
-        .child(spacer())
-        .child(next_btn);
-
-    let confirm_discard_banner = s.shell_ui.onboarding_confirm_discard.then(|| {
-        row()
-            .key("onboarding-confirm-discard")
-            .w_full()
-            .padding(10.0)
-            .radius(8.0)
-            .fill(t.elevated_bg)
-            .border(1.0, t.warning)
-            .gap(8.0)
-            .center_y()
-            .child(icon(&icons::ALERT_TRIANGLE, 14.0).color(t.warning))
-            .child(
-                text("Setup is incomplete (missing project folder or provider). Skip anyway?")
-                    .font(t.caption)
-                    .color(t.text_base)
-                    .wrap()
-                    .grow(1.0)
-                    .shrink(),
-            )
-            .child(
-                Button::new("Keep setting up")
-                    .variant(ButtonVariant::Ghost)
-                    .control_size(ControlSize::Small)
-                    .on_press_tx(|s: &mut AppState, _| {
-                        s.shell_ui.onboarding_confirm_discard = false;
-                    })
-                    .build(k),
-            )
-            .child(
-                Button::new("Skip anyway")
-                    .variant(ButtonVariant::Danger)
-                    .control_size(ControlSize::Small)
-                    .on_press_tx(|s: &mut AppState, _| {
-                        s.shell_ui.onboarding_confirm_discard = false;
-                        s.dispatch(Action::Shell(ShellAction::SkipOnboarding));
-                    })
-                    .build(k),
-            )
-    });
-
-    let card = col()
-        .key("desktop-onboarding-card")
-        .w(560.0)
-        .max_h(580.0)
-        .padding(20.0)
-        .gap(16.0)
-        .radius(14.0)
-        .fill(t.popover_bg)
-        .border(1.0, t.border_strong)
-        .child(
-            row()
-                .w_full()
-                .center_y()
-                .child(icon(&icons::SPARKLES, 18.0).color(t.accent))
-                .child(el().w(8.0))
-                .child(text("Welcome to Cowork").font(t.title).color(t.text_base))
-                .child(spacer())
-                .child(Badge::new(format!("Step {} / 5", step_idx + 1)).build(k)),
-        )
-        .child(
-            col()
-                .w_full()
-                .max_h(360.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .child(content_col),
-        )
-        .children(confirm_discard_banner)
-        .child(footer);
-
-    Some(
-        col()
-            .key("desktop-onboarding-backdrop")
-            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .fill(t.scrim)
-            .center()
-            .padding(24.0)
-            .modal(false, |_: &mut AppState| {})
-            .child(card),
-    )
-}
-
 pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayItem> {
     let query = s.shell_ui.search_edit.text.trim().to_ascii_lowercase();
     let ws_filter = s.shell_ui.search_workspace_filter.as_deref();
@@ -952,14 +653,12 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
         }
     }
 
-    let card = col()
-        .key("sidebar-search-overlay-card")
-        .w(600.0)
-        .max_w(600.0)
-        .max_h(520.0)
-        .radius(12.0)
-        .fill(t.popover_bg)
-        .border(1.0, t.border_strong)
+    let inner = col()
+        .w_full()
+        .max_h(518.0)
+        .radius(11.0)
+        .continuous_corners()
+        .clip_rounded(11.0)
         .child(el().w_full().padding(12.0).child(search_input))
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(chips)
@@ -985,6 +684,8 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 .px(14.0)
                 .gap(12.0)
                 .center_y()
+                .corners([0.0, 0.0, 11.0, 11.0])
+                .continuous_corners()
                 .fill(t.panel_bg)
                 .child(
                     text(format!(
@@ -1006,6 +707,21 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                         .build(k),
                 ),
         );
+
+    let card = k.elevate(
+        col()
+            .key("sidebar-search-overlay-card")
+            .w(600.0)
+            .max_w(600.0)
+            .max_h(520.0)
+            .padding(1.0)
+            .radius(12.0)
+            .continuous_corners()
+            .fill(t.popover_bg)
+            .border(1.0, t.border_strong)
+            .child(inner),
+        &k.elevation.overlay,
+    );
 
     Some(
         col()
@@ -1265,6 +981,10 @@ mod tests {
         assert!(!is_onboarding_visible(&s));
         s.scene_mode = false;
 
+        s.window_mode = crate::state::WindowMode::QuickChat;
+        assert!(!is_onboarding_visible(&s));
+        s.window_mode = crate::state::WindowMode::Main;
+
         s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
             SettingsPageId::Models,
         ))));
@@ -1404,7 +1124,7 @@ mod tests {
         use rune::{Env, Runtime};
 
         let mut s = AppState::default();
-        s.shell_ui.onboarding_step = 1;
+        s.shell_ui.onboarding_step = 2;
 
         let mut rt = Runtime::new(
             s,

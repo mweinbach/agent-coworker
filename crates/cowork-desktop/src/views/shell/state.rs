@@ -51,6 +51,13 @@ pub struct ShellUiState {
     pub sidebar_reorder: Reorder,
     pub onboarding_step: usize,
     pub onboarding_confirm_discard: bool,
+    pub onboarding_expanded_provider: Option<String>,
+    pub onboarding_api_key_edit: TextEdit,
+    pub onboarding_api_key_revealed: bool,
+    pub onboarding_oauth_code_edit: TextEdit,
+    pub onboarding_lmstudio_url_edit: TextEdit,
+    pub onboarding_open_select: Option<String>,
+    pub onboarding_completion_error: Option<String>,
     pub selected_workflow_run_id: Option<String>,
     pub task_create_open: bool,
     pub task_create_title_edit: TextEdit,
@@ -79,6 +86,20 @@ pub struct ShellUiState {
     pub menu_bar: super::menu_bar::MenuBarUiState,
 }
 
+impl ShellUiState {
+    pub fn reset_onboarding_transient(&mut self) {
+        self.onboarding_step = 0;
+        self.onboarding_confirm_discard = false;
+        self.onboarding_expanded_provider = None;
+        self.onboarding_api_key_edit = TextEdit::new("");
+        self.onboarding_api_key_revealed = false;
+        self.onboarding_oauth_code_edit = TextEdit::new("");
+        self.onboarding_lmstudio_url_edit = TextEdit::new("");
+        self.onboarding_open_select = None;
+        self.onboarding_completion_error = None;
+    }
+}
+
 impl Default for ShellUiState {
     fn default() -> Self {
         Self {
@@ -101,6 +122,13 @@ impl Default for ShellUiState {
             sidebar_reorder: Reorder::new().gap(2.0),
             onboarding_step: 0,
             onboarding_confirm_discard: false,
+            onboarding_expanded_provider: None,
+            onboarding_api_key_edit: TextEdit::new(""),
+            onboarding_api_key_revealed: false,
+            onboarding_oauth_code_edit: TextEdit::new(""),
+            onboarding_lmstudio_url_edit: TextEdit::new(""),
+            onboarding_open_select: None,
+            onboarding_completion_error: None,
             selected_workflow_run_id: None,
             task_create_open: false,
             task_create_title_edit: TextEdit::new(""),
@@ -569,6 +597,10 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         s.dispatch(Action::Shell(ShellAction::DismissLmStudioStartModal));
         return true;
     }
+    if s.shell_ui.onboarding_open_select.is_some() {
+        s.shell_ui.onboarding_open_select = None;
+        return true;
+    }
     if s.shell_ui.onboarding_confirm_discard {
         s.shell_ui.onboarding_confirm_discard = false;
         return true;
@@ -606,6 +638,10 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         } else {
             s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
         }
+        return true;
+    }
+    if super::overlays::is_onboarding_visible(s) {
+        super::onboarding::request_dismiss_onboarding(s);
         return true;
     }
     false

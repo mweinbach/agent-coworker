@@ -149,6 +149,8 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         .px(14.0)
         .gap(12.0)
         .center_y()
+        .corners([0.0, 0.0, 11.0, 11.0])
+        .continuous_corners()
         .fill(t.panel_bg)
         .child(
             text("↑↓ navigate · Enter run · Esc close")
@@ -158,13 +160,12 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         .child(spacer())
         .child(Badge::new("Esc close").build(k));
 
-    let card = col()
-        .key("command-palette-card")
-        .w(580.0)
-        .max_h(520.0)
-        .radius(12.0)
-        .fill(t.popover_bg)
-        .border(1.0, t.border_strong)
+    let inner = col()
+        .w_full()
+        .max_h(518.0)
+        .radius(11.0)
+        .continuous_corners()
+        .clip_rounded(11.0)
         .child(
             row()
                 .w_full()
@@ -197,6 +198,20 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         )
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(footer);
+
+    let card = k.elevate(
+        col()
+            .key("command-palette-card")
+            .w(580.0)
+            .max_h(520.0)
+            .padding(1.0)
+            .radius(12.0)
+            .continuous_corners()
+            .fill(t.popover_bg)
+            .border(1.0, t.border_strong)
+            .child(inner),
+        &k.elevation.overlay,
+    );
 
     Some(
         col()
@@ -509,5 +524,139 @@ mod tests {
         assert!(zoom_keys.contains(&"pal-act-zoom-in"));
         assert!(zoom_keys.contains(&"pal-act-zoom-out"));
         assert!(zoom_keys.contains(&"pal-act-zoom-reset"));
+    }
+
+    #[test]
+    fn command_palette_and_search_overlay_top_and_bottom_corners_match() {
+        use std::path::PathBuf;
+
+        use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
+        use rune::{Cx, Env, Runtime};
+
+        const VP: (f32, f32) = (1280.0, 820.0);
+
+        fn shell_root(state: &AppState, cx: &mut Cx<AppState>) -> El {
+            let dark = state.effective_dark(cx.system_dark());
+            let (k, t) = crate::theme::build_kit_with_accent(
+                dark,
+                state.desktop_settings.reduced_transparency,
+                state.desktop_settings.high_contrast,
+                state.desktop_settings.accent_palette,
+            );
+            cx.foreground(t.text_base);
+            cx.focus_ring(2.0, 2.5, t.focus_ring);
+            cx.web_focus();
+            crate::views::shell::view(state, cx, &k, &t)
+        }
+
+        let gpu = Gpu::headless();
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+
+        for dark in [false, true] {
+            let suffix = if dark { "dark" } else { "light" };
+            for (is_palette, card_key, snap_prefix) in [
+                (true, "command-palette-card", "command_palette"),
+                (false, "sidebar-search-overlay-card", "sidebar_search"),
+            ] {
+                let mut s = AppState::default();
+                s.onboarding.completed = true;
+                s.desktop_settings.theme = if dark {
+                    ThemePreference::Dark
+                } else {
+                    ThemePreference::Light
+                };
+                if is_palette {
+                    open_command_palette(&mut s);
+                } else {
+                    s.shell_ui.search_overlay_open = true;
+                }
+
+                let scale = 2.0_f32;
+                let dw = (VP.0 * scale) as u32;
+                let dh = (VP.1 * scale) as u32;
+                let mut rt = Runtime::new(s, shell_root, VP, Env::new(dark, scale));
+                rt.frame(0.0);
+                rt.settle_all();
+                rt.frame(0.0);
+
+                let (rect, _) = rt
+                    .presented(card_key)
+                    .unwrap_or_else(|| panic!("expected `{card_key}` to be mounted"));
+
+                let target = Offscreen::new(&gpu.device, dw, dh);
+                renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+                renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (dw, dh));
+                renderer.prepare(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut rt.text.atlas,
+                    &rt.instances,
+                    (dw, dh),
+                );
+                let tokens = crate::theme::resolve_tokens_with_accent(
+                    dark,
+                    rt.state.desktop_settings.reduced_transparency,
+                    rt.state.desktop_settings.high_contrast,
+                    rt.state.desktop_settings.accent_palette,
+                );
+                let clear = [
+                    tokens.panel_bg.r,
+                    tokens.panel_bg.g,
+                    tokens.panel_bg.b,
+                    tokens.panel_bg.a,
+                ];
+                let mut enc = gpu.device.create_command_encoder(&Default::default());
+                renderer.draw(&mut enc, &target.view, clear);
+                target.copy(&mut enc);
+                renderer.submit(&gpu.queue, enc);
+                let rgba = target.read(&gpu.device);
+
+                if let Ok(dir) = std::env::var("COWORK_PALETTE_SNAP_DIR") {
+                    let dir = PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).expect("create palette snap dir");
+                    write_png(
+                        &dir.join(format!("{snap_prefix}_{suffix}.png")),
+                        dw,
+                        dh,
+                        &rgba,
+                    )
+                    .expect("write palette snap");
+                }
+
+                let px = |x: u32, y: u32| -> [u8; 3] {
+                    let idx = ((y * dw + x) * 4) as usize;
+                    [rgba[idx], rgba[idx + 1], rgba[idx + 2]]
+                };
+
+                let x0 = (rect[0] * scale).round() as u32;
+                let y0 = (rect[1] * scale).round() as u32;
+                let x1 = ((rect[0] + rect[2]) * scale).round() as u32 - 1;
+                let y1 = ((rect[1] + rect[3]) * scale).round() as u32 - 1;
+
+                // Compare interior footer fill pixel vs outermost bottom-left/bottom-right corner pixels:
+                // rounded bottom corners must NOT paint the interior footer fill out to (x0 + 1, y1 - 1).
+                let footer_interior = px(x0 + 40, y1 - 16);
+                let bl_outer_corner = px(x0 + 1, y1 - 1);
+                let br_outer_corner = px(x1 - 1, y1 - 1);
+                let tl_outer_corner = px(x0 + 1, y0 + 1);
+
+                assert_ne!(
+                    bl_outer_corner, footer_interior,
+                    "{card_key} ({suffix}) bottom-left corner must be rounded, not sharp footer fill"
+                );
+                assert_ne!(
+                    br_outer_corner, footer_interior,
+                    "{card_key} ({suffix}) bottom-right corner must be rounded, not sharp footer fill"
+                );
+                // Top-left and bottom-left outermost corner pixels sit outside the 12pt continuous curve
+                // over the uniform scrim (modulo vertical drop shadow alpha, within small shadow delta).
+                let luma_diff =
+                    (i16::from(tl_outer_corner[0]) - i16::from(bl_outer_corner[0])).abs();
+                assert!(
+                    luma_diff <= 28,
+                    "{card_key} ({suffix}) top-left ({tl_outer_corner:?}) and bottom-left ({bl_outer_corner:?}) outer corner pixels diverged by {luma_diff}"
+                );
+            }
+        }
     }
 }

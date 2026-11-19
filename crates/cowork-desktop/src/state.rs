@@ -2054,6 +2054,19 @@ impl AppState {
         id
     }
 
+    /// Provider credentials are written through a workspace server, so a fresh install with
+    /// no workspaces would leave every connect control disabled. Provision the quick-chat
+    /// workspace (shown as "Chats") so keys and OAuth can be saved right away.
+    fn ensure_provider_management_workspace(&mut self) {
+        if self.scene_mode
+            || self.window_mode != WindowMode::Main
+            || self.workspaces.iter().any(|w| !w.archived)
+        {
+            return;
+        }
+        self.ensure_or_create_quick_chat_workspace();
+    }
+
     fn apply_session_config_event(&mut self, workspace_id: &str, evt: &Value) {
         let Some(cfg) = evt.get("config") else {
             return;
@@ -3951,6 +3964,12 @@ impl AppState {
                             && ws_ids.contains(t.workspace_id.as_str())
                     })
                     .collect();
+                if !self.onboarding.completed
+                    && !self.onboarding.dismissed
+                    && (!self.workspaces.is_empty() || !self.threads.is_empty())
+                {
+                    self.onboarding.completed = true;
+                }
                 self.archived_threads = self
                     .threads
                     .iter()
@@ -4793,6 +4812,11 @@ impl AppState {
             self.sync_active_explorer_dir();
             self.send_task_ws(&workspace_id, "task/read", json!({ "taskId": id }));
         }
+        if self.route().view == ViewId::Settings
+            && self.route().settings_page.canonical() == SettingsPageId::Models
+        {
+            self.ensure_provider_management_workspace();
+        }
         if self.settings_ui.conversation_import.is_some() && !conversation_import::is_current(self)
         {
             self.settings_ui.conversation_import = None;
@@ -4898,11 +4922,13 @@ impl AppState {
             ShellAction::CompleteOnboarding => {
                 self.onboarding.completed = true;
                 self.onboarding.dismissed = false;
+                self.shell_ui.reset_onboarding_transient();
                 self.persist_state();
             }
             ShellAction::SkipOnboarding => {
                 self.onboarding.dismissed = true;
                 self.onboarding.completed = false;
+                self.shell_ui.reset_onboarding_transient();
                 self.persist_state();
             }
             ShellAction::OpenFilePreview(preview) => {
@@ -7833,6 +7859,18 @@ impl AppState {
             }
             SettingsAction::RestartOnboarding => {
                 self.onboarding = OnboardingState::default();
+                self.shell_ui.reset_onboarding_transient();
+                if self.route().view == ViewId::Settings {
+                    if self.nav.can_go_back() {
+                        self.nav.go_back();
+                    } else {
+                        let target = self.route().last_non_settings_view;
+                        self.nav.update(NavigationPatch {
+                            view: Some(target),
+                            ..Default::default()
+                        });
+                    }
+                }
                 self.persist_state();
             }
         }
@@ -12124,6 +12162,37 @@ fn probe_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_models_settings_without_workspaces_provisions_quick_chat_workspace() {
+        let mut state = AppState::default();
+        assert!(state.resolve_management_workspace_id().is_none());
+
+        state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Models,
+        ))));
+
+        assert_eq!(state.workspaces.len(), 1);
+        assert!(state.workspaces[0].one_off_chat);
+        let ws_id = state.workspaces[0].id.clone();
+        assert_eq!(
+            state.resolve_management_workspace_id(),
+            Some(ws_id.as_str())
+        );
+        assert!(state.services.emitted_native_commands.iter().any(|cmd| matches!(
+            cmd,
+            NativeCommand::StartWorkspaceServer { workspace_id, .. } if *workspace_id == ws_id
+        )));
+
+        // Re-entering the page reuses the provisioned workspace.
+        state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Usage,
+        ))));
+        state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Providers,
+        ))));
+        assert_eq!(state.workspaces.len(), 1);
+    }
 
     #[test]
     fn dispatch_navigation_and_theme_transitions() {

@@ -25,7 +25,7 @@ extraResources:
     to: tray/icon.png
   - from: build/icon.ico
     to: tray/icon.ico
-  - from: resources/binaries
+  - from: ../../dist/binaries
     to: binaries
     filter:
       - "**/*"

@@ -324,12 +324,7 @@ pub fn find_sidecar_launch_command(
             search_dirs.push(res.to_path_buf());
         }
     } else if let Some(root) = repo_root {
-        search_dirs.push(
-            root.join("apps")
-                .join("desktop")
-                .join("resources")
-                .join("binaries"),
-        );
+        search_dirs.push(root.join("dist").join("binaries"));
     }
     if let Some(exe_dir) = current_exe_dir
         && !search_dirs.contains(&exe_dir.to_path_buf())
@@ -526,5 +521,43 @@ mod tests {
         let builtin =
             resolve_builtin_dir_for_sidecar(false, None, Some(root), &HashMap::new()).unwrap();
         assert_eq!(builtin.as_deref(), Some(root));
+    }
+
+    #[test]
+    fn finds_dev_staged_sidecar_in_neutral_dist_binaries() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let platform = current_host_platform();
+        let arch = current_host_arch();
+        let triple = resolve_desktop_target_triple(platform, arch).unwrap();
+        let filename = resolve_packaged_sidecar_filename(platform, arch).unwrap();
+
+        let staged_dir = root.join("dist").join("binaries");
+        std::fs::create_dir_all(&staged_dir).unwrap();
+        let staged_bin = staged_dir.join(&filename);
+        std::fs::write(&staged_bin, "staged-bin").unwrap();
+        let manifest = SidecarManifest {
+            target_triple: triple,
+            platform: platform.into(),
+            arch: arch.into(),
+            launch: SidecarLaunchSpec {
+                kind: "executable".into(),
+                path: filename,
+                args: Vec::new(),
+            },
+        };
+        std::fs::write(
+            staged_dir.join(SIDECAR_MANIFEST_NAME),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let cmd =
+            find_sidecar_launch_command(false, None, None, Some(root), &HashMap::new()).unwrap();
+        assert_eq!(cmd.command, staged_bin);
+        assert_eq!(
+            cmd.manifest_path,
+            Some(staged_dir.join(SIDECAR_MANIFEST_NAME))
+        );
     }
 }

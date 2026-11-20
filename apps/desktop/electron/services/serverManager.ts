@@ -339,6 +339,10 @@ function getSidecarSearchDirs(): string[] {
   const dirs = [path.join(appRoot, "resources", "binaries")];
   const repoRoot = resolveDevRepoRoot();
   if (repoRoot) {
+    const repoStagedBinaries = path.join(repoRoot, "dist", "binaries");
+    if (!dirs.includes(repoStagedBinaries)) {
+      dirs.unshift(repoStagedBinaries);
+    }
     const repoDesktopBinaries = path.join(repoRoot, "apps", "desktop", "resources", "binaries");
     if (!dirs.includes(repoDesktopBinaries)) {
       dirs.push(repoDesktopBinaries);

@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { hostArch, hostPlatform } from "../src/platform/host";
 import {
   buildSidecarManifest,
   resolvePackagedSidecarFilename,
+  resolveStagedBinariesDir,
   SIDECAR_MANIFEST_NAME,
-} from "../apps/desktop/electron/services/sidecar";
-import { hostArch, hostPlatform } from "../src/platform/host";
+} from "../src/platform/sidecar";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/windowsSandboxHelper";
 import {
@@ -20,7 +21,7 @@ import {
 import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
 
-const CACHE_VERSION = 16;
+const CACHE_VERSION = 17;
 // Maintainer-only research notes that live next to the model prompts but are never loaded at runtime.
 const PROMPTS_EXCLUDED_PATHS = [path.join("system-models", ".research")];
 
@@ -193,6 +194,20 @@ function resolveRustCompilerIdentity(): string {
   return "rustc:unknown";
 }
 
+function resolveSidecarInputs(root: string): string[] {
+  return [
+    path.join(root, "Cargo.toml"),
+    path.join(root, "Cargo.lock"),
+    path.join(root, "crates"),
+    path.join(root, "config"),
+    path.join(root, "prompts"),
+    path.join(root, "src", "platform", "sidecar.ts"),
+    path.join(root, "scripts", "build_desktop_resources.ts"),
+    path.join(root, "scripts", "releaseBuildUtils.ts"),
+    path.join(root, "scripts", "workspaceRustBinary.ts"),
+  ];
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const forceWindowsSandboxBuild = rawArgs.includes("--force-windows-sandbox-build");
@@ -209,17 +224,7 @@ async function main() {
 
   const cache = await loadCache(cachePath);
 
-  const sidecarInputs = [
-    path.join(root, "Cargo.toml"),
-    path.join(root, "Cargo.lock"),
-    path.join(root, "crates"),
-    path.join(root, "config"),
-    path.join(root, "prompts"),
-    path.join(root, "apps", "desktop", "electron", "services", "sidecar.ts"),
-    path.join(root, "scripts", "build_desktop_resources.ts"),
-    path.join(root, "scripts", "releaseBuildUtils.ts"),
-    path.join(root, "scripts", "workspaceRustBinary.ts"),
-  ];
+  const sidecarInputs = resolveSidecarInputs(root);
   const promptsSrc = path.join(root, "prompts");
   const configSrc = path.join(root, "config");
   const skillsSrc = path.join(root, "skills");
@@ -248,7 +253,7 @@ async function main() {
     resolveRustCompilerIdentity(),
   );
 
-  const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+  const desktopBinariesDir = resolveStagedBinariesDir(root);
   const sidecarOutfile = path.join(
     desktopBinariesDir,
     resolvePackagedSidecarFilename(platform, arch),
@@ -416,6 +421,7 @@ if (import.meta.main) {
 }
 
 export const __internal = {
+  resolveSidecarInputs,
   fingerprintInputs,
   clearDesktopSidecarArtifacts,
   syncWindowsSandboxHelper,

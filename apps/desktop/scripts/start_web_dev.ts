@@ -183,18 +183,31 @@ function resolveWebDevSidecarCommand(
     };
   }
 
-  const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
-  const hasManifest = existsSync(path.join(binariesDir, SIDECAR_MANIFEST_NAME));
-  if (hasManifest) {
+  const binariesDirs = [
+    path.join(root, "dist", "binaries"),
+    path.join(root, "apps", "desktop", "resources", "binaries"),
+  ];
+  const manifestDir = binariesDirs.find((dir) => existsSync(path.join(dir, SIDECAR_MANIFEST_NAME)));
+  if (manifestDir) {
     try {
-      return findPackagedSidecarLaunchCommand([binariesDir]);
+      return findPackagedSidecarLaunchCommand([manifestDir]);
     } catch (error) {
       // Cross-target packaging can leave another host's sidecar staged.
       console.warn(`Ignoring staged sidecar: ${error instanceof Error ? error.message : error}`);
     }
   }
+  if (!manifestDir) {
+    for (const dir of binariesDirs) {
+      if (!existsSync(dir)) continue;
+      try {
+        return findPackagedSidecarLaunchCommand([dir]);
+      } catch {
+        // Fall through to workspace Cargo target resolution.
+      }
+    }
+  }
   return {
-    command: resolveWorkspaceServerBinary(root, env, { includeStaged: !hasManifest }),
+    command: resolveWorkspaceServerBinary(root, env, { includeStaged: !manifestDir }),
     args: [],
   };
 }

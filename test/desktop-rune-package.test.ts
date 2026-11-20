@@ -12,6 +12,7 @@ import {
   refreshWindowsSandboxHashManifests,
   resolveCargoBuildEnv,
   resolveMacArchiveNames,
+  resolvePackageVersion,
   resolvePlatformKey,
   resolveUpdaterPayloadDescriptor,
   stageRuntimeResources,
@@ -25,6 +26,7 @@ import {
   validateLatestJsonManifest,
 } from "../scripts/desktop_rune_release_manifest";
 import { scratchRoots } from "../src/platform/scratchRoots";
+import { buildSidecarManifest, resolveStagedBinariesDir } from "../src/platform/sidecar";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -271,7 +273,73 @@ describe("desktop_rune_package CLI and build config helpers", () => {
     expect(winSigned.resources.map((item) => item.target)).toContain("windows-sandbox");
   });
 
-  test("stageRuntimeResources stages dist/sidecar/tray/windows-sandbox and refreshes sandbox sha256 manifests", async () => {
+  test("resolvePackageVersion reads Packager.toml without apps/desktop and honors overrides", async () => {
+    const tempRoot = await makeTempDir("cowork-version-");
+    try {
+      const packagerDir = path.join(tempRoot, "crates", "cowork-desktop", "packaging");
+      await fs.mkdir(packagerDir, { recursive: true });
+      await fs.writeFile(
+        path.join(packagerDir, "Packager.toml"),
+        'name = "cowork-desktop"\nversion = "2.4.0"\n',
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(tempRoot, "package.json"),
+        JSON.stringify({ name: "agent-coworker", version: "1.0.0" }),
+        "utf8",
+      );
+
+      expect(await resolvePackageVersion(tempRoot, undefined, {})).toBe("2.4.0");
+      expect(
+        await resolvePackageVersion(tempRoot, undefined, { COWORK_APP_VERSION: "v2.5.0" }),
+      ).toBe("2.5.0");
+      expect(await resolvePackageVersion(tempRoot, "2.6.0", { COWORK_APP_VERSION: "2.5.0" })).toBe(
+        "2.6.0",
+      );
+
+      // Even if a conflicting apps/desktop/package.json exists, Packager.toml stays authoritative.
+      await fs.mkdir(path.join(tempRoot, "apps", "desktop"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempRoot, "apps", "desktop", "package.json"),
+        JSON.stringify({ name: "desktop", version: "9.9.9" }),
+        "utf8",
+      );
+      expect(await resolvePackageVersion(tempRoot, undefined, {})).toBe("2.4.0");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("native packaging, staging, and release workflows have no apps/desktop inputs", async () => {
+    const baseConfig = await loadPackagerBaseConfig(repoRoot);
+    expect(await resolvePackageVersion(repoRoot, undefined, {})).toBe(
+      normalizeSemverVersion(String(baseConfig.version)),
+    );
+
+    const independentFiles = [
+      "scripts/desktop_rune_package.ts",
+      "scripts/build_desktop_resources.ts",
+      "scripts/build_cowork_server_binary.ts",
+      "scripts/workspaceRustBinary.ts",
+      ".github/workflows/desktop-rune-release.yml",
+      ".github/workflows/cowork-server-release.yml",
+    ];
+    for (const relPath of independentFiles) {
+      const content = await fs.readFile(path.join(repoRoot, relPath), "utf8");
+      expect(content, `${relPath} must not depend on apps/desktop`).not.toContain("apps/desktop");
+      expect(content, `${relPath} must not join apps/desktop paths`).not.toMatch(
+        /path\.join\([^)]*"apps"[^)]*"desktop"/,
+      );
+    }
+
+    const runeWorkflow = await fs.readFile(
+      path.join(repoRoot, ".github", "workflows", "desktop-rune-release.yml"),
+      "utf8",
+    );
+    expect(runeWorkflow).toContain("desktop_rune_package.ts --print-version");
+  });
+
+  test("stageRuntimeResources stages dist/sidecar/tray/windows-sandbox without apps/desktop and refreshes sandbox sha256 manifests", async () => {
     const tempRoot = await makeTempDir("cowork-stage-");
     try {
       for (const subdir of ["prompts", "config", "skills", "workflows"]) {
@@ -281,7 +349,7 @@ describe("desktop_rune_package CLI and build config helpers", () => {
         await fs.writeFile(path.join(dir, "ignored.js.map"), "sourcemap", "utf8");
       }
 
-      const binSrcDir = path.join(tempRoot, "apps", "desktop", "resources", "binaries");
+      const binSrcDir = resolveStagedBinariesDir(tempRoot);
       await fs.mkdir(binSrcDir, { recursive: true });
       await fs.writeFile(
         path.join(binSrcDir, "cowork-server-x86_64-pc-windows-msvc.exe"),
@@ -289,7 +357,7 @@ describe("desktop_rune_package CLI and build config helpers", () => {
       );
       await fs.writeFile(
         path.join(binSrcDir, "cowork-server-manifest.json"),
-        JSON.stringify({ rustTarget: "x86_64-pc-windows-msvc" }),
+        JSON.stringify(buildSidecarManifest("win32", "x64")),
       );
       await fs.writeFile(path.join(binSrcDir, "cowork-win-sandbox.exe"), "sandbox-v1");
       await fs.writeFile(path.join(binSrcDir, "codex-windows-sandbox-setup.exe"), "setup-v1");
@@ -347,6 +415,20 @@ describe("desktop_rune_package CLI and build config helpers", () => {
         ) as { files: Record<string, string> };
         expect(manifest.files["cowork-win-sandbox.exe"]).toBe(expectedHash);
       }
+
+      // Reject a mismatched sidecar manifest instead of packaging stale wrong-target artifacts.
+      await fs.writeFile(
+        path.join(binSrcDir, "cowork-server-manifest.json"),
+        JSON.stringify(buildSidecarManifest("darwin", "arm64")),
+      );
+      await expect(
+        stageRuntimeResources({
+          root: tempRoot,
+          platform: "win32",
+          rustTarget: "x86_64-pc-windows-msvc",
+          stagedDir,
+        }),
+      ).rejects.toThrow(/does not match target/);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

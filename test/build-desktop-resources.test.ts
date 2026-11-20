@@ -12,6 +12,7 @@ import {
 } from "../scripts/winSandboxPrebuilt";
 import { hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/scratchRoots";
+import { resolveStagedBinariesDir } from "../src/platform/sidecar";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
@@ -21,6 +22,14 @@ import {
 import { buildStoredZipBuffer } from "./helpers/zipFixture";
 
 describe("desktop resource build helpers", () => {
+  test("sidecar fingerprint inputs and staging dir are independent of apps/desktop", () => {
+    const root = path.resolve(import.meta.dir, "..");
+    const inputs = __internal.resolveSidecarInputs(root);
+    expect(inputs.some((entry) => entry.includes(path.join("apps", "desktop")))).toBe(false);
+    expect(inputs).toContain(path.join(root, "src", "platform", "sidecar.ts"));
+    expect(resolveStagedBinariesDir(root)).toBe(path.join(root, "dist", "binaries"));
+  });
+
   test("invalidates sidecar fingerprints when only the compiler revision changes", async () => {
     const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-sidecar-cache-"));
     try {
@@ -53,7 +62,7 @@ describe("desktop resource build helpers", () => {
 
   test("sidecar cleanup preserves independently managed native resources", async () => {
     const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-desktop-resources-"));
-    const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+    const binariesDir = resolveStagedBinariesDir(root);
 
     try {
       await fs.mkdir(binariesDir, { recursive: true });
@@ -100,14 +109,7 @@ describe("desktop resource build helpers", () => {
 
   test("builds and copies the Windows sandbox helper for Windows targets", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-    const dest = path.join(
-      root,
-      "apps",
-      "desktop",
-      "resources",
-      "binaries",
-      WINDOWS_SANDBOX_HELPER_NAME,
-    );
+    const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
     const crateDir = path.join(root, "crates", "cowork-win-sandbox");
     const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
     const commands: string[][] = [];
@@ -326,14 +328,7 @@ describe("desktop resource build helpers", () => {
     "downloads verified prebuilt Windows sandbox helpers instead of running cargo",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-      const dest = path.join(
-        root,
-        "apps",
-        "desktop",
-        "resources",
-        "binaries",
-        WINDOWS_SANDBOX_HELPER_NAME,
-      );
+      const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
       const commands: string[][] = [];
 
       try {
@@ -386,14 +381,7 @@ describe("desktop resource build helpers", () => {
     "throws on a prebuilt helper hash mismatch instead of silently rebuilding",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-      const dest = path.join(
-        root,
-        "apps",
-        "desktop",
-        "resources",
-        "binaries",
-        WINDOWS_SANDBOX_HELPER_NAME,
-      );
+      const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
       const commands: string[][] = [];
 
       try {
@@ -439,14 +427,7 @@ describe("desktop resource build helpers", () => {
     "throws on a prebuilt zip hash mismatch instead of silently rebuilding",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-      const dest = path.join(
-        root,
-        "apps",
-        "desktop",
-        "resources",
-        "binaries",
-        WINDOWS_SANDBOX_HELPER_NAME,
-      );
+      const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
       const commands: string[][] = [];
 
       try {
@@ -480,14 +461,7 @@ describe("desktop resource build helpers", () => {
     "falls back to cargo when the prebuilt lock fingerprint drifts from the crate source",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-      const dest = path.join(
-        root,
-        "apps",
-        "desktop",
-        "resources",
-        "binaries",
-        WINDOWS_SANDBOX_HELPER_NAME,
-      );
+      const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
       const crateDir = path.join(root, "crates", "cowork-win-sandbox");
       const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
       const commands: string[][] = [];
@@ -532,14 +506,7 @@ describe("desktop resource build helpers", () => {
     "skips prebuilt downloads when COWORK_WIN_SANDBOX_PREBUILT=0 or forceBuild is set",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-      const dest = path.join(
-        root,
-        "apps",
-        "desktop",
-        "resources",
-        "binaries",
-        WINDOWS_SANDBOX_HELPER_NAME,
-      );
+      const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
       const crateDir = path.join(root, "crates", "cowork-win-sandbox");
       const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
       const commands: string[][] = [];
@@ -594,14 +561,7 @@ describe("desktop resource build helpers", () => {
 
   prebuiltTest("falls back to cargo when the prebuilt release asset is unavailable", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-    const dest = path.join(
-      root,
-      "apps",
-      "desktop",
-      "resources",
-      "binaries",
-      WINDOWS_SANDBOX_HELPER_NAME,
-    );
+    const dest = path.join(resolveStagedBinariesDir(root), WINDOWS_SANDBOX_HELPER_NAME);
     const crateDir = path.join(root, "crates", "cowork-win-sandbox");
     const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
     const commands: string[][] = [];
@@ -642,7 +602,7 @@ describe("desktop resource build helpers", () => {
 
   test("prunes stale sourcemaps, tsbuildinfo files, and .DS_Store from desktop binaries", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
-    const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+    const binariesDir = resolveStagedBinariesDir(root);
 
     try {
       await fs.mkdir(path.join(binariesDir, "nested"), { recursive: true });
@@ -674,9 +634,7 @@ describe("desktop resource build helpers", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
     try {
       await expect(
-        __internal.pruneStaleDesktopBinaryArtifacts(
-          path.join(root, "apps", "desktop", "resources", "binaries"),
-        ),
+        __internal.pruneStaleDesktopBinaryArtifacts(resolveStagedBinariesDir(root)),
       ).resolves.toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });

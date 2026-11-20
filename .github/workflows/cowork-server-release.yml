@@ -51,7 +51,6 @@ jobs:
             .bun-version
             bun.lock
             package.json
-            apps/desktop/package.json
             packages/*/package.json
             apps/mobile/bun.lock
             apps/mobile/package.json

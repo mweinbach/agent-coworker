@@ -3,9 +3,9 @@ import path from "node:path";
 
 import { writeFileAtomic } from "../src/platform/fs";
 import { hostArch, hostPlatform } from "../src/platform/host";
+import { buildSidecarManifest, SIDECAR_MANIFEST_NAME } from "../src/platform/sidecar";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/windowsSandboxHelper";
-import { SIDECAR_MANIFEST_NAME } from "../src/shared/runtimeProgress";
 import {
   copyDir,
   pathExists,
@@ -194,15 +194,7 @@ export async function buildServerBinary(
     });
   }
 
-  const manifest = {
-    targetTriple: rustTarget,
-    platform: target.platform,
-    arch: target.arch,
-    launch: {
-      kind: "executable" as const,
-      path: path.basename(outfile),
-    },
-  };
+  const manifest = buildSidecarManifest(target.platform, target.arch, path.basename(outfile));
   await writeFileAtomic(
     path.join(outDir, SIDECAR_MANIFEST_NAME),
     `${JSON.stringify(manifest, null, 2)}\n`,

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { hostArch, hostPlatform } from "../src/platform/host";
+import { resolvePackagedSidecarFilename, resolveStagedBinariesDir } from "../src/platform/sidecar";
 import { resolveRustCompileTarget, type runCommand } from "./releaseBuildUtils";
 
 type WorkspaceBinary = "cowork" | "cowork-server";
@@ -106,13 +107,14 @@ export function resolveWorkspaceServerBinary(
     return buildWorkspaceBinary(root, "cowork-server", env);
   }
   const platform = hostPlatform();
-  const triple = resolveRustCompileTarget(platform, hostArch());
+  const arch = hostArch();
+  const triple = resolveRustCompileTarget(platform, arch);
   const ext = platform === "win32" ? ".exe" : "";
   const targetDir = path.resolve(root, env.CARGO_TARGET_DIR || "target");
   const candidates: string[] = [];
   if (includeStaged) {
     candidates.push(
-      path.join(root, "apps", "desktop", "resources", "binaries", `cowork-server-${triple}${ext}`),
+      path.join(resolveStagedBinariesDir(root), resolvePackagedSidecarFilename(platform, arch)),
     );
   }
   for (const profile of ["release", "debug"]) {

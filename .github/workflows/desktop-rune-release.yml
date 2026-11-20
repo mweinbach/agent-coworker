@@ -79,7 +79,6 @@ jobs:
             .bun-version
             bun.lock
             package.json
-            apps/desktop/package.json
             packages/*/package.json
             apps/mobile/bun.lock
             apps/mobile/package.json
@@ -116,7 +115,7 @@ jobs:
             version="${release_tag#desktop-rune-v}"
             version="${version#v}"
           else
-            version="$(bun -e 'const pkg = await Bun.file("apps/desktop/package.json").json(); console.log(pkg.version);')"
+            version="$(bun scripts/desktop_rune_package.ts --print-version)"
           fi
 
           if [[ -z "$version" ]]; then

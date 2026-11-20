@@ -1839,11 +1839,17 @@ fn make_emitter(
     })
 }
 
-/// Resolves the compile-time desktop app version, preferring `COWORK_APP_VERSION` over `CARGO_PKG_VERSION`.
+/// Resolves the compile-time desktop app version, preferring `COWORK_APP_VERSION` over the
+/// authoritative `packaging/Packager.toml` version (`COWORK_DESKTOP_VERSION`) and `CARGO_PKG_VERSION`.
 pub(crate) fn resolve_desktop_app_version() -> &'static str {
     option_env!("COWORK_APP_VERSION")
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            option_env!("COWORK_DESKTOP_VERSION")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
@@ -2643,5 +2649,39 @@ mod tests {
             Duration::from_secs(15)
         );
         assert_eq!(resolve_shutdown_wait_timeout(true), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn desktop_app_version_defaults_to_packager_toml_version() {
+        let packager_toml = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("packaging")
+                .join("Packager.toml"),
+        )
+        .expect("read packaging/Packager.toml");
+        let packager_version = packager_toml
+            .lines()
+            .find_map(|line| {
+                let trimmed = line.trim();
+                let (key, value) = trimmed.split_once('=')?;
+                (key.trim() == "version").then(|| value.trim().trim_matches('"').trim_matches('\''))
+            })
+            .expect("Packager.toml declares version");
+        assert_eq!(
+            option_env!("COWORK_DESKTOP_VERSION"),
+            Some(
+                option_env!("COWORK_APP_VERSION")
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(packager_version)
+            )
+        );
+        if option_env!("COWORK_APP_VERSION")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            assert_eq!(resolve_desktop_app_version(), packager_version);
+        }
     }
 }

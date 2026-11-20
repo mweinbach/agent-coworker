@@ -8,6 +8,17 @@ import { hostArch, hostPlatform } from "../src/platform/host";
 import { home } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/scratchRoots";
 import {
+  isSidecarManifest,
+  resolveStagedBinariesDir,
+  SIDECAR_MANIFEST_NAME,
+} from "../src/platform/sidecar";
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../src/platform/windowsSandboxHelper";
+import {
   normalizeSemverVersion,
   type UpdaterFragment,
   type UpdaterPayloadFormat,
@@ -97,12 +108,12 @@ const VALID_PACKAGER_FORMATS = new Set<PackagerFormat>([
 ]);
 
 const WINDOWS_SANDBOX_FILES = [
-  "cowork-win-sandbox.exe",
-  "codex-windows-sandbox-setup.exe",
-  "codex-command-runner.exe",
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
 ] as const;
 
-const WINDOWS_SANDBOX_MANIFEST_NAME = "cowork-win-sandbox.sha256.json";
+const WINDOWS_SANDBOX_MANIFEST_NAME = WINDOWS_SANDBOX_HASH_MANIFEST_NAME;
 
 const TELEMETRY_BUILD_ENV_KEYS = [
   "COWORK_SENTRY_DSN",
@@ -311,20 +322,29 @@ export async function resolvePackageVersion(
   if (envVersion) {
     return normalizeSemverVersion(envVersion);
   }
-  const desktopPkgPath = path.join(root, "apps", "desktop", "package.json");
-  if (await pathExists(desktopPkgPath)) {
-    const desktopPkg = JSON.parse(await fs.readFile(desktopPkgPath, "utf8")) as {
+  const packagerTomlPath = path.join(
+    root,
+    "crates",
+    "cowork-desktop",
+    "packaging",
+    "Packager.toml",
+  );
+  if (await pathExists(packagerTomlPath)) {
+    const packagerConfig = Bun.TOML.parse(await fs.readFile(packagerTomlPath, "utf8")) as {
       version?: unknown;
     };
-    if (typeof desktopPkg.version === "string" && desktopPkg.version.trim()) {
-      return normalizeSemverVersion(desktopPkg.version);
+    if (typeof packagerConfig.version === "string" && packagerConfig.version.trim()) {
+      return normalizeSemverVersion(packagerConfig.version);
     }
   }
-  const rootPkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as {
-    version?: unknown;
-  };
-  if (typeof rootPkg.version === "string" && rootPkg.version.trim()) {
-    return normalizeSemverVersion(rootPkg.version);
+  const rootPkgPath = path.join(root, "package.json");
+  if (await pathExists(rootPkgPath)) {
+    const rootPkg = JSON.parse(await fs.readFile(rootPkgPath, "utf8")) as {
+      version?: unknown;
+    };
+    if (typeof rootPkg.version === "string" && rootPkg.version.trim()) {
+      return normalizeSemverVersion(rootPkg.version);
+    }
   }
   throw new Error("Unable to determine Cowork package version.");
 }
@@ -714,22 +734,33 @@ export async function stageRuntimeResources(params: {
     await copyFilteredDir(src, path.join(stagedDir, "dist", subdir));
   }
 
-  const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+  const stagedBinariesSrcDir = resolveStagedBinariesDir(root);
   const stagedBinariesDir = path.join(stagedDir, "binaries");
   await fs.mkdir(stagedBinariesDir, { recursive: true });
 
   const sidecarName =
     platform === "win32" ? `cowork-server-${rustTarget}.exe` : `cowork-server-${rustTarget}`;
-  const sidecarSrc = path.join(desktopBinariesDir, sidecarName);
-  const manifestSrc = path.join(desktopBinariesDir, "cowork-server-manifest.json");
+  const sidecarSrc = path.join(stagedBinariesSrcDir, sidecarName);
+  const manifestSrc = path.join(stagedBinariesSrcDir, SIDECAR_MANIFEST_NAME);
   if (!(await pathExists(sidecarSrc)) || !(await pathExists(manifestSrc))) {
     throw new Error(
-      `Missing staged cowork-server sidecar artifacts in ${desktopBinariesDir} (expected ${sidecarName} and cowork-server-manifest.json).`,
+      `Missing staged cowork-server sidecar artifacts in ${stagedBinariesSrcDir} (expected ${sidecarName} and ${SIDECAR_MANIFEST_NAME}).`,
+    );
+  }
+  const parsedManifest: unknown = JSON.parse(await fs.readFile(manifestSrc, "utf8"));
+  if (
+    !isSidecarManifest(parsedManifest) ||
+    parsedManifest.platform !== platform ||
+    parsedManifest.targetTriple !== rustTarget ||
+    parsedManifest.launch.path !== sidecarName
+  ) {
+    throw new Error(
+      `Staged sidecar manifest in ${manifestSrc} does not match target ${platform}/${rustTarget} (${sidecarName}).`,
     );
   }
   const sidecarDest = path.join(stagedBinariesDir, sidecarName);
   await fs.copyFile(sidecarSrc, sidecarDest);
-  await fs.copyFile(manifestSrc, path.join(stagedBinariesDir, "cowork-server-manifest.json"));
+  await fs.copyFile(manifestSrc, path.join(stagedBinariesDir, SIDECAR_MANIFEST_NAME));
   if (platform !== "win32") {
     await fs.chmod(sidecarDest, 0o755);
   }
@@ -737,7 +768,7 @@ export async function stageRuntimeResources(params: {
   let hasWindowsSandbox = false;
   if (platform === "win32") {
     const winSandboxDest = path.join(stagedDir, "windows-sandbox");
-    const sandboxManifestSrc = path.join(desktopBinariesDir, WINDOWS_SANDBOX_MANIFEST_NAME);
+    const sandboxManifestSrc = path.join(stagedBinariesSrcDir, WINDOWS_SANDBOX_MANIFEST_NAME);
     if (await pathExists(sandboxManifestSrc)) {
       await fs.mkdir(winSandboxDest, { recursive: true });
       await fs.copyFile(
@@ -749,7 +780,7 @@ export async function stageRuntimeResources(params: {
         path.join(winSandboxDest, WINDOWS_SANDBOX_MANIFEST_NAME),
       );
       for (const fileName of WINDOWS_SANDBOX_FILES) {
-        const helperSrc = path.join(desktopBinariesDir, fileName);
+        const helperSrc = path.join(stagedBinariesSrcDir, fileName);
         if (await pathExists(helperSrc)) {
           await fs.copyFile(helperSrc, path.join(stagedBinariesDir, fileName));
           await fs.copyFile(helperSrc, path.join(winSandboxDest, fileName));
@@ -1377,6 +1408,7 @@ if (import.meta.main) {
         "  --arch <arm64|x64>",
         "  --formats <a,b>             Comma-separated cargo-packager formats",
         "  --version <semver>          Override package version",
+        "  --print-version             Print resolved package version and exit",
         "  --out-dir <path>            Override output root directory",
         "  --binaries-dir <path>       Override compiled binary directory",
         "  --skip-build                Reuse existing release binary",
@@ -1386,6 +1418,12 @@ if (import.meta.main) {
         "  --require-sign              Fail if required signing keys are missing",
       ].join("\n"),
     );
+    process.exit(0);
+  }
+  if (process.argv.includes("--print-version")) {
+    const cli = parsePackageCliArgs(process.argv.slice(2));
+    const version = await resolvePackageVersion(defaultRoot, cli.version, process.env);
+    console.log(version);
     process.exit(0);
   }
   await runRunePackage().catch((err) => {

@@ -323,6 +323,8 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           prerelease: true
+          # Never displace GitHub's `releases/latest`, which desktop auto-updaters query.
+          make_latest: "false"
           generate_release_notes: true
           files: ${{ steps.collect.outputs.files }}
           name: cowork-server ${{ github.ref_name }}

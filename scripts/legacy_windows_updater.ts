@@ -112,7 +112,7 @@ export function classifyLegacyWindowsInstallerArch(fileName: string): WindowsLeg
   }
   if (lower.includes("aarch64")) {
     throw new Error(
-      `Windows legacy installer "${fileName}" uses "aarch64" instead of "arm64"; electron-updater Provider.findFile matches process.arch ("arm64").`,
+      `Windows legacy installer "${fileName}" uses "aarch64" instead of "arm64"; electron-updater Provider.findFile matches client arch ("arm64").`,
     );
   }
   const hasArm64 = /(?:^|[_-])arm64(?:[_.-]|$)/.test(lower);
@@ -366,7 +366,7 @@ export function selectLegacyWindowsInstallerForClient(
     info,
   }));
 
-  // Mirrors Provider.findFile(files, "exe") using client's process.arch
+  // Mirrors Provider.findFile(files, "exe") using the client's target arch
   const exeFiles = resolved.filter((item) => item.url.pathname.toLowerCase().endsWith(".exe"));
   const chosen =
     exeFiles.find((item) =>

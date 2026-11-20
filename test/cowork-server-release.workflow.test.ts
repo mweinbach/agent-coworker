@@ -93,8 +93,9 @@ describe("cowork-server release workflow", () => {
     );
   });
 
-  test("blocks prerelease publishing on the ARM64 smoke job", () => {
+  test("blocks prerelease publishing on the ARM64 smoke job and never displaces Latest", () => {
     expect(workflow).toMatch(/publish:[\s\S]*?needs:[\s\S]*?- build[\s\S]*?- smoke-windows-arm64/);
     expect(workflow).toContain("files: ${{ steps.collect.outputs.files }}");
+    expect(workflow).toContain('make_latest: "false"');
   });
 });

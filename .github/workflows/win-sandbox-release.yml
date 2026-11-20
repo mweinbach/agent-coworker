@@ -115,6 +115,8 @@ jobs:
         # contents: write, so the third-party action must not be a mutable tag.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          # Never displace GitHub's `releases/latest`, which desktop auto-updaters query.
+          make_latest: "false"
           files: |
             helper-assets/win-sandbox-*.zip
             prebuilt.lock.json

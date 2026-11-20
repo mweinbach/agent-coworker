@@ -48,10 +48,11 @@ describe("windows sandbox helper release workflow", () => {
     );
   });
 
-  test("pins the release-publishing action to an immutable commit SHA", () => {
+  test("pins the release-publishing action to an immutable commit SHA and never displaces Latest", () => {
     expect(workflow).toContain(
       "uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2",
     );
     expect(workflow).not.toMatch(/softprops\/action-gh-release@v/);
+    expect(workflow).toContain('make_latest: "false"');
   });
 });

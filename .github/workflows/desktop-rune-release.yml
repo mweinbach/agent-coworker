@@ -49,9 +49,13 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
+      candidate_tag: ${{ steps.meta.outputs.candidate_tag }}
+      followup_version: ${{ steps.meta.outputs.followup_version }}
+      followup_tag: ${{ steps.meta.outputs.followup_tag }}
       sign_release: ${{ steps.meta.outputs.sign_release }}
       require_sign: ${{ steps.meta.outputs.require_sign }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      will_promote_latest: ${{ steps.meta.outputs.will_promote_latest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -128,28 +132,65 @@ jobs:
             prerelease="true"
           fi
 
+          if [[ -n "$release_tag" ]]; then
+            candidate_tag="$release_tag"
+          else
+            candidate_tag="desktop-rune-v${version}"
+          fi
+
+          followup_version="$(bun scripts/assemble_rune_release.ts next-patch-version --version "$version")"
+          if [[ "$candidate_tag" == desktop-rune-v* ]]; then
+            followup_tag="desktop-rune-v${followup_version}"
+          else
+            followup_tag="v${followup_version}"
+          fi
+
+          will_promote_latest="false"
+          if [[ -n "$release_tag" && "$prerelease" != "true" ]]; then
+            will_promote_latest="true"
+          fi
+
           {
             echo "version=$version"
             echo "release_tag=$release_tag"
+            echo "candidate_tag=$candidate_tag"
+            echo "followup_version=$followup_version"
+            echo "followup_tag=$followup_tag"
             echo "sign_release=$sign_release"
             echo "require_sign=$require_sign"
             echo "prerelease=$prerelease"
+            echo "will_promote_latest=$will_promote_latest"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Validate release updater & telemetry variables
+      - name: Validate release updater, version & promotion gates
         shell: bash
         env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+          CANDIDATE_TAG: ${{ steps.meta.outputs.candidate_tag }}
           SIGN_RELEASE: ${{ steps.meta.outputs.sign_release }}
           REQUIRE_SIGN: ${{ steps.meta.outputs.require_sign }}
+          WILL_PROMOTE_LATEST: ${{ steps.meta.outputs.will_promote_latest }}
           COWORK_UPDATER_PUBKEY: ${{ vars.COWORK_UPDATER_PUBKEY }}
           COWORK_SENTRY_DSN: ${{ vars.COWORK_SENTRY_DSN }}
           COWORK_POSTHOG_KEY: ${{ vars.COWORK_POSTHOG_KEY }}
           COWORK_POSTHOG_HOST: ${{ vars.COWORK_POSTHOG_HOST }}
         run: |
           set -euo pipefail
-          if [[ "$REQUIRE_SIGN" == "true" && -z "${COWORK_UPDATER_PUBKEY:-}" ]]; then
-            echo "vars.COWORK_UPDATER_PUBKEY must be set when require_sign=true." >&2
-            exit 1
+          if [[ "$WILL_PROMOTE_LATEST" == "true" ]]; then
+            if [[ "$SIGN_RELEASE" != "true" || "$REQUIRE_SIGN" != "true" ]]; then
+              echo "Refusing to promote a Latest desktop release without sign_release=true and require_sign=true." >&2
+              exit 1
+            fi
+          fi
+          if [[ "$REQUIRE_SIGN" == "true" || "$WILL_PROMOTE_LATEST" == "true" ]]; then
+            if [[ -z "${COWORK_UPDATER_PUBKEY:-}" ]]; then
+              echo "vars.COWORK_UPDATER_PUBKEY must be set when require_sign=true or promoting Latest." >&2
+              exit 1
+            fi
+            bun scripts/assemble_rune_release.ts check-version \
+              --version "$RELEASE_VERSION" \
+              --tag "$CANDIDATE_TAG" \
+              --min-originating-version 1.3.1
           fi
           if [[ "$SIGN_RELEASE" == "true" ]]; then
             if [[ -z "${COWORK_SENTRY_DSN:-}" ]]; then
@@ -475,14 +516,13 @@ jobs:
           if-no-files-found: error
           path: target/rune-package/${{ matrix.platform_key }}/upload/*
 
-  release:
-    name: Publish GitHub Release
+  assemble-candidate:
+    name: Assemble & verify candidate release feeds
     needs: [validate, package]
-    if: needs.validate.outputs.release_tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -497,72 +537,307 @@ jobs:
           path: release-artifacts
           merge-multiple: false
 
-      - name: Collect assets & generate update feeds
+      - name: Assemble & verify native and legacy bridge feeds
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.candidate_tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          REQUIRE_SIGN: ${{ needs.validate.outputs.require_sign }}
+          WILL_PROMOTE_LATEST: ${{ needs.validate.outputs.will_promote_latest }}
+          GITHUB_REPO_FULL: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPO_FULL%%/*}"
+          repo="${GITHUB_REPO_FULL#*/}"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          assemble_args=(
+            "assemble"
+            "--artifacts-dir" "release-artifacts"
+            "--out-dir" "release-upload"
+            "--version" "$RELEASE_VERSION"
+            "--tag" "$CANDIDATE_TAG"
+            "--owner" "$owner"
+            "--repo" "$repo"
+            "--pub-date" "$pub_date"
+          )
+          if [[ "$REQUIRE_SIGN" == "true" || "$WILL_PROMOTE_LATEST" == "true" ]]; then
+            assemble_args+=(
+              "--require-complete"
+              "--require-signed"
+              "--min-originating-version" "1.3.1"
+            )
+          fi
+
+          bun scripts/assemble_rune_release.ts "${assemble_args[@]}"
+          ls -la release-upload
+
+      - name: Upload assembled candidate release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: rune-release-candidate
+          if-no-files-found: error
+          path: release-upload/*
+
+  verify-upgrade:
+    name: Verify Native Upgrade (${{ matrix.lane }})
+    needs: [validate, assemble-candidate]
+    if: >-
+      needs.validate.outputs.sign_release == 'true' ||
+      needs.validate.outputs.require_sign == 'true' ||
+      needs.validate.outputs.will_promote_latest == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: macos-arm64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+            platform_key: macos-aarch64
+            rust_target: aarch64-apple-darwin
+            formats: app,dmg
+            cache_scope: macos-release-arm64
+          - lane: windows-x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+            platform_key: windows-x86_64
+            rust_target: x86_64-pc-windows-msvc
+            formats: nsis
+            cache_scope: windows-release-x64
+          - lane: windows-arm64
+            runner: windows-11-arm
+            platform: win32
+            arch: arm64
+            platform_key: windows-aarch64
+            rust_target: aarch64-pc-windows-msvc
+            formats: nsis
+            cache_scope: windows-release-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: ${{ matrix.cache_scope }}
+
+      - name: Add Rust target
+        shell: bash
+        run: rustup target add "${{ matrix.rust_target }}"
+
+      - name: Cache cargo-packager CLI
+        id: packager-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-packager*
+          key: cargo-packager-0.11.8-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-packager CLI
+        if: steps.packager-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Download assembled candidate release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: rune-release-candidate
+          path: candidate-release
+
+      - name: Package signed follow-up Rune release (non-publishing vNext)
+        shell: bash
+        env:
+          COWORK_APP_VERSION: ${{ needs.validate.outputs.followup_version }}
+          COWORK_UPDATER_PUBKEY: ${{ vars.COWORK_UPDATER_PUBKEY }}
+          CARGO_PACKAGER_SIGN_PUBLIC_KEY: ${{ vars.COWORK_UPDATER_PUBKEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+          COWORK_SENTRY_DSN: ${{ vars.COWORK_SENTRY_DSN }}
+          COWORK_SENTRY_ENVIRONMENT: ${{ vars.COWORK_SENTRY_ENVIRONMENT }}
+          COWORK_POSTHOG_KEY: ${{ vars.COWORK_POSTHOG_KEY }}
+          COWORK_POSTHOG_HOST: ${{ vars.COWORK_POSTHOG_HOST }}
+          COWORK_POSTHOG_ENVIRONMENT: ${{ vars.COWORK_POSTHOG_ENVIRONMENT }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+          WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          bun run desktop:rune:package -- \
+            "--platform=${{ matrix.platform }}" \
+            "--arch=${{ matrix.arch }}" \
+            "--formats=${{ matrix.formats }}" \
+            "--version=${{ needs.validate.outputs.followup_version }}" \
+            "--require-sign"
+
+      - name: Assemble local non-publishing follow-up Rune feed (vNext)
+        shell: bash
+        env:
+          FOLLOWUP_VERSION: ${{ needs.validate.outputs.followup_version }}
+          FOLLOWUP_TAG: ${{ needs.validate.outputs.followup_tag }}
+          CANDIDATE_VERSION: ${{ needs.validate.outputs.version }}
+          GITHUB_REPO_FULL: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPO_FULL%%/*}"
+          repo="${GITHUB_REPO_FULL#*/}"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          out_dir="target/rune-package/${{ matrix.platform_key }}/out"
+          stage_dir="followup-artifacts"
+          rm -rf "$stage_dir"
+          mkdir -p "$stage_dir"
+          shopt -s nullglob
+          for pattern in \
+            "$out_dir"/*-mac.zip \
+            "$out_dir"/*.app.tar.gz \
+            "$out_dir"/*-setup.exe \
+            "$out_dir"/*.sig \
+            "$out_dir"/updater-fragment-*.json \
+            "$out_dir"/package-summary-*.json
+          do
+            cp "$pattern" "$stage_dir/"
+          done
+          bun scripts/assemble_rune_release.ts assemble \
+            --artifacts-dir "$stage_dir" \
+            --out-dir followup-release \
+            --version "$FOLLOWUP_VERSION" \
+            --tag "$FOLLOWUP_TAG" \
+            --owner "$owner" \
+            --repo "$repo" \
+            --pub-date "$pub_date" \
+            --require-signed \
+            --min-originating-version "$CANDIDATE_VERSION"
+
+      - name: Fetch & verify pinned historical originating Electron fixture (v1.3.1)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          bun scripts/bridge_upgrade_fixture.ts fetch \
+            --lane "${{ matrix.lane }}" \
+            --out-dir originating-fixture \
+            --require-signed
+
+      - name: Run native non-publishing upgrade chain (v1.3.1 -> candidate -> vNext)
+        shell: bash
+        env:
+          CANDIDATE_VERSION: ${{ needs.validate.outputs.version }}
+          CANDIDATE_TAG: ${{ needs.validate.outputs.candidate_tag }}
+          FOLLOWUP_VERSION: ${{ needs.validate.outputs.followup_version }}
+          FOLLOWUP_TAG: ${{ needs.validate.outputs.followup_tag }}
+          GITHUB_REPO_FULL: ${{ github.repository }}
+          WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPO_FULL%%/*}"
+          repo="${GITHUB_REPO_FULL#*/}"
+          if [[ "${{ matrix.platform }}" == "darwin" ]]; then
+            originating_asset="originating-fixture/Cowork-1.3.1-arm64-mac.zip"
+          elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            originating_asset="originating-fixture/Cowork-1.3.1-win-arm64.exe"
+          else
+            originating_asset="originating-fixture/Cowork-1.3.1-win-x64.exe"
+          fi
+
+          bun scripts/bridge_upgrade_harness.ts run \
+            --lane "${{ matrix.lane }}" \
+            --originating-asset "$originating_asset" \
+            --candidate-dir candidate-release \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --candidate-tag "$CANDIDATE_TAG" \
+            --followup-dir followup-release \
+            --followup-version "$FOLLOWUP_VERSION" \
+            --followup-tag "$FOLLOWUP_TAG" \
+            --owner "$owner" \
+            --repo "$repo" \
+            --work-dir "$RUNNER_TEMP/bridge-upgrade-${{ matrix.lane }}" \
+            --report "bridge-upgrade-report-${{ matrix.lane }}.json" \
+            --require-signed \
+            --allow-disposable-host
+
+      - name: Upload native upgrade verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-upgrade-report-${{ matrix.lane }}
+          if-no-files-found: warn
+          path: bridge-upgrade-report-${{ matrix.lane }}.json
+
+  release:
+    name: Publish GitHub Release
+    needs: [validate, package, assemble-candidate, verify-upgrade]
+    if: >-
+      always() &&
+      needs.validate.outputs.release_tag != '' &&
+      needs.validate.result == 'success' &&
+      needs.package.result == 'success' &&
+      needs.assemble-candidate.result == 'success' &&
+      (needs.verify-upgrade.result == 'success' ||
+        (needs.validate.outputs.prerelease == 'true' &&
+          needs.validate.outputs.require_sign != 'true' &&
+          needs.validate.outputs.sign_release != 'true' &&
+          needs.verify-upgrade.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Download verified candidate release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: rune-release-candidate
+          path: release-upload
+
+      - name: Re-verify assembled release feeds before promotion
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           REQUIRE_SIGN: ${{ needs.validate.outputs.require_sign }}
+          WILL_PROMOTE_LATEST: ${{ needs.validate.outputs.will_promote_latest }}
           GITHUB_REPO_FULL: ${{ github.repository }}
         run: |
           set -euo pipefail
-          mkdir -p release-upload
-          find release-artifacts -type f ! -name 'updater-fragment-*.json' ! -name 'package-summary-*.json' -exec cp {} release-upload/ \;
-
           owner="${GITHUB_REPO_FULL%%/*}"
           repo="${GITHUB_REPO_FULL#*/}"
-          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          fragment_count="$(find release-artifacts -type f -name 'updater-fragment-*.json' | wc -l | xargs)"
-          if [[ "$fragment_count" -gt 0 ]]; then
-            bun scripts/desktop_rune_release_manifest.ts \
-              --in-dir release-artifacts \
+          if [[ "$REQUIRE_SIGN" == "true" || "$WILL_PROMOTE_LATEST" == "true" ]]; then
+            bun scripts/assemble_rune_release.ts verify \
+              --dir release-upload \
               --version "$RELEASE_VERSION" \
               --tag "$RELEASE_TAG" \
               --owner "$owner" \
               --repo "$repo" \
-              --pub-date "$pub_date" \
-              --out release-upload/latest.json
-          elif [[ "$REQUIRE_SIGN" == "true" ]]; then
-            echo "No updater-fragment-*.json files produced while require_sign=true." >&2
-            exit 1
-          else
-            echo "No signed updater fragments present (unsigned manual build); skipping latest.json."
-          fi
-
-          mac_zip_count="$(find release-upload -maxdepth 1 -type f -name '*-mac.zip' | wc -l | xargs)"
-          if [[ "$mac_zip_count" -gt 0 ]]; then
-            mac_args=(
-              "generate"
-              "--in-dir" "release-upload"
-              "--version" "$RELEASE_VERSION"
-              "--pub-date" "$pub_date"
-              "--out" "release-upload/latest-mac.yml"
-            )
-            if [[ "$REQUIRE_SIGN" == "true" ]]; then
-              mac_args+=("--require-arches" "arm64,x64")
-            fi
-            bun scripts/legacy_mac_updater.ts "${mac_args[@]}"
-          elif [[ "$REQUIRE_SIGN" == "true" ]]; then
-            echo "No macOS *-mac.zip files produced while require_sign=true." >&2
-            exit 1
-          fi
-
-          win_exe_count="$(find release-upload -maxdepth 1 -type f -name '*-setup.exe' | wc -l | xargs)"
-          if [[ "$win_exe_count" -gt 0 ]]; then
-            win_args=(
-              "generate"
-              "--in-dir" "release-upload"
-              "--out-dir" "release-upload"
-              "--version" "$RELEASE_VERSION"
-              "--pub-date" "$pub_date"
-            )
-            if [[ "$REQUIRE_SIGN" == "true" ]]; then
-              win_args+=("--require-arches" "x64,arm64")
-            fi
-            bun scripts/legacy_windows_updater.ts "${win_args[@]}"
-          elif [[ "$REQUIRE_SIGN" == "true" ]]; then
-            echo "No Windows *-setup.exe installers produced while require_sign=true." >&2
-            exit 1
+              --min-originating-version 1.3.1
           fi
           ls -la release-upload
 
@@ -572,5 +847,6 @@ jobs:
           tag_name: ${{ needs.validate.outputs.release_tag }}
           name: "Cowork ${{ needs.validate.outputs.version }}"
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.validate.outputs.prerelease == 'true' && 'false' || 'true' }}
           generate_release_notes: true
           files: release-upload/*

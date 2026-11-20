@@ -420,7 +420,13 @@ describe("desktop_rune_package CLI and build config helpers", () => {
 
     const independentFiles = [
       "scripts/desktop_rune_package.ts",
+      "scripts/desktop_rune_release_manifest.ts",
       "scripts/legacy_mac_updater.ts",
+      "scripts/legacy_windows_updater.ts",
+      "scripts/assemble_rune_release.ts",
+      "scripts/bridge_upgrade_fixture.ts",
+      "scripts/bridge_upgrade_server.ts",
+      "scripts/bridge_upgrade_harness.ts",
       "scripts/build_desktop_resources.ts",
       "scripts/build_cowork_server_binary.ts",
       "scripts/workspaceRustBinary.ts",
@@ -1017,10 +1023,10 @@ describe("legacy macOS updater handoff (latest-mac.yml & producer checks)", () =
     expect(workflow).toContain("bun scripts/legacy_mac_updater.ts");
     expect(workflow).toContain('verify_args+=("--require-signed" "--require-notarized")');
 
-    // Release job must publish BOTH Rune's native latest.json AND legacy latest-mac.yml over final bytes.
-    expect(workflow).toContain("--out release-upload/latest.json");
-    expect(workflow).toContain('"--out" "release-upload/latest-mac.yml"');
-    expect(workflow).toContain('mac_args+=("--require-arches" "arm64,x64")');
+    // Assembly job must produce and verify BOTH Rune's native latest.json AND legacy latest-mac.yml over final bytes.
+    expect(workflow).toContain("bun scripts/assemble_rune_release.ts");
+    expect(workflow).toContain('"--require-complete"');
+    expect(workflow).toContain('"--require-signed"');
   });
 });
 
@@ -1454,8 +1460,8 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
       "$channelName = if ($env:WIN_ARCH -eq 'arm64') { 'latest-arm64.yml' } else { 'latest.yml' }",
     );
     expect(workflow).toContain("$verifyArgs += '--require-signed'");
-    expect(workflow).toContain('win_args+=("--require-arches" "x64,arm64")');
-    expect(workflow).toContain('bun scripts/legacy_windows_updater.ts "${win_args[@]}"');
+    expect(workflow).toContain("bun scripts/assemble_rune_release.ts");
+    expect(workflow).toContain('"--require-complete"');
   });
 
   test("legacy_windows_updater CLI generate and verify subcommands succeed end-to-end in a temp directory", async () => {

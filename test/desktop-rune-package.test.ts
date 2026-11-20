@@ -15,6 +15,7 @@ import {
   resolvePackageVersion,
   resolvePlatformKey,
   resolveUpdaterPayloadDescriptor,
+  resolveWindowsSigningInput,
   stageRuntimeResources,
   validateUpdaterSignKeys,
 } from "../scripts/desktop_rune_package";
@@ -39,6 +40,25 @@ import {
   verifyMacUpdaterTarGz,
   writeLegacyMacChannelFile,
 } from "../scripts/legacy_mac_updater";
+import {
+  buildLegacyWindowsChannelMetadata,
+  classifyLegacyWindowsInstallerArch,
+  inspectPeMachine,
+  LEGACY_WINDOWS_ARM64_CHANNEL_FILENAME,
+  LEGACY_WINDOWS_ELECTRON_APP_GUID,
+  LEGACY_WINDOWS_X64_CHANNEL_FILENAME,
+  PE_MACHINE_ARM64,
+  PE_MACHINE_I386,
+  PE_MACHINE_X64,
+  parseLegacyWindowsChannelYaml,
+  resolveLegacyWindowsChannelFilename,
+  resolveLegacyWindowsInstallerName,
+  selectLegacyWindowsInstallerForClient,
+  serializeLegacyWindowsChannelYaml,
+  validateMigrationNsisTemplate,
+  verifyWindowsReleaseOutputs,
+  writeLegacyWindowsChannelFilesForDir,
+} from "../scripts/legacy_windows_updater";
 import { hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/scratchRoots";
 import { buildSidecarManifest, resolveStagedBinariesDir } from "../src/platform/sidecar";
@@ -1001,5 +1021,500 @@ describe("legacy macOS updater handoff (latest-mac.yml & producer checks)", () =
     expect(workflow).toContain("--out release-upload/latest.json");
     expect(workflow).toContain('"--out" "release-upload/latest-mac.yml"');
     expect(workflow).toContain('mac_args+=("--require-arches" "arm64,x64")');
+  });
+});
+
+function makePeBinary(machine: number, payload = "cowork-pe-fixture"): Buffer {
+  const peOffset = 0x80;
+  const payloadBytes = Buffer.from(payload, "utf8");
+  const buf = Buffer.alloc(peOffset + 24 + payloadBytes.length);
+  buf.writeUInt16LE(0x5a4d, 0); // "MZ"
+  buf.writeUInt32LE(peOffset, 0x3c); // e_lfanew
+  buf.writeUInt32LE(0x00004550, peOffset); // "PE\0\0"
+  buf.writeUInt16LE(machine, peOffset + 4); // COFF Machine
+  payloadBytes.copy(buf, peOffset + 24);
+  return buf;
+}
+
+describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migration NSIS)", () => {
+  test("classifies x64 vs arm64 Windows installer names and rejects aarch64 or unsafe names", () => {
+    expect(resolveLegacyWindowsChannelFilename("x64")).toBe(LEGACY_WINDOWS_X64_CHANNEL_FILENAME);
+    expect(resolveLegacyWindowsChannelFilename("x86_64")).toBe(LEGACY_WINDOWS_X64_CHANNEL_FILENAME);
+    expect(resolveLegacyWindowsChannelFilename("arm64")).toBe(
+      LEGACY_WINDOWS_ARM64_CHANNEL_FILENAME,
+    );
+    expect(resolveLegacyWindowsChannelFilename("aarch64")).toBe(
+      LEGACY_WINDOWS_ARM64_CHANNEL_FILENAME,
+    );
+
+    expect(resolveLegacyWindowsInstallerName("x64", "v1.4.0")).toBe("Cowork_1.4.0_x64-setup.exe");
+    expect(resolveLegacyWindowsInstallerName("arm64", "1.4.0")).toBe(
+      "Cowork_1.4.0_arm64-setup.exe",
+    );
+    expect(classifyLegacyWindowsInstallerArch("Cowork_1.4.0_x64-setup.exe")).toBe("x64");
+    expect(classifyLegacyWindowsInstallerArch("Cowork_1.4.0_arm64-setup.exe")).toBe("arm64");
+
+    expect(() => classifyLegacyWindowsInstallerArch("Cowork_1.4.0_aarch64-setup.exe")).toThrow(
+      /uses "aarch64" instead of "arm64"/,
+    );
+    expect(() => classifyLegacyWindowsInstallerArch("Cowork 1.4.0 x64-setup.exe")).toThrow(
+      /Invalid Windows installer basename/,
+    );
+    expect(() => classifyLegacyWindowsInstallerArch("Cowork_1.4.0_x64.msi")).toThrow(/\.exe/);
+    expect(() => classifyLegacyWindowsInstallerArch("Cowork_1.4.0_setup.exe")).toThrow(
+      /Unable to classify Windows architecture/,
+    );
+  });
+
+  test("generates latest.yml and latest-arm64.yml over final bytes and maps x64/arm64 clients cleanly", async () => {
+    const tempDir = await makeTempDir("cowork-legacy-win-yml-");
+    try {
+      const x64Bytes = makePeBinary(PE_MACHINE_I386, "signed-nsis-x64-v1.4.0");
+      const arm64Bytes = makePeBinary(PE_MACHINE_I386, "signed-nsis-arm64-v1.4.0-longer");
+      const x64Path = path.join(tempDir, "Cowork_1.4.0_x64-setup.exe");
+      const arm64Path = path.join(tempDir, "Cowork_1.4.0_arm64-setup.exe");
+      await fs.writeFile(x64Path, x64Bytes);
+      await fs.writeFile(arm64Path, arm64Bytes);
+
+      const written = await writeLegacyWindowsChannelFilesForDir({
+        inDir: tempDir,
+        outDir: tempDir,
+        version: "v1.4.0",
+        releaseDate: "2026-11-20T12:00:00.000Z",
+        requiredArches: ["x64", "arm64"],
+      });
+      expect(written.map((item) => item.channelFile)).toEqual(["latest.yml", "latest-arm64.yml"]);
+
+      const x64Yaml = await fs.readFile(path.join(tempDir, "latest.yml"), "utf8");
+      const arm64Yaml = await fs.readFile(path.join(tempDir, "latest-arm64.yml"), "utf8");
+      const x64Meta = parseLegacyWindowsChannelYaml(x64Yaml, "x64");
+      const arm64Meta = parseLegacyWindowsChannelYaml(arm64Yaml, "arm64");
+
+      const expectedX64Sha512 = createHash("sha512").update(x64Bytes).digest("base64");
+      const expectedArm64Sha512 = createHash("sha512").update(arm64Bytes).digest("base64");
+
+      expect(x64Meta).toEqual({
+        version: "1.4.0",
+        files: [
+          {
+            url: "Cowork_1.4.0_x64-setup.exe",
+            sha512: expectedX64Sha512,
+            size: x64Bytes.length,
+          },
+        ],
+        path: "Cowork_1.4.0_x64-setup.exe",
+        sha512: expectedX64Sha512,
+        releaseDate: "2026-11-20T12:00:00.000Z",
+      });
+      expect(arm64Meta).toEqual({
+        version: "1.4.0",
+        files: [
+          {
+            url: "Cowork_1.4.0_arm64-setup.exe",
+            sha512: expectedArm64Sha512,
+            size: arm64Bytes.length,
+          },
+        ],
+        path: "Cowork_1.4.0_arm64-setup.exe",
+        sha512: expectedArm64Sha512,
+        releaseDate: "2026-11-20T12:00:00.000Z",
+      });
+      expect(serializeLegacyWindowsChannelYaml(x64Meta)).toBe(x64Yaml);
+      expect(serializeLegacyWindowsChannelYaml(arm64Meta)).toBe(arm64Yaml);
+
+      const channels = {
+        "latest.yml": x64Meta,
+        "latest-arm64.yml": arm64Meta,
+      };
+      const x64Selection = selectLegacyWindowsInstallerForClient(channels, {
+        arch: "x64",
+        tag: "v1.4.0",
+      });
+      expect(x64Selection?.channelFile).toBe("latest.yml");
+      expect(x64Selection?.fileName).toBe("Cowork_1.4.0_x64-setup.exe");
+      expect(x64Selection?.entry.sha512).toBe(expectedX64Sha512);
+      expect(x64Selection?.url).toBe(
+        "https://github.com/mweinbach/agent-coworker/releases/download/v1.4.0/Cowork_1.4.0_x64-setup.exe",
+      );
+
+      const arm64Selection = selectLegacyWindowsInstallerForClient(channels, {
+        arch: "arm64",
+        tag: "v1.4.0",
+      });
+      expect(arm64Selection?.channelFile).toBe("latest-arm64.yml");
+      expect(arm64Selection?.fileName).toBe("Cowork_1.4.0_arm64-setup.exe");
+      expect(arm64Selection?.entry.sha512).toBe(expectedArm64Sha512);
+      expect(arm64Selection?.url).toBe(
+        "https://github.com/mweinbach/agent-coworker/releases/download/v1.4.0/Cowork_1.4.0_arm64-setup.exe",
+      );
+
+      // Cross-arch contamination is rejected.
+      expect(() => parseLegacyWindowsChannelYaml(arm64Yaml, "x64")).toThrow(
+        /references arm64 installer.*expected x64/,
+      );
+      expect(() => parseLegacyWindowsChannelYaml(x64Yaml, "arm64")).toThrow(
+        /references x64 installer.*expected arm64/,
+      );
+
+      // Version mismatch fails closed.
+      await expect(
+        buildLegacyWindowsChannelMetadata({
+          version: "1.5.0",
+          arch: "x64",
+          installerPath: x64Path,
+        }),
+      ).rejects.toThrow(/does not match expected release version "1\.5\.0"/);
+
+      // Missing required arch fails closed.
+      const singleArchDir = path.join(tempDir, "single-arch");
+      await fs.mkdir(singleArchDir, { recursive: true });
+      await fs.copyFile(x64Path, path.join(singleArchDir, "Cowork_1.4.0_x64-setup.exe"));
+      await expect(
+        writeLegacyWindowsChannelFilesForDir({
+          inDir: singleArchDir,
+          outDir: singleArchDir,
+          version: "1.4.0",
+          requiredArches: ["x64", "arm64"],
+        }),
+      ).rejects.toThrow(/Missing required Windows "arm64" installer/);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("verifies Windows PE architectures, sidecar/sandbox manifests, channel digests, and fails closed on drift", async () => {
+    const tempDir = await makeTempDir("cowork-win-producer-");
+    try {
+      const version = "1.4.0";
+      for (const arch of ["x64", "arm64"] as const) {
+        const expectedMachine = arch === "arm64" ? PE_MACHINE_ARM64 : PE_MACHINE_X64;
+        const rustTarget = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
+        const archDir = path.join(tempDir, arch);
+        const outDir = path.join(archDir, "out");
+        const stagedDir = path.join(archDir, "staged");
+        const binariesDir = path.join(archDir, "release-bin");
+        await fs.mkdir(outDir, { recursive: true });
+        await fs.mkdir(path.join(stagedDir, "binaries"), { recursive: true });
+        await fs.mkdir(path.join(stagedDir, "windows-sandbox"), { recursive: true });
+        await fs.mkdir(binariesDir, { recursive: true });
+
+        const installerName = resolveLegacyWindowsInstallerName(arch, version);
+        const installerPath = path.join(outDir, installerName);
+        await fs.writeFile(installerPath, makePeBinary(PE_MACHINE_I386, `nsis-${arch}`));
+
+        const mainExePath = path.join(binariesDir, "cowork-desktop.exe");
+        await fs.writeFile(mainExePath, makePeBinary(expectedMachine, `main-${arch}`));
+
+        const sidecarName = `cowork-server-${rustTarget}.exe`;
+        await fs.writeFile(
+          path.join(stagedDir, "binaries", sidecarName),
+          makePeBinary(expectedMachine, `sidecar-${arch}`),
+        );
+        await fs.writeFile(
+          path.join(stagedDir, "binaries", "cowork-server-manifest.json"),
+          JSON.stringify(buildSidecarManifest("win32", arch)),
+          "utf8",
+        );
+
+        const helperFiles: Record<string, string> = {};
+        for (const helperName of [
+          "cowork-win-sandbox.exe",
+          "codex-windows-sandbox-setup.exe",
+          "codex-command-runner.exe",
+        ]) {
+          const helperBytes = makePeBinary(expectedMachine, `${helperName}-${arch}`);
+          const hash = createHash("sha256").update(helperBytes).digest("hex");
+          helperFiles[helperName] = hash;
+          await fs.writeFile(path.join(stagedDir, "binaries", helperName), helperBytes);
+          await fs.writeFile(path.join(stagedDir, "windows-sandbox", helperName), helperBytes);
+        }
+        const sandboxManifest = JSON.stringify({
+          schemaVersion: 1,
+          rustTarget,
+          files: helperFiles,
+        });
+        await fs.writeFile(
+          path.join(stagedDir, "binaries", "cowork-win-sandbox.sha256.json"),
+          sandboxManifest,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stagedDir, "windows-sandbox", "cowork-win-sandbox.sha256.json"),
+          sandboxManifest,
+          "utf8",
+        );
+
+        const [writtenChannel] = await writeLegacyWindowsChannelFilesForDir({
+          inDir: outDir,
+          outDir,
+          version,
+          releaseDate: "2026-11-20T12:00:00.000Z",
+          requiredArches: [arch],
+        });
+        expect(writtenChannel).toBeDefined();
+
+        const verified = await verifyWindowsReleaseOutputs({
+          outDir,
+          stagedDir,
+          binariesDir,
+          version,
+          arch,
+          verifyChannelYmlPath: writtenChannel?.outPath,
+        });
+        expect(verified.installerPe.arch).toBe("x86");
+        expect(verified.mainBinaryPe?.arch).toBe(arch);
+        expect(verified.sidecarPe?.arch).toBe(arch);
+        expect(verified.verifiedSandboxFiles.length).toBe(6);
+
+        // Verify PE inspection directly
+        const peInfo = await inspectPeMachine(mainExePath);
+        expect(peInfo.machine).toBe(expectedMachine);
+        expect(peInfo.arch).toBe(arch);
+      }
+
+      // Negative 1: tampered installer bytes break channel digest check.
+      const x64OutDir = path.join(tempDir, "x64", "out");
+      await fs.appendFile(
+        path.join(x64OutDir, "Cowork_1.4.0_x64-setup.exe"),
+        Buffer.from("tampered"),
+      );
+      await expect(
+        verifyWindowsReleaseOutputs({
+          outDir: x64OutDir,
+          version,
+          arch: "x64",
+          verifyChannelYmlPath: path.join(x64OutDir, "latest.yml"),
+        }),
+      ).rejects.toThrow(/size mismatch|sha512 mismatch/);
+
+      // Negative 2: wrong native PE arch for arm64 main binary fails closed.
+      const armBinDir = path.join(tempDir, "arm64", "release-bin");
+      await fs.writeFile(
+        path.join(armBinDir, "cowork-desktop.exe"),
+        makePeBinary(PE_MACHINE_X64, "wrong-arch"),
+      );
+      await expect(
+        verifyWindowsReleaseOutputs({
+          outDir: path.join(tempDir, "arm64", "out"),
+          stagedDir: path.join(tempDir, "arm64", "staged"),
+          binariesDir: armBinDir,
+          version,
+          arch: "arm64",
+          verifyChannelYmlPath: path.join(tempDir, "arm64", "out", "latest-arm64.yml"),
+        }),
+      ).rejects.toThrow(/PE machine mismatch/);
+
+      // Negative 3: tampered sandbox helper fails closed.
+      const armStagedDir = path.join(tempDir, "arm64", "staged");
+      await fs.writeFile(
+        path.join(armBinDir, "cowork-desktop.exe"),
+        makePeBinary(PE_MACHINE_ARM64, "restored-arm64"),
+      );
+      await fs.appendFile(
+        path.join(armStagedDir, "binaries", "cowork-win-sandbox.exe"),
+        Buffer.from("tampered"),
+      );
+      await expect(
+        verifyWindowsReleaseOutputs({
+          outDir: path.join(tempDir, "arm64", "out"),
+          stagedDir: armStagedDir,
+          binariesDir: armBinDir,
+          version,
+          arch: "arm64",
+          verifyChannelYmlPath: path.join(tempDir, "arm64", "out", "latest-arm64.yml"),
+        }),
+      ).rejects.toThrow(/Sandbox hash mismatch/);
+
+      // Negative 4: requiring Authenticode verification on non-Windows host never silently passes.
+      if (hostPlatform() !== "win32") {
+        await expect(
+          verifyWindowsReleaseOutputs({
+            outDir: path.join(tempDir, "arm64", "out"),
+            version,
+            arch: "arm64",
+            verifyChannelYmlPath: path.join(tempDir, "arm64", "out", "latest-arm64.yml"),
+            requireSigned: true,
+          }),
+        ).rejects.toThrow(/requires a Windows host/);
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Packager.toml wires migration-aware NSIS template and satisfies adoption, scope, flag, retry, shortcut, and relaunch contracts", async () => {
+    const baseConfig = await loadPackagerBaseConfig(repoRoot);
+    const nsis = baseConfig.nsis as { template?: string; installMode?: string } | undefined;
+    expect(nsis?.installMode).toBe("currentUser");
+    expect(nsis?.template).toBe("crates/cowork-desktop/packaging/nsis/installer.nsi");
+
+    const resolvedConfig = buildPackagerConfig({
+      root: repoRoot,
+      baseConfig,
+      version: "1.4.0",
+      outDir: "/tmp/out",
+      binariesDir: "/tmp/bin",
+      stagedDir: "/tmp/staged",
+      targetTriple: "x86_64-pc-windows-msvc",
+      includeWindowsSandbox: true,
+    });
+    expect(resolvedConfig.nsis?.template).toBe(
+      path.join(repoRoot, "crates", "cowork-desktop", "packaging", "nsis", "installer.nsi"),
+    );
+
+    const templatePath = String(resolvedConfig.nsis?.template);
+    const templateText = await fs.readFile(templatePath, "utf8");
+    validateMigrationNsisTemplate(templateText);
+
+    // Exact legacy Electron NSIS GUID for `com.cowork.desktop`.
+    expect(templateText).toContain(`!define LEGACY_APP_GUID "${LEGACY_WINDOWS_ELECTRON_APP_GUID}"`);
+    // Single canonical uninstall entry + legacy uninstall key removal happens AFTER installing Rune files.
+    const installExeIdx = templateText.indexOf('File "${MAINBINARYSRCPATH}"');
+    const writeUninstIdx = templateText.indexOf('WriteUninstaller "$INSTDIR\\uninstall.exe"');
+    const writeCanonicalUninstIdx = templateText.indexOf(
+      'WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString"',
+    );
+    const deleteLegacyUninstIdx = templateText.indexOf('DeleteRegKey SHCTX "${LEGACY_UNINST_KEY}"');
+    expect(installExeIdx).toBeGreaterThan(-1);
+    expect(writeUninstIdx).toBeGreaterThan(installExeIdx);
+    expect(writeCanonicalUninstIdx).toBeGreaterThan(writeUninstIdx);
+    expect(deleteLegacyUninstIdx).toBeGreaterThan(writeCanonicalUninstIdx);
+
+    // Elevated HKLM self-relaunch preserves `/D=` at end of args and guards against elevation loops.
+    expect(templateText).toContain('StrCpy $2 "/COWORK_ELEVATED /allusers"');
+    expect(templateText).toContain('StrCpy $2 "$2 /D=$INSTDIR"');
+
+    // User data directories are explicitly protected from install-target adoption.
+    expect(templateText).toContain('StrLen $R1 "$APPDATA\\"');
+    expect(templateText).toContain('$R0 == "$PROFILE\\.cowork"');
+
+    // Single relaunch guard clears `$ShouldRelaunch` before calling `Exec`.
+    expect(templateText).toContain("StrCpy $ShouldRelaunch 0");
+    expect(templateText).toContain("Exec '\"$INSTDIR\\${MAINBINARYNAME}.exe\"'");
+
+    // Negative validator checks fail closed on unavailable plugins or user-data deletion.
+    expect(() => validateMigrationNsisTemplate(`${templateText}\nStdUtils::GetParameter`)).toThrow(
+      /unavailable plugin/,
+    );
+    expect(() =>
+      validateMigrationNsisTemplate(`${templateText}\nRMDir /r "$APPDATA\\Cowork"`),
+    ).toThrow(/never delete user data/);
+  });
+
+  test("resolveWindowsSigningInput strictly isolates Windows credentials from macOS CSC_LINK", () => {
+    // Must NEVER consume macOS CSC_LINK / CSC_KEY_PASSWORD.
+    expect(
+      resolveWindowsSigningInput({
+        CSC_LINK: "base64-macos-developer-id-p12",
+        CSC_KEY_PASSWORD: "mac-password",
+      }),
+    ).toEqual({ kind: "none" });
+
+    expect(
+      resolveWindowsSigningInput({
+        WIN_CSC_LINK: "base64-win-authenticode-pfx",
+        WIN_CSC_KEY_PASSWORD: "win-password",
+        CSC_LINK: "base64-macos-p12",
+      }),
+    ).toEqual({
+      kind: "pfx",
+      pfx: "base64-win-authenticode-pfx",
+      pfxPassword: "win-password",
+    });
+
+    expect(
+      resolveWindowsSigningInput({
+        WINDOWS_CERTIFICATE_THUMBPRINT: "ABCDEF123456",
+        WIN_CSC_LINK: "ignored-when-thumbprint-set",
+      }),
+    ).toEqual({
+      kind: "thumbprint",
+      thumbprint: "ABCDEF123456",
+    });
+
+    expect(
+      resolveWindowsSigningInput({
+        WINDOWS_SIGN_COMMAND: "signtool sign %1",
+        WINDOWS_CERTIFICATE_THUMBPRINT: "ABCDEF123456",
+      }),
+    ).toEqual({
+      kind: "command",
+      signCommand: "signtool sign %1",
+    });
+  });
+
+  test("desktop-rune-release workflow enforces Windows signing/verification gates and publishes latest.yml and latest-arm64.yml", async () => {
+    const workflow = await fs.readFile(
+      path.join(repoRoot, ".github", "workflows", "desktop-rune-release.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain("scripts/legacy_windows_updater.ts");
+    expect(workflow).toContain(
+      "$channelName = if ($env:WIN_ARCH -eq 'arm64') { 'latest-arm64.yml' } else { 'latest.yml' }",
+    );
+    expect(workflow).toContain("$verifyArgs += '--require-signed'");
+    expect(workflow).toContain('win_args+=("--require-arches" "x64,arm64")');
+    expect(workflow).toContain('bun scripts/legacy_windows_updater.ts "${win_args[@]}"');
+  });
+
+  test("legacy_windows_updater CLI generate and verify subcommands succeed end-to-end in a temp directory", async () => {
+    const tempDir = await makeTempDir("cowork-win-cli-");
+    try {
+      const version = "1.4.0";
+      await fs.writeFile(
+        path.join(tempDir, "Cowork_1.4.0_x64-setup.exe"),
+        makePeBinary(PE_MACHINE_I386, "cli-x64"),
+      );
+      await fs.writeFile(
+        path.join(tempDir, "Cowork_1.4.0_arm64-setup.exe"),
+        makePeBinary(PE_MACHINE_I386, "cli-arm64"),
+      );
+
+      const genProc = Bun.spawn(
+        [
+          "bun",
+          path.join(repoRoot, "scripts", "legacy_windows_updater.ts"),
+          "generate",
+          "--in-dir",
+          tempDir,
+          "--out-dir",
+          tempDir,
+          "--version",
+          version,
+          "--pub-date",
+          "2026-11-20T12:00:00.000Z",
+          "--require-arches",
+          "x64,arm64",
+        ],
+        { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(await genProc.exited).toBe(0);
+
+      for (const [arch, channelFile] of [
+        ["x64", "latest.yml"],
+        ["arm64", "latest-arm64.yml"],
+      ] as const) {
+        const verifyProc = Bun.spawn(
+          [
+            "bun",
+            path.join(repoRoot, "scripts", "legacy_windows_updater.ts"),
+            "verify",
+            "--out-dir",
+            tempDir,
+            "--version",
+            version,
+            "--arch",
+            arch,
+            "--channel-yml",
+            path.join(tempDir, channelFile),
+          ],
+          { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+        );
+        expect(await verifyProc.exited).toBe(0);
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

@@ -44,6 +44,7 @@ allowDowngrades = true
 compression = "lzma"
 installMode = "currentUser"
 installerIcon = "crates/cowork-desktop/packaging/icons/icon.ico"
+template = "crates/cowork-desktop/packaging/nsis/installer.nsi"
 languages = ["English"]
 
 [linux]

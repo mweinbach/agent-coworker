@@ -310,6 +310,7 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
           WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+          WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
           # Required for running appimagetool inside containers without FUSE
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
@@ -376,7 +377,7 @@ jobs:
 
           bun scripts/legacy_mac_updater.ts "${verify_args[@]}"
 
-      - name: Verify Windows PE architecture, sandbox hashes, and Authenticode
+      - name: Verify Windows PE architecture, sandbox hashes, legacy channel, and Authenticode
         if: matrix.platform == 'win32'
         shell: pwsh
         env:
@@ -384,56 +385,62 @@ jobs:
           REQUIRE_SIGN: ${{ needs.validate.outputs.require_sign }}
           EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
           WIN_ARCH: ${{ matrix.arch }}
+          WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
         run: |
           $ErrorActionPreference = 'Stop'
           $workDir = "target/rune-package/${{ matrix.platform_key }}"
           $outDir = Join-Path $workDir "out"
           $stagedDir = Join-Path $workDir "staged"
+          $packagerConfig = Get-Content (Join-Path $workDir "packager.config.json") -Raw | ConvertFrom-Json
+          $binariesDir = $packagerConfig.binariesDir
           $installer = Join-Path $outDir "Cowork_${env:EXPECTED_VERSION}_${env:WIN_ARCH}-setup.exe"
+          $channelName = if ($env:WIN_ARCH -eq 'arm64') { 'latest-arm64.yml' } else { 'latest.yml' }
+          $channelPath = Join-Path $outDir $channelName
+          $summaryPath = Join-Path $outDir "package-summary-${{ matrix.platform_key }}.json"
+
           if (-not (Test-Path $installer)) {
             throw "Missing NSIS installer: $installer"
           }
-
-          $expectedMachine = if ($env:WIN_ARCH -eq 'arm64') { 0xAA64 } else { 0x8664 }
-          $checkPeMachine = {
-            param([string]$Path, [int]$Expected)
-            $bytes = [System.IO.File]::ReadAllBytes($Path)
-            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
-            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-            if ($machine -ne $Expected) {
-              throw ("PE machine mismatch for {0}: got 0x{1:X4}, expected 0x{2:X4}" -f $Path, $machine, $Expected)
+          if (-not (Test-Path $channelPath)) {
+            throw "Missing legacy Windows updater channel file: $channelPath"
+          }
+          if ($env:REQUIRE_SIGN -eq 'true') {
+            if (-not (Test-Path "$installer.sig")) {
+              throw "Missing Minisign signature for Windows installer: $installer.sig"
+            }
+            $fragmentPath = Join-Path $outDir "updater-fragment-${{ matrix.platform_key }}.json"
+            if (-not (Test-Path $fragmentPath)) {
+              throw "Missing Rune updater fragment: $fragmentPath"
             }
           }
 
-          $sidecarTriple = if ($env:WIN_ARCH -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
-          & $checkPeMachine (Join-Path $stagedDir "binaries/cowork-server-$sidecarTriple.exe") $expectedMachine
-
-          foreach ($dirName in @('binaries', 'windows-sandbox')) {
-            $manifestPath = Join-Path $stagedDir "$dirName/cowork-win-sandbox.sha256.json"
-            if (Test-Path $manifestPath) {
-              $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-              foreach ($prop in $manifest.files.PSObject.Properties) {
-                $targetFile = Join-Path $stagedDir "$dirName/$($prop.Name)"
-                $actualHash = (Get-FileHash $targetFile -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($actualHash -ne $prop.Value.ToLowerInvariant()) {
-                  throw "Sandbox hash mismatch for $targetFile ($actualHash != $($prop.Value))"
-                }
-              }
+          $verifyArgs = @(
+            'scripts/legacy_windows_updater.ts',
+            'verify',
+            '--out-dir', $outDir,
+            '--staged-dir', $stagedDir,
+            '--binaries-dir', $binariesDir,
+            '--version', $env:EXPECTED_VERSION,
+            '--arch', $env:WIN_ARCH,
+            '--channel-yml', $channelPath
+          )
+          $requireSigned = $env:REQUIRE_SIGN -eq 'true'
+          if (-not $requireSigned -and $env:SIGN_RELEASE -eq 'true' -and (Test-Path $summaryPath)) {
+            $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
+            if ($summary.signedPlatform) {
+              $requireSigned = $true
+            }
+          }
+          if ($requireSigned) {
+            $verifyArgs += '--require-signed'
+            if ($env:WINDOWS_SIGN_PUBLISHER) {
+              $verifyArgs += @('--publisher', $env:WINDOWS_SIGN_PUBLISHER)
             }
           }
 
-          if ($env:SIGN_RELEASE -eq 'true') {
-            $toCheck = @($installer)
-            Get-ChildItem -Path (Join-Path $stagedDir "binaries"), (Join-Path $stagedDir "windows-sandbox") -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object {
-              $toCheck += $_.FullName
-            }
-            foreach ($file in $toCheck) {
-              $sig = Get-AuthenticodeSignature -FilePath $file
-              if ($sig.Status -ne 'Valid') {
-                $msg = "Authenticode signature status for $file is $($sig.Status)"
-                if ($env:REQUIRE_SIGN -eq 'true') { throw $msg } else { Write-Warning $msg }
-              }
-            }
+          & bun @verifyArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows legacy updater / Authenticode verification failed with exit code $LASTEXITCODE"
           }
 
       - name: Stage release upload artifacts
@@ -537,6 +544,24 @@ jobs:
             bun scripts/legacy_mac_updater.ts "${mac_args[@]}"
           elif [[ "$REQUIRE_SIGN" == "true" ]]; then
             echo "No macOS *-mac.zip files produced while require_sign=true." >&2
+            exit 1
+          fi
+
+          win_exe_count="$(find release-upload -maxdepth 1 -type f -name '*-setup.exe' | wc -l | xargs)"
+          if [[ "$win_exe_count" -gt 0 ]]; then
+            win_args=(
+              "generate"
+              "--in-dir" "release-upload"
+              "--out-dir" "release-upload"
+              "--version" "$RELEASE_VERSION"
+              "--pub-date" "$pub_date"
+            )
+            if [[ "$REQUIRE_SIGN" == "true" ]]; then
+              win_args+=("--require-arches" "x64,arm64")
+            fi
+            bun scripts/legacy_windows_updater.ts "${win_args[@]}"
+          elif [[ "$REQUIRE_SIGN" == "true" ]]; then
+            echo "No Windows *-setup.exe installers produced while require_sign=true." >&2
             exit 1
           fi
           ls -la release-upload

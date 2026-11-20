@@ -34,6 +34,13 @@ import {
   writeLegacyMacChannelFile,
 } from "./legacy_mac_updater";
 import {
+  resolveLegacyWindowsChannelFilename,
+  resolveLegacyWindowsInstallerName,
+  validateMigrationNsisTemplate,
+  verifyWindowsReleaseOutputs,
+  writeLegacyWindowsChannelFile,
+} from "./legacy_windows_updater";
+import {
   pathExists,
   resolveBuildTarget,
   resolveRustCompileTarget,
@@ -712,6 +719,9 @@ export function buildPackagerConfig(params: {
   if (typeof nsisBase.installerIcon === "string") {
     nsisBase.installerIcon = resolveRepoPath(nsisBase.installerIcon);
   }
+  if (typeof nsisBase.template === "string") {
+    nsisBase.template = resolveRepoPath(nsisBase.template);
+  }
 
   const resources: StagedResourceMapping[] = [
     { src: path.join(stagedDir, "dist", "prompts"), target: "dist/prompts" },
@@ -923,6 +933,43 @@ async function findCargoPackagerBin(env: NodeJS.ProcessEnv): Promise<string> {
   );
 }
 
+export interface ResolvedWindowsSigningInput {
+  kind: "command" | "thumbprint" | "pfx" | "none";
+  signCommand?: string;
+  thumbprint?: string;
+  pfx?: string;
+  pfxPassword?: string;
+}
+
+/**
+ * Resolves Windows Authenticode signing inputs strictly from Windows-specific variables.
+ * Never falls back to `CSC_LINK` / `CSC_KEY_PASSWORD` (which hold the macOS Apple Developer ID
+ * certificate in multi-platform CI workflows).
+ */
+export function resolveWindowsSigningInput(env: NodeJS.ProcessEnv): ResolvedWindowsSigningInput {
+  const explicitCommand =
+    env.CARGO_PACKAGER_WINDOWS_SIGN_COMMAND?.trim() || env.WINDOWS_SIGN_COMMAND?.trim();
+  if (explicitCommand) {
+    return { kind: "command", signCommand: explicitCommand };
+  }
+
+  const explicitThumbprint = env.WINDOWS_CERTIFICATE_THUMBPRINT?.trim();
+  if (explicitThumbprint) {
+    return { kind: "thumbprint", thumbprint: explicitThumbprint };
+  }
+
+  const rawPfx = env.WIN_CSC_LINK?.trim();
+  if (rawPfx) {
+    return {
+      kind: "pfx",
+      pfx: rawPfx,
+      pfxPassword: env.WIN_CSC_KEY_PASSWORD ?? "",
+    };
+  }
+
+  return { kind: "none" };
+}
+
 async function prepareWindowsAuthenticode(
   env: NodeJS.ProcessEnv,
   stagedDir: string,
@@ -932,26 +979,25 @@ async function prepareWindowsAuthenticode(
   signCommand?: string;
   cleanup?: () => Promise<void>;
 }> {
-  const explicitCommand =
-    env.CARGO_PACKAGER_WINDOWS_SIGN_COMMAND?.trim() || env.WINDOWS_SIGN_COMMAND?.trim();
-  if (explicitCommand) {
-    await signStagedWindowsExesWithCommand(stagedDir, explicitCommand);
+  const resolved = resolveWindowsSigningInput(env);
+  if (resolved.kind === "command" && resolved.signCommand) {
+    await signStagedWindowsExesWithCommand(stagedDir, resolved.signCommand);
     await refreshWindowsSandboxHashManifests(stagedDir);
-    return { signCommand: explicitCommand };
+    return { signCommand: resolved.signCommand };
   }
 
-  const explicitThumbprint = env.WINDOWS_CERTIFICATE_THUMBPRINT?.trim();
-  if (explicitThumbprint) {
-    await signStagedWindowsExesWithThumbprint(stagedDir, explicitThumbprint, env);
+  if (resolved.kind === "thumbprint" && resolved.thumbprint) {
+    await signStagedWindowsExesWithThumbprint(stagedDir, resolved.thumbprint, env);
     await refreshWindowsSandboxHashManifests(stagedDir);
-    return { thumbprint: explicitThumbprint };
+    return { thumbprint: resolved.thumbprint };
   }
 
-  const rawPfx = env.WIN_CSC_LINK?.trim() || env.CSC_LINK?.trim();
-  const pfxPassword = env.WIN_CSC_KEY_PASSWORD ?? env.CSC_KEY_PASSWORD ?? "";
-  if (!rawPfx) {
+  if (resolved.kind !== "pfx" || !resolved.pfx) {
     return {};
   }
+
+  const rawPfx = resolved.pfx;
+  const pfxPassword = resolved.pfxPassword ?? "";
 
   const pfxPath = path.join(tempDir, `cowork-win-sign-${process.pid}.pfx`);
   if (fsSync.existsSync(rawPfx)) {
@@ -1343,6 +1389,14 @@ export async function runRunePackage(
     });
 
     const configPath = path.join(workDir, "packager.config.json");
+    if (
+      cli.platform === "win32" &&
+      cli.formats.includes("nsis") &&
+      typeof resolvedConfig.nsis?.template === "string"
+    ) {
+      const templateText = await fs.readFile(resolvedConfig.nsis.template, "utf8");
+      validateMigrationNsisTemplate(templateText);
+    }
     await fs.writeFile(configPath, `${JSON.stringify(resolvedConfig, null, 2)}\n`, "utf8");
 
     console.log(
@@ -1363,6 +1417,9 @@ export async function runRunePackage(
     const artifacts: string[] = [];
     let legacyMacChannelPath: string | null = null;
     let legacyMacZipSummary: { fileName: string; sha512: string; size: number } | null = null;
+    let legacyWindowsChannelPath: string | null = null;
+    let legacyWindowsInstallerSummary: { fileName: string; sha512: string; size: number } | null =
+      null;
     if (cli.platform === "darwin") {
       const normArch = normalizeArchName(cli.arch);
       const appPath = path.join(outDir, "Cowork.app");
@@ -1425,12 +1482,40 @@ export async function runRunePackage(
       }
     } else if (cli.platform === "win32") {
       const normArch = normalizeArchName(cli.arch) === "arm64" ? "arm64" : "x64";
-      const renamedExe = await normalizeGeneratedInstallerName(
-        outDir,
-        "-setup.exe",
-        `Cowork_${version}_${normArch}-setup.exe`,
-      );
-      if (renamedExe) artifacts.push(renamedExe);
+      const targetExeName = resolveLegacyWindowsInstallerName(normArch, version);
+      const renamedExe = await normalizeGeneratedInstallerName(outDir, "-setup.exe", targetExeName);
+      if (renamedExe) {
+        artifacts.push(renamedExe);
+        legacyWindowsChannelPath = path.join(outDir, resolveLegacyWindowsChannelFilename(normArch));
+        const { metadata: legacyWindowsMetadata } = await writeLegacyWindowsChannelFile({
+          version,
+          arch: normArch,
+          installerPath: renamedExe,
+          outPath: legacyWindowsChannelPath,
+        });
+        artifacts.push(legacyWindowsChannelPath);
+        const primaryExeEntry = legacyWindowsMetadata.files[0];
+        if (primaryExeEntry) {
+          legacyWindowsInstallerSummary = {
+            fileName: primaryExeEntry.url,
+            sha512: primaryExeEntry.sha512,
+            size: primaryExeEntry.size,
+          };
+        }
+
+        const shouldVerifyWindowsSign =
+          !cli.skipSign && Boolean(windowsCertificateThumbprint || windowsSignCommand);
+        await verifyWindowsReleaseOutputs({
+          outDir,
+          version,
+          arch: normArch,
+          stagedDir,
+          binariesDir: packagerBinariesDir,
+          verifyChannelYmlPath: legacyWindowsChannelPath,
+          requireSigned: shouldVerifyWindowsSign,
+          expectedPublisher: env.WINDOWS_SIGN_PUBLISHER?.trim() || undefined,
+        });
+      }
       const renamedMsi = await normalizeGeneratedInstallerName(
         outDir,
         ".msi",
@@ -1502,6 +1587,10 @@ export async function runRunePackage(
       updaterFragment: updaterFragmentPath ? path.basename(updaterFragmentPath) : null,
       legacyMacChannel: legacyMacChannelPath ? path.basename(legacyMacChannelPath) : null,
       legacyMacZip: legacyMacZipSummary,
+      legacyWindowsChannel: legacyWindowsChannelPath
+        ? path.basename(legacyWindowsChannelPath)
+        : null,
+      legacyWindowsInstaller: legacyWindowsInstallerSummary,
     };
     await fs.writeFile(
       path.join(outDir, `package-summary-${platformKey}.json`),

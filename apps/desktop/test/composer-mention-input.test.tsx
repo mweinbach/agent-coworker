@@ -7,11 +7,11 @@ import {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { ComposerMentionInput } from "../src/ui/chat/ComposerMentionInput";
 import { placeComposerMentionMenu } from "../src/ui/chat/composerMentionGeometry";
 import type { MentionCatalog } from "../src/ui/chat/composerMentions";
 import { OverlayStackProvider } from "../src/ui/OverlayStack";
-import { setupJsdom } from "./jsdomHarness";
 
 const CATALOG: MentionCatalog = {
   items: [

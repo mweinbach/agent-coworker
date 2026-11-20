@@ -9,6 +9,7 @@ resetNavigationBeforeEach(() =>
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { buildAttachmentSignature } from "../src/app/attachmentInputs";
 import {
   composerDraftKeyForNewChatTarget,
@@ -22,7 +23,6 @@ import {
   setJsonRpcSocketOverride,
 } from "./helpers/jsonRpcSocketMock";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",

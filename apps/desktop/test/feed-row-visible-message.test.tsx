@@ -5,11 +5,11 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { buildCanvasDocumentPrompt } from "../src/lib/canvasRequest";
 import { ChatViewContext } from "../src/ui/chat/ChatViewContext";
 import type { MentionCatalog } from "../src/ui/chat/composerMentions";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const copyTextMock = mock(async (_text: string) => {});
 

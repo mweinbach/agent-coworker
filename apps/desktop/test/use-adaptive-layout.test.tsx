@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { useAdaptiveLayout } from "../src/lib/useAdaptiveLayout";
-import { setupJsdom } from "./jsdomHarness";
 
 test.serial(
   "the adaptive layout subscription follows wide, compact, narrow, and wide again",

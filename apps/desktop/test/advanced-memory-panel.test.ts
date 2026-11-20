@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 const { AdvancedMemoryEditorDialog, AdvancedMemoryPanel } = await import(
   "../src/ui/settings/pages/AdvancedMemoryPanel"

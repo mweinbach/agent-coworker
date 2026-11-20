@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { act, createElement, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,7 +10,6 @@ import {
 } from "../src/components/ui/dropdown-menu";
 import { AdaptiveRailSurface } from "../src/ui/layout/AdaptiveRailSurface";
 import { OverlayStackProvider } from "../src/ui/OverlayStack";
-import { setupJsdom } from "./jsdomHarness";
 
 test.serial(
   "adaptive overlay rails trap focus, close with Escape, and restore the trigger",

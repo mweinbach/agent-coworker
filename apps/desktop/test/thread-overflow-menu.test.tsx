@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { ThreadOverflowMenu } from "../src/ui/sidebar/ThreadOverflowMenu";
-import { setupJsdom } from "./jsdomHarness";
 
 // The core accessibility win of ThreadOverflowMenu is that the trigger is a
 // real, focusable <button> (replacing the previous hover-only affordance) so

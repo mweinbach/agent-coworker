@@ -3,11 +3,10 @@ import { JSDOM } from "jsdom";
 import { act, createElement, type ReactNode, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { ChatRenderItem } from "../src/ui/chat/activityGroups";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",

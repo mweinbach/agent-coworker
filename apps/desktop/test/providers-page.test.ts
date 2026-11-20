@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "b
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { operationKey, runAcknowledgedOperation } from "../src/app/store.helpers/operations";
 import type { OperationResult } from "../src/app/types";
 import type {
@@ -11,7 +11,6 @@ import type {
 } from "../src/ui/settings/pages/providersPageUtils";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",

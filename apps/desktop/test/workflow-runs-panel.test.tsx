@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { ThreadWorkflowRun } from "../src/app/types";
 import { WorkflowRunsPanel } from "../src/ui/WorkflowRunsPanel";
-import { setupJsdom } from "./jsdomHarness";
 
 function makeRun(overrides: Partial<ThreadWorkflowRun>): ThreadWorkflowRun {
   return {

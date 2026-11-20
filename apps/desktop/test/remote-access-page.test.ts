@@ -10,14 +10,13 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { type JsdomHarness, setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { operationKey } from "../src/app/store.helpers/operations";
 import type {
   MobileRelayForgetTrustedPhoneInput,
   MobileRelayUpdateTrustedPhonePermissionsInput,
 } from "../src/lib/desktopApi";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
 
 async function cleanupRenderedRoot(root: Root | null, harness: JsdomHarness): Promise<void> {
   try {

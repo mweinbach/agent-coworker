@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 class MockResizeObserver {
   observe() {}

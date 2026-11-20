@@ -2,9 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const confirmActionMock = mock(async () => true);
 

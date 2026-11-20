@@ -135,14 +135,18 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("localStorage", dom.window.localStorage);
   setGlobalProperty("sessionStorage", dom.window.sessionStorage);
   setGlobalProperty("scrollTo", () => {});
-  if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
+  const htmlElementProto = dom.window.HTMLElement.prototype as HTMLElement & {
+    attachEvent?: unknown;
+    detachEvent?: unknown;
+  };
+  if (typeof htmlElementProto.attachEvent !== "function") {
     Object.defineProperty(dom.window.HTMLElement.prototype, "attachEvent", {
       configurable: true,
       writable: true,
       value: () => {},
     });
   }
-  if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
+  if (typeof htmlElementProto.detachEvent !== "function") {
     Object.defineProperty(dom.window.HTMLElement.prototype, "detachEvent", {
       configurable: true,
       writable: true,

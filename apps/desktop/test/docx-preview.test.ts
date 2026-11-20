@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { buildStoredZipBuffer } from "../../../test/helpers/zipFixture";
 import { decorateDocxPreviewHtml, loadDocxPreviewLayout } from "../src/lib/docxPreview";
-import { setupJsdom } from "./jsdomHarness";
 
 function setupDocxDom() {
   return setupJsdom({

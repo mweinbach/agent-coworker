@@ -10,7 +10,7 @@ import path from "node:path";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
+import { setupJsdom } from "../helpers/jsdomHarness";
 
 type HostProps = Record<string, unknown> & { children?: ReactNode };
 const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));

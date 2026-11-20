@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import {
   composerDraftKeyForNewChatTarget,
   createEmptyComposerDraft,
@@ -10,7 +10,6 @@ import { useAppStore } from "../src/app/store";
 import type { AppStoreState } from "../src/app/store.helpers";
 import type { WorkspaceRecord } from "../src/app/types";
 import { NewChatLanding } from "../src/ui/chat/NewChatLanding";
-import { setupJsdom } from "./jsdomHarness";
 
 const workspace: WorkspaceRecord = {
   id: "workspace-landing",

@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { act, createElement, useState } from "react";
 import type { Root } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { type RendererHotModule, renderRendererRoot } from "../src/lib/rendererRoot";
-import { setupJsdom } from "./jsdomHarness";
 
 function createHotModule(data: Record<string, unknown> = {}) {
   const disposeCallbacks: Array<(data: Record<string, unknown>) => void> = [];

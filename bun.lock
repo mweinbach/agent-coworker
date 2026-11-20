@@ -14,11 +14,13 @@
         "@axe-core/playwright": "^4.13.0",
         "@biomejs/biome": "^2.5.10",
         "@playwright/test": "^1.62.1",
+        "@types/jsdom": "^28.0.3",
         "@types/node": "^26.3.0",
         "@types/react": "^19.2.18",
         "@types/react-dom": "^19.2.5",
         "bun-types": "^1.4.0",
         "fake-indexeddb": "^6.2.5",
+        "jsdom": "^29.1.1",
         "knip": "^6.32.2",
         "typescript": "^7.0.2",
         "vite-plus": "0.3.0",
@@ -57,7 +59,6 @@
         "@streamdown/math": "^1.0.2",
         "@streamdown/mermaid": "^1.0.2",
         "@tailwindcss/vite": "4.3.3",
-        "@types/jsdom": "^28.0.3",
         "@types/node": "^26.1.1",
         "@types/ws": "^8.18.1",
         "@vitejs/plugin-react": "6.1.1",
@@ -66,7 +67,6 @@
         "electron-builder": "26.15.3",
         "electron-vite": "6.0.0-beta.1",
         "framer-motion": "^12.42.2",
-        "jsdom": "^29.1.1",
         "lucide-react": "^1.27.0",
         "react-grab": "^0.1.50",
         "streamdown": "^2.5.0",
@@ -2643,7 +2643,7 @@
 
     "undici": ["undici@7.29.0", "", {}, "sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw=="],
 
-    "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
+    "undici-types": ["undici-types@7.29.0", "", {}, "sha512-vamA8dGlzMwhpyYpQp9d8vka3o4D/yn5I7ez7Or+msDA4bZ8Uh+Zy91WvWf3I73gDAkFha9JcYRqm2li0Npfgg=="],
 
     "unicode-regex": ["unicode-regex@4.2.0", "", { "dependencies": { "regexp-util": "^2.0.3" } }, "sha512-fEYz7CCnvHDAdrb8OYAP7qlQCWzXBO5cHXQ3XI+HoZaBpiAwyC6b2nixMGl91yrDYEIRm7NDskgTvnLZ7mqrKQ=="],
 
@@ -2825,7 +2825,7 @@
 
     "@tailwindcss/oxide-wasm32-wasi/tslib": ["tslib@2.8.1", "", { "bundled": true }, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
-    "@types/jsdom/undici-types": ["undici-types@7.29.0", "", {}, "sha512-vamA8dGlzMwhpyYpQp9d8vka3o4D/yn5I7ez7Or+msDA4bZ8Uh+Zy91WvWf3I73gDAkFha9JcYRqm2li0Npfgg=="],
+    "@types/node/undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
 
     "@univerjs-pro/license/@noble/hashes": ["@noble/hashes@2.2.0", "", {}, "sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg=="],
 

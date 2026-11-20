@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 import { RouterProvider } from "@tanstack/react-router";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { getAppRouter } from "../src/app/router";
 import { SETTINGS_PAGE_ALIASES } from "../src/app/settingsNavigation";
 import { useAppStore } from "../src/app/store";
@@ -22,7 +23,6 @@ import { OverlayStackProvider } from "../src/ui/OverlayStack";
 import { getSettingsDragZoneStyle, SettingsShell } from "../src/ui/settings/SettingsShell";
 import { getSettingsGroups } from "../src/ui/settings/settingsPages";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const defaultStoreState = useAppStore.getState();
 

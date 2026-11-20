@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import type { ChatRenderItem } from "../src/ui/chat/activityGroups";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 // Streamdown (imported via DesktopMarkdown) expects DOM globals at module
 // evaluation time, so imports run under a temporary jsdom scope.

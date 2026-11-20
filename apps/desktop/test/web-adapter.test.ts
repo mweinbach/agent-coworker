@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import "fake-indexeddb/auto";
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 const storage = new Map<string, string>();
 const transcriptEvent = {

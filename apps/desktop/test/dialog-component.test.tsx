@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 describe("desktop dialog component", () => {
   test("renders the stock shadcn/Radix dialog structure", async () => {

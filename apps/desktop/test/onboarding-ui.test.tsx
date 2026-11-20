@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
 import {
@@ -10,7 +10,6 @@ import {
   setJsonRpcSocketOverride,
 } from "./helpers/jsonRpcSocketMock";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 installDesktopCommandsBridge();
 

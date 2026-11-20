@@ -27,6 +27,7 @@ import type {
   SpreadsheetWorkbookSnapshot,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../src/shared/spreadsheetPreview";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { connectRustJsonRpc, startRustTestServer } from "../../../test/helpers/rustServerHarness";
 import { buildMinimalXlsxBuffer } from "../../../test/helpers/zipFixture";
 import { useAppStore } from "../src/app/store";
@@ -34,7 +35,6 @@ import {
   registerCanvasDocumentTransitionHandler,
   requestCanvasDocumentCloseApproval,
 } from "../src/lib/canvasDocumentLifecycle";
-
 import {
   isWorkbookSnapshotForPath,
   shouldBlockSpreadsheetUnload,
@@ -46,7 +46,6 @@ import {
   spreadsheetSnapshotToUniverData,
 } from "../src/lib/univerSpreadsheet";
 import { canExecuteSpreadsheetCommand } from "../src/ui/univerCommandPolicy";
-import { setupJsdom } from "./jsdomHarness";
 
 for (const [packageName, presetName] of [
   ["core", "UniverSheetsCorePreset"],

@@ -1,11 +1,15 @@
 import { afterEach, mock } from "bun:test";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import { setupJsdom } from "./helpers/jsdomHarness";
 import "./helpers/mock-react-native";
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 
-const desktopRequire = createRequire(path.resolve("apps/desktop/package.json"));
+const rootRequire = createRequire(path.resolve("package.json"));
+const desktopDir = path.resolve("apps/desktop");
+const desktopPackageJson = path.join(desktopDir, "package.json");
+const desktopRequire = existsSync(desktopPackageJson) ? createRequire(desktopPackageJson) : null;
 
 // Animation libraries capture `requestAnimationFrame` once, when their module is
 // first evaluated — which happens during a test file's top-level imports, before
@@ -37,31 +41,30 @@ function namespaceForMock<T extends Record<string, unknown>>(mod: T): T & { defa
   return { ...mod, default: mod };
 }
 
-const desktopReact = namespaceForMock(desktopRequire("react") as Record<string, unknown>);
-const desktopJsxDevRuntime = namespaceForMock(
-  desktopRequire("react/jsx-dev-runtime") as Record<string, unknown>,
+const sharedReact = namespaceForMock(rootRequire("react") as Record<string, unknown>);
+const sharedJsxDevRuntime = namespaceForMock(
+  rootRequire("react/jsx-dev-runtime") as Record<string, unknown>,
 );
-const desktopJsxRuntime = namespaceForMock(
-  desktopRequire("react/jsx-runtime") as Record<string, unknown>,
+const sharedJsxRuntime = namespaceForMock(
+  rootRequire("react/jsx-runtime") as Record<string, unknown>,
 );
-const desktopReactDom = namespaceForMock(desktopRequire("react-dom") as Record<string, unknown>);
-const desktopReactDomClient = namespaceForMock(
-  desktopRequire("react-dom/client") as Record<string, unknown>,
+const sharedReactDom = namespaceForMock(rootRequire("react-dom") as Record<string, unknown>);
+const sharedReactDomClient = namespaceForMock(
+  rootRequire("react-dom/client") as Record<string, unknown>,
 );
-const desktopReactDomServer = namespaceForMock(
-  desktopRequire("react-dom/server") as Record<string, unknown>,
+const sharedReactDomServer = namespaceForMock(
+  rootRequire("react-dom/server") as Record<string, unknown>,
 );
 
 // Bun's bare-module test resolver can load one React copy through repo-root
-// transitive dependencies (for example `radix-ui`) and another through the
-// desktop workspace's ReactDOM. Keep React singleton modules aligned with the
-// desktop renderer, matching electron-vite's `resolve.dedupe` behavior.
-mock.module("react", () => desktopReact);
-mock.module("react/jsx-dev-runtime", () => desktopJsxDevRuntime);
-mock.module("react/jsx-runtime", () => desktopJsxRuntime);
-mock.module("react-dom", () => desktopReactDom);
-mock.module("react-dom/client", () => desktopReactDomClient);
-mock.module("react-dom/server", () => desktopReactDomServer);
+// dependencies and another through workspace-local ReactDOM (e.g. apps/mobile).
+// Keep React singleton modules aligned with the root React installation.
+mock.module("react", () => sharedReact);
+mock.module("react/jsx-dev-runtime", () => sharedJsxDevRuntime);
+mock.module("react/jsx-runtime", () => sharedJsxRuntime);
+mock.module("react-dom", () => sharedReactDom);
+mock.module("react-dom/client", () => sharedReactDomClient);
+mock.module("react-dom/server", () => sharedReactDomServer);
 
 // framer-motion's layout animations (`layout`, `layoutId`) register projection
 // nodes on a process-global document root whose frameloop keeps re-scheduling
@@ -116,7 +119,7 @@ function stripMotionProps(props: Record<string, unknown>): Record<string, unknow
 }
 
 function createFramerMotionStub() {
-  const react = desktopReact as unknown as typeof import("react");
+  const react = sharedReact as unknown as typeof import("react");
   const forwardTag = (tag: string) =>
     react.forwardRef(function MotionStub(
       { children, ...props }: Record<string, unknown> & { children?: unknown },
@@ -168,22 +171,25 @@ function createFramerMotionStub() {
   return { ...namespace, default: namespace };
 }
 
-// The desktop workspace resolves framer-motion to its own copy, and the bare
-// specifier alone does not intercept it. `require.resolve` is also the wrong
-// key here: it returns the CJS entry (dist/cjs/index.js) while the components
-// import the ESM one (dist/es/index.mjs), so the mock has to be keyed by the
-// module-condition resolution Bun actually uses.
-const desktopDir = path.resolve("apps/desktop");
-mock.module("framer-motion", createFramerMotionStub);
-for (const specifier of ["framer-motion", "motion/react"]) {
-  for (const resolve of [
-    () => Bun.resolveSync(specifier, desktopDir),
-    () => desktopRequire.resolve(specifier),
-  ]) {
-    try {
-      mock.module(resolve(), createFramerMotionStub);
-    } catch {
-      // Not every motion entry point is installed in every workspace.
+// Optional legacy desktop renderer setup: keep active desktop UI tests working
+// until apps/desktop is retired, without requiring apps/desktop for mobile UI tests.
+if (desktopRequire) {
+  // The desktop workspace resolves framer-motion to its own copy, and the bare
+  // specifier alone does not intercept it. `require.resolve` is also the wrong
+  // key here: it returns the CJS entry (dist/cjs/index.js) while the components
+  // import the ESM one (dist/es/index.mjs), so the mock has to be keyed by the
+  // module-condition resolution Bun actually uses.
+  mock.module("framer-motion", createFramerMotionStub);
+  for (const specifier of ["framer-motion", "motion/react"]) {
+    for (const resolve of [
+      () => Bun.resolveSync(specifier, desktopDir),
+      () => desktopRequire.resolve(specifier),
+    ]) {
+      try {
+        mock.module(resolve(), createFramerMotionStub);
+      } catch {
+        // Not every motion entry point is installed in every workspace.
+      }
     }
   }
 }
@@ -193,11 +199,20 @@ for (const specifier of ["framer-motion", "motion/react"]) {
 // whichever test reaches it first decides whether dialogs can mount portals
 // for every later test in the same Bun process. Initialize it once with a DOM,
 // matching the renderer environment, before test-file imports begin.
-const radixImportHarness = setupJsdom();
+let hasRadixUi = false;
 try {
-  await import("radix-ui");
-} finally {
-  radixImportHarness.restore();
+  rootRequire.resolve("radix-ui");
+  hasRadixUi = true;
+} catch {
+  // Optional desktop renderer dependency; absent once retired.
+}
+if (hasRadixUi) {
+  const radixImportHarness = setupJsdom();
+  try {
+    await import("radix-ui");
+  } finally {
+    radixImportHarness.restore();
+  }
 }
 
 try {
@@ -209,12 +224,12 @@ try {
   const mobileReactDomClientPath = mobileRequire.resolve("react-dom/client");
   const mobileReactDomServerPath = mobileRequire.resolve("react-dom/server");
 
-  mock.module(mobileReactPath, () => desktopReact);
-  mock.module(mobileReactJsxRuntimePath, () => desktopJsxRuntime);
-  mock.module(mobileReactJsxDevRuntimePath, () => desktopJsxDevRuntime);
-  mock.module(mobileReactDomPath, () => desktopReactDom);
-  mock.module(mobileReactDomClientPath, () => desktopReactDomClient);
-  mock.module(mobileReactDomServerPath, () => desktopReactDomServer);
+  mock.module(mobileReactPath, () => sharedReact);
+  mock.module(mobileReactJsxRuntimePath, () => sharedJsxRuntime);
+  mock.module(mobileReactJsxDevRuntimePath, () => sharedJsxDevRuntime);
+  mock.module(mobileReactDomPath, () => sharedReactDom);
+  mock.module(mobileReactDomClientPath, () => sharedReactDomClient);
+  mock.module(mobileReactDomServerPath, () => sharedReactDomServer);
 } catch {
   // Mobile workspace deps are not installed in every CI job.
 }

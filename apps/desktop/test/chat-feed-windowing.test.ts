@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { FeedItem } from "../src/app/types";
 import {
   type FeedDerivationWindowState,
@@ -9,7 +10,6 @@ import {
   selectFeedDerivationWindow,
 } from "../src/ui/chat/feedWindow";
 import { useFeedDerivationWindow } from "../src/ui/chat/useFeedDerivationWindow";
-import { setupJsdom } from "./jsdomHarness";
 
 function makeFeed(count: number): FeedItem[] {
   return Array.from({ length: count }, (_, index) => ({

@@ -1,9 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { CrashReportingErrorBoundary } from "../src/ui/CrashReportingErrorBoundary";
-import { setupJsdom } from "./jsdomHarness";
 
 function ThrowingChild() {
   throw new Error("render blew up");

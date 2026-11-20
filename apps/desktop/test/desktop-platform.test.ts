@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { getDesktopPlatformInfo } from "../src/lib/desktopPlatform";
-import { setupJsdom } from "./jsdomHarness";
 
 type DesktopRootDataset = Partial<
   Record<

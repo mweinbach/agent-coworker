@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
 const { DesktopOnboarding } = await import("../src/ui/onboarding/DesktopOnboarding");

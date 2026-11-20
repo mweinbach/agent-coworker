@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { Progress } from "../src/components/ui/progress";
-import { setupJsdom } from "./jsdomHarness";
 
 describe("Progress", () => {
   let harness: ReturnType<typeof setupJsdom>;

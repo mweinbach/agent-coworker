@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-
+import { type JsdomHarness, setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { operationKey } from "../src/app/store.helpers/operations";
 import type { TelemetryStatusInput } from "../src/lib/desktopApi";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock, DEFAULT_TELEMETRY_STATUS } from "./helpers/mockDesktopCommands";
-import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
 
 const getTelemetryStatusMock = mock(async () => DEFAULT_TELEMETRY_STATUS);
 const saveStateMock = mock(async (_state?: unknown) => {});

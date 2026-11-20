@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { operationError } from "../src/app/store.helpers/operations";
 import type { WorkspaceRecord } from "../src/app/types";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
@@ -22,7 +22,6 @@ import {
   setJsonRpcSocketOverride,
 } from "./helpers/jsonRpcSocketMock";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 installDesktopCommandsBridge();
 

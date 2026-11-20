@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { OperationState } from "../src/app/types";
 import { ConnectionRecoveryBanner } from "../src/ui/ConnectionRecoveryBanner";
-import { setupJsdom } from "./jsdomHarness";
 
 describe("ConnectionRecoveryBanner", () => {
   let harness: ReturnType<typeof setupJsdom>;

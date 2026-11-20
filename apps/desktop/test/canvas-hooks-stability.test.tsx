@@ -9,8 +9,8 @@ import type {
   CanvasDocumentSaveAsRequest,
   CanvasDocumentSaveRequest,
 } from "../../../src/shared/canvasDocument";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 function makePreviewResult(text: string, truncated = false) {
   const bytes = new TextEncoder().encode(text);

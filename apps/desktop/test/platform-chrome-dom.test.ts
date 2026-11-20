@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { PlatformChromeInfo } from "../src/lib/desktopApi";
 import {
   applyPlatformChromeToDocument,
   syncPlatformChromeCssVars,
 } from "../src/lib/platformChromeDom";
-import { setupJsdom } from "./jsdomHarness";
 
 describe("applyPlatformChromeToDocument", () => {
   test("projects platform chrome layout metrics and flags onto the document root", () => {

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { createEmptyComposerDraft } from "../src/app/composerDrafts";
 import type { ComposerSubmission } from "../src/app/composerSubmission";
 import {
@@ -19,7 +19,6 @@ import {
   MessageComposerTextarea,
   MessageComposerTools,
 } from "../src/ui/composer/MessageComposer";
-import { setupJsdom } from "./jsdomHarness";
 
 const IMAGE_ATTACHMENT: MessageComposerAttachmentItem = {
   filename: "diagram.png",

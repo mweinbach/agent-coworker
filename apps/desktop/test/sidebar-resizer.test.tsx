@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
 const { SidebarResizer } = await import("../src/ui/layout/SidebarResizer");

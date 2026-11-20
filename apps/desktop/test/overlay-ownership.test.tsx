@@ -3,7 +3,7 @@ import { act, createElement, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "./jsdomHarness";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 
 async function dispatchEscape(window: Window): Promise<KeyboardEvent> {
   const event = new window.KeyboardEvent("keydown", {

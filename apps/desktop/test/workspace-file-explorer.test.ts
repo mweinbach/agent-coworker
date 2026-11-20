@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { ExplorerEntry } from "../src/app/types";
 import {
   buildDirectoryFingerprint,
@@ -10,7 +10,6 @@ import {
   shouldAutoRefreshExplorer,
   shouldReuseBackgroundDirectorySnapshot,
 } from "../src/ui/file-explorer/WorkspaceFileExplorer";
-import { setupJsdom } from "./jsdomHarness";
 
 function entry(
   partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, "name" | "path" | "isDirectory">,

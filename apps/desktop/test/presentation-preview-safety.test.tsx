@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { PresentationPreviewResult } from "../../../src/shared/presentationPreview";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { useAppStore } from "../src/app/store";
 import {
   __internalFilePreviewResources,
@@ -10,7 +11,6 @@ import {
 } from "../src/lib/filePreviewResource";
 import { PptxPreview } from "../src/ui/PptxPreview";
 import { SlidePreview } from "../src/ui/SlidePreview";
-import { setupJsdom } from "./jsdomHarness";
 
 class PresentationResizeObserver {
   static callbacks = new Set<ResizeObserverCallback>();

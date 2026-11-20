@@ -11,6 +11,7 @@ import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { CanvasDocumentOpenRequest } from "../../../src/shared/canvasDocument";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import {
   type NativeCloseWindow,
   NativeWindowCloseCoordinator,
@@ -29,7 +30,6 @@ import {
   type WindowCloseResponseInput,
 } from "../src/lib/desktopApi";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 let canvasMounts = 0;
 let canvasUnmounts = 0;

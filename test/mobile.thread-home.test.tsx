@@ -2,8 +2,6 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import type { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
 import type { WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
 import { setActiveCoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/runtimeClient";
@@ -16,6 +14,7 @@ import {
   useThreadStore,
 } from "../apps/mobile/src/features/cowork/threadStore";
 import { useWorkspaceStore } from "../apps/mobile/src/features/cowork/workspaceStore";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => any) {
   mock.module(alias, factory);

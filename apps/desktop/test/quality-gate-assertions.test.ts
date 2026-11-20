@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Page } from "playwright";
-
+import { type JsdomHarness, setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { assertNoViewportClipping, isKnownColorContrastTarget } from "../quality-gates/assertions";
-import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
 
 const page = {
   evaluate: async (callback: (input: unknown) => unknown, input: unknown) => callback(input),

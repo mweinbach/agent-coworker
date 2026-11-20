@@ -6,9 +6,9 @@ import type {
   AgentProfileCatalogEntry,
   AgentProfileScope,
 } from "../../../src/shared/agentProfiles";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",

@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { DocumentThemeStore } from "../src/lib/documentThemeStore";
-import { setupJsdom } from "./jsdomHarness";
 
 describe("DocumentThemeStore", () => {
   test.serial("shares one MutationObserver across all active markdown subscribers", () => {

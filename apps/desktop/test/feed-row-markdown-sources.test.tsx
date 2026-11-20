@@ -6,11 +6,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { CitationSource } from "../../../src/shared/displayCitationMarkers";
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { ChatViewContext } from "../src/ui/chat/ChatViewContext";
 import type { MentionCatalog } from "../src/ui/chat/composerMentions";
 import { OverlayStackProvider } from "../src/ui/OverlayStack";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const confirmActionMock = mock(async () => true);
 

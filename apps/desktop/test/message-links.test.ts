@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { OverlayStackProvider } from "../src/ui/OverlayStack";
-import { setupJsdom } from "./jsdomHarness";
 
 const moduleImportHarness = setupJsdom();
 const {

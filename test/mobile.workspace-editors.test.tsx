@@ -3,7 +3,7 @@ import path from "node:path";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => unknown) {
   mock.module(alias, factory);

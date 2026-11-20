@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { ConnectPage } from "../src/components/ConnectPage";
 import * as webAdapter from "../src/lib/webAdapter";
-import { setupJsdom } from "./jsdomHarness";
 
 class DiscoveryWebSocket {
   static instances: DiscoveryWebSocket[] = [];

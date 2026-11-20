@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { ProviderName } from "../src/lib/wsProtocol";
 import type { ComposerModelSelection } from "../src/ui/chat/ComposerModelSelector";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 class MockResizeObserver {
   observe() {}

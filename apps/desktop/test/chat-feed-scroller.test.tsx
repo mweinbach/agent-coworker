@@ -3,12 +3,12 @@ import { act, type ComponentProps, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
+import { type JsdomHarness, setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { ChatRenderItem } from "../src/ui/chat/activityGroups";
 import { ChatViewContext } from "../src/ui/chat/ChatViewContext";
 import type { MentionCatalog } from "../src/ui/chat/composerMentions";
 import { selectFeedDerivationWindow } from "../src/ui/chat/feedWindow";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 

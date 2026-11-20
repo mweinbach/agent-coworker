@@ -3,9 +3,9 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { CanvasDocumentOpenRequest } from "../../../src/shared/canvasDocument";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
 const { Canvas } = await import("../src/ui/Canvas");

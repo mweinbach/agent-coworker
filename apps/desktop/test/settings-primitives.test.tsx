@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { EntityIcon } from "../src/ui/settings/SettingsPrimitives";
-import { setupJsdom } from "./jsdomHarness";
 
 describe("settings primitives", () => {
   test("EntityIcon retries image rendering when src changes after an error", async () => {

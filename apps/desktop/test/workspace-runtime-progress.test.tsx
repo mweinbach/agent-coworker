@@ -3,8 +3,8 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { CoworkRuntimeBootstrapProgress } from "../../../src/shared/runtimeProgress";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { WorkspaceRuntimeProgress } from "../src/ui/WorkspaceRuntimeProgress";
-import { setupJsdom } from "./jsdomHarness";
 
 const downloadProgress: CoworkRuntimeBootstrapProgress = {
   phase: "downloading",

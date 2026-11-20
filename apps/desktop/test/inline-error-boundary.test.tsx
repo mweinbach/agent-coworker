@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import {
   CrashReportingErrorBoundary,
   InlineErrorBoundary,
 } from "../src/ui/CrashReportingErrorBoundary";
-import { setupJsdom } from "./jsdomHarness";
 
 function Boom({ message }: { message: string }) {
   if (message === "boom") {

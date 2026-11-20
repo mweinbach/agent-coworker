@@ -9,9 +9,9 @@ resetNavigationBeforeEach(() =>
 import { describe, expect, test } from "bun:test";
 import { act, createElement, Profiler } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { defaultThreadRuntime } from "../src/app/store.helpers/runtimeState";
 import type { FeedItem } from "../src/app/types";
-import { setupJsdom } from "./jsdomHarness";
 
 class MockResizeObserver {
   observe() {}

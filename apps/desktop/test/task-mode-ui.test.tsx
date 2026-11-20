@@ -11,10 +11,10 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/shared/tasks";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
 import { createTaskActions, type TaskActionDependencies } from "../src/app/store.actions/tasks";
 import type { ChatInteraction } from "../src/app/types";
-import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
 const realOpenFilePreview = useAppStore.getState().openFilePreview;

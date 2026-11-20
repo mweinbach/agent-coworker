@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, type ComponentProps, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "../../../test/helpers/jsdomHarness";
 import type { ThreadAgentSummary } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 

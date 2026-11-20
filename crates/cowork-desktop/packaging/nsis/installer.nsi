@@ -30,6 +30,7 @@ Unicode true
 ${StrCase}
 ${StrLoc}
 ${StrStr}
+${UnStrStr}
 
 !define MANUFACTURER "{{manufacturer}}"
 !define PRODUCTNAME "{{product_name}}"
@@ -89,10 +90,16 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
   !uninstfinalize '${UNINSTALLERSIGNCOMMAND}'
 !endif
 
+; Dedicated exit code emitted ONLY when `/COWORK_DEFER_LAUNCH` is active and the user
+; leaves "Run Cowork" checked on the interactive Finish page. The waiting non-elevated
+; user-context parent translates this sentinel to exit code 0 and launches Rune once.
+!define COWORK_EXIT_LAUNCH_REQUESTED 200
+
 ; Default to per-user execution level so standard per-user installs and updates never
 ; require UAC. When an existing legitimate per-machine (HKLM) install is adopted or
-; `/allusers` is explicitly requested, `.onInit` self-elevates via ShellExecuteW "runas"
-; and strictly isolates HKLM operations from HKCU.
+; `/allusers` is explicitly requested, `.onInit` elevates via ShellExecuteExW "runas",
+; waits for completion in the user-context parent, propagates exit status, and performs
+; at most one non-elevated launch on success while strictly isolating HKLM from HKCU.
 !if "${INSTALLMODE}" == "perMachine"
   RequestExecutionLevel highest
 !else
@@ -134,9 +141,13 @@ Var ShouldRelaunch
 Var NoShortcutsFlag
 Var KeepShortcutsFlag
 Var NoDesktopShortcutFlag
+Var RequestedAllUsersFlag
+Var RequestedCurrentUserFlag
 Var RequestedScope
 Var ResolvedScope
+Var ValidationScope
 Var AlreadyElevatedFlag
+Var DeferLaunchToParent
 Var ExplicitInstDir
 Var MigrationRetryFlag
 Var IsUpgradeMode
@@ -145,9 +156,15 @@ Var LegacyInstallDir
 Var LegacyRegistryPresent
 Var LegacyShortcutName
 Var LegacyMenuDirectory
+Var HkcuHasInstall
+Var HklmHasInstall
 Var HadDesktopShortcut
 Var HadStartMenuShortcut
 Var AppStartMenuFolder
+Var UserAppDataDir
+Var UserProfileDir
+Var UserLocalAppDataDir
+Var UsersRootDir
 Var UnAlreadyElevated
 
 ; Installer pages
@@ -326,7 +343,8 @@ FunctionEnd
 !define MUI_FINISHPAGE_SHOWREADME
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateDesktopShortcut
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${MAINBINARYNAME}.exe"
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION OnFinishPageRun
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_FINISH
 
@@ -356,8 +374,58 @@ FunctionEnd
   !endif
 !macroend
 
+; Substring helper macro usable in both installer (`StrStr`) and uninstaller (`UnStrStr`) contexts
+!macro CallStrStr PREFIX OUT HAYSTACK NEEDLE
+  !if "${PREFIX}" == "un."
+    ${UnStrStr} ${OUT} ${HAYSTACK} ${NEEDLE}
+  !else
+    ${StrStr} ${OUT} ${HAYSTACK} ${NEEDLE}
+  !endif
+!macroend
+
+; Reject if PATH equals BASE or starts with BASE\ (case-insensitive)
+!macro RejectIfPathOrPrefix PATH BASE LABEL
+  ${If} "${BASE}" != ""
+    ${If} ${PATH} == "${BASE}"
+      Goto ${LABEL}
+    ${EndIf}
+    StrLen $R1 "${BASE}\"
+    StrCpy $R2 ${PATH} $R1
+    ${If} $R2 == "${BASE}\"
+      Goto ${LABEL}
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Capture user-context profile paths BEFORE `SetShellVarContext all` can switch `$APPDATA`
+; to `C:\ProgramData`, ensuring user-profile exclusion stays active in every scope.
+!macro CaptureUserContextDirs PREFIX
+  SetShellVarContext current
+  Push "$APPDATA"
+  Call ${PREFIX}NormalizeDirPath
+  Pop $UserAppDataDir
+  Push "$PROFILE"
+  Call ${PREFIX}NormalizeDirPath
+  Pop $UserProfileDir
+  Push "$LOCALAPPDATA"
+  Call ${PREFIX}NormalizeDirPath
+  Pop $UserLocalAppDataDir
+  StrCpy $UsersRootDir ""
+  ${If} $UserProfileDir != ""
+    Push $UserProfileDir
+    Call ${PREFIX}GetPathParent
+    Pop $R0
+    StrLen $R1 $R0
+    ${If} $R1 > 3
+      StrCpy $UsersRootDir $R0
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Shared path-safety, elevation-wait, retry-delete, and empty-dir helpers for installer & uninstaller
+!macro DefineCorePathAndElevationHelpers PREFIX
 ; Helper: strip surrounding quotes and trailing backslash (preserving drive root length)
-Function NormalizeDirPath
+Function ${PREFIX}NormalizeDirPath
   Exch $R0
   Push $R1
   Push $R2
@@ -391,6 +459,691 @@ Function NormalizeDirPath
   Pop $R1
   Exch $R0
 FunctionEnd
+
+; Helper: return parent directory of a Windows path (or "" if none)
+Function ${PREFIX}GetPathParent
+  Exch $R0
+  Push $R1
+  Push $R2
+  Push $R3
+
+  StrLen $R2 $R0
+  StrCpy $R1 1
+  ${Do}
+    ${If} $R1 > $R2
+      StrCpy $R0 ""
+      Goto gpp_done
+    ${EndIf}
+    StrCpy $R3 $R0 1 -$R1
+    ${If} $R3 == "\"
+      StrCpy $R0 $R0 -$R1
+      Goto gpp_done
+    ${EndIf}
+    IntOp $R1 $R1 + 1
+  ${Loop}
+
+  gpp_done:
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Exch $R0
+FunctionEnd
+
+; Helper: return 1 if normalized path falls inside a forbidden system, user-profile data,
+; or cross-scope subtree; return 0 otherwise.
+Function ${PREFIX}IsForbiddenSubtree
+  Exch $R0
+  Push $R1
+  Push $R2
+
+  ; Always forbid Windows directory, active AppData, captured user Roaming AppData,
+  ; `$PROFILE\AppData\Roaming`, and `$PROFILE\.cowork` (even after `SetShellVarContext all`).
+  !insertmacro RejectIfPathOrPrefix $R0 "$WINDIR" ifs_forbidden
+  !insertmacro RejectIfPathOrPrefix $R0 "$APPDATA" ifs_forbidden
+  !insertmacro RejectIfPathOrPrefix $R0 "$UserAppDataDir" ifs_forbidden
+  !insertmacro RejectIfPathOrPrefix $R0 "$PROFILE\AppData\Roaming" ifs_forbidden
+  !insertmacro RejectIfPathOrPrefix $R0 "$UserProfileDir\AppData\Roaming" ifs_forbidden
+  !insertmacro RejectIfPathOrPrefix $R0 "$PROFILE\.cowork" ifs_forbidden
+  !insertmacro RejectIfPathOrPrefix $R0 "$UserProfileDir\.cowork" ifs_forbidden
+
+  ; Reject ANY user's Roaming AppData or `.cowork` directory even under over-the-shoulder elevation
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "\AppData\Roaming\"
+  ${If} $R1 != ""
+    Goto ifs_forbidden
+  ${EndIf}
+  StrCpy $R1 $R0 16 -16
+  ${If} $R1 == "\AppData\Roaming"
+    Goto ifs_forbidden
+  ${EndIf}
+
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "\.cowork\"
+  ${If} $R1 != ""
+    Goto ifs_forbidden
+  ${EndIf}
+  StrCpy $R1 $R0 8 -8
+  ${If} $R1 == "\.cowork"
+    Goto ifs_forbidden
+  ${EndIf}
+
+  ; Enforce strict install-scope directory boundaries so privileged per-machine (`all`)
+  ; operations never target user-profile directories and per-user (`current`) operations
+  ; never target Program Files.
+  ${If} $ValidationScope == "all"
+    !insertmacro RejectIfPathOrPrefix $R0 "$PROFILE" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$UserProfileDir" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$LOCALAPPDATA" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$UserLocalAppDataDir" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$UsersRootDir" ifs_forbidden
+  ${ElseIf} $ValidationScope == "current"
+    !insertmacro RejectIfPathOrPrefix $R0 "$PROGRAMFILES" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$PROGRAMFILES64" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$COMMONFILES" ifs_forbidden
+    !insertmacro RejectIfPathOrPrefix $R0 "$COMMONFILES64" ifs_forbidden
+  ${EndIf}
+
+  StrCpy $R0 0
+  Goto ifs_done
+
+  ifs_forbidden:
+  StrCpy $R0 1
+
+  ifs_done:
+  Pop $R2
+  Pop $R1
+  Exch $R0
+FunctionEnd
+
+; Helper: validate that a directory path is safe:
+; - drive-rooted, canonical (`GetFullPathNameW`), no traversal/metacharacters/ADS
+; - not a system/container root, user-profile data dir, or cross-scope location
+; - full ancestor walk from target up to and including drive root verifying every existing
+;   ancestor is a real directory (`0x10`), NOT a reparse point (`0x400`), its `GetLongPathNameW`
+;   expansion is not in a forbidden subtree, and any `GetFileAttributesW` error other than
+;   `ERROR_FILE_NOT_FOUND (2)` or `ERROR_PATH_NOT_FOUND (3)` is rejected as ambiguous ancestry.
+; Input: candidate path on stack. Output: normalized path on stack, or "" if rejected.
+Function ${PREFIX}ValidateInstallDir
+  Exch $R0
+  Push $R1
+  Push $R2
+  Push $0
+  Push $1
+  Push $2
+
+  Push $R0
+  Call ${PREFIX}NormalizeDirPath
+  Pop $R0
+
+  ${If} $R0 == ""
+    Goto vid_reject
+  ${EndIf}
+
+  ; Must be drive-rooted and deeper than drive root (e.g. `C:\x`, len >= 4)
+  StrLen $R1 $R0
+  ${If} $R1 < 4
+    Goto vid_reject
+  ${EndIf}
+  StrCpy $R1 $R0 1 1
+  StrCpy $R2 $R0 1 2
+  ${If} $R1 != ":"
+  ${OrIf} $R2 != "\"
+    Goto vid_reject
+  ${EndIf}
+
+  ; Reject secondary colons (NTFS ADS / device paths) after drive prefix
+  StrCpy $R1 $R0 "" 2
+  !insertmacro CallStrStr "${PREFIX}" $R2 $R1 ":"
+  ${If} $R2 != ""
+    Goto vid_reject
+  ${EndIf}
+
+  ; Reject leading/trailing spaces or trailing dots (ambiguous Win32 path normalization)
+  StrCpy $R1 $R0 1
+  ${If} $R1 == " "
+    Goto vid_reject
+  ${EndIf}
+  StrCpy $R1 $R0 1 -1
+  ${If} $R1 == " "
+  ${OrIf} $R1 == "."
+    Goto vid_reject
+  ${EndIf}
+
+  ; Reject UNC/double-backslash, dot/dot-dot traversal segments, forward slashes, or metacharacters
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "\\"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "\..\"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  StrCpy $R1 $R0 3 -3
+  ${If} $R1 == "\.."
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "\.\"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  StrCpy $R1 $R0 2 -2
+  ${If} $R1 == "\."
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "/"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "*"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "?"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  StrCpy $0 '$\"'
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 $0
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "<"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 ">"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+  !insertmacro CallStrStr "${PREFIX}" $R1 $R0 "|"
+  ${If} $R1 != ""
+    Goto vid_reject
+  ${EndIf}
+
+  ; Verify Win32 canonical equivalence via GetFullPathNameW (rejects ambiguous trailing dots/spaces)
+  StrCpy $0 $R0
+  StrCpy $1 ""
+  System::Call 'kernel32::GetFullPathNameW(w r0, i ${NSIS_MAX_STRLEN}, t .r1, p 0)i.r2'
+  ${If} $2 = 0
+  ${OrIf} $2 >= ${NSIS_MAX_STRLEN}
+    Goto vid_reject
+  ${EndIf}
+  Push $1
+  Call ${PREFIX}NormalizeDirPath
+  Pop $1
+  ${If} $1 != $R0
+    Goto vid_reject
+  ${EndIf}
+
+  ; Reject exact system and container roots
+  ${If} $R0 == "$WINDIR"
+  ${OrIf} $R0 == "$SYSDIR"
+  ${OrIf} $R0 == "$PROGRAMFILES"
+  ${OrIf} $R0 == "$PROGRAMFILES64"
+  ${OrIf} $R0 == "$COMMONFILES"
+  ${OrIf} $R0 == "$COMMONFILES64"
+  ${OrIf} $R0 == "$LOCALAPPDATA"
+  ${OrIf} $R0 == "$LOCALAPPDATA\Programs"
+  ${OrIf} $R0 == "$UserLocalAppDataDir"
+  ${OrIf} $R0 == "$UserLocalAppDataDir\Programs"
+  ${OrIf} $R0 == "$APPDATA"
+  ${OrIf} $R0 == "$UserAppDataDir"
+  ${OrIf} $R0 == "$PROFILE"
+  ${OrIf} $R0 == "$UserProfileDir"
+  ${OrIf} $R0 == "$PROFILE\AppData"
+  ${OrIf} $R0 == "$UserProfileDir\AppData"
+  ${OrIf} $R0 == "$PROFILE\AppData\Local"
+  ${OrIf} $R0 == "$UserProfileDir\AppData\Local"
+  ${OrIf} $R0 == "$PROFILE\AppData\Local\Programs"
+  ${OrIf} $R0 == "$UserProfileDir\AppData\Local\Programs"
+  ${OrIf} $R0 == "$TEMP"
+  ${OrIf} $R0 == "$DESKTOP"
+  ${OrIf} $R0 == "$SMPROGRAMS"
+    Goto vid_reject
+  ${EndIf}
+  ${If} $UsersRootDir != ""
+  ${AndIf} $R0 == "$UsersRootDir"
+    Goto vid_reject
+  ${EndIf}
+
+  ; Reject forbidden system, user-profile data, and cross-scope subtrees
+  Push $R0
+  Call ${PREFIX}IsForbiddenSubtree
+  Pop $2
+  ${If} $2 != 0
+    Goto vid_reject
+  ${EndIf}
+
+  ; Verify drive root (e.g. `C:\`) exists, is a real directory, and is not a reparse point
+  StrCpy $0 $R0 3
+  System::Call 'kernel32::GetFileAttributesW(w r0)i.r1 ?e'
+  Pop $2
+  ${If} $1 = -1
+    Goto vid_reject
+  ${EndIf}
+  IntOp $2 $1 & 0x10
+  ${If} $2 = 0
+    Goto vid_reject
+  ${EndIf}
+  IntOp $2 $1 & 0x400
+  ${If} $2 != 0
+    Goto vid_reject
+  ${EndIf}
+
+  ; Walk `$R0` and EVERY ancestor directory up to drive root checking for reparse points (0x400),
+  ; non-directory segments, 8.3 short-name aliases into forbidden subtrees, or ambiguous errors.
+  StrCpy $R1 $R0
+  ${Do}
+    StrLen $R2 $R1
+    ${If} $R2 <= 3
+      ${ExitDo}
+    ${EndIf}
+
+    StrCpy $0 $R1
+    System::Call 'kernel32::GetFileAttributesW(w r0)i.r1 ?e'
+    Pop $2
+    ${If} $1 != -1
+      IntOp $2 $1 & 0x10
+      ${If} $2 = 0
+        Goto vid_reject
+      ${EndIf}
+      IntOp $2 $1 & 0x400
+      ${If} $2 != 0
+        Goto vid_reject
+      ${EndIf}
+
+      ; Check `GetLongPathNameW` canonical expansion of each existing ancestor against forbidden subtrees
+      StrCpy $1 ""
+      System::Call 'kernel32::GetLongPathNameW(w r0, t .r1, i ${NSIS_MAX_STRLEN})i.r2'
+      ${If} $2 > 0
+      ${AndIf} $2 < ${NSIS_MAX_STRLEN}
+        Push $1
+        Call ${PREFIX}NormalizeDirPath
+        Pop $1
+        Push $1
+        Call ${PREFIX}IsForbiddenSubtree
+        Pop $2
+        ${If} $2 != 0
+          Goto vid_reject
+        ${EndIf}
+      ${EndIf}
+    ${Else}
+      ; Fail closed on ambiguous ancestry errors (anything other than NOT_FOUND / PATH_NOT_FOUND)
+      ${If} $2 <> 2
+      ${AndIf} $2 <> 3
+        Goto vid_reject
+      ${EndIf}
+    ${EndIf}
+
+    Push $R1
+    Call ${PREFIX}GetPathParent
+    Pop $R1
+    ${If} $R1 == ""
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+
+  Goto vid_done
+
+  vid_reject:
+  StrCpy $R0 ""
+
+  vid_done:
+  Pop $2
+  Pop $1
+  Pop $0
+  Pop $R2
+  Pop $R1
+  Exch $R0
+FunctionEnd
+
+; Helper: elevate an executable via ShellExecuteExW (`runas`, `SEE_MASK_NOCLOSEPROCESS`),
+; wait for completion with `WaitForSingleObject`, retrieve child exit code via
+; `GetExitCodeProcess`, and close the process handle.
+; Inputs on stack: exe path (pushed first), parameters (pushed second).
+; Outputs on stack: top = child exit code (or Win32 error code on failure),
+;                   next = 1 if elevated child launched and waited, 0 otherwise.
+Function ${PREFIX}RunElevatedAndWait
+  Exch $R1 ; parameters
+  Exch
+  Exch $R0 ; executable path
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+
+  StrCpy $9 0
+  StrCpy $8 1223
+  StrCpy $3 0
+  StrCpy $4 0
+  StrCpy $5 0
+  StrCpy $6 0
+
+  System::Call '*(&w16 "runas")p.r4'
+  System::Call '*(&w${NSIS_MAX_STRLEN} R0)p.r5'
+  System::Call '*(&w${NSIS_MAX_STRLEN} R1)p.r6'
+
+  ${If} $4 != 0
+  ${AndIf} $5 != 0
+  ${AndIf} $6 != 0
+    !if "${NSIS_PTR_SIZE}" > 4
+      ; 64-bit SHELLEXECUTEINFOW (112 bytes; SEE_MASK_NOCLOSEPROCESS = 0x40, SW_SHOWNORMAL = 1)
+      System::Call '*(i 112, i 0x40, p $HWNDPARENT, p r4, p r5, p r6, p 0, i 1, i 0, p 0, p 0, p 0, p 0, i 0, i 0, p 0, p 0)p.r3'
+    !else
+      ; 32-bit SHELLEXECUTEINFOW (60 bytes; SEE_MASK_NOCLOSEPROCESS = 0x40, SW_SHOWNORMAL = 1)
+      System::Call '*(i 60, i 0x40, p $HWNDPARENT, p r4, p r5, p r6, p 0, i 1, p 0, p 0, p 0, p 0, i 0, p 0, p 0)p.r3'
+    !endif
+  ${EndIf}
+
+  ${If} $3 != 0
+    System::Call 'shell32::ShellExecuteExW(p r3)i.r0 ?e'
+    Pop $1 ; Win32 GetLastError()
+    ${If} $0 <> 0
+      StrCpy $7 0
+      !if "${NSIS_PTR_SIZE}" > 4
+        System::Call '*$3(i, i, p, p, p, p, p, i, i, p, p, p, p, i, i, p, p.r7)'
+      !else
+        System::Call '*$3(i, i, p, p, p, p, p, i, p, p, p, p, i, p, p.r7)'
+      !endif
+      ${If} $7 != 0
+        StrCpy $9 1
+        System::Call 'kernel32::WaitForSingleObject(p r7, i -1)i.r0'
+        StrCpy $8 1
+        ${If} $0 = 0
+          System::Call 'kernel32::GetExitCodeProcess(p r7, *i .r8)i.r2'
+          ${If} $2 = 0
+            StrCpy $8 1
+          ${EndIf}
+        ${EndIf}
+        System::Call 'kernel32::CloseHandle(p r7)'
+      ${Else}
+        ; Fail closed if ShellExecuteExW returned no waitable process handle
+        StrCpy $9 0
+        StrCpy $8 1
+      ${EndIf}
+    ${Else}
+      ${If} $1 <> 0
+        StrCpy $8 $1
+      ${Else}
+        StrCpy $8 1223
+      ${EndIf}
+    ${EndIf}
+    System::Free $3
+  ${EndIf}
+
+  ${If} $6 != 0
+    System::Free $6
+  ${EndIf}
+  ${If} $5 != 0
+    System::Free $5
+  ${EndIf}
+  ${If} $4 != 0
+    System::Free $4
+  ${EndIf}
+
+  StrCpy $R0 $9 ; launched flag
+  StrCpy $R1 $8 ; exit/error code
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+  Exch $R0
+  Exch
+  Exch $R1
+FunctionEnd
+
+; Helper: idempotent delete with short retry for transient AV / process-exit locks
+Function ${PREFIX}DeleteFileWithRetry
+  Exch $R0
+  Push $R1
+  StrCpy $R1 0
+  ${Do}
+    IfFileExists "$R0" 0 dfwr_done
+    ClearErrors
+    Delete "$R0"
+    IfFileExists "$R0" 0 dfwr_done
+    ${If} $R1 >= 15
+      ${ExitDo}
+    ${EndIf}
+    Sleep 300
+    IntOp $R1 $R1 + 1
+  ${Loop}
+  dfwr_done:
+  Pop $R1
+  Pop $R0
+FunctionEnd
+
+; Helper: verify an existing path is a validated real directory and NOT a reparse point (0x400).
+; Input: path on stack. Output: 1 if safe existing non-reparse directory, 0 otherwise.
+Function ${PREFIX}IsSafeExistingNonReparseDir
+  Exch $R0
+  Push $0
+  Push $1
+  Push $2
+
+  Push $R0
+  Call ${PREFIX}ValidateInstallDir
+  Pop $R0
+  ${If} $R0 == ""
+    StrCpy $R0 0
+    Goto isenrd_done
+  ${EndIf}
+
+  StrCpy $0 $R0
+  System::Call 'kernel32::GetFileAttributesW(w r0)i.r1 ?e'
+  Pop $2
+  ${If} $1 = -1
+    StrCpy $R0 0
+    Goto isenrd_done
+  ${EndIf}
+  IntOp $2 $1 & 0x10
+  ${If} $2 = 0
+    StrCpy $R0 0
+    Goto isenrd_done
+  ${EndIf}
+  IntOp $2 $1 & 0x400
+  ${If} $2 != 0
+    StrCpy $R0 0
+    Goto isenrd_done
+  ${EndIf}
+
+  StrCpy $R0 1
+
+  isenrd_done:
+  Pop $2
+  Pop $1
+  Pop $0
+  Exch $R0
+FunctionEnd
+
+; Helper: delete a single known owned file only if its parent chain is validated
+; (no reparse points / forbidden subtrees) and the target is a regular non-reparse file.
+; Input: full file path on stack.
+Function ${PREFIX}DeleteOwnedNonReparseFile
+  Exch $R0
+  Push $R1
+  Push $0
+  Push $1
+  Push $2
+
+  IfFileExists "$R0" 0 donrf_done
+
+  Push $R0
+  Call ${PREFIX}GetPathParent
+  Pop $R1
+  Push $R1
+  Call ${PREFIX}IsSafeExistingNonReparseDir
+  Pop $R1
+  ${If} $R1 <> 1
+    Goto donrf_done
+  ${EndIf}
+
+  StrCpy $0 $R0
+  System::Call 'kernel32::GetFileAttributesW(w r0)i.r1 ?e'
+  Pop $2
+  ${If} $1 = -1
+    Goto donrf_done
+  ${EndIf}
+  IntOp $2 $1 & 0x10
+  ${If} $2 != 0
+    Goto donrf_done
+  ${EndIf}
+  IntOp $2 $1 & 0x400
+  ${If} $2 != 0
+    Goto donrf_done
+  ${EndIf}
+
+  Delete "$R0"
+
+  donrf_done:
+  Pop $2
+  Pop $1
+  Pop $0
+  Pop $R1
+  Pop $R0
+FunctionEnd
+
+; Helper: same safety guards as `DeleteOwnedNonReparseFile`, with retry for transient file locks.
+; Input: full file path on stack.
+Function ${PREFIX}DeleteOwnedNonReparseFileWithRetry
+  Exch $R0
+  Push $R1
+  Push $0
+  Push $1
+  Push $2
+
+  IfFileExists "$R0" 0 donrfr_done
+
+  Push $R0
+  Call ${PREFIX}GetPathParent
+  Pop $R1
+  Push $R1
+  Call ${PREFIX}IsSafeExistingNonReparseDir
+  Pop $R1
+  ${If} $R1 <> 1
+    Goto donrfr_done
+  ${EndIf}
+
+  StrCpy $0 $R0
+  System::Call 'kernel32::GetFileAttributesW(w r0)i.r1 ?e'
+  Pop $2
+  ${If} $1 = -1
+    Goto donrfr_done
+  ${EndIf}
+  IntOp $2 $1 & 0x10
+  ${If} $2 != 0
+    Goto donrfr_done
+  ${EndIf}
+  IntOp $2 $1 & 0x400
+  ${If} $2 != 0
+    Goto donrfr_done
+  ${EndIf}
+
+  Push $R0
+  Call ${PREFIX}DeleteFileWithRetry
+
+  donrfr_done:
+  Pop $2
+  Pop $1
+  Pop $0
+  Pop $R1
+  Pop $R0
+FunctionEnd
+
+; Helper: non-recursively remove known empty directories bottom-up from leafDir until stopRoot.
+; Preserves any unknown files and never follows or removes reparse points.
+; Inputs on stack: stopRoot (pushed first), leafDir (pushed second).
+Function ${PREFIX}RemoveEmptyKnownSubdirChain
+  Exch $R0 ; leafDir
+  Exch
+  Exch $R1 ; stopRoot
+  Push $R2
+  Push $0
+  Push $1
+  Push $2
+
+  Push $R0
+  Call ${PREFIX}NormalizeDirPath
+  Pop $R0
+  Push $R1
+  Call ${PREFIX}NormalizeDirPath
+  Pop $R1
+
+  ${If} $R0 == ""
+  ${OrIf} $R1 == ""
+    Goto reksc_done
+  ${EndIf}
+
+  ${Do}
+    ${If} $R0 == $R1
+      ${ExitDo}
+    ${EndIf}
+    StrLen $R2 $R0
+    ${If} $R2 <= 3
+      ${ExitDo}
+    ${EndIf}
+
+    ; Ensure `$R0` is strictly inside `$R1\`
+    StrLen $R2 "$R1\"
+    StrCpy $0 $R0 $R2
+    ${If} $0 != "$R1\"
+      ${ExitDo}
+    ${EndIf}
+
+    ; Validate full ancestor chain before removing an empty directory
+    Push $R0
+    Call ${PREFIX}ValidateInstallDir
+    Pop $2
+    ${If} $2 == ""
+      ${ExitDo}
+    ${EndIf}
+
+    StrCpy $0 $R0
+    System::Call 'kernel32::GetFileAttributesW(w r0)i.r1 ?e'
+    Pop $2
+    ${If} $1 != -1
+      IntOp $2 $1 & 0x10
+      ${If} $2 = 0
+        ${ExitDo}
+      ${EndIf}
+      IntOp $2 $1 & 0x400
+      ${If} $2 != 0
+        ${ExitDo}
+      ${EndIf}
+      ; Non-recursive RMDir: removes ONLY if empty, preserving unknown files
+      RMDir "$R0"
+    ${EndIf}
+
+    Push $R0
+    Call ${PREFIX}GetPathParent
+    Pop $R0
+    ${If} $R0 == ""
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+
+  reksc_done:
+  Pop $2
+  Pop $1
+  Pop $0
+  Pop $R2
+  Pop $R1
+  Pop $R0
+FunctionEnd
+!macroend
+
+!insertmacro DefineCorePathAndElevationHelpers ""
+!insertmacro DefineCorePathAndElevationHelpers "un."
 
 ; Helper: extract first quoted token from a command line (e.g., UninstallString)
 Function ExtractQuotedPath
@@ -437,178 +1190,12 @@ Function ExtractQuotedPath
   Exch $R0
 FunctionEnd
 
-; Helper: return parent directory of a Windows path (or "" if none)
-Function GetPathParent
-  Exch $R0
-  Push $R1
-  Push $R2
-  Push $R3
-
-  StrLen $R2 $R0
-  StrCpy $R1 1
-  ${Do}
-    ${If} $R1 > $R2
-      StrCpy $R0 ""
-      Goto gpp_done
-    ${EndIf}
-    StrCpy $R3 $R0 1 -$R1
-    ${If} $R3 == "\"
-      StrCpy $R0 $R0 -$R1
-      Goto gpp_done
-    ${EndIf}
-    IntOp $R1 $R1 + 1
-  ${Loop}
-
-  gpp_done:
-  Pop $R3
-  Pop $R2
-  Pop $R1
-  Exch $R0
-FunctionEnd
-
-; Helper: validate that a directory path is safe (drive-rooted, no traversal, not system/root,
-; and neither the directory nor its immediate parent is a reparse point / symlink / junction).
-; Input: candidate path on stack. Output: normalized path on stack, or "" if rejected.
-Function ValidateInstallDir
-  Exch $R0
-  Push $R1
-  Push $R2
-  Push $0
-  Push $1
-  Push $2
-
-  Push $R0
-  Call NormalizeDirPath
-  Pop $R0
-
-  ${If} $R0 == ""
-    Goto vid_reject
-  ${EndIf}
-
-  ; Must be drive-rooted and deeper than drive root (e.g. `C:\x`, len >= 4)
-  StrLen $R1 $R0
-  ${If} $R1 < 4
-    Goto vid_reject
-  ${EndIf}
-  StrCpy $R1 $R0 1 1
-  StrCpy $R2 $R0 1 2
-  ${If} $R1 != ":"
-  ${OrIf} $R2 != "\"
-    Goto vid_reject
-  ${EndIf}
-
-  ; Reject path traversal segments, forward slashes, or wildcards
-  ${StrStr} $R1 $R0 "\..\"
-  ${If} $R1 != ""
-    Goto vid_reject
-  ${EndIf}
-  StrCpy $R1 $R0 3 -3
-  ${If} $R1 == "\.."
-    Goto vid_reject
-  ${EndIf}
-  ${StrStr} $R1 $R0 "/"
-  ${If} $R1 != ""
-    Goto vid_reject
-  ${EndIf}
-  ${StrStr} $R1 $R0 "*"
-  ${If} $R1 != ""
-    Goto vid_reject
-  ${EndIf}
-  ${StrStr} $R1 $R0 "?"
-  ${If} $R1 != ""
-    Goto vid_reject
-  ${EndIf}
-
-  ; Reject system and container roots
-  ${If} $R0 == "$WINDIR"
-  ${OrIf} $R0 == "$SYSDIR"
-  ${OrIf} $R0 == "$PROGRAMFILES"
-  ${OrIf} $R0 == "$PROGRAMFILES64"
-  ${OrIf} $R0 == "$COMMONFILES"
-  ${OrIf} $R0 == "$COMMONFILES64"
-  ${OrIf} $R0 == "$LOCALAPPDATA"
-  ${OrIf} $R0 == "$LOCALAPPDATA\Programs"
-  ${OrIf} $R0 == "$APPDATA"
-  ${OrIf} $R0 == "$PROFILE"
-  ${OrIf} $R0 == "$TEMP"
-  ${OrIf} $R0 == "$DESKTOP"
-  ${OrIf} $R0 == "$SMPROGRAMS"
-    Goto vid_reject
-  ${EndIf}
-
-  ; Reject anything inside Windows directory (`$WINDIR\...`), user AppData (`$APPDATA\...`),
-  ; or shared server home (`$PROFILE\.cowork`) so user data/system dirs are never treated as app dirs.
-  StrLen $R1 "$WINDIR\"
-  StrCpy $R2 $R0 $R1
-  ${If} $R2 == "$WINDIR\"
-    Goto vid_reject
-  ${EndIf}
-
-  StrLen $R1 "$APPDATA\"
-  StrCpy $R2 $R0 $R1
-  ${If} $R2 == "$APPDATA\"
-    Goto vid_reject
-  ${EndIf}
-
-  ${If} $R0 == "$PROFILE\.cowork"
-    Goto vid_reject
-  ${EndIf}
-  StrLen $R1 "$PROFILE\.cowork\"
-  StrCpy $R2 $R0 $R1
-  ${If} $R2 == "$PROFILE\.cowork\"
-    Goto vid_reject
-  ${EndIf}
-
-  ; If directory exists, verify it is a real directory and NOT a reparse point (0x400)
-  StrCpy $0 $R0
-  System::Call 'kernel32::GetFileAttributesW(w r0)i.r1'
-  ${If} $1 != -1
-    IntOp $2 $1 & 0x10
-    ${If} $2 = 0
-      Goto vid_reject
-    ${EndIf}
-    IntOp $2 $1 & 0x400
-    ${If} $2 != 0
-      Goto vid_reject
-    ${EndIf}
-  ${EndIf}
-
-  ; Also verify immediate parent directory (if present) is NOT a reparse point (0x400)
-  Push $R0
-  Call GetPathParent
-  Pop $R1
-  ${If} $R1 != ""
-    StrLen $R2 $R1
-    ${If} $R2 > 2
-      StrCpy $0 $R1
-      System::Call 'kernel32::GetFileAttributesW(w r0)i.r1'
-      ${If} $1 != -1
-        IntOp $2 $1 & 0x400
-        ${If} $2 != 0
-          Goto vid_reject
-        ${EndIf}
-      ${EndIf}
-    ${EndIf}
-  ${EndIf}
-
-  Goto vid_done
-
-  vid_reject:
-  StrCpy $R0 ""
-
-  vid_done:
-  Pop $2
-  Pop $1
-  Pop $0
-  Pop $R2
-  Pop $R1
-  Exch $R0
-FunctionEnd
-
 ; Helper: verify a registered path is safe AND belongs to Cowork (or is a known migration retry).
 ; Input: candidate path on stack. Output: normalized path on stack, or "" if rejected.
 Function ValidateRegisteredCoworkDir
   Exch $R0
+  Push $R1
+
   Push $R0
   Call ValidateInstallDir
   Pop $R0
@@ -624,21 +1211,31 @@ Function ValidateRegisteredCoworkDir
   ${OrIf} ${FileExists} "$R0\${LEGACY_UNINSTALLER_NAME}"
   ${OrIf} ${FileExists} "$R0\${MAINBINARYNAME}.exe"
   ${OrIf} ${FileExists} "$R0\uninstall.exe"
-  ${OrIf} ${FileExists} "$R0\resources\app.asar"
+    Goto vrc_done
+  ${EndIf}
+
+  ; Only check `$R0\resources\app.asar` if `$R0\resources` itself is a non-reparse directory
+  Push "$R0\resources"
+  Call IsSafeExistingNonReparseDir
+  Pop $R1
+  ${If} $R1 = 1
+  ${AndIf} ${FileExists} "$R0\resources\app.asar"
     Goto vrc_done
   ${EndIf}
 
   StrCpy $R0 ""
 
   vrc_done:
+  Pop $R1
   Exch $R0
 FunctionEnd
 
-; Probe a single registry hive (`HKCU` or `HKLM`) strictly in isolation.
+; Probe a single registry hive (`HKCU` or `HKLM`) strictly in isolation under its matching scope.
 ; Populates:
 ;   $ExistingRuneInstallDir, $LegacyInstallDir, $LegacyRegistryPresent,
 ;   $LegacyShortcutName, $LegacyMenuDirectory, $MigrationRetryFlag
-!macro ProbeInstallInHive HIVE
+!macro ProbeInstallInHive HIVE SCOPE
+  StrCpy $ValidationScope "${SCOPE}"
   StrCpy $ExistingRuneInstallDir ""
   StrCpy $LegacyInstallDir ""
   StrCpy $LegacyRegistryPresent 0
@@ -701,6 +1298,46 @@ FunctionEnd
   ReadRegStr $LegacyMenuDirectory ${HIVE} "${LEGACY_INSTALL_KEY}" "MenuDirectory"
 !macroend
 
+; Helper: launch Rune (`${MAINBINARYNAME}.exe`) from a validated install directory
+; strictly in a non-elevated user context. Never spawns an elevated Rune or sidecar.
+; Input: install directory path on stack.
+Function LaunchCoworkNonElevated
+  Exch $R0
+  Push $0
+  Push $1
+
+  Push $R0
+  Call ValidateInstallDir
+  Pop $R0
+  ${If} $R0 == ""
+    Goto lcne_done
+  ${EndIf}
+
+  ${IfNot} ${FileExists} "$R0\${MAINBINARYNAME}.exe"
+    Goto lcne_done
+  ${EndIf}
+
+  System::Call 'shell32::IsUserAnAdmin()i.r0'
+  ${If} $0 = 0
+    ; Running in standard non-elevated user context (normal HKCU install or waiting
+    ; user-context parent of an HKLM install): launch Rune directly in user context.
+    Exec '"$R0\${MAINBINARYNAME}.exe"'
+  ${Else}
+    ; Installer was started already elevated (no non-elevated parent). Never launch
+    ; Rune directly with an elevated token; only delegate through the desktop shell
+    ; (`explorer.exe`) when an interactive shell window exists.
+    System::Call 'user32::GetShellWindow()p.r1'
+    ${If} $1 != 0
+      Exec '"$WINDIR\explorer.exe" "$R0\${MAINBINARYNAME}.exe"'
+    ${EndIf}
+  ${EndIf}
+
+  lcne_done:
+  Pop $1
+  Pop $0
+  Pop $R0
+FunctionEnd
+
 Function .onInit
   !insertmacro SetRegViewForTarget
 
@@ -713,9 +1350,13 @@ Function .onInit
   StrCpy $NoShortcutsFlag 0
   StrCpy $KeepShortcutsFlag 0
   StrCpy $NoDesktopShortcutFlag 0
+  StrCpy $RequestedAllUsersFlag 0
+  StrCpy $RequestedCurrentUserFlag 0
   StrCpy $RequestedScope ""
   StrCpy $ResolvedScope "current"
+  StrCpy $ValidationScope "current"
   StrCpy $AlreadyElevatedFlag 0
+  StrCpy $DeferLaunchToParent 0
   StrCpy $ExplicitInstDir 0
   StrCpy $MigrationRetryFlag 0
   StrCpy $IsUpgradeMode 0
@@ -724,9 +1365,14 @@ Function .onInit
   StrCpy $LegacyRegistryPresent 0
   StrCpy $LegacyShortcutName ""
   StrCpy $LegacyMenuDirectory ""
+  StrCpy $HkcuHasInstall 0
+  StrCpy $HklmHasInstall 0
   StrCpy $HadDesktopShortcut 0
   StrCpy $HadStartMenuShortcut 0
   StrCpy $AppStartMenuFolder ""
+
+  ; Capture user-context profile paths BEFORE `SetShellVarContext all` can ever run
+  !insertmacro CaptureUserContextDirs ""
 
   ; Record whether `/D=<dir>` was passed before `.onInit` (NSIS sets `$INSTDIR` from `/D=`)
   ${If} $INSTDIR != ""
@@ -784,31 +1430,51 @@ Function .onInit
   ClearErrors
   ${GetOptions} $CmdParams "/allusers" $R0
   ${IfNot} ${Errors}
+    StrCpy $RequestedAllUsersFlag 1
     StrCpy $RequestedScope "all"
   ${EndIf}
 
   ClearErrors
   ${GetOptions} $CmdParams "--allusers" $R0
   ${IfNot} ${Errors}
+    StrCpy $RequestedAllUsersFlag 1
     StrCpy $RequestedScope "all"
   ${EndIf}
 
   ClearErrors
   ${GetOptions} $CmdParams "/currentuser" $R0
   ${IfNot} ${Errors}
+    StrCpy $RequestedCurrentUserFlag 1
     StrCpy $RequestedScope "current"
   ${EndIf}
 
   ClearErrors
   ${GetOptions} $CmdParams "--currentuser" $R0
   ${IfNot} ${Errors}
+    StrCpy $RequestedCurrentUserFlag 1
     StrCpy $RequestedScope "current"
+  ${EndIf}
+
+  ; Reject conflicting explicit scope flags immediately
+  ${If} $RequestedAllUsersFlag = 1
+  ${AndIf} $RequestedCurrentUserFlag = 1
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONSTOP "Conflicting installation scope flags were specified."
+    ${EndIf}
+    SetErrorLevel 87
+    Quit
   ${EndIf}
 
   ClearErrors
   ${GetOptions} $CmdParams "/COWORK_ELEVATED" $R0
   ${IfNot} ${Errors}
     StrCpy $AlreadyElevatedFlag 1
+  ${EndIf}
+
+  ClearErrors
+  ${GetOptions} $CmdParams "/COWORK_DEFER_LAUNCH" $R0
+  ${IfNot} ${Errors}
+    StrCpy $DeferLaunchToParent 1
   ${EndIf}
 
   ; Compute single-relaunch policy for silent/passive modes:
@@ -825,39 +1491,77 @@ Function .onInit
     ${EndIf}
   ${EndIf}
 
-  ; Resolve install scope strictly from registered ownership or explicit scope flag.
-  ; Never mix HKCU and HKLM registrations.
+  ; Probe both hives strictly in isolation to detect existing ownership, reject scope
+  ; changes, and reject ambiguous dual-hive installations.
+  !insertmacro ProbeInstallInHive HKCU "current"
+  ${If} $ExistingRuneInstallDir != ""
+  ${OrIf} $LegacyInstallDir != ""
+  ${OrIf} $MigrationRetryFlag = 1
+    StrCpy $HkcuHasInstall 1
+  ${EndIf}
+
+  !insertmacro ProbeInstallInHive HKLM "all"
+  ${If} $ExistingRuneInstallDir != ""
+  ${OrIf} $LegacyInstallDir != ""
+  ${OrIf} $MigrationRetryFlag = 1
+    StrCpy $HklmHasInstall 1
+  ${EndIf}
+
+  ; Reject ambiguous dual-scope installations (both HKCU and HKLM registered)
+  ${If} $HkcuHasInstall = 1
+  ${AndIf} $HklmHasInstall = 1
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONSTOP "Both per-user and per-machine ${PRODUCTNAME} installations were detected. Uninstall one before continuing."
+    ${EndIf}
+    SetErrorLevel 87
+    Quit
+  ${EndIf}
+
+  ; Reject explicit scope changes against an existing installation in the opposite hive
+  ${If} $RequestedScope == "all"
+  ${AndIf} $HkcuHasInstall = 1
+  ${AndIf} $HklmHasInstall = 0
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONSTOP "Cannot change an existing per-user ${PRODUCTNAME} installation to per-machine scope."
+    ${EndIf}
+    SetErrorLevel 87
+    Quit
+  ${EndIf}
+
+  ${If} $RequestedScope == "current"
+  ${AndIf} $HklmHasInstall = 1
+  ${AndIf} $HkcuHasInstall = 0
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONSTOP "Cannot change an existing per-machine ${PRODUCTNAME} installation to per-user scope."
+    ${EndIf}
+    SetErrorLevel 87
+    Quit
+  ${EndIf}
+
+  ; Resolve final scope cleanly
   !if "${INSTALLMODE}" == "perMachine"
     ${If} $RequestedScope == ""
+    ${AndIf} $HkcuHasInstall = 0
       StrCpy $RequestedScope "all"
     ${EndIf}
   !endif
 
   ${If} $RequestedScope == "all"
+  ${OrIf} $HklmHasInstall = 1
     StrCpy $ResolvedScope "all"
-    !insertmacro ProbeInstallInHive HKLM
-  ${ElseIf} $RequestedScope == "current"
-    StrCpy $ResolvedScope "current"
-    !insertmacro ProbeInstallInHive HKCU
+    StrCpy $ValidationScope "all"
+    !insertmacro ProbeInstallInHive HKLM "all"
   ${Else}
-    ; Auto-detect scope: prefer legitimate per-user HKCU install, then per-machine HKLM install
-    !insertmacro ProbeInstallInHive HKCU
-    ${If} $ExistingRuneInstallDir != ""
-    ${OrIf} $LegacyInstallDir != ""
-    ${OrIf} $MigrationRetryFlag = 1
-      StrCpy $ResolvedScope "current"
-    ${Else}
-      !insertmacro ProbeInstallInHive HKLM
-      ${If} $ExistingRuneInstallDir != ""
-      ${OrIf} $LegacyInstallDir != ""
-      ${OrIf} $MigrationRetryFlag = 1
-        StrCpy $ResolvedScope "all"
-      ${Else}
-        ; Fresh install defaults to per-user HKCU
-        StrCpy $ResolvedScope "current"
-        !insertmacro ProbeInstallInHive HKCU
-      ${EndIf}
-    ${EndIf}
+    StrCpy $ResolvedScope "current"
+    StrCpy $ValidationScope "current"
+    !insertmacro ProbeInstallInHive HKCU "current"
+  ${EndIf}
+
+  ; Never allow a scope downgrade/change across our self-elevation boundary
+  ${If} $AlreadyElevatedFlag = 1
+  ${AndIf} $ResolvedScope != "all"
+    SetErrorLevel 87
+    Quit
   ${EndIf}
 
   ; If resolved scope is per-machine (HKLM), require administrator privileges.
@@ -873,8 +1577,26 @@ Function .onInit
         Quit
       ${EndIf}
 
-      ; Re-launch elevated, placing internal flags BEFORE `$CmdParams` so any `/D=` remains last
-      StrCpy $2 "/COWORK_ELEVATED /allusers"
+      ; Validate explicit `/D=` BEFORE triggering UAC so unsafe/cross-scope paths fail fast
+      ${If} $ExplicitInstDir = 1
+        Push $INSTDIR
+        Call ValidateInstallDir
+        Pop $R0
+        ${If} $R0 == ""
+          ${IfNot} ${Silent}
+            MessageBox MB_ICONSTOP "The requested installation directory is invalid or unsafe."
+          ${EndIf}
+          SetErrorLevel 87
+          Quit
+        ${EndIf}
+        StrCpy $INSTDIR $R0
+      ${EndIf}
+
+      ; Re-launch elevated, suppressing relaunch inside the elevated child so THIS
+      ; user-context parent waits for completion, propagates exit status, and performs
+      ; at most ONE non-elevated launch on success. Place internal flags BEFORE
+      ; `$CmdParams` so any `/D=` remains last.
+      StrCpy $2 "/COWORK_ELEVATED /COWORK_DEFER_LAUNCH /allusers"
       ${If} $CmdParams != ""
         StrCpy $2 "$2 $CmdParams"
       ${EndIf}
@@ -884,12 +1606,47 @@ Function .onInit
           StrCpy $2 "$2 /D=$INSTDIR"
         ${EndIf}
       ${EndIf}
-      StrCpy $1 "$EXEPATH"
-      System::Call 'shell32::ShellExecuteW(p $HWNDPARENT, w "runas", w r1, w r2, w "", i 1)i.r0'
-      ${If} $0 <= 32
-        SetErrorLevel 1223
+
+      Push "$EXEPATH"
+      Push "$2"
+      Call RunElevatedAndWait
+      Pop $8 ; child exit code (or Win32 error code)
+      Pop $9 ; launched flag
+
+      ${If} $9 = 0
+        SetErrorLevel $8
         Quit
       ${EndIf}
+
+      ; Translate interactive GUI "Run Cowork" sentinel back to exit code 0 + parent launch
+      ${If} $8 = ${COWORK_EXIT_LAUNCH_REQUESTED}
+        StrCpy $ShouldRelaunch 1
+        StrCpy $8 0
+      ${EndIf}
+
+      ; Propagate any non-zero child failure without launching Rune
+      ${If} $8 <> 0
+        SetErrorLevel $8
+        Quit
+      ${EndIf}
+
+      ; Elevated install succeeded: perform at most ONE non-elevated launch from this
+      ; user-context parent using the validated installed HKLM location.
+      ${If} $ShouldRelaunch = 1
+        StrCpy $ShouldRelaunch 0
+        ReadRegStr $R0 HKLM "${MANUPRODUCTKEY}" "InstallLocation"
+        ${If} $R0 == ""
+          ReadRegStr $R0 HKLM "${MANUPRODUCTKEY}" ""
+        ${EndIf}
+        ${If} $R0 == ""
+          ReadRegStr $R0 HKLM "${UNINSTKEY}" "InstallLocation"
+        ${EndIf}
+        ${If} $R0 != ""
+          Push $R0
+          Call LaunchCoworkNonElevated
+        ${EndIf}
+      ${EndIf}
+
       SetErrorLevel 0
       Quit
     ${EndIf}
@@ -950,9 +1707,11 @@ Function .onInit
     StrCpy $HadDesktopShortcut 1
   ${EndIf}
 
+  StrCpy $R0 $AppStartMenuFolder 1
   ${If} ${FileExists} "$SMPROGRAMS\${PRODUCTNAME}.lnk"
     StrCpy $HadStartMenuShortcut 1
   ${ElseIf} $AppStartMenuFolder != ""
+  ${AndIf} $R0 != ">"
   ${AndIf} ${FileExists} "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
     StrCpy $HadStartMenuShortcut 1
   ${ElseIf} $LegacyShortcutName != ""
@@ -1052,76 +1811,178 @@ SectionEnd
   !insertmacro WaitAndCloseProcess "${SIDECAR_PROC_NAME}"
 !macroend
 
-; Helper: idempotent delete with short retry for transient AV / process-exit locks
-Function DeleteFileWithRetry
-  Exch $R0
-  Push $R1
-  StrCpy $R1 0
-  ${Do}
-    IfFileExists "$R0" 0 dfwr_done
-    ClearErrors
-    Delete "$R0"
-    IfFileExists "$R0" 0 dfwr_done
-    ${If} $R1 >= 15
-      ${ExitDo}
-    ${EndIf}
-    Sleep 300
-    IntOp $R1 $R1 + 1
-  ${Loop}
-  dfwr_done:
-  Pop $R1
-  Pop $R0
-FunctionEnd
-
-; Helper: surgically remove legacy Electron runtime files from a validated Cowork directory.
-; Never touches `%APPDATA%\Cowork`, `%APPDATA%\desktop`, `%USERPROFILE%\.cowork`, or user files.
+; Helper: surgically remove ONLY known owned legacy Electron runtime files from a validated
+; Cowork directory without any recursive deletion (`RMDir /r`). Unknown files and all user
+; profile directories (`%APPDATA%\Cowork`, `%APPDATA%\desktop`, `%USERPROFILE%\.cowork`)
+; are strictly preserved.
 Function CleanupValidatedLegacyElectronFiles
   ${If} $LegacyInstallDir == ""
     Return
   ${EndIf}
 
-  ; Re-verify path safety immediately before deleting any legacy application files
+  ; Re-verify path safety and scope ownership immediately before removing any legacy file
+  StrCpy $ValidationScope $ResolvedScope
   Push $LegacyInstallDir
   Call ValidateRegisteredCoworkDir
   Pop $R0
   ${If} $R0 == ""
     Return
   ${EndIf}
+  StrCpy $LegacyInstallDir $R0
 
   ; Remove legacy main binary and uninstaller first (abort if legacy app is still locked)
   Push "$LegacyInstallDir\${LEGACY_EXECUTABLE_NAME}"
-  Call DeleteFileWithRetry
+  Call DeleteOwnedNonReparseFileWithRetry
   ${If} ${FileExists} "$LegacyInstallDir\${LEGACY_EXECUTABLE_NAME}"
     Abort "$(failedToKillApp)"
   ${EndIf}
 
   Push "$LegacyInstallDir\${LEGACY_UNINSTALLER_NAME}"
-  Call DeleteFileWithRetry
+  Call DeleteOwnedNonReparseFileWithRetry
 
-  ; Remove known Electron/Chromium runtime files and directories (idempotent on retry)
-  Delete "$LegacyInstallDir\chrome_100_percent.pak"
-  Delete "$LegacyInstallDir\chrome_200_percent.pak"
-  Delete "$LegacyInstallDir\chrome_elf.dll"
-  Delete "$LegacyInstallDir\resources.pak"
-  Delete "$LegacyInstallDir\icudtl.dat"
-  Delete "$LegacyInstallDir\v8_context_snapshot.bin"
-  Delete "$LegacyInstallDir\snapshot_blob.bin"
-  Delete "$LegacyInstallDir\ffmpeg.dll"
-  Delete "$LegacyInstallDir\libEGL.dll"
-  Delete "$LegacyInstallDir\libGLESv2.dll"
-  Delete "$LegacyInstallDir\d3dcompiler_47.dll"
-  Delete "$LegacyInstallDir\dxcompiler.dll"
-  Delete "$LegacyInstallDir\dxil.dll"
-  Delete "$LegacyInstallDir\vk_swiftshader.dll"
-  Delete "$LegacyInstallDir\vk_swiftshader_icd.json"
-  Delete "$LegacyInstallDir\vulkan-1.dll"
-  Delete "$LegacyInstallDir\LICENSE.electron.txt"
-  Delete "$LegacyInstallDir\LICENSES.chromium.html"
-  Delete "$LegacyInstallDir\version"
-  Delete "$LegacyInstallDir\debug.log"
-  RMDir /r "$LegacyInstallDir\locales"
-  RMDir /r "$LegacyInstallDir\resources"
-  RMDir /r "$LegacyInstallDir\swiftshader"
+  ; Remove known top-level Electron/Chromium runtime files (idempotent on retry)
+  Push "$LegacyInstallDir\chrome_100_percent.pak"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\chrome_200_percent.pak"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\chrome_elf.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\resources.pak"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\icudtl.dat"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\v8_context_snapshot.bin"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\snapshot_blob.bin"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\ffmpeg.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\libEGL.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\libGLESv2.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\d3dcompiler_47.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\dxcompiler.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\dxil.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\vk_swiftshader.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\vk_swiftshader_icd.json"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\vulkan-1.dll"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\LICENSE.electron.txt"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\LICENSES.chromium.html"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\version"
+  Call DeleteOwnedNonReparseFile
+  Push "$LegacyInstallDir\debug.log"
+  Call DeleteOwnedNonReparseFile
+
+  ; Clean known owned files in `swiftshader` without recursive deletion
+  Push "$LegacyInstallDir\swiftshader"
+  Call IsSafeExistingNonReparseDir
+  Pop $R0
+  ${If} $R0 = 1
+    Push "$LegacyInstallDir\swiftshader\libEGL.dll"
+    Call DeleteOwnedNonReparseFile
+    Push "$LegacyInstallDir\swiftshader\libGLESv2.dll"
+    Call DeleteOwnedNonReparseFile
+    Push "$LegacyInstallDir\swiftshader\vk_swiftshader.dll"
+    Call DeleteOwnedNonReparseFile
+    RMDir "$LegacyInstallDir\swiftshader"
+  ${EndIf}
+
+  ; Clean known Chromium locale `.pak` files in `locales` without recursive deletion
+  Push "$LegacyInstallDir\locales"
+  Call IsSafeExistingNonReparseDir
+  Pop $R0
+  ${If} $R0 = 1
+    ClearErrors
+    FindFirst $R1 $R2 "$LegacyInstallDir\locales\*.pak"
+    ${DoWhile} $R2 != ""
+      Push "$LegacyInstallDir\locales\$R2"
+      Call DeleteOwnedNonReparseFile
+      ClearErrors
+      FindNext $R1 $R2
+      ${If} ${Errors}
+        StrCpy $R2 ""
+      ${EndIf}
+    ${Loop}
+    ${If} $R1 != ""
+      FindClose $R1
+    ${EndIf}
+    RMDir "$LegacyInstallDir\locales"
+  ${EndIf}
+
+  ; Clean known owned Electron `resources` files without recursive deletion (preserves unknown files)
+  Push "$LegacyInstallDir\resources"
+  Call IsSafeExistingNonReparseDir
+  Pop $R0
+  ${If} $R0 = 1
+    Push "$LegacyInstallDir\resources\app.asar"
+    Call DeleteOwnedNonReparseFileWithRetry
+    Push "$LegacyInstallDir\resources\app-update.yml"
+    Call DeleteOwnedNonReparseFile
+    Push "$LegacyInstallDir\resources\elevate.exe"
+    Call DeleteOwnedNonReparseFile
+    Push "$LegacyInstallDir\resources\package-type"
+    Call DeleteOwnedNonReparseFile
+
+    ; Clean known legacy Electron tray icons
+    Push "$LegacyInstallDir\resources\tray"
+    Call IsSafeExistingNonReparseDir
+    Pop $R1
+    ${If} $R1 = 1
+      Push "$LegacyInstallDir\resources\tray\icon.png"
+      Call DeleteOwnedNonReparseFile
+      Push "$LegacyInstallDir\resources\tray\icon.ico"
+      Call DeleteOwnedNonReparseFile
+      RMDir "$LegacyInstallDir\resources\tray"
+    ${EndIf}
+
+    ; Clean known legacy Electron sidecar and Windows sandbox helpers
+    Push "$LegacyInstallDir\resources\binaries"
+    Call IsSafeExistingNonReparseDir
+    Pop $R1
+    ${If} $R1 = 1
+      Push "$LegacyInstallDir\resources\binaries\cowork-server-x86_64-pc-windows-msvc.exe"
+      Call DeleteOwnedNonReparseFileWithRetry
+      Push "$LegacyInstallDir\resources\binaries\cowork-server-aarch64-pc-windows-msvc.exe"
+      Call DeleteOwnedNonReparseFileWithRetry
+      Push "$LegacyInstallDir\resources\binaries\cowork-server-manifest.json"
+      Call DeleteOwnedNonReparseFile
+      Push "$LegacyInstallDir\resources\binaries\sidecar-manifest.json"
+      Call DeleteOwnedNonReparseFile
+      Push "$LegacyInstallDir\resources\binaries\cowork-win-sandbox.exe"
+      Call DeleteOwnedNonReparseFileWithRetry
+      Push "$LegacyInstallDir\resources\binaries\codex-windows-sandbox-setup.exe"
+      Call DeleteOwnedNonReparseFileWithRetry
+      Push "$LegacyInstallDir\resources\binaries\codex-command-runner.exe"
+      Call DeleteOwnedNonReparseFileWithRetry
+      Push "$LegacyInstallDir\resources\binaries\cowork-win-sandbox.sha256.json"
+      Call DeleteOwnedNonReparseFile
+      RMDir "$LegacyInstallDir\resources\binaries"
+    ${EndIf}
+
+    ; Remove known bundled resource files matching the Cowork resource layout under `resources\`
+    {{#each resources}}
+      Push "$LegacyInstallDir\resources\\{{this}}"
+      Call DeleteOwnedNonReparseFile
+    {{/each}}
+
+    ; Remove now-empty known resource subdirectories bottom-up (non-recursive RMDir only)
+    {{#each resources_dirs}}
+      Push "$LegacyInstallDir\resources"
+      Push "$LegacyInstallDir\resources\\{{this}}"
+      Call RemoveEmptyKnownSubdirChain
+    {{/each}}
+
+    RMDir "$LegacyInstallDir\resources"
+  ${EndIf}
 
   ; If adopting into a different directory (e.g. explicit `/D=`), remove old dir only if now empty
   ${If} $LegacyInstallDir != $INSTDIR
@@ -1130,7 +1991,8 @@ Function CleanupValidatedLegacyElectronFiles
 FunctionEnd
 
 Section Install
-  ; Ensure target `$INSTDIR` is still safe (e.g. if changed interactively on Directory page)
+  ; Ensure target `$INSTDIR` is still safe and within the active scope (e.g. if changed interactively)
+  StrCpy $ValidationScope $ResolvedScope
   Push $INSTDIR
   Call ValidateInstallDir
   Pop $R0
@@ -1273,14 +2135,34 @@ Section Install
   ${IfThen} $PassiveMode = 1 ${|} SetAutoClose true ${|}
 SectionEnd
 
+Function OnFinishPageRun
+  ; In interactive GUI mode, when spawned by our non-elevated user-context parent,
+  ; never launch Rune inside the elevated child; signal the waiting parent instead.
+  ${If} $DeferLaunchToParent = 1
+    SetErrorLevel ${COWORK_EXIT_LAUNCH_REQUESTED}
+    Return
+  ${EndIf}
+  StrCpy $ValidationScope $ResolvedScope
+  Push $INSTDIR
+  Call LaunchCoworkNonElevated
+FunctionEnd
+
 Function .onInstSuccess
+  ; When spawned by our non-elevated user-context parent, suppress relaunch inside
+  ; the elevated child so the waiting parent performs at most one non-elevated launch.
+  ${If} $DeferLaunchToParent = 1
+    Return
+  ${EndIf}
+
   ; Relaunch Rune ONCE in silent/passive modes when requested by `/R`, `--force-run`,
-  ; or non-silent `--updated`. In interactive GUI mode, `MUI_FINISHPAGE_RUN` handles launch.
+  ; or non-silent `--updated`. In interactive GUI mode, `OnFinishPageRun` handles launch.
   ${If} ${Silent}
   ${OrIf} $PassiveMode = 1
     ${If} $ShouldRelaunch = 1
       StrCpy $ShouldRelaunch 0
-      Exec '"$INSTDIR\${MAINBINARYNAME}.exe"'
+      StrCpy $ValidationScope $ResolvedScope
+      Push $INSTDIR
+      Call LaunchCoworkNonElevated
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -1290,6 +2172,10 @@ Function un.onInit
 
   StrCpy $PassiveMode 0
   StrCpy $UnAlreadyElevated 0
+  StrCpy $ValidationScope "current"
+
+  ; Capture user-context profile paths BEFORE `SetShellVarContext all` can ever run
+  !insertmacro CaptureUserContextDirs "un."
 
   ClearErrors
   ${GetOptions} $CMDLINE "/P" $R0
@@ -1303,18 +2189,90 @@ Function un.onInit
     StrCpy $UnAlreadyElevated 1
   ${EndIf}
 
-  ; Determine whether this uninstaller belongs to an HKLM (per-machine) or HKCU (per-user) install
+  ; Normalize `$INSTDIR` before matching against HKLM / HKCU registrations
+  Push $INSTDIR
+  Call un.NormalizeDirPath
+  Pop $INSTDIR
+
+  ; Read normalized registered install paths from HKLM and HKCU strictly in isolation
   ReadRegStr $R0 HKLM "${MANUPRODUCTKEY}" ""
-  ReadRegStr $R1 HKCU "${MANUPRODUCTKEY}" ""
-  StrCpy $R2 "current"
+  ${If} $R0 == ""
+    ReadRegStr $R0 HKLM "${MANUPRODUCTKEY}" "InstallLocation"
+  ${EndIf}
+  ${If} $R0 == ""
+    ReadRegStr $R0 HKLM "${UNINSTKEY}" "InstallLocation"
+  ${EndIf}
   ${If} $R0 != ""
-    ${If} $R0 == $INSTDIR
-    ${OrIf} $R1 == ""
-      StrCpy $R2 "all"
+    Push $R0
+    Call un.NormalizeDirPath
+    Pop $R0
+  ${EndIf}
+
+  ReadRegStr $R1 HKCU "${MANUPRODUCTKEY}" ""
+  ${If} $R1 == ""
+    ReadRegStr $R1 HKCU "${MANUPRODUCTKEY}" "InstallLocation"
+  ${EndIf}
+  ${If} $R1 == ""
+    ReadRegStr $R1 HKCU "${UNINSTKEY}" "InstallLocation"
+  ${EndIf}
+  ${If} $R1 != ""
+    Push $R1
+    Call un.NormalizeDirPath
+    Pop $R1
+  ${EndIf}
+
+  StrCpy $R3 0
+  StrCpy $R4 0
+  ${If} $R0 != ""
+  ${AndIf} $R0 == $INSTDIR
+    StrCpy $R3 1
+  ${EndIf}
+  ${If} $R1 != ""
+  ${AndIf} $R1 == $INSTDIR
+    StrCpy $R4 1
+  ${EndIf}
+
+  ; Reject ambiguous dual-hive ownership for `$INSTDIR`
+  ${If} $R3 = 1
+  ${AndIf} $R4 = 1
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONSTOP "Ambiguous per-user and per-machine ${PRODUCTNAME} registrations were found for this directory."
+    ${EndIf}
+    SetErrorLevel 87
+    Quit
+  ${EndIf}
+
+  StrCpy $R2 "current"
+  ${If} $R3 = 1
+    StrCpy $R2 "all"
+  ${ElseIf} $R4 = 1
+    StrCpy $R2 "current"
+  ${Else}
+    ; Do not escalate privileges or uninstall an unregistered directory when HKLM owns a different path
+    ${If} $UnAlreadyElevated = 1
+      SetErrorLevel 87
+      Quit
+    ${EndIf}
+    ${If} $R0 != ""
+    ${AndIf} $R1 == ""
+      SetErrorLevel 87
+      Quit
     ${EndIf}
   ${EndIf}
 
+  StrCpy $ValidationScope $R2
+
   ${If} $R2 == "all"
+    ; Validate `$INSTDIR` under per-machine scope BEFORE requesting UAC elevation
+    Push $INSTDIR
+    Call un.ValidateInstallDir
+    Pop $R5
+    ${If} $R5 == ""
+      SetErrorLevel 87
+      Quit
+    ${EndIf}
+    StrCpy $INSTDIR $R5
+
     SetShellVarContext all
     System::Call 'shell32::IsUserAnAdmin()i.r0'
     ${If} $0 = 0
@@ -1325,48 +2283,74 @@ Function un.onInit
         SetErrorLevel 5
         Quit
       ${EndIf}
-      ; Prefer the installed `uninstall.exe` over the transient temp copy `$EXEPATH`
+
+      ; Prefer the installed `uninstall.exe` WITHOUT `_?=$INSTDIR` so NSIS uses its
+      ; standard temp-copy self-removal mechanism (copying itself to `%TEMP%` before
+      ; running cleanup, allowing `$INSTDIR\uninstall.exe` and `$INSTDIR` to be removed).
+      ; Keep `_?=$INSTDIR` strictly for the `$EXEPATH` fallback when already relocated.
       ${If} ${FileExists} "$INSTDIR\uninstall.exe"
         StrCpy $1 "$INSTDIR\uninstall.exe"
+        StrCpy $2 "/COWORK_ELEVATED"
       ${Else}
         StrCpy $1 "$EXEPATH"
+        StrCpy $2 "/COWORK_ELEVATED _?=$INSTDIR"
       ${EndIf}
-      StrCpy $2 "/COWORK_ELEVATED _?=$INSTDIR"
       ${If} ${Silent}
         StrCpy $2 "/S $2"
       ${EndIf}
       ${If} $PassiveMode = 1
         StrCpy $2 "/P $2"
       ${EndIf}
-      System::Call 'shell32::ShellExecuteW(p $HWNDPARENT, w "runas", w r1, w r2, w "", i 1)i.r0'
-      ${If} $0 <= 32
-        SetErrorLevel 1223
-        Quit
-      ${EndIf}
-      SetErrorLevel 0
+
+      Push "$1"
+      Push "$2"
+      Call un.RunElevatedAndWait
+      Pop $8 ; child exit code (or Win32 error code)
+      Pop $9 ; launched flag
+      SetErrorLevel $8
       Quit
     ${EndIf}
   ${Else}
     SetShellVarContext current
+    Push $INSTDIR
+    Call un.ValidateInstallDir
+    Pop $R5
+    ${If} $R5 == ""
+      SetErrorLevel 87
+      Quit
+    ${EndIf}
+    StrCpy $INSTDIR $R5
   ${EndIf}
 
   !insertmacro MUI_UNGETLANGUAGE
 FunctionEnd
 
 Section Uninstall
+  ; Re-validate `$INSTDIR` before deleting any files
+  Push $INSTDIR
+  Call un.ValidateInstallDir
+  Pop $R0
+  ${If} $R0 == ""
+    Abort "Invalid installation directory."
+  ${EndIf}
+  StrCpy $INSTDIR $R0
+
   !insertmacro WaitAndCloseCoworkProcesses
 
-  ; Remove installed Rune application files (never touch user data directories)
-  Delete "$INSTDIR\${MAINBINARYNAME}.exe"
+  ; Remove installed Rune application files (only known non-reparse files; never touch user data)
+  Push "$INSTDIR\${MAINBINARYNAME}.exe"
+  Call un.DeleteOwnedNonReparseFileWithRetry
 
   ; Delete resources
   {{#each resources}}
-    Delete "$INSTDIR\\{{this}}"
+    Push "$INSTDIR\\{{this}}"
+    Call un.DeleteOwnedNonReparseFile
   {{/each}}
 
   ; Delete external binaries
   {{#each binaries}}
-    Delete "$INSTDIR\\{{this}}"
+    Push "$INSTDIR\\{{this}}"
+    Call un.DeleteOwnedNonReparseFileWithRetry
   {{/each}}
 
   ; Delete file associations
@@ -1384,17 +2368,22 @@ Section Uninstall
     ${EndIf}
   {{/each}}
 
-  ; Delete uninstaller and empty install directories
-  Delete "$INSTDIR\uninstall.exe"
+  ; Delete uninstaller (running from `%TEMP%` via standard NSIS temp-copy) and empty known dirs
+  Push "$INSTDIR\uninstall.exe"
+  Call un.DeleteOwnedNonReparseFileWithRetry
 
   {{#each resources_dirs}}
-  RMDir /REBOOTOK "$INSTDIR\\{{this}}"
+  Push "$INSTDIR"
+  Push "$INSTDIR\\{{this}}"
+  Call un.RemoveEmptyKnownSubdirChain
   {{/each}}
   RMDir "$INSTDIR"
 
-  ; Remove Start Menu shortcuts (both foldered and top-level)
+  ; Remove Start Menu shortcuts (both foldered and top-level; ignore MUI2 `>` disabled sentinel)
   ReadRegStr $AppStartMenuFolder SHCTX "${MANUPRODUCTKEY}" "StartMenuFolder"
+  StrCpy $R0 $AppStartMenuFolder 1
   ${If} $AppStartMenuFolder != ""
+  ${AndIf} $R0 != ">"
     Delete "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
     RMDir "$SMPROGRAMS\$AppStartMenuFolder"
   ${EndIf}
@@ -1427,6 +2416,11 @@ Function CreateDesktopShortcut
 FunctionEnd
 
 Function CreateStartMenuShortcut
+  StrCpy $R0 $AppStartMenuFolder 1
+  ${If} $R0 == ">"
+    ; MUI2 stores a leading `>` sentinel when "Do not create shortcuts" was selected
+    Return
+  ${EndIf}
   ${If} $AppStartMenuFolder != ""
     CreateDirectory "$SMPROGRAMS\$AppStartMenuFolder"
     CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"

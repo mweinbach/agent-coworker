@@ -758,6 +758,7 @@ export function validateMigrationNsisTemplate(templateText: string): void {
     "{{version}}",
     "{{arch}}",
     "{{#each resources}}",
+    "{{#each resources_dirs}}",
     "{{#each binaries}}",
     // Legacy Electron identity & ownership
     LEGACY_WINDOWS_ELECTRON_APP_GUID,
@@ -773,13 +774,33 @@ export function validateMigrationNsisTemplate(templateText: string): void {
     '"/P"',
     '"/R"',
     '"/NS"',
-    // 64-bit registry view, privilege isolation, safe path checks, retry marker, shell notifications
+    // 64-bit registry view, synchronous privilege handoff, non-elevated single launch
     "SetRegView 64",
     "IsUserAnAdmin",
-    'ShellExecuteW(p $HWNDPARENT, w "runas"',
+    "ShellExecuteExW",
+    "WaitForSingleObject",
+    "GetExitCodeProcess",
+    "CloseHandle",
     "/COWORK_ELEVATED",
+    "/COWORK_DEFER_LAUNCH",
+    "COWORK_EXIT_LAUNCH_REQUESTED",
+    "LaunchCoworkNonElevated",
+    "MUI_FINISHPAGE_RUN_FUNCTION OnFinishPageRun",
+    "GetShellWindow",
+    // Full ancestor validation, user-profile exclusion, non-recursive owned cleanup, retry/shell
     "GetFileAttributesW",
+    "GetFullPathNameW",
+    "GetLongPathNameW",
     "0x400",
+    "IsForbiddenSubtree",
+    "$UserAppDataDir",
+    "$PROFILE\\AppData\\Roaming",
+    "\\AppData\\Roaming\\",
+    "\\.cowork\\",
+    "DeleteOwnedNonReparseFile",
+    "IsSafeExistingNonReparseDir",
+    "RemoveEmptyKnownSubdirChain",
+    "${UnStrStr}",
     "MigrationInProgress",
     "MigratedFrom",
     "ApplicationID::Set",
@@ -801,19 +822,104 @@ export function validateMigrationNsisTemplate(templateText: string): void {
     }
   }
 
+  // Strip full-line NSIS comments (`; ...`) for executable-line safety checks
+  const activeLines = templateText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith(";"));
+  const activeScript = activeLines.join("\n");
+
   // Must NEVER delete user data directories
   const forbiddenUserDataDeletes = [
     'RMDir /r "$APPDATA',
     'RmDir /r "$APPDATA',
     'RMDir /r "$PROFILE\\.cowork',
     'RmDir /r "$PROFILE\\.cowork',
+    'RMDir /r "$UserAppDataDir',
+    'RmDir /r "$UserAppDataDir',
   ];
   for (const forbidden of forbiddenUserDataDeletes) {
-    if (templateText.includes(forbidden)) {
+    if (activeScript.includes(forbidden)) {
       throw new Error(
         `Migration NSIS template must never delete user data directories (${forbidden}).`,
       );
     }
+  }
+
+  // Must NEVER perform recursive directory deletion (`RMDir /r`) anywhere in installer or uninstaller
+  if (/\bRMDir\s+\/r\b/i.test(activeScript)) {
+    throw new Error(
+      "Migration NSIS template must not use recursive `RMDir /r`; delete only known owned files and empty directories.",
+    );
+  }
+
+  // Must NOT use fire-and-forget `ShellExecuteW(..., "runas", ...)` without waiting
+  if (/ShellExecuteW\s*\([^)]*"runas"/i.test(activeScript)) {
+    throw new Error(
+      'Migration NSIS template must use synchronous ShellExecuteExW + WaitForSingleObject + GetExitCodeProcess instead of fire-and-forget ShellExecuteW("runas").',
+    );
+  }
+
+  // Must NOT bind `MUI_FINISHPAGE_RUN` directly to an executable path (which would launch elevated)
+  if (/^!define\s+MUI_FINISHPAGE_RUN\s+"/m.test(activeScript)) {
+    throw new Error(
+      "Migration NSIS template must use `MUI_FINISHPAGE_RUN_FUNCTION` instead of direct `MUI_FINISHPAGE_RUN` executable launch.",
+    );
+  }
+
+  // Uninstaller elevation of `$INSTDIR\uninstall.exe` must omit `_?=` so NSIS restores standard
+  // `%TEMP%` copy self-removal; `_?=$INSTDIR` is only permitted on the `$EXEPATH` fallback.
+  const unOnInitMatch = activeScript.match(/Function\s+un\.onInit\b([\s\S]*?)FunctionEnd/);
+  if (!unOnInitMatch) {
+    throw new Error("Migration NSIS template is missing `Function un.onInit`.");
+  }
+  const unOnInitBody = unOnInitMatch[1];
+  const installedUninstBranch = unOnInitBody.match(
+    /\$\{If\}\s+\$\{FileExists\}\s+"\$INSTDIR\\uninstall\.exe"([\s\S]*?)\$\{Else\}/,
+  );
+  if (!installedUninstBranch) {
+    throw new Error(
+      'Migration NSIS template `un.onInit` must branch on `${FileExists} "$INSTDIR\\uninstall.exe"` when elevating.',
+    );
+  }
+  if (installedUninstBranch[1].includes("_?=")) {
+    throw new Error(
+      'Migration NSIS template `un.onInit` must omit `_?=` when elevating "$INSTDIR\\uninstall.exe" so NSIS temp-copy self-removal works.',
+    );
+  }
+
+  // Verify NSIS and Handlebars block balance across the template
+  const countMatches = (regex: RegExp) => activeLines.filter((line) => regex.test(line)).length;
+  const blockPairs: Array<[string, RegExp, RegExp]> = [
+    ["Function/FunctionEnd", /^Function\s+/, /^FunctionEnd$/],
+    ["Section/SectionEnd", /^Section(?:\s+|$)/, /^SectionEnd$/],
+    ["!macro/!macroend", /^!macro\s+/, /^!macroend$/],
+    ["!if/!endif", /^!if(?:n?def)?\s+/, /^!endif$/],
+    ["${If}/${EndIf}", /^\$\{If(?:Not)?\}\s+/, /^\$\{EndIf\}$/],
+    ["${Do}/${Loop}", /^\$\{Do(?:While)?\}(?:\s+|$)/, /^\$\{Loop\}$/],
+  ];
+  for (const [label, openRe, closeRe] of blockPairs) {
+    const opens = countMatches(openRe);
+    const closes = countMatches(closeRe);
+    if (opens !== closes) {
+      throw new Error(
+        `Migration NSIS template has unbalanced ${label} blocks (open=${opens}, close=${closes}).`,
+      );
+    }
+  }
+  const hbEachOpen = (templateText.match(/\{\{#each\b/g) ?? []).length;
+  const hbEachClose = (templateText.match(/\{\{\/each\}\}/g) ?? []).length;
+  if (hbEachOpen !== hbEachClose) {
+    throw new Error(
+      `Migration NSIS template has unbalanced Handlebars {{#each}} blocks (open=${hbEachOpen}, close=${hbEachClose}).`,
+    );
+  }
+  const hbIfOpen = (templateText.match(/\{\{#if\b/g) ?? []).length;
+  const hbIfClose = (templateText.match(/\{\{\/if\}\}/g) ?? []).length;
+  if (hbIfOpen !== hbIfClose) {
+    throw new Error(
+      `Migration NSIS template has unbalanced Handlebars {{#if}} blocks (open=${hbIfOpen}, close=${hbIfClose}).`,
+    );
   }
 }
 

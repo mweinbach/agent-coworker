@@ -1386,25 +1386,89 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
     expect(writeCanonicalUninstIdx).toBeGreaterThan(writeUninstIdx);
     expect(deleteLegacyUninstIdx).toBeGreaterThan(writeCanonicalUninstIdx);
 
-    // Elevated HKLM self-relaunch preserves `/D=` at end of args and guards against elevation loops.
-    expect(templateText).toContain('StrCpy $2 "/COWORK_ELEVATED /allusers"');
+    // Elevated HKLM handoff uses synchronous ShellExecuteExW + WaitForSingleObject + GetExitCodeProcess,
+    // defers launch back to the waiting user-context parent, preserves `/D=` at end of args, and
+    // never runs Rune/sidecar directly while elevated.
+    expect(templateText).toContain('StrCpy $2 "/COWORK_ELEVATED /COWORK_DEFER_LAUNCH /allusers"');
     expect(templateText).toContain('StrCpy $2 "$2 /D=$INSTDIR"');
+    expect(templateText).toContain("Call RunElevatedAndWait");
+    expect(templateText).toContain("System::Call 'shell32::ShellExecuteExW(p r3)i.r0 ?e'");
+    expect(templateText).toContain("System::Call 'kernel32::WaitForSingleObject(p r7, i -1)i.r0'");
+    expect(templateText).toContain("System::Call 'kernel32::GetExitCodeProcess(p r7, *i .r8)i.r2'");
+    expect(templateText).toContain("!define MUI_FINISHPAGE_RUN_FUNCTION OnFinishPageRun");
+    expect(templateText).toContain("SetErrorLevel ${COWORK_EXIT_LAUNCH_REQUESTED}");
+    expect(templateText).toContain("Call LaunchCoworkNonElevated");
+    expect(templateText).toContain("System::Call 'user32::GetShellWindow()p.r1'");
+    expect(templateText).toContain('Exec \'"$WINDIR\\explorer.exe" "$R0\\${MAINBINARYNAME}.exe"\'');
 
-    // User data directories are explicitly protected from install-target adoption.
-    expect(templateText).toContain('StrLen $R1 "$APPDATA\\"');
-    expect(templateText).toContain('$R0 == "$PROFILE\\.cowork"');
+    // Full ancestor validation, scope-change rejection, user-profile exclusion (surviving
+    // `SetShellVarContext all`), and non-recursive owned-file cleanup (preserving unknown files).
+    expect(templateText).toContain("!insertmacro CaptureUserContextDirs");
+    expect(templateText).toContain('!insertmacro RejectIfPathOrPrefix $R0 "$UserAppDataDir"');
+    expect(templateText).toContain(
+      '!insertmacro RejectIfPathOrPrefix $R0 "$PROFILE\\AppData\\Roaming"',
+    );
+    expect(templateText).toContain('!insertmacro RejectIfPathOrPrefix $R0 "$PROFILE\\.cowork"');
+    expect(templateText).toContain('!insertmacro RejectIfPathOrPrefix $R0 "$UsersRootDir"');
+    expect(templateText).toContain("kernel32::GetFullPathNameW");
+    expect(templateText).toContain("kernel32::GetLongPathNameW");
+    expect(templateText).toContain("${If} $RequestedAllUsersFlag = 1");
+    expect(templateText).toContain("${AndIf} $RequestedCurrentUserFlag = 1");
+    expect(templateText).toContain("${If} $HkcuHasInstall = 1");
+    expect(templateText).toContain("${AndIf} $HklmHasInstall = 1");
+    expect(templateText).toContain("Call DeleteOwnedNonReparseFile");
+    expect(templateText).toContain("Call RemoveEmptyKnownSubdirChain");
+    expect(templateText).not.toMatch(/^\s*RMDir\s+\/r\b/im);
 
-    // Single relaunch guard clears `$ShouldRelaunch` before calling `Exec`.
+    // Single relaunch guard clears `$ShouldRelaunch` before launching via `LaunchCoworkNonElevated`.
     expect(templateText).toContain("StrCpy $ShouldRelaunch 0");
-    expect(templateText).toContain("Exec '\"$INSTDIR\\${MAINBINARYNAME}.exe\"'");
+    expect(templateText).toContain("Exec '\"$R0\\${MAINBINARYNAME}.exe\"'");
 
-    // Negative validator checks fail closed on unavailable plugins or user-data deletion.
+    // HKLM self-elevated uninstall omits `_?=` when elevating `$INSTDIR\uninstall.exe` so standard
+    // NSIS temp-copy self-removal deletes `$INSTDIR\uninstall.exe` and `$INSTDIR` cleanly.
+    const unOnInitMatch = templateText.match(/Function un\.onInit([\s\S]*?)FunctionEnd/);
+    expect(unOnInitMatch).not.toBeNull();
+    const unOnInit = unOnInitMatch?.[1] ?? "";
+    expect(unOnInit).toContain(
+      'StrCpy $1 "$INSTDIR\\uninstall.exe"\n        StrCpy $2 "/COWORK_ELEVATED"',
+    );
+    expect(unOnInit).toContain(
+      'StrCpy $1 "$EXEPATH"\n        StrCpy $2 "/COWORK_ELEVATED _?=$INSTDIR"',
+    );
+    expect(unOnInit).toContain("Call un.RunElevatedAndWait");
+    expect(templateText).toContain(
+      'Push "$INSTDIR\\uninstall.exe"\n  Call un.DeleteOwnedNonReparseFileWithRetry',
+    );
+
+    // Negative validator checks fail closed on unavailable plugins, user-data deletion, recursive
+    // cleanup, non-waiting elevation, direct elevated Finish launch, or broken temp-copy uninstall.
     expect(() => validateMigrationNsisTemplate(`${templateText}\nStdUtils::GetParameter`)).toThrow(
       /unavailable plugin/,
     );
     expect(() =>
       validateMigrationNsisTemplate(`${templateText}\nRMDir /r "$APPDATA\\Cowork"`),
     ).toThrow(/never delete user data/);
+    expect(() =>
+      validateMigrationNsisTemplate(`${templateText}\nRMDir /r "$LegacyInstallDir\\resources"`),
+    ).toThrow(/recursive `RMDir \/r`/);
+    expect(() =>
+      validateMigrationNsisTemplate(
+        `${templateText}\nSystem::Call 'shell32::ShellExecuteW(p $HWNDPARENT, w "runas", w r1, w r2, w "", i 1)i.r0'`,
+      ),
+    ).toThrow(/synchronous ShellExecuteExW/);
+    expect(() =>
+      validateMigrationNsisTemplate(
+        `${templateText}\n!define MUI_FINISHPAGE_RUN "$INSTDIR\\\${MAINBINARYNAME}.exe"`,
+      ),
+    ).toThrow(/MUI_FINISHPAGE_RUN_FUNCTION/);
+    expect(() =>
+      validateMigrationNsisTemplate(
+        templateText.replace(
+          'StrCpy $1 "$INSTDIR\\uninstall.exe"\n        StrCpy $2 "/COWORK_ELEVATED"',
+          'StrCpy $1 "$INSTDIR\\uninstall.exe"\n        StrCpy $2 "/COWORK_ELEVATED _?=$INSTDIR"',
+        ),
+      ),
+    ).toThrow(/omit `_\?=`/);
   });
 
   test("resolveWindowsSigningInput strictly isolates Windows credentials from macOS CSC_LINK", () => {

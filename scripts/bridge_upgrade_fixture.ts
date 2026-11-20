@@ -278,18 +278,16 @@ export async function fetchPinnedOriginatingFixture(params: {
         }
         await verifyMacCodeSignatureAndNotarization({
           appPath: path.join(verifyDir, "Cowork.app"),
-          requireSigned: true,
-          requireNotarized: true,
+          requireDeveloperId: true,
+          requireNotarization: true,
+          expectedBundleId: PINNED_ORIGINATING_FIXTURE.bundleId,
         });
         verifiedSigned = true;
       } finally {
         await fs.rm(verifyDir, { recursive: true, force: true });
       }
     } else {
-      await verifyWindowsAuthenticodeSignature({
-        filePath: assetPath,
-        expectedPublisher: params.expectedWindowsPublisher,
-      });
+      await verifyWindowsAuthenticodeSignature(assetPath, params.expectedWindowsPublisher);
       verifiedSigned = true;
     }
   }
@@ -323,6 +321,12 @@ export interface SeededBridgeProfile {
   sentinelFilePath: string;
 }
 
+async function canonicalizePathForCompare(rawPath: string): Promise<string> {
+  const resolved = path.resolve(rawPath);
+  const real = await fs.realpath(resolved).catch(() => resolved);
+  return real.replace(/[\\/]+$/, "").toLowerCase();
+}
+
 export async function seedDisposableBridgeProfile(params: {
   userDataDir: string;
   coworkHomeDir: string;
@@ -331,7 +335,7 @@ export async function seedDisposableBridgeProfile(params: {
 }): Promise<SeededBridgeProfile> {
   const userDataDir = path.resolve(params.userDataDir);
   const coworkHomeDir = path.resolve(params.coworkHomeDir);
-  const workspaceDir = path.resolve(params.workspaceDir);
+  const rawWorkspaceDir = path.resolve(params.workspaceDir);
   const workspaceId = "ws-bridge-continuity-001";
   const threadId = "thread-bridge-continuity-001";
   const threadTitle = "Bridge upgrade profile continuity check";
@@ -341,45 +345,64 @@ export async function seedDisposableBridgeProfile(params: {
 
   await fs.mkdir(path.join(userDataDir, "transcripts"), { recursive: true });
   await fs.mkdir(coworkHomeDir, { recursive: true });
-  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.mkdir(rawWorkspaceDir, { recursive: true });
+  const workspaceDir = await fs.realpath(rawWorkspaceDir).catch(() => rawWorkspaceDir);
   await fs.writeFile(
     path.join(workspaceDir, "README.md"),
     "# Disposable Bridge Upgrade Workspace\n",
     "utf8",
   );
 
+  // Canonical version-2 persisted desktop state shared by Electron v1.3.1
+  // (`sanitizePersistedState`) and Rune (`crates/cowork-desktop/src/native/persistence.rs`).
   const now = "2026-10-04T16:00:00.000Z";
   const state = {
-    schemaVersion: 2,
+    version: 2,
     workspaces: [
       {
         id: workspaceId,
         name: "Bridge Workspace",
         path: workspaceDir,
-        kind: "project",
+        workspaceKind: "project",
         createdAt: now,
         lastOpenedAt: now,
+        archived: false,
+        wsProtocol: "jsonrpc",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: false,
+        yolo: false,
       },
     ],
+    threads: [
+      {
+        id: threadId,
+        workspaceId,
+        title: threadTitle,
+        titleSource: "manual",
+        createdAt: now,
+        lastMessageAt: now,
+        status: "active",
+        sessionId: null,
+        messageCount: 1,
+        lastEventSeq: 1,
+        archived: false,
+      },
+    ],
+    workspaceOrder: [workspaceId],
+    collapsedWorkspaceIds: [],
+    collapsedSidebarSections: [],
     activeWorkspaceId: workspaceId,
-    threadsByWorkspace: {
-      [workspaceId]: [
-        {
-          id: threadId,
-          title: threadTitle,
-          createdAt: now,
-          updatedAt: now,
-          cwd: workspaceDir,
-          messageCount: 1,
-          lastEventSeq: 1,
-        },
-      ],
-    },
-    activeThreadByWorkspace: {
-      [workspaceId]: threadId,
-    },
-    settings: {
+    activeThreadId: threadId,
+    developerMode: false,
+    showHiddenFiles: false,
+    perWorkspaceSettings: false,
+    desktopSettings: {
       theme: "dark",
+    },
+    onboarding: {
+      status: "completed",
+      completedAt: now,
+      dismissedAt: null,
     },
   };
 
@@ -429,33 +452,91 @@ export async function verifyBridgeProfileContinuity(profile: SeededBridgeProfile
     );
   }
   const state = JSON.parse(stateRaw) as {
-    workspaces?: Array<{ id?: string; path?: string }>;
-    threadsByWorkspace?: Record<string, Array<{ id?: string; title?: string }>>;
+    version?: unknown;
+    workspaces?: Array<{ id?: string; path?: string; workspaceKind?: string }>;
+    threads?: Array<{
+      id?: string;
+      workspaceId?: string;
+      title?: string;
+      createdAt?: string;
+      lastMessageAt?: string;
+    }>;
+    onboarding?: {
+      status?: string;
+      completedAt?: string | null;
+      dismissedAt?: string | null;
+    };
   };
+  if (typeof state.version !== "number" || !Number.isFinite(state.version) || state.version < 2) {
+    throw new Error(
+      `Profile continuity failed: desktop state version must be >= 2 in ${profile.stateFilePath} (got ${String(state.version)}).`,
+    );
+  }
+
   const workspace = state.workspaces?.find((ws) => ws.id === profile.workspaceId);
   if (!workspace) {
     throw new Error(
       `Profile continuity failed: workspace "${profile.workspaceId}" missing from ${profile.stateFilePath}`,
     );
   }
-  const normalizedExpected = path.resolve(profile.workspaceDir).toLowerCase();
-  const normalizedActual = path.resolve(workspace.path ?? "").toLowerCase();
+  if (workspace.workspaceKind !== "project") {
+    throw new Error(
+      `Profile continuity failed: workspace "${profile.workspaceId}" workspaceKind drifted (${String(workspace.workspaceKind)} vs project).`,
+    );
+  }
+  const normalizedExpected = await canonicalizePathForCompare(profile.workspaceDir);
+  const normalizedActual = await canonicalizePathForCompare(workspace.path ?? "");
   if (normalizedActual !== normalizedExpected) {
     throw new Error(
       `Profile continuity failed: workspace path drifted (${workspace.path} vs ${profile.workspaceDir}).`,
     );
   }
 
-  const threads = state.threadsByWorkspace?.[profile.workspaceId] ?? [];
-  const thread = threads.find((t) => t.id === profile.threadId);
-  if (!thread || thread.title !== profile.threadTitle) {
+  const threads = Array.isArray(state.threads) ? state.threads : [];
+  const thread = threads.find(
+    (t) => t.id === profile.threadId && t.workspaceId === profile.workspaceId,
+  );
+  if (
+    !thread ||
+    thread.title !== profile.threadTitle ||
+    typeof thread.createdAt !== "string" ||
+    !thread.createdAt.trim() ||
+    typeof thread.lastMessageAt !== "string" ||
+    !thread.lastMessageAt.trim()
+  ) {
     throw new Error(
-      `Profile continuity failed: seeded thread "${profile.threadId}" missing or modified in ${profile.stateFilePath}.`,
+      `Profile continuity failed: seeded top-level thread "${profile.threadId}" missing or modified in ${profile.stateFilePath}.`,
+    );
+  }
+
+  if (
+    state.onboarding?.status !== "completed" ||
+    typeof state.onboarding.completedAt !== "string" ||
+    !state.onboarding.completedAt.trim() ||
+    state.onboarding.dismissedAt !== null
+  ) {
+    throw new Error(
+      `Profile continuity failed: completed onboarding state missing or modified in ${profile.stateFilePath} (got ${JSON.stringify(state.onboarding ?? null)}).`,
     );
   }
 
   const transcriptRaw = await fs.readFile(profile.transcriptFilePath, "utf8").catch(() => null);
-  if (!transcriptRaw?.includes(profile.transcriptText)) {
+  if (!transcriptRaw) {
+    throw new Error(`Profile continuity failed: missing transcript ${profile.transcriptFilePath}.`);
+  }
+  const transcriptLines = transcriptRaw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const hasSeededTranscriptEvent = transcriptLines.some((line) => {
+    try {
+      const event = JSON.parse(line) as { threadId?: string; payload?: { text?: string } };
+      return event.threadId === profile.threadId && event.payload?.text === profile.transcriptText;
+    } catch {
+      return false;
+    }
+  });
+  if (!hasSeededTranscriptEvent) {
     throw new Error(
       `Profile continuity failed: transcript ${profile.transcriptFilePath} missing seeded message.`,
     );

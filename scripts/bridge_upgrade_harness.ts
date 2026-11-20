@@ -151,6 +151,26 @@ export function assertHop1AuditLog(params: {
   }
 }
 
+export function advanceBridgeFeedAfterHop1Download(params: {
+  server: { getRequests: () => BridgeFeedRequestLog[]; setActiveTag: (tag: string) => void };
+  owner: string;
+  repo: string;
+  candidateTag: string;
+  candidateVersion: string;
+  followupTag: string;
+  lane: BridgeUpgradeLaneSpec;
+}): void {
+  assertHop1AuditLog({
+    requests: params.server.getRequests(),
+    owner: params.owner,
+    repo: params.repo,
+    candidateTag: params.candidateTag,
+    candidateVersion: params.candidateVersion,
+    lane: params.lane,
+  });
+  params.server.setActiveTag(params.followupTag);
+}
+
 export function assertHop2AuditLog(params: {
   requests: readonly BridgeFeedRequestLog[];
   owner: string;
@@ -158,12 +178,25 @@ export function assertHop2AuditLog(params: {
   followupTag: string;
   followupVersion: string;
   lane: BridgeUpgradeLaneSpec;
+  candidateTag?: string;
 }): void {
   const prefix = `/${params.owner}/${params.repo}/releases`;
+  const expectedFeedPath = `${prefix}/latest/download/latest.json`;
+
+  if (params.candidateTag) {
+    const prematureCandidatePoll = params.requests.find(
+      (req) => req.pathname === expectedFeedPath && req.activeTagAtRequest === params.candidateTag,
+    );
+    if (prematureCandidatePoll) {
+      throw new Error(
+        `Hop 2 feed timing race detected: Rune polled ${expectedFeedPath} while active Latest tag was still ${params.candidateTag} (expected feed to advance to ${params.followupTag} before candidate's first update poll).`,
+      );
+    }
+  }
+
   const hop2Reqs = params.requests.filter(
     (req) => req.activeTagAtRequest === params.followupTag && req.status === 200,
   );
-  const expectedFeedPath = `${prefix}/latest/download/latest.json`;
   const expectedAssetName = params.lane.resolveFollowupNativeAsset(params.followupVersion);
   const expectedAssetPath = `${prefix}/download/${params.followupTag}/${expectedAssetName}`;
 
@@ -179,6 +212,72 @@ export function assertHop2AuditLog(params: {
       `Hop 2 (Rune candidate -> Rune ${params.followupTag}) did not observe required real native updater requests: ${missing.join(", ")}`,
     );
   }
+}
+
+/**
+ * Normalizes a Windows registry `InstallLocation` value for exact path comparison.
+ * Accepts either an unquoted absolute directory path (`C:\Users\...\Cowork`) or a
+ * single balanced double-quoted path (`"C:\Users\...\Cowork"`, as written to
+ * `UNINSTKEY\InstallLocation` by `crates/cowork-desktop/packaging/nsis/installer.nsi`).
+ * Rejects empty values, unbalanced quotes, embedded quotes, and relative paths.
+ */
+export function normalizeWindowsInstallLocation(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Windows InstallLocation is empty.");
+  }
+
+  let unquoted = trimmed;
+  if (unquoted.startsWith('"') || unquoted.endsWith('"')) {
+    if (!(unquoted.startsWith('"') && unquoted.endsWith('"') && unquoted.length >= 2)) {
+      throw new Error(`Windows InstallLocation has unbalanced quotes: ${raw}`);
+    }
+    unquoted = unquoted.slice(1, -1).trim();
+  }
+
+  if (!unquoted || unquoted.includes('"')) {
+    throw new Error(`Windows InstallLocation is empty or contains embedded quotes: ${raw}`);
+  }
+
+  if (!/^[A-Za-z]:[\\/]/.test(unquoted)) {
+    throw new Error(`Windows InstallLocation is not an absolute drive path: ${raw}`);
+  }
+
+  const normalized = unquoted.replace(/\//g, "\\");
+  if (/^[A-Za-z]:\\+$/.test(normalized)) {
+    return `${normalized.slice(0, 2)}\\`;
+  }
+  return normalized.replace(/\\+$/, "");
+}
+
+export function assertWindowsInstallLocationMatches(actualRaw: string, expectedDir: string): void {
+  const actual = normalizeWindowsInstallLocation(actualRaw);
+  const expected = normalizeWindowsInstallLocation(expectedDir);
+  if (actual.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error(`Rune InstallLocation drifted: ${actualRaw} vs ${expectedDir}`);
+  }
+}
+
+export function parseAndVerifyWindowsRuneRegistryOutput(
+  stdout: string,
+  expected: { installDir: string; expectedVersion: string },
+): void {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error("Windows Rune uninstall registry check returned empty output.");
+  }
+  const parsed = JSON.parse(trimmed) as {
+    DisplayVersion?: unknown;
+    InstallLocation?: unknown;
+  };
+  const displayVersion = typeof parsed.DisplayVersion === "string" ? parsed.DisplayVersion : "";
+  if (displayVersion !== expected.expectedVersion) {
+    throw new Error(
+      `Rune uninstall DisplayVersion is ${displayVersion}, expected ${expected.expectedVersion}`,
+    );
+  }
+  const installLocation = typeof parsed.InstallLocation === "string" ? parsed.InstallLocation : "";
+  assertWindowsInstallLocationMatches(installLocation, expected.installDir);
 }
 
 async function execCapture(
@@ -439,14 +538,22 @@ async function listCoworkProcesses(params: {
   if (params.platform === "darwin") {
     const res = await execCapture(["ps", "-axo", "pid=,comm="]);
     if (res.exitCode !== 0) return [];
-    const expected = path.resolve(params.expectedExePath);
+    const expectedResolved = path.resolve(params.expectedExePath);
+    const expectedReal = await fs.realpath(expectedResolved).catch(() => expectedResolved);
     const matches: Array<{ pid: number; path: string }> = [];
     for (const line of res.stdout.split(/\r?\n/)) {
       const match = /^\s*(\d+)\s+(.+)$/.exec(line);
       if (!match) continue;
       const pid = Number(match[1]);
       const comm = match[2]!.trim();
-      if (comm === expected || comm.startsWith(`${expected} `)) {
+      const commReal = await fs.realpath(comm).catch(() => comm);
+      if (
+        comm === expectedResolved ||
+        comm === expectedReal ||
+        commReal === expectedReal ||
+        comm.startsWith(`${expectedResolved} `) ||
+        comm.startsWith(`${expectedReal} `)
+      ) {
         matches.push({ pid, path: comm });
       }
     }
@@ -581,6 +688,7 @@ async function driveElectronUpdatesRestartToInstall(params: {
   originatingPid: number;
   platform: "darwin" | "win32";
   timeoutMs: number;
+  onBeforeRestartToInstall?: () => Promise<void> | void;
 }): Promise<void> {
   const target = await waitForCondition("Electron CDP page target", 60_000, 1_000, async () => {
     const resp = await fetch(`http://127.0.0.1:${params.cdpPort}/json`);
@@ -657,6 +765,11 @@ async function driveElectronUpdatesRestartToInstall(params: {
         "Originating Electron app exited before user approved Restart and Install (autoInstallOnAppQuit must stay false).",
       );
     }
+
+    // Allow the caller to verify completed Hop 1 requests and advance the local Latest
+    // feed to vNext BEFORE triggering Restart and Install so Rune vCandidate's first
+    // automatic update check (after its unchanged 10s STARTUP_CHECK_DELAY) sees vNext.
+    await params.onBeforeRestartToInstall?.();
 
     // Navigate to Settings -> Updates and click the real "Restart to update" button if visible;
     // otherwise invoke the same renderer preload action bound to the button (`quitAndInstallUpdate`).
@@ -803,8 +916,9 @@ async function verifyInstalledMacRuneBundle(params: {
   if (params.requireSigned) {
     await verifyMacCodeSignatureAndNotarization({
       appPath: params.appPath,
-      requireSigned: true,
-      requireNotarized: true,
+      requireDeveloperId: true,
+      requireNotarization: true,
+      expectedBundleId: PINNED_ORIGINATING_FIXTURE.bundleId,
     });
   }
 }
@@ -841,14 +955,11 @@ async function verifyInstalledWindowsRune(params: {
   }
 
   if (params.requireSigned) {
-    await verifyWindowsAuthenticodeSignature({
-      filePath: mainExe,
-      expectedPublisher: params.expectedPublisher,
-    });
+    await verifyWindowsAuthenticodeSignature(mainExe, params.expectedPublisher);
   }
 
-  const escapedDir = path.resolve(params.installDir).replaceAll("'", "''");
-  const escapedVersion = params.expectedVersion.replaceAll("'", "''");
+  const normalizedInstallDir = normalizeWindowsInstallLocation(params.installDir);
+  const escapedDir = normalizedInstallDir.replaceAll("'", "''");
   const verifyRegScript = `
     $ErrorActionPreference = 'Stop'
     $legacyKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PINNED_ORIGINATING_FIXTURE.windowsLegacyUninstallGuid}'
@@ -860,13 +971,6 @@ async function verifyInstalledWindowsRune(params: {
       throw "Missing Rune uninstall entry: $runeKey"
     }
     $props = Get-ItemProperty -Path $runeKey
-    if ($props.DisplayVersion -ne '${escapedVersion}') {
-      throw "Rune uninstall DisplayVersion is $($props.DisplayVersion), expected ${escapedVersion}"
-    }
-    $loc = ($props.InstallLocation).TrimEnd('\\')
-    if ($loc.ToLowerInvariant() -ne '${escapedDir}'.TrimEnd('\\').ToLowerInvariant()) {
-      throw "Rune InstallLocation drifted: $loc vs ${escapedDir}"
-    }
     $uninstExe = Join-Path '${escapedDir}' 'uninstall.exe'
     if (-not (Test-Path -LiteralPath $uninstExe)) {
       throw "Missing Rune uninstaller: $uninstExe"
@@ -875,11 +979,19 @@ async function verifyInstalledWindowsRune(params: {
     if (-not (Test-Path -LiteralPath $startMenuLnk)) {
       throw "Missing Start Menu shortcut: $startMenuLnk"
     }
+    @{
+      DisplayVersion = [string]$props.DisplayVersion
+      InstallLocation = [string]$props.InstallLocation
+    } | ConvertTo-Json -Compress
   `;
-  await execChecked(
+  const regOut = await execChecked(
     ["pwsh", "-NoProfile", "-Command", verifyRegScript],
     "verify Windows single uninstall ownership and shortcuts",
   );
+  parseAndVerifyWindowsRuneRegistryOutput(regOut, {
+    installDir: normalizedInstallDir,
+    expectedVersion: params.expectedVersion,
+  });
 }
 
 export async function runNativeBridgeUpgradeChain(params: {
@@ -972,7 +1084,7 @@ export async function runNativeBridgeUpgradeChain(params: {
       ],
       "read originating Windows InstallLocation",
     );
-    installPath = installLocOut.trim();
+    installPath = installLocOut.trim() ? normalizeWindowsInstallLocation(installLocOut) : "";
     if (!installPath) {
       throw new Error("Originating Windows v1.3.1 installer did not register InstallLocation.");
     }
@@ -1016,23 +1128,34 @@ export async function runNativeBridgeUpgradeChain(params: {
     );
     spawnedPids.add(oldProc.pid);
 
-    // 4. Wait for real automatic update discovery & download, then trigger Restart and Install.
+    // 4. Wait for real automatic update discovery & download, verify Hop 1 requests,
+    // advance Latest -> vNext BEFORE Restart and Install so Rune vCandidate's very first
+    // automatic check (after its unchanged 10s STARTUP_CHECK_DELAY) polls vNext, then
+    // trigger Restart and Install.
     await driveElectronUpdatesRestartToInstall({
       cdpPort,
       expectedCandidateVersion: candidateVersion,
       originatingPid: oldProc.pid,
       platform: lane.platform,
       timeoutMs: 240_000,
+      onBeforeRestartToInstall: () => {
+        advanceBridgeFeedAfterHop1Download({
+          server: server!,
+          owner,
+          repo,
+          candidateTag: params.candidateTag,
+          candidateVersion,
+          followupTag: params.followupTag,
+          lane,
+        });
+      },
     });
 
-    assertHop1AuditLog({
-      requests: server.getRequests(),
-      owner,
-      repo,
-      candidateTag: params.candidateTag,
-      candidateVersion,
-      lane,
-    });
+    if (server.getActiveTag() !== params.followupTag) {
+      throw new Error(
+        `Bridge feed failed to advance to ${params.followupTag} before candidate launch (active=${server.getActiveTag()}).`,
+      );
+    }
 
     // 5. Verify Hop 1: old Electron exits, installed app is Rune vCandidate, single relaunch, profile intact.
     await waitForCondition("originating Electron process exit", 120_000, 1_000, async () => {
@@ -1089,9 +1212,8 @@ export async function runNativeBridgeUpgradeChain(params: {
 
     await verifyBridgeProfileContinuity(profile);
 
-    // 6. Hop 2: Switch local feed server Latest -> vNext and verify real signed Rune -> Rune update.
-    server.setActiveTag(params.followupTag);
-
+    // 6. Hop 2: Local feed server was already advanced to vNext before candidate launched;
+    // verify real signed Rune -> Rune update discovery, download, Minisign verification, and install.
     const stagingDir = path.join(userDataDir, "updates-staging");
     await waitForCondition(
       `Rune v${candidateVersion} to download & Minisign-verify v${followupVersion}`,
@@ -1107,6 +1229,7 @@ export async function runNativeBridgeUpgradeChain(params: {
             followupTag: params.followupTag,
             followupVersion,
             lane,
+            candidateTag: params.candidateTag,
           });
         } catch {
           return false;

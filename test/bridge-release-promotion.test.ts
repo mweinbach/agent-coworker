@@ -27,10 +27,14 @@ import {
   verifyBridgeProfileContinuity,
 } from "../scripts/bridge_upgrade_fixture";
 import {
+  advanceBridgeFeedAfterHop1Download,
   assertDisposableRunnerGuard,
   assertHop1AuditLog,
   assertHop2AuditLog,
+  assertWindowsInstallLocationMatches,
   buildLateClientAdditionalAtomTags,
+  normalizeWindowsInstallLocation,
+  parseAndVerifyWindowsRuneRegistryOutput,
 } from "../scripts/bridge_upgrade_harness";
 import { startBridgeUpgradeServer } from "../scripts/bridge_upgrade_server";
 import type { UpdaterFragment, UpdaterPlatformKey } from "../scripts/desktop_rune_release_manifest";
@@ -879,6 +883,420 @@ describe("pinned historical fixture, disposable guards, profile continuity, and 
       await fs.rm(profile.sentinelFilePath);
       await expect(verifyBridgeProfileContinuity(profile)).rejects.toThrow(/sentinel missing/);
     } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("seeded canonical version-2 profile is read by Rune's actual PersistenceService reader and survives save", async () => {
+    const tempRoot = await makeTempDir("cowork-rune-persistence-bridge-");
+    try {
+      const realWorkspaceTarget = path.join(tempRoot, "real-workspace");
+      await fs.mkdir(realWorkspaceTarget, { recursive: true });
+      const symlinkWorkspaceDir = path.join(tempRoot, "workspace-link");
+      await fs.symlink(realWorkspaceTarget, symlinkWorkspaceDir);
+
+      const profile = await seedDisposableBridgeProfile({
+        userDataDir: path.join(tempRoot, "Cowork"),
+        coworkHomeDir: path.join(tempRoot, ".cowork"),
+        workspaceDir: symlinkWorkspaceDir,
+      });
+
+      // 1. Verify canonical v2 schema fields directly on disk (no invented threadsByWorkspace).
+      const seededDoc = JSON.parse(await fs.readFile(profile.stateFilePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(seededDoc.version).toBe(2);
+      expect(seededDoc.schemaVersion).toBeUndefined();
+      expect(seededDoc.threadsByWorkspace).toBeUndefined();
+      expect(Array.isArray(seededDoc.threads)).toBe(true);
+      expect((seededDoc.onboarding as { status?: string })?.status).toBe("completed");
+      expect((seededDoc.onboarding as { dismissedAt?: unknown })?.dismissedAt).toBeNull();
+      expect(seededDoc.activeWorkspaceId).toBe(profile.workspaceId);
+      expect(seededDoc.activeThreadId).toBe(profile.threadId);
+
+      // 2. Run Rune's actual Rust PersistenceService reader + merge_and_save_core_snapshot
+      //    against the exact disposable profile seeded by seedDisposableBridgeProfile.
+      const runRunePersistenceCheck = async (extraEnv?: Record<string, string>) => {
+        const proc = Bun.spawn(
+          [
+            "cargo",
+            "test",
+            "-p",
+            "cowork-desktop",
+            "--test",
+            "bridge_profile_continuity",
+            "seeded_bridge_profile_from_env_roundtrips_through_rune_persistence",
+            "--",
+            "--exact",
+            "--nocapture",
+          ],
+          {
+            cwd: repoRoot,
+            env: {
+              ...process.env,
+              COWORK_TEST_BRIDGE_PROFILE_DIR: profile.userDataDir,
+              COWORK_TEST_BRIDGE_WORKSPACE_DIR: profile.workspaceDir,
+              ...extraEnv,
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const [exitCode, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(exitCode, `Rune persistence check failed:\n${stdout}\n${stderr}`).toBe(0);
+      };
+
+      await runRunePersistenceCheck();
+      // Verify continuity checker still passes after Rune's real merge_and_save_core_snapshot write-back.
+      await expect(verifyBridgeProfileContinuity(profile)).resolves.toBeUndefined();
+
+      // 3. Simulate Electron v1.3.1's sanitizePersistedState write-back (which strips
+      //    activeWorkspaceId/activeThreadId and desktopSettings.theme while keeping version: 2,
+      //    workspaces, top-level threads, and completed onboarding) and re-verify through Rune.
+      const postElectronState = JSON.parse(
+        await fs.readFile(profile.stateFilePath, "utf8"),
+      ) as Record<string, unknown>;
+      delete postElectronState.activeWorkspaceId;
+      delete postElectronState.activeThreadId;
+      postElectronState.desktopSettings = {
+        quickChat: {
+          iconEnabled: true,
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+        archivedChatsAutoDeleteDays: 30,
+        sidebarSectionOrder: ["workspaces", "threads"],
+      };
+      await fs.writeFile(
+        profile.stateFilePath,
+        `${JSON.stringify(postElectronState, null, 2)}\n`,
+        "utf8",
+      );
+
+      await runRunePersistenceCheck({ COWORK_TEST_BRIDGE_EXPECT_ELECTRON_SANITIZED: "1" });
+      await expect(verifyBridgeProfileContinuity(profile)).resolves.toBeUndefined();
+
+      // 4. Negative schema checks: verifier fails closed on incompatible/broken state.json.
+      await fs.writeFile(
+        profile.stateFilePath,
+        `${JSON.stringify({
+          schemaVersion: 2,
+          workspaces: [
+            {
+              id: profile.workspaceId,
+              name: "Bridge Workspace",
+              path: profile.workspaceDir,
+              kind: "project",
+            },
+          ],
+          threadsByWorkspace: {
+            [profile.workspaceId]: [{ id: profile.threadId, title: profile.threadTitle }],
+          },
+        })}\n`,
+        "utf8",
+      );
+      await expect(verifyBridgeProfileContinuity(profile)).rejects.toThrow(/version must be >= 2/);
+
+      // Pending onboarding fails closed (would leave Rune onboarding modal open during Hop 2).
+      const pendingOnboardingDoc = {
+        ...seededDoc,
+        onboarding: { status: "pending", completedAt: null, dismissedAt: null },
+      };
+      await fs.writeFile(
+        profile.stateFilePath,
+        `${JSON.stringify(pendingOnboardingDoc, null, 2)}\n`,
+        "utf8",
+      );
+      await expect(verifyBridgeProfileContinuity(profile)).rejects.toThrow(
+        /completed onboarding state missing or modified/,
+      );
+
+      // Missing top-level thread fails closed.
+      const missingThreadDoc = { ...seededDoc, threads: [] };
+      await fs.writeFile(
+        profile.stateFilePath,
+        `${JSON.stringify(missingThreadDoc, null, 2)}\n`,
+        "utf8",
+      );
+      await expect(verifyBridgeProfileContinuity(profile)).rejects.toThrow(
+        /seeded top-level thread/,
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("Windows InstallLocation comparison accepts quoted and unquoted matching paths and rejects drifted or malformed paths", async () => {
+    // Confirm the NSIS template still writes quoted UNINSTKEY\InstallLocation and unquoted MANUPRODUCTKEY\InstallLocation.
+    const nsiSource = await fs.readFile(
+      path.join(repoRoot, "crates", "cowork-desktop", "packaging", "nsis", "installer.nsi"),
+      "utf8",
+    );
+    expect(nsiSource).toContain(
+      'WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\\"$INSTDIR$\\""',
+    );
+    expect(nsiSource).toContain(
+      'WriteRegStr SHCTX "${MANUPRODUCTKEY}" "InstallLocation" "$INSTDIR"',
+    );
+
+    const expectedDir = "C:\\Users\\runneradmin\\AppData\\Local\\Programs\\Cowork";
+
+    // Legitimate quoted and unquoted InstallLocation values match cleanly.
+    expect(normalizeWindowsInstallLocation(`"${expectedDir}"`)).toBe(expectedDir);
+    expect(normalizeWindowsInstallLocation(`"${expectedDir}\\"`)).toBe(expectedDir);
+    expect(normalizeWindowsInstallLocation(expectedDir)).toBe(expectedDir);
+    expect(normalizeWindowsInstallLocation(`${expectedDir}\\`)).toBe(expectedDir);
+
+    expect(() =>
+      assertWindowsInstallLocationMatches(`"${expectedDir}"`, expectedDir),
+    ).not.toThrow();
+    expect(() =>
+      assertWindowsInstallLocationMatches(`"${expectedDir}\\"`, expectedDir),
+    ).not.toThrow();
+    expect(() => assertWindowsInstallLocationMatches(expectedDir, expectedDir)).not.toThrow();
+    expect(() =>
+      assertWindowsInstallLocationMatches(
+        '"c:\\program files\\Cowork\\"',
+        "C:\\Program Files\\Cowork",
+      ),
+    ).not.toThrow();
+
+    // Realistic PowerShell ConvertTo-Json -Compress output with NSIS-quoted InstallLocation passes.
+    expect(() =>
+      parseAndVerifyWindowsRuneRegistryOutput(
+        JSON.stringify({
+          DisplayVersion: "1.5.0",
+          InstallLocation: `"${expectedDir}"`,
+        }),
+        { installDir: expectedDir, expectedVersion: "1.5.0" },
+      ),
+    ).not.toThrow();
+
+    // Unquoted InstallLocation also passes when exact path matches.
+    expect(() =>
+      parseAndVerifyWindowsRuneRegistryOutput(
+        JSON.stringify({
+          DisplayVersion: "1.5.0",
+          InstallLocation: expectedDir,
+        }),
+        { installDir: expectedDir, expectedVersion: "1.5.0" },
+      ),
+    ).not.toThrow();
+
+    // Different paths MUST be rejected (never silently accepted after quote stripping).
+    for (const differentPath of [
+      '"C:\\Other\\Cowork"',
+      `"${expectedDir}2"`,
+      `"${expectedDir}\\sub"`,
+      '"C:\\Users\\runneradmin\\AppData\\Local\\Programs"',
+      "D:\\Users\\runneradmin\\AppData\\Local\\Programs\\Cowork",
+    ]) {
+      expect(() => assertWindowsInstallLocationMatches(differentPath, expectedDir)).toThrow(
+        /InstallLocation drifted/,
+      );
+    }
+
+    // Malformed, unbalanced, double-quoted, empty, or relative values MUST be rejected.
+    for (const malformed of [
+      `"${expectedDir}`,
+      `${expectedDir}"`,
+      `""${expectedDir}""`,
+      `"${expectedDir}" --extra`,
+      '""',
+      "   ",
+      "Cowork",
+    ]) {
+      expect(() => assertWindowsInstallLocationMatches(malformed, expectedDir)).toThrow();
+    }
+
+    // DisplayVersion drift MUST be rejected.
+    expect(() =>
+      parseAndVerifyWindowsRuneRegistryOutput(
+        JSON.stringify({
+          DisplayVersion: "1.4.0",
+          InstallLocation: `"${expectedDir}"`,
+        }),
+        { installDir: expectedDir, expectedVersion: "1.5.0" },
+      ),
+    ).toThrow(/DisplayVersion is 1\.4\.0, expected 1\.5\.0/);
+  });
+
+  test("fixture feed advances to next native release before candidate's first poll without changing production timers", async () => {
+    // Production updater timers in Rune must remain unchanged.
+    const updaterSource = await fs.readFile(
+      path.join(repoRoot, "crates", "cowork-desktop", "src", "native", "updater.rs"),
+      "utf8",
+    );
+    expect(updaterSource).toContain(
+      "const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(10);",
+    );
+    expect(updaterSource).toContain(
+      "const AUTOMATIC_CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);",
+    );
+
+    const tempRoot = await makeTempDir("cowork-bridge-feed-timing-");
+    let server: Awaited<ReturnType<typeof startBridgeUpgradeServer>> | null = null;
+    try {
+      const candidateArtifacts = path.join(tempRoot, "cand-in");
+      await createSynthetic6PlatformArtifacts(candidateArtifacts, "1.5.0");
+      const candidateOut = path.join(tempRoot, "cand-out");
+      await assembleRuneRelease({
+        artifactsDir: candidateArtifacts,
+        outDir: candidateOut,
+        version: "1.5.0",
+        tag: "v1.5.0",
+        owner: "mweinbach",
+        repo: "agent-coworker",
+        pubDate: "2026-11-15T12:00:00Z",
+        requireSigned: true,
+        requireComplete: true,
+        minOriginatingVersion: ORIGINATING_ELECTRON_VERSION,
+      });
+
+      const followupArtifacts = path.join(tempRoot, "next-in");
+      await createSynthetic6PlatformArtifacts(followupArtifacts, "1.5.1");
+      const followupOut = path.join(tempRoot, "next-out");
+      await assembleRuneRelease({
+        artifactsDir: followupArtifacts,
+        outDir: followupOut,
+        version: "1.5.1",
+        tag: "v1.5.1",
+        owner: "mweinbach",
+        repo: "agent-coworker",
+        pubDate: "2026-11-15T13:00:00Z",
+        requireSigned: true,
+        requireComplete: true,
+        minOriginatingVersion: "1.5.0",
+      });
+
+      server = await startBridgeUpgradeServer({
+        owner: "mweinbach",
+        repo: "agent-coworker",
+        releases: [
+          { tag: "v1.5.0", version: "1.5.0", dir: candidateOut },
+          { tag: "v1.5.1", version: "1.5.1", dir: followupOut },
+        ],
+        initialLatestTag: "v1.5.0",
+        additionalAtomTags: buildLateClientAdditionalAtomTags({
+          candidateTag: "v1.5.0",
+          candidateVersion: "1.5.0",
+        }),
+      });
+
+      const lane = BRIDGE_UPGRADE_LANES["windows-x64"];
+
+      // Advancing before Hop 1 completes must fail closed without mutating activeTag.
+      expect(() =>
+        advanceBridgeFeedAfterHop1Download({
+          server: server!,
+          owner: "mweinbach",
+          repo: "agent-coworker",
+          candidateTag: "v1.5.0",
+          candidateVersion: "1.5.0",
+          followupTag: "v1.5.1",
+          lane,
+        }),
+      ).toThrow(/did not observe required real updater requests/);
+      expect(server.getActiveTag()).toBe("v1.5.0");
+
+      // Execute Hop 1 requests while activeTag === v1.5.0.
+      const r1 = await fetch(`${server.url}/mweinbach/agent-coworker/releases.atom`);
+      expect(r1.status).toBe(200);
+      const r2 = await fetch(`${server.url}/mweinbach/agent-coworker/releases/latest`, {
+        headers: { Accept: "application/json" },
+      });
+      expect(r2.status).toBe(200);
+      const r3 = await fetch(
+        `${server.url}/mweinbach/agent-coworker/releases/download/v1.5.0/${lane.candidateChannelFile}`,
+      );
+      expect(r3.status).toBe(200);
+      const r4 = await fetch(
+        `${server.url}/mweinbach/agent-coworker/releases/download/v1.5.0/${lane.resolveCandidateLegacyAsset("1.5.0")}`,
+      );
+      expect(r4.status).toBe(200);
+
+      // Advance Latest -> v1.5.1 BEFORE candidate Rune starts or makes its first poll.
+      advanceBridgeFeedAfterHop1Download({
+        server,
+        owner: "mweinbach",
+        repo: "agent-coworker",
+        candidateTag: "v1.5.0",
+        candidateVersion: "1.5.0",
+        followupTag: "v1.5.1",
+        lane,
+      });
+      expect(server.getActiveTag()).toBe("v1.5.1");
+
+      // Candidate Rune's VERY FIRST poll of latest.json must immediately receive v1.5.1 (not v1.5.0).
+      const firstFeedResp = await fetch(
+        `${server.url}/mweinbach/agent-coworker/releases/latest/download/latest.json`,
+      );
+      expect(firstFeedResp.status).toBe(200);
+      const firstFeed = (await firstFeedResp.json()) as { version: string };
+      expect(firstFeed.version).toBe("1.5.1");
+
+      const followupAssetResp = await fetch(
+        `${server.url}/mweinbach/agent-coworker/releases/download/v1.5.1/${lane.resolveFollowupNativeAsset("1.5.1")}`,
+      );
+      expect(followupAssetResp.status).toBe(200);
+
+      expect(() =>
+        assertHop2AuditLog({
+          requests: server!.getRequests(),
+          owner: "mweinbach",
+          repo: "agent-coworker",
+          followupTag: "v1.5.1",
+          followupVersion: "1.5.1",
+          lane,
+          candidateTag: "v1.5.0",
+        }),
+      ).not.toThrow();
+
+      // Negative timing race check: if Rune polled latest.json while activeTag was still v1.5.0,
+      // assertHop2AuditLog must reject it as a feed timing race.
+      const racedServer = await startBridgeUpgradeServer({
+        owner: "mweinbach",
+        repo: "agent-coworker",
+        releases: [
+          { tag: "v1.5.0", version: "1.5.0", dir: candidateOut },
+          { tag: "v1.5.1", version: "1.5.1", dir: followupOut },
+        ],
+        initialLatestTag: "v1.5.0",
+      });
+      try {
+        const premature = await fetch(
+          `${racedServer.url}/mweinbach/agent-coworker/releases/latest/download/latest.json`,
+        );
+        expect(premature.status).toBe(200);
+        racedServer.setActiveTag("v1.5.1");
+        await fetch(
+          `${racedServer.url}/mweinbach/agent-coworker/releases/latest/download/latest.json`,
+        );
+        await fetch(
+          `${racedServer.url}/mweinbach/agent-coworker/releases/download/v1.5.1/${lane.resolveFollowupNativeAsset("1.5.1")}`,
+        );
+
+        expect(() =>
+          assertHop2AuditLog({
+            requests: racedServer.getRequests(),
+            owner: "mweinbach",
+            repo: "agent-coworker",
+            followupTag: "v1.5.1",
+            followupVersion: "1.5.1",
+            lane,
+            candidateTag: "v1.5.0",
+          }),
+        ).toThrow(/feed timing race detected/);
+      } finally {
+        await racedServer.stop();
+      }
+    } finally {
+      await server?.stop();
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });

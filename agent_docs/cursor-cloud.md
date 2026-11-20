@@ -18,7 +18,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 ## Notes
 
-- `bun run test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` and `apps/desktop/test/`.
+- `bun run test` runs the full TypeScript/client/black-box suite. All tests are deterministic and require no network or API keys. TypeScript test files live in `test/`; Rust workspace tests (including `cowork-desktop`) run via `cargo test --workspace`.
 - A small number of tests are skipped by default (remote MCP integration tests requiring network).
 - **Lint philosophy**: `biome.json` is tuned to catch LLM-generated code failure modes. Type-safety erosion (`noExplicitAny`, `noNonNullAssertion`, `noBannedTypes`), React lifecycle bugs (`useExhaustiveDependencies`, `noAssignInExpressions`, `noArrayIndexKey`), and error-handling camouflage (`noUselessCatch`, `noEmptyBlock`) are all surfaced. New code should not introduce new violations.
-- `bun run start` first builds sidecar resources (`build:desktop-resources`), then runs `electron-vite dev`. D-Bus and GPU errors in logs are cosmetic on headless Linux and do not affect functionality. Dev builds expose CDP on `127.0.0.1:9322` by default for external UI automation or inspection (`COWORK_ELECTRON_REMOTE_DEBUG=0` disables it).
+- `bun run start` builds `cowork-server` and launches the native Rune desktop app (`crates/cowork-desktop/`). For headless UI inspection, run `cargo run -p cowork-desktop --bin cowork-desktop -- --scene chat-demo --snap /tmp/chat.png`.

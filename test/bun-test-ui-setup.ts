@@ -1,23 +1,14 @@
-import { afterEach, mock } from "bun:test";
-import { existsSync } from "node:fs";
+import { mock } from "bun:test";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { setupJsdom } from "./helpers/jsdomHarness";
 import "./helpers/mock-react-native";
 
 const rootRequire = createRequire(path.resolve("package.json"));
-const desktopDir = path.resolve("apps/desktop");
-const desktopPackageJson = path.join(desktopDir, "package.json");
-const desktopRequire = existsSync(desktopPackageJson) ? createRequire(desktopPackageJson) : null;
 
-// Animation libraries capture `requestAnimationFrame` once, when their module is
-// first evaluated — which happens during a test file's top-level imports, before
-// any jsdom exists. motion-dom then keeps its frameloop re-scheduling across
-// unmounts, so a frame queued by one test file runs during the next one and
-// throws `document is not defined` from inside a projection node. Install a
-// DOM-aware scheduler before any test module loads: it animates normally while a
-// jsdom is installed and drops frames when there is nothing to render into.
+// Install a DOM-aware requestAnimationFrame scheduler before any test module
+// loads so frames run normally while jsdom is active and drop silently once a
+// test tears down its document.
 function hasLiveDocument(): boolean {
   return typeof (globalThis as { document?: unknown }).document !== "undefined";
 }
@@ -57,7 +48,7 @@ const sharedReactDomServer = namespaceForMock(
 );
 
 // Bun's bare-module test resolver can load one React copy through repo-root
-// dependencies and another through workspace-local ReactDOM (e.g. apps/mobile).
+// dependencies and another through workspace-local ReactDOM (apps/mobile).
 // Keep React singleton modules aligned with the root React installation.
 mock.module("react", () => sharedReact);
 mock.module("react/jsx-dev-runtime", () => sharedJsxDevRuntime);
@@ -65,155 +56,6 @@ mock.module("react/jsx-runtime", () => sharedJsxRuntime);
 mock.module("react-dom", () => sharedReactDom);
 mock.module("react-dom/client", () => sharedReactDomClient);
 mock.module("react-dom/server", () => sharedReactDomServer);
-
-// framer-motion's layout animations (`layout`, `layoutId`) register projection
-// nodes on a process-global document root whose frameloop keeps re-scheduling
-// after a test unmounts. Under jsdom that root then measures a document which
-// the next test file has already torn down, so an unrelated test fails with
-// `document is not defined` depending only on cumulative timing. Nothing in the
-// suite asserts animation behavior — the tests assert rendered DOM — so render
-// motion elements as their plain intrinsic tags and keep the projection tree
-// out of the process entirely.
-const MOTION_ONLY_PROPS = new Set([
-  "animate",
-  "as",
-  "axis",
-  "custom",
-  "drag",
-  "dragConstraints",
-  "dragControls",
-  "dragElastic",
-  "dragListener",
-  "dragMomentum",
-  "exit",
-  "initial",
-  "layout",
-  "layoutDependency",
-  "layoutId",
-  "layoutRoot",
-  "layoutScroll",
-  "onAnimationComplete",
-  "onDrag",
-  "onDragEnd",
-  "onDragStart",
-  "onLayoutAnimationComplete",
-  "onLayoutAnimationStart",
-  "onReorder",
-  "transition",
-  "value",
-  "values",
-  "variants",
-  "whileDrag",
-  "whileFocus",
-  "whileHover",
-  "whileInView",
-  "whileTap",
-]);
-
-function stripMotionProps(props: Record<string, unknown>): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(props)) {
-    if (!MOTION_ONLY_PROPS.has(key)) next[key] = value;
-  }
-  return next;
-}
-
-function createFramerMotionStub() {
-  const react = sharedReact as unknown as typeof import("react");
-  const forwardTag = (tag: string) =>
-    react.forwardRef(function MotionStub(
-      { children, ...props }: Record<string, unknown> & { children?: unknown },
-      ref: unknown,
-    ) {
-      return react.createElement(
-        tag,
-        { ...stripMotionProps(props), ref } as never,
-        children as never,
-      );
-    });
-  const motionCache = new Map<string, unknown>();
-  const motion = new Proxy(
-    {},
-    {
-      get(_target, tag: string) {
-        if (!motionCache.has(tag)) motionCache.set(tag, forwardTag(tag));
-        return motionCache.get(tag);
-      },
-    },
-  );
-  // Reorder renders whatever `as` names (the sidebar uses `as="div"`), so the
-  // stub has to honor it or it changes the DOM shape tests assert against.
-  const forwardPolymorphic = (defaultTag: string) =>
-    react.forwardRef(function ReorderStub(
-      { children, ...props }: Record<string, unknown> & { children?: unknown },
-      ref: unknown,
-    ) {
-      const tag = typeof props.as === "string" ? props.as : defaultTag;
-      return react.createElement(
-        tag,
-        { ...stripMotionProps(props), ref } as never,
-        children as never,
-      );
-    });
-  const Reorder = {
-    Group: forwardPolymorphic("ul"),
-    Item: forwardPolymorphic("li"),
-  };
-  const namespace = {
-    AnimatePresence: ({ children }: { children?: unknown }) => children ?? null,
-    LayoutGroup: ({ children }: { children?: unknown }) => children ?? null,
-    MotionConfig: ({ children }: { children?: unknown }) => children ?? null,
-    Reorder,
-    motion,
-    useDragControls: () => ({ start: () => {} }),
-    useReducedMotion: () => true,
-  };
-  return { ...namespace, default: namespace };
-}
-
-// Optional legacy desktop renderer setup: keep active desktop UI tests working
-// until apps/desktop is retired, without requiring apps/desktop for mobile UI tests.
-if (desktopRequire) {
-  // The desktop workspace resolves framer-motion to its own copy, and the bare
-  // specifier alone does not intercept it. `require.resolve` is also the wrong
-  // key here: it returns the CJS entry (dist/cjs/index.js) while the components
-  // import the ESM one (dist/es/index.mjs), so the mock has to be keyed by the
-  // module-condition resolution Bun actually uses.
-  mock.module("framer-motion", createFramerMotionStub);
-  for (const specifier of ["framer-motion", "motion/react"]) {
-    for (const resolve of [
-      () => Bun.resolveSync(specifier, desktopDir),
-      () => desktopRequire.resolve(specifier),
-    ]) {
-      try {
-        mock.module(resolve(), createFramerMotionStub);
-      } catch {
-        // Not every motion entry point is installed in every workspace.
-      }
-    }
-  }
-}
-
-// Radix selects its layout-effect implementation when its modules are first
-// evaluated. The desktop suite otherwise imports Radix nondeterministically:
-// whichever test reaches it first decides whether dialogs can mount portals
-// for every later test in the same Bun process. Initialize it once with a DOM,
-// matching the renderer environment, before test-file imports begin.
-let hasRadixUi = false;
-try {
-  rootRequire.resolve("radix-ui");
-  hasRadixUi = true;
-} catch {
-  // Optional desktop renderer dependency; absent once retired.
-}
-if (hasRadixUi) {
-  const radixImportHarness = setupJsdom();
-  try {
-    await import("radix-ui");
-  } finally {
-    radixImportHarness.restore();
-  }
-}
 
 try {
   const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
@@ -233,19 +75,3 @@ try {
 } catch {
   // Mobile workspace deps are not installed in every CI job.
 }
-
-afterEach(() => {
-  let storePath: string;
-  try {
-    storePath = require.resolve("../apps/desktop/src/app/store");
-  } catch {
-    return;
-  }
-  const store = require.cache[storePath];
-  if (store) {
-    const { useAppStore } = store.exports;
-    if (useAppStore && typeof (useAppStore as any).clearAllListeners === "function") {
-      (useAppStore as any).clearAllListeners();
-    }
-  }
-});

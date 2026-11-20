@@ -53,15 +53,3 @@ export function normalizeGoogleThinkingLevelForModel(
   if (!isGoogleThinkingLevel(value)) return undefined;
   return listGoogleThinkingLevelsForModel(modelId).includes(value) ? value : undefined;
 }
-
-export function googleReasoningEffortFromThinkingLevel(
-  thinkingLevel: GoogleThinkingLevel | undefined,
-): GoogleReasoningEffort {
-  return thinkingLevel ?? GOOGLE_DYNAMIC_REASONING_EFFORT;
-}
-
-export function googleThinkingLevelFromReasoningEffort(
-  reasoningEffort: GoogleReasoningEffort,
-): GoogleThinkingLevel | undefined {
-  return reasoningEffort === GOOGLE_DYNAMIC_REASONING_EFFORT ? undefined : reasoningEffort;
-}

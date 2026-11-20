@@ -20,9 +20,7 @@ export function hostArch(): NodeJS.Architecture {
 export type DesktopPlatform = "windows" | "macos" | "linux" | "other";
 
 /**
- * Single raw→normalized platform vocabulary mapping for UI-facing code
- * (replaces the byte-identical copies in apps/desktop/src/lib/desktopPlatform.ts
- * and apps/desktop/electron/services/windowChrome/platformChrome.ts).
+ * Single raw→normalized platform vocabulary mapping for UI-facing and packaging code.
  */
 export function toDesktopPlatform(platform: NodeJS.Platform = hostPlatform()): DesktopPlatform {
   switch (platform) {

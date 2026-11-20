@@ -386,14 +386,6 @@ export function defaultSupportedModel(provider: ProviderName): SupportedModel {
   return entry;
 }
 
-export function defaultModelIdForProvider(provider: ProviderName): string {
-  return defaultSupportedModel(provider).id;
-}
-
-export function listSupportedModelIds(provider: ProviderName): readonly string[] {
-  return listSupportedModels(provider).map((entry) => entry.id);
-}
-
 export function supportsImageInput(provider: ProviderName, modelId: string): boolean {
   return getSupportedModel(provider, modelId)?.supportsImageInput ?? false;
 }

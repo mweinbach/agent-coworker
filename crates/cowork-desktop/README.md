@@ -1,26 +1,21 @@
 # Cowork Native Desktop (`crates/cowork-desktop`)
 
-Native Rust desktop client for Cowork built on [Rune](https://github.com/anomalyco/rune). Like the Electron app (`apps/desktop/`), it is a thin UI client that spawns and communicates with a per-workspace `cowork-server` sidecar over typed JSON-RPC WebSockets (`crates/cowork-protocol`).
+Native Rust desktop client for Cowork built on [Rune](https://github.com/anomalyco/rune). It is Cowork's sole desktop UI, implemented as a thin client that spawns and communicates with a per-workspace `cowork-server` sidecar over typed JSON-RPC WebSockets (`crates/cowork-protocol`).
 
 ## Running
 
-From the repository root:
-
-```bash
-bun run desktop:rune
-```
-
-`bun run desktop:rune` builds `cowork-server` and launches `cowork-desktop`, forwarding any extra arguments after `--`:
-
-```bash
-bun run desktop:rune -- --scene chat-demo --theme dark
-```
-
-Or run directly with Cargo:
+Run directly with Cargo (no Bun or Node install required):
 
 ```bash
 cargo build -p cowork-server --bin cowork-server
 cargo run -p cowork-desktop --bin cowork-desktop
+```
+
+Or from the repository root via Bun (`bun run start` and `bun run desktop:rune` both build `cowork-server` and launch `cowork-desktop`, forwarding any extra arguments after `--`):
+
+```bash
+bun run start
+bun run start -- --scene chat-demo --theme dark
 ```
 
 Relevant environment overrides:
@@ -85,22 +80,27 @@ All product/session/tool logic lives in `crates/cowork-server` and `crates/cowor
 
 | Area | Owner | Modules |
 | --- | --- | --- |
-| Shared core & integration | `architect` | `Cargo.toml`, `src/main.rs`, `src/lib.rs`, `src/actions.rs`, `src/router.rs`, `src/shortcuts.rs`, `src/state.rs`, `src/theme.rs`, `src/ws.rs`, `tests/e2e_roundtrip.rs` |
-| Chat views | `chat` | `src/views/chat/` — landing, virtualized feed, markdown, activity/tool cards, approvals/questions, composer, attachments, agent run viewer |
-| App shell & overlays | `shell` | `src/views/shell/` — main/quick-chat/utility shells, top bar, sidebar, command palette, search, onboarding, toasts, task views, context inspector, inline preview |
-| Settings | `settings` | `src/views/settings/` — settings shell and pages (`models`, `subagents`, `toolAccess`, `defaults`, `profileMemory`, `remoteAccess`, `backup`, `chats`, `usage`, `privacyTelemetry`, `desktop`, `updates`, `experiments`, `diagnostics`) |
-| Native host integration | `native` | `src/native/` — sidecar lifecycle, state persistence, path/root security, redacting local logs, file explorer/watcher/preview, OS dialogs, menus, tray/global shortcut, notifications, diagnostics, remote access, Minisign auto-updater |
+| Shared core & integration | `architect` | `crates/cowork-desktop/Cargo.toml`, `crates/cowork-desktop/src/main.rs`, `crates/cowork-desktop/src/lib.rs`, `crates/cowork-desktop/src/actions.rs`, `crates/cowork-desktop/src/router.rs`, `crates/cowork-desktop/src/shortcuts.rs`, `crates/cowork-desktop/src/state.rs`, `crates/cowork-desktop/src/theme.rs`, `crates/cowork-desktop/src/ws.rs`, `crates/cowork-desktop/tests/e2e_roundtrip.rs` |
+| Chat views | `chat` | `crates/cowork-desktop/src/views/chat/` — landing, virtualized feed, markdown, activity/tool cards, approvals/questions, composer, attachments, agent run viewer |
+| App shell & overlays | `shell` | `crates/cowork-desktop/src/views/shell/` — main/quick-chat/utility shells, top bar, sidebar, command palette, search, onboarding, toasts, task views, context inspector, inline preview |
+| Settings | `settings` | `crates/cowork-desktop/src/views/settings/` — settings shell and pages (`models`, `subagents`, `toolAccess`, `defaults`, `profileMemory`, `remoteAccess`, `backup`, `chats`, `usage`, `privacyTelemetry`, `desktop`, `updates`, `experiments`, `diagnostics`) |
+| Native host integration | `native` | `crates/cowork-desktop/src/native/` — sidecar lifecycle, state persistence (including legacy desktop state migration), path/root security, redacting local logs, file explorer/watcher/preview, OS dialogs, menus, tray/global shortcut, notifications, diagnostics, remote access, Minisign auto-updater |
 
 ## Packaging & releases
 
-Native desktop installers, signed archives, and updater feeds are built with `cargo-packager` (`0.11.8`), replacing `electron-builder` without putting packaging metadata in `crates/cowork-desktop/Cargo.toml`.
+Native desktop installers, signed archives, and updater feeds are built with `cargo-packager` (`0.11.8`), without putting packaging metadata in `crates/cowork-desktop/Cargo.toml`.
 
 - **Local unsigned macOS build** (creates `.app`, `.dmg`, `-mac.zip`, and `.app.tar.gz` under `target/rune-package/<platformKey>/out/`):
   ```bash
   bun run desktop:rune:package -- --unsigned
   ```
-- **Packaging inputs**: [`crates/cowork-desktop/packaging/Packager.toml`](packaging/Packager.toml) (shared identity `com.cowork.desktop`, product `Cowork`, min macOS `12.0`), `entitlements.mac.plist`, and icons under `packaging/icons/`. Runtime staging pulls `dist/{prompts,config,skills,workflows}`, the target `cowork-server` sidecar + `cowork-server-manifest.json`, `tray/icon.{png,ico}`, and (on Windows) `windows-sandbox/` helpers with refreshed `cowork-win-sandbox.sha256.json` hashes.
-- **Release pipeline**: [`.github/workflows/desktop-rune-release.yml`](../../.github/workflows/desktop-rune-release.yml) builds all 6 targets (`macos-{aarch64,x86_64}`, `windows-{x86_64,aarch64}`, `linux-{x86_64,aarch64}`) on `desktop-rune-v*` tags or `workflow_dispatch`, Minisign-signs updater payloads, and aggregates `updater-fragment-*.json` into `latest.json` via [`scripts/desktop_rune_release_manifest.ts`](../../scripts/desktop_rune_release_manifest.ts).
+- **Packaging inputs**: [`crates/cowork-desktop/packaging/Packager.toml`](packaging/Packager.toml) (authoritative version source, shared identity `com.cowork.desktop`, product `Cowork`, min macOS `12.0`), `entitlements.mac.plist`, migration-aware Windows NSIS template [`packaging/nsis/installer.nsi`](packaging/nsis/installer.nsi), and icons under `packaging/icons/`. Runtime staging pulls `dist/{prompts,config,skills,workflows}`, the target `cowork-server` sidecar + `cowork-server-manifest.json`, `tray/icon.{png,ico}`, and (on Windows) `windows-sandbox/` helpers with refreshed `cowork-win-sandbox.sha256.json` hashes.
+- **Release pipeline**: [`.github/workflows/desktop-rune-release.yml`](../../.github/workflows/desktop-rune-release.yml) builds all 6 targets (`macos-{aarch64,x86_64}`, `windows-{x86_64,aarch64}`, `linux-{x86_64,aarch64}`) on `v*` or `desktop-rune-v*` tags (and `workflow_dispatch`), Minisign-signs updater payloads, assembles both the native `latest.json` feed and legacy updater compatibility metadata via [`scripts/assemble_rune_release.ts`](../../scripts/assemble_rune_release.ts), and gates promotion on non-publishing native `verify-upgrade` runs across `macos-15`, `windows-latest`, and `windows-11-arm`.
+- **Legacy Electron -> Rune updater bridge**:
+  - **macOS (`arm64`, `x64`)**: publishes `latest-mac.yml` alongside signed, notarized `Cowork_<ver>_arm64-mac.zip` and `Cowork_<ver>_x64-mac.zip` (`CFBundleIdentifier=com.cowork.desktop`, `CFBundleExecutable=Cowork`) via [`scripts/legacy_mac_updater.ts`](../../scripts/legacy_mac_updater.ts). Existing packaged clients discover the update on `releases/latest` and switch in place when the user clicks **Restart and Install**.
+  - **Windows (`x64`, `arm64`)**: publishes `latest.yml` and `latest-arm64.yml` pointing to Authenticode-signed migration-aware NSIS installers (`scripts/legacy_windows_updater.ts`, `crates/cowork-desktop/packaging/nsis/installer.nsi`) that adopt the existing install location/scope, preserve user data and shortcuts, maintain a single uninstall registration, and relaunch Rune once non-elevated.
+  - **Late users & follow-up updates**: every non-prerelease `Latest` release during the bridge window publishes both the legacy channel metadata/assets and Rune's Minisign-signed `latest.json` feed. After the first handoff, Rune updates itself natively via `latest.json`. Non-desktop release workflows (`cowork-server-release.yml`, `win-sandbox-release.yml`) explicitly set `make_latest: "false"` so they cannot displace the desktop `Latest` release.
+  - **Linux**: native `x86_64` and `aarch64` Rune packaging (`.AppImage` / `.deb`) remains supported directly, with no legacy Electron auto-upgrade bridge claimed.
 
 ### CI Secrets & Variables
 

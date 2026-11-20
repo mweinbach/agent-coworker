@@ -74,7 +74,7 @@ function hasRenderableReasoningText(item: ReasoningActivityItem): boolean {
   return normalizeReasoningMarkdown(item.text).length > 0;
 }
 
-export function effectiveToolState(item: ToolActivityItem): ToolFeedState {
+function effectiveToolState(item: ToolActivityItem): ToolFeedState {
   if (item.result !== undefined && isRecord(item.result)) {
     if (item.result.denied === true) return "output-denied";
     if ("error" in item.result || item.result.ok === false) return "output-error";
@@ -90,7 +90,7 @@ export function effectiveToolState(item: ToolActivityItem): ToolFeedState {
   return "output-available";
 }
 
-export function isFailedToolState(state: ToolFeedState): boolean {
+function isFailedToolState(state: ToolFeedState): boolean {
   return state === "output-error" || state === "output-denied";
 }
 

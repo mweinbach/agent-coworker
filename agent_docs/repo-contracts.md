@@ -21,8 +21,7 @@ Each rule lists its key references — start there before editing.
 - **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
 - **Canonical config roots**: `.cowork/` and `~/.cowork/` are the only runtime config/skills/memory/MCP namespaces; support legacy `.agent` only through an explicit one-time migration command, not permanent dual lookups.
   - References: `crates/cowork-config/src/lib.rs` (path resolution, `.agent` -> `.cowork` migration, and three-tier merge: built-in `config/defaults.json` → user `~/.cowork/config/config.json` → project `.cowork/config.json`, env vars override all)
-- **Workspace settings**: any new field must round-trip through `PersistenceService.sanitizeWorkspaces()` — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
-  - References: `apps/desktop/electron/services/persistence.ts`
+- **Workspace settings**: any new field must round-trip through desktop persistence sanitization (`crates/cowork-desktop/src/native/persistence.rs` and `crates/cowork-server/src/desktop_state_normalize.rs`) — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
 - **Workspace settings target**: settings controls must render and mutate the same workspace class; hidden `oneOffChat` records should not back project default controls.
 - **Chat target pickers**: settings and memory target pickers should collapse all non-project `oneOffChat` records into one `Chats` target, while project workspaces still appear individually.
 - **Chat target labels**: apply the same `Chats` grouping to every settings/metadata workspace picker or label that represents hidden one-off chat workspaces; do not fix only the currently visible page.
@@ -38,7 +37,7 @@ Each rule lists its key references — start there before editing.
 - **Optimistic chat sends**: preserve `clientMessageId` through `turn/start`/`turn/steer` and the projected `item/userMessage` notifications, or duplicate user bubbles render.
   - References: `crates/cowork-server/src/jsonrpc_turn.rs`, `crates/cowork-inference/src/projector.rs`
 - **Thread reasoning state**: reasoning-effort changes in an existing chat are thread-owned preferences. Persist them on the thread, preserve them across navigation/reconciliation/restart, and clear them only when the thread's model changes to a potentially incompatible reasoning contract.
-  - References: `src/shared/openaiCompatibleOptions.ts`, `src/shared/googleThinking.ts`, `apps/desktop/src/ui/chat/ComposerReasoningToggle.tsx`
+  - References: `src/shared/openaiCompatibleOptions.ts`, `src/shared/googleThinking.ts`, `crates/cowork-desktop/src/views/chat/`
 
 ## Tools, providers & models
 
@@ -75,8 +74,8 @@ Each rule lists its key references — start there before editing.
 
 ## Accessibility & theming
 
-- **Contrast consumer paths**: when adding accessible foreground/background tokens, trace them through each platform theme adapter into rendered controls and test that consumer path; token-pair contrast tests alone are insufficient. Use explicit arbitrary Tailwind values for nonstandard ring widths, and map high-contrast selected/focus states to the system `Highlight`/`HighlightText` pair.
-  - References: `apps/desktop/src/styles.css`
+- **Contrast consumer paths**: when adding accessible foreground/background tokens, trace them through each platform theme adapter into rendered controls and test that consumer path; token-pair contrast tests alone are insufficient.
+  - References: `crates/cowork-desktop/src/theme.rs`, `apps/mobile/src/theme/tokens.ts`
 
 ## Misc UI-adjacent
 

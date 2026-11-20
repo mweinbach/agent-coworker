@@ -1,6 +1,6 @@
 # agent-coworker
 
-A local-first AI coworker agent: Rust core harness (`crates/`), JSON-RPC WebSocket server (`cowork-server`), CLI REPL (`cowork`), and thin TypeScript UI clients (Electron desktop, Expo mobile).
+A local-first AI coworker agent: Rust core harness (`crates/`), JSON-RPC WebSocket server (`cowork-server`), native Rust desktop client on Rune (`crates/cowork-desktop/`), CLI REPL (`cowork`), and Expo mobile client (`apps/mobile/`).
 
 ## Execution and communication
 
@@ -24,38 +24,37 @@ When adding a JSON-RPC method or notification:
 
 ## Layout
 
-- `crates/` — Rust harness & server workspace: agent loop (`crates/cowork-harness/`), server (`crates/cowork-server/`), tools (`crates/cowork-tools/`), providers (`crates/cowork-providers/`), MCP (`crates/cowork-mcp/`), storage (`crates/cowork-storage/`), CLI (`crates/cowork-cli/`), Rune desktop app (`crates/cowork-desktop/`)
-- `src/` — shared TypeScript client contracts (`src/shared/`), model/provider catalogs (`src/models/`, `src/providers/`), and desktop platform helpers (`src/platform/`)
-- `apps/desktop/` — Electron app, UI layer only (see `apps/desktop/AGENTS.md`)
+- `crates/` — Rust harness, server, and native client workspace: agent loop (`crates/cowork-harness/`), server (`crates/cowork-server/`), tools (`crates/cowork-tools/`), providers (`crates/cowork-providers/`), MCP (`crates/cowork-mcp/`), storage (`crates/cowork-storage/`), CLI (`crates/cowork-cli/`), native Rune desktop app (`crates/cowork-desktop/`)
+- `src/` — shared TypeScript client contracts (`src/shared/`), WebSocket JSON-RPC client (`src/client/`), model/provider catalogs (`src/models/`, `src/providers/`), and platform/packaging helpers (`src/platform/`)
 - `apps/mobile/` — Expo mobile app (React Native)
 - `packages/harness/` — dev harness, docs generation and checks
-- `test/`, `apps/desktop/test/` — Bun tests (`*.test.ts`)
+- `test/` — Bun tests (`*.test.ts`, `*.test.tsx`)
 - `config/` — built-in defaults; model registry lives in `config/models/<provider>/`
 - `prompts/`, `skills/` — system + sub-agent prompts, bundled skills
 - `docs/` — architecture and protocol docs; `docs/harness/index.md` is the harness docs map
 
 ## Commands
 
-Use Bun, not npm. Vite+ owns lint/format for the build configs and new navigation
-modules listed in root `vite.config.ts`; Biome owns all remaining scopes, including
-the existing renderer source and CSS.
-Use the root scripts to run both non-overlapping scopes; do not hand-maintain style.
+Native desktop, CLI, and server can be built and launched directly with Cargo without a JavaScript install:
 
-- `bun install` — install root and workspace dependencies
+- `cargo build -p cowork-server --bin cowork-server && cargo run -p cowork-desktop --bin cowork-desktop` — native Rune desktop app
+- `cargo run -p cowork-cli --bin cowork` — Rust CLI REPL
+- `cargo run -p cowork-server --bin cowork-server` — standalone WebSocket server (`ws://127.0.0.1:7337/ws`)
+
+For JS/TS tooling, mobile, packaging scripts, and docs checks, use Bun (not npm). Biome owns JS/TS lint and formatting; do not hand-maintain style.
+
+- `bun install` — install root and `packages/*` dependencies
 - `bun install --cwd apps/mobile --frozen-lockfile` — install the locked mobile SDK dependencies required by the full test suite
-- `bun run start` / `bun run desktop:rune` / `bun run cli` / `bun run serve` — Electron desktop app / native Rune desktop app / Rust CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
-- `bun run desktop:web` — browser development build of the desktop UI
+- `bun run start` / `bun run desktop:rune` / `bun run cli` / `bun run serve` — native Rune desktop app / alias / Rust CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
 - `cargo test --workspace` — run all Rust crate unit and integration tests
 - `cargo clippy --workspace --all-targets -- -D warnings` / `cargo fmt --all -- --check` — Rust lint and format checks
 - `bun run test` — full TypeScript/client/black-box suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.
-- `bun run typecheck` — TypeScript strict, root + `packages/harness` + `apps/desktop`
-- `bun run lint` / `bun run check:write` — scoped Biome + Vite+ lint / lint+format fix
-- `bun run check:tooling` — scoped Vite+ lint/format plus strict build-config TypeScript check
-- `bun run web:build` — browser production build through the local Vite+ CLI
+- `bun run typecheck` — TypeScript strict, root + `packages/harness`
+- `bun run lint` / `bun run check:write` — Biome lint / lint+format fix
 - `bun run docs:check` — protocol/docs consistency against Rust's exported JSON-RPC manifest (runs in CI)
 - `bun run knip` — dead-export check
 
-For code, dependency, build, and runtime configuration changes, the canonical pre-commit verification lane is `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `bun run test`, `bun run typecheck`, `bun run check`, and `bun run docs:check`. `bun run check` includes lint and format checks for both tooling scopes. Run this lane for each committed logical slice; results from the same unchanged slice need not be repeated just to finish the task.
+For code, dependency, build, and runtime configuration changes, the canonical pre-commit verification lane is `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `bun run test`, `bun run typecheck`, `bun run check`, and `bun run docs:check`. Run this lane for each committed logical slice; results from the same unchanged slice need not be repeated just to finish the task.
 
 Read-only audits require source-backed verification, not runtime tests. For instruction-only or prose-only changes, inspect the full diff, validate affected skill metadata and documentation links, and run applicable documentation checks; runtime tests are required only if executable behavior or a test-consumed contract changes, or the user explicitly requests them. Report which checks ran and any unresolved failures.
 
@@ -81,7 +80,7 @@ Task-specific docs — load the one that matches your task before starting:
 - `agent_docs/engineering-rules.md` — durable rules from past corrections: PR review workflow, scope discipline, verification gates
 - `agent_docs/repo-contracts.md` — repo-specific invariants (auth, config tiers, JSON-RPC projector, tools, runtime)
 - `agent_docs/code-review-rules.md` — review checklist for contract, authority-boundary, and IPC diffs
-- `agent_docs/desktop-ui.md` — shadcn/ui + Electron patterns, desktop verification workflow
+- `agent_docs/desktop-ui.md` — native Rune desktop UI patterns, headless scenes, and verification workflow
 - `agent_docs/mobile-ui.md` — Expo/mobile patterns and verification
 - `agent_docs/model-selection.md` — which models to use for which work
 - `agent_docs/astra.md` — GPT-6 Astra prompting guidance, skill audit rules, and API migration constraints

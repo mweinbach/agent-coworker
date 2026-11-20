@@ -18,11 +18,19 @@ This guide covers everything you need to start contributing to the project.
 
 ```bash
 git clone <repo-url> && cd agent-coworker
-bun install                     # installs root + apps/desktop deps
+
+# Native Rust surfaces (no JS install required):
+cargo build -p cowork-server --bin cowork-server
+cargo run -p cowork-desktop --bin cowork-desktop # Native Rune desktop app
+cargo run -p cowork-cli --bin cowork             # Rust CLI REPL
+cargo run -p cowork-server --bin cowork-server   # Standalone WebSocket server
+
+# Optional Bun/JS workspace deps (mobile, packaging scripts, docs checks, TS tests):
+bun install
 bun install --cwd apps/mobile --frozen-lockfile # required by the full test suite
 
-# Run in different modes:
-bun run start                   # Desktop app in dev mode -- starts server automatically
+# Bun convenience shortcuts:
+bun run start                   # Native Rune desktop app (builds sidecar + launches Rune)
 bun run cli                     # Rust CLI REPL via cargo
 bun run serve                   # Standalone WebSocket server
 ```
@@ -50,7 +58,6 @@ Key modules:
 | `crates/cowork-mcp/` | MCP server config registry, OAuth provider, auth store, and tool pool. |
 | `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery. |
 | `src/shared/` | Pure TypeScript client/UI contracts and schemas. |
-| `apps/desktop/` | Electron desktop app. |
 | `crates/cowork-desktop/` | Native Rune desktop app (`crates/cowork-desktop/README.md`). |
 | `crates/cowork-cli/` | CLI REPL client. |
 
@@ -76,15 +83,12 @@ src/
   types.ts              # Shared TypeScript types
   client/               # WebSocket JSON-RPC client (JsonRpcSocket)
   models/               # Static client model registry
-  platform/             # Desktop host/path/sandbox helpers
+  platform/             # Host/path/sidecar/sandbox packaging helpers
   providers/            # Static client provider catalog
   session/              # Client usage/pricing helpers
   shared/               # Shared client/UI schemas and stream projection
-  sync/                 # Cloud sync outbox helpers
-  telemetry/            # Client privacy/telemetry wrappers
-  utils/                # Shared client/platform utilities
+  utils/                # Shared path and type utilities
 apps/
-  desktop/              # Electron desktop app
   mobile/               # Optional Expo mobile app (React Native)
 packages/
   harness/              # Developer harness, docs checks and provider spec generation
@@ -93,9 +97,9 @@ config/
   mcp-servers.json      # System-level MCP server definitions
 skills/                 # Built-in skills (memories, task, workflow)
 prompts/                # System prompts, sub-agent prompts, command templates
-scripts/                # Runtime packaging and release build helpers
+scripts/                # Runtime packaging, bridge upgrade, and release build helpers
 docs/                   # Architecture docs, protocol spec, harness docs
-test/                   # All test files (*.test.ts)
+test/                   # TypeScript client, mobile, packaging, and black-box server tests (*.test.ts)
 ```
 
 ## Configuration
@@ -190,36 +194,35 @@ Credentials are stored separately from server configs:
 
 ## Testing
 
-Rust crate unit and integration tests run via **Cargo** (`crates/cowork-server/tests/` and inline `#[cfg(test)]`), while TypeScript client, desktop, mobile, and black-box server integration tests use **Bun's test runner** (`test/` and `apps/desktop/test/`).
+Rust crate unit and integration tests (including the native Rune desktop app in `crates/cowork-desktop/`) run via **Cargo**, while TypeScript client, mobile, packaging, and black-box server integration tests use **Bun's test runner** (`test/`).
 
 The full TypeScript suite exercises the installed Expo Router and native UI modules. Install both root and mobile dependencies using the Getting Started commands before running it.
 
 ```bash
-cargo test --workspace          # Run all Rust workspace tests
+cargo test --workspace          # Run all Rust workspace tests (including cowork-desktop)
 bun run test                    # Run all TypeScript + black-box integration tests
-bun run test -- apps/desktop/test # Run desktop tests
 bun run test -- test/rust-server.http-and-rpc.integration.test.ts # Run a specific test file
 ```
 
 The full runner keeps each test file in a fresh process. Backend tests skip the
-React/jsdom bootstrap; desktop and mobile tests keep it. Root tests that exercise
+React/jsdom bootstrap; mobile UI tests keep it. Root tests that exercise
 UI code must include `mobile` or `desktop` in their path or use `.test.tsx`.
 Ad hoc runs with paths or filters retain the complete bootstrap.
 
 Key testing patterns:
 - **Deterministic local mocks** -- Rust provider/harness/server tests use local mock HTTP/SSE/stdio servers; black-box TypeScript integration tests spawn isolated `cowork-server` instances via `test/helpers/rustServerHarness.ts`.
 - **No network calls** -- Default test runs must stay 100% offline and isolate all state in temporary directories (`COWORK_HOME_OVERRIDE`).
-- **Test files follow `*.test.ts` naming** -- Place TypeScript tests in `test/` or `apps/desktop/test/`, and Rust integration tests in `crates/<crate>/tests/`.
+- **Test files follow `*.test.ts` naming** -- Place TypeScript tests in `test/`, and Rust integration tests in `crates/<crate>/tests/`.
 
 ## Commits & PRs
 
 - **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
 - **Always run tests** before pushing: `cargo test --workspace && bun run test`
 - **Focused PRs**: Keep pull requests small and focused on a single concern.
-- **Code quality**: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `bun run typecheck` (TypeScript strict, root + harness + desktop), `bun run check` (Biome + Vite+), `bun run knip`, and `bun run docs:check` all run in CI.
+- **Code quality**: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `bun run typecheck` (TypeScript strict, root + harness), `bun run check` (Biome), `bun run knip`, and `bun run docs:check` all run in CI.
 
 Biome rejects unnecessary `else` branches, empty JavaScript blocks, and conditions made redundant
-by inferred types. Test and desktop quality fixtures are excluded from the latter two rules.
+by inferred types. Test fixtures are excluded from the latter two rules.
 Unused imports, variables, and parameters in `scripts/` are also errors. The existing local and CI
 checks enforce these rules.
 

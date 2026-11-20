@@ -30,7 +30,7 @@ There are two ways to run the server for your application.
 
 ### Mode 1: Sidecar Binary (Recommended for Native Apps)
 
-Compile the server to a standalone binary and ship it alongside your app. This is how the Electron desktop app works.
+Compile the server to a standalone binary and ship it alongside your app. This is how the native Rune desktop app (`crates/cowork-desktop/`) works.
 
 **Build the binary:**
 
@@ -87,7 +87,7 @@ With `--json`, wait for `server_listening` to discover the bound listener. This 
 }
 ```
 
-Parse this to discover the WebSocket URL. When binding to a non-loopback host such as `0.0.0.0` (or when serving browser Origins), `browserAccessToken` must be sent to `/ws` as the `coworkBrowserToken` query parameter and to `/cowork/*` HTTP routes as the `X-Cowork-Browser-Token` header. See `apps/desktop/electron/services/serverManager.ts` for a production-grade implementation including startup timeout, `server_startup_progress` forwarding, stderr capture, and cooperative stdin-EOF shutdown.
+Parse this to discover the WebSocket URL. When binding to a non-loopback host such as `0.0.0.0` (or when serving browser Origins), `browserAccessToken` must be sent to `/ws` as the `coworkBrowserToken` query parameter and to `/cowork/*` HTTP routes as the `X-Cowork-Browser-Token` header. See `crates/cowork-desktop/src/native/server_manager.rs` for a production-grade implementation including startup timeout, `server_startup_progress` forwarding, stderr capture, and cooperative stdin-EOF shutdown.
 
 **Server CLI flags:**
 
@@ -335,20 +335,20 @@ For native apps that spawn the server as a sidecar, you need to handle:
 
 **Crash recovery**: If the server process exits unexpectedly, your app can restart it and reconnect clients via `thread/resume`. Sessions are persisted to SQLite, so state is not lost.
 
-See `apps/desktop/electron/services/serverManager.ts` for a complete reference implementation of sidecar lifecycle management.
+See `crates/cowork-desktop/src/native/server_manager.rs` for a complete reference implementation of sidecar lifecycle management.
 
 ## Reference Implementation: Desktop App
 
-The Electron desktop app (`apps/desktop/`) is the canonical example of a native app wrapping the cowork server. Key patterns to study:
+The native Rune desktop app (`crates/cowork-desktop/`) is the canonical example of a native app wrapping the cowork server. Key patterns to study:
 
 | Concern | File | Pattern |
 |---------|------|---------|
-| Sidecar spawn & lifecycle | `apps/desktop/electron/services/serverManager.ts` | Spawn Rust binary, parse startup NDJSON, stdin-EOF shutdown |
-| Socket management | `apps/desktop/src/app/store.helpers/controlSocket.ts` | Per-workspace control sockets |
-| Thread sockets | `apps/desktop/src/app/store.helpers/runtimeState.ts` | Per-thread `JsonRpcSocket` map |
-| Feed reduction | `apps/desktop/src/app/store.helpers/threadEventReducer.ts` | JSON-RPC notifications -> Zustand state |
-| State management | `apps/desktop/src/app/store.ts` | Zustand store with action namespaces |
-| IPC bridge | `apps/desktop/electron/ipc.ts` | Electron main <-> renderer communication |
+| Sidecar spawn & lifecycle | `crates/cowork-desktop/src/native/server_manager.rs` | Spawn Rust binary, parse startup NDJSON, stdin-EOF shutdown |
+| Sidecar binary resolution | `crates/cowork-desktop/src/native/sidecar.rs` | Resolve packaged sidecar manifest or Cargo workspace binary |
+| WebSocket JSON-RPC client | `crates/cowork-desktop/src/ws.rs` | Typed per-workspace and per-thread JSON-RPC sockets |
+| State & action dispatch | `crates/cowork-desktop/src/state.rs` | Thread feed reduction and acknowledged operation state |
+| Persistence & migration | `crates/cowork-desktop/src/native/persistence.rs` | Atomic `state.json` + JSONL transcript cache + legacy profile import |
+| Packaging & release bridge | `crates/cowork-desktop/packaging/Packager.toml` | `cargo-packager` bundle inputs + legacy Electron -> Rune updater bridge (`scripts/assemble_rune_release.ts`) |
 
 ## Checklist: Building a New Client
 

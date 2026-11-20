@@ -22,18 +22,11 @@ const REPO_PATH_PREFIXES = [
   "prompts/",
   "test/",
 ];
-const GENERATED_REPO_PATH_PREFIXES = [
-  "apps/desktop/resources/",
-  "apps/desktop/out/",
-  "apps/desktop/out-quality/",
-  "apps/desktop/out-web/",
-  "apps/desktop/release/",
-];
+const GENERATED_REPO_PATH_PREFIXES = ["dist/", "target/"];
 const TOP_LEVEL_DOCS = ["README.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md"];
 export const CURATED_DOCS_WITH_PATH_CHECKS = [
   ...TOP_LEVEL_DOCS,
-  "apps/desktop/AGENTS.md",
-  "apps/desktop/README.md",
+  "crates/cowork-desktop/README.md",
   "agent_docs/adding-models.md",
   "agent_docs/astra.md",
   "agent_docs/code-review-rules.md",

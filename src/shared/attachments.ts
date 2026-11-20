@@ -1,14 +1,6 @@
 export const MAX_TURN_ATTACHMENT_COUNT = 8;
 export const MAX_ATTACHMENT_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
-export const MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
 export const MAX_ATTACHMENT_UPLOAD_BYTE_SIZE = 100 * 1024 * 1024;
-export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(
-  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
-);
-
-function getBase64SizeFromByteLength(byteLength: number): number {
-  return Math.ceil(Math.max(0, byteLength) / 3) * 4;
-}
 
 export function getAttachmentCountValidationMessage(count?: number): string | null {
   if ((count ?? 0) > MAX_TURN_ATTACHMENT_COUNT) {

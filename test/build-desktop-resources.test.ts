@@ -96,15 +96,15 @@ describe("desktop resource build helpers", () => {
     }
   });
 
-  test("desktop dev does not force-rebuild a potentially running sandbox helper", async () => {
-    const desktopPackage = JSON.parse(
-      await fs.readFile(
-        path.resolve(import.meta.dir, "..", "apps", "desktop", "package.json"),
-        "utf8",
-      ),
-    ) as { scripts?: { dev?: string } };
+  test("desktop dev and resource build scripts do not force-rebuild a potentially running sandbox helper", async () => {
+    const rootPackage = JSON.parse(
+      await fs.readFile(path.resolve(import.meta.dir, "..", "package.json"), "utf8"),
+    ) as { scripts?: { start?: string; "build:desktop-resources"?: string } };
 
-    expect(desktopPackage.scripts?.dev).not.toContain("--force-windows-sandbox-build");
+    expect(rootPackage.scripts?.start).not.toContain("--force-windows-sandbox-build");
+    expect(rootPackage.scripts?.["build:desktop-resources"]).not.toContain(
+      "--force-windows-sandbox-build",
+    );
   });
 
   test("builds and copies the Windows sandbox helper for Windows targets", async () => {

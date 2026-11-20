@@ -20,7 +20,7 @@ Durable rules distilled from past user corrections. Load this file for PR work, 
 - When the user explicitly stops automation or delegation, delete the automation, stop delegated work, and finish in the current primary thread without spawning or resuming agents.
 - Before claiming a comment is fixed, re-check the exact current branch path it points at.
 - Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
-  - References: `.github/workflows/ci.yml` (main lane), plus `desktop-release.yml`, `cowork-server-release.yml`, `win-sandbox-release.yml`
+  - References: `.github/workflows/ci.yml` (main lane), plus `desktop-rune-release.yml`, `cowork-server-release.yml`, `win-sandbox-release.yml`
 - For ordinary PR feedback handling, use one independent review pass plus one verification pass. Reopen review only for new changes, unresolved findings, failed checks, or newly discovered material risk. Once findings are fixed and CI is green, perform the next action already authorized by the user; merge only when merging is authorized. An explicitly requested exhaustive audit or a managed task's required review rounds can have a different review scope.
 
 ## Scope & Plan Discipline
@@ -48,7 +48,7 @@ Durable rules distilled from past user corrections. Load this file for PR work, 
 - Verify the requested outcome before marking a task complete. Apply the canonical verification lane and its read-only/instruction-only applicability rules in the root `AGENTS.md`; report any remaining evidence gaps instead of claiming unverified behavior works.
 - When the canonical lane requires tests, run the full project test command, not just specific tests: cross-file Bun module mocks can pass in isolation and still fail in the full suite.
   - References: `scripts/run_tests.ts`, `packages/harness/src/check_docs.ts`
-- For desktop UI changes, verify the affected behavior in the live running app using the tool preference and evidence requirements in `desktop-ui.md` → Electron tooling. Tests alone are not proof.
+- For desktop UI changes, verify the affected behavior via headless Rune scenes (`--snap`/`--tree`) or the live running Rune app as documented in `desktop-ui.md`. Unit tests alone are not proof.
 - For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift. (See `mobile-ui.md`.)
 - For mobile navigation and accessibility changes, render real iOS and Android component/router trees; source-string assertions are not proof. Commit deterministic platform snapshots when simulators are unavailable, and never claim manual VoiceOver/TalkBack coverage that was not run.
 - Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.

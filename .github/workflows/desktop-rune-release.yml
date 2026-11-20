@@ -3,9 +3,7 @@ name: Desktop Rune Release
 on:
   push:
     tags:
-      # Keep `desktop-release.yml` on `v*` until Electron is retired.
-      # When cutting over to Rune as the primary desktop release, switch this
-      # workflow's tag trigger to `v*` and disable `.github/workflows/desktop-release.yml`.
+      - "v*"
       - "desktop-rune-v*"
   workflow_dispatch:
     inputs:

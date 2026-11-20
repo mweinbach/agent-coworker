@@ -25,6 +25,21 @@ import {
   type UpdaterFragment,
   validateLatestJsonManifest,
 } from "../scripts/desktop_rune_release_manifest";
+import {
+  buildLegacyMacChannelMetadata,
+  classifyLegacyMacZipArch,
+  inspectMachOArchs,
+  LEGACY_MAC_CHANNEL_FILENAME,
+  parseLegacyMacChannelYaml,
+  resolveLegacyMacZipName,
+  selectLegacyMacZipForClient,
+  serializeLegacyMacChannelYaml,
+  verifyMacAppBundle,
+  verifyMacReleaseOutputs,
+  verifyMacUpdaterTarGz,
+  writeLegacyMacChannelFile,
+} from "../scripts/legacy_mac_updater";
+import { hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/scratchRoots";
 import { buildSidecarManifest, resolveStagedBinariesDir } from "../src/platform/sidecar";
 
@@ -116,8 +131,13 @@ describe("desktop_rune_package CLI and build config helpers", () => {
     });
     expect(resolveMacArchiveNames("arm64", "v1.3.1")).toEqual({
       dmgName: "Cowork_1.3.1_aarch64.dmg",
-      zipName: "Cowork_1.3.1_aarch64-mac.zip",
+      zipName: "Cowork_1.3.1_arm64-mac.zip",
       updaterTarGzName: "Cowork_1.3.1_aarch64.app.tar.gz",
+    });
+    expect(resolveMacArchiveNames("x64", "v1.3.1")).toEqual({
+      dmgName: "Cowork_1.3.1_x64.dmg",
+      zipName: "Cowork_1.3.1_x64-mac.zip",
+      updaterTarGzName: "Cowork_1.3.1_x64.app.tar.gz",
     });
   });
 
@@ -194,6 +214,64 @@ describe("desktop_rune_package CLI and build config helpers", () => {
       expect(strippedEnv.APPLE_APP_SPECIFIC_PASSWORD).toBeUndefined();
       expect(strippedEnv.APPLE_TEAM_ID).toBeUndefined();
       expect(strippedEnv.APPLE_KEYCHAIN_PROFILE).toBeUndefined();
+
+      // GitHub Actions passes unset optional secrets as empty strings ("").
+      // Ensure CSC_KEY_PASSWORD and APPLE_APP_SPECIFIC_PASSWORD fallbacks work
+      // and empty Apple ID vars cannot shadow API key auth in cargo-packager.
+      const ciFallbackCreds = await prepareMacSigningEnv(
+        {
+          APPLE_CERTIFICATE: "",
+          APPLE_CERTIFICATE_PASSWORD: "",
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Example (TEAM123)",
+          CSC_LINK: Buffer.from("dummy-p12-bytes").toString("base64"),
+          CSC_KEY_PASSWORD: "csc-secret-password",
+          APPLE_ID: "",
+          APPLE_PASSWORD: "",
+          APPLE_APP_SPECIFIC_PASSWORD: "",
+          APPLE_TEAM_ID: "",
+          APPLE_API_KEY_ID: "KEY999",
+          APPLE_API_KEY: "-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n",
+          APPLE_API_ISSUER: "issuer-uuid-999",
+        },
+        { tempDir, platform: "linux" },
+      );
+      expect(ciFallbackCreds.env.APPLE_CERTIFICATE_PASSWORD).toBe("csc-secret-password");
+      expect(ciFallbackCreds.hasNotarizeCredentials).toBe(true);
+      expect(ciFallbackCreds.env.APPLE_API_KEY).toBe("KEY999");
+
+      const packagerEnv = buildCargoPackagerEnv({
+        buildEnv: {
+          COWORK_APP_VERSION: "1.3.1",
+          APPLE_ID: "",
+          APPLE_PASSWORD: "",
+          APPLE_TEAM_ID: "",
+          APPLE_KEYCHAIN_PROFILE: "",
+          APPLE_CERTIFICATE: "",
+          APPLE_CERTIFICATE_PASSWORD: "",
+        },
+        macSigningEnv: ciFallbackCreds.env,
+        skipNotarize: false,
+      });
+      expect(packagerEnv.APPLE_API_KEY).toBe("KEY999");
+      expect(packagerEnv.APPLE_API_ISSUER).toBe("issuer-uuid-999");
+      expect(packagerEnv.APPLE_API_KEY_PATH).toBe(ciFallbackCreds.env.APPLE_API_KEY_PATH);
+      expect(packagerEnv.APPLE_CERTIFICATE_PASSWORD).toBe("csc-secret-password");
+      expect(packagerEnv.APPLE_ID).toBeUndefined();
+      expect(packagerEnv.APPLE_PASSWORD).toBeUndefined();
+      expect(packagerEnv.APPLE_TEAM_ID).toBeUndefined();
+      expect(packagerEnv.APPLE_KEYCHAIN_PROFILE).toBeUndefined();
+
+      const appleIdFallback = await prepareMacSigningEnv(
+        {
+          APPLE_ID: "dev@example.com",
+          APPLE_PASSWORD: "",
+          APPLE_APP_SPECIFIC_PASSWORD: "app-specific-pw",
+          APPLE_TEAM_ID: "TEAM123",
+        },
+        { tempDir, platform: "linux" },
+      );
+      expect(appleIdFallback.hasNotarizeCredentials).toBe(true);
+      expect(appleIdFallback.env.APPLE_PASSWORD).toBe("app-specific-pw");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -249,6 +327,9 @@ describe("desktop_rune_package CLI and build config helpers", () => {
     });
     expect(unsigned.macos?.signingIdentity).toBeUndefined();
     expect(unsigned.windows?.certificateThumbprint).toBeUndefined();
+    expect(unsigned.binaries).toEqual([{ path: "Cowork", main: true }]);
+    expect(unsigned.identifier).toBe("com.cowork.desktop");
+    expect(unsigned.productName).toBe("Cowork");
     expect(unsigned.resources.map((item) => item.target)).toEqual([
       "dist/prompts",
       "dist/config",
@@ -270,6 +351,7 @@ describe("desktop_rune_package CLI and build config helpers", () => {
       windowsCertificateThumbprint: "ABCDEF123456",
     });
     expect(winSigned.windows?.certificateThumbprint).toBe("ABCDEF123456");
+    expect(winSigned.binaries).toEqual([{ path: "cowork-desktop", main: true }]);
     expect(winSigned.resources.map((item) => item.target)).toContain("windows-sandbox");
   });
 
@@ -318,6 +400,7 @@ describe("desktop_rune_package CLI and build config helpers", () => {
 
     const independentFiles = [
       "scripts/desktop_rune_package.ts",
+      "scripts/legacy_mac_updater.ts",
       "scripts/build_desktop_resources.ts",
       "scripts/build_cowork_server_binary.ts",
       "scripts/workspaceRustBinary.ts",
@@ -566,5 +649,357 @@ describe("desktop_rune_release_manifest latest.json aggregation", () => {
         },
       }),
     ).toThrow(/https:\/\//);
+  });
+});
+
+function makeMachOHeader(arch: "arm64" | "x64"): Buffer {
+  const buf = Buffer.alloc(32);
+  buf.writeUInt32LE(0xfeedfacf, 0);
+  buf.writeUInt32LE(arch === "arm64" ? 0x0100000c : 0x01000007, 4);
+  return buf;
+}
+
+function makeInfoPlistXml(fields: {
+  bundleId: string;
+  bundleName: string;
+  displayName: string;
+  executable: string;
+  version: string;
+  minSystemVersion: string;
+}): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    `  <key>CFBundleIdentifier</key><string>${fields.bundleId}</string>`,
+    `  <key>CFBundleName</key><string>${fields.bundleName}</string>`,
+    `  <key>CFBundleDisplayName</key><string>${fields.displayName}</string>`,
+    `  <key>CFBundleExecutable</key><string>${fields.executable}</string>`,
+    `  <key>CFBundleShortVersionString</key><string>${fields.version}</string>`,
+    `  <key>LSMinimumSystemVersion</key><string>${fields.minSystemVersion}</string>`,
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
+}
+
+async function createSyntheticMacAppBundle(params: {
+  parentDir: string;
+  version: string;
+  arch: "arm64" | "x64";
+  executableName?: string;
+  bundleId?: string;
+  binaryArch?: "arm64" | "x64";
+}): Promise<string> {
+  const appPath = path.join(params.parentDir, "Cowork.app");
+  const contentsDir = path.join(appPath, "Contents");
+  const macOsDir = path.join(contentsDir, "MacOS");
+  const resourcesDir = path.join(contentsDir, "Resources");
+  const executableName = params.executableName ?? "Cowork";
+  const binaryArch = params.binaryArch ?? params.arch;
+  const rustTarget = params.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+
+  await fs.mkdir(macOsDir, { recursive: true });
+  await fs.mkdir(path.join(resourcesDir, "binaries"), { recursive: true });
+  await fs.mkdir(path.join(resourcesDir, "tray"), { recursive: true });
+  for (const subdir of ["prompts", "config", "skills", "workflows"]) {
+    await fs.mkdir(path.join(resourcesDir, "dist", subdir), { recursive: true });
+    await fs.writeFile(path.join(resourcesDir, "dist", subdir, "marker.txt"), subdir, "utf8");
+  }
+
+  await fs.writeFile(
+    path.join(contentsDir, "Info.plist"),
+    makeInfoPlistXml({
+      bundleId: params.bundleId ?? "com.cowork.desktop",
+      bundleName: "Cowork",
+      displayName: "Cowork",
+      executable: executableName,
+      version: params.version,
+      minSystemVersion: "12.0",
+    }),
+    "utf8",
+  );
+
+  const mainExe = path.join(macOsDir, executableName);
+  await fs.writeFile(mainExe, makeMachOHeader(binaryArch));
+  await fs.chmod(mainExe, 0o755);
+
+  const sidecarName = `cowork-server-${rustTarget}`;
+  const sidecarPath = path.join(resourcesDir, "binaries", sidecarName);
+  await fs.writeFile(sidecarPath, makeMachOHeader(binaryArch));
+  await fs.chmod(sidecarPath, 0o755);
+  await fs.writeFile(
+    path.join(resourcesDir, "binaries", "cowork-server-manifest.json"),
+    JSON.stringify(buildSidecarManifest("darwin", params.arch)),
+    "utf8",
+  );
+  await fs.writeFile(path.join(resourcesDir, "tray", "icon.png"), "png");
+
+  return appPath;
+}
+
+describe("legacy macOS updater handoff (latest-mac.yml & producer checks)", () => {
+  test("classifies arm64 vs x64 macOS ZIP basenames and rejects aarch64 spelling", () => {
+    expect(resolveLegacyMacZipName("arm64", "v1.4.0")).toBe("Cowork_1.4.0_arm64-mac.zip");
+    expect(resolveLegacyMacZipName("aarch64", "1.4.0")).toBe("Cowork_1.4.0_arm64-mac.zip");
+    expect(resolveLegacyMacZipName("x64", "1.4.0")).toBe("Cowork_1.4.0_x64-mac.zip");
+    expect(classifyLegacyMacZipArch("Cowork_1.4.0_arm64-mac.zip")).toBe("arm64");
+    expect(classifyLegacyMacZipArch("Cowork_1.4.0_x64-mac.zip")).toBe("x64");
+    expect(() => classifyLegacyMacZipArch("Cowork_1.4.0_aarch64-mac.zip")).toThrow(
+      /uses "aarch64" instead of "arm64"/,
+    );
+    expect(() => classifyLegacyMacZipArch("Cowork 1.4.0 arm64-mac.zip")).toThrow(
+      /Invalid macOS ZIP basename/,
+    );
+    expect(() => classifyLegacyMacZipArch("Cowork_1.4.0_arm64.dmg")).toThrow(/\.zip/);
+  });
+
+  test("generates latest-mac.yml over final bytes and matches historical electron-updater selection for arm64, Rosetta, and x64", async () => {
+    const tempDir = await makeTempDir("cowork-legacy-mac-yml-");
+    try {
+      const armBytes = Buffer.from("signed-arm64-cowork-zip-final-bytes-v1.4.0");
+      const x64Bytes = Buffer.from("signed-x64-cowork-zip-final-bytes-v1.4.0-longer");
+      const armZipPath = path.join(tempDir, "Cowork_1.4.0_arm64-mac.zip");
+      const x64ZipPath = path.join(tempDir, "Cowork_1.4.0_x64-mac.zip");
+      await fs.writeFile(armZipPath, armBytes);
+      await fs.writeFile(x64ZipPath, x64Bytes);
+
+      const outPath = path.join(tempDir, LEGACY_MAC_CHANNEL_FILENAME);
+      const { metadata, yaml } = await writeLegacyMacChannelFile({
+        version: "v1.4.0",
+        zipPaths: [x64ZipPath, armZipPath],
+        releaseDate: "2026-11-20T12:00:00.000Z",
+        requiredArches: ["arm64", "x64"],
+        outPath,
+      });
+
+      const expectedArmSha512 = createHash("sha512").update(armBytes).digest("base64");
+      const expectedX64Sha512 = createHash("sha512").update(x64Bytes).digest("base64");
+
+      expect(metadata.version).toBe("1.4.0");
+      expect(metadata.path).toBe("Cowork_1.4.0_arm64-mac.zip");
+      expect(metadata.sha512).toBe(expectedArmSha512);
+      expect(metadata.files).toEqual([
+        { url: "Cowork_1.4.0_arm64-mac.zip", sha512: expectedArmSha512, size: armBytes.length },
+        { url: "Cowork_1.4.0_x64-mac.zip", sha512: expectedX64Sha512, size: x64Bytes.length },
+      ]);
+
+      const reparsed = parseLegacyMacChannelYaml(yaml);
+      expect(typeof reparsed.releaseDate).toBe("string");
+      expect(reparsed).toEqual(metadata);
+
+      // Historical electron-updater@6.8.9 selection matrix:
+      const armSelection = selectLegacyMacZipForClient(reparsed, {
+        processArch: "arm64",
+        isRosetta: false,
+        tag: "v1.4.0",
+      });
+      expect(armSelection?.fileName).toBe("Cowork_1.4.0_arm64-mac.zip");
+      expect(armSelection?.entry.sha512).toBe(expectedArmSha512);
+      expect(armSelection?.entry.size).toBe(armBytes.length);
+      expect(armSelection?.url).toBe(
+        "https://github.com/mweinbach/agent-coworker/releases/download/v1.4.0/Cowork_1.4.0_arm64-mac.zip",
+      );
+
+      const rosettaSelection = selectLegacyMacZipForClient(reparsed, {
+        processArch: "x64",
+        isRosetta: true,
+        tag: "v1.4.0",
+      });
+      expect(rosettaSelection?.fileName).toBe("Cowork_1.4.0_arm64-mac.zip");
+
+      const x64Selection = selectLegacyMacZipForClient(reparsed, {
+        processArch: "x64",
+        isRosetta: false,
+        tag: "v1.4.0",
+      });
+      expect(x64Selection?.fileName).toBe("Cowork_1.4.0_x64-mac.zip");
+      expect(x64Selection?.entry.sha512).toBe(expectedX64Sha512);
+      expect(x64Selection?.entry.size).toBe(x64Bytes.length);
+
+      // Single-arch arm64 channel must never offer arm64 ZIP to an Intel x64 Mac.
+      const armOnly = await buildLegacyMacChannelMetadata({
+        version: "1.4.0",
+        zipPaths: [armZipPath],
+        releaseDate: "2026-11-20T12:00:00.000Z",
+      });
+      expect(
+        selectLegacyMacZipForClient(armOnly, {
+          processArch: "x64",
+          isRosetta: false,
+          tag: "v1.4.0",
+        }),
+      ).toBeNull();
+
+      // Enforcing requiredArches fails closed when one arch is missing.
+      await expect(
+        buildLegacyMacChannelMetadata({
+          version: "1.4.0",
+          zipPaths: [armZipPath],
+          requiredArches: ["arm64", "x64"],
+        }),
+      ).rejects.toThrow(/Missing required macOS "x64" ZIP/);
+
+      // Version mismatch between ZIP filename and release version fails closed.
+      await expect(
+        buildLegacyMacChannelMetadata({
+          version: "1.5.0",
+          zipPaths: [armZipPath],
+        }),
+      ).rejects.toThrow(/does not match expected release version "1\.5\.0"/);
+
+      // Verify serialized YAML matches round-trip.
+      expect(serializeLegacyMacChannelYaml(reparsed)).toBe(yaml);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("verifies macOS bundle identity, executable name, Mach-O arch, ZIP extraction, tar.gz hygiene, and fails closed on drift", async () => {
+    const tempDir = await makeTempDir("cowork-mac-producer-");
+    try {
+      const outDir = path.join(tempDir, "out");
+      await fs.mkdir(outDir, { recursive: true });
+      const version = "1.4.0";
+
+      const appPath = await createSyntheticMacAppBundle({
+        parentDir: outDir,
+        version,
+        arch: "arm64",
+      });
+
+      const machOArchs = await inspectMachOArchs(path.join(appPath, "Contents", "MacOS", "Cowork"));
+      expect(machOArchs).toEqual(["arm64"]);
+
+      const zipPath = path.join(outDir, "Cowork_1.4.0_arm64-mac.zip");
+      const zipCmd =
+        hostPlatform() === "darwin"
+          ? ["ditto", "-c", "-k", "--keepParent", "--sequesterRsrc", appPath, zipPath]
+          : ["zip", "-ry", zipPath, "Cowork.app"];
+      const zipProc = Bun.spawn(zipCmd, { cwd: outDir, stdout: "pipe", stderr: "pipe" });
+      expect(await zipProc.exited).toBe(0);
+
+      const tarGzPath = path.join(outDir, "Cowork_1.4.0_aarch64.app.tar.gz");
+      const tarProc = Bun.spawn(["tar", "-czf", tarGzPath, "-C", outDir, "Cowork.app"], {
+        cwd: outDir,
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await tarProc.exited).toBe(0);
+
+      const latestMacPath = path.join(outDir, LEGACY_MAC_CHANNEL_FILENAME);
+      await writeLegacyMacChannelFile({
+        version,
+        zipPaths: [zipPath],
+        outPath: latestMacPath,
+        releaseDate: "2026-11-20T12:00:00.000Z",
+      });
+
+      const verified = await verifyMacReleaseOutputs({
+        outDir,
+        version,
+        arch: "arm64",
+        requireDmg: false,
+        verifyLatestMacYmlPath: latestMacPath,
+      });
+      expect(verified.appBundle.bundleId).toBe("com.cowork.desktop");
+      expect(verified.appBundle.executableName).toBe("Cowork");
+      expect(verified.appBundle.mainExecutableArchs).toEqual(["arm64"]);
+      expect(verified.zipExtractedBundle.executableName).toBe("Cowork");
+
+      // Negative check 1: mutating the final ZIP bytes breaks latest-mac.yml digest/size check.
+      await fs.appendFile(zipPath, Buffer.from("tampered-trailing-byte"));
+      await expect(
+        verifyMacReleaseOutputs({
+          outDir,
+          version,
+          arch: "arm64",
+          requireDmg: false,
+          verifyLatestMacYmlPath: latestMacPath,
+        }),
+      ).rejects.toThrow(/sha512 mismatch/);
+
+      // Negative check 2: AppleDouble entry in .app.tar.gz is rejected.
+      const dirtyTarDir = path.join(tempDir, "dirty-tar");
+      await fs.mkdir(path.join(dirtyTarDir, "Cowork.app", "Contents", "MacOS"), {
+        recursive: true,
+      });
+      await fs.writeFile(path.join(dirtyTarDir, "._Cowork.app"), "appledouble");
+      await fs.writeFile(
+        path.join(dirtyTarDir, "Cowork.app", "Contents", "MacOS", "Cowork"),
+        makeMachOHeader("arm64"),
+      );
+      await fs.writeFile(
+        path.join(dirtyTarDir, "Cowork.app", "Contents", "Info.plist"),
+        "<plist/>",
+      );
+      const dirtyTarPath = path.join(tempDir, "dirty.app.tar.gz");
+      const dirtyTarProc = Bun.spawn(
+        ["tar", "-czf", dirtyTarPath, "-C", dirtyTarDir, "._Cowork.app", "Cowork.app"],
+        { cwd: dirtyTarDir, env: { ...process.env, COPYFILE_DISABLE: "1" } },
+      );
+      expect(await dirtyTarProc.exited).toBe(0);
+      await expect(verifyMacUpdaterTarGz(dirtyTarPath)).rejects.toThrow(/AppleDouble/);
+
+      // Negative check 3: wrong CFBundleExecutable ("cowork-desktop") is rejected.
+      const wrongExeDir = path.join(tempDir, "wrong-exe");
+      const wrongExeApp = await createSyntheticMacAppBundle({
+        parentDir: wrongExeDir,
+        version,
+        arch: "arm64",
+        executableName: "cowork-desktop",
+      });
+      await expect(
+        verifyMacAppBundle({
+          appPath: wrongExeApp,
+          expectedVersion: version,
+          expectedArch: "arm64",
+        }),
+      ).rejects.toThrow(/Unexpected CFBundleExecutable/);
+
+      // Negative check 4: x64 binary packaged under arm64 target is rejected.
+      const wrongArchDir = path.join(tempDir, "wrong-arch");
+      const wrongArchApp = await createSyntheticMacAppBundle({
+        parentDir: wrongArchDir,
+        version,
+        arch: "arm64",
+        binaryArch: "x64",
+      });
+      await expect(
+        verifyMacAppBundle({
+          appPath: wrongArchApp,
+          expectedVersion: version,
+          expectedArch: "arm64",
+        }),
+      ).rejects.toThrow(/Mach-O arch \[x64\], expected \[arm64\]/);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("desktop-rune-release workflow enforces macOS signing/notarization gates and publishes both latest.json and latest-mac.yml", async () => {
+    const workflow = await fs.readFile(
+      path.join(repoRoot, ".github", "workflows", "desktop-rune-release.yml"),
+      "utf8",
+    );
+
+    // Must not swallow macOS notarization or Gatekeeper failures.
+    expect(workflow).not.toContain('xcrun stapler validate "$app_path" || true');
+    expect(workflow).not.toContain('xcrun stapler validate "$dmg_path" || true');
+    expect(workflow).not.toContain('spctl --assess --type exec --verbose=4 "$app_path" || true');
+
+    // Must verify the arm64/x64 macOS ZIP (not aarch64-mac.zip) and enforce signing/notarization on required releases.
+    expect(workflow).toContain(
+      'zip_path="$out_dir/Cowork_${EXPECTED_VERSION}_${ZIP_ARCH}-mac.zip"',
+    );
+    expect(workflow).toContain("bun scripts/legacy_mac_updater.ts");
+    expect(workflow).toContain('verify_args+=("--require-signed" "--require-notarized")');
+
+    // Release job must publish BOTH Rune's native latest.json AND legacy latest-mac.yml over final bytes.
+    expect(workflow).toContain("--out release-upload/latest.json");
+    expect(workflow).toContain('"--out" "release-upload/latest-mac.yml"');
+    expect(workflow).toContain('mac_args+=("--require-arches" "arm64,x64")');
   });
 });

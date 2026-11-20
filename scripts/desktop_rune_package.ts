@@ -25,6 +25,15 @@ import {
   type UpdaterPlatformKey,
 } from "./desktop_rune_release_manifest";
 import {
+  EXPECTED_MAC_EXECUTABLE_NAME,
+  LEGACY_MAC_CHANNEL_FILENAME,
+  resolveLegacyMacZipName,
+  resolveMacDmgName,
+  resolveMacTarGzName,
+  verifyMacReleaseOutputs,
+  writeLegacyMacChannelFile,
+} from "./legacy_mac_updater";
+import {
   pathExists,
   resolveBuildTarget,
   resolveRustCompileTarget,
@@ -214,11 +223,11 @@ export function resolveUpdaterPayloadDescriptor(
 
 export function resolveMacArchiveNames(arch: string, version: string) {
   const normVersion = normalizeSemverVersion(version);
-  const macArch = normalizeArchName(arch) === "arm64" ? "aarch64" : "x64";
+  const normArch = normalizeArchName(arch);
   return {
-    dmgName: `Cowork_${normVersion}_${macArch}.dmg`,
-    zipName: `Cowork_${normVersion}_${macArch}-mac.zip`,
-    updaterTarGzName: `Cowork_${normVersion}_${macArch}.app.tar.gz`,
+    dmgName: resolveMacDmgName(normArch, normVersion),
+    zipName: resolveLegacyMacZipName(normArch, normVersion),
+    updaterTarGzName: resolveMacTarGzName(normArch, normVersion),
   };
 }
 
@@ -380,6 +389,15 @@ export function resolveCargoBuildEnv(
   return out;
 }
 
+const APPLE_SIGNING_ENV_KEYS = [
+  "APPLE_CERTIFICATE",
+  "APPLE_CERTIFICATE_PASSWORD",
+  "APPLE_SIGNING_IDENTITY",
+  "CSC_LINK",
+  "CSC_KEY_PASSWORD",
+  "CSC_NAME",
+] as const;
+
 const APPLE_NOTARIZE_ENV_KEYS = [
   "APPLE_API_KEY",
   "APPLE_API_KEY_ID",
@@ -401,8 +419,21 @@ export function buildCargoPackagerEnv(params: {
 }): Record<string, string> {
   const out: Record<string, string> = {
     ...params.buildEnv,
-    ...params.macSigningEnv,
   };
+  // Strip raw Apple signing/notarization vars first so unset CI secrets passed as
+  // empty strings ("") cannot trigger cargo-packager's `std::env::var_os` checks
+  // ahead of the resolved credentials in `macSigningEnv`.
+  for (const key of APPLE_SIGNING_ENV_KEYS) {
+    delete out[key];
+  }
+  for (const key of APPLE_NOTARIZE_ENV_KEYS) {
+    delete out[key];
+  }
+  for (const [key, value] of Object.entries(params.macSigningEnv)) {
+    if (value !== "" || key === "APPLE_CERTIFICATE_PASSWORD") {
+      out[key] = value;
+    }
+  }
   if (params.skipNotarize) {
     for (const key of APPLE_NOTARIZE_ENV_KEYS) {
       delete out[key];
@@ -437,8 +468,12 @@ export async function prepareMacSigningEnv(
   const tempDir = options.tempDir ?? scratchRoots()[0] ?? "/tmp";
   const currentPlatform = options.platform ?? hostPlatform();
 
-  const rawCert = env.APPLE_CERTIFICATE?.trim() || env.CSC_LINK?.trim();
-  const certPassword = env.APPLE_CERTIFICATE_PASSWORD ?? env.CSC_KEY_PASSWORD ?? "";
+  const appleCert = env.APPLE_CERTIFICATE?.trim();
+  const cscCert = env.CSC_LINK?.trim();
+  const rawCert = appleCert || cscCert;
+  const certPassword = appleCert
+    ? env.APPLE_CERTIFICATE_PASSWORD || env.CSC_KEY_PASSWORD || ""
+    : env.CSC_KEY_PASSWORD || env.APPLE_CERTIFICATE_PASSWORD || "";
 
   let p12PathForIdentityProbe: string | undefined;
   if (rawCert) {
@@ -503,8 +538,8 @@ export async function prepareMacSigningEnv(
     ) {
       resolved.APPLE_ID = env.APPLE_ID.trim();
       resolved.APPLE_PASSWORD = (
-        env.APPLE_PASSWORD ??
-        env.APPLE_APP_SPECIFIC_PASSWORD ??
+        env.APPLE_PASSWORD?.trim() ||
+        env.APPLE_APP_SPECIFIC_PASSWORD?.trim() ||
         ""
       ).trim();
       resolved.APPLE_TEAM_ID = env.APPLE_TEAM_ID.trim();
@@ -553,7 +588,7 @@ async function extractSigningIdentityFromP12(
   tempDir?: string,
 ): Promise<string | undefined> {
   const passEnvKey = "COWORK_P12_PROBE_PASS";
-  const pkcs12 = await execSpawn(
+  let pkcs12 = await execSpawn(
     ["openssl", "pkcs12", "-in", p12Path, "-clcerts", "-nokeys", "-passin", `env:${passEnvKey}`],
     {
       env: { ...process.env, [passEnvKey]: password },
@@ -562,12 +597,32 @@ async function extractSigningIdentityFromP12(
     },
   );
   if (pkcs12.code !== 0 || !pkcs12.stdout) {
+    pkcs12 = await execSpawn(
+      [
+        "openssl",
+        "pkcs12",
+        "-legacy",
+        "-in",
+        p12Path,
+        "-clcerts",
+        "-nokeys",
+        "-passin",
+        `env:${passEnvKey}`,
+      ],
+      {
+        env: { ...process.env, [passEnvKey]: password },
+        captureOutput: true,
+        allowFailure: true,
+      },
+    );
+  }
+  if (pkcs12.code !== 0 || !pkcs12.stdout) {
     return undefined;
   }
-  const certMatch = pkcs12.stdout.match(
-    /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/,
-  );
-  if (!certMatch) {
+  const certMatches = Array.from(
+    pkcs12.stdout.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g),
+  ).map((match) => match[0]);
+  if (certMatches.length === 0) {
     return undefined;
   }
   const tmpPem = path.join(
@@ -575,16 +630,25 @@ async function extractSigningIdentityFromP12(
     `cowork-cert-subject-${process.pid}.pem`,
   );
   try {
-    await fs.writeFile(tmpPem, certMatch[0], { mode: 0o600 });
-    const subjectResult = await execSpawn(
-      ["openssl", "x509", "-in", tmpPem, "-noout", "-subject"],
-      { captureOutput: true, allowFailure: true },
-    );
-    if (subjectResult.code !== 0) {
-      return undefined;
+    let fallbackCn: string | undefined;
+    for (const pem of certMatches) {
+      await fs.writeFile(tmpPem, pem, { mode: 0o600 });
+      const subjectResult = await execSpawn(
+        ["openssl", "x509", "-in", tmpPem, "-noout", "-subject"],
+        { captureOutput: true, allowFailure: true },
+      );
+      if (subjectResult.code !== 0) {
+        continue;
+      }
+      const cnMatch = subjectResult.stdout.match(/(?:^|[,/])\s*CN\s*=\s*([^,/\n]+)/);
+      const cn = cnMatch?.[1]?.trim();
+      if (!cn) continue;
+      if (cn.startsWith("Developer ID Application")) {
+        return cn;
+      }
+      fallbackCn ??= cn;
     }
-    const cnMatch = subjectResult.stdout.match(/(?:^|[,/])\s*CN\s*=\s*([^,/\n]+)/);
-    return cnMatch?.[1]?.trim() || undefined;
+    return fallbackCn;
   } finally {
     await fs.rm(tmpPem, { force: true });
   }
@@ -664,6 +728,16 @@ export function buildPackagerConfig(params: {
     });
   }
 
+  const rawBinaries = Array.isArray(baseConfig.binaries)
+    ? (baseConfig.binaries as Array<{ path: string; main: boolean }>)
+    : [{ path: "cowork-desktop", main: true }];
+  const isMacTarget = params.targetTriple.includes("apple-darwin");
+  const binaries = isMacTarget
+    ? rawBinaries.map((entry) =>
+        entry.main ? { ...entry, path: EXPECTED_MAC_EXECUTABLE_NAME } : entry,
+      )
+    : rawBinaries;
+
   return {
     name: typeof baseConfig.name === "string" ? baseConfig.name : "cowork-desktop",
     productName: typeof baseConfig.productName === "string" ? baseConfig.productName : "Cowork",
@@ -678,9 +752,7 @@ export function buildPackagerConfig(params: {
     binariesDir: params.binariesDir,
     targetTriple: params.targetTriple,
     icons,
-    binaries: Array.isArray(baseConfig.binaries)
-      ? (baseConfig.binaries as Array<{ path: string; main: boolean }>)
-      : [{ path: "cowork-desktop", main: true }],
+    binaries,
     resources,
     macos: macosBase as PackagerJsonConfig["macos"],
     dmg: (baseConfig.dmg as Record<string, unknown> | undefined) ?? undefined,
@@ -1241,13 +1313,27 @@ export async function runRunePackage(
       }
     }
 
+    let packagerBinariesDir = binariesDir;
+    if (cli.platform === "darwin") {
+      // Stage the compiled Rust binary under the historical macOS executable name
+      // (`Cowork`) so cargo-packager emits `Cowork.app/Contents/MacOS/Cowork`
+      // and `CFBundleExecutable = Cowork` before inside-out codesigning/notarization.
+      const macosBinariesDir = path.join(workDir, "macos-binaries");
+      await rmrf(macosBinariesDir);
+      await fs.mkdir(macosBinariesDir, { recursive: true });
+      const stagedMacMainBin = path.join(macosBinariesDir, EXPECTED_MAC_EXECUTABLE_NAME);
+      await fs.copyFile(mainBinPath, stagedMacMainBin);
+      await fs.chmod(stagedMacMainBin, 0o755);
+      packagerBinariesDir = macosBinariesDir;
+    }
+
     const baseConfig = await loadPackagerBaseConfig(root);
     const resolvedConfig = buildPackagerConfig({
       root,
       baseConfig,
       version,
       outDir,
-      binariesDir,
+      binariesDir: packagerBinariesDir,
       stagedDir,
       targetTriple: rustTarget,
       includeWindowsSandbox: hasWindowsSandbox,
@@ -1275,9 +1361,12 @@ export async function runRunePackage(
     );
 
     const artifacts: string[] = [];
+    let legacyMacChannelPath: string | null = null;
+    let legacyMacZipSummary: { fileName: string; sha512: string; size: number } | null = null;
     if (cli.platform === "darwin") {
+      const normArch = normalizeArchName(cli.arch);
       const appPath = path.join(outDir, "Cowork.app");
-      const names = resolveMacArchiveNames(cli.arch, version);
+      const names = resolveMacArchiveNames(normArch, version);
       const dmgPath = path.join(outDir, names.dmgName);
 
       if (await pathExists(dmgPath)) {
@@ -1297,8 +1386,42 @@ export async function runRunePackage(
         artifacts.push(zipPath);
 
         const tarGzPath = path.join(outDir, names.updaterTarGzName);
-        await runCommand(["tar", "-czf", tarGzPath, "-C", outDir, "Cowork.app"], { cwd: outDir });
+        await runCommand(["tar", "-czf", tarGzPath, "-C", outDir, "Cowork.app"], {
+          cwd: outDir,
+          env: { ...process.env, COPYFILE_DISABLE: "1" },
+        });
         artifacts.push(tarGzPath);
+
+        legacyMacChannelPath = path.join(outDir, LEGACY_MAC_CHANNEL_FILENAME);
+        const { metadata: legacyMacMetadata } = await writeLegacyMacChannelFile({
+          version,
+          zipPaths: [zipPath],
+          outPath: legacyMacChannelPath,
+          requiredArches: [normArch],
+        });
+        artifacts.push(legacyMacChannelPath);
+        const primaryZipEntry = legacyMacMetadata.files[0];
+        if (primaryZipEntry) {
+          legacyMacZipSummary = {
+            fileName: primaryZipEntry.url,
+            sha512: primaryZipEntry.sha512,
+            size: primaryZipEntry.size,
+          };
+        }
+
+        const shouldVerifyMacSign = !cli.skipSign && Boolean(macSigning.signingIdentity);
+        const shouldVerifyMacNotarize =
+          shouldVerifyMacSign && !cli.skipNotarize && macSigning.hasNotarizeCredentials;
+        await verifyMacReleaseOutputs({
+          outDir,
+          version,
+          arch: normArch,
+          requireSigned: shouldVerifyMacSign,
+          requireNotarized: shouldVerifyMacNotarize,
+          requireUpdaterTarGz: true,
+          requireDmg: cli.formats.includes("dmg"),
+          verifyLatestMacYmlPath: legacyMacChannelPath,
+        });
       }
     } else if (cli.platform === "win32") {
       const normArch = normalizeArchName(cli.arch) === "arm64" ? "arm64" : "x64";
@@ -1377,6 +1500,8 @@ export async function runRunePackage(
       signedUpdater: Boolean(updaterFragmentPath),
       artifacts: artifacts.map((item) => path.basename(item)),
       updaterFragment: updaterFragmentPath ? path.basename(updaterFragmentPath) : null,
+      legacyMacChannel: legacyMacChannelPath ? path.basename(legacyMacChannelPath) : null,
+      legacyMacZip: legacyMacZipSummary,
     };
     await fs.writeFile(
       path.join(outDir, `package-summary-${platformKey}.json`),

@@ -332,42 +332,49 @@ jobs:
         shell: bash
         env:
           SIGN_RELEASE: ${{ needs.validate.outputs.sign_release }}
+          REQUIRE_SIGN: ${{ needs.validate.outputs.require_sign }}
           EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
           MAC_ARCH: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x64' }}
+          ZIP_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           out_dir="target/rune-package/${{ matrix.platform_key }}/out"
           app_path="$out_dir/Cowork.app"
           dmg_path="$out_dir/Cowork_${EXPECTED_VERSION}_${MAC_ARCH}.dmg"
-          zip_path="$out_dir/Cowork_${EXPECTED_VERSION}_${MAC_ARCH}-mac.zip"
+          zip_path="$out_dir/Cowork_${EXPECTED_VERSION}_${ZIP_ARCH}-mac.zip"
           tar_path="$out_dir/Cowork_${EXPECTED_VERSION}_${MAC_ARCH}.app.tar.gz"
+          channel_path="$out_dir/latest-mac.yml"
+          summary_path="$out_dir/package-summary-${{ matrix.platform_key }}.json"
 
           test -d "$app_path"
           test -f "$dmg_path"
           test -f "$zip_path"
           test -f "$tar_path"
-
-          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
-          bundle_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
-          if [[ "$bundle_id" != "com.cowork.desktop" ]]; then
-            echo "Unexpected CFBundleIdentifier: $bundle_id" >&2
-            exit 1
-          fi
-          if [[ "$bundle_ver" != "$EXPECTED_VERSION" ]]; then
-            echo "Unexpected CFBundleShortVersionString: $bundle_ver (expected $EXPECTED_VERSION)" >&2
-            exit 1
+          test -f "$channel_path"
+          if [[ "$REQUIRE_SIGN" == "true" ]]; then
+            test -f "${tar_path}.sig"
+            test -f "$out_dir/updater-fragment-${{ matrix.platform_key }}.json"
           fi
 
-          if [[ "$SIGN_RELEASE" == "true" ]]; then
-            if codesign --verify --deep --strict --verbose=2 "$app_path"; then
-              xcrun stapler validate "$app_path" || true
-              xcrun stapler validate "$dmg_path" || true
-              spctl --assess --type exec --verbose=4 "$app_path" || true
-            elif [[ "${{ needs.validate.outputs.require_sign }}" == "true" ]]; then
-              echo "Signed macOS bundle verification failed." >&2
-              exit 1
+          verify_args=(
+            "verify"
+            "--out-dir" "$out_dir"
+            "--version" "$EXPECTED_VERSION"
+            "--arch" "$ZIP_ARCH"
+            "--latest-mac-yml" "$channel_path"
+          )
+          if [[ "$REQUIRE_SIGN" == "true" ]]; then
+            verify_args+=("--require-signed" "--require-notarized")
+          elif [[ "$SIGN_RELEASE" == "true" && -f "$summary_path" ]]; then
+            if bun -e 'const s = JSON.parse(await Bun.file(process.argv[1]).text()); process.exit(s.signedPlatform ? 0 : 1);' "$summary_path"; then
+              verify_args+=("--require-signed")
+            fi
+            if bun -e 'const s = JSON.parse(await Bun.file(process.argv[1]).text()); process.exit(s.notarized ? 0 : 1);' "$summary_path"; then
+              verify_args+=("--require-notarized")
             fi
           fi
+
+          bun scripts/legacy_mac_updater.ts "${verify_args[@]}"
 
       - name: Verify Windows PE architecture, sandbox hashes, and Authenticode
         if: matrix.platform == 'win32'
@@ -483,7 +490,7 @@ jobs:
           path: release-artifacts
           merge-multiple: false
 
-      - name: Collect assets & generate latest.json
+      - name: Collect assets & generate update feeds
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
@@ -497,6 +504,7 @@ jobs:
 
           owner="${GITHUB_REPO_FULL%%/*}"
           repo="${GITHUB_REPO_FULL#*/}"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           fragment_count="$(find release-artifacts -type f -name 'updater-fragment-*.json' | wc -l | xargs)"
           if [[ "$fragment_count" -gt 0 ]]; then
             bun scripts/desktop_rune_release_manifest.ts \
@@ -505,12 +513,31 @@ jobs:
               --tag "$RELEASE_TAG" \
               --owner "$owner" \
               --repo "$repo" \
+              --pub-date "$pub_date" \
               --out release-upload/latest.json
           elif [[ "$REQUIRE_SIGN" == "true" ]]; then
             echo "No updater-fragment-*.json files produced while require_sign=true." >&2
             exit 1
           else
             echo "No signed updater fragments present (unsigned manual build); skipping latest.json."
+          fi
+
+          mac_zip_count="$(find release-upload -maxdepth 1 -type f -name '*-mac.zip' | wc -l | xargs)"
+          if [[ "$mac_zip_count" -gt 0 ]]; then
+            mac_args=(
+              "generate"
+              "--in-dir" "release-upload"
+              "--version" "$RELEASE_VERSION"
+              "--pub-date" "$pub_date"
+              "--out" "release-upload/latest-mac.yml"
+            )
+            if [[ "$REQUIRE_SIGN" == "true" ]]; then
+              mac_args+=("--require-arches" "arm64,x64")
+            fi
+            bun scripts/legacy_mac_updater.ts "${mac_args[@]}"
+          elif [[ "$REQUIRE_SIGN" == "true" ]]; then
+            echo "No macOS *-mac.zip files produced while require_sign=true." >&2
+            exit 1
           fi
           ls -la release-upload
 

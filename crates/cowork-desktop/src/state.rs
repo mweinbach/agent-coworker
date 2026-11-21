@@ -9316,6 +9316,26 @@ impl AppState {
                     self.reduce_cowork_event(workspace_id, &normalized, now_ms);
                 }
             }
+            "cowork/session/agentSpawned"
+            | "cowork/session/agentStatus"
+            | "cowork/session/agentList"
+            | "cowork/session/agentWaitResult" => {
+                if params.get("type").is_some() {
+                    self.reduce_cowork_event(workspace_id, &params, now_ms);
+                } else {
+                    let event_type = match method {
+                        "cowork/session/agentSpawned" => "agent_spawned",
+                        "cowork/session/agentStatus" => "agent_status",
+                        "cowork/session/agentList" => "agent_list",
+                        _ => "agent_wait_result",
+                    };
+                    let mut normalized = params;
+                    if let Some(obj) = normalized.as_object_mut() {
+                        obj.insert("type".to_string(), json!(event_type));
+                    }
+                    self.reduce_cowork_event(workspace_id, &normalized, now_ms);
+                }
+            }
             "task/created" | "task/updated" => {
                 let task_val = params.get("task").unwrap_or(&params);
                 self.apply_task_record_update(workspace_id, task_val);
@@ -10061,52 +10081,77 @@ impl AppState {
                     }
                 }
             }
-            "agent_started" | "agent_completed" | "agent_failed" | "agent_updated" => {
-                if let Some(id) = tid
-                    && let Some(agent_id) = evt.get("agentId").and_then(Value::as_str)
+            "agent_spawned" | "agent_status" | "agent_started" | "agent_completed"
+            | "agent_failed" | "agent_updated" => {
+                let agent_val = evt.get("agent").unwrap_or(evt);
+                let resolved_tid = tid.or_else(|| {
+                    agent_val
+                        .get("parentSessionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+                let default_status = match evt_type {
+                    "agent_completed" => "completed",
+                    "agent_failed" => "failed",
+                    _ => "running",
+                };
+                if let Some(id) = resolved_tid
+                    && let Some(summary) =
+                        parse_thread_agent_summary(agent_val, default_status, Some(now_ms))
                 {
                     let rt = self.thread_runtime_by_id.entry(id).or_default();
-                    let status = evt
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or(match evt_type {
-                            "agent_completed" => "completed",
-                            "agent_failed" => "failed",
-                            _ => "running",
+                    upsert_thread_agent(&mut rt.agents, summary);
+                }
+            }
+            "agent_list" => {
+                if let Some(agents_arr) = evt.get("agents").and_then(Value::as_array) {
+                    let resolved_tid = tid.or_else(|| {
+                        agents_arr.iter().find_map(|item| {
+                            item.get("parentSessionId")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
                         })
-                        .to_string();
-                    let name = evt
-                        .get("name")
-                        .or_else(|| evt.get("nickname"))
-                        .and_then(Value::as_str)
-                        .unwrap_or(agent_id)
-                        .to_string();
-                    if let Some(existing) = rt.agents.iter_mut().find(|a| a.agent_id == agent_id) {
-                        existing.status = status;
-                        if let Some(err) = evt.get("error").and_then(Value::as_str) {
-                            existing.error = Some(err.to_string());
+                    });
+                    if let Some(id) = resolved_tid {
+                        let rt = self.thread_runtime_by_id.entry(id).or_default();
+                        let prev_started: HashMap<String, i64> = rt
+                            .agents
+                            .iter()
+                            .filter_map(|a| a.started_at.map(|ts| (a.agent_id.clone(), ts)))
+                            .collect();
+                        rt.agents = agents_arr
+                            .iter()
+                            .filter_map(|item| {
+                                let mut summary =
+                                    parse_thread_agent_summary(item, "completed", Some(now_ms))?;
+                                if summary.started_at.is_none() {
+                                    summary.started_at =
+                                        prev_started.get(&summary.agent_id).copied();
+                                }
+                                Some(summary)
+                            })
+                            .collect();
+                    }
+                }
+            }
+            "agent_wait_result" => {
+                if let Some(agents_arr) = evt.get("agents").and_then(Value::as_array) {
+                    let resolved_tid = tid.or_else(|| {
+                        agents_arr.iter().find_map(|item| {
+                            item.get("parentSessionId")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        })
+                    });
+                    if let Some(id) = resolved_tid {
+                        let rt = self.thread_runtime_by_id.entry(id).or_default();
+                        for item in agents_arr {
+                            if let Some(summary) =
+                                parse_thread_agent_summary(item, "completed", Some(now_ms))
+                            {
+                                upsert_thread_agent(&mut rt.agents, summary);
+                            }
                         }
-                    } else {
-                        rt.agents.push(ThreadAgentSummary {
-                            agent_id: agent_id.to_string(),
-                            name,
-                            nickname: evt
-                                .get("nickname")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            title: evt.get("title").and_then(Value::as_str).map(str::to_string),
-                            role: evt.get("role").and_then(Value::as_str).map(str::to_string),
-                            depth: evt.get("depth").and_then(Value::as_u64).unwrap_or(0) as u32,
-                            status,
-                            model: evt.get("model").and_then(Value::as_str).map(str::to_string),
-                            usage_label: evt
-                                .get("usageLabel")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            started_at: Some(now_ms),
-                            completed_at: None,
-                            error: evt.get("error").and_then(Value::as_str).map(str::to_string),
-                        });
                     }
                 }
             }
@@ -11376,7 +11421,7 @@ impl AppState {
         {
             rt.agents = agents_arr
                 .iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .filter_map(|v| parse_thread_agent_summary(v, "completed", None))
                 .collect();
         }
         if !stale_snapshot
@@ -13749,6 +13794,199 @@ fn parse_timestamp_ms(val: Option<&Value>) -> i64 {
             .map(|dt| dt.timestamp_millis())
             .unwrap_or(0),
         _ => 0,
+    }
+}
+
+fn normalize_agent_status(raw: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "errored" | "error" | "failed" => "failed".to_string(),
+        "cancelled" | "canceled" | "interrupted" => "cancelled".to_string(),
+        "completed" | "done" => "completed".to_string(),
+        "closed" => "closed".to_string(),
+        "running" => "running".to_string(),
+        "pending_init" => "pending_init".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn format_agent_usage_label(val: &Value) -> Option<String> {
+    if val.is_null() {
+        return None;
+    }
+    let summary = parse_usage_summary(val);
+    let total_tokens = summary.input_tokens.saturating_add(summary.output_tokens);
+    let cost = summary.estimated_cost_usd;
+    if total_tokens == 0 && cost <= 0.0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if total_tokens > 0 {
+        let tok = if total_tokens >= 1_000_000 {
+            format!("{:.1}M tok", total_tokens as f64 / 1_000_000.0)
+        } else if total_tokens >= 1_000 {
+            format!("{:.1}k tok", total_tokens as f64 / 1_000.0)
+        } else {
+            format!("{total_tokens} tok")
+        };
+        parts.push(tok);
+    }
+    if cost > 0.0 {
+        let cost_str = if cost < 0.01 {
+            format!("${cost:.4}")
+        } else {
+            format!("${cost:.2}")
+        };
+        parts.push(cost_str);
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn parse_thread_agent_summary(
+    val: &Value,
+    default_status: &str,
+    fallback_now_ms: Option<i64>,
+) -> Option<ThreadAgentSummary> {
+    let agent_id = val
+        .get("agentId")
+        .or_else(|| val.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+
+    let non_empty_str = |key: &str| {
+        val.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    let nickname = non_empty_str("nickname");
+    let title = non_empty_str("title");
+    let role = non_empty_str("role");
+    let name = non_empty_str("name")
+        .or_else(|| nickname.clone())
+        .or_else(|| title.clone())
+        .or_else(|| role.clone())
+        .unwrap_or_else(|| agent_id.clone());
+
+    let lifecycle_closed = val
+        .get("lifecycleState")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.eq_ignore_ascii_case("closed"));
+    let busy = val.get("busy").and_then(Value::as_bool);
+    let status = if lifecycle_closed {
+        "closed".to_string()
+    } else if let Some(exec) = val
+        .get("executionState")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        normalize_agent_status(exec)
+    } else if let Some(raw_status) = val
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        normalize_agent_status(raw_status)
+    } else if busy == Some(true) {
+        "running".to_string()
+    } else if busy == Some(false) {
+        "completed".to_string()
+    } else {
+        normalize_agent_status(default_status)
+    };
+
+    let is_terminal = matches!(
+        status.as_str(),
+        "closed" | "completed" | "failed" | "cancelled"
+    );
+
+    let parse_opt_ts = |key: &str| {
+        let ms = parse_timestamp_ms(val.get(key));
+        (ms > 0).then_some(ms)
+    };
+    let started_at = parse_opt_ts("startedAt")
+        .or_else(|| parse_opt_ts("createdAt"))
+        .or(fallback_now_ms);
+    let completed_at = if is_terminal {
+        parse_opt_ts("completedAt")
+            .or_else(|| parse_opt_ts("updatedAt"))
+            .or(fallback_now_ms)
+    } else {
+        None
+    };
+
+    let model = non_empty_str("effectiveModel")
+        .or_else(|| non_empty_str("model"))
+        .or_else(|| non_empty_str("requestedModel"));
+    let usage_label = non_empty_str("usageLabel").or_else(|| {
+        val.get("sessionUsage")
+            .or_else(|| val.get("lastTurnUsage"))
+            .and_then(format_agent_usage_label)
+    });
+    let error = val
+        .get("error")
+        .and_then(|e| {
+            e.as_str()
+                .or_else(|| e.get("message").and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    Some(ThreadAgentSummary {
+        agent_id,
+        name,
+        nickname,
+        title,
+        role,
+        depth: val.get("depth").and_then(Value::as_u64).unwrap_or(0) as u32,
+        status,
+        model,
+        usage_label,
+        started_at,
+        completed_at,
+        error,
+    })
+}
+
+fn upsert_thread_agent(agents: &mut Vec<ThreadAgentSummary>, incoming: ThreadAgentSummary) {
+    if let Some(existing) = agents.iter_mut().find(|a| a.agent_id == incoming.agent_id) {
+        if incoming.name != incoming.agent_id || existing.name == existing.agent_id {
+            existing.name = incoming.name;
+        }
+        if incoming.nickname.is_some() {
+            existing.nickname = incoming.nickname;
+        }
+        if incoming.title.is_some() {
+            existing.title = incoming.title;
+        }
+        if incoming.role.is_some() {
+            existing.role = incoming.role;
+        }
+        if incoming.depth > 0 {
+            existing.depth = incoming.depth;
+        }
+        existing.status = incoming.status;
+        if incoming.model.is_some() {
+            existing.model = incoming.model;
+        }
+        if incoming.usage_label.is_some() {
+            existing.usage_label = incoming.usage_label;
+        }
+        if existing.started_at.is_none() {
+            existing.started_at = incoming.started_at;
+        }
+        existing.completed_at = incoming.completed_at;
+        if incoming.error.is_some() || existing.status != "failed" {
+            existing.error = incoming.error;
+        }
+    } else {
+        agents.push(incoming);
     }
 }
 
@@ -20916,5 +21154,269 @@ mod tests {
                 .and_then(|d| d.reasoning_effort),
             None
         );
+    }
+
+    #[test]
+    fn subagent_lifecycle_notifications_and_snapshots_reconcile_runtime_agents() {
+        use crate::views::chat::model::count_active_child_agents;
+
+        let mut state = AppState::default();
+        let ws_id = "ws-1";
+        let parent_id = "th-parent";
+
+        let spawned_summary = json!({
+            "agentId": "child-1",
+            "parentSessionId": parent_id,
+            "role": "researcher",
+            "mode": "read_only",
+            "depth": 1,
+            "nickname": "Scout",
+            "effectiveModel": "openai:gpt-5",
+            "title": "Investigate parser",
+            "provider": "openai",
+            "createdAt": "2026-11-21T08:00:00Z",
+            "updatedAt": "2026-11-21T08:00:01Z",
+            "lifecycleState": "active",
+            "executionState": "running",
+            "busy": true,
+            "sessionUsage": {
+                "totalPromptTokens": 1200,
+                "totalCompletionTokens": 300,
+                "estimatedTotalCostUsd": 0.02
+            }
+        });
+
+        // 1. cowork/session/agentSpawned populates active subagent.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: ws_id.to_string(),
+            method: "cowork/session/agentSpawned".to_string(),
+            params: json!({
+                "type": "agent_spawned",
+                "sessionId": parent_id,
+                "agent": spawned_summary
+            }),
+        });
+        let rt = state
+            .thread_runtime_by_id
+            .get(parent_id)
+            .expect("parent runtime should exist");
+        assert_eq!(rt.agents.len(), 1);
+        assert_eq!(rt.agents[0].agent_id, "child-1");
+        assert_eq!(rt.agents[0].name, "Scout");
+        assert_eq!(rt.agents[0].title.as_deref(), Some("Investigate parser"));
+        assert_eq!(rt.agents[0].role.as_deref(), Some("researcher"));
+        assert_eq!(rt.agents[0].depth, 1);
+        assert_eq!(rt.agents[0].status, "running");
+        assert_eq!(rt.agents[0].model.as_deref(), Some("openai:gpt-5"));
+        assert_eq!(
+            rt.agents[0].usage_label.as_deref(),
+            Some("1.5k tok · $0.02")
+        );
+        assert!(rt.agents[0].completed_at.is_none());
+        assert_eq!(count_active_child_agents(&rt.agents), 1);
+
+        // 2. cowork/session/agentStatus -> completed clears active count.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: ws_id.to_string(),
+            method: "cowork/session/agentStatus".to_string(),
+            params: json!({
+                "type": "agent_status",
+                "sessionId": parent_id,
+                "agent": {
+                    "agentId": "child-1",
+                    "parentSessionId": parent_id,
+                    "role": "researcher",
+                    "mode": "read_only",
+                    "depth": 1,
+                    "nickname": "Scout",
+                    "effectiveModel": "openai:gpt-5",
+                    "title": "Investigate parser",
+                    "provider": "openai",
+                    "createdAt": "2026-11-21T08:00:00Z",
+                    "updatedAt": "2026-11-21T08:00:10Z",
+                    "lifecycleState": "active",
+                    "executionState": "completed",
+                    "busy": false
+                }
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get(parent_id).unwrap();
+        assert_eq!(rt.agents[0].status, "completed");
+        assert!(rt.agents[0].completed_at.is_some());
+        assert_eq!(count_active_child_agents(&rt.agents), 0);
+
+        // 3. cowork/session/agentStatus -> running again clears completed_at.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: ws_id.to_string(),
+            method: "cowork/session/agentStatus".to_string(),
+            params: json!({
+                "type": "agent_status",
+                "sessionId": parent_id,
+                "agent": {
+                    "agentId": "child-1",
+                    "parentSessionId": parent_id,
+                    "role": "researcher",
+                    "mode": "read_only",
+                    "depth": 1,
+                    "nickname": "Scout",
+                    "effectiveModel": "openai:gpt-5",
+                    "title": "Investigate parser",
+                    "provider": "openai",
+                    "createdAt": "2026-11-21T08:00:00Z",
+                    "updatedAt": "2026-11-21T08:00:20Z",
+                    "lifecycleState": "active",
+                    "executionState": "running",
+                    "busy": true
+                }
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get(parent_id).unwrap();
+        assert_eq!(rt.agents[0].status, "running");
+        assert!(rt.agents[0].completed_at.is_none());
+        assert_eq!(count_active_child_agents(&rt.agents), 1);
+
+        // 4. cowork/session/agentStatus -> errored maps to failed and is inactive.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: ws_id.to_string(),
+            method: "cowork/session/agentStatus".to_string(),
+            params: json!({
+                "type": "agent_status",
+                "sessionId": parent_id,
+                "agent": {
+                    "agentId": "child-1",
+                    "parentSessionId": parent_id,
+                    "role": "researcher",
+                    "mode": "read_only",
+                    "depth": 1,
+                    "nickname": "Scout",
+                    "effectiveModel": "openai:gpt-5",
+                    "title": "Investigate parser",
+                    "provider": "openai",
+                    "createdAt": "2026-11-21T08:00:00Z",
+                    "updatedAt": "2026-11-21T08:00:25Z",
+                    "lifecycleState": "active",
+                    "executionState": "errored",
+                    "busy": false
+                }
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get(parent_id).unwrap();
+        assert_eq!(rt.agents[0].status, "failed");
+        assert_eq!(count_active_child_agents(&rt.agents), 0);
+
+        // 5. cowork/session/agentList reconciles full list and handles lifecycleState=closed.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: ws_id.to_string(),
+            method: "cowork/session/agentList".to_string(),
+            params: json!({
+                "type": "agent_list",
+                "sessionId": parent_id,
+                "agents": [
+                    {
+                        "agentId": "child-1",
+                        "parentSessionId": parent_id,
+                        "role": "researcher",
+                        "mode": "read_only",
+                        "depth": 1,
+                        "nickname": "Scout",
+                        "effectiveModel": "openai:gpt-5",
+                        "title": "Investigate parser",
+                        "provider": "openai",
+                        "createdAt": "2026-11-21T08:00:00Z",
+                        "updatedAt": "2026-11-21T08:00:30Z",
+                        "lifecycleState": "closed",
+                        "executionState": "closed",
+                        "busy": false
+                    },
+                    {
+                        "agentId": "child-2",
+                        "parentSessionId": parent_id,
+                        "role": "coder",
+                        "mode": "workspace_write",
+                        "depth": 1,
+                        "effectiveModel": "anthropic:claude-sonnet-4-6",
+                        "title": "Patch composer",
+                        "provider": "anthropic",
+                        "createdAt": "2026-11-21T08:00:31Z",
+                        "updatedAt": "2026-11-21T08:00:31Z",
+                        "lifecycleState": "active",
+                        "executionState": "running",
+                        "busy": true
+                    }
+                ]
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get(parent_id).unwrap();
+        assert_eq!(rt.agents.len(), 2);
+        assert_eq!(rt.agents[0].status, "closed");
+        assert_eq!(rt.agents[1].agent_id, "child-2");
+        assert_eq!(rt.agents[1].name, "Patch composer");
+        assert_eq!(rt.agents[1].status, "running");
+        assert_eq!(count_active_child_agents(&rt.agents), 1);
+
+        // 6. cowork/session/agentWaitResult updates waited subset without dropping siblings.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: ws_id.to_string(),
+            method: "cowork/session/agentWaitResult".to_string(),
+            params: json!({
+                "type": "agent_wait_result",
+                "sessionId": parent_id,
+                "agents": [{
+                    "agentId": "child-2",
+                    "parentSessionId": parent_id,
+                    "role": "coder",
+                    "mode": "workspace_write",
+                    "depth": 1,
+                    "effectiveModel": "anthropic:claude-sonnet-4-6",
+                    "title": "Patch composer",
+                    "provider": "anthropic",
+                    "createdAt": "2026-11-21T08:00:31Z",
+                    "updatedAt": "2026-11-21T08:00:40Z",
+                    "lifecycleState": "active",
+                    "executionState": "completed",
+                    "busy": false
+                }]
+            }),
+        });
+        let rt = state.thread_runtime_by_id.get(parent_id).unwrap();
+        assert_eq!(rt.agents.len(), 2);
+        assert_eq!(rt.agents[1].status, "completed");
+        assert_eq!(count_active_child_agents(&rt.agents), 0);
+
+        // 7. Snapshot hydration (`coworkSnapshot.agents`) parses wire PersistentAgentSummary entries.
+        state.apply_thread_snapshot_response(
+            ws_id,
+            &json!({
+                "coworkSnapshot": {
+                    "sessionId": "th-reloaded",
+                    "lastEventSeq": 12,
+                    "agents": [{
+                        "agentId": "child-snap",
+                        "parentSessionId": "th-reloaded",
+                        "role": "reviewer",
+                        "mode": "read_only",
+                        "depth": 1,
+                        "nickname": "Auditor",
+                        "effectiveModel": "openai:gpt-5",
+                        "title": "Audit changes",
+                        "provider": "openai",
+                        "createdAt": "2026-11-21T08:01:00Z",
+                        "updatedAt": "2026-11-21T08:01:05Z",
+                        "lifecycleState": "active",
+                        "executionState": "running",
+                        "busy": true
+                    }]
+                }
+            }),
+        );
+        let reloaded = state
+            .thread_runtime_by_id
+            .get("th-reloaded")
+            .expect("reloaded runtime should exist");
+        assert_eq!(reloaded.agents.len(), 1);
+        assert_eq!(reloaded.agents[0].agent_id, "child-snap");
+        assert_eq!(reloaded.agents[0].name, "Auditor");
+        assert_eq!(reloaded.agents[0].status, "running");
+        assert_eq!(count_active_child_agents(&reloaded.agents), 1);
     }
 }

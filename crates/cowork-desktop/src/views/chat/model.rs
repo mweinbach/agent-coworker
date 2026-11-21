@@ -1682,7 +1682,7 @@ pub fn is_active_child_agent(agent: &ThreadAgentSummary) -> bool {
     let status = agent.status.to_ascii_lowercase();
     !matches!(
         status.as_str(),
-        "closed" | "completed" | "failed" | "cancelled"
+        "closed" | "completed" | "failed" | "errored" | "error" | "cancelled" | "canceled"
     ) && agent.completed_at.is_none()
 }
 

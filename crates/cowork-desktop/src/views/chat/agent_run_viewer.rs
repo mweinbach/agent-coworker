@@ -226,7 +226,7 @@ fn resolve_agent_status(
         return ("Subagent", StatusPillTone::Neutral);
     };
     match a.status.to_ascii_lowercase().as_str() {
-        "failed" | "error" => ("Failed", StatusPillTone::Danger),
+        "failed" | "errored" | "error" => ("Failed", StatusPillTone::Danger),
         "cancelled" | "canceled" => ("Cancelled", StatusPillTone::Warning),
         "completed" | "closed" | "done" => ("Completed", StatusPillTone::Success),
         _ => ("Finished", StatusPillTone::Neutral),

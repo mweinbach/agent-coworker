@@ -1382,7 +1382,7 @@ fn format_effort_label(effort: &str) -> String {
 }
 
 fn detect_active_slash_query(text: &str, focus: usize) -> Option<SlashQuery<'_>> {
-    if !text.starts_with('/') || focus > text.len() || !text.is_char_boundary(focus) {
+    if !text.starts_with('/') || focus < 1 || focus > text.len() || !text.is_char_boundary(focus) {
         return None;
     }
     let slice = &text[1..focus];
@@ -1580,5 +1580,21 @@ mod tests {
             ),
             ReasoningEffortValue::Max
         );
+    }
+
+    #[test]
+    fn detect_active_slash_query_ignores_caret_before_leading_slash() {
+        assert!(detect_active_slash_query("/help", 0).is_none());
+        assert!(detect_active_slash_query("/", 0).is_none());
+        assert_eq!(detect_active_slash_query("/", 1).map(|q| q.query), Some(""));
+        assert_eq!(
+            detect_active_slash_query("/help", 5).map(|q| q.query),
+            Some("help")
+        );
+        assert_eq!(
+            detect_active_slash_query("/help", 3).map(|q| q.query),
+            Some("he")
+        );
+        assert!(detect_active_slash_query("/help arg", 9).is_none());
     }
 }

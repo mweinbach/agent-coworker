@@ -13248,6 +13248,43 @@ fn apply_defaults_obj_to_workspace(
             }
             dst.insert(k.clone(), v.clone());
         }
+        for (desktop_key, server_key) in [
+            ("defaultAdvancedMemory", "advancedMemory"),
+            ("defaultSkillImprovementEnabled", "skillImprovementEnabled"),
+            ("defaultSkillImprovementScope", "skillImprovementScope"),
+            (
+                "defaultSkillImprovementExcludedSkills",
+                "skillImprovementExcludedSkills",
+            ),
+            (
+                "defaultWorkflowMaxConcurrentAgents",
+                "workflowMaxConcurrentAgents",
+            ),
+        ] {
+            let val = obj
+                .get(desktop_key)
+                .or_else(|| obj.get(server_key))
+                .or_else(|| {
+                    (desktop_key == "defaultAdvancedMemory")
+                        .then(|| obj.get("advancedMemoryEnabled"))
+                        .flatten()
+                });
+            if let Some(val) = val {
+                if val.is_null() {
+                    dst.remove(desktop_key);
+                    dst.remove(server_key);
+                    if desktop_key == "defaultAdvancedMemory" {
+                        dst.remove("advancedMemoryEnabled");
+                    }
+                } else {
+                    dst.insert(desktop_key.to_string(), val.clone());
+                    dst.insert(server_key.to_string(), val.clone());
+                    if desktop_key == "defaultAdvancedMemory" {
+                        dst.insert("advancedMemoryEnabled".to_string(), val.clone());
+                    }
+                }
+            }
+        }
         for spec in &CLEARABLE_DEFAULT_KEYS {
             if should_clear_default(obj, spec) {
                 dst.remove(spec.desktop_key);
@@ -13354,13 +13391,26 @@ fn apply_defaults_obj_to_workspace(
         ws.default_backups_enabled = b;
     }
     if let Some(un) = obj.get("userName").and_then(Value::as_str) {
-        ws.user_name = Some(un.to_string());
+        ws.user_name = (!un.trim().is_empty()).then(|| un.to_string());
     }
     if let Some(up) = obj.get("userProfile") {
-        ws.user_profile = Some(up.clone());
+        ws.user_profile = (!up.is_null()).then(|| up.clone());
     }
     if let Some(po) = obj.get("providerOptions") {
-        ws.provider_options = Some(po.clone());
+        ws.provider_options = (!po.is_null()).then(|| po.clone());
+    }
+    if let Some(dst) = ws.defaults.as_object_mut() {
+        for nullable_desktop_key in [
+            "reasoningEffort",
+            "lmStudioEnabled",
+            "defaultWorkflowMaxConcurrentAgents",
+            "workflowMaxConcurrentAgents",
+            "providerOptions",
+        ] {
+            if obj.get(nullable_desktop_key) == Some(&Value::Null) {
+                dst.remove(nullable_desktop_key);
+            }
+        }
     }
 }
 
@@ -13441,7 +13491,14 @@ fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Va
             "defaultWorkflowMaxConcurrentAgents",
             "workflowMaxConcurrentAgents",
         ),
+        ("defaultAdvancedMemory", "advancedMemory"),
         ("advancedMemoryEnabled", "advancedMemory"),
+        ("defaultSkillImprovementEnabled", "skillImprovementEnabled"),
+        ("defaultSkillImprovementScope", "skillImprovementScope"),
+        (
+            "defaultSkillImprovementExcludedSkills",
+            "skillImprovementExcludedSkills",
+        ),
     ] {
         if let Some(val) = map.remove(desktop_key)
             && !map.contains_key(server_key)
@@ -13455,6 +13512,16 @@ fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Va
             map.insert(spec.clear_server_key.to_string(), json!(true));
         } else if map.contains_key(spec.server_key) {
             map.remove(spec.clear_server_key);
+        }
+    }
+    for strip_if_null in [
+        "providerOptions",
+        "reasoningEffort",
+        "lmStudioEnabled",
+        "workflowMaxConcurrentAgents",
+    ] {
+        if map.get(strip_if_null) == Some(&Value::Null) {
+            map.remove(strip_if_null);
         }
     }
     map
@@ -22449,5 +22516,179 @@ mod tests {
                     )
                 })
         );
+    }
+
+    #[test]
+    fn enabling_shared_settings_copies_all_workspace_defaults_and_clears_inherited_overrides() {
+        use crate::views::settings::workspaces::sync_workspace_defaults_everywhere;
+
+        let mut state = AppState::default();
+        state.desktop_settings.per_workspace_settings = false;
+
+        let mut ws_a = WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1);
+        ws_a.default_provider = Some("openai".to_string());
+        ws_a.default_model = Some("gpt-5".to_string());
+        ws_a.default_preferred_child_model = Some("gpt-5-mini".to_string());
+        ws_a.default_child_model_routing_mode = Some("cross-provider-allowlist".to_string());
+        ws_a.default_preferred_child_model_ref = Some("openai:gpt-5-mini".to_string());
+        ws_a.default_allowed_child_model_refs = vec![
+            "openai:gpt-5-mini".to_string(),
+            "anthropic:claude-sonnet-4-6".to_string(),
+        ];
+        ws_a.default_enable_mcp = false;
+        ws_a.default_backups_enabled = true;
+        ws_a.provider_options = Some(json!({ "openai": { "reasoningEffort": "high" } }));
+        ws_a.user_name = Some("Ada".to_string());
+        ws_a.user_profile = Some(json!({
+            "instructions": "Be concise",
+            "work": "Systems",
+            "details": ""
+        }));
+        // Project A sets workflow concurrency, advanced memory, and skill improvement,
+        // while inheriting overflow, tool calling, memory model, and skill improvement model.
+        ws_a.defaults = json!({
+            "defaultWorkflowMaxConcurrentAgents": 6,
+            "defaultAdvancedMemory": true,
+            "defaultSkillImprovementEnabled": true,
+            "defaultSkillImprovementScope": "global",
+            "defaultSkillImprovementExcludedSkills": ["noisy-skill"],
+            "reasoningEffort": "high"
+        });
+
+        let mut ws_b = WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2);
+        ws_b.default_provider = Some("anthropic".to_string());
+        ws_b.default_model = Some("claude-sonnet-4-6".to_string());
+        ws_b.default_preferred_child_model = Some("claude-haiku-4-5".to_string());
+        ws_b.default_child_model_routing_mode = Some("same-provider".to_string());
+        ws_b.default_preferred_child_model_ref = Some("anthropic:claude-haiku-4-5".to_string());
+        ws_b.default_allowed_child_model_refs = vec!["google:gemini-2.5-flash".to_string()];
+        ws_b.default_enable_mcp = true;
+        ws_b.default_backups_enabled = false;
+        ws_b.provider_options = Some(json!({ "anthropic": { "thinking": true } }));
+        ws_b.defaults = json!({
+            "defaultToolOutputOverflowChars": 12000,
+            "toolOutputOverflowChars": 12000,
+            "defaultToolCalling": { "codeMode": true, "deferredToolSearch": true, "strategy": "harness" },
+            "toolCalling": { "codeMode": true, "deferredToolSearch": true, "strategy": "harness" },
+            "defaultMemoryGenerationModel": "anthropic:claude-haiku-4-5",
+            "memoryGenerationModel": "anthropic:claude-haiku-4-5",
+            "defaultSkillImprovementModel": "anthropic:claude-haiku-4-5",
+            "skillImprovementModel": "anthropic:claude-haiku-4-5",
+            "defaultWorkflowMaxConcurrentAgents": 2,
+            "workflowMaxConcurrentAgents": 2,
+            "defaultAdvancedMemory": false,
+            "advancedMemory": false,
+            "defaultSkillImprovementEnabled": false,
+            "skillImprovementEnabled": false,
+            "defaultSkillImprovementScope": "workspace",
+            "skillImprovementScope": "workspace",
+            "defaultSkillImprovementExcludedSkills": ["other-skill"],
+            "skillImprovementExcludedSkills": ["other-skill"]
+        });
+
+        state.workspaces.push(ws_a);
+        state.workspaces.push(ws_b);
+        state.active_workspace_id = Some("ws-a".to_string());
+
+        sync_workspace_defaults_everywhere(&mut state, "ws-a");
+
+        // Desktop workspace B must now match A across all fields and have cleared inherited keys.
+        let b = state.workspaces.iter().find(|w| w.id == "ws-b").unwrap();
+        assert_eq!(b.default_provider.as_deref(), Some("openai"));
+        assert_eq!(b.default_model.as_deref(), Some("gpt-5"));
+        assert_eq!(
+            b.default_preferred_child_model.as_deref(),
+            Some("gpt-5-mini")
+        );
+        assert_eq!(
+            b.default_child_model_routing_mode.as_deref(),
+            Some("cross-provider-allowlist")
+        );
+        assert_eq!(
+            b.default_preferred_child_model_ref.as_deref(),
+            Some("openai:gpt-5-mini")
+        );
+        assert_eq!(
+            b.default_allowed_child_model_refs,
+            vec![
+                "openai:gpt-5-mini".to_string(),
+                "anthropic:claude-sonnet-4-6".to_string()
+            ]
+        );
+        assert_eq!(
+            b.provider_options,
+            Some(json!({ "openai": { "reasoningEffort": "high" } }))
+        );
+        assert_eq!(b.defaults["workflowMaxConcurrentAgents"], json!(6));
+        assert_eq!(b.defaults["advancedMemory"], json!(true));
+        assert_eq!(b.defaults["skillImprovementEnabled"], json!(true));
+        assert_eq!(b.defaults["skillImprovementScope"], json!("global"));
+        assert_eq!(
+            b.defaults["skillImprovementExcludedSkills"],
+            json!(["noisy-skill"])
+        );
+        assert_eq!(b.defaults["reasoningEffort"], json!("high"));
+        assert!(b.defaults.get("defaultToolOutputOverflowChars").is_none());
+        assert!(b.defaults.get("toolOutputOverflowChars").is_none());
+        assert!(b.defaults.get("defaultToolCalling").is_none());
+        assert!(b.defaults.get("toolCalling").is_none());
+        assert!(b.defaults.get("defaultMemoryGenerationModel").is_none());
+        assert!(b.defaults.get("memoryGenerationModel").is_none());
+        assert!(b.defaults.get("defaultSkillImprovementModel").is_none());
+        assert!(b.defaults.get("skillImprovementModel").is_none());
+
+        // Harness RPC sent to ws-b must carry all fields AND explicit clear sentinels.
+        let b_rpcs: Vec<&Value> = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .filter_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    params,
+                    ..
+                } if workspace_id == "ws-b" && method == "cowork/session/defaults/apply" => {
+                    Some(params)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            b_rpcs.len(),
+            1,
+            "expected exactly one defaults/apply RPC for ws-b"
+        );
+        let cfg = &b_rpcs[0]["config"];
+        assert_eq!(
+            cfg["childModelRoutingMode"],
+            json!("cross-provider-allowlist")
+        );
+        assert_eq!(cfg["preferredChildModel"], json!("gpt-5-mini"));
+        assert_eq!(cfg["preferredChildModelRef"], json!("openai:gpt-5-mini"));
+        assert_eq!(
+            cfg["allowedChildModelRefs"],
+            json!(["openai:gpt-5-mini", "anthropic:claude-sonnet-4-6"])
+        );
+        assert_eq!(cfg["workflowMaxConcurrentAgents"], json!(6));
+        assert_eq!(cfg["advancedMemory"], json!(true));
+        assert_eq!(cfg["skillImprovementEnabled"], json!(true));
+        assert_eq!(cfg["skillImprovementScope"], json!("global"));
+        assert_eq!(
+            cfg["skillImprovementExcludedSkills"],
+            json!(["noisy-skill"])
+        );
+        assert_eq!(
+            cfg["providerOptions"],
+            json!({ "openai": { "reasoningEffort": "high" } })
+        );
+        assert_eq!(cfg["clearToolOutputOverflowChars"], json!(true));
+        assert!(cfg.get("toolOutputOverflowChars").is_none());
+        assert_eq!(cfg["clearToolCalling"], json!(true));
+        assert!(cfg.get("toolCalling").is_none());
+        assert_eq!(cfg["clearMemoryGenerationModel"], json!(true));
+        assert!(cfg.get("memoryGenerationModel").is_none());
+        assert_eq!(cfg["clearSkillImprovementModel"], json!(true));
+        assert!(cfg.get("skillImprovementModel").is_none());
     }
 }

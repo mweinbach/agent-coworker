@@ -116,18 +116,86 @@ fn build_tool_calling_patch(tc: &WorkspaceToolCalling) -> Value {
     })
 }
 
-fn sync_workspace_defaults_everywhere(s: &mut AppState, source_id: &str) {
-    let Some(src) = s.workspaces.iter().find(|w| w.id == source_id).cloned() else {
-        return;
+pub(crate) fn build_shared_workspace_defaults_patch(
+    src: &WorkspaceRecord,
+    src_runtime: Option<&WorkspaceRuntime>,
+) -> Value {
+    let mut patch = serde_json::Map::new();
+    let src_defaults = src.defaults.as_object();
+    let src_cfg = src_runtime
+        .and_then(|rt| rt.control_session_config.as_ref())
+        .and_then(Value::as_object);
+    let pick_default = |keys: &[&str]| -> Option<Value> {
+        keys.iter().find_map(|k| {
+            src_defaults
+                .and_then(|d| d.get(*k))
+                .filter(|v| !v.is_null())
+                .cloned()
+        })
+    };
+    let pick_effective = |default_keys: &[&str], cfg_keys: &[&str]| -> Option<Value> {
+        pick_default(default_keys).or_else(|| {
+            cfg_keys.iter().find_map(|k| {
+                src_cfg
+                    .and_then(|c| c.get(*k))
+                    .filter(|v| !v.is_null())
+                    .cloned()
+            })
+        })
     };
 
-    let mut patch = serde_json::Map::new();
-    if let Some(p) = src.default_provider {
-        patch.insert("defaultProvider".to_string(), Value::String(p));
+    if let Some(p) = src
+        .default_provider
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        patch.insert("defaultProvider".to_string(), Value::String(p.to_string()));
     }
-    if let Some(m) = src.default_model {
-        patch.insert("defaultModel".to_string(), Value::String(m));
+    if let Some(m) = src
+        .default_model
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        patch.insert("defaultModel".to_string(), Value::String(m.to_string()));
     }
+
+    // Child-model routing and allowlist.
+    patch.insert(
+        "defaultPreferredChildModel".to_string(),
+        Value::String(
+            src.default_preferred_child_model
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+    );
+    patch.insert(
+        "defaultChildModelRoutingMode".to_string(),
+        Value::String(
+            src.default_child_model_routing_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("same-provider")
+                .to_string(),
+        ),
+    );
+    patch.insert(
+        "defaultPreferredChildModelRef".to_string(),
+        Value::String(
+            src.default_preferred_child_model_ref
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+    );
+    patch.insert(
+        "defaultAllowedChildModelRefs".to_string(),
+        json!(src.default_allowed_child_model_refs),
+    );
+
     patch.insert(
         "defaultEnableMcp".to_string(),
         Value::Bool(src.default_enable_mcp),
@@ -137,18 +205,200 @@ fn sync_workspace_defaults_everywhere(s: &mut AppState, source_id: &str) {
         Value::Bool(src.default_backups_enabled),
     );
     patch.insert("yolo".to_string(), Value::Bool(src.yolo));
-    if let Some(un) = src.user_name {
-        patch.insert("userName".to_string(), Value::String(un));
+
+    patch.insert(
+        "userName".to_string(),
+        Value::String(
+            src.user_name
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+    );
+    patch.insert(
+        "userProfile".to_string(),
+        src.user_profile.clone().unwrap_or_else(|| {
+            json!({
+                "instructions": "",
+                "work": "",
+                "details": "",
+            })
+        }),
+    );
+
+    // Provider options (explicit null clears stale local options on target workspaces).
+    patch.insert(
+        "providerOptions".to_string(),
+        src.provider_options.clone().unwrap_or(Value::Null),
+    );
+
+    // Clearable override 1: tool calling.
+    if let Some(tc) = pick_default(&["defaultToolCalling", "toolCalling"]) {
+        patch.insert("defaultToolCalling".to_string(), tc);
+    } else {
+        patch.insert("clearDefaultToolCalling".to_string(), Value::Bool(true));
     }
-    if let Some(up) = src.user_profile {
-        patch.insert("userProfile".to_string(), up);
+
+    // Clearable override 2: tool output overflow (distinguish explicit `null` disable vs inherited).
+    if let Some(overflow) = src_defaults.and_then(|d| d.get("defaultToolOutputOverflowChars")) {
+        patch.insert(
+            "defaultToolOutputOverflowChars".to_string(),
+            overflow.clone(),
+        );
+    } else {
+        patch.insert(
+            "clearDefaultToolOutputOverflowChars".to_string(),
+            Value::Bool(true),
+        );
     }
-    if let Some(tc) = src
-        .defaults
-        .get("toolCalling")
-        .or_else(|| src.defaults.get("defaultToolCalling"))
-    {
-        patch.insert("toolCalling".to_string(), tc.clone());
+
+    // Clearable override 3: memory generation model.
+    if let Some(mem_model) = pick_effective(
+        &["defaultMemoryGenerationModel", "memoryGenerationModel"],
+        &["memoryGenerationModel"],
+    )
+    .and_then(|v| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }) {
+        patch.insert(
+            "defaultMemoryGenerationModel".to_string(),
+            Value::String(mem_model),
+        );
+    } else {
+        patch.insert(
+            "clearDefaultMemoryGenerationModel".to_string(),
+            Value::Bool(true),
+        );
+    }
+
+    // Clearable override 4: skill improvement model.
+    if let Some(skill_model) = pick_effective(
+        &["defaultSkillImprovementModel", "skillImprovementModel"],
+        &["skillImprovementModel"],
+    )
+    .and_then(|v| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }) {
+        patch.insert(
+            "defaultSkillImprovementModel".to_string(),
+            Value::String(skill_model),
+        );
+    } else {
+        patch.insert(
+            "clearDefaultSkillImprovementModel".to_string(),
+            Value::Bool(true),
+        );
+    }
+
+    // Workflow concurrency.
+    if let Some(concurrency) = pick_effective(
+        &[
+            "defaultWorkflowMaxConcurrentAgents",
+            "workflowMaxConcurrentAgents",
+        ],
+        &["workflowMaxConcurrentAgents"],
+    ) {
+        patch.insert(
+            "defaultWorkflowMaxConcurrentAgents".to_string(),
+            concurrency,
+        );
+    } else {
+        patch.insert(
+            "defaultWorkflowMaxConcurrentAgents".to_string(),
+            Value::Null,
+        );
+    }
+
+    // Memory & skill improvement settings.
+    for (patch_key, default_keys, cfg_keys, fallback) in [
+        (
+            "defaultAdvancedMemory",
+            &[
+                "defaultAdvancedMemory",
+                "advancedMemory",
+                "advancedMemoryEnabled",
+            ][..],
+            &["advancedMemory"][..],
+            Some(Value::Bool(false)),
+        ),
+        (
+            "enableMemory",
+            &["enableMemory"][..],
+            &["enableMemory"][..],
+            None,
+        ),
+        (
+            "memoryRequireApproval",
+            &["memoryRequireApproval"][..],
+            &["memoryRequireApproval"][..],
+            None,
+        ),
+        (
+            "observabilityEnabled",
+            &["observabilityEnabled"][..],
+            &["observabilityEnabled"][..],
+            None,
+        ),
+        (
+            "defaultSkillImprovementEnabled",
+            &["defaultSkillImprovementEnabled", "skillImprovementEnabled"][..],
+            &["skillImprovementEnabled"][..],
+            Some(Value::Bool(false)),
+        ),
+        (
+            "defaultSkillImprovementScope",
+            &["defaultSkillImprovementScope", "skillImprovementScope"][..],
+            &["skillImprovementScope"][..],
+            None,
+        ),
+        (
+            "defaultSkillImprovementExcludedSkills",
+            &[
+                "defaultSkillImprovementExcludedSkills",
+                "skillImprovementExcludedSkills",
+            ][..],
+            &["skillImprovementExcludedSkills"][..],
+            Some(json!([])),
+        ),
+    ] {
+        if let Some(val) = pick_effective(default_keys, cfg_keys).or(fallback) {
+            patch.insert(patch_key.to_string(), val);
+        }
+    }
+
+    // Desktop-local defaults in `ws.defaults`.
+    patch.insert(
+        "reasoningEffort".to_string(),
+        pick_default(&["reasoningEffort"]).unwrap_or(Value::Null),
+    );
+    if let Some(lm) = pick_default(&["lmStudioEnabled"]) {
+        patch.insert("lmStudioEnabled".to_string(), lm);
+    }
+
+    Value::Object(patch)
+}
+
+pub(crate) fn sync_workspace_defaults_everywhere(s: &mut AppState, source_id: &str) {
+    let Some(src) = s.workspaces.iter().find(|w| w.id == source_id).cloned() else {
+        return;
+    };
+    let payload =
+        build_shared_workspace_defaults_patch(&src, s.workspace_runtime_by_id.get(source_id));
+
+    if !s.desktop_settings.per_workspace_settings {
+        // Shared mode already applies `UpdateWorkspaceDefaults` to every non-archived workspace.
+        s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: source_id.to_string(),
+            defaults: payload,
+        }));
+        return;
     }
 
     let other_ids: Vec<String> = s
@@ -157,7 +407,6 @@ fn sync_workspace_defaults_everywhere(s: &mut AppState, source_id: &str) {
         .filter(|w| !w.archived && w.id != source_id)
         .map(|w| w.id.clone())
         .collect();
-    let payload = Value::Object(patch);
     for id in other_ids {
         s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
             workspace_id: id,

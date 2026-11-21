@@ -53,7 +53,10 @@ impl WindowCloseCoordinator {
         if for_quit {
             inner.quitting = true;
         }
-        if let Some(existing) = inner.pending_by_window.get(window_key) {
+        if let Some(existing) = inner.pending_by_window.get_mut(window_key) {
+            if for_quit {
+                existing.for_quit = true;
+            }
             return CloseDecision::PendingApproval {
                 request_id: existing.id.clone(),
             };
@@ -165,6 +168,18 @@ pub fn build_window_close_confirm_request(
     }
 }
 
+/// Builds a destructive confirmation dialog prompt for quitting while dirty or busy.
+pub fn build_app_quit_confirm_request(request_id: &str) -> ConfirmDialogRequest {
+    ConfirmDialogRequest {
+        id: format!("{WINDOW_CLOSE_CONFIRM_PREFIX}main:{request_id}"),
+        title: "Unsaved work in progress".to_string(),
+        message: "You have unsent messages or an active response running. Quitting now may interrupt or discard them.".to_string(),
+        confirm_label: "Close Anyway".to_string(),
+        cancel_label: "Keep Open".to_string(),
+        destructive: true,
+    }
+}
+
 /// Extracts `(window_key, request_id)` from a window-close confirmation dialog ID.
 pub fn parse_window_close_confirm_id(dialog_id: &str) -> Option<(&str, &str)> {
     let rest = dialog_id.strip_prefix(WINDOW_CLOSE_CONFIRM_PREFIX)?;
@@ -226,6 +241,63 @@ pub fn evaluate_window_close(
             dialog: build_window_close_confirm_request(window_key, &request_id),
             request_id,
         },
+    }
+}
+
+/// Evaluates whether an explicit app quit can proceed immediately or must prompt the user.
+pub fn evaluate_app_quit(
+    coordinator: &WindowCloseCoordinator,
+    state: &AppState,
+    already_quitting: bool,
+) -> WindowCloseOutcome {
+    if already_quitting {
+        coordinator.clear_window("main");
+        return WindowCloseOutcome::AllowQuit;
+    }
+
+    let needs_confirmation = has_unsaved_or_busy_work(state);
+    match coordinator.begin_close("main", needs_confirmation, true) {
+        CloseDecision::AllowImmediate => WindowCloseOutcome::AllowQuit,
+        CloseDecision::PendingApproval { request_id } => WindowCloseOutcome::PromptUser {
+            dialog: build_app_quit_confirm_request(&request_id),
+            request_id,
+        },
+    }
+}
+
+/// Applies the outcome of an explicit app quit request onto live Rune handles and state.
+pub fn execute_app_quit_hook(
+    coordinator: &WindowCloseCoordinator,
+    state: &mut AppState,
+    tx: &mut rune::Tx,
+    app_handle: Option<&rune::AppHandle<AppState>>,
+    flush_bounds: impl FnOnce(),
+) {
+    let outcome = evaluate_app_quit(coordinator, state, rune::quitting());
+    match outcome {
+        WindowCloseOutcome::AllowHideOnly => {
+            flush_bounds();
+        }
+        WindowCloseOutcome::AllowQuit => {
+            flush_bounds();
+            if !rune::quitting() {
+                tx.quit();
+            }
+        }
+        WindowCloseOutcome::PromptUser { request_id, dialog } => {
+            if let Some(handle) = get_window_handle("main") {
+                handle.open();
+                handle.focus();
+            } else if let Some(app) = app_handle {
+                reveal_and_activate_main_window(app);
+            }
+            state.apply_store_event(StoreEvent::ConfirmWindowClose {
+                window_id: "main".to_string(),
+                request_id,
+                title: dialog.title,
+                message: dialog.message,
+            });
+        }
     }
 }
 
@@ -515,5 +587,52 @@ mod tests {
             evaluate_window_close(&coord, "main", &dirty, false, false),
             WindowCloseOutcome::PromptUser { .. }
         ));
+    }
+
+    #[test]
+    fn explicit_quit_prompts_when_dirty_and_quits_only_after_confirmation() {
+        let coord = WindowCloseCoordinator::new();
+        let clean = AppState::default();
+        assert_eq!(
+            evaluate_app_quit(&coord, &clean, false),
+            WindowCloseOutcome::AllowQuit
+        );
+        assert!(!coord.is_quitting());
+
+        let mut dirty = AppState::default();
+        dirty.composer_edit.text = "unsent prompt".to_string();
+        let WindowCloseOutcome::PromptUser {
+            request_id: req1,
+            dialog,
+        } = evaluate_app_quit(&coord, &dirty, false)
+        else {
+            panic!("expected quit confirmation prompt for unsaved draft");
+        };
+        assert!(coord.is_quitting());
+        assert_eq!(
+            parse_window_close_confirm_id(&dialog.id),
+            Some(("main", req1.as_str()))
+        );
+
+        // Cancelling resets the quitting state so a subsequent quit prompts again.
+        assert_eq!(
+            plan_window_close_resolution(&coord, "main", &req1, false, true, false),
+            WindowCloseResolutionAction::Ignore
+        );
+        assert!(!coord.is_quitting());
+
+        let WindowCloseOutcome::PromptUser {
+            request_id: req2, ..
+        } = evaluate_app_quit(&coord, &dirty, false)
+        else {
+            panic!("expected second quit confirmation prompt after cancel");
+        };
+        assert_ne!(req1, req2);
+
+        // Confirming a quit prompt always resolves to `Quit`, even on macOS (`quit_on_main_close=false`).
+        assert_eq!(
+            plan_window_close_resolution(&coord, "main", &req2, true, true, false),
+            WindowCloseResolutionAction::Quit
+        );
     }
 }

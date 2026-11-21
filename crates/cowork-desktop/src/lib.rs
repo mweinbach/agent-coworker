@@ -572,7 +572,7 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                         tx.close_window();
                     }
                     WindowCommand::QuitApp => {
-                        tx.quit();
+                        native::request_app_quit(state, tx);
                     }
                     WindowCommand::FocusMain {
                         open_new_chat_workspace,

@@ -109,7 +109,9 @@ fn handle_tray_menu_action(handle: &AppHandle<AppState>, id: &str) {
             reveal_and_activate_main_window(handle);
         }
         "quit" => {
-            handle.quit();
+            handle.update(|state, tx| {
+                super::request_app_quit(state, tx);
+            });
         }
         _ => {}
     }

@@ -84,8 +84,9 @@ use tray::QuickChatTrayController;
 use updater::{DesktopUpdaterService, UpdaterConfig};
 use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
 use window_lifecycle::{
-    WindowCloseCoordinator, complete_window_close_resolution, execute_window_close_hook,
-    get_window_handle, register_window_handle, reveal_and_activate_main_window,
+    WindowCloseCoordinator, complete_window_close_resolution, execute_app_quit_hook,
+    execute_window_close_hook, get_window_handle, register_window_handle,
+    reveal_and_activate_main_window,
 };
 use window_state::{
     WindowStateStore, is_headless_invocation, reconcile_opened_window_placement,
@@ -154,6 +155,11 @@ fn shared_window_state_store() -> &'static WindowStateStore {
 
 fn shared_close_coordinator() -> &'static WindowCloseCoordinator {
     WINDOW_CLOSE_COORDINATOR.get_or_init(WindowCloseCoordinator::new)
+}
+
+#[cfg(test)]
+pub(crate) fn shared_close_coordinator_for_tests() -> &'static WindowCloseCoordinator {
+    shared_close_coordinator()
 }
 
 fn sample_open_window_placements() {
@@ -279,6 +285,17 @@ pub fn on_window_close(window_key: &str, state: &mut AppState, tx: &mut rune::Tx
         tx,
         current_app_handle().as_ref(),
         move || flush_window_bounds_for(&key),
+    );
+}
+
+/// Evaluates explicit quit requests against unsaved/busy work before entering Rune's quit path.
+pub fn request_app_quit(state: &mut AppState, tx: &mut rune::Tx) {
+    execute_app_quit_hook(
+        shared_close_coordinator(),
+        state,
+        tx,
+        current_app_handle().as_ref(),
+        || flush_window_bounds_for("main"),
     );
 }
 

@@ -347,6 +347,8 @@ pub struct ThreadRecord {
     pub legacy_transcript_id: Option<String>,
     pub pinned: bool,
     pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<i64>,
     #[serde(default)]
     pub draft: bool,
     pub provider: Option<String>,
@@ -1495,7 +1497,7 @@ impl Default for DesktopSettings {
             quick_chat_shortcut_enabled: true,
             quick_chat_shortcut: "CommandOrControl+Shift+Space".to_string(),
             show_menu_bar: true,
-            archived_chats_auto_delete_days: 30,
+            archived_chats_auto_delete_days: 0,
             sidebar_section_order: vec![
                 SidebarSectionKey::Pinned,
                 SidebarSectionKey::Tasks,
@@ -1759,6 +1761,7 @@ pub struct AppState {
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_delete_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_expired_archived_deletes: Vec<(String, String)>,
     pub(crate) subscribed_threads_by_workspace: HashMap<String, HashSet<String>>,
     pub(crate) pending_upload_stages_by_key: HashMap<String, usize>,
     pub(crate) persisted_active_thread_id: Option<String>,
@@ -1896,6 +1899,7 @@ impl Default for AppState {
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
             pending_delete_threads_by_rpc_id: HashMap::new(),
+            pending_expired_archived_deletes: Vec::new(),
             subscribed_threads_by_workspace: HashMap::new(),
             pending_upload_stages_by_key: HashMap::new(),
             persisted_active_thread_id: None,
@@ -2038,6 +2042,59 @@ impl AppState {
         }
     }
 
+    fn resolve_workspace_defaults_source(&self) -> Option<&WorkspaceRecord> {
+        let selected = self
+            .active_workspace_id
+            .as_deref()
+            .and_then(|id| self.workspaces.iter().find(|w| w.id == id && !w.archived));
+
+        if self.desktop_settings.per_workspace_settings
+            && let Some(ws) = selected
+        {
+            return Some(ws);
+        }
+
+        if let Some(ws) = selected.filter(|w| !w.one_off_chat) {
+            return Some(ws);
+        }
+
+        self.workspaces
+            .iter()
+            .find(|w| !w.archived && !w.one_off_chat)
+            .or(selected)
+            .or_else(|| self.workspaces.iter().find(|w| !w.archived))
+            .or_else(|| self.workspaces.first())
+    }
+
+    fn build_workspace_record_with_defaults(
+        &self,
+        id: String,
+        name: String,
+        path: String,
+        now_ms: i64,
+        one_off_chat: bool,
+    ) -> WorkspaceRecord {
+        let mut ws = WorkspaceRecord::new(id, name, path, now_ms);
+        ws.one_off_chat = one_off_chat;
+        let Some(source) = self.resolve_workspace_defaults_source() else {
+            return ws;
+        };
+        ws.yolo = source.yolo;
+        ws.default_provider = source.default_provider.clone();
+        ws.default_model = source.default_model.clone();
+        ws.default_preferred_child_model = source.default_preferred_child_model.clone();
+        ws.default_child_model_routing_mode = source.default_child_model_routing_mode.clone();
+        ws.default_preferred_child_model_ref = source.default_preferred_child_model_ref.clone();
+        ws.default_allowed_child_model_refs = source.default_allowed_child_model_refs.clone();
+        ws.default_enable_mcp = source.default_enable_mcp;
+        ws.default_backups_enabled = source.default_backups_enabled;
+        ws.provider_options = source.provider_options.clone();
+        ws.user_name = source.user_name.clone();
+        ws.user_profile = source.user_profile.clone();
+        ws.defaults = source.defaults.clone();
+        ws
+    }
+
     fn ensure_or_create_quick_chat_workspace(&mut self) -> String {
         if let Some(existing) = self
             .workspaces
@@ -2053,8 +2110,13 @@ impl AppState {
         let id = format!("oneoff-{}", uuid::Uuid::new_v4());
         let path = chats_root.join(&id).to_string_lossy().into_owned();
         let now = self.wall_clock_ms();
-        let mut ws = WorkspaceRecord::new(id.clone(), "Quick chat".to_string(), path.clone(), now);
-        ws.one_off_chat = true;
+        let ws = self.build_workspace_record_with_defaults(
+            id.clone(),
+            "Quick chat".to_string(),
+            path.clone(),
+            now,
+            true,
+        );
         let yolo = ws.yolo;
         self.workspaces.push(ws);
         self.workspace_order.push(id.clone());
@@ -2425,8 +2487,10 @@ impl AppState {
     fn dispatch_menu_window_or_tx(&mut self, tx: Option<&mut rune::Tx>, command_id: &str) -> bool {
         match command_id {
             "app.quit" | "file.quit" | "quit" => {
-                if let Some(tx) = tx {
-                    tx.quit();
+                if self.window_mode != WindowMode::Main && self.services.window_tx.is_some() {
+                    self.send_window(WindowCommand::QuitApp);
+                } else if let Some(tx) = tx {
+                    crate::native::request_app_quit(self, tx);
                 } else {
                     self.send_window(WindowCommand::QuitApp);
                 }
@@ -3565,12 +3629,12 @@ impl AppState {
                         .payload
                         .get("clientMessageId")
                         .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|c| !c.is_empty())
                         .map(str::to_string);
-                    let dedupe_key = cid
-                        .as_ref()
-                        .map(|c| format!("cid:{c}"))
-                        .unwrap_or_else(|| format!("txt:{}", content.trim()));
-                    if !seen_user_keys.insert(dedupe_key) {
+                    if let Some(ref c) = cid
+                        && !seen_user_keys.insert(format!("cid:{c}"))
+                    {
                         continue;
                     }
                     let rt = self
@@ -4103,9 +4167,10 @@ impl AppState {
                         id: t.id.clone(),
                         workspace_id: t.workspace_id.clone(),
                         title: t.title.clone(),
-                        archived_at: t.updated_at,
+                        archived_at: t.archived_at.unwrap_or(t.updated_at),
                     })
                     .collect();
+                self.enforce_archived_chat_retention(None);
                 self.collapsed_workspace_ids =
                     persisted.collapsed_workspace_ids.into_iter().collect();
                 self.collapsed_sidebar_sections =
@@ -5814,8 +5879,10 @@ impl AppState {
             }
             ChatAction::ArchiveThread(thread_id) => {
                 let mut changed = false;
+                let now = self.wall_clock_ms();
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     t.archived = true;
+                    t.archived_at = Some(now);
                     changed = !t.draft;
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
@@ -5833,6 +5900,7 @@ impl AppState {
                 let mut changed = false;
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     t.archived = false;
+                    t.archived_at = None;
                     changed = !t.draft;
                 }
                 self.archived_threads.retain(|t| t.id != thread_id);
@@ -7046,7 +7114,13 @@ impl AppState {
     fn reduce_settings(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::UpdateDesktopSettings(settings) => {
+                let prev_days = self.desktop_settings.archived_chats_auto_delete_days;
                 self.desktop_settings = settings;
+                if self.desktop_settings.archived_chats_auto_delete_days > 0
+                    && self.desktop_settings.archived_chats_auto_delete_days != prev_days
+                {
+                    self.enforce_archived_chat_retention(None);
+                }
                 self.persist_state();
             }
             SettingsAction::SetAccentPalette(palette) => {
@@ -8568,7 +8642,13 @@ impl AppState {
                 });
                 let id = uuid::Uuid::new_v4().to_string();
                 let now = self.wall_clock_ms();
-                let ws = WorkspaceRecord::new(id.clone(), resolved_name, path_str.clone(), now);
+                let ws = self.build_workspace_record_with_defaults(
+                    id.clone(),
+                    resolved_name,
+                    path_str.clone(),
+                    now,
+                    false,
+                );
                 let yolo = ws.yolo;
                 self.workspaces.push(ws);
                 self.workspace_order.push(id.clone());
@@ -8747,6 +8827,7 @@ impl AppState {
         rt.capabilities = serde_json::to_value(result.capabilities).ok();
 
         let cwd = self.workspace_path(workspace_id);
+        self.flush_pending_expired_archived_deletes(workspace_id);
         let list_params = ThreadListParams {
             cwd: cwd.clone(),
             limit: None,
@@ -10508,6 +10589,7 @@ impl AppState {
             return;
         };
         let mut prev_legacy_ids: HashMap<String, String> = HashMap::new();
+        let mut prev_archived_at: HashMap<String, i64> = HashMap::new();
         for t in self
             .threads
             .iter()
@@ -10518,6 +10600,26 @@ impl AppState {
                 if let Some(ref sid) = t.session_id {
                     prev_legacy_ids.insert(sid.clone(), legacy.clone());
                 }
+            }
+            if t.archived {
+                let ts = t.archived_at.unwrap_or(t.updated_at);
+                if ts > 0 {
+                    prev_archived_at.insert(t.id.clone(), ts);
+                    if let Some(ref sid) = t.session_id {
+                        prev_archived_at.insert(sid.clone(), ts);
+                    }
+                }
+            }
+        }
+        for a in self
+            .archived_threads
+            .iter()
+            .filter(|a| a.workspace_id == workspace_id)
+        {
+            if a.archived_at > 0 {
+                prev_archived_at
+                    .entry(a.id.clone())
+                    .or_insert(a.archived_at);
             }
         }
         self.threads
@@ -10534,6 +10636,17 @@ impl AppState {
             let Some(id) = v.get("id").and_then(Value::as_str) else {
                 continue;
             };
+            if self
+                .pending_delete_threads_by_rpc_id
+                .values()
+                .any(|tid| tid == id)
+                || self
+                    .pending_expired_archived_deletes
+                    .iter()
+                    .any(|(ws_id, tid)| ws_id == workspace_id && tid == id)
+            {
+                continue;
+            }
             let title = v
                 .get("title")
                 .and_then(Value::as_str)
@@ -10541,6 +10654,20 @@ impl AppState {
                 .to_string();
             let is_archived = v.get("archived").and_then(Value::as_bool).unwrap_or(false);
             let pinned = v.get("pinned").and_then(Value::as_bool).unwrap_or(false);
+            let updated_at = parse_timestamp_ms(v.get("updatedAt"));
+            let archived_at = if is_archived {
+                let parsed = parse_timestamp_ms(v.get("archivedAt"));
+                if parsed > 0 {
+                    Some(parsed)
+                } else {
+                    prev_archived_at
+                        .get(id)
+                        .copied()
+                        .or((updated_at > 0).then_some(updated_at))
+                }
+            } else {
+                None
+            };
             let record = ThreadRecord {
                 id: id.to_string(),
                 workspace_id: workspace_id.to_string(),
@@ -10550,6 +10677,7 @@ impl AppState {
                 legacy_transcript_id: prev_legacy_ids.get(id).cloned(),
                 pinned,
                 archived: is_archived,
+                archived_at,
                 draft: false,
                 provider: v
                     .get("modelProvider")
@@ -10566,7 +10694,7 @@ impl AppState {
                     .or_else(|| v.get("preview"))
                     .and_then(Value::as_str)
                     .map(str::to_string),
-                updated_at: parse_timestamp_ms(v.get("updatedAt")),
+                updated_at,
                 created_at: parse_timestamp_ms(v.get("createdAt")),
                 source_task_id: v
                     .get("sourceTaskId")
@@ -10580,7 +10708,7 @@ impl AppState {
                     id: id.to_string(),
                     workspace_id: workspace_id.to_string(),
                     title,
-                    archived_at: record.updated_at,
+                    archived_at: record.archived_at.unwrap_or(record.updated_at),
                 });
             }
             if !retained.contains(id) {
@@ -10590,6 +10718,7 @@ impl AppState {
         self.archived_threads
             .retain(|a| a.workspace_id != workspace_id);
         self.archived_threads.extend(archived);
+        self.enforce_archived_chat_retention(Some(workspace_id));
 
         if let Some(active_tid) = self.nav.current().active_thread_id.clone() {
             if let Some(active_thread) = self.threads.iter().find(|t| t.id == active_tid) {
@@ -10681,6 +10810,7 @@ impl AppState {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             archived: false,
+            archived_at: None,
             draft: false,
             provider: server_provider.clone(),
             model: thread_val
@@ -10782,6 +10912,10 @@ impl AppState {
                 .get("archived")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            archived_at: {
+                let parsed = parse_timestamp_ms(thread_val.get("archivedAt"));
+                (parsed > 0).then_some(parsed)
+            },
             draft: false,
             provider: thread_val
                 .get("modelProvider")
@@ -11618,6 +11752,140 @@ impl AppState {
 
         if !self.scene_mode {
             self.persist_state();
+        }
+    }
+
+    fn flush_pending_expired_archived_deletes(&mut self, workspace_id: &str) {
+        let mut to_delete: Vec<String> = Vec::new();
+        self.pending_expired_archived_deletes
+            .retain(|(ws_id, tid)| {
+                if ws_id == workspace_id {
+                    if !to_delete.iter().any(|existing| existing == tid) {
+                        to_delete.push(tid.clone());
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        if to_delete.is_empty() {
+            return;
+        }
+        let cwd = self.workspace_path(workspace_id);
+        for target_session_id in to_delete {
+            if self
+                .pending_delete_threads_by_rpc_id
+                .values()
+                .any(|existing| existing == &target_session_id)
+            {
+                continue;
+            }
+            let params = SessionDeleteParams {
+                cwd: cwd.clone(),
+                target_session_id: target_session_id.clone(),
+            };
+            if let Some(req_id) =
+                self.send_ws_typed(workspace_id, "cowork/session/delete", &params, false)
+            {
+                self.pending_delete_threads_by_rpc_id
+                    .insert(req_id, target_session_id);
+            }
+        }
+    }
+
+    /// Enforces `desktop_settings.archived_chats_auto_delete_days` by pruning expired archived
+    /// threads, removing their local transcripts, and requesting server-side session deletion
+    /// (immediately when connected, or once the workspace WS initializes).
+    fn enforce_archived_chat_retention(&mut self, workspace_filter: Option<&str>) {
+        let days = self.desktop_settings.archived_chats_auto_delete_days;
+        if days == 0 {
+            return;
+        }
+        let threshold_ms = i64::from(days).saturating_mul(86_400_000);
+        let now_ms = self.wall_clock_ms();
+
+        // Collect `(workspace_id, thread_id, server_session_id, is_draft)`.
+        let mut expired: Vec<(String, String, Option<String>, bool)> = Vec::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
+
+        for t in &self.threads {
+            if !t.archived {
+                continue;
+            }
+            if workspace_filter.is_some_and(|ws| t.workspace_id != ws) {
+                continue;
+            }
+            let archived_at = t.archived_at.unwrap_or(t.updated_at);
+            if archived_at > 0
+                && now_ms.saturating_sub(archived_at) > threshold_ms
+                && seen_ids.insert(t.id.clone())
+            {
+                let server_sid = if t.draft {
+                    None
+                } else {
+                    Some(
+                        t.session_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(t.id.as_str())
+                            .to_string(),
+                    )
+                };
+                expired.push((t.workspace_id.clone(), t.id.clone(), server_sid, t.draft));
+            }
+        }
+
+        for a in &self.archived_threads {
+            if workspace_filter.is_some_and(|ws| a.workspace_id != ws) {
+                continue;
+            }
+            if a.archived_at > 0
+                && now_ms.saturating_sub(a.archived_at) > threshold_ms
+                && seen_ids.insert(a.id.clone())
+            {
+                expired.push((
+                    a.workspace_id.clone(),
+                    a.id.clone(),
+                    Some(a.id.clone()),
+                    false,
+                ));
+            }
+        }
+
+        if expired.is_empty() {
+            return;
+        }
+
+        for (ws_id, thread_id, server_sid, is_draft) in expired {
+            self.reconcile_deleted_thread(&ws_id, &thread_id);
+            if !is_draft
+                && let Some(target_session_id) = server_sid
+                && !self
+                    .pending_delete_threads_by_rpc_id
+                    .values()
+                    .any(|existing| existing == &target_session_id)
+            {
+                if self.is_workspace_ws_connected(&ws_id) {
+                    let params = SessionDeleteParams {
+                        cwd: self.workspace_path(&ws_id),
+                        target_session_id: target_session_id.clone(),
+                    };
+                    if let Some(req_id) =
+                        self.send_ws_typed(&ws_id, "cowork/session/delete", &params, false)
+                    {
+                        self.pending_delete_threads_by_rpc_id
+                            .insert(req_id, target_session_id);
+                    }
+                } else if !self
+                    .pending_expired_archived_deletes
+                    .iter()
+                    .any(|(w, t)| w == &ws_id && t == &target_session_id)
+                {
+                    self.pending_expired_archived_deletes
+                        .push((ws_id, target_session_id));
+                }
+            }
         }
     }
 
@@ -19449,6 +19717,305 @@ mod tests {
                 .iter()
                 .any(|cmd| matches!(cmd, NativeCommand::SavePersistedState(_))),
             "expected persisted state update after thread deletion"
+        );
+    }
+
+    #[test]
+    fn adding_workspace_and_quick_chat_inherit_shared_defaults() {
+        let mut state = AppState::default();
+        state.desktop_settings.per_workspace_settings = false;
+        let mut source = WorkspaceRecord::new("ws-src", "Source", "/tmp/src", 1);
+        source.default_provider = Some("anthropic".to_string());
+        source.default_model = Some("claude-sonnet-4-6".to_string());
+        source.default_preferred_child_model = Some("claude-haiku-4-5".to_string());
+        source.default_child_model_routing_mode = Some("allowlist".to_string());
+        source.default_preferred_child_model_ref = Some("anthropic:claude-haiku-4-5".to_string());
+        source.default_allowed_child_model_refs = vec!["anthropic:claude-haiku-4-5".to_string()];
+        source.default_enable_mcp = false;
+        source.default_backups_enabled = false;
+        source.yolo = true;
+        source.user_name = Some("Ada".to_string());
+        source.defaults = json!({ "provider": "anthropic", "model": "claude-sonnet-4-6" });
+        state.workspaces.push(source);
+        state.active_workspace_id = Some("ws-src".to_string());
+
+        state.dispatch(Action::Native(NativeAction::AddWorkspace {
+            path: std::path::PathBuf::from("/tmp/new-folder"),
+            name: Some("New Folder".to_string()),
+        }));
+        let added = state
+            .workspaces
+            .iter()
+            .find(|w| w.path == "/tmp/new-folder")
+            .expect("added workspace");
+        assert_eq!(added.default_provider.as_deref(), Some("anthropic"));
+        assert_eq!(added.default_model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(
+            added.default_preferred_child_model.as_deref(),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(
+            added.default_child_model_routing_mode.as_deref(),
+            Some("allowlist")
+        );
+        assert_eq!(
+            added.default_preferred_child_model_ref.as_deref(),
+            Some("anthropic:claude-haiku-4-5")
+        );
+        assert_eq!(
+            added.default_allowed_child_model_refs,
+            vec!["anthropic:claude-haiku-4-5".to_string()]
+        );
+        assert!(!added.default_enable_mcp);
+        assert!(!added.default_backups_enabled);
+        assert!(added.yolo);
+        assert_eq!(added.user_name.as_deref(), Some("Ada"));
+
+        let qc_id = state.ensure_or_create_quick_chat_workspace();
+        let qc = state
+            .workspaces
+            .iter()
+            .find(|w| w.id == qc_id)
+            .expect("quick chat workspace");
+        assert!(qc.one_off_chat);
+        assert_eq!(qc.default_provider.as_deref(), Some("anthropic"));
+        assert_eq!(qc.default_model.as_deref(), Some("claude-sonnet-4-6"));
+        assert!(!qc.default_enable_mcp);
+        assert!(qc.yolo);
+    }
+
+    #[test]
+    fn archived_chat_retention_deletes_expired_threads_on_startup_and_settings_update() {
+        let mut state = AppState::default();
+        let now_secs: u64 = 1_750_000_000;
+        let now_ms = (now_secs as i64) * 1_000;
+        state.now_secs = now_secs as f64;
+
+        let expired_ts = now_ms - 40 * 86_400_000;
+        let recent_ts = now_ms - 5 * 86_400_000;
+        let settings = DesktopSettings {
+            archived_chats_auto_delete_days: 30,
+            ..DesktopSettings::default()
+        };
+
+        let persisted = PersistedDesktopState {
+            settings,
+            workspaces: vec![WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1)],
+            workspace_order: vec!["ws-1".to_string()],
+            threads: vec![
+                ThreadRecord {
+                    id: "th-expired".to_string(),
+                    workspace_id: "ws-1".to_string(),
+                    title: "Old Archived".to_string(),
+                    session_id: Some("sess-expired".to_string()),
+                    legacy_transcript_id: Some("legacy-expired".to_string()),
+                    archived: true,
+                    archived_at: Some(expired_ts),
+                    updated_at: expired_ts,
+                    created_at: expired_ts,
+                    ..ThreadRecord::default()
+                },
+                ThreadRecord {
+                    id: "th-recent".to_string(),
+                    workspace_id: "ws-1".to_string(),
+                    title: "Recent Archived".to_string(),
+                    session_id: Some("sess-recent".to_string()),
+                    archived: true,
+                    archived_at: Some(recent_ts),
+                    updated_at: recent_ts,
+                    created_at: recent_ts,
+                    ..ThreadRecord::default()
+                },
+            ],
+            active_workspace_id: Some("ws-1".to_string()),
+            ..PersistedDesktopState::default()
+        };
+
+        state.apply_store_event(StoreEvent::NativeReady {
+            persisted: Box::new(persisted),
+            is_packaged: false,
+            system_dark: None,
+        });
+
+        assert!(state.threads.iter().all(|t| t.id != "th-expired"));
+        assert!(state.archived_threads.iter().all(|t| t.id != "th-expired"));
+        assert!(state.threads.iter().any(|t| t.id == "th-recent"));
+        assert!(state.archived_threads.iter().any(|t| t.id == "th-recent"));
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    NativeCommand::DeleteLocalTranscripts { thread_ids }
+                        if thread_ids.iter().any(|id| id == "th-expired")
+                            && thread_ids.iter().any(|id| id == "sess-expired")
+                            && thread_ids.iter().any(|id| id == "legacy-expired")
+                )),
+            "expected local transcript cleanup for expired archived thread"
+        );
+
+        // Once the workspace WS initializes, queued server deletion is sent.
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-1".to_string(),
+            result: Box::new(init_res),
+        });
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { method, params, .. }
+                        if method == "cowork/session/delete"
+                            && params.get("targetSessionId").and_then(Value::as_str)
+                                == Some("sess-expired")
+                )),
+            "expected cowork/session/delete for expired archived session on WS connect"
+        );
+
+        // Lowering retention to 3 days immediately deletes the 5-day-old archived chat too.
+        state.services.emitted_ws_commands.clear();
+        let mut tighter = state.desktop_settings.clone();
+        tighter.archived_chats_auto_delete_days = 3;
+        state.dispatch(Action::Settings(SettingsAction::UpdateDesktopSettings(
+            tighter,
+        )));
+        assert!(state.threads.iter().all(|t| t.id != "th-recent"));
+        assert!(state.archived_threads.iter().all(|t| t.id != "th-recent"));
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { method, params, .. }
+                        if method == "cowork/session/delete"
+                            && params.get("targetSessionId").and_then(Value::as_str)
+                                == Some("sess-recent")
+                )),
+            "expected cowork/session/delete when tightening retention days"
+        );
+    }
+
+    #[test]
+    fn legacy_transcript_preserves_repeated_prompts_without_client_message_ids() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-legacy".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Legacy".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        let entries = vec![
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:01Z".to_string(),
+                thread_id: "th-legacy".to_string(),
+                direction: "client".to_string(),
+                payload: json!({ "type": "user_message", "text": "continue" }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:02Z".to_string(),
+                thread_id: "th-legacy".to_string(),
+                direction: "server".to_string(),
+                payload: json!({ "type": "assistant_message", "text": "step 1 done" }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:03Z".to_string(),
+                thread_id: "th-legacy".to_string(),
+                direction: "client".to_string(),
+                payload: json!({ "type": "user_message", "text": "continue" }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:04Z".to_string(),
+                thread_id: "th-legacy".to_string(),
+                direction: "client".to_string(),
+                payload: json!({
+                    "type": "user_message",
+                    "text": "with id",
+                    "clientMessageId": "cid-1"
+                }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:05Z".to_string(),
+                thread_id: "th-legacy".to_string(),
+                direction: "client".to_string(),
+                payload: json!({
+                    "type": "user_message",
+                    "text": "with id",
+                    "clientMessageId": "cid-1"
+                }),
+            },
+        ];
+
+        state.apply_store_event(StoreEvent::LocalTranscriptLoaded {
+            request_id: "req-legacy".to_string(),
+            thread_id: "th-legacy".to_string(),
+            result: Ok(entries),
+        });
+
+        let rt = state
+            .thread_runtime_by_id
+            .get("th-legacy")
+            .expect("hydrated runtime");
+        let user_texts: Vec<&str> = rt
+            .feed
+            .iter()
+            .filter_map(|item| match item {
+                FeedItem::Message {
+                    role: FeedMessageRole::User,
+                    content,
+                    ..
+                } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["continue", "continue", "with id"]);
+    }
+
+    #[test]
+    fn explicit_quit_with_unsaved_draft_opens_close_confirmation_instead_of_quitting() {
+        let mut state = AppState::default();
+        state.composer_edit.text = "unsent message".to_string();
+        let mut tx = rune::Tx::default();
+
+        assert!(state.dispatch_menu_command_with_tx(&mut tx, "app.quit"));
+        let dialog = state
+            .pending_confirm_dialog
+            .as_ref()
+            .expect("expected close confirmation dialog on dirty quit");
+        let (win_key, req_id) =
+            crate::native::window_lifecycle::parse_window_close_confirm_id(&dialog.id)
+                .expect("expected window-close confirm dialog ID");
+        assert_eq!(win_key, "main");
+        // Clean up shared coordinator state so parallel tests remain isolated.
+        assert_eq!(
+            crate::native::window_lifecycle::plan_window_close_resolution(
+                crate::native::shared_close_coordinator_for_tests(),
+                win_key,
+                req_id,
+                false,
+                true,
+                false,
+            ),
+            crate::native::window_lifecycle::WindowCloseResolutionAction::Ignore
         );
     }
 }

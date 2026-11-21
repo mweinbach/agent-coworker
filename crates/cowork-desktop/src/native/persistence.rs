@@ -1053,8 +1053,15 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
             map.insert("pinned".to_string(), json!(th.pinned));
             map.insert("archived".to_string(), json!(th.archived));
             if th.archived {
-                map.entry("archivedAt".to_string())
-                    .or_insert_with(|| json!(epoch_ms_to_iso(th.updated_at)));
+                if let Some(archived_at) = th.archived_at {
+                    map.insert(
+                        "archivedAt".to_string(),
+                        json!(epoch_ms_to_iso(archived_at)),
+                    );
+                } else {
+                    map.entry("archivedAt".to_string())
+                        .or_insert_with(|| json!(epoch_ms_to_iso(th.updated_at)));
+                }
             } else {
                 map.remove("archivedAt");
             }
@@ -2140,6 +2147,16 @@ fn core_thread_from_value(value: &Value) -> Option<ThreadRecord> {
         _ => ThreadStatus::Active,
     };
 
+    let archived = map
+        .get("archived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let archived_at = if archived {
+        parse_timestamp_value(map.get("archivedAt")).map(|(_, ms)| ms)
+    } else {
+        None
+    };
+
     Some(ThreadRecord {
         id,
         workspace_id,
@@ -2148,10 +2165,8 @@ fn core_thread_from_value(value: &Value) -> Option<ThreadRecord> {
         session_id: non_empty_string(map.get("sessionId")),
         legacy_transcript_id: safe_id_from_value(map.get("legacyTranscriptId")),
         pinned: map.get("pinned").and_then(Value::as_bool).unwrap_or(false),
-        archived: map
-            .get("archived")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        archived,
+        archived_at,
         draft: map.get("draft").and_then(Value::as_bool).unwrap_or(false),
         provider: non_empty_string(map.get("provider").or_else(|| map.get("modelProvider"))),
         model: non_empty_string(map.get("model")),
@@ -3028,6 +3043,7 @@ mod tests {
             legacy_transcript_id: None,
             pinned: true,
             archived: false,
+            archived_at: None,
             draft: false,
             provider: Some("anthropic".to_string()),
             model: Some("claude-sonnet-4-6".to_string()),
@@ -3047,6 +3063,7 @@ mod tests {
             legacy_transcript_id: None,
             pinned: false,
             archived: true,
+            archived_at: Some(1_700_000_050_000),
             draft: false,
             provider: None,
             model: None,

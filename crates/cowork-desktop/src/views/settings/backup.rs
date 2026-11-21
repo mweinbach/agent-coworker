@@ -287,7 +287,10 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .text
         .trim()
         .to_ascii_lowercase();
-    let visible_backups: Vec<BackupRowItem> = collect_backup_rows(&s.backups)
+    let target_backups = active_target
+        .map(|target| s.backups_for_workspace(&target.id))
+        .unwrap_or(&[]);
+    let visible_backups: Vec<BackupRowItem> = collect_backup_rows(target_backups)
         .into_iter()
         .filter(|b| {
             filter.is_empty()
@@ -483,7 +486,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .child(actions);
 
             if let Some(cp_id) = checkpoint_opt
-                && let Some(delta) = s.backup_delta.as_ref()
+                && let Some(delta) =
+                    active_target.and_then(|target| s.backup_delta_for_workspace(&target.id))
                 && delta.target_session_id == session_id
                 && delta.checkpoint_id == cp_id
             {

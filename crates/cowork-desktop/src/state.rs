@@ -321,6 +321,10 @@ pub struct WorkspaceRuntime {
     pub provider_statuses: Vec<ProviderStatusSummary>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub mcp_servers_loaded: bool,
+    pub backups: Vec<BackupSummary>,
+    pub backups_loaded: bool,
+    pub backup_delta: Option<BackupDeltaView>,
+    pub last_backup_restore: Option<Value>,
     pub reconnecting: bool,
     pub reconnect_attempt: u32,
     pub last_error: Option<String>,
@@ -5313,6 +5317,8 @@ impl AppState {
                 });
                 if canonical == Some(SettingsPageId::ToolAccess) {
                     self.bootstrap_active_workspace_tool_access();
+                } else if canonical == Some(SettingsPageId::Backup) {
+                    self.refresh_active_workspace_backups();
                 } else if canonical == Some(SettingsPageId::RemoteAccess)
                     && self.remote_access.running
                 {
@@ -5336,6 +5342,8 @@ impl AppState {
                 });
                 if canonical == SettingsPageId::ToolAccess {
                     self.bootstrap_active_workspace_tool_access();
+                } else if canonical == SettingsPageId::Backup {
+                    self.refresh_active_workspace_backups();
                 } else if canonical == SettingsPageId::RemoteAccess && self.remote_access.running {
                     self.send_native(NativeCommand::RefreshRemoteAccessTrustedDevices);
                 }
@@ -5413,6 +5421,7 @@ impl AppState {
         }
         if self.active_workspace_id != prev_ws {
             self.sync_active_workspace_mcp_servers();
+            self.sync_active_workspace_backups();
             if let Some(ws_id) = self.active_workspace_id.clone() {
                 self.ensure_workspace_server_started(&ws_id);
                 if self.is_workspace_ws_connected(&ws_id) {
@@ -5425,6 +5434,17 @@ impl AppState {
                             && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
                     {
                         self.bootstrap_tool_access_catalogs(&ws_id);
+                    }
+                    if self.route().view == ViewId::Settings
+                        && self.route().settings_page.canonical() == SettingsPageId::Backup
+                    {
+                        let cwd = self.workspace_path(&ws_id);
+                        let _ = self.send_ws_request(
+                            &ws_id,
+                            "cowork/backups/workspace/read",
+                            json!({ "cwd": cwd }),
+                            true,
+                        );
                     }
                 }
             }
@@ -9091,6 +9111,7 @@ impl AppState {
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
                 self.sync_active_workspace_mcp_servers();
+                self.sync_active_workspace_backups();
                 self.sync_active_explorer_dir();
                 self.persist_state();
                 self.send_native(NativeCommand::StartWorkspaceServer {
@@ -9120,6 +9141,7 @@ impl AppState {
                     self.active_workspace_id = self.workspaces.first().map(|w| w.id.clone());
                 }
                 self.sync_active_workspace_mcp_servers();
+                self.sync_active_workspace_backups();
                 if self
                     .canvas_document
                     .as_ref()
@@ -10437,7 +10459,8 @@ impl AppState {
                     .or_else(|| evt.get("backups"))
                     .and_then(Value::as_array)
                 {
-                    self.backups = arr.iter().filter_map(parse_backup_summary).collect();
+                    let parsed = arr.iter().filter_map(parse_backup_summary).collect();
+                    self.apply_workspace_backups_snapshot(workspace_id, parsed, false);
                 }
             }
             "session_deleted" => {
@@ -10890,25 +10913,21 @@ impl AppState {
                     .or_else(|| target.get("backups"))
                     .and_then(Value::as_array)
                 {
-                    self.backups = arr.iter().filter_map(parse_backup_summary).collect();
-                }
-                if method == "cowork/backups/workspace/deleteEntry"
-                    && let Some(ref delta) = self.backup_delta
-                    && !self
-                        .backups
-                        .iter()
-                        .any(|b| b.target_session_id == delta.target_session_id)
-                {
-                    self.backup_delta = None;
+                    let parsed = arr.iter().filter_map(parse_backup_summary).collect();
+                    self.apply_workspace_backups_snapshot(
+                        workspace_id,
+                        parsed,
+                        method == "cowork/backups/workspace/deleteEntry",
+                    );
                 }
                 if method == "cowork/backups/workspace/restore" {
-                    self.last_backup_restore = Some(payload);
+                    self.apply_workspace_backup_restore(workspace_id, payload);
                 }
             }
             "cowork/backups/workspace/delta/read" => {
                 let target = payload.get("event").unwrap_or(&payload);
                 if let Some(delta) = parse_backup_delta(target) {
-                    self.backup_delta = Some(delta);
+                    self.apply_workspace_backup_delta(workspace_id, delta);
                 }
             }
             "task/list" => {
@@ -11872,6 +11891,133 @@ impl AppState {
                 .unwrap_or_default();
         } else {
             self.mcp_servers.clear();
+        }
+    }
+
+    pub fn backups_for_workspace(&self, workspace_id: &str) -> &[BackupSummary] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.backups_loaded
+        {
+            return &rt.backups;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.backups_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.backups;
+        }
+        &[]
+    }
+
+    pub fn backup_delta_for_workspace(&self, workspace_id: &str) -> Option<&BackupDeltaView> {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && (rt.backups_loaded || rt.backup_delta.is_some())
+        {
+            return rt.backup_delta.as_ref();
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.backups_loaded && rt.backup_delta.is_none())
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return self.backup_delta.as_ref();
+        }
+        None
+    }
+
+    fn sync_active_workspace_backups(&mut self) {
+        self.settings_ui.backup_selected_id = None;
+        if let Some(ws_id) = self.active_workspace_id.as_deref() {
+            if let Some(rt) = self.workspace_runtime_by_id.get(ws_id) {
+                self.backups = if rt.backups_loaded {
+                    rt.backups.clone()
+                } else {
+                    Vec::new()
+                };
+                self.backup_delta = rt.backup_delta.clone();
+                self.last_backup_restore = rt.last_backup_restore.clone();
+            } else {
+                self.backups.clear();
+                self.backup_delta = None;
+                self.last_backup_restore = None;
+            }
+        } else {
+            self.backups.clear();
+            self.backup_delta = None;
+            self.last_backup_restore = None;
+        }
+    }
+
+    fn refresh_active_workspace_backups(&mut self) {
+        let Some(ws_id) = self.resolve_management_workspace_id().map(str::to_string) else {
+            return;
+        };
+        if !self.is_workspace_ws_connected(&ws_id) {
+            return;
+        }
+        let cwd = self.workspace_path(&ws_id);
+        let _ = self.send_ws_request(
+            &ws_id,
+            "cowork/backups/workspace/read",
+            json!({ "cwd": cwd }),
+            true,
+        );
+    }
+
+    fn apply_workspace_backups_snapshot(
+        &mut self,
+        workspace_id: &str,
+        entries: Vec<BackupSummary>,
+        clear_orphan_delta: bool,
+    ) {
+        let next_delta = {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            rt.backups = entries.clone();
+            rt.backups_loaded = true;
+            if clear_orphan_delta
+                && let Some(ref delta) = rt.backup_delta
+                && !rt
+                    .backups
+                    .iter()
+                    .any(|b| b.target_session_id == delta.target_session_id)
+            {
+                rt.backup_delta = None;
+            }
+            rt.backup_delta.clone()
+        };
+        if self.is_active_or_sole_workspace(workspace_id) {
+            self.backups = entries;
+            if clear_orphan_delta {
+                self.backup_delta = next_delta;
+            }
+        }
+    }
+
+    fn apply_workspace_backup_delta(&mut self, workspace_id: &str, delta: BackupDeltaView) {
+        let rt = self
+            .workspace_runtime_by_id
+            .entry(workspace_id.to_string())
+            .or_default();
+        rt.backup_delta = Some(delta.clone());
+        if self.is_active_or_sole_workspace(workspace_id) {
+            self.backup_delta = Some(delta);
+        }
+    }
+
+    fn apply_workspace_backup_restore(&mut self, workspace_id: &str, payload: Value) {
+        let rt = self
+            .workspace_runtime_by_id
+            .entry(workspace_id.to_string())
+            .or_default();
+        rt.last_backup_restore = Some(payload.clone());
+        if self.is_active_or_sole_workspace(workspace_id) {
+            self.last_backup_restore = Some(payload);
         }
     }
 
@@ -22690,5 +22836,148 @@ mod tests {
         assert!(cfg.get("memoryGenerationModel").is_none());
         assert_eq!(cfg["clearSkillImprovementModel"], json!(true));
         assert!(cfg.get("skillImprovementModel").is_none());
+    }
+
+    #[test]
+    fn backup_snapshots_and_deltas_stay_isolated_per_workspace() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), WsConnectionState::Connected);
+        state
+            .workspace_socket_by_id
+            .insert("ws-b".to_string(), WsConnectionState::Connected);
+
+        state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Backup,
+        ))));
+        state.apply_ws_response(
+            "ws-a",
+            1,
+            "cowork/backups/workspace/read",
+            Ok(json!({
+                "entries": [{
+                    "targetSessionId": "sess-a",
+                    "sessionTitle": "Project A refactor",
+                    "createdAt": 1700000000000i64,
+                    "sizeBytes": 1024,
+                    "checkpoints": [{
+                        "id": "cp-a1",
+                        "label": "A checkpoint",
+                        "createdAt": 1700000001000i64
+                    }]
+                }]
+            })),
+        );
+        state.apply_ws_response(
+            "ws-a",
+            2,
+            "cowork/backups/workspace/delta/read",
+            Ok(json!({
+                "targetSessionId": "sess-a",
+                "checkpointId": "cp-a1",
+                "added": 1,
+                "modified": 2,
+                "deleted": 0,
+                "files": [{ "change": "modified", "path": "src/a.rs" }]
+            })),
+        );
+        assert_eq!(state.backups_for_workspace("ws-a").len(), 1);
+        assert!(state.backup_delta_for_workspace("ws-a").is_some());
+        assert!(state.backups_for_workspace("ws-b").is_empty());
+        assert!(state.backup_delta_for_workspace("ws-b").is_none());
+
+        // Switching to project B while on Backups clears active mirror, clears selected ID,
+        // and requests B's backup list.
+        state.settings_ui.backup_selected_id = Some("sess-a::cp-a1".to_string());
+        let before_switch = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-b".to_string(),
+        )));
+        assert!(state.backups.is_empty());
+        assert!(state.backup_delta.is_none());
+        assert!(state.settings_ui.backup_selected_id.is_none());
+        assert!(state.backups_for_workspace("ws-b").is_empty());
+        assert!(
+            state.services.emitted_ws_commands[before_switch..]
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    WsCommand::SendRequest {
+                        workspace_id,
+                        method,
+                        ..
+                    } if workspace_id == "ws-b" && method == "cowork/backups/workspace/read"
+                ))
+        );
+
+        // A late response or delta from project A must NOT pollute project B's visible backups.
+        state.apply_ws_response(
+            "ws-a",
+            3,
+            "cowork/backups/workspace/read",
+            Ok(json!({
+                "entries": [{
+                    "targetSessionId": "sess-a-late",
+                    "sessionTitle": "Late A",
+                    "createdAt": 1700000005000i64,
+                    "sizeBytes": 512,
+                    "checkpoints": []
+                }]
+            })),
+        );
+        state.apply_ws_response(
+            "ws-a",
+            4,
+            "cowork/backups/workspace/delta/read",
+            Ok(json!({
+                "targetSessionId": "sess-a-late",
+                "checkpointId": "cp-late",
+                "added": 0,
+                "modified": 1,
+                "deleted": 0,
+                "files": []
+            })),
+        );
+        assert!(state.backups.is_empty());
+        assert!(state.backup_delta.is_none());
+        assert!(state.backups_for_workspace("ws-b").is_empty());
+        assert_eq!(
+            state.backups_for_workspace("ws-a")[0].target_session_id,
+            "sess-a-late"
+        );
+
+        // Project B's own snapshot populates B without affecting A.
+        state.apply_ws_response(
+            "ws-b",
+            5,
+            "cowork/backups/workspace/read",
+            Ok(json!({
+                "entries": [{
+                    "targetSessionId": "sess-b",
+                    "sessionTitle": "Project B work",
+                    "createdAt": 1700000010000i64,
+                    "sizeBytes": 2048,
+                    "checkpoints": []
+                }]
+            })),
+        );
+        assert_eq!(state.backups.len(), 1);
+        assert_eq!(state.backups[0].target_session_id, "sess-b");
+        assert_eq!(
+            state.backups_for_workspace("ws-b")[0].target_session_id,
+            "sess-b"
+        );
+        assert_eq!(
+            state.backups_for_workspace("ws-a")[0].target_session_id,
+            "sess-a-late"
+        );
     }
 }

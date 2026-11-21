@@ -69,6 +69,9 @@ pub struct WindowsMxcRequestSpec {
     pub working_directory: String,
     pub readwrite_paths: Vec<String>,
     pub readonly_paths: Vec<String>,
+    /// Protected `.git`/`.cowork` carveouts that must remain read-only whenever their parent
+    /// writable root exists on disk (even if the `.git` or `.cowork` directory does not yet exist).
+    pub protected_readonly_paths: Vec<String>,
     pub denied_paths: Vec<String>,
     pub allow_network: bool,
     pub environment: Vec<(String, String)>,
@@ -514,6 +517,7 @@ fn build_windows_mxc_spec_with(
     // General read-only candidates. Because BaseContainer uses longest-prefix match, any general
     // read-only candidate that is equal to or inside a `readwrite_paths` entry is skipped so it
     // never downgrades a writable directory (e.g. `cwd` inside a writable repo root) to read-only.
+    let protected_readonly_paths = protected_ro.clone();
     let mut readonly_paths: Vec<String> = protected_ro;
     let mut seen_ro: HashSet<String> = readonly_paths
         .iter()
@@ -608,6 +612,7 @@ fn build_windows_mxc_spec_with(
         working_directory,
         readwrite_paths,
         readonly_paths,
+        protected_readonly_paths,
         denied_paths,
         allow_network: policy_allows_network(policy),
         environment: ensure_required_mxc_child_env(child_env, host_env),
@@ -772,6 +777,182 @@ fn filter_existing_mxc_paths(paths: &[String], exists: impl Fn(&Path) -> bool) -
         .collect()
 }
 
+#[cfg(any(windows, test))]
+fn normalize_mxc_policy_key(path: &str) -> String {
+    path.replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+#[cfg(any(windows, test))]
+fn is_same_or_descendant_any_sep(path: &str, ancestor: &str) -> bool {
+    let p = normalize_mxc_policy_key(path);
+    let a = normalize_mxc_policy_key(ancestor);
+    if a.is_empty() {
+        return false;
+    }
+    if p == a {
+        return true;
+    }
+    p.len() > a.len() && p.starts_with(&a) && p.as_bytes().get(a.len()) == Some(&b'\\')
+}
+
+#[cfg(any(windows, test))]
+static MXC_PROTECTED_PLACEHOLDER_REFS: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<String, usize>>,
+> = std::sync::OnceLock::new();
+
+/// Refcounted RAII guard for temporary empty `.git`/`.cowork` placeholder directories materialized
+/// so Windows PSEC enforces read-only carveouts even before those directories exist on disk.
+///
+/// Only directories created by this guard are tracked, and a placeholder is only removed via
+/// `std::fs::remove_dir` (which refuses to delete non-empty directories) once the last concurrent
+/// sandbox invocation referencing it finishes.
+#[cfg(any(windows, test))]
+struct MxcProtectedPlaceholders {
+    created: Vec<(String, PathBuf)>,
+}
+
+#[cfg(any(windows, test))]
+impl Drop for MxcProtectedPlaceholders {
+    fn drop(&mut self) {
+        if self.created.is_empty() {
+            return;
+        }
+        let registry =
+            MXC_PROTECTED_PLACEHOLDER_REFS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        let mut refs = registry.lock().unwrap_or_else(|e| e.into_inner());
+        for (key, path) in self.created.drain(..).rev() {
+            let remove_now = match refs.get_mut(&key) {
+                Some(count) if *count > 1 => {
+                    *count -= 1;
+                    false
+                }
+                Some(_) => {
+                    refs.remove(&key);
+                    true
+                }
+                None => false,
+            };
+            if remove_now {
+                let _ = std::fs::remove_dir(&path);
+            }
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+struct PreparedMxcFilesystemPaths {
+    readwrite_paths: Vec<String>,
+    readonly_paths: Vec<String>,
+    denied_paths: Vec<String>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    placeholders: MxcProtectedPlaceholders,
+}
+
+/// Resolves host-existing MXC policy paths while preserving missing protected `.git`/`.cowork`
+/// carveouts inside existing writable roots by materializing temporary empty placeholder
+/// directories for the lifetime of the container. Fails closed if a protected child under an
+/// existing writable root cannot be inspected or materialized.
+#[cfg(any(windows, test))]
+fn prepare_mxc_filesystem_paths(
+    spec: &WindowsMxcRequestSpec,
+) -> Result<PreparedMxcFilesystemPaths, String> {
+    let readwrite_paths = filter_existing_mxc_paths(&spec.readwrite_paths, Path::exists);
+    let mut placeholders = MxcProtectedPlaceholders {
+        created: Vec::new(),
+    };
+    let mut materialized_keys: HashSet<String> = HashSet::new();
+
+    if !readwrite_paths.is_empty() {
+        let registry =
+            MXC_PROTECTED_PLACEHOLDER_REFS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
+        for protected in &spec.protected_readonly_paths {
+            let covered_by_rw = readwrite_paths
+                .iter()
+                .any(|rw| is_same_or_descendant_any_sep(protected, rw));
+            if !covered_by_rw {
+                continue;
+            }
+            let key = normalize_mxc_policy_key(protected);
+            if !materialized_keys.insert(key.clone()) {
+                continue;
+            }
+            let path = Path::new(protected);
+            let mut refs = registry.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(count) = refs.get_mut(&key) {
+                if path.is_dir() {
+                    *count += 1;
+                    placeholders.created.push((key, path.to_path_buf()));
+                    continue;
+                }
+                refs.remove(&key);
+            }
+
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => {
+                    if !path.exists() {
+                        return Err(format!(
+                            "Protected path '{protected}' is a dangling symlink and cannot be safely enforced by Windows MXC."
+                        ));
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    let parent_exists = path.parent().is_some_and(Path::is_dir);
+                    if !parent_exists {
+                        continue;
+                    }
+                    match std::fs::create_dir(path) {
+                        Ok(()) => {
+                            refs.insert(key.clone(), 1);
+                            placeholders.created.push((key, path.to_path_buf()));
+                        }
+                        Err(create_err)
+                            if create_err.kind() == std::io::ErrorKind::AlreadyExists =>
+                        {
+                            if !path.exists() {
+                                return Err(format!(
+                                    "Protected path '{protected}' already exists as an inaccessible entry."
+                                ));
+                            }
+                        }
+                        Err(create_err) => {
+                            return Err(format!(
+                                "Failed to materialize protected carveout '{protected}': {create_err}"
+                            ));
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "Failed to inspect protected carveout '{protected}': {err}"
+                    ));
+                }
+            }
+        }
+    }
+
+    let mut readonly_paths = filter_existing_mxc_paths(&spec.readonly_paths, Path::exists);
+    let mut seen_ro: HashSet<String> = readonly_paths
+        .iter()
+        .map(|p| normalize_mxc_policy_key(p))
+        .collect();
+    for (key, path) in &placeholders.created {
+        if seen_ro.insert(key.clone()) {
+            readonly_paths.push(path.to_string_lossy().into_owned());
+        }
+    }
+    let denied_paths = filter_existing_mxc_paths(&spec.denied_paths, Path::exists);
+
+    Ok(PreparedMxcFilesystemPaths {
+        readwrite_paths,
+        readonly_paths,
+        denied_paths,
+        placeholders,
+    })
+}
+
 #[cfg(windows)]
 mod native_mxc {
     use std::collections::HashMap;
@@ -793,8 +974,8 @@ mod native_mxc {
     use tokio::sync::watch;
 
     use super::{
-        WindowsMxcBuildOptions, WindowsMxcRequestSpec, build_windows_mxc_spec,
-        ensure_required_mxc_child_env, filter_existing_mxc_paths,
+        MxcProtectedPlaceholders, WindowsMxcBuildOptions, WindowsMxcRequestSpec,
+        build_windows_mxc_spec, ensure_required_mxc_child_env, prepare_mxc_filesystem_paths,
     };
     use crate::policy::SandboxPolicy;
     use crate::runner::{
@@ -876,7 +1057,9 @@ mod native_mxc {
         out
     }
 
-    pub(super) fn build_mxc_container_request(spec: &WindowsMxcRequestSpec) -> ContainerRequest {
+    pub(super) fn build_mxc_container_request(
+        spec: &WindowsMxcRequestSpec,
+    ) -> Result<(ContainerRequest, MxcProtectedPlaceholders), String> {
         let network = if spec.allow_network {
             NetworkPolicy {
                 egress: Some(NetworkEgressPolicy {
@@ -905,33 +1088,34 @@ mod native_mxc {
             }
         };
 
-        let readwrite_paths = filter_existing_mxc_paths(&spec.readwrite_paths, Path::exists);
-        let readonly_paths = filter_existing_mxc_paths(&spec.readonly_paths, Path::exists);
-        let denied_paths = filter_existing_mxc_paths(&spec.denied_paths, Path::exists);
+        let prepared = prepare_mxc_filesystem_paths(spec)?;
 
-        ContainerRequest {
-            command: spec.command_line.clone(),
-            filesystem: Some(FilesystemPolicy {
-                readwrite_paths,
-                readonly_paths,
-                denied_paths,
-                clear_policy_on_exit: Some(true),
-            }),
-            network: Some(network),
-            // Keep Win32k enabled (`disable: false`) so tools linking user32/gdi32 (e.g.
-            // headless LibreOffice or PowerShell) do not crash, while locking clipboard & input.
-            ui: Some(UiPolicy {
-                disable: false,
-                clipboard: ClipboardPolicy::None,
-                allow_input_injection: false,
-            }),
-            timeout_ms: None,
-            containment: Containment::ProcessContainer(ProcessContainerConfig::default()),
-            container_name: None,
-            working_directory: Some(spec.working_directory.clone()),
-            environment: Some(spec.environment.clone()),
-            inherit_default_environment: Some(false),
-        }
+        Ok((
+            ContainerRequest {
+                command: spec.command_line.clone(),
+                filesystem: Some(FilesystemPolicy {
+                    readwrite_paths: prepared.readwrite_paths,
+                    readonly_paths: prepared.readonly_paths,
+                    denied_paths: prepared.denied_paths,
+                    clear_policy_on_exit: Some(true),
+                }),
+                network: Some(network),
+                // Keep Win32k enabled (`disable: false`) so tools linking user32/gdi32 (e.g.
+                // headless LibreOffice or PowerShell) do not crash, while locking clipboard & input.
+                ui: Some(UiPolicy {
+                    disable: false,
+                    clipboard: ClipboardPolicy::None,
+                    allow_input_injection: false,
+                }),
+                timeout_ms: None,
+                containment: Containment::ProcessContainer(ProcessContainerConfig::default()),
+                container_name: None,
+                working_directory: Some(spec.working_directory.clone()),
+                environment: Some(spec.environment.clone()),
+                inherit_default_environment: Some(false),
+            },
+            prepared.placeholders,
+        ))
     }
 
     fn build_request_for_host(
@@ -941,7 +1125,7 @@ mod native_mxc {
         child_env: &HashMap<String, String>,
         host_env: &HashMap<String, String>,
         opts: &WindowsMxcBuildOptions<'_>,
-    ) -> ContainerRequest {
+    ) -> Result<(ContainerRequest, MxcProtectedPlaceholders), String> {
         let env_pairs = ensure_required_mxc_child_env(child_env, host_env);
         let mut discovered = discover_mxc_host_readonly_paths(&env_pairs);
         discovered.extend(opts.extra_tool_readonly_paths.iter().cloned());
@@ -1090,7 +1274,18 @@ mod native_mxc {
             };
         }
 
-        let request = build_request_for_host(inner, policy, cwd, child_env, host_env, &opts);
+        let (request, _protected_placeholders) =
+            match build_request_for_host(inner, policy, cwd, child_env, host_env, &opts) {
+                Ok(built) => built,
+                Err(err) => {
+                    return RawProcessOutcome {
+                        stdout: String::new(),
+                        stderr: format!("Windows MXC ProcessContainer policy error: {err}"),
+                        exit_code: 1,
+                        error_code: Some(SandboxErrorCode::BackendFailed),
+                    };
+                }
+            };
         let spawn_result = tokio::task::spawn_blocking(move || {
             mxc_sdk::v1::spawn(request, SpawnOptions { telemetry: None })
         })
@@ -1305,7 +1500,17 @@ mod native_mxc {
     ) -> i32 {
         use std::io::Write;
 
-        let request = build_request_for_host(inner, policy, cwd, child_env, host_env, &opts);
+        let (request, _protected_placeholders) =
+            match build_request_for_host(inner, policy, cwd, child_env, host_env, &opts) {
+                Ok(built) => built,
+                Err(err) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "Windows MXC ProcessContainer policy error: {err}"
+                    );
+                    return 125;
+                }
+            };
         let mut spawn_opts = SpawnExtendedOptions::default();
         spawn_opts.stdio = SpawnStdio::Inherit;
 
@@ -1744,5 +1949,126 @@ mod tests {
                 .eq_ignore_ascii_case(r"C:\Users\Alice\.ssh")
         });
         assert_eq!(filtered, vec![r"C:\Users\Alice\.ssh".to_owned()]);
+    }
+
+    #[test]
+    fn prepare_mxc_filesystem_paths_materializes_missing_protected_children_and_cleans_up() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let empty_ws = tmp.path().join("empty_ws");
+        std::fs::create_dir_all(&empty_ws).unwrap();
+
+        let existing_ws = tmp.path().join("existing_ws");
+        std::fs::create_dir_all(existing_ws.join(".cowork")).unwrap();
+        std::fs::write(existing_ws.join(".cowork").join("config.json"), "{}").unwrap();
+
+        let missing_git = empty_ws.join(".git").to_string_lossy().into_owned();
+        let missing_cowork = empty_ws.join(".cowork").to_string_lossy().into_owned();
+        let missing_nested_git = empty_ws
+            .join("output")
+            .join(".git")
+            .to_string_lossy()
+            .into_owned();
+        let existing_cowork = existing_ws.join(".cowork").to_string_lossy().into_owned();
+        let existing_git_missing = existing_ws.join(".git").to_string_lossy().into_owned();
+
+        let spec = WindowsMxcRequestSpec {
+            command_line: "powershell.exe".to_owned(),
+            working_directory: empty_ws.to_string_lossy().into_owned(),
+            readwrite_paths: vec![
+                empty_ws.to_string_lossy().into_owned(),
+                empty_ws.join("output").to_string_lossy().into_owned(),
+                existing_ws.to_string_lossy().into_owned(),
+            ],
+            readonly_paths: vec![
+                missing_git.clone(),
+                missing_cowork.clone(),
+                missing_nested_git.clone(),
+                existing_cowork.clone(),
+                existing_git_missing.clone(),
+                tmp.path()
+                    .join("nonexistent-general-ro")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            protected_readonly_paths: vec![
+                missing_git.clone(),
+                missing_cowork.clone(),
+                missing_nested_git.clone(),
+                existing_cowork.clone(),
+                existing_git_missing.clone(),
+            ],
+            denied_paths: vec![
+                tmp.path()
+                    .join("missing-creds")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            allow_network: false,
+            environment: Vec::new(),
+        };
+
+        // First concurrent invocation materializes missing `.git` and `.cowork` under existing
+        // writable roots while skipping uncreated intermediate parents (`empty_ws/output/.git`).
+        let first = prepare_mxc_filesystem_paths(&spec).expect("first prepare succeeds");
+        assert!(
+            first
+                .readwrite_paths
+                .contains(&empty_ws.to_string_lossy().into_owned())
+        );
+        assert!(first.denied_paths.is_empty());
+        assert!(first.readonly_paths.contains(&missing_git));
+        assert!(first.readonly_paths.contains(&missing_cowork));
+        assert!(first.readonly_paths.contains(&existing_cowork));
+        assert!(first.readonly_paths.contains(&existing_git_missing));
+        assert!(!first.readonly_paths.contains(&missing_nested_git));
+        assert!(empty_ws.join(".git").is_dir());
+        assert!(empty_ws.join(".cowork").is_dir());
+        assert!(!empty_ws.join("output").exists());
+
+        // Second overlapping invocation increments refcount; dropping the first must keep
+        // the placeholders on disk until the second finishes.
+        let second = prepare_mxc_filesystem_paths(&spec).expect("second prepare succeeds");
+        assert!(second.readonly_paths.contains(&missing_git));
+        assert!(second.readonly_paths.contains(&missing_cowork));
+        drop(first);
+        assert!(
+            empty_ws.join(".cowork").is_dir(),
+            "overlapping sandbox must keep placeholder alive"
+        );
+        assert!(empty_ws.join(".git").is_dir());
+
+        // Dropping the last invocation removes ONLY the empty placeholders we created and
+        // preserves pre-existing `.cowork` directories untouched.
+        drop(second);
+        assert!(!empty_ws.join(".git").exists());
+        assert!(!empty_ws.join(".cowork").exists());
+        assert!(!existing_ws.join(".git").exists());
+        assert!(existing_ws.join(".cowork").join("config.json").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_mxc_filesystem_paths_fails_closed_on_dangling_protected_symlink() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let dangling = ws.join(".cowork");
+        std::os::unix::fs::symlink(tmp.path().join("outside-target"), &dangling).unwrap();
+
+        let spec = WindowsMxcRequestSpec {
+            command_line: "sh".to_owned(),
+            working_directory: ws.to_string_lossy().into_owned(),
+            readwrite_paths: vec![ws.to_string_lossy().into_owned()],
+            readonly_paths: vec![dangling.to_string_lossy().into_owned()],
+            protected_readonly_paths: vec![dangling.to_string_lossy().into_owned()],
+            denied_paths: Vec::new(),
+            allow_network: false,
+            environment: Vec::new(),
+        };
+
+        let err = prepare_mxc_filesystem_paths(&spec)
+            .err()
+            .expect("dangling protected symlink must fail closed");
+        assert!(err.contains("dangling symlink"), "{err}");
     }
 }

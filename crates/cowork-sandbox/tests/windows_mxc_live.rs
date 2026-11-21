@@ -228,20 +228,22 @@ async fn windows_mxc_enforces_sandbox_or_fails_closed_when_psec_absent() {
 
     // 6. Nonexistent writable subdirs, missing `.git`/`.cowork`, and missing credential roots
     //    (including missing intermediate parents) must not cause `CreateProcessSecurityEnvironment`
-    //    to fail with `ERROR_PATH_NOT_FOUND` (`0x80070003`), while existing denied roots stay denied.
+    //    to fail with `ERROR_PATH_NOT_FOUND` (`0x80070003`), while missing `.git`/`.cowork`
+    //    carveouts under existing writable roots remain write-protected and cleaned up on exit.
     let empty_ws = root.join("empty_ws");
     std::fs::create_dir_all(&empty_ws).unwrap();
+    let empty_ws_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![
+            empty_ws.clone(),
+            empty_ws.join("output"),
+            empty_ws.join("uploads"),
+        ],
+        writable_root_kinds: HashMap::new(),
+        network: false,
+    };
     let mut missing_paths_req = new_req(
         "Set-Content -Path 'created.txt' -Value 'ok'; Write-Output 'missing-paths-ok'",
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                empty_ws.clone(),
-                empty_ws.join("output"),
-                empty_ws.join("uploads"),
-            ],
-            writable_root_kinds: HashMap::new(),
-            network: false,
-        },
+        empty_ws_policy.clone(),
         &empty_ws,
         &env,
     );
@@ -260,4 +262,50 @@ async fn windows_mxc_enforces_sandbox_or_fails_closed_when_psec_absent() {
             .trim(),
         "ok"
     );
+    assert!(
+        !empty_ws.join(".cowork").exists(),
+        "empty placeholder .cowork must be cleaned up after exit"
+    );
+    assert!(
+        !empty_ws.join(".git").exists(),
+        "empty placeholder .git must be cleaned up after exit"
+    );
+
+    let missing_cowork_write = run_req(new_req(
+        "New-Item -ItemType Directory -Force -Path '.cowork' | Out-Null; Set-Content -Path '.cowork\\mcp-servers.json' -Value '{}'",
+        empty_ws_policy.clone(),
+        &empty_ws,
+        &env,
+    ))
+    .await;
+    assert_ne!(
+        missing_cowork_write.exit_code, 0,
+        "creating .cowork\\mcp-servers.json in a fresh workspace must fail: {missing_cowork_write:?}"
+    );
+    assert!(
+        !empty_ws.join(".cowork").join("mcp-servers.json").exists(),
+        ".cowork\\mcp-servers.json must not be created"
+    );
+    assert!(!empty_ws.join(".cowork").exists());
+
+    let missing_git_write = run_req(new_req(
+        "New-Item -ItemType Directory -Force -Path '.git\\hooks' | Out-Null; Set-Content -Path '.git\\hooks\\pre-commit' -Value 'echo pwned'",
+        empty_ws_policy,
+        &empty_ws,
+        &env,
+    ))
+    .await;
+    assert_ne!(
+        missing_git_write.exit_code, 0,
+        "creating .git\\hooks\\pre-commit in a fresh workspace must fail: {missing_git_write:?}"
+    );
+    assert!(
+        !empty_ws
+            .join(".git")
+            .join("hooks")
+            .join("pre-commit")
+            .exists(),
+        ".git\\hooks\\pre-commit must not be created"
+    );
+    assert!(!empty_ws.join(".git").exists());
 }

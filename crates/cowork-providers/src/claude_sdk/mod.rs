@@ -150,33 +150,232 @@ fn claude_sdk_effort(provider_options: &Map<String, Value>) -> Option<&'static s
     }
 }
 
+/// Maps a native Claude Code tool name (from `can_use_tool`) to Cowork's canonical built-in tool
+/// identifier so profile allowlists (`authorized_tool_names`) apply uniformly.
+fn claude_native_tool_canonical_name(tool_name: &str) -> Option<&'static str> {
+    let trimmed = tool_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("mcp__") || lower.starts_with("mcp_") {
+        return Some("mcpCall");
+    }
+    match lower.as_str() {
+        "bash" | "shell" => Some("bash"),
+        "read" | "ls" | "notebookread" => Some("read"),
+        "write" => Some("write"),
+        "edit" | "multiedit" | "notebookedit" => Some("edit"),
+        "glob" => Some("glob"),
+        "grep" => Some("grep"),
+        "webfetch" => Some("webFetch"),
+        "websearch" => Some("webSearch"),
+        "askuserquestion" => Some("AskUserQuestion"),
+        "todowrite" | "todoread" => Some("todoWrite"),
+        "skill" => Some("skill"),
+        "task" | "agent" => Some("spawnAgent"),
+        _ => None,
+    }
+}
+
+/// Known native Claude Code tools checked against `--disallowedTools` for defense-in-depth
+/// alongside the authoritative runtime `can_use_tool` allowlist gate.
+const CLAUDE_NATIVE_TOOLS: &[&str] = &[
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "NotebookRead",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "Task",
+    "Agent",
+    "Skill",
+    "AskUserQuestion",
+];
+
+fn allowlist_contains_tool(allowlist: &[String], candidate: &str) -> bool {
+    allowlist
+        .iter()
+        .any(|allowed| allowed.trim().eq_ignore_ascii_case(candidate))
+}
+
+fn claude_disallowed_native_tools(authorized_tool_names: &[String]) -> Vec<&'static str> {
+    CLAUDE_NATIVE_TOOLS
+        .iter()
+        .copied()
+        .filter(|&native| {
+            let canonical_allowed = claude_native_tool_canonical_name(native)
+                .is_some_and(|canon| allowlist_contains_tool(authorized_tool_names, canon));
+            let direct_allowed = allowlist_contains_tool(authorized_tool_names, native);
+            !(canonical_allowed || direct_allowed)
+        })
+        .collect()
+}
+
+fn claude_tool_is_authorized(
+    req_body: &Value,
+    tools_disabled: bool,
+    authorized_tool_names: Option<&[String]>,
+) -> Result<(), String> {
+    if tools_disabled {
+        return Err("Tools are disabled for this turn.".to_owned());
+    }
+    let Some(allowlist) = authorized_tool_names else {
+        return Ok(());
+    };
+    let tool_name = req_body
+        .get("tool_name")
+        .or_else(|| req_body.get("toolName"))
+        .or_else(|| req_body.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Tool execution denied: missing native tool name.".to_owned())?;
+    if allowlist.is_empty() {
+        return Err(format!(
+            "Tool '{tool_name}' is not allowed by this session's tool policy."
+        ));
+    }
+    let allowed = allowlist_contains_tool(allowlist, tool_name)
+        || claude_native_tool_canonical_name(tool_name)
+            .is_some_and(|canon| allowlist_contains_tool(allowlist, canon));
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "Tool '{tool_name}' is not allowed by this session's tool policy."
+        ))
+    }
+}
+
+fn push_claude_history_prefix(blocks: &mut Vec<Value>, prior: &[CanonicalMessage]) {
+    let mut pending_text = String::new();
+    let mut wrote_header = false;
+    let mut has_prior_content = false;
+
+    let ensure_header = |buf: &mut String, wrote_header: &mut bool| {
+        if !*wrote_header {
+            buf.push_str("Prior conversation context:\n");
+            *wrote_header = true;
+        }
+    };
+
+    for msg in prior {
+        let role = match msg.role {
+            MessageRole::User => "User",
+            MessageRole::Assistant => "Assistant",
+            MessageRole::Tool => "Tool",
+            MessageRole::System | MessageRole::Developer => "System",
+        };
+        let mut msg_has_prefix = false;
+        let mut wrote_text_since_image = false;
+
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
+                    ensure_header(&mut pending_text, &mut wrote_header);
+                    if !msg_has_prefix {
+                        if has_prior_content && !pending_text.is_empty() {
+                            pending_text.push_str("\n\n");
+                        }
+                        pending_text.push_str(role);
+                        pending_text.push_str(": ");
+                        msg_has_prefix = true;
+                    } else if wrote_text_since_image {
+                        pending_text.push('\n');
+                    }
+                    pending_text.push_str(text.trim());
+                    wrote_text_since_image = true;
+                    has_prior_content = true;
+                }
+                ContentBlock::ToolResult {
+                    tool_name,
+                    content,
+                    is_error,
+                    ..
+                } => {
+                    let rendered = serde_json::to_string(content).unwrap_or_default();
+                    if !rendered.is_empty() {
+                        ensure_header(&mut pending_text, &mut wrote_header);
+                        if !msg_has_prefix {
+                            if has_prior_content && !pending_text.is_empty() {
+                                pending_text.push_str("\n\n");
+                            }
+                            pending_text.push_str(role);
+                            pending_text.push_str(": ");
+                            msg_has_prefix = true;
+                        } else if wrote_text_since_image {
+                            pending_text.push('\n');
+                        }
+                        pending_text.push_str(&format!(
+                            "[tool_result {} (error={})]: {}",
+                            tool_name.as_deref().unwrap_or("tool"),
+                            is_error,
+                            rendered
+                        ));
+                        wrote_text_since_image = true;
+                        has_prior_content = true;
+                    }
+                }
+                ContentBlock::Media {
+                    kind: MediaKind::Image,
+                    source: MediaSource::Base64 { data, mime_type },
+                    ..
+                } => {
+                    ensure_header(&mut pending_text, &mut wrote_header);
+                    if !msg_has_prefix {
+                        if has_prior_content && !pending_text.is_empty() {
+                            pending_text.push_str("\n\n");
+                        }
+                        pending_text.push_str(role);
+                        pending_text.push(':');
+                        msg_has_prefix = true;
+                    }
+                    if !pending_text.is_empty() {
+                        blocks.push(json!({
+                            "type": "text",
+                            "text": std::mem::take(&mut pending_text),
+                        }));
+                    }
+                    blocks.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": data,
+                        }
+                    }));
+                    wrote_text_since_image = false;
+                    has_prior_content = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if has_prior_content {
+        if !pending_text.is_empty() {
+            pending_text.push_str("\n\n");
+        }
+        pending_text.push_str("Latest user message:");
+        blocks.push(json!({
+            "type": "text",
+            "text": pending_text,
+        }));
+    }
+}
+
 fn build_claude_user_content(messages: &[CanonicalMessage], include_history: bool) -> Vec<Value> {
     let mut blocks = Vec::new();
     if include_history && messages.len() > 1 {
-        let mut transcript = String::new();
-        for msg in &messages[..messages.len() - 1] {
-            let role = match msg.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "Assistant",
-                MessageRole::Tool => "Tool",
-                MessageRole::System | MessageRole::Developer => "System",
-            };
-            let text = extract_plain_text(msg);
-            if !text.trim().is_empty() {
-                if !transcript.is_empty() {
-                    transcript.push_str("\n\n");
-                }
-                transcript.push_str(role);
-                transcript.push_str(": ");
-                transcript.push_str(text.trim());
-            }
-        }
-        if !transcript.is_empty() {
-            blocks.push(json!({
-                "type": "text",
-                "text": format!("Prior conversation context:\n{transcript}\n\nLatest user message:")
-            }));
-        }
+        push_claude_history_prefix(&mut blocks, &messages[..messages.len() - 1]);
     }
 
     let tail: &[CanonicalMessage] = if include_history {
@@ -229,18 +428,6 @@ fn build_claude_user_content(messages: &[CanonicalMessage], include_history: boo
         }
     }
     blocks
-}
-
-fn extract_plain_text(msg: &CanonicalMessage) -> String {
-    let mut parts = Vec::new();
-    for block in &msg.content {
-        if let ContentBlock::Text { text, .. } = block
-            && !text.is_empty()
-        {
-            parts.push(text.as_str());
-        }
-    }
-    parts.join("\n")
 }
 
 fn claude_fingerprint(request: &ProviderStepRequest, prefix: &[CanonicalMessage]) -> String {
@@ -395,9 +582,15 @@ impl ProviderTransport for ClaudeSdkTransport {
             args.push("--append-system-prompt".to_owned());
             args.push(request.system_prompt.clone());
         }
-        if tools_disabled {
+        if tools_disabled || request.authorized_tool_names.as_deref() == Some(&[]) {
             args.push("--tools".to_owned());
             args.push(String::new());
+        } else if let Some(allowlist) = request.authorized_tool_names.as_deref() {
+            let disallowed = claude_disallowed_native_tools(allowlist);
+            if !disallowed.is_empty() {
+                args.push("--disallowedTools".to_owned());
+                args.push(disallowed.join(","));
+            }
         }
 
         let spawn_env = build_claude_sdk_spawn_env(&cw_home, &env, request.api_key.as_deref());
@@ -531,12 +724,26 @@ impl ProviderTransport for ClaudeSdkTransport {
                                 .and_then(Value::as_str)
                                 .unwrap_or("");
                             if subtype == "can_use_tool" {
-                                let approved = if let Some(handler) = &tool_handler {
-                                    handler
-                                        .request_approval("claude/can_use_tool", &req_body)
-                                        .await
-                                } else {
-                                    false
+                                let (approved, deny_message) = match claude_tool_is_authorized(
+                                    &req_body,
+                                    tools_disabled,
+                                    request.authorized_tool_names.as_deref(),
+                                ) {
+                                    Err(reason) => (false, reason),
+                                    Ok(()) => {
+                                        let ok = if let Some(handler) = &tool_handler {
+                                            handler
+                                                .request_approval("claude/can_use_tool", &req_body)
+                                                .await
+                                        } else {
+                                            false
+                                        };
+                                        (
+                                            ok,
+                                            "Tool execution denied by Cowork approval policy."
+                                                .to_owned(),
+                                        )
+                                    }
                                 };
                                 let reply = if approved {
                                     let input = req_body
@@ -562,7 +769,7 @@ impl ProviderTransport for ClaudeSdkTransport {
                                             "request_id": req_id,
                                             "response": {
                                                 "behavior": "deny",
-                                                "message": "Tool execution denied by Cowork approval policy.",
+                                                "message": deny_message,
                                             }
                                         }
                                     })

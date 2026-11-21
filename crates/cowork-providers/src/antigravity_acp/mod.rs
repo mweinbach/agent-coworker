@@ -163,16 +163,245 @@ fn antigravity_effort(provider_options: &Map<String, Value>) -> Option<&'static 
     }
 }
 
-fn extract_plain_text(msg: &CanonicalMessage) -> String {
-    let mut parts = Vec::new();
-    for block in &msg.content {
-        if let ContentBlock::Text { text, .. } = block
-            && !text.is_empty()
+fn allowlist_contains_tool(allowlist: &[String], candidate: &str) -> bool {
+    allowlist
+        .iter()
+        .any(|allowed| allowed.trim().eq_ignore_ascii_case(candidate))
+}
+
+fn acp_name_canonical_tools(name: &str) -> &'static [&'static str] {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return &[];
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("mcp__") || lower.starts_with("mcp_") {
+        return &["mcpCall"];
+    }
+    match lower.as_str() {
+        "bash" | "shell" | "exec" | "execute" | "run_cmd" | "run_command" | "terminal"
+        | "command_status" | "send_command_input" => &["bash"],
+        "read" | "read_file" | "view_file" | "view_file_outline" | "view_code_item"
+        | "list_dir" => &["read"],
+        "write" | "write_file" | "write_to_file" | "create_file" => &["write"],
+        "edit"
+        | "edit_file"
+        | "replace_file_content"
+        | "multi_replace_file_content"
+        | "apply_patch" => &["edit"],
+        "glob" | "find_by_name" | "list_files" => &["glob"],
+        "grep" | "grep_search" | "search_files" => &["grep"],
+        "webfetch" | "web_fetch" | "read_url_content" | "fetch_url" => &["webFetch"],
+        "websearch" | "web_search" | "search_web" => &["webSearch"],
+        "askuserquestion" | "ask_user" => &["AskUserQuestion"],
+        "todowrite" | "todo_write" => &["todoWrite"],
+        "skill" => &["skill"],
+        "spawnagent" | "invoke_subagent" | "agent" | "task" => &["spawnAgent"],
+        _ => &[],
+    }
+}
+
+fn acp_kind_canonical_tools(kind: &str) -> &'static [&'static str] {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "execute" => &["bash"],
+        "read" => &["read"],
+        "edit" => &["edit", "write"],
+        "delete" | "move" => &["write"],
+        "search" => &["grep", "glob"],
+        "fetch" => &["webFetch", "webSearch"],
+        _ => &[],
+    }
+}
+
+/// Fail-closed authorization check for ACP `session/request_permission` requests against
+/// `tools_disabled` and `request.authorized_tool_names` before delegating to approval handlers.
+fn acp_permission_is_authorized(
+    params: &Value,
+    tools_disabled: bool,
+    authorized_tool_names: Option<&[String]>,
+) -> bool {
+    if tools_disabled {
+        return false;
+    }
+    let Some(allowlist) = authorized_tool_names else {
+        return true;
+    };
+    if allowlist.is_empty() {
+        return false;
+    }
+
+    let tool_call = params.get("toolCall");
+    let kind = tool_call
+        .and_then(|tc| tc.get("kind"))
+        .or_else(|| params.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // Never allow a misleading display title to bypass a mutating/exec ACP ToolKind.
+    if let Some(k) = kind {
+        let kind_tools = acp_kind_canonical_tools(k);
+        if !kind_tools.is_empty()
+            && !kind_tools
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon))
         {
-            parts.push(text.as_str());
+            return false;
         }
     }
-    parts.join("\n")
+
+    let raw_name = tool_call
+        .and_then(|tc| {
+            tc.get("toolName")
+                .or_else(|| tc.get("name"))
+                .or_else(|| tc.get("title"))
+        })
+        .or_else(|| {
+            params
+                .get("toolName")
+                .or_else(|| params.get("tool_name"))
+                .or_else(|| params.get("name"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if let Some(name) = raw_name {
+        if allowlist_contains_tool(allowlist, name) {
+            return true;
+        }
+        let mapped = acp_name_canonical_tools(name);
+        if !mapped.is_empty() {
+            return mapped
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon));
+        }
+    }
+
+    if let Some(k) = kind {
+        let kind_tools = acp_kind_canonical_tools(k);
+        if !kind_tools.is_empty() {
+            return kind_tools
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon));
+        }
+    }
+
+    false
+}
+
+fn push_acp_history_prefix(blocks: &mut Vec<Value>, prior: &[CanonicalMessage]) {
+    let mut pending_text = String::new();
+    let mut wrote_header = false;
+    let mut has_prior_content = false;
+
+    let ensure_header = |buf: &mut String, wrote_header: &mut bool| {
+        if !*wrote_header {
+            buf.push_str("Prior conversation context:\n");
+            *wrote_header = true;
+        }
+    };
+
+    for msg in prior {
+        let role = match msg.role {
+            MessageRole::User => "User",
+            MessageRole::Assistant => "Assistant",
+            MessageRole::Tool => "Tool",
+            MessageRole::System | MessageRole::Developer => "System",
+        };
+        let mut msg_has_prefix = false;
+        let mut wrote_text_since_image = false;
+
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
+                    ensure_header(&mut pending_text, &mut wrote_header);
+                    if !msg_has_prefix {
+                        if has_prior_content && !pending_text.is_empty() {
+                            pending_text.push_str("\n\n");
+                        }
+                        pending_text.push_str(role);
+                        pending_text.push_str(": ");
+                        msg_has_prefix = true;
+                    } else if wrote_text_since_image {
+                        pending_text.push('\n');
+                    }
+                    pending_text.push_str(text.trim());
+                    wrote_text_since_image = true;
+                    has_prior_content = true;
+                }
+                ContentBlock::ToolResult {
+                    tool_name,
+                    content,
+                    is_error,
+                    ..
+                } => {
+                    let rendered = serde_json::to_string(content).unwrap_or_default();
+                    if !rendered.is_empty() {
+                        ensure_header(&mut pending_text, &mut wrote_header);
+                        if !msg_has_prefix {
+                            if has_prior_content && !pending_text.is_empty() {
+                                pending_text.push_str("\n\n");
+                            }
+                            pending_text.push_str(role);
+                            pending_text.push_str(": ");
+                            msg_has_prefix = true;
+                        } else if wrote_text_since_image {
+                            pending_text.push('\n');
+                        }
+                        pending_text.push_str(&format!(
+                            "[tool_result {} (error={})]: {}",
+                            tool_name.as_deref().unwrap_or("tool"),
+                            is_error,
+                            rendered
+                        ));
+                        wrote_text_since_image = true;
+                        has_prior_content = true;
+                    }
+                }
+                ContentBlock::Media {
+                    kind: MediaKind::Image,
+                    source: MediaSource::Base64 { data, mime_type },
+                    ..
+                } => {
+                    ensure_header(&mut pending_text, &mut wrote_header);
+                    if !msg_has_prefix {
+                        if has_prior_content && !pending_text.is_empty() {
+                            pending_text.push_str("\n\n");
+                        }
+                        pending_text.push_str(role);
+                        pending_text.push(':');
+                        msg_has_prefix = true;
+                    }
+                    if !pending_text.is_empty() {
+                        blocks.push(json!({
+                            "type": "text",
+                            "text": std::mem::take(&mut pending_text),
+                        }));
+                    }
+                    blocks.push(json!({
+                        "type": "image",
+                        "mimeType": mime_type,
+                        "data": data,
+                    }));
+                    wrote_text_since_image = false;
+                    has_prior_content = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if has_prior_content {
+        if !pending_text.is_empty() {
+            pending_text.push_str("\n\n");
+        }
+        pending_text.push_str("Latest user message:");
+        blocks.push(json!({
+            "type": "text",
+            "text": pending_text,
+        }));
+    }
 }
 
 fn build_acp_prompt_blocks(
@@ -188,30 +417,7 @@ fn build_acp_prompt_blocks(
         }));
     }
     if include_history && messages.len() > 1 {
-        let mut transcript = String::new();
-        for msg in &messages[..messages.len() - 1] {
-            let role = match msg.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "Assistant",
-                MessageRole::Tool => "Tool",
-                MessageRole::System | MessageRole::Developer => "System",
-            };
-            let txt = extract_plain_text(msg);
-            if !txt.trim().is_empty() {
-                if !transcript.is_empty() {
-                    transcript.push_str("\n\n");
-                }
-                transcript.push_str(role);
-                transcript.push_str(": ");
-                transcript.push_str(txt.trim());
-            }
-        }
-        if !transcript.is_empty() {
-            blocks.push(json!({
-                "type": "text",
-                "text": format!("Prior conversation context:\n{transcript}\n\nLatest user message:")
-            }));
-        }
+        push_acp_history_prefix(&mut blocks, &messages[..messages.len() - 1]);
     }
 
     let tail: &[CanonicalMessage] = if include_history {
@@ -497,6 +703,10 @@ impl ProviderTransport for AntigravityAcpTransport {
         let pending: Arc<Mutex<PendingAcpMap>> = Arc::new(Mutex::new(HashMap::new()));
         let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<(String, Value)>();
 
+        let tools_disabled =
+            self.disable_tools || request_disables_all_tools(&request.provider_options);
+        let authorized_tools_for_reqs = Arc::new(request.authorized_tool_names.clone());
+
         let pending_reader = Arc::clone(&pending);
         let stdin_for_reqs = stdin_tx.clone();
         let handler_for_reqs = self.tool_handler.clone();
@@ -524,9 +734,16 @@ impl ProviderTransport for AntigravityAcpTransport {
                         let params = obj.get("params").cloned().unwrap_or(Value::Null);
                         let tx_reply = stdin_for_reqs.clone();
                         let handler = handler_for_reqs.clone();
+                        let authorized_tools = Arc::clone(&authorized_tools_for_reqs);
                         tokio::spawn(async move {
                             let reply = if method == "session/request_permission" {
-                                let approved = if let Some(h) = handler {
+                                let approved = if !acp_permission_is_authorized(
+                                    &params,
+                                    tools_disabled,
+                                    authorized_tools.as_deref(),
+                                ) {
+                                    false
+                                } else if let Some(h) = handler {
                                     h.request_approval(&method, &params).await
                                 } else {
                                     false
@@ -590,8 +807,6 @@ impl ProviderTransport for AntigravityAcpTransport {
         let cancel = budget.cancellation_token().clone();
         let turn_id = request.turn_id.clone();
         let resume_plan = resolve_resume_acp_session(&request);
-        let tools_disabled =
-            self.disable_tools || request_disables_all_tools(&request.provider_options);
 
         let setup_res = async {
             let init_res = client

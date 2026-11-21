@@ -3,7 +3,6 @@
 //! wire transports (streaming thoughts/text/tools, fail-closed permission bridge, and continuation).
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -13,8 +12,8 @@ use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::routing::get;
 use cowork_inference::{
-    CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
-    RequestPolicy, StepBudget, StreamEvent,
+    CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderContinuationState,
+    ProviderOpaqueMeta, RequestPolicy, StepBudget, StreamEvent,
 };
 use cowork_providers::antigravity_acp::{
     ANTIGRAVITY_ACP_MANAGED_VERSION, AntigravityAcpInstallOptions, AntigravityAcpTransport,
@@ -379,8 +378,7 @@ for line in sys.stdin:
         })
         break
 "#;
-    let mut f = std::fs::File::create(&script_path).unwrap();
-    f.write_all(script.as_bytes()).unwrap();
+    std::fs::write(&script_path, script).unwrap();
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let mut env = HashMap::new();
@@ -579,8 +577,7 @@ for line in sys.stdin:
         })
         break
 "#;
-    let mut f = std::fs::File::create(&script_path).unwrap();
-    f.write_all(script.as_bytes()).unwrap();
+    std::fs::write(&script_path, script).unwrap();
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let mut env = HashMap::new();
@@ -700,4 +697,300 @@ for line in sys.stdin:
         text2,
         "model=gemini-4-neon;thought=xhigh;authed=True;perm=opt-deny;resumed=True"
     );
+}
+
+fn user_msg_with_image(text: &str, data: &str, mime_type: &str) -> CanonicalMessage {
+    CanonicalMessage {
+        id: "u-img".to_owned(),
+        role: MessageRole::User,
+        content: vec![
+            ContentBlock::Text {
+                text: text.to_owned(),
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            },
+            ContentBlock::Media {
+                kind: MediaKind::Image,
+                source: MediaSource::Base64 {
+                    data: data.to_owned(),
+                    mime_type: mime_type.to_owned(),
+                },
+                provider_meta: ProviderOpaqueMeta::default(),
+            },
+        ],
+        phase: None,
+        provider: None,
+        api: None,
+        model: None,
+        stop_reason: None,
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+    }
+}
+
+fn assistant_msg(text: &str) -> CanonicalMessage {
+    CanonicalMessage {
+        id: "a1".to_owned(),
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::Text {
+            text: text.to_owned(),
+            phase: None,
+            citations: Vec::new(),
+            provider_meta: ProviderOpaqueMeta::default(),
+        }],
+        phase: None,
+        provider: None,
+        api: None,
+        model: None,
+        stop_reason: None,
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: "2026-01-01T00:00:01Z".to_owned(),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_sdk_enforces_authorized_tool_allowlist_and_preserves_history_images() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-claude-allowlist.py");
+    let script = r#"#!/usr/bin/env python3
+import json, sys
+
+args = sys.argv[1:]
+disallowed = args[args.index("--disallowedTools") + 1] if "--disallowedTools" in args else ""
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("type") == "control_request" and msg.get("request", {}).get("subtype") == "initialize":
+        emit({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}
+        })
+    elif msg.get("type") == "user":
+        content = msg["message"]["content"]
+        image_datas = [
+            b["source"]["data"]
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "image"
+        ]
+        # First request a disallowed native Bash tool, then an allowed native Read tool.
+        emit({
+            "type": "control_request",
+            "request_id": "perm-bash",
+            "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "rm -rf /"}}
+        })
+        bash_perm = json.loads(sys.stdin.readline().strip())["response"]["response"]["behavior"]
+        emit({
+            "type": "control_request",
+            "request_id": "perm-read",
+            "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "README.md"}}
+        })
+        read_perm = json.loads(sys.stdin.readline().strip())["response"]["response"]["behavior"]
+        reply = f"bash={bash_perm};read={read_perm};images={','.join(image_datas)};has_disallowed_bash={'Bash' in disallowed.split(',')}"
+        emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": reply}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}})
+        emit({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": "claude-allow-1",
+            "result": reply,
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        })
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    // Handler approves everything (simulating YOLO mode); allowlist MUST still deny Bash before handler is called.
+    let handler = Arc::new(TestApprovalHandler {
+        allow: true,
+        calls: AtomicUsize::new(0),
+    });
+    let mut transport = ClaudeSdkTransport::with_env_and_handler(env, Some(handler.clone()));
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+
+    let req = ProviderStepRequest {
+        model_id: "claude-opus-4-8".to_owned(),
+        base_url: None,
+        api_key: Some("sk-ant-test".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: "Read only.".to_owned(),
+        messages: vec![
+            user_msg_with_image("Inspect this screenshot", "IMG_TURN_1_BASE64", "image/png"),
+            assistant_msg("I see a dashboard."),
+            user_msg("What color is the chart?"),
+        ],
+        tools: Vec::new(),
+        authorized_tool_names: Some(vec!["read".to_owned()]),
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-allow-1".to_owned(),
+    };
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let res = transport
+        .stream_step(req, &budget, &mut |_| {})
+        .await
+        .expect("Claude SDK turn succeeds");
+
+    // Handler was ONLY consulted for allowed `Read`, never for disallowed `Bash`.
+    assert_eq!(handler.calls.load(Ordering::Relaxed), 1);
+    let text = res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        text,
+        "bash=deny;read=allow;images=IMG_TURN_1_BASE64;has_disallowed_bash=True"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_acp_enforces_authorized_tool_allowlist_and_preserves_history_images() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-agy-allowlist.py");
+    let script = r#"#!/usr/bin/env python3
+import json, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    params = msg.get("params", {})
+
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-allow-1"}})
+    elif method in ("session/set_model", "session/set_config_option"):
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        sid = params.get("sessionId")
+        prompt = params.get("prompt", [])
+        image_datas = [
+            b["data"]
+            for b in prompt
+            if isinstance(b, dict) and b.get("type") == "image"
+        ]
+        # First request a disallowed execute tool, then an allowed read tool.
+        send({
+            "jsonrpc": "2.0",
+            "id": 9101,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": sid,
+                "toolCall": {"toolCallId": "tc-exec", "title": "run_cmd", "kind": "execute"},
+                "options": [
+                    {"optionId": "opt-allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "opt-deny", "name": "Reject", "kind": "reject_once"}
+                ]
+            }
+        })
+        exec_resp = json.loads(sys.stdin.readline().strip())["result"]["outcome"].get("optionId")
+        send({
+            "jsonrpc": "2.0",
+            "id": 9102,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": sid,
+                "toolCall": {"toolCallId": "tc-read", "title": "read_file", "kind": "read"},
+                "options": [
+                    {"optionId": "opt-allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "opt-deny", "name": "Reject", "kind": "reject_once"}
+                ]
+            }
+        })
+        read_resp = json.loads(sys.stdin.readline().strip())["result"]["outcome"].get("optionId")
+        reply = f"exec={exec_resp};read={read_resp};images={','.join(image_datas)}"
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}}}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    let handler = Arc::new(TestApprovalHandler {
+        allow: true,
+        calls: AtomicUsize::new(0),
+    });
+    let mut transport = AntigravityAcpTransport::with_env_and_handler(env, Some(handler.clone()));
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+
+    let req = ProviderStepRequest {
+        model_id: "gemini-4-neon".to_owned(),
+        base_url: None,
+        api_key: Some("gem-key".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: "Read only.".to_owned(),
+        messages: vec![
+            user_msg_with_image("Inspect this image", "ACP_IMG_TURN_1", "image/jpeg"),
+            assistant_msg("Got it."),
+            user_msg("Summarize what you saw."),
+        ],
+        tools: Vec::new(),
+        authorized_tool_names: Some(vec!["read".to_owned()]),
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-acp-allow-1".to_owned(),
+    };
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let res = transport
+        .stream_step(req, &budget, &mut |_| {})
+        .await
+        .expect("ACP turn succeeds");
+
+    // Handler was ONLY consulted for allowed `read_file`, never for disallowed `run_cmd`.
+    assert_eq!(handler.calls.load(Ordering::Relaxed), 1);
+    let text = res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(text, "exec=opt-deny;read=opt-allow;images=ACP_IMG_TURN_1");
 }

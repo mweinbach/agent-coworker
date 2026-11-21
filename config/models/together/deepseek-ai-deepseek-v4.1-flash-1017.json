@@ -1,0 +1,10 @@
+{
+  "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "provider": "together",
+  "displayName": "DeepSeek V4.1 Flash 1017",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

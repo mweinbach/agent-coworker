@@ -1,0 +1,11 @@
+{
+  "id": "grok-4.7",
+  "provider": "opencode-go",
+  "displayName": "Grok 4.7",
+  "knowledgeCutoff": "2026-05",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+  "isDefault": false
+}

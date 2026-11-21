@@ -2,9 +2,10 @@
   "id": "claude-opus-4-7",
   "provider": "opencode-zen",
   "displayName": "Claude Opus 4.7",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "January 31, 2026",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
   "isDefault": false
 }

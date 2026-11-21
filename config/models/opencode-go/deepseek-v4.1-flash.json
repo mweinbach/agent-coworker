@@ -1,0 +1,11 @@
+{
+  "id": "deepseek-v4.1-flash",
+  "provider": "opencode-go",
+  "displayName": "DeepSeek V4.1 Flash 1017",
+  "knowledgeCutoff": "2025-05",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "high", "max"],
+  "isDefault": false
+}

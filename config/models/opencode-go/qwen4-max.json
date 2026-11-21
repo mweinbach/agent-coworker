@@ -1,0 +1,11 @@
+{
+  "id": "qwen4-max",
+  "provider": "opencode-go",
+  "displayName": "Qwen4 Max",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "high", "xhigh"],
+  "isDefault": false
+}

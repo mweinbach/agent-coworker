@@ -1,0 +1,10 @@
+{
+  "id": "stepfun-ai/step-5-preview",
+  "provider": "nvidia",
+  "displayName": "Step 5 Preview",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

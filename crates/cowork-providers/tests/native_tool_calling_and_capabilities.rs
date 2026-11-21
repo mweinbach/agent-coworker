@@ -215,7 +215,8 @@ fn sample_tools() -> Vec<ToolDefinition> {
 #[test]
 fn static_classifier_and_strategy_resolution_cover_openai_anthropic_openrouter_codex_and_loopback()
 {
-    // Official OpenAI gpt-5.4 vs gpt-4.1
+    // Official OpenAI gpt-5.4 (tool search only), gpt-6.2-astra (tool search + PTC),
+    // gpt-5.4-nano / gpt-5.5-pro / gpt-4.1 (harness)
     let oa_54 = classify_static_endpoint_capabilities(
         ProviderName::Openai,
         Some("https://api.openai.com/v1"),
@@ -225,18 +226,31 @@ fn static_classifier_and_strategy_resolution_cover_openai_anthropic_openrouter_c
         oa_54.native_tool_search,
         Some(NativeToolSearchKind::OpenAiResponses)
     );
+    assert_eq!(oa_54.native_programmatic_tool_calling, None);
+
+    let oa_62 = classify_static_endpoint_capabilities(
+        ProviderName::Openai,
+        Some("https://api.openai.com/v1"),
+        "gpt-6.2-astra",
+    );
     assert_eq!(
-        oa_54.native_programmatic_tool_calling,
+        oa_62.native_tool_search,
+        Some(NativeToolSearchKind::OpenAiResponses)
+    );
+    assert_eq!(
+        oa_62.native_programmatic_tool_calling,
         Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
     );
 
-    let oa_41 = classify_static_endpoint_capabilities(
-        ProviderName::Openai,
-        Some("https://api.openai.com/v1"),
-        "gpt-4.1",
-    );
-    assert_eq!(oa_41.native_tool_search, None);
-    assert_eq!(oa_41.native_programmatic_tool_calling, None);
+    for non_ts in ["gpt-5.4-nano", "gpt-5.5-pro", "gpt-4.1"] {
+        let caps = classify_static_endpoint_capabilities(
+            ProviderName::Openai,
+            Some("https://api.openai.com/v1"),
+            non_ts,
+        );
+        assert_eq!(caps.native_tool_search, None, "{non_ts}");
+        assert_eq!(caps.native_programmatic_tool_calling, None, "{non_ts}");
+    }
 
     // OpenRouter OpenAI & Anthropic variants
     let or_oa = classify_static_endpoint_capabilities(
@@ -261,20 +275,40 @@ fn static_classifier_and_strategy_resolution_cover_openai_anthropic_openrouter_c
     );
     assert_eq!(or_ant.native_programmatic_tool_calling, None);
 
-    // Official Anthropic Claude Sonnet 4.6 vs Claude 3.5 Haiku
-    let ant_46 = classify_static_endpoint_capabilities(
+    // Official Anthropic Claude Sonnet 4.6, Opus 5.5, Fable 5.2, Haiku 4.5, and Claude 3.5 Haiku
+    for full_native in [
+        "claude-sonnet-4-6",
+        "claude-opus-5-5",
+        "claude-fable-5-2",
+        "claude-haiku-5-5",
+    ] {
+        let caps = classify_static_endpoint_capabilities(
+            ProviderName::Anthropic,
+            Some("https://api.anthropic.com"),
+            full_native,
+        );
+        assert_eq!(
+            caps.native_tool_search,
+            Some(NativeToolSearchKind::AnthropicBm25),
+            "{full_native}"
+        );
+        assert_eq!(
+            caps.native_programmatic_tool_calling,
+            Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120),
+            "{full_native}"
+        );
+    }
+
+    let ant_haiku_45 = classify_static_endpoint_capabilities(
         ProviderName::Anthropic,
         Some("https://api.anthropic.com"),
-        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
     );
     assert_eq!(
-        ant_46.native_tool_search,
+        ant_haiku_45.native_tool_search,
         Some(NativeToolSearchKind::AnthropicBm25)
     );
-    assert_eq!(
-        ant_46.native_programmatic_tool_calling,
-        Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120)
-    );
+    assert_eq!(ant_haiku_45.native_programmatic_tool_calling, None);
 
     let ant_35 = classify_static_endpoint_capabilities(
         ProviderName::Anthropic,
@@ -284,12 +318,59 @@ fn static_classifier_and_strategy_resolution_cover_openai_anthropic_openrouter_c
     assert_eq!(ant_35.native_tool_search, None);
     assert_eq!(ant_35.native_programmatic_tool_calling, None);
 
-    // Codex CLI
-    let codex = classify_static_endpoint_capabilities(ProviderName::CodexCli, None, "gpt-5.4");
+    // Google Gemini Interactions v1beta Tool retrieval
+    for google_ts in [
+        "gemini-4-hydrogen",
+        "gemini-4-neon",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+    ] {
+        let caps = classify_static_endpoint_capabilities(ProviderName::Google, None, google_ts);
+        assert_eq!(
+            caps.native_tool_search,
+            Some(NativeToolSearchKind::GoogleInteractions),
+            "{google_ts}"
+        );
+        assert_eq!(caps.native_programmatic_tool_calling, None);
+    }
+    let google_legacy =
+        classify_static_endpoint_capabilities(ProviderName::Google, None, "gemini-3.1-pro-preview");
+    assert_eq!(google_legacy.native_tool_search, None);
+
+    // Claude CLI (Agent SDK ToolSearch)
+    let claude_cli =
+        classify_static_endpoint_capabilities(ProviderName::ClaudeCli, None, "claude-opus-5-5");
+    assert_eq!(
+        claude_cli.native_tool_search,
+        Some(NativeToolSearchKind::ClaudeAgentSdk)
+    );
+    assert_eq!(claude_cli.native_programmatic_tool_calling, None);
+
+    // Codex CLI (dynamicTools deferLoading + code_mode)
+    let codex = classify_static_endpoint_capabilities(ProviderName::CodexCli, None, "gpt-6.2-sol");
+    assert_eq!(
+        codex.native_tool_search,
+        Some(NativeToolSearchKind::CodexDynamicTools)
+    );
     assert_eq!(
         codex.native_programmatic_tool_calling,
         Some(NativeProgrammaticToolCallingKind::CodexCodeMode)
     );
+
+    // Bedrock Converse and LM Studio stay on Cowork harness even under Strategy::Native
+    for harness_only in [
+        (ProviderName::Bedrock, "global.anthropic.claude-sonnet-5-5"),
+        (ProviderName::Lmstudio, "local-model"),
+    ] {
+        let caps = resolve_endpoint_tool_capabilities(
+            harness_only.0,
+            None,
+            harness_only.1,
+            ToolCallingStrategy::Native,
+        );
+        assert_eq!(caps.native_tool_search, None);
+        assert_eq!(caps.native_programmatic_tool_calling, None);
+    }
 
     // Loopback / custom base URL honors Auto (None) vs Native vs Harness
     let loopback_auto = resolve_endpoint_tool_capabilities(

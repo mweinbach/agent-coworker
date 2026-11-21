@@ -17,8 +17,8 @@ use crate::bedrock::{
 use crate::chat_completions::lmstudio::resolve_lmstudio_options;
 use crate::{
     AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
-    CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
-    ProviderTransport,
+    ClaudeAgentSdkTransport, CodexAppServerTransport, GoogleInteractionsTransport,
+    OpenAiResponsesTransport, ProviderTransport,
 };
 
 /// Bedrock auth for `provider` (`None` for every other provider, or when Bedrock has no usable
@@ -120,6 +120,30 @@ pub fn select_provider_transport(
     env: &HashMap<String, String>,
     codex_transport: impl FnOnce() -> CodexAppServerTransport,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
+    select_provider_transport_with_claude(
+        provider,
+        bedrock_auth,
+        homedir,
+        env,
+        codex_transport,
+        || {
+            ClaudeAgentSdkTransport::with_env(env.clone())
+                .with_homedir(homedir.to_path_buf())
+                .with_tools_disabled(true)
+        },
+    )
+}
+
+/// Like [`select_provider_transport`], allowing callers with a tool bridge (turns, skill
+/// improvement) to configure the [`ClaudeAgentSdkTransport`] directly.
+pub fn select_provider_transport_with_claude(
+    provider: ProviderName,
+    bedrock_auth: Option<BedrockAuthConfig>,
+    homedir: &Path,
+    env: &HashMap<String, String>,
+    codex_transport: impl FnOnce() -> CodexAppServerTransport,
+    claude_transport: impl FnOnce() -> ClaudeAgentSdkTransport,
+) -> Result<Arc<dyn ProviderTransport>, String> {
     match provider {
         ProviderName::Openai => Ok(Arc::new(OpenAiResponsesTransport::new())),
         ProviderName::Anthropic => Ok(Arc::new(AnthropicMessagesTransport::new())),
@@ -132,6 +156,7 @@ pub fn select_provider_transport(
             ))),
         },
         ProviderName::CodexCli => Ok(Arc::new(codex_transport())),
+        ProviderName::ClaudeCli => Ok(Arc::new(claude_transport())),
         other => ChatCompletionsTransport::new(other)
             .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
             .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str())),

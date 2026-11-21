@@ -1,0 +1,13 @@
+{
+  "id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "provider": "bedrock",
+  "displayName": "Claude Sonnet 4.5 (Bedrock, Legacy)",
+  "knowledgeCutoff": "April 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high"],
+  "isDefault": false
+}

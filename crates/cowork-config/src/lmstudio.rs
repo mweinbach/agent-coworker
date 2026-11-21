@@ -69,9 +69,9 @@ fn non_empty_str(value: Option<&Value>) -> Option<&str> {
 /// Resolves the LM Studio endpoint the provider catalog discovers against.
 ///
 /// Base URL precedence: `providerOptions.lmstudio.baseUrl` (or `base_url`), then
-/// `LM_STUDIO_BASE_URL`, then a root-level `providerOptions.baseUrl` when there is no `lmstudio`
-/// section, then [`DEFAULT_LM_STUDIO_BASE_URL`]. API key precedence: the saved connection key,
-/// then `LM_STUDIO_API_KEY`, then `LM_STUDIO_API_TOKEN`.
+/// `providerOptions.baseUrl` when there is no `lmstudio` section, then
+/// [`DEFAULT_LM_STUDIO_BASE_URL`]. API key precedence: the saved connection key, then
+/// `LM_STUDIO_API_KEY`, then `LM_STUDIO_API_TOKEN`, then `LM_API_TOKEN`.
 ///
 /// `provider_options` must be the *trusted* merged options from config load, in which a
 /// workspace-supplied non-loopback `lmstudio.baseUrl` has already been stripped.
@@ -103,6 +103,7 @@ pub fn resolve_lmstudio_discovery_endpoint(
         .filter(|s| !s.is_empty())
         .or_else(|| env_non_empty("LM_STUDIO_API_KEY"))
         .or_else(|| env_non_empty("LM_STUDIO_API_TOKEN"))
+        .or_else(|| env_non_empty("LM_API_TOKEN"))
         .map(ToOwned::to_owned);
 
     LmStudioDiscoveryEndpoint {

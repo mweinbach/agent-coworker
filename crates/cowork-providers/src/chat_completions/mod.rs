@@ -140,6 +140,9 @@ const REASONING_CONTENT_REQUIRED_MODELS: &[(ProviderName, &[&str])] = &[
         ProviderName::Fireworks,
         &[
             "accounts/fireworks/models/kimi-k3",
+            "accounts/fireworks/models/kimi-k3p1-pro",
+            "accounts/fireworks/models/deepseek-v4p1-flash",
+            "accounts/fireworks/models/deepseek-v4p1-flash-1017",
             "accounts/fireworks/routers/kimi-k3-fast",
         ],
     ),
@@ -148,6 +151,7 @@ const REASONING_CONTENT_REQUIRED_MODELS: &[(ProviderName, &[&str])] = &[
         &[
             "accounts/fireworks/models/kimi-k3",
             "accounts/fireworks/routers/kimi-k3-fast",
+            "accounts/fireworks/routers/kimi-fast-latest",
         ],
     ),
     (ProviderName::Nvidia, &["deepseek-ai/deepseek-v4.1-flash"]),

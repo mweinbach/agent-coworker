@@ -1,0 +1,10 @@
+{
+  "id": "minimaxai/minimax-m3.1-flash",
+  "provider": "nvidia",
+  "displayName": "MiniMax M3.1 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

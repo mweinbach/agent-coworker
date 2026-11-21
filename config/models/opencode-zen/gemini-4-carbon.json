@@ -1,0 +1,11 @@
+{
+  "id": "gemini-4-carbon",
+  "provider": "opencode-zen",
+  "displayName": "Gemini 4 Carbon",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high"],
+  "isDefault": false
+}

@@ -321,14 +321,87 @@ impl BedrockConverseTransport {
     }
 }
 
+fn is_claude_5_model(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    lower.contains("claude-opus-5")
+        || lower.contains("claude-sonnet-5")
+        || lower.contains("claude-haiku-5")
+}
+
+fn is_claude_46_model(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    lower.contains("claude-opus-4-6") || lower.contains("claude-sonnet-4-6")
+}
+
 fn is_claude_adaptive_model(model_id: &str) -> bool {
     let lower = model_id.to_ascii_lowercase();
-    lower.contains("claude-opus-4-6")
-        || lower.contains("claude-sonnet-4-6")
+    is_claude_46_model(&lower)
         || lower.contains("claude-opus-4-7")
         || lower.contains("claude-sonnet-4-7")
         || lower.contains("claude-opus-4-8")
         || lower.contains("claude-sonnet-4-8")
+        || is_claude_5_model(&lower)
+}
+
+fn is_nova_2_lite_model(model_id: &str) -> bool {
+    model_id
+        .to_ascii_lowercase()
+        .contains("amazon.nova-2-lite-v1")
+}
+
+fn is_nova_prompt_cache_model(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    [
+        "amazon.nova-micro-v1",
+        "amazon.nova-lite-v1",
+        "amazon.nova-pro-v1",
+        "amazon.nova-2-lite-v1",
+    ]
+    .iter()
+    .any(|id| lower.contains(id))
+}
+
+fn normalize_claude_adaptive_effort<'a>(model_id: &str, effort: &'a str) -> &'a str {
+    match effort {
+        "minimal" | "light" => "low",
+        // Claude 4.6 supports max but not xhigh. Keep manually configured legacy values valid;
+        // the registry advertises only the model's native effort ladder.
+        "xhigh" if is_claude_46_model(model_id) => "high",
+        other => other,
+    }
+}
+
+fn normalize_nova_reasoning_effort(effort: &str) -> Option<&'static str> {
+    match effort {
+        "minimal" | "light" | "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" | "xhigh" | "max" => Some("high"),
+        _ => None,
+    }
+}
+
+fn claude_disabled_thinking_type(model_id: &str) -> Option<&'static str> {
+    let lower = model_id.to_ascii_lowercase();
+    if lower.contains("claude-sonnet-5-5") {
+        // Sonnet 5.5 rejects disabled thinking; between_tools is its lowest valid setting.
+        Some("between_tools")
+    } else if lower.contains("claude-opus-5-5") {
+        // Opus 5.5 always uses adaptive thinking.
+        None
+    } else if is_claude_5_model(&lower) {
+        Some("disabled")
+    } else {
+        // Claude 4.x adaptive models already disable thinking when the field is omitted.
+        None
+    }
+}
+
+fn claude_supports_temperature(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    // AWS removed temperature/top_p/top_k starting with Claude Opus 4.7.
+    !(lower.contains("claude-opus-4-7")
+        || lower.contains("claude-opus-4-8")
+        || lower.contains("claude-opus-5"))
 }
 
 fn is_claude_budgeted_thinking_model(model_id: &str) -> bool {
@@ -471,15 +544,19 @@ fn resolve_bedrock_cache_retention(provider_options: &Map<String, Value>) -> Bed
     })
 }
 
-/// TS `supportsPromptCaching`: Claude 4.x, Claude 3.7 Sonnet and Claude 3.5 Haiku; non-Claude
-/// models only when `AWS_BEDROCK_FORCE_CACHE=1`.
+/// Claude 4.x/5.x, Claude 3.7 Sonnet, Claude 3.5 Haiku, and the supported Nova
+/// understanding models accept explicit cache points. Other models require the legacy override.
 fn bedrock_supports_prompt_caching(model_id: &str) -> bool {
     let id = model_id.to_ascii_lowercase();
+    if is_nova_prompt_cache_model(&id) {
+        return true;
+    }
     if !id.contains("claude") {
         return std::env::var("AWS_BEDROCK_FORCE_CACHE").as_deref() == Ok("1");
     }
     id.contains("-4-")
         || id.contains("-4.")
+        || is_claude_5_model(&id)
         || id.contains("claude-3-7-sonnet")
         || id.contains("claude-3-5-haiku")
 }
@@ -559,7 +636,16 @@ pub fn build_converse_request_body(
     provider_options: &Map<String, Value>,
 ) -> Value {
     let mut body = Map::new();
-    let cache_retention = resolve_bedrock_cache_retention(provider_options);
+    let requested_cache_retention = resolve_bedrock_cache_retention(provider_options);
+    // Nova understanding models accept only the default five-minute TTL. Degrade a global
+    // one-hour preference instead of emitting a cachePoint that Bedrock rejects.
+    let cache_retention = if requested_cache_retention == BedrockCacheRetention::Long
+        && is_nova_prompt_cache_model(model_id)
+    {
+        BedrockCacheRetention::Short
+    } else {
+        requested_cache_retention
+    };
     let use_cache_points =
         cache_retention != BedrockCacheRetention::None && bedrock_supports_prompt_caching(model_id);
     let supports_signature = bedrock_supports_thinking_signature(model_id);
@@ -734,6 +820,9 @@ pub fn build_converse_request_body(
     body.insert("messages".to_string(), Value::Array(wire_messages));
 
     // TS `convertToolConfig`: `toolChoice: "none"` omits `toolConfig` entirely.
+    // Anthropic server-side tool search is available through InvokeModel, not Converse. Keep
+    // Converse tools as ordinary client tool specs; defer_loading and tool-search wire blocks
+    // must not be emitted on this endpoint.
     let tool_choice = resolve_bedrock_tool_choice(provider_options);
     if !tools.is_empty() && tool_choice != Some(BedrockToolChoice::None) {
         let tool_specs: Vec<Value> = tools
@@ -774,7 +863,9 @@ pub fn build_converse_request_body(
         .or_else(|| EFFORT_KEYS.iter().find_map(|k| provider_options.get(*k)))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty() && *s != "none" && *s != "off");
+        .filter(|s| !s.is_empty());
+    let reasoning_disabled = effort.is_some_and(|eff| matches!(eff, "none" | "off"));
+    let enabled_effort = effort.filter(|eff| !matches!(*eff, "none" | "off"));
 
     let mut max_tokens = read_bedrock_opt(provider_options, "maxTokens")
         .or_else(|| read_bedrock_opt(provider_options, "max_tokens"))
@@ -782,12 +873,18 @@ pub fn build_converse_request_body(
         .and_then(Value::as_u64);
 
     let mut additional = Map::new();
-    if let Some(eff) = effort {
+    if reasoning_disabled && let Some(thinking_type) = claude_disabled_thinking_type(model_id) {
+        additional.insert("thinking".to_string(), json!({ "type": thinking_type }));
+    }
+    let mut nova_high_reasoning = false;
+    if let Some(eff) = enabled_effort {
         if is_claude_adaptive_model(model_id) {
-            // TS `streamSimpleBedrock` returns before `adjustMaxTokensForThinking` for adaptive
-            // models: `maxTokens` passes through untouched.
+            // Adaptive models take their effort in output_config, not in thinking or as a budget.
             additional.insert("thinking".to_string(), json!({ "type": "adaptive" }));
-            additional.insert("output_config".to_string(), json!({ "effort": eff }));
+            additional.insert(
+                "output_config".to_string(),
+                json!({ "effort": normalize_claude_adaptive_effort(model_id, eff) }),
+            );
         } else if is_claude_budgeted_thinking_model(model_id) {
             let custom_budgets =
                 read_bedrock_opt(provider_options, "thinkingBudgets").and_then(Value::as_object);
@@ -801,6 +898,18 @@ pub fn build_converse_request_body(
                 "thinking".to_string(),
                 json!({ "type": "enabled", "budget_tokens": adjusted.thinking_budget }),
             );
+        } else if is_nova_2_lite_model(model_id)
+            && let Some(nova_effort) = normalize_nova_reasoning_effort(eff)
+        {
+            nova_high_reasoning = nova_effort == "high";
+            additional.insert(
+                "reasoningConfig".to_string(),
+                json!({ "type": "enabled", "maxReasoningEffort": nova_effort }),
+            );
+            if nova_high_reasoning {
+                // Nova 2 Lite high effort rejects maxTokens and sampling parameters.
+                max_tokens = None;
+            }
         }
     }
 
@@ -808,7 +917,10 @@ pub fn build_converse_request_body(
     if let Some(max_tokens) = max_tokens {
         inference_cfg.insert("maxTokens".to_string(), json!(max_tokens));
     }
-    if let Some(temp) = read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
+    if !nova_high_reasoning
+        && claude_supports_temperature(model_id)
+        && let Some(temp) =
+            read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
         && temp.is_finite()
     {
         inference_cfg.insert("temperature".to_string(), json!(temp));
@@ -1510,5 +1622,118 @@ mod host_region_tests {
                 "{region:?} must be rejected"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod converse_request_tests {
+    use serde_json::{Map, Value, json};
+
+    use super::build_converse_request_body;
+
+    fn options(value: Value) -> Map<String, Value> {
+        value.as_object().expect("options object").clone()
+    }
+
+    fn request(model_id: &str, provider_options: &Map<String, Value>) -> Value {
+        build_converse_request_body(model_id, "system", &[], &[], provider_options)
+    }
+
+    #[test]
+    fn nova_2_lite_reasoning_uses_native_converse_fields() {
+        let body = request(
+            "global.amazon.nova-2-lite-v1:0",
+            &options(json!({
+                "reasoningEffort": "medium",
+                "maxTokens": 10_000,
+                "temperature": 0.7
+            })),
+        );
+        assert_eq!(
+            body["additionalModelRequestFields"]["reasoningConfig"],
+            json!({ "type": "enabled", "maxReasoningEffort": "medium" })
+        );
+        assert_eq!(body["inferenceConfig"]["maxTokens"], json!(10_000));
+        assert_eq!(body["inferenceConfig"]["temperature"], json!(0.7));
+    }
+
+    #[test]
+    fn nova_2_lite_high_reasoning_omits_rejected_inference_fields() {
+        let body = request(
+            "us.amazon.nova-2-lite-v1:0",
+            &options(json!({
+                "reasoningEffort": "high",
+                "maxTokens": 10_000,
+                "temperature": 0.7
+            })),
+        );
+        assert_eq!(
+            body["additionalModelRequestFields"]["reasoningConfig"],
+            json!({ "type": "enabled", "maxReasoningEffort": "high" })
+        );
+        assert!(body.get("inferenceConfig").is_none());
+    }
+
+    #[test]
+    fn adaptive_claude_models_use_supported_effort_and_disable_modes() {
+        let opus = request(
+            "global.anthropic.claude-opus-5-5",
+            &options(json!({ "reasoningEffort": "max" })),
+        );
+        assert_eq!(
+            opus["additionalModelRequestFields"],
+            json!({
+                "thinking": { "type": "adaptive" },
+                "output_config": { "effort": "max" }
+            })
+        );
+
+        let sonnet_46 = request(
+            "global.anthropic.claude-sonnet-4-6",
+            &options(json!({ "reasoningEffort": "xhigh" })),
+        );
+        assert_eq!(
+            sonnet_46["additionalModelRequestFields"]["output_config"],
+            json!({ "effort": "high" })
+        );
+
+        let haiku_55 = request(
+            "global.anthropic.claude-haiku-5-5",
+            &options(json!({ "reasoningEffort": "none" })),
+        );
+        assert_eq!(
+            haiku_55["additionalModelRequestFields"]["thinking"],
+            json!({ "type": "disabled" })
+        );
+    }
+
+    #[test]
+    fn nova_cache_points_never_use_one_hour_ttl() {
+        let nova = request(
+            "amazon.nova-lite-v1:0",
+            &options(json!({ "cacheRetention": "long" })),
+        );
+        assert_eq!(
+            nova["system"][1],
+            json!({ "cachePoint": { "type": "default" } })
+        );
+
+        let claude = request(
+            "global.anthropic.claude-opus-5-5",
+            &options(json!({ "cacheRetention": "long" })),
+        );
+        assert_eq!(
+            claude["system"][1],
+            json!({ "cachePoint": { "type": "default", "ttl": "1h" } })
+        );
+    }
+
+    #[test]
+    fn newer_opus_models_omit_temperature() {
+        let body = request(
+            "global.anthropic.claude-opus-4-7",
+            &options(json!({ "temperature": 0.2 })),
+        );
+        assert!(body.get("inferenceConfig").is_none());
     }
 }

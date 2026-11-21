@@ -2,9 +2,10 @@
   "id": "gpt-5-nano",
   "provider": "opencode-zen",
   "displayName": "GPT-5 Nano",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "May 30, 2024",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high"],
   "isDefault": false
 }

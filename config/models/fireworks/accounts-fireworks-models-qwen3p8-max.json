@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/qwen3p8-max",
+  "provider": "fireworks",
+  "displayName": "Qwen 3.8 Max",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

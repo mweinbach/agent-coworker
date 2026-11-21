@@ -394,25 +394,79 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
         "fireworks:accounts/fireworks/models/minimax-m2p7",
         ModelPricing::with_cache(0.3, 1.2, Some(0.06), None),
     );
+    for (model_id, input, output, cached_input) in [
+        ("accounts/fireworks/models/kimi-k3p1-pro", 2.0, 10.0, 0.20),
+        ("accounts/fireworks/models/kimi-k3", 3.0, 15.0, 0.30),
+        (
+            "accounts/fireworks/models/deepseek-v4p1-flash-1017",
+            0.30,
+            1.20,
+            0.006,
+        ),
+        ("accounts/fireworks/models/glm-5p3", 1.40, 4.40, 0.26),
+        ("accounts/fireworks/models/glm-5p3-flash", 0.15, 0.50, 0.03),
+        ("accounts/fireworks/models/qwen3p8-max", 2.0, 6.0, 0.25),
+        (
+            "accounts/fireworks/models/minimax-m3p1-flash",
+            0.15,
+            0.60,
+            0.015,
+        ),
+        ("accounts/fireworks/models/minimax-m3", 0.30, 1.20, 0.06),
+    ] {
+        put(
+            &format!("fireworks:{model_id}"),
+            ModelPricing::with_cache(input, output, Some(cached_input), None),
+        );
+    }
     put(
         "firepass:accounts/fireworks/routers/kimi-k2p6-turbo",
         ModelPricing::with_cache(0.95, 4.0, Some(0.16), None),
     );
+    put(
+        "firepass:accounts/fireworks/routers/kimi-fast-latest",
+        ModelPricing::with_cache(0.0, 0.0, Some(0.0), Some(0.0)),
+    );
 
     // OpenCode Zen (`src/providers/opencodeShared.ts`; opencode-go intentionally excluded)
     for (model_id, inp, outp, cread, cwrite) in [
+        ("claude-fable-5-2", 8.0, 40.0, 0.2, 10.0),
+        ("claude-fable-5-1", 10.0, 50.0, 0.25, 12.5),
+        ("claude-fable-5", 10.0, 50.0, 1.0, 12.5),
+        ("claude-opus-5-5", 4.0, 20.0, 0.2, 5.0),
+        ("claude-opus-5", 5.0, 25.0, 0.5, 6.25),
         ("claude-opus-4-8", 5.0, 25.0, 0.5, 6.25),
         ("claude-opus-4-7", 5.0, 25.0, 0.5, 6.25),
         ("claude-opus-4-6", 5.0, 25.0, 0.5, 6.25),
         ("claude-opus-4-5", 5.0, 25.0, 0.5, 6.25),
         ("claude-opus-4-1", 15.0, 75.0, 1.5, 18.75),
+        ("claude-sonnet-5-5", 2.0, 10.0, 0.1, 2.5),
+        ("claude-sonnet-5", 2.0, 10.0, 0.2, 2.5),
         ("claude-sonnet-4-6", 3.0, 15.0, 0.3, 3.75),
         ("claude-sonnet-4-5", 3.0, 15.0, 0.3, 3.75),
         ("claude-sonnet-4", 3.0, 15.0, 0.3, 3.75),
+        ("claude-haiku-5-5", 0.1, 0.5, 0.01, 0.125),
         ("claude-haiku-4-5", 1.0, 5.0, 0.1, 1.25),
+        ("gemini-4-neon", 3.0, 15.0, 0.15, 0.0),
+        ("gemini-4-argon", 2.0, 10.0, 0.1, 0.0),
+        ("gemini-4-carbon", 2.0, 10.0, 0.1, 0.0),
+        ("gemini-4-hydrogen", 1.5, 7.5, 0.075, 0.0),
+        ("gemini-3.8-flash", 0.75, 3.75, 0.075, 0.0),
+        ("gemini-3.7-flash", 0.75, 3.75, 0.075, 0.0),
+        ("gemini-3.6-flash", 0.75, 3.75, 0.075, 0.0),
         ("gemini-3.5-flash", 1.5, 9.0, 0.15, 0.0),
+        ("gemini-3.5-flash-lite", 0.3, 2.5, 0.03, 0.0),
         ("gemini-3.1-pro", 2.0, 12.0, 0.2, 0.0),
         ("gemini-3-flash", 0.5, 3.0, 0.05, 0.0),
+        ("gpt-6.2-astra", 8.0, 40.0, 0.4, 10.0),
+        ("gpt-6.2-sol", 2.0, 10.0, 0.1, 2.5),
+        ("gpt-6.1-sol", 2.0, 10.0, 0.1, 2.5),
+        ("gpt-6-astra", 10.0, 50.0, 1.0, 12.5),
+        ("gpt-6-sol", 2.0, 10.0, 0.2, 2.5),
+        ("gpt-6-luna", 0.1, 0.5, 0.01, 0.125),
+        ("gpt-5.6-sol", 4.0, 20.0, 0.4, 5.0),
+        ("gpt-5.6-terra", 2.0, 12.0, 0.2, 2.5),
+        ("gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25),
         ("gpt-5.5", 5.0, 30.0, 0.5, 0.0),
         ("gpt-5.5-pro", 30.0, 180.0, 30.0, 0.0),
         ("gpt-5.4", 2.5, 15.0, 0.25, 0.0),
@@ -430,23 +484,50 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
         ("gpt-5", 1.07, 8.5, 0.107, 0.0),
         ("gpt-5-codex", 1.07, 8.5, 0.107, 0.0),
         ("gpt-5-nano", 0.05, 0.4, 0.005, 0.0),
+        ("grok-4.7", 2.0, 6.0, 0.5, 0.0),
+        ("grok-4.6", 2.0, 6.0, 0.5, 0.0),
+        ("grok-4.5", 2.0, 6.0, 0.3, 0.0),
         ("grok-build-0.1", 1.0, 2.0, 0.2, 0.0),
-        ("deepseek-v4-flash", 0.14, 0.28, 0.03, 0.0),
+        ("deepseek-v4-pro", 1.74, 3.48, 0.145, 0.0),
+        ("deepseek-v4.1-flash", 0.3, 1.2, 0.006, 0.0),
+        ("deepseek-v4-flash", 0.14, 0.28, 0.028, 0.0),
+        ("glm-5.3", 1.4, 4.4, 0.26, 0.0),
+        ("glm-5.3-flash", 0.15, 0.5, 0.03, 0.0),
         ("glm-5.1", 1.4, 4.4, 0.26, 0.0),
         ("glm-5", 1.0, 3.2, 0.2, 0.0),
+        ("minimax-m3", 0.3, 1.2, 0.06, 0.0),
         ("minimax-m2.7", 0.3, 1.2, 0.06, 0.0),
         ("minimax-m2.5", 0.3, 1.2, 0.06, 0.0),
+        ("kimi-k3", 3.0, 15.0, 0.3, 3.0),
+        ("kimi-k2.7-code", 0.95, 4.0, 0.19, 0.0),
         ("kimi-k2.6", 0.95, 4.0, 0.16, 0.0),
-        ("kimi-k2.5", 0.6, 3.0, 0.08, 0.0),
+        ("kimi-k2.5", 0.6, 3.0, 0.1, 0.0),
+        ("mistral-large-4", 0.68, 2.09, 0.07, 0.0),
+        ("muse-spark-1.3", 1.25, 4.25, 0.15, 0.0),
+        ("muse-spark-1.2", 1.25, 4.25, 0.15, 0.0),
+        ("muse-wonder-1.0", 4.0, 20.0, 0.2, 0.0),
+        ("muse-ember-1.0", 0.1, 0.5, 0.004, 0.0),
+        ("qwen3.8-max", 2.0, 6.0, 0.25, 2.5),
+        ("qwen3.8-flash", 0.15, 0.47, 0.016, 0.2),
         ("qwen3.6-plus", 0.5, 3.0, 0.05, 0.625),
         ("qwen3.5-plus", 0.2, 1.2, 0.02, 0.25),
         ("big-pickle", 0.0, 0.0, 0.0, 0.0),
+        ("deepseek-v4.1-flash-free", 0.0, 0.0, 0.0, 0.0),
         ("deepseek-v4-flash-free", 0.0, 0.0, 0.0, 0.0),
+        ("mimo-v2.6-flash-free", 0.0, 0.0, 0.0, 0.0),
         ("mimo-v2.5-free", 0.0, 0.0, 0.0, 0.0),
         ("qwen3.6-plus-free", 0.0, 0.0, 0.0, 0.0),
         ("minimax-m3-free", 0.0, 0.0, 0.0, 0.0),
         ("nemotron-3-ultra-free", 0.0, 0.0, 0.0, 0.0),
+        ("nemotron-3.5-super-vl-free", 0.0, 0.0, 0.0, 0.0),
+        ("nemotron-3.5-lightning-free", 0.0, 0.0, 0.0, 0.0),
         ("north-mini-code-free", 0.0, 0.0, 0.0, 0.0),
+        ("longcat-2.5-free", 0.0, 0.0, 0.0, 0.0),
+        ("iceman-free", 0.0, 0.0, 0.0, 0.0),
+        ("beam-free", 0.0, 0.0, 0.0, 0.0),
+        ("flint-40b-free", 0.0, 0.0, 0.0, 0.0),
+        ("hy4-flash-free", 0.0, 0.0, 0.0, 0.0),
+        ("tidepool-alpha-free", 0.0, 0.0, 0.0, 0.0),
     ] {
         put(
             &format!("opencode-zen:{model_id}"),
@@ -455,12 +536,41 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
     }
 
     // Anthropic
-    for opus in ["claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8"] {
+    put(
+        "anthropic:claude-fable-5-2",
+        ModelPricing::with_cache(8.0, 40.0, Some(0.2), Some(10.0)),
+    );
+    put(
+        "anthropic:claude-fable-5-1",
+        ModelPricing::with_cache(10.0, 50.0, Some(0.25), Some(12.5)),
+    );
+    put(
+        "anthropic:claude-fable-5",
+        ModelPricing::with_cache(10.0, 50.0, Some(1.0), Some(12.5)),
+    );
+    put(
+        "anthropic:claude-opus-5-5",
+        ModelPricing::with_cache(4.0, 20.0, Some(0.2), Some(5.0)),
+    );
+    for opus in [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+    ] {
         put(
             &format!("anthropic:{opus}"),
             ModelPricing::with_cache(5.0, 25.0, Some(0.5), Some(6.25)),
         );
     }
+    put(
+        "anthropic:claude-sonnet-5-5",
+        ModelPricing::with_cache(2.0, 10.0, Some(0.1), Some(2.5)),
+    );
+    put(
+        "anthropic:claude-sonnet-5",
+        ModelPricing::with_cache(2.0, 10.0, Some(0.2), Some(2.5)),
+    );
     for sonnet in ["claude-sonnet-4-6", "claude-sonnet-4-5"] {
         put(
             &format!("anthropic:{sonnet}"),
@@ -468,8 +578,81 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
         );
     }
     put(
+        "anthropic:claude-haiku-5-5",
+        ModelPricing::with_long_context(
+            0.1,
+            0.5,
+            Some(0.01),
+            Some(0.125),
+            100_000,
+            Some(0.5),
+            Some(2.5),
+            Some(0.05),
+        ),
+    );
+    put(
         "anthropic:claude-haiku-4-5",
         ModelPricing::with_cache(1.0, 5.0, Some(0.1), Some(1.25)),
+    );
+
+    // Amazon Bedrock (Global CRIS for global.* IDs, US standard for base IDs)
+    for (model_id, input, output, cache_read, cache_write) in [
+        ("global.anthropic.claude-opus-5-5", 4.0, 20.0, 0.2, 5.0),
+        ("global.anthropic.claude-sonnet-5-5", 2.0, 10.0, 0.1, 2.5),
+        ("global.anthropic.claude-opus-4-8", 5.0, 25.0, 0.5, 6.25),
+        ("global.anthropic.claude-opus-4-7", 5.0, 25.0, 0.5, 6.25),
+        ("global.anthropic.claude-opus-4-6-v1", 5.0, 25.0, 0.5, 6.25),
+        ("global.anthropic.claude-sonnet-4-6", 3.0, 15.0, 0.3, 3.75),
+        (
+            "global.anthropic.claude-opus-4-5-20251101-v1:0",
+            5.0,
+            25.0,
+            0.5,
+            6.25,
+        ),
+        (
+            "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            3.0,
+            15.0,
+            0.3,
+            3.75,
+        ),
+        (
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            1.0,
+            5.0,
+            0.1,
+            1.25,
+        ),
+        ("global.amazon.nova-2-lite-v1:0", 0.30, 2.50, 0.075, 0.30),
+        ("amazon.nova-pro-v1:0", 0.80, 3.20, 0.20, 0.80),
+        ("amazon.nova-lite-v1:0", 0.06, 0.24, 0.015, 0.06),
+        ("amazon.nova-micro-v1:0", 0.035, 0.14, 0.00875, 0.035),
+        (
+            "anthropic.claude-3-5-haiku-20241022-v1:0",
+            0.80,
+            4.00,
+            0.08,
+            1.00,
+        ),
+    ] {
+        put(
+            &format!("bedrock:{model_id}"),
+            ModelPricing::with_cache(input, output, Some(cache_read), Some(cache_write)),
+        );
+    }
+    put(
+        "bedrock:global.anthropic.claude-haiku-5-5",
+        ModelPricing::with_long_context(
+            0.10,
+            0.50,
+            Some(0.01),
+            Some(0.125),
+            100_000,
+            Some(0.50),
+            Some(2.50),
+            Some(0.05),
+        ),
     );
 
     // Baseten
@@ -485,6 +668,34 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
         "baseten:nvidia/Nemotron-120B-A12B",
         ModelPricing::with_cache(0.3, 0.75, Some(0.06), None),
     );
+    put(
+        "baseten:moonshotai/Kimi-K3.1-Pro",
+        ModelPricing::with_cache(2.0, 10.0, Some(0.2), None),
+    );
+    put(
+        "baseten:moonshotai/Kimi-K3",
+        ModelPricing::with_cache(3.0, 15.0, Some(0.3), None),
+    );
+    put(
+        "baseten:zai-org/GLM-5.3",
+        ModelPricing::with_cache(1.4, 4.4, Some(0.14), None),
+    );
+    put(
+        "baseten:zai-org/GLM-5.3-Flash",
+        ModelPricing::with_cache(0.15, 0.5, Some(0.03), None),
+    );
+    put(
+        "baseten:deepseek-ai/DeepSeek-V4-Pro-0813",
+        ModelPricing::with_cache(1.32, 3.96, Some(0.132), None),
+    );
+    put(
+        "baseten:deepseek-ai/DeepSeek-V4.1-Flash",
+        ModelPricing::with_cache(0.3, 1.2, Some(0.007), None),
+    );
+    put(
+        "baseten:nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+        ModelPricing::with_cache(0.6, 2.4, Some(0.12), None),
+    );
 
     // Together AI
     put(
@@ -496,23 +707,128 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
         ModelPricing::standard(0.6, 3.6),
     );
     put("together:zai-org/GLM-5", ModelPricing::standard(1.0, 3.2));
+    put(
+        "together:deepseek-ai/DeepSeek-V4-Pro-0813",
+        ModelPricing::with_cache(1.32, 3.96, Some(0.13), None),
+    );
+    put(
+        "together:deepseek-ai/DeepSeek-V4.1-Flash",
+        ModelPricing::with_cache(0.3, 1.2, Some(0.006), None),
+    );
+    put(
+        "together:deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        ModelPricing::with_cache(0.3, 1.2, Some(0.006), None),
+    );
+    put(
+        "together:MiniMaxAI/MiniMax-M3.1-Flash",
+        ModelPricing::with_cache(0.15, 0.6, Some(0.015), None),
+    );
+    put(
+        "together:moonshotai/Kimi-K3",
+        ModelPricing::with_cache(3.0, 15.0, Some(0.3), None),
+    );
+    put(
+        "together:moonshotai/Kimi-K3.1-Pro",
+        ModelPricing::with_cache(2.0, 10.0, Some(0.2), None),
+    );
+    put(
+        "together:Qwen/Qwen3.5-9B",
+        ModelPricing::standard(0.17, 0.25),
+    );
+    put(
+        "together:Qwen/Qwen3.7-Max",
+        ModelPricing::with_cache(1.5, 4.5, Some(0.5), None),
+    );
+    put(
+        "together:Qwen/Qwen3.8-Flash",
+        ModelPricing::standard(0.09, 0.282),
+    );
+    put(
+        "together:Qwen/Qwen4-Max",
+        ModelPricing::with_cache(1.425, 4.275, Some(0.07125), None),
+    );
+    put(
+        "together:zai-org/GLM-5.3",
+        ModelPricing::with_cache(1.4, 4.4, Some(0.26), None),
+    );
+    put(
+        "together:zai-org/GLM-5.3-Flash",
+        ModelPricing::with_cache(0.15, 0.5, Some(0.03), None),
+    );
 
     // MiniMax
     put(
+        "minimax:MiniMax-M3.1-Flash",
+        ModelPricing::with_cache(0.15, 0.60, Some(0.015), None),
+    );
+    put(
         "minimax:MiniMax-M3",
         ModelPricing::with_long_context(
-            0.6,
-            2.4,
-            Some(0.12),
+            0.30,
+            1.20,
+            Some(0.06),
             None,
             512_000,
-            Some(1.2),
-            Some(4.8),
-            Some(0.24),
+            Some(0.60),
+            Some(2.40),
+            Some(0.12),
         ),
     );
 
     // OpenAI
+    put(
+        "openai:gpt-6.2-astra",
+        ModelPricing::with_long_context(
+            8.0,
+            40.0,
+            Some(0.4),
+            Some(10.0),
+            272_000,
+            Some(16.0),
+            Some(60.0),
+            Some(0.8),
+        ),
+    );
+    put(
+        "openai:gpt-6.2-sol",
+        ModelPricing::with_long_context(
+            2.0,
+            10.0,
+            Some(0.1),
+            Some(2.5),
+            272_000,
+            Some(4.0),
+            Some(15.0),
+            Some(0.2),
+        ),
+    );
+    put(
+        "openai:gpt-6.1-terra",
+        ModelPricing::with_long_context(
+            1.0,
+            5.0,
+            Some(0.05),
+            Some(1.25),
+            272_000,
+            Some(2.0),
+            Some(7.5),
+            Some(0.1),
+        ),
+    );
+    put(
+        "openai:gpt-6-luna",
+        ModelPricing::with_long_context(
+            0.1,
+            0.5,
+            Some(0.01),
+            Some(0.125),
+            272_000,
+            Some(0.2),
+            Some(0.75),
+            Some(0.02),
+        ),
+    );
+    put("openai:gpt-5.5-pro", ModelPricing::standard(30.0, 180.0));
     put(
         "openai:gpt-5.5",
         ModelPricing::with_long_context(
@@ -572,6 +888,84 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
 
     // Codex CLI
     put(
+        "codex-cli:gpt-6.2-astra",
+        ModelPricing::with_long_context(
+            8.0,
+            40.0,
+            Some(0.4),
+            Some(10.0),
+            272_000,
+            Some(16.0),
+            Some(60.0),
+            Some(0.8),
+        ),
+    );
+    put(
+        "codex-cli:gpt-6.2-sol",
+        ModelPricing::with_long_context(
+            2.0,
+            10.0,
+            Some(0.1),
+            Some(2.5),
+            272_000,
+            Some(4.0),
+            Some(15.0),
+            Some(0.2),
+        ),
+    );
+    put(
+        "codex-cli:gpt-6.1-sol",
+        ModelPricing::with_long_context(
+            2.0,
+            10.0,
+            Some(0.1),
+            Some(2.5),
+            272_000,
+            Some(4.0),
+            Some(15.0),
+            Some(0.2),
+        ),
+    );
+    put(
+        "codex-cli:gpt-6.1-terra",
+        ModelPricing::with_long_context(
+            1.0,
+            5.0,
+            Some(0.05),
+            Some(1.25),
+            272_000,
+            Some(2.0),
+            Some(7.5),
+            Some(0.1),
+        ),
+    );
+    put(
+        "codex-cli:gpt-6-astra",
+        ModelPricing::with_long_context(
+            10.0,
+            50.0,
+            Some(1.0),
+            Some(12.5),
+            272_000,
+            Some(20.0),
+            Some(75.0),
+            Some(2.0),
+        ),
+    );
+    put(
+        "codex-cli:gpt-6-luna",
+        ModelPricing::with_long_context(
+            0.1,
+            0.5,
+            Some(0.01),
+            Some(0.125),
+            272_000,
+            Some(0.2),
+            Some(0.75),
+            Some(0.02),
+        ),
+    );
+    put(
         "codex-cli:gpt-5.6-sol",
         ModelPricing::with_cache(5.0, 30.0, Some(0.5), Some(6.25)),
     );
@@ -623,6 +1017,20 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
     );
 
     // Google
+    for (model, input, output, cached) in [
+        ("gemini-4-carbon", 2.0, 10.0, 0.10),
+        ("gemini-4-argon", 2.0, 10.0, 0.10),
+        ("gemini-4-neon", 3.0, 15.0, 0.15),
+        ("gemini-4-hydrogen", 1.5, 7.5, 0.075),
+        ("gemini-3.8-flash", 0.75, 3.75, 0.075),
+        ("gemini-3.6-flash", 0.75, 3.75, 0.075),
+        ("gemini-3.5-flash-lite", 0.30, 2.50, 0.03),
+    ] {
+        put(
+            &format!("google:{model}"),
+            ModelPricing::with_cache(input, output, Some(cached), None),
+        );
+    }
     for pro in [
         "gemini-3.1-pro-preview-customtools",
         "gemini-3.1-pro-preview",

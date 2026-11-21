@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/deepseek-v4p1-flash-1017",
+  "provider": "fireworks",
+  "displayName": "DeepSeek V4.1 Flash 1017",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

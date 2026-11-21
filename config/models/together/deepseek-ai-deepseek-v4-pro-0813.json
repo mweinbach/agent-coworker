@@ -1,0 +1,13 @@
+{
+  "id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+  "provider": "together",
+  "displayName": "DeepSeek V4 Pro 0813",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["high", "max"],
+  "isDefault": false
+}

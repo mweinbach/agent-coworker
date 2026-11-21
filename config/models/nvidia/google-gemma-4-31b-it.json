@@ -1,0 +1,10 @@
+{
+  "id": "google/gemma-4-31b-it",
+  "provider": "nvidia",
+  "displayName": "Gemma 4 31B IT",
+  "knowledgeCutoff": "January 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

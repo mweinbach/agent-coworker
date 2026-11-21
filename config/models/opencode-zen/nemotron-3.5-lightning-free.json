@@ -1,0 +1,10 @@
+{
+  "id": "nemotron-3.5-lightning-free",
+  "provider": "opencode-zen",
+  "displayName": "Nemotron 3.5 Lightning Free",
+  "knowledgeCutoff": "September 2025",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

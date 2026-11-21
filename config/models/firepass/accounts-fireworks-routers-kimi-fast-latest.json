@@ -1,0 +1,13 @@
+{
+  "id": "accounts/fireworks/routers/kimi-fast-latest",
+  "provider": "firepass",
+  "displayName": "Kimi Fast (Fire Pass)",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "max"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

@@ -24,7 +24,7 @@ When adding a JSON-RPC method or notification:
 
 ## Layout
 
-- `crates/` — Rust harness & server workspace: agent loop (`crates/cowork-harness/`), server (`crates/cowork-server/`), tools (`crates/cowork-tools/`), providers (`crates/cowork-providers/`), MCP (`crates/cowork-mcp/`), storage (`crates/cowork-storage/`), CLI (`crates/cowork-cli/`)
+- `crates/` — Rust harness & server workspace: agent loop (`crates/cowork-harness/`), server (`crates/cowork-server/`), tools (`crates/cowork-tools/`), providers (`crates/cowork-providers/`), MCP (`crates/cowork-mcp/`), storage (`crates/cowork-storage/`), CLI (`crates/cowork-cli/`), Rune desktop app (`crates/cowork-desktop/`)
 - `src/` — shared TypeScript client contracts (`src/shared/`), model/provider catalogs (`src/models/`, `src/providers/`), and desktop platform helpers (`src/platform/`)
 - `apps/desktop/` — Electron app, UI layer only (see `apps/desktop/AGENTS.md`)
 - `apps/mobile/` — Expo mobile app (React Native)
@@ -43,7 +43,7 @@ Use the root scripts to run both non-overlapping scopes; do not hand-maintain st
 
 - `bun install` — install root and workspace dependencies
 - `bun install --cwd apps/mobile --frozen-lockfile` — install the locked mobile SDK dependencies required by the full test suite
-- `bun run start` / `bun run cli` / `bun run serve` — Electron desktop app in dev mode / Rust CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
+- `bun run start` / `bun run desktop:rune` / `bun run cli` / `bun run serve` — Electron desktop app / native Rune desktop app / Rust CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
 - `bun run desktop:web` — browser development build of the desktop UI
 - `cargo test --workspace` — run all Rust crate unit and integration tests
 - `cargo clippy --workspace --all-targets -- -D warnings` / `cargo fmt --all -- --check` — Rust lint and format checks
@@ -89,6 +89,7 @@ Task-specific docs — load the one that matches your task before starting:
 - `agent_docs/cursor-cloud.md` — Cursor Cloud environment specifics
 - `docs/websocket-protocol.md` — WebSocket protocol source of truth
 - `docs/harness/index.md` — harness context/observability/SLO docs map
+- `crates/cowork-desktop/README.md` — native Rune desktop app quickstart, headless scenes, and module ownership
 - `CONTRIBUTING.md` — architecture deep-dive: adding tools, skills, MCP servers
 
 [Ask DeepWiki](https://deepwiki.com/mweinbach/agent-coworker)

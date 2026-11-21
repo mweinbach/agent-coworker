@@ -1,0 +1,16 @@
+{
+  "id": "gemini-3.8-flash",
+  "provider": "google",
+  "displayName": "Gemini 3.8 Flash",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3.5-flash.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "dynamic",
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
+  },
+  "supportedReasoningEfforts": ["dynamic", "low", "medium", "high"],
+  "isDefault": false
+}

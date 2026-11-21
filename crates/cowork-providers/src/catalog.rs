@@ -15,7 +15,6 @@ use cowork_config::{
 };
 pub use cowork_config::{ProviderAuthMethod, ProviderAuthMethodField};
 use regex::Regex;
-use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -297,6 +296,7 @@ fn model_deny_regex() -> &'static Regex {
 fn is_openai_reasoning_id(model_id: &str) -> bool {
     let lower = model_id.trim().to_ascii_lowercase();
     lower.starts_with("gpt-5")
+        || lower.starts_with("gpt-6")
         || lower == "o1"
         || lower == "o3"
         || lower == "o4"
@@ -310,7 +310,23 @@ fn is_openai_reasoning_id(model_id: &str) -> bool {
 
 fn google_reasoning_for_model(model_id: &str) -> ProviderCatalogReasoning {
     let lower = model_id.to_ascii_lowercase();
-    let efforts = if lower.contains("flash-lite") || lower.contains("flash") {
+    let efforts = if lower == "gemini-4-neon" || lower == "gemini-4-hydrogen" {
+        vec![
+            "dynamic".to_string(),
+            "low".to_string(),
+            "medium".to_string(),
+            "high".to_string(),
+            "xhigh".to_string(),
+        ]
+    } else if matches!(
+        lower.as_str(),
+        "gemini-3-flash-preview"
+            | "gemini-3.1-flash-lite"
+            | "gemini-3.1-flash-lite-preview"
+            | "gemini-3.5-flash"
+            | "gemini-3.5-flash-lite"
+            | "gemini-3.6-flash"
+    ) {
         vec![
             "dynamic".to_string(),
             "minimal".to_string(),
@@ -333,10 +349,6 @@ fn google_reasoning_for_model(model_id: &str) -> ProviderCatalogReasoning {
 }
 
 fn static_reasoning_for_supported(model: &SupportedModel) -> Option<ProviderCatalogReasoning> {
-    if model.provider == ProviderName::Google {
-        return Some(google_reasoning_for_model(&model.id));
-    }
-
     let default_effort = model
         .provider_options_defaults
         .get("reasoningEffort")
@@ -350,9 +362,13 @@ fn static_reasoning_for_supported(model: &SupportedModel) -> Option<ProviderCata
         .clone()
         .filter(|v| !v.is_empty())
         .or_else(|| {
-            default_effort
-                .as_ref()
-                .map(|_| vec!["low".to_string(), "medium".to_string(), "high".to_string()])
+            if model.provider == ProviderName::Google {
+                Some(google_reasoning_for_model(&model.id).available_efforts)
+            } else {
+                default_effort
+                    .as_ref()
+                    .map(|_| vec!["low".to_string(), "medium".to_string(), "high".to_string()])
+            }
         })?;
 
     let default = default_effort.unwrap_or_else(|| available[0].clone());
@@ -739,18 +755,16 @@ async fn discover_api_models_http(
             continue;
         }
         let sup = supported_by_id.get(model_id);
-        let reasoning = if provider == ProviderName::Openai && is_openai_reasoning_id(model_id) {
-            if let Some(sr) = sup.and_then(static_reasoning_for_supported) {
-                Some(CachedModelReasoning {
-                    default_effort: Some(sr.default_effort),
-                    available_efforts: Some(sr.available_efforts),
-                })
-            } else {
-                Some(CachedModelReasoning {
-                    default_effort: Some("high".into()),
-                    available_efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
-                })
-            }
+        let reasoning = if let Some(sr) = sup.and_then(static_reasoning_for_supported) {
+            Some(CachedModelReasoning {
+                default_effort: Some(sr.default_effort),
+                available_efforts: Some(sr.available_efforts),
+            })
+        } else if provider == ProviderName::Openai && is_openai_reasoning_id(model_id) {
+            Some(CachedModelReasoning {
+                default_effort: Some("high".into()),
+                available_efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
+            })
         } else {
             None
         };
@@ -816,6 +830,69 @@ async fn discover_lmstudio_models_read_only(
     lm_opts.api_base_url = format!("{normalized}/api/v1");
     lm_opts.base_url = normalized.clone();
 
+    // Prefer LM Studio's native `/api/v1/models` endpoint so rich capabilities (vision,
+    // reasoning allowed_options/default, loaded instances) are preserved whenever available.
+    let ctl = LmStudioControlClient::new(lm_opts.clone());
+    if let Ok(native) = ctl.list_native_models().await
+        && !native.is_empty()
+    {
+        let default_key = native
+            .iter()
+            .find(|m| !m.loaded_instances.is_empty())
+            .or_else(|| native.first())
+            .map(|m| m.key.clone());
+        let models = native
+            .into_iter()
+            .map(|m| {
+                let vision = m
+                    .capabilities
+                    .as_ref()
+                    .and_then(|c| c.vision)
+                    .or(m.vision)
+                    .unwrap_or(false);
+                let reasoning = m
+                    .capabilities
+                    .as_ref()
+                    .and_then(|c| c.reasoning.as_ref())
+                    .and_then(|r| {
+                        let available =
+                            (!r.allowed_options.is_empty()).then(|| r.allowed_options.clone());
+                        if r.default.is_none() && available.is_none() {
+                            None
+                        } else {
+                            Some(CachedModelReasoning {
+                                default_effort: r.default.clone(),
+                                available_efforts: available,
+                            })
+                        }
+                    });
+                CachedModelDiscoveryModel {
+                    id: m.key.clone(),
+                    model: None,
+                    display_name: m.display_name.unwrap_or_else(|| m.key.clone()),
+                    description: m.description,
+                    knowledge_cutoff: Some("Unknown".into()),
+                    supports_image_input: Some(vision),
+                    is_default: (default_key.as_deref() == Some(m.key.as_str())).then_some(true),
+                    reasoning,
+                    runtime_options: Some(Map::from_iter([(
+                        "source".into(),
+                        Value::String("local-http".into()),
+                    )])),
+                    runtime_overrides: None,
+                }
+            })
+            .collect();
+        return Ok(ModelDiscoveryResult {
+            provider: ProviderName::Lmstudio,
+            source: ModelDiscoverySource::LocalHttp,
+            models,
+            updated_at: None,
+            expires_at: None,
+            message: None,
+        });
+    }
+
     let v1_url = format!("{}/models", lm_opts.inference_base_url);
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -832,40 +909,6 @@ async fn discover_lmstudio_models_read_only(
         .send()
         .await
         .map_err(|e| format!("LM Studio server is unreachable at {normalized}: {e}"))?;
-
-    if v1_resp.status() == StatusCode::NOT_FOUND {
-        // Fallback for mock servers that only mount `/api/v1/models`
-        let ctl = LmStudioControlClient::new(lm_opts);
-        let native = ctl.list_native_models().await.map_err(|e| e.message)?;
-        let default_key = native
-            .iter()
-            .find(|m| !m.loaded_instances.is_empty())
-            .or_else(|| native.first())
-            .map(|m| m.key.clone());
-        let models = native
-            .into_iter()
-            .map(|m| CachedModelDiscoveryModel {
-                id: m.key.clone(),
-                model: None,
-                display_name: m.display_name.unwrap_or_else(|| m.key.clone()),
-                description: m.description,
-                knowledge_cutoff: Some("Unknown".into()),
-                supports_image_input: Some(m.vision.unwrap_or(false)),
-                is_default: (default_key.as_deref() == Some(m.key.as_str())).then_some(true),
-                reasoning: None,
-                runtime_options: None,
-                runtime_overrides: None,
-            })
-            .collect();
-        return Ok(ModelDiscoveryResult {
-            provider: ProviderName::Lmstudio,
-            source: ModelDiscoverySource::LocalHttp,
-            models,
-            updated_at: None,
-            expires_at: None,
-            message: None,
-        });
-    }
 
     if !v1_resp.status().is_success() {
         return Err(format!(
@@ -1140,7 +1183,8 @@ fn merge_custom_models_and_preferences(
         .map(|prefs| prefs.iter().map(|p| (p.id.clone(), p.enabled)).collect())
         .unwrap_or_default();
 
-    let discovery_authoritative = provider == ProviderName::CodexCli;
+    let discovery_authoritative =
+        matches!(provider, ProviderName::CodexCli | ProviderName::ClaudeCli);
     let use_curated = is_curated_aggregator(provider)
         && entry
             .models
@@ -1559,6 +1603,149 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                 se.state = Some("unreachable".into());
                                 se.message =
                                     Some(format!("Codex model discovery failed: {err_msg}"));
+                                se
+                            }
+                        }
+                    }
+                };
+                (entry, is_conn)
+            }
+            ProviderName::ClaudeCli => {
+                let has_saved = store
+                    .services
+                    .get(&provider)
+                    .is_some_and(|e| matches!(e.mode, ConnectionMode::Oauth));
+                let auth =
+                    crate::claude_agent_sdk::read_claude_auth_status(&opts.homedir, &opts.env)
+                        .await;
+                let is_conn = has_saved || auth.logged_in;
+                let has_claude_override = env_non_empty(&opts.env, "COWORK_CLAUDE_AGENT_SDK_BIN")
+                    .or_else(|| env_non_empty(&opts.env, "COWORK_CLAUDE_CLI_BIN"))
+                    .is_some();
+                let cached = read_model_discovery_cache(&paths, provider, None).await;
+                let cached_fresh = is_model_discovery_cache_fresh(cached.as_ref(), None);
+                let should_use_live =
+                    cached.is_some() || is_conn || (has_claude_override && opts.refresh);
+                let auth_msg = (!auth.message.is_empty()).then_some(auth.message);
+
+                let entry = if !should_use_live {
+                    let mut entry = static_catalog_entry(built_in_dir, provider);
+                    entry.state = Some("unconfigured".into());
+                    entry.message = auth_msg;
+                    entry
+                } else if !is_conn && !has_claude_override {
+                    let c = cached.expect("checked cached.is_some()");
+                    let disc = cache_to_discovery(&c);
+                    let stale = !cached_fresh || opts.refresh;
+                    catalog_entry_from_discovery(
+                        built_in_dir,
+                        provider,
+                        &disc,
+                        Some(if stale { "unreachable" } else { "ready" }.into()),
+                        stale.then(|| {
+                            format!(
+                                "Claude account unavailable. Using cached model catalog from {}.",
+                                c.updated_at
+                            )
+                        }),
+                    )
+                } else if let Some(c) = cached.as_ref()
+                    && !opts.refresh
+                    && cached_fresh
+                {
+                    let disc = cache_to_discovery(c);
+                    catalog_entry_from_discovery(
+                        built_in_dir,
+                        provider,
+                        &disc,
+                        Some(
+                            if disc.models.is_empty() {
+                                "empty"
+                            } else {
+                                "ready"
+                            }
+                            .into(),
+                        ),
+                        auth_msg,
+                    )
+                } else {
+                    match crate::claude_agent_sdk::list_claude_sdk_models(
+                        &opts.homedir,
+                        &opts.env,
+                        timeout,
+                    )
+                    .await
+                    {
+                        Ok(models) if !models.is_empty() => {
+                            let disc = ModelDiscoveryResult {
+                                provider,
+                                source: ModelDiscoverySource::LocalCli,
+                                models,
+                                updated_at: None,
+                                expires_at: None,
+                                message: None,
+                            };
+                            let written = write_model_discovery_cache(
+                                &paths,
+                                provider,
+                                disc.clone(),
+                                None,
+                                None,
+                            )
+                            .await
+                            .ok();
+                            let final_disc =
+                                written.as_ref().map(cache_to_discovery).unwrap_or(disc);
+                            catalog_entry_from_discovery(
+                                built_in_dir,
+                                provider,
+                                &final_disc,
+                                Some("ready".into()),
+                                auth_msg,
+                            )
+                        }
+                        Ok(_) => {
+                            if let Some(c) = cached.as_ref()
+                                && c.source != ModelDiscoverySource::Static
+                            {
+                                let c_disc = cache_to_discovery(c);
+                                catalog_entry_from_discovery(
+                                    built_in_dir,
+                                    provider,
+                                    &c_disc,
+                                    Some("unreachable".into()),
+                                    Some(format!(
+                                        "Claude Agent SDK returned no models. Using cached model catalog from {}.",
+                                        c.updated_at
+                                    )),
+                                )
+                            } else {
+                                let mut se = static_catalog_entry(built_in_dir, provider);
+                                se.state =
+                                    Some(if is_conn { "ready" } else { "unconfigured" }.into());
+                                se.message = auth_msg;
+                                se
+                            }
+                        }
+                        Err(err_msg) => {
+                            if let Some(c) = cached {
+                                let c_disc = cache_to_discovery(&c);
+                                catalog_entry_from_discovery(
+                                    built_in_dir,
+                                    provider,
+                                    &c_disc,
+                                    Some("unreachable".into()),
+                                    Some(format!(
+                                        "Claude Agent SDK model discovery failed: {err_msg} Using cached model catalog from {}.",
+                                        c.updated_at
+                                    )),
+                                )
+                            } else {
+                                let mut se = static_catalog_entry(built_in_dir, provider);
+                                se.state = Some("unreachable".into());
+                                se.message = Some(format!(
+                                    "Claude Agent SDK model discovery failed: {err_msg}"
+                                ));
                                 se
                             }
                         }
@@ -2109,6 +2296,57 @@ pub async fn build_provider_statuses(
                     message: "ChatGPT account verified.".into(),
                     checked_at: checked_at.clone(),
                     method_id: Some("oauth_cli".into()),
+                    saved_api_key_masks,
+                    saved_field_masks,
+                });
+                continue;
+            }
+        }
+
+        if provider == ProviderName::ClaudeCli {
+            let auth =
+                crate::claude_agent_sdk::read_claude_auth_status(&opts.homedir, &opts.env).await;
+            let has_saved = store
+                .services
+                .get(&ProviderName::ClaudeCli)
+                .is_some_and(|e| e.mode == ConnectionMode::Oauth);
+            if auth.logged_in {
+                let account = if auth.email.is_some()
+                    || auth.subscription_type.is_some()
+                    || auth.plan_tier.is_some()
+                {
+                    Some(serde_json::json!({
+                        "email": auth.email,
+                        "plan": auth.plan_tier.or(auth.subscription_type),
+                        "orgName": auth.org_name,
+                    }))
+                } else {
+                    None
+                };
+                out.push(ProviderStatusEntry {
+                    provider,
+                    authorized: true,
+                    verified: true,
+                    mode: "oauth".into(),
+                    account,
+                    message: auth.message,
+                    checked_at: checked_at.clone(),
+                    method_id: Some("oauth_cli".into()),
+                    saved_api_key_masks,
+                    saved_field_masks,
+                });
+                continue;
+            }
+            if !has_saved {
+                out.push(ProviderStatusEntry {
+                    provider,
+                    authorized: false,
+                    verified: false,
+                    mode: "missing".into(),
+                    account: None,
+                    message: auth.message,
+                    checked_at: checked_at.clone(),
+                    method_id: None,
                     saved_api_key_masks,
                     saved_field_masks,
                 });

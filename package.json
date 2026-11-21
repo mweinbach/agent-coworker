@@ -19,6 +19,8 @@
     "serve": "cargo run --quiet -p cowork-server --bin cowork-server --",
     "dev:rpc": "cargo run --quiet -p cowork-server --bin cowork-server -- --host 127.0.0.1 --port 7337",
     "desktop:demo": "COWORK_DEMO_MODE=1 bun run start",
+    "desktop:rune": "cargo build --quiet -p cowork-server --bin cowork-server && cargo run --quiet -p cowork-desktop --bin cowork-desktop --",
+    "desktop:rune:package": "bun scripts/desktop_rune_package.ts",
     "setup:runtime": "bun scripts/setup_cowork_runtime.ts",
     "build:server-binary": "bun scripts/build_cowork_server_binary.ts",
     "desktop:web": "bun apps/desktop/scripts/start_web_dev.ts",

@@ -38,11 +38,21 @@ pub struct LmStudioLoadedInstance {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LmStudioReasoningCapabilities {
+    #[serde(default)]
+    pub allowed_options: Vec<String>,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LmStudioCapabilities {
     #[serde(default)]
     pub vision: Option<bool>,
     #[serde(default)]
     pub trained_for_tool_use: Option<bool>,
+    #[serde(default)]
+    pub reasoning: Option<LmStudioReasoningCapabilities>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +199,7 @@ pub fn resolve_lmstudio_options(
         .filter(|s| !s.is_empty())
         .or_else(|| env_non_empty("LM_STUDIO_API_KEY"))
         .or_else(|| env_non_empty("LM_STUDIO_API_TOKEN"))
+        .or_else(|| env_non_empty("LM_API_TOKEN"))
         .map(ToOwned::to_owned);
 
     let context_length = env_non_empty("LM_STUDIO_CONTEXT_LENGTH")
@@ -635,5 +646,74 @@ impl LmStudioLocalService {
                 bounded_timeout.div_ceil(1000)
             )),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_native_model_reasoning_capabilities() {
+        let parsed: LmStudioModelsEnvelope = serde_json::from_value(json!({
+            "models": [{
+                "type": "llm",
+                "publisher": "google",
+                "key": "google/gemma-4-26b-a4b",
+                "display_name": "Gemma 4 26B A4B",
+                "loaded_instances": [],
+                "max_context_length": 262144,
+                "format": "gguf",
+                "capabilities": {
+                    "vision": true,
+                    "trained_for_tool_use": true,
+                    "reasoning": {
+                        "allowed_options": ["off", "on", "low", "medium", "high"],
+                        "default": "on"
+                    }
+                },
+                "description": null,
+                "variants": ["google/gemma-4-26b-a4b@q4_k_m"],
+                "selected_variant": "google/gemma-4-26b-a4b@q4_k_m"
+            }]
+        }))
+        .unwrap();
+
+        let model = &parsed.models[0];
+        assert_eq!(model.max_context_length, Some(262144));
+        let capabilities = model.capabilities.as_ref().unwrap();
+        assert_eq!(capabilities.vision, Some(true));
+        assert_eq!(capabilities.trained_for_tool_use, Some(true));
+        let reasoning = capabilities.reasoning.as_ref().unwrap();
+        assert_eq!(
+            reasoning.allowed_options,
+            ["off", "on", "low", "medium", "high"]
+        );
+        assert_eq!(reasoning.default.as_deref(), Some("on"));
+    }
+
+    #[test]
+    fn official_api_token_env_is_a_fallback() {
+        let env = HashMap::from([
+            ("LM_API_TOKEN".to_string(), "official-token".to_string()),
+            (
+                "LM_STUDIO_API_TOKEN".to_string(),
+                "legacy-token".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            resolve_lmstudio_options(&env, None, None)
+                .api_key
+                .as_deref(),
+            Some("legacy-token")
+        );
+
+        let env = HashMap::from([("LM_API_TOKEN".to_string(), "official-token".to_string())]);
+        assert_eq!(
+            resolve_lmstudio_options(&env, None, None)
+                .api_key
+                .as_deref(),
+            Some("official-token")
+        );
     }
 }

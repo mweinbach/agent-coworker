@@ -66,10 +66,12 @@ function openAiReasoningConfigForSupportedModel(
 ): { defaultEffort: OpenAiReasoningEffort; availableEfforts: OpenAiReasoningEffort[] } | null {
   const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
   if (!isOpenAiReasoningEffort(defaultEffort)) return null;
-  const declared = new Set<OpenAiReasoningEffort>([
-    defaultEffort,
-    ...(model.supportedReasoningEfforts ?? DEFAULT_OPENAI_REASONING_EFFORT_VALUES),
-  ]);
+  const declared = new Set<OpenAiReasoningEffort>(
+    [
+      defaultEffort,
+      ...(model.supportedReasoningEfforts ?? DEFAULT_OPENAI_REASONING_EFFORT_VALUES),
+    ].filter(isOpenAiReasoningEffort),
+  );
   return {
     defaultEffort,
     availableEfforts: OPENAI_REASONING_EFFORT_VALUES.filter((effort) => declared.has(effort)),
@@ -85,7 +87,12 @@ export function reasoningConfigForProviderModel(
   if (supportedModel.provider === "google") {
     return {
       defaultEffort: GOOGLE_DYNAMIC_REASONING_EFFORT,
-      availableEfforts: [...new Set(listGoogleReasoningEffortValuesForModel(supportedModel.id))],
+      availableEfforts: [
+        ...new Set(
+          supportedModel.supportedReasoningEfforts ??
+            listGoogleReasoningEffortValuesForModel(supportedModel.id),
+        ),
+      ],
     };
   }
   const openAiConfig = openAiReasoningConfigForSupportedModel(supportedModel);

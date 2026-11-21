@@ -2,7 +2,7 @@
   "id": "kimi-k2.5",
   "provider": "opencode-zen",
   "displayName": "Kimi K2.5",
-  "knowledgeCutoff": "April 2024",
+  "knowledgeCutoff": "January 2025",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

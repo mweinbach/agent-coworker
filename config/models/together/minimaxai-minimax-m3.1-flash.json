@@ -1,0 +1,10 @@
+{
+  "id": "MiniMaxAI/MiniMax-M3.1-Flash",
+  "provider": "together",
+  "displayName": "MiniMax M3.1 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -39,6 +39,16 @@ pub enum ProviderContinuationState {
         #[serde(skip_serializing_if = "Option::is_none", rename = "requestFingerprint")]
         request_fingerprint: Option<String>,
     },
+    #[serde(rename = "claude-cli")]
+    ClaudeCli {
+        model: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "updatedAt")]
+        updated_at: String,
+        #[serde(skip_serializing_if = "Option::is_none", rename = "requestFingerprint")]
+        request_fingerprint: Option<String>,
+    },
 }
 
 impl ProviderContinuationState {
@@ -47,6 +57,7 @@ impl ProviderContinuationState {
             Self::OpenAi { .. } => "openai",
             Self::Google { .. } => "google",
             Self::CodexCli { .. } => "codex-cli",
+            Self::ClaudeCli { .. } => "claude-cli",
         }
     }
 
@@ -54,7 +65,8 @@ impl ProviderContinuationState {
         match self {
             Self::OpenAi { model, .. }
             | Self::Google { model, .. }
-            | Self::CodexCli { model, .. } => model.as_str(),
+            | Self::CodexCli { model, .. }
+            | Self::ClaudeCli { model, .. } => model.as_str(),
         }
     }
 
@@ -69,6 +81,10 @@ impl ProviderContinuationState {
                 ..
             } => Some(request_fingerprint.as_str()),
             Self::CodexCli {
+                request_fingerprint,
+                ..
+            }
+            | Self::ClaudeCli {
                 request_fingerprint,
                 ..
             } => request_fingerprint.as_deref(),

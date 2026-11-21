@@ -1,0 +1,11 @@
+{
+  "id": "kimi-k3",
+  "provider": "opencode-zen",
+  "displayName": "Kimi K3",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "high", "max"],
+  "isDefault": false
+}

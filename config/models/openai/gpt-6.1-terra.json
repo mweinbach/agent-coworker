@@ -1,0 +1,15 @@
+{
+  "id": "gpt-6.1-terra",
+  "provider": "openai",
+  "displayName": "GPT-6.1 Terra",
+  "knowledgeCutoff": "June 01, 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "medium",
+    "reasoningSummary": "detailed",
+    "textVerbosity": "medium"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

@@ -945,10 +945,19 @@ impl ServerRuntimeState {
                     resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref())
                         .is_some()
                 }
-                ProviderName::Lmstudio | ProviderName::CodexCli => conn_store
-                    .as_ref()
-                    .and_then(|s| s.services.get(&p))
-                    .is_some(),
+                ProviderName::Lmstudio | ProviderName::CodexCli | ProviderName::ClaudeCli => {
+                    conn_store
+                        .as_ref()
+                        .and_then(|s| s.services.get(&p))
+                        .is_some()
+                        || (p == ProviderName::ClaudeCli
+                            && cowork_providers::claude_agent_sdk::read_claude_auth_status(
+                                &self.homedir,
+                                &self.env,
+                            )
+                            .await
+                            .logged_in)
+                }
                 other => resolve_provider_api_key(other, conn_store.as_ref(), &self.env).is_some(),
             };
             if connected {

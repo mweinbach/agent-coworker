@@ -449,7 +449,7 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     let mut ws = connect_initialized_ws(server.ws_url()).await;
     let cwd = iso.workspace_dir.to_string_lossy().into_owned();
 
-    // 1. catalog/read -> all 14 providers
+    // 1. catalog/read -> all 15 providers
     let cat_res = ws_rpc(
         &mut ws,
         "r1",
@@ -458,7 +458,7 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     )
     .await;
     let all = cat_res["result"]["event"]["all"].as_array().unwrap();
-    assert_eq!(all.len(), 14);
+    assert_eq!(all.len(), 15);
 
     // Unknown param key -> -32602
     let unknown_param = ws_rpc(
@@ -481,10 +481,11 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     let methods = methods_res["result"]["event"]["methods"]
         .as_object()
         .unwrap();
-    assert_eq!(methods.len(), 14);
+    assert_eq!(methods.len(), 15);
     assert_eq!(methods["google"].as_array().unwrap().len(), 3);
     assert_eq!(methods["bedrock"].as_array().unwrap().len(), 4);
     assert_eq!(methods["codex-cli"][0]["id"], "oauth_cli");
+    assert_eq!(methods["claude-cli"][0]["id"], "oauth_cli");
 
     // 3. auth/setApiKey (default methodId omitted for CLI compatibility + explicit exa_api_key + validation)
     let set_openai = ws_rpc(
@@ -634,7 +635,7 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     let statuses = status_res["result"]["event"]["providers"]
         .as_array()
         .unwrap();
-    assert_eq!(statuses.len(), 14);
+    assert_eq!(statuses.len(), 15);
     let openai_st = statuses.iter().find(|s| s["provider"] == "openai").unwrap();
     assert_eq!(openai_st["authorized"], true);
     assert_eq!(openai_st["savedApiKeyMasks"]["api_key"], "sk-p...9876");

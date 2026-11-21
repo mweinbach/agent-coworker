@@ -1,0 +1,10 @@
+{
+  "id": "kimi-k2.7-code",
+  "provider": "opencode-zen",
+  "displayName": "Kimi K2.7 Code",
+  "knowledgeCutoff": "January 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

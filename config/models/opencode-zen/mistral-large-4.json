@@ -1,0 +1,11 @@
+{
+  "id": "mistral-large-4",
+  "provider": "opencode-zen",
+  "displayName": "Mistral Large 4",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["none", "high"],
+  "isDefault": false
+}

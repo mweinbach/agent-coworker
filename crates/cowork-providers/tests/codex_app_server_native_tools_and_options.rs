@@ -867,3 +867,105 @@ async fn codex_native_plan_forwards_explicit_code_mode_feature_flag() {
     let started = fx.logged(run, "thread/start");
     assert_eq!(started["config"]["features"]["code_mode"], json!(true));
 }
+
+#[tokio::test]
+async fn codex_native_plan_marks_deferred_dynamic_tools_with_defer_loading() {
+    use cowork_providers::{
+        NativeToolCallingPlan, NativeToolSearchKind, ToolDefinition, write_native_tool_calling_plan,
+    };
+
+    let fx = Fixture::new();
+    let run = "native-tool-search";
+    let mut opts = Map::new();
+    opts.insert(
+        "cwd".into(),
+        json!(fx.base.join("workspace").to_string_lossy()),
+    );
+    opts.insert(
+        "coworkHome".into(),
+        json!(fx.base.join("home/.cowork").to_string_lossy()),
+    );
+    write_native_tool_calling_plan(
+        &mut opts,
+        &NativeToolCallingPlan {
+            tool_search: Some(NativeToolSearchKind::CodexDynamicTools),
+            programmatic_tool_calling: None,
+            deferred_tool_names: vec!["mcp__docs__search".into(), "askUserQuestion".into()],
+            programmatic_tool_names: Vec::new(),
+            codex_code_mode: None,
+        },
+    );
+
+    let mut env = HashMap::new();
+    env.insert(
+        "PATH".into(),
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+    );
+    env.insert("HOME".into(), fx.base.join("home").to_string_lossy().into());
+
+    let mut transport = CodexAppServerTransport::with_command_override(
+        "node".into(),
+        vec![
+            fx.script.to_string_lossy().into_owned(),
+            fx.log_path(run).to_string_lossy().into_owned(),
+            "plain".into(),
+        ],
+    )
+    .with_built_in_dir(Some(repo_root()));
+    transport.env_override = Some(env);
+
+    transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gpt-6.2-sol".into(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Instructions".into(),
+                messages: vec![user_message("search tools")],
+                tools: vec![
+                    ToolDefinition {
+                        name: "todoWrite".into(),
+                        description: "Update todo list".into(),
+                        parameters: json!({ "type": "object" }),
+                    },
+                    ToolDefinition {
+                        name: "askUserQuestion".into(),
+                        description: "Ask user".into(),
+                        parameters: json!({ "type": "object" }),
+                    },
+                    ToolDefinition {
+                        name: "mcp__docs__search".into(),
+                        description: "Search docs".into(),
+                        parameters: json!({ "type": "object" }),
+                    },
+                ],
+                authorized_tool_names: None,
+                provider_options: opts,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-codex-ts".into(),
+            },
+            &StepBudget::new(60_000, None),
+            &mut |_ev| {},
+        )
+        .await
+        .expect("codex native tool search turn succeeds");
+
+    let started = fx.logged(run, "thread/start");
+    let dynamic_tools = started["dynamicTools"]
+        .as_array()
+        .expect("dynamicTools array");
+    let find_tool = |name: &str| {
+        dynamic_tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name} in {dynamic_tools:?}"))
+    };
+    assert!(find_tool("todoWrite").get("deferLoading").is_none());
+    assert_eq!(find_tool("askUserQuestion")["deferLoading"], json!(true));
+    assert_eq!(
+        find_tool("cowork_mcp__docs__search")["deferLoading"],
+        json!(true)
+    );
+}

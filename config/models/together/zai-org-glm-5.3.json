@@ -1,0 +1,13 @@
+{
+  "id": "zai-org/GLM-5.3",
+  "provider": "together",
+  "displayName": "GLM-5.3",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "max"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high", "max"],
+  "isDefault": false
+}

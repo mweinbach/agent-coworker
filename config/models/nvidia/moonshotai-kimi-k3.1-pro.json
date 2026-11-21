@@ -1,0 +1,10 @@
+{
+  "id": "moonshotai/kimi-k3.1-pro",
+  "provider": "nvidia",
+  "displayName": "Kimi K3.1 Pro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

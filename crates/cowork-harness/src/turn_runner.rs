@@ -715,9 +715,12 @@ impl TurnStepRunner {
             // provider's `providerOptions` section and fail closed when invalid
             // (`resolvePiRequestPolicy` parity); `cfg.step_timeout_ms` is the default step budget.
             //
-            // The Codex app-server runs a whole agentic loop per step and TS never capped it at the
-            // turn level (only its startup RPCs time out), so it gets no step deadline here.
-            let exempt_from_step_budget = self.cfg.provider == ProviderName::CodexCli;
+            // Agent-SDK transports (Codex app-server, Claude Agent SDK) run a full agentic loop
+            // per step with bridged tools, so they are exempt from the per-HTTP-step deadline.
+            let exempt_from_step_budget = matches!(
+                self.cfg.provider,
+                ProviderName::CodexCli | ProviderName::ClaudeCli
+            );
             let policy = match step_request_policy(&self.cfg, exempt_from_step_budget) {
                 Ok(policy) => policy,
                 Err(message) => {

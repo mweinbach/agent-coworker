@@ -1,0 +1,10 @@
+{
+  "id": "Qwen/Qwen3.8-Flash",
+  "provider": "together",
+  "displayName": "Qwen3.8 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

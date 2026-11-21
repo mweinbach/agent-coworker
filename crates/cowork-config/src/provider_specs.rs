@@ -24,6 +24,7 @@ pub enum ProviderWireProtocol {
     GeminiInteractions,
     BedrockConverse,
     CodexAppServer,
+    ClaudeAgentSdk,
 }
 
 /// How a provider's model catalog is discovered (`discovery` in `config/providers.json`).
@@ -168,6 +169,7 @@ mod tests {
             "gemini-interactions",
             "bedrock-converse",
             "codex-app-server",
+            "claude-agent-sdk",
         ];
         for entry in raw["providers"].as_array().unwrap() {
             let transport = entry["transport"].as_str().unwrap();

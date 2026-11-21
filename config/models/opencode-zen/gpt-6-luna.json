@@ -1,0 +1,11 @@
+{
+  "id": "gpt-6-luna",
+  "provider": "opencode-zen",
+  "displayName": "GPT-6 Luna",
+  "knowledgeCutoff": "May 18, 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

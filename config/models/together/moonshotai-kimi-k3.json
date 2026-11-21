@@ -1,0 +1,13 @@
+{
+  "id": "moonshotai/Kimi-K3",
+  "provider": "together",
+  "displayName": "Kimi K3",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "max"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high", "max"],
+  "isDefault": false
+}

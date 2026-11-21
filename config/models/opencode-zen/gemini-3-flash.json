@@ -2,9 +2,10 @@
   "id": "gemini-3-flash",
   "provider": "opencode-zen",
   "displayName": "Gemini 3 Flash",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "January 2025",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high"],
   "isDefault": false
 }

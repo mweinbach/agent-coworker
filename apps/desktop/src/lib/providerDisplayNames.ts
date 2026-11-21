@@ -13,6 +13,7 @@ const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 // Desktop branding overrides on top of `displayName` from config/providers.json.
 const DESKTOP_DISPLAY_NAME_OVERRIDES: Partial<Record<ProviderName, string>> = {
   "codex-cli": "ChatGPT Subscription",
+  "claude-cli": "Claude Subscription",
 };
 
 export function displayProviderName(provider: ProviderName): string {
@@ -41,7 +42,7 @@ export function visibleAuthMethods(
       (method) => method.id !== EXA_AUTH_METHOD_ID && method.id !== PARALLEL_AUTH_METHOD_ID,
     );
   }
-  if (provider === "codex-cli") {
+  if (provider === "codex-cli" || provider === "claude-cli") {
     return methods.filter((method) => method.id !== "api_key");
   }
   return methods;

@@ -244,7 +244,7 @@ fn model_registry_loads_all_builtin_provider_manifests_and_resolves_aliases() {
             .provider_options_defaults
             .get("reasoningEffort")
             .and_then(|v| v.as_str()),
-        Some("high")
+        Some("medium")
     );
 
     let legacy_gpt = registry

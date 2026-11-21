@@ -2,7 +2,7 @@
   "id": "accounts/fireworks/models/glm-5p1",
   "provider": "fireworks",
   "displayName": "GLM 5.1",
-  "knowledgeCutoff": "Mid 2025",
+  "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

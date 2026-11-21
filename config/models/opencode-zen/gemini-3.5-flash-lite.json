@@ -1,0 +1,11 @@
+{
+  "id": "gemini-3.5-flash-lite",
+  "provider": "opencode-zen",
+  "displayName": "Gemini 3.5 Flash Lite",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high"],
+  "isDefault": false
+}

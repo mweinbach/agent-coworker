@@ -1,0 +1,11 @@
+{
+  "id": "glm-5.3-flash",
+  "provider": "opencode-zen",
+  "displayName": "GLM-5.3-Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "high", "max"],
+  "isDefault": false
+}

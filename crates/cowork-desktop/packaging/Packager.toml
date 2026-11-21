@@ -1,0 +1,54 @@
+# Packaging configuration for the native Rune desktop app (`crates/cowork-desktop`).
+# Passed to `cargo packager` via `bun run desktop:rune:package` (`scripts/desktop_rune_package.ts`),
+# which dynamically stages runtime resources (`dist/`, `binaries/`, `tray/`, `windows-sandbox/`),
+# resolves target-specific paths/version, and applies env/CI signing credentials.
+
+name = "cowork-desktop"
+productName = "Cowork"
+version = "1.3.1"
+identifier = "com.cowork.desktop"
+publisher = "Cowork"
+description = "Local-first AI coworker desktop workspace"
+copyright = "Copyright (c) 2026 Cowork"
+category = "productivity"
+
+outDir = "target/rune-package/out"
+binariesDir = "target/release"
+
+icons = [
+  "crates/cowork-desktop/packaging/icons/icon.icns",
+  "crates/cowork-desktop/packaging/icons/icon.ico",
+  "crates/cowork-desktop/packaging/icons/icon.png",
+]
+
+[[binaries]]
+path = "cowork-desktop"
+main = true
+
+[macos]
+minimumSystemVersion = "12.0"
+entitlements = "crates/cowork-desktop/packaging/entitlements.mac.plist"
+
+[dmg]
+windowSize = { width = 600, height = 400 }
+appPosition = { x = 180, y = 170 }
+appFolderPosition = { x = 480, y = 170 }
+
+[windows]
+digestAlgorithm = "sha256"
+tsp = true
+timestampUrl = "http://timestamp.digicert.com"
+allowDowngrades = true
+
+[nsis]
+compression = "lzma"
+installMode = "currentUser"
+installerIcon = "crates/cowork-desktop/packaging/icons/icon.ico"
+languages = ["English"]
+
+[linux]
+generateDesktopEntry = true
+
+[deb]
+section = "utils"
+priority = "optional"

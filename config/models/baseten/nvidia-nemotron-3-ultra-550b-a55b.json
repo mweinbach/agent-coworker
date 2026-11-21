@@ -1,0 +1,13 @@
+{
+  "id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+  "provider": "baseten",
+  "displayName": "Nemotron 3 Ultra",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "none"
+  },
+  "supportedReasoningEfforts": ["none", "high"],
+  "isDefault": false
+}

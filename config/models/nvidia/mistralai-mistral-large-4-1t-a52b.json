@@ -1,0 +1,10 @@
+{
+  "id": "mistralai/mistral-large-4-1t-a52b",
+  "provider": "nvidia",
+  "displayName": "Mistral Large 4",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

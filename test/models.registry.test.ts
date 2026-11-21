@@ -89,7 +89,9 @@ describe("model registry invariants", () => {
     for (const model of MODEL_REGISTRY_ENTRIES) {
       const efforts = model.supportedReasoningEfforts;
       if (!efforts) continue;
-      const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
+      const defaultEffort =
+        model.providerOptionsDefaults.reasoningEffort ?? model.providerOptionsDefaults.effort;
+      if (defaultEffort === undefined) continue;
       expect(
         typeof defaultEffort === "string" &&
           efforts.includes(defaultEffort as (typeof efforts)[number]),
@@ -99,14 +101,14 @@ describe("model registry invariants", () => {
   });
 
   test("per-model reasoning efforts flow through the provider catalog", () => {
-    // GPT-5.5 does not accept "minimal" (vendor docs: none/low/medium/high/xhigh).
+    // GPT-5.5 does not accept "minimal" (vendor docs: none/low/medium/high/xhigh, default medium).
     expect(reasoningConfigForProviderModel("openai", "gpt-5.5")).toEqual({
-      defaultEffort: "high",
+      defaultEffort: "medium",
       availableEfforts: ["none", "low", "medium", "high", "xhigh"],
     });
     expect(reasoningConfigForProviderModel("openai", "gpt-5-mini")).toEqual({
       defaultEffort: "high",
-      availableEfforts: ["none", "minimal", "low", "medium", "high"],
+      availableEfforts: ["minimal", "low", "medium", "high"],
     });
     expect(reasoningConfigForProviderModel("codex-cli", "gpt-5.4")).toEqual({
       defaultEffort: "high",

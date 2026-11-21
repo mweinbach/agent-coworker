@@ -1,0 +1,10 @@
+{
+  "id": "Qwen/Qwen4-Max",
+  "provider": "together",
+  "displayName": "Qwen4 Max",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

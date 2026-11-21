@@ -1,0 +1,10 @@
+{
+  "id": "iceman-free",
+  "provider": "opencode-zen",
+  "displayName": "Iceman Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

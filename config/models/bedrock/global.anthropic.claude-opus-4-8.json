@@ -1,0 +1,13 @@
+{
+  "id": "global.anthropic.claude-opus-4-8",
+  "provider": "bedrock",
+  "displayName": "Claude Opus 4.8 (Bedrock)",
+  "knowledgeCutoff": "January 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

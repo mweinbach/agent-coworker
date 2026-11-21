@@ -4,39 +4,94 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 const OPENCODE_GO_MODELS: &[&str] = &[
-    "minimax-m3",
-    "minimax-m2.7",
-    "minimax-m2.5",
-    "kimi-k2.6",
-    "kimi-k2.5",
-    "glm-5.1",
-    "glm-5",
+    // Current public Go catalog.
+    "deepseek-v4.1-flash",
     "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "qwen3.7-max",
+    "glm-5.3",
+    "grok-4.7",
+    "muse-spark-1.2-contributor",
+    "muse-spark-1.3-contributor",
+    "glm-5.3-flash",
+    "gpt-5.6-luna",
+    "gpt-6-luna",
+    "claude-haiku-5-5",
+    "hy3",
+    "hy4-preview",
+    "kimi-k2.7-code",
+    "kimi-k3",
+    "mimo-v2.6-flash",
+    "mimo-v2.6-pro",
+    "minimax-m3",
+    "minimax-m3.1-flash",
+    "longcat-2.0",
+    "step-5-preview",
+    "beam-free",
+    "qwen3.8-max",
+    "qwen3.8-flash",
     "qwen3.7-plus",
-    "qwen3.6-plus",
-    "qwen3.5-plus",
+    "kimi-k3.1-pro",
+    "iceman-contributor-free",
+    "gemini-4-argon",
+    "hy4",
+    "longcat-2.5-free",
+    "hy4-flash-free",
+    "qwen4-max",
+    // Preserved legacy registry entries.
     "mimo-v2-pro",
+    "qwen3.5-plus",
     "mimo-v2-omni",
     "mimo-v2.5-pro",
+    "minimax-m2.5",
+    "kimi-k2.6",
+    "glm-5.1",
+    "glm-5",
     "mimo-v2.5",
     "hy3-preview",
+    "deepseek-v4-flash",
+    "minimax-m2.7",
+    "kimi-k2.5",
+    "qwen3.7-max",
+    "qwen3.6-plus",
 ];
 
 const OPENCODE_ZEN_MODELS: &[&str] = &[
+    "claude-fable-5-2",
+    "claude-fable-5-1",
+    "claude-fable-5",
+    "claude-opus-5-5",
+    "claude-opus-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-opus-4-5",
     "claude-opus-4-1",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-sonnet-4",
+    "claude-haiku-5-5",
     "claude-haiku-4-5",
+    "gemini-4-argon",
+    "gemini-4-carbon",
+    "gemini-4-hydrogen",
+    "gemini-4-neon",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-pro",
     "gemini-3-flash",
+    "gpt-6.2-astra",
+    "gpt-6.2-sol",
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.5-pro",
     "gpt-5.4",
@@ -54,23 +109,50 @@ const OPENCODE_ZEN_MODELS: &[&str] = &[
     "gpt-5",
     "gpt-5-codex",
     "gpt-5-nano",
+    "grok-4.7",
+    "grok-4.6",
+    "grok-4.5",
     "grok-build-0.1",
+    "deepseek-v4-pro",
+    "deepseek-v4.1-flash",
     "deepseek-v4-flash",
+    "glm-5.3",
+    "glm-5.3-flash",
     "glm-5.1",
     "glm-5",
+    "minimax-m3",
     "minimax-m2.7",
     "minimax-m2.5",
+    "kimi-k3",
+    "kimi-k2.7-code",
     "kimi-k2.6",
     "kimi-k2.5",
+    "mistral-large-4",
+    "muse-spark-1.3",
+    "muse-spark-1.2",
+    "muse-wonder-1.0",
+    "muse-ember-1.0",
+    "qwen3.8-max",
+    "qwen3.8-flash",
     "qwen3.6-plus",
     "qwen3.5-plus",
     "big-pickle",
+    "deepseek-v4.1-flash-free",
     "deepseek-v4-flash-free",
+    "mimo-v2.6-flash-free",
     "mimo-v2.5-free",
     "qwen3.6-plus-free",
     "minimax-m3-free",
     "nemotron-3-ultra-free",
+    "nemotron-3.5-super-vl-free",
+    "nemotron-3.5-lightning-free",
     "north-mini-code-free",
+    "longcat-2.5-free",
+    "iceman-free",
+    "beam-free",
+    "flint-40b-free",
+    "hy4-flash-free",
+    "tidepool-alpha-free",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +216,7 @@ impl ProviderQuirks {
         match provider {
             ProviderName::Together => {
                 quirks.thinking_format = ThinkingFormat::Together;
+                quirks.supports_reasoning_effort = true;
             }
             ProviderName::Fireworks | ProviderName::Firepass => {
                 quirks.supports_reasoning_effort = true;
@@ -145,10 +228,10 @@ impl ProviderQuirks {
             }
             ProviderName::Minimax => {
                 quirks.max_tokens_field = MaxTokensField::MaxCompletionTokens;
+                quirks.supports_reasoning_effort = true;
                 quirks.split_inline_think_tags = true;
             }
             ProviderName::Lmstudio => {
-                quirks.supports_reasoning_effort = true;
                 quirks.split_inline_think_tags = true;
                 quirks.is_public_catalog = true;
             }
@@ -159,7 +242,8 @@ impl ProviderQuirks {
                 quirks.is_public_catalog = true;
             }
             ProviderName::Baseten => {
-                quirks.discovery_auth_prefix = "Api-Key";
+                quirks.supports_reasoning_effort = true;
+                quirks.discovery_auth_prefix = "Bearer";
             }
             _ => {}
         }
@@ -195,22 +279,40 @@ pub fn normalize_nvidia_chat_completions_body(payload: Value) -> Value {
     let Value::Object(mut obj) = payload else {
         return payload;
     };
-    for forbidden in [
-        "store",
-        "max_tokens",
-        "max_completion_tokens",
-        "reasoning_budget",
-        "reasoning_effort",
-        "enable_thinking",
-    ] {
+    for forbidden in ["store", "max_completion_tokens", "enable_thinking"] {
         obj.remove(forbidden);
     }
-    let mut kwargs = match obj.remove("chat_template_kwargs") {
-        Some(Value::Object(existing)) => existing,
-        _ => Map::new(),
-    };
-    kwargs.insert("enable_thinking".to_string(), Value::Bool(true));
-    obj.insert("chat_template_kwargs".to_string(), Value::Object(kwargs));
+    let model = obj
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let uses_enable_thinking = matches!(
+        model.as_str(),
+        "nvidia/nemotron-3-super-120b-a12b"
+            | "nvidia/nemotron-3-ultra-550b-a55b"
+            | "nvidia/nemotron-3.5-lightning-30b-a3b"
+            | "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    );
+    let force_nonempty_content = matches!(
+        model.as_str(),
+        "nvidia/nemotron-3-super-120b-a12b" | "nvidia/nemotron-3-ultra-550b-a55b"
+    ) && obj.contains_key("tools");
+    let has_reasoning_effort = obj.contains_key("reasoning_effort");
+
+    if (uses_enable_thinking && !has_reasoning_effort) || force_nonempty_content {
+        let mut kwargs = match obj.remove("chat_template_kwargs") {
+            Some(Value::Object(existing)) => existing,
+            _ => Map::new(),
+        };
+        if uses_enable_thinking && !has_reasoning_effort {
+            kwargs.insert("enable_thinking".to_string(), Value::Bool(true));
+        }
+        if force_nonempty_content {
+            kwargs.insert("force_nonempty_content".to_string(), Value::Bool(true));
+        }
+        obj.insert("chat_template_kwargs".to_string(), Value::Object(kwargs));
+    }
     Value::Object(obj)
 }
 

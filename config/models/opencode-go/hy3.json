@@ -1,0 +1,11 @@
+{
+  "id": "hy3",
+  "provider": "opencode-go",
+  "displayName": "Hy3",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["none", "low", "high"],
+  "isDefault": false
+}

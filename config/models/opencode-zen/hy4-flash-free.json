@@ -1,0 +1,11 @@
+{
+  "id": "hy4-flash-free",
+  "provider": "opencode-zen",
+  "displayName": "Hy4 flash Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["none", "high"],
+  "isDefault": false
+}

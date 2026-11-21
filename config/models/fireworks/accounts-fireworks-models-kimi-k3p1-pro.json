@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/kimi-k3p1-pro",
+  "provider": "fireworks",
+  "displayName": "Kimi K3.1 Pro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

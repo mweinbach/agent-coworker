@@ -10,6 +10,6 @@
     "reasoningSummary": "detailed",
     "textVerbosity": "medium"
   },
-  "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high"],
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high"],
   "isDefault": false
 }

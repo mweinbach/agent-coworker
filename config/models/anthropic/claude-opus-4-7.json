@@ -2,7 +2,7 @@
   "id": "claude-opus-4-7",
   "provider": "anthropic",
   "displayName": "Claude Opus 4.7",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "January 2026",
   "supportsImageInput": true,
   "promptTemplate": "system-models/claude-opus-4-7.md",
   "providerOptionsDefaults": {
@@ -12,5 +12,6 @@
     "effort": "high",
     "disableParallelToolUse": true
   },
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
   "isDefault": false
 }

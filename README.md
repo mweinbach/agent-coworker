@@ -267,6 +267,7 @@ bun run typecheck           # typecheck root, harness, and desktop
 bun run docs:check          # verify docs/protocol consistency against Rust's exported manifest
 bun run start               # run Electron desktop app in dev mode
 bun run desktop:demo        # run desktop app with onboarding demo mode
+bun run desktop:rune        # build sidecar and run native Rune desktop app
 bun run cli                 # run the Rust CLI REPL via cargo
 bun run harness:run         # run harness scenarios against cowork-server in report-only mode
 ```
@@ -286,6 +287,7 @@ Repository map:
 | --- | --- |
 | `crates/cowork-server/` | WebSocket server, JSON-RPC routes, session orchestration, mobile TLS |
 | `crates/cowork-cli/` | CLI REPL and command parsing |
+| `crates/cowork-desktop/` | Native Rust desktop app built on Rune (see `crates/cowork-desktop/README.md`) |
 | `crates/cowork-providers/` | Provider catalog, auth, and model wire adapters |
 | `crates/cowork-tools/` | Built-in server-side tools |
 | `crates/cowork-harness/` | Agent turn loop, subagents, workflows, and session runtime |
@@ -309,6 +311,7 @@ More docs:
 - [docs/workspace-context.md](./docs/workspace-context.md)
 - [docs/harness/index.md](./docs/harness/index.md)
 - [docs/harness/config.md](./docs/harness/config.md)
+- [crates/cowork-desktop/README.md](./crates/cowork-desktop/README.md)
 
 ## Status
 

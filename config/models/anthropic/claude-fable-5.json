@@ -1,0 +1,17 @@
+{
+  "id": "claude-fable-5",
+  "provider": "anthropic",
+  "displayName": "Claude Fable 5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-opus-4-8.md",
+  "providerOptionsDefaults": {
+    "thinking": {
+      "type": "adaptive"
+    },
+    "effort": "high",
+    "disableParallelToolUse": true
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

@@ -56,7 +56,9 @@ pub const ROLE_OPTIONS: &[(&str, &str)] = &[
     ("reviewer", "Reviewer"),
 ];
 
-const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
+const REASONING_EFFORTS: &[&str] = &[
+    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+];
 
 /// Returns default built-in tools for a base role template.
 pub fn role_default_tools(role: &str) -> Vec<&'static str> {
@@ -139,7 +141,20 @@ pub fn resolve_workflow_concurrency(ws: &WorkspaceRecord) -> u64 {
 /// Returns true when the selected `<provider>:<model>` target supports reasoning effort.
 pub fn model_supports_reasoning(selection: &str) -> bool {
     let provider = selection.split(':').next().unwrap_or("");
-    matches!(provider, "openai" | "codex-cli" | "openai-compatible")
+    matches!(
+        provider,
+        "openai"
+            | "codex-cli"
+            | "anthropic"
+            | "google"
+            | "bedrock"
+            | "lmstudio"
+            | "together"
+            | "fireworks"
+            | "firepass"
+            | "opencode-go"
+            | "opencode-zen"
+    )
 }
 
 fn role_label(role: &str) -> &'static str {
@@ -1079,7 +1094,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
 
         if model_supports_reasoning(&selected_model_value) {
-            let eff_options = ["Inherit", "low", "medium", "high", "xhigh"];
+            let eff_options = [
+                "Inherit", "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+            ];
             let eff_cur = s
                 .settings_ui
                 .subagent_reasoning_effort

@@ -679,7 +679,12 @@ struct ProviderModelGroup<'a> {
 fn configured_provider_groups(providers: &[ProviderSummary]) -> Vec<ProviderModelGroup<'_>> {
     providers
         .iter()
-        .filter(|p| p.configured)
+        .filter(|p| {
+            p.configured
+                && cowork_config::ProviderName::parse(&p.id)
+                    .map(|prov| prov.is_user_facing())
+                    .unwrap_or(true)
+        })
         .filter_map(|p| {
             let models: Vec<&ProviderModelSummary> = p
                 .models
@@ -716,14 +721,15 @@ fn provider_monogram(provider_id: &str, provider_name: &str) -> String {
     match provider_id.trim().to_ascii_lowercase().as_str() {
         "anthropic" => "A".to_string(),
         "openai" => "O".to_string(),
-        "codex-cli" | "openai-codex" => "C".to_string(),
+        "codex-cli" => "C".to_string(),
         "google" => "G".to_string(),
         "bedrock" => "B".to_string(),
         "lmstudio" => "L".to_string(),
         "together" => "T".to_string(),
         "fireworks" | "firepass" => "F".to_string(),
         "nvidia" => "N".to_string(),
-        "openrouter" => "R".to_string(),
+        "minimax" => "M".to_string(),
+        "opencode-go" | "opencode-zen" => "Z".to_string(),
         _ => provider_name
             .chars()
             .find(|c| c.is_alphanumeric())
@@ -862,6 +868,7 @@ fn format_effort_short_label(effort: &str) -> String {
     match effort.trim().to_ascii_lowercase().as_str() {
         "none" => "Off".to_string(),
         "minimal" => "Min".to_string(),
+        "light" => "Light".to_string(),
         "low" => "Low".to_string(),
         "medium" => "Med".to_string(),
         "high" => "High".to_string(),
@@ -876,6 +883,7 @@ fn format_effort_description(effort: &str) -> &'static str {
     match effort.trim().to_ascii_lowercase().as_str() {
         "none" => "No extended thinking",
         "minimal" => "Fastest responses",
+        "light" => "Light, fast reasoning",
         "low" => "Quick, light reasoning",
         "medium" => "Balanced speed and depth",
         "high" => "Thorough multi-step analysis",
@@ -2312,6 +2320,7 @@ fn parse_reasoning_effort(raw: &str) -> Option<ReasoningEffortValue> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "none" | "off" => Some(ReasoningEffortValue::None),
         "minimal" => Some(ReasoningEffortValue::Minimal),
+        "light" => Some(ReasoningEffortValue::Light),
         "low" => Some(ReasoningEffortValue::Low),
         "medium" => Some(ReasoningEffortValue::Medium),
         "high" => Some(ReasoningEffortValue::High),
@@ -2331,6 +2340,7 @@ fn format_effort_label(effort: &str) -> String {
     match effort.trim().to_ascii_lowercase().as_str() {
         "none" => "None".to_string(),
         "minimal" => "Minimal".to_string(),
+        "light" => "Light".to_string(),
         "low" => "Low".to_string(),
         "medium" => "Medium".to_string(),
         "high" => "High".to_string(),

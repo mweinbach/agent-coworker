@@ -776,18 +776,29 @@ fn normalize_google_thinking_level(model_id: &str, raw: Option<&str>) -> Option<
         .map(str::trim)
         .filter(|s| !s.is_empty())?
         .to_ascii_lowercase();
-    if level == "dynamic" {
+    if level == "dynamic" || level == "none" || level == "off" {
         return None;
     }
-    let is_flash = GOOGLE_FLASH_MODELS
-        .iter()
-        .any(|id| model_id.trim().eq_ignore_ascii_case(id));
+    let lower_model = model_id.trim().to_ascii_lowercase();
+    // Gemini 2.0 / 2.5 models do not accept Gemini 3+ `thinking_level`.
+    if lower_model.starts_with("gemini-2.") || lower_model.starts_with("gemini-1.") {
+        return None;
+    }
+    let is_flash = lower_model.contains("flash")
+        || GOOGLE_FLASH_MODELS
+            .iter()
+            .any(|id| lower_model.eq_ignore_ascii_case(id));
+    let mapped = match level.as_str() {
+        "light" => "low",
+        "xhigh" | "max" => "high",
+        other => other,
+    };
     let allowed: &[&str] = if is_flash {
         &["minimal", "low", "medium", "high"]
     } else {
         &["low", "medium", "high"]
     };
-    allowed.contains(&level.as_str()).then_some(level)
+    allowed.contains(&mapped).then(|| mapped.to_string())
 }
 
 fn read_google_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
@@ -843,7 +854,9 @@ fn build_google_interactions_payload(
             .get("thinkingLevel")
             .and_then(Value::as_str)
             .or(effort_fallback);
-        if let Some(level) = normalize_google_thinking_level(model_id, raw_level) {
+        if !force_disable_thoughts
+            && let Some(level) = normalize_google_thinking_level(model_id, raw_level)
+        {
             gen_cfg.insert("thinking_level".to_string(), Value::String(level));
         }
         gen_cfg.insert(

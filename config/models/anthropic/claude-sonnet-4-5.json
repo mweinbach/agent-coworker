@@ -10,7 +10,9 @@
       "type": "enabled",
       "budgetTokens": 32000
     },
+    "effort": "high",
     "disableParallelToolUse": true
   },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high"],
   "isDefault": false
 }

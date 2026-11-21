@@ -51,6 +51,7 @@ pub fn provider_base_url_env_key(provider: ProviderName) -> String {
     match provider {
         ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
         ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
+        ProviderName::Lmstudio => "LM_STUDIO_BASE_URL".to_owned(),
         other => format!(
             "{}_BASE_URL",
             other.as_str().to_ascii_uppercase().replace('-', "_")

@@ -5,25 +5,15 @@ use serde_json::Value;
 use crate::state::{ProviderModelSummary, ProviderStatusSummary, ProviderSummary};
 use crate::views::settings::primitives::StatusTone;
 
-const BUILT_IN_PROVIDER_PRIORITY: &[&str] = &[
-    "anthropic",
-    "openai",
-    "openai-codex",
-    "google",
-    "openrouter",
-    "bedrock",
-    "azure",
-    "ollama",
-    "lmstudio",
-];
-
-/// Returns the sort rank for a provider id (lower appears first when connection status ties).
+/// Returns the sort rank for a provider id from canonical `config/providers.json` order
+/// (lower appears first when connection status ties).
 pub fn provider_priority_rank(id: &str) -> usize {
     let lower = id.trim().to_ascii_lowercase();
-    BUILT_IN_PROVIDER_PRIORITY
+    let specs = cowork_config::provider_specs();
+    specs
         .iter()
-        .position(|candidate| *candidate == lower)
-        .unwrap_or(BUILT_IN_PROVIDER_PRIORITY.len())
+        .position(|spec| spec.id == lower)
+        .unwrap_or(specs.len())
 }
 
 /// Computes badge label and tone for a provider summary + runtime status snapshot.
@@ -50,11 +40,16 @@ pub fn provider_status_badge(
 pub fn format_auth_method_label(method: &str) -> String {
     match method.trim().to_ascii_lowercase().as_str() {
         "api_key" | "apikey" => "API key".to_string(),
-        "oauth" => "OAuth sign-in".to_string(),
+        "exa_api_key" => "Exa API key".to_string(),
+        "parallel_api_key" => "Parallel API key".to_string(),
+        "oauth" | "oauth_cli" => "OAuth sign-in".to_string(),
         "oauth_callback" | "oauth-callback" => "OAuth callback".to_string(),
         "device_code" | "device-code" => "Device code".to_string(),
         "cli" | "codex_cli" => "CLI session".to_string(),
-        "aws_profile" | "iam" => "AWS credentials".to_string(),
+        "aws_default" => "AWS default credentials".to_string(),
+        "aws_profile" | "iam" => "AWS profile".to_string(),
+        "aws_keys" => "AWS access keys".to_string(),
+        "credentials" => "Credentials".to_string(),
         "local" | "none" => "Local server".to_string(),
         "" => "Default".to_string(),
         other => other.replace(['_', '-'], " "),

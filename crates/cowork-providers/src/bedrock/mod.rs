@@ -329,6 +329,9 @@ fn is_claude_adaptive_model(model_id: &str) -> bool {
         || lower.contains("claude-sonnet-4-7")
         || lower.contains("claude-opus-4-8")
         || lower.contains("claude-sonnet-4-8")
+        || lower.contains("claude-opus-5")
+        || lower.contains("claude-sonnet-5")
+        || lower.contains("claude-fable-5")
 }
 
 fn is_claude_budgeted_thinking_model(model_id: &str) -> bool {
@@ -573,6 +576,19 @@ pub fn build_converse_request_body(
     }
 
     let mut wire_messages: Vec<Value> = Vec::new();
+    let push_user_blocks = |wire_messages: &mut Vec<Value>, blocks: Vec<Value>| {
+        if blocks.is_empty() {
+            return;
+        }
+        if let Some(last) = wire_messages.last_mut()
+            && last.get("role").and_then(Value::as_str) == Some("user")
+            && let Some(arr) = last.get_mut("content").and_then(Value::as_array_mut)
+        {
+            arr.extend(blocks);
+            return;
+        }
+        wire_messages.push(json!({ "role": "user", "content": blocks }));
+    };
     for msg in messages {
         match msg.role {
             MessageRole::System | MessageRole::Developer => {}
@@ -593,9 +609,7 @@ pub fn build_converse_request_body(
                         _ => {}
                     }
                 }
-                if !content.is_empty() {
-                    wire_messages.push(json!({ "role": "user", "content": content }));
-                }
+                push_user_blocks(&mut wire_messages, content);
             }
             MessageRole::Assistant => {
                 let same_model = is_same_bedrock_model(msg, model_id);
@@ -717,9 +731,7 @@ pub fn build_converse_request_body(
                         }));
                     }
                 }
-                if !content.is_empty() {
-                    wire_messages.push(json!({ "role": "user", "content": content }));
-                }
+                push_user_blocks(&mut wire_messages, content);
             }
         }
     }
@@ -783,18 +795,29 @@ pub fn build_converse_request_body(
 
     let mut additional = Map::new();
     if let Some(eff) = effort {
+        let lower_eff = eff.to_ascii_lowercase();
         if is_claude_adaptive_model(model_id) {
             // TS `streamSimpleBedrock` returns before `adjustMaxTokensForThinking` for adaptive
-            // models: `maxTokens` passes through untouched.
+            // models: `maxTokens` passes through untouched. Clamp standardized efforts to
+            // Anthropic adaptive levels (`low`/`medium`/`high`/`max`).
+            let mapped = match lower_eff.as_str() {
+                "minimal" | "light" | "low" => Some("low"),
+                "medium" => Some("medium"),
+                "high" => Some("high"),
+                "xhigh" | "max" => Some("max"),
+                _ => None,
+            };
             additional.insert("thinking".to_string(), json!({ "type": "adaptive" }));
-            additional.insert("output_config".to_string(), json!({ "effort": eff }));
+            if let Some(mapped) = mapped {
+                additional.insert("output_config".to_string(), json!({ "effort": mapped }));
+            }
         } else if is_claude_budgeted_thinking_model(model_id) {
             let custom_budgets =
                 read_bedrock_opt(provider_options, "thinkingBudgets").and_then(Value::as_object);
             let adjusted = adjust_bedrock_max_tokens_for_thinking(
                 max_tokens.unwrap_or_else(|| bedrock_claude_model_max_tokens(model_id)),
                 bedrock_claude_model_max_tokens(model_id),
-                bedrock_thinking_budget_for_level(eff, custom_budgets),
+                bedrock_thinking_budget_for_level(&lower_eff, custom_budgets),
             );
             max_tokens = Some(adjusted.max_tokens);
             additional.insert(
@@ -808,7 +831,10 @@ pub fn build_converse_request_body(
     if let Some(max_tokens) = max_tokens {
         inference_cfg.insert("maxTokens".to_string(), json!(max_tokens));
     }
-    if let Some(temp) = read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
+    // Bedrock rejects custom `temperature` when Claude thinking is enabled.
+    if !additional.contains_key("thinking")
+        && let Some(temp) =
+            read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
         && temp.is_finite()
     {
         inference_cfg.insert("temperature".to_string(), json!(temp));

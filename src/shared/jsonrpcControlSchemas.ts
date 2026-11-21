@@ -121,12 +121,33 @@ const providerOptionsGoogleSchema = z
     nativeWebSearch: z.boolean().optional(),
     thinkingConfig: z
       .object({
-        thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
+        thinkingLevel: z.enum([...GOOGLE_THINKING_LEVEL_VALUES, "dynamic"]).optional(),
       })
       .strict()
       .optional(),
     responseFormat: z.unknown().optional(),
     responseMimeType: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const providerOptionsAnthropicSchema = z
+  .object({
+    effort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+    reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+    thinking: z
+      .object({
+        type: z.enum(["adaptive", "enabled", "disabled"]).optional(),
+        budgetTokens: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const providerOptionsReasoningEffortSchema = z
+  .object({
+    reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+    effort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
   })
   .strict();
 
@@ -136,6 +157,7 @@ const providerOptionsLmStudioSchema = z
     contextLength: z.number().int().positive().optional(),
     autoLoad: z.boolean().optional(),
     reloadOnContextMismatch: z.boolean().optional(),
+    reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
   })
   .strict();
 
@@ -144,7 +166,14 @@ const editableProviderOptionsSchema = z
     openai: providerOptionsOpenAiSchema.optional(),
     "codex-cli": providerOptionsCodexSchema.optional(),
     google: providerOptionsGoogleSchema.optional(),
+    anthropic: providerOptionsAnthropicSchema.optional(),
+    bedrock: providerOptionsReasoningEffortSchema.optional(),
     lmstudio: providerOptionsLmStudioSchema.optional(),
+    together: providerOptionsReasoningEffortSchema.optional(),
+    fireworks: providerOptionsReasoningEffortSchema.optional(),
+    firepass: providerOptionsReasoningEffortSchema.optional(),
+    "opencode-go": providerOptionsReasoningEffortSchema.optional(),
+    "opencode-zen": providerOptionsReasoningEffortSchema.optional(),
   })
   .strict();
 

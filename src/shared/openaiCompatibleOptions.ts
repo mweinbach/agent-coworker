@@ -10,7 +10,14 @@ const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "openai",
   "codex-cli",
   "google",
+  "anthropic",
+  "bedrock",
   "lmstudio",
+  "together",
+  "fireworks",
+  "firepass",
+  "opencode-go",
+  "opencode-zen",
 ] as const;
 
 // Canonical effort ladder shared by OpenAI-compatible providers and Codex.
@@ -110,6 +117,23 @@ type LmStudioProviderOptions = {
   contextLength?: number;
   autoLoad?: boolean;
   reloadOnContextMismatch?: boolean;
+  reasoningEffort?: OpenAiReasoningEffort;
+};
+
+type AnthropicThinkingOptions = {
+  type?: "adaptive" | "enabled" | "disabled";
+  budgetTokens?: number;
+};
+
+type AnthropicProviderOptions = {
+  effort?: OpenAiReasoningEffort;
+  reasoningEffort?: OpenAiReasoningEffort;
+  thinking?: AnthropicThinkingOptions;
+};
+
+type ReasoningEffortProviderOptions = {
+  reasoningEffort?: OpenAiReasoningEffort;
+  effort?: OpenAiReasoningEffort;
 };
 
 type GoogleThinkingConfig = {
@@ -127,7 +151,14 @@ export type OpenAiCompatibleProviderOptionsByProvider = Partial<{
   openai: OpenAiProviderOptions;
   "codex-cli": CodexCliProviderOptions;
   google: GoogleProviderOptions;
+  anthropic: AnthropicProviderOptions;
+  bedrock: ReasoningEffortProviderOptions;
   lmstudio: LmStudioProviderOptions;
+  together: ReasoningEffortProviderOptions;
+  fireworks: ReasoningEffortProviderOptions;
+  firepass: ReasoningEffortProviderOptions;
+  "opencode-go": ReasoningEffortProviderOptions;
+  "opencode-zen": ReasoningEffortProviderOptions;
 }>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -327,12 +358,64 @@ function pickLmStudioProviderOptionsSection(value: unknown): LmStudioProviderOpt
   if (reloadOnContextMismatch !== undefined) {
     next.reloadOnContextMismatch = reloadOnContextMismatch;
   }
+  if (isOpenAiReasoningEffort(value.reasoningEffort)) {
+    next.reasoningEffort = value.reasoningEffort;
+  }
 
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function pickAnthropicProviderOptionsSection(value: unknown): AnthropicProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const next: AnthropicProviderOptions = {};
+  if (isOpenAiReasoningEffort(value.effort)) {
+    next.effort = value.effort;
+  }
+  if (isOpenAiReasoningEffort(value.reasoningEffort)) {
+    next.reasoningEffort = value.reasoningEffort;
+  }
+  if (isPlainObject(value.thinking)) {
+    const t: AnthropicThinkingOptions = {};
+    if (
+      value.thinking.type === "adaptive" ||
+      value.thinking.type === "enabled" ||
+      value.thinking.type === "disabled"
+    ) {
+      t.type = value.thinking.type;
+    }
+    const budget = pickPositiveInteger(value.thinking.budgetTokens);
+    if (budget !== undefined) {
+      t.budgetTokens = budget;
+    }
+    if (Object.keys(t).length > 0) {
+      next.thinking = t;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function pickReasoningEffortProviderOptionsSection(
+  value: unknown,
+): ReasoningEffortProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const next: ReasoningEffortProviderOptions = {};
+  if (isOpenAiReasoningEffort(value.reasoningEffort)) {
+    next.reasoningEffort = value.reasoningEffort;
+  }
+  if (isOpenAiReasoningEffort(value.effort)) {
+    next.effort = value.effort;
+  }
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function pickGoogleThinkingConfig(value: unknown): GoogleThinkingConfig | undefined {
   if (!isPlainObject(value)) return undefined;
+  if (
+    typeof value.thinkingLevel === "string" &&
+    value.thinkingLevel.trim().toLowerCase() === GOOGLE_DYNAMIC_REASONING_EFFORT
+  ) {
+    return {};
+  }
 
   const next: GoogleThinkingConfig = {};
   if (isGoogleThinkingLevel(value.thinkingLevel)) {
@@ -387,9 +470,26 @@ export function pickEditableOpenAiCompatibleProviderOptions(
   if (google) {
     out.google = google;
   }
+  const anthropic = pickAnthropicProviderOptionsSection(providerOptions.anthropic);
+  if (anthropic) {
+    out.anthropic = anthropic;
+  }
   const lmstudio = pickLmStudioProviderOptionsSection(providerOptions.lmstudio);
   if (lmstudio) {
     out.lmstudio = lmstudio;
+  }
+  for (const provider of [
+    "bedrock",
+    "together",
+    "fireworks",
+    "firepass",
+    "opencode-go",
+    "opencode-zen",
+  ] as const) {
+    const picked = pickReasoningEffortProviderOptionsSection(providerOptions[provider]);
+    if (picked) {
+      out[provider] = picked;
+    }
   }
 
   return Object.keys(out).length > 0 ? out : undefined;
@@ -458,7 +558,11 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
           ? pickOpenAiCompatibleProviderOptionsSection(sectionPatch)
           : provider === "google"
             ? pickGoogleProviderOptionsSection(sectionPatch)
-            : pickLmStudioProviderOptionsSection(sectionPatch);
+            : provider === "anthropic"
+              ? pickAnthropicProviderOptionsSection(sectionPatch)
+              : provider === "lmstudio"
+                ? pickLmStudioProviderOptionsSection(sectionPatch)
+                : pickReasoningEffortProviderOptionsSection(sectionPatch);
     if (!cleanedPatch) continue;
 
     const currentSection = isPlainObject(current[provider]) ? { ...current[provider] } : {};

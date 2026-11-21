@@ -21,7 +21,8 @@ import type { ProviderName } from "../types";
 function openAiReasoningConfigForSupportedModel(
   model: Pick<SupportedModel, "providerOptionsDefaults" | "supportedReasoningEfforts">,
 ): { defaultEffort: OpenAiReasoningEffort; availableEfforts: OpenAiReasoningEffort[] } | null {
-  const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
+  const defaultEffort =
+    model.providerOptionsDefaults.reasoningEffort ?? model.providerOptionsDefaults.effort;
   if (!isOpenAiReasoningEffort(defaultEffort)) return null;
   const declared = new Set<OpenAiReasoningEffort>([
     defaultEffort,

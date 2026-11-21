@@ -177,7 +177,7 @@ pub fn resolve_lmstudio_options(
 
     let raw_base = env_non_empty("LM_STUDIO_BASE_URL").or_else(|| {
         section
-            .and_then(|s| s.get("baseUrl"))
+            .and_then(|s| s.get("baseUrl").or_else(|| s.get("base_url")))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -501,7 +501,20 @@ impl LmStudioLocalService {
             .send()
             .await
         {
-            Ok(_) => (true, None),
+            Ok(resp)
+                if resp.status().is_success()
+                    || resp.status() == reqwest::StatusCode::NOT_FOUND =>
+            {
+                (true, None)
+            }
+            Ok(resp) => (
+                false,
+                Some(format!(
+                    "LM Studio server at {} returned HTTP {}.",
+                    opts.base_url,
+                    resp.status().as_u16()
+                )),
+            ),
             Err(err) => (
                 false,
                 Some(format!(
@@ -519,7 +532,19 @@ impl LmStudioLocalService {
         provider_options: Option<&Map<String, Value>>,
         explicit_base_url: Option<&str>,
     ) -> LmStudioLocalStatus {
-        let mut opts = resolve_lmstudio_options(env, provider_options, None);
+        self.get_status_with_key(homedir, env, provider_options, explicit_base_url, None)
+            .await
+    }
+
+    pub async fn get_status_with_key(
+        &self,
+        homedir: &Path,
+        env: &HashMap<String, String>,
+        provider_options: Option<&Map<String, Value>>,
+        explicit_base_url: Option<&str>,
+        saved_api_key: Option<&str>,
+    ) -> LmStudioLocalStatus {
+        let mut opts = resolve_lmstudio_options(env, provider_options, saved_api_key);
         if let Some(explicit) = explicit_base_url.filter(|s| !s.trim().is_empty()) {
             let base = normalize_lmstudio_base_url(Some(explicit));
             opts.inference_base_url = format!("{base}/v1");
@@ -550,7 +575,19 @@ impl LmStudioLocalService {
         base_url: Option<&str>,
         timeout_ms: Option<u64>,
     ) -> Result<LmStudioLocalStartResult, String> {
-        let mut opts = resolve_lmstudio_options(env, None, None);
+        self.start_local_with_key(homedir, env, base_url, timeout_ms, None)
+            .await
+    }
+
+    pub async fn start_local_with_key(
+        &self,
+        homedir: &Path,
+        env: &HashMap<String, String>,
+        base_url: Option<&str>,
+        timeout_ms: Option<u64>,
+        saved_api_key: Option<&str>,
+    ) -> Result<LmStudioLocalStartResult, String> {
+        let mut opts = resolve_lmstudio_options(env, None, saved_api_key);
         if let Some(explicit) = base_url.filter(|s| !s.trim().is_empty()) {
             let normalized = normalize_lmstudio_base_url(Some(explicit));
             opts.inference_base_url = format!("{normalized}/v1");

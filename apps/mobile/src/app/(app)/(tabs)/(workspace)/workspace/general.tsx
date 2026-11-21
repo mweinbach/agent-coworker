@@ -5,6 +5,7 @@ import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import type { ProviderCapabilitiesCheckResult } from "@/cowork-shared/jsonrpcControlSchemas";
+import { PROVIDER_SPECS } from "@/cowork-shared/providerSpecs";
 import {
   MAX_DYNAMIC_TYPE_MULTIPLIER,
   minimumTouchTarget,
@@ -132,11 +133,18 @@ export default function WorkspaceGeneralScreen() {
     }
   }, [isConnected, activeWorkspaceCwd, refreshProviders]);
 
-  const selectedProvider = controlSnapshot?.config?.provider ?? catalog[0]?.id ?? null;
+  const visibleCatalog = useMemo(() => {
+    const specs = PROVIDER_SPECS as Record<string, { readonly userFacing?: boolean } | undefined>;
+    return catalog.filter((entry) => specs[entry.id]?.userFacing !== false);
+  }, [catalog]);
+  const selectedProvider = controlSnapshot?.config?.provider ?? visibleCatalog[0]?.id ?? null;
   const selectedModel = controlSnapshot?.config?.model ?? null;
   const providerEntry = useMemo(
-    () => catalog.find((entry) => entry.id === selectedProvider) ?? null,
-    [catalog, selectedProvider],
+    () =>
+      visibleCatalog.find((entry) => entry.id === selectedProvider) ??
+      catalog.find((entry) => entry.id === selectedProvider) ??
+      null,
+    [visibleCatalog, catalog, selectedProvider],
   );
   const routingMode = controlSnapshot?.sessionConfig?.childModelRoutingMode ?? "same-provider";
   const backupsEnabled =
@@ -231,7 +239,7 @@ export default function WorkspaceGeneralScreen() {
           <View style={{ gap: 8 }}>
             <SectionLabel>Provider</SectionLabel>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {catalog.map((provider) => (
+              {visibleCatalog.map((provider) => (
                 <ChoicePill
                   key={provider.id}
                   label={provider.name}
@@ -517,11 +525,13 @@ export default function WorkspaceGeneralScreen() {
           <View style={{ gap: 14 }}>
             <View style={{ gap: 8 }}>
               <SectionLabel>Backend</SectionLabel>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                {(["native", "exa"] as const).map((backend) => (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {(["native", "exa", "parallel"] as const).map((backend) => (
                   <ChoicePill
                     key={backend}
-                    label={backend === "exa" ? "Exa" : "Native"}
+                    label={
+                      backend === "exa" ? "Exa" : backend === "parallel" ? "Parallel" : "Native"
+                    }
                     selected={(codexOptions?.webSearchBackend ?? "native") === backend}
                     onPress={() => {
                       void applyWorkspaceDefaults({

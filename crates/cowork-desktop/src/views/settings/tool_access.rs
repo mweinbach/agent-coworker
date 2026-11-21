@@ -18,7 +18,6 @@ use crate::views::settings::primitives::{
     compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input, settings_page, stat_tile,
     status_pill,
 };
-use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::shell::PageContent;
 use crate::views::settings::state::ToolAccessTab;
 use crate::views::settings::{connectors, icons, mcp_servers};
@@ -2586,69 +2585,136 @@ fn tool_providers_section(s: &AppState, ws: &WorkspaceRecord, k: &Kit, t: &Theme
         );
 
     let statuses = workspace_provider_statuses(s, Some(ws.id.as_str()));
+    let google_status = statuses.iter().find(|st| st.provider == "google");
 
-    for (provider_id, name, subtitle) in [
+    for (method_id, name, subtitle, is_exa) in [
         (
-            "exa",
+            "exa_api_key",
             "Exa Search",
             "Semantic web search and page content extraction.",
+            true,
         ),
         (
-            "parallel",
+            "parallel_api_key",
             "Parallel Search",
             "Parallel AI search queries and curated web extracts.",
+            false,
         ),
     ] {
-        let summary = s.provider_catalog.iter().find(|p| p.id == provider_id);
-        let status = statuses.iter().find(|st| st.provider == provider_id);
-        let connected = summary.is_some_and(|sum| is_provider_connected(sum, status, Some(ws)))
-            || status.is_some_and(|st| {
-                st.healthy
-                    || st.connected
-                    || st
-                        .saved_api_key_mask
-                        .as_deref()
-                        .is_some_and(|m| !m.trim().is_empty())
-            });
+        let saved_mask = google_status
+            .and_then(|st| st.saved_api_key_masks.get(method_id))
+            .filter(|m| !m.trim().is_empty());
+        let connected = saved_mask.is_some();
+        let edit = if is_exa {
+            &s.settings_ui.tool_key_exa_edit
+        } else {
+            &s.settings_ui.tool_key_parallel_edit
+        };
+        let empty = edit.text.trim().is_empty();
+        let ws_id = ws.id.clone();
+        let method_owned = method_id.to_string();
 
         section = section.child(
-            row()
+            col()
                 .w_full()
-                .items_center()
-                .justify_between()
-                .gap(12.0)
+                .gap(8.0)
                 .px(16.0)
                 .py(12.0)
                 .child(
                     row()
-                        .grow(1.0)
-                        .min_w(0.0)
+                        .w_full()
                         .items_center()
+                        .justify_between()
                         .gap(12.0)
-                        .child(entity_icon(s, None, name, EntityIconSize::Sm, k, t))
                         .child(
-                            col()
+                            row()
                                 .grow(1.0)
                                 .min_w(0.0)
-                                .gap(2.0)
-                                .child(text(name).font(k.ty.ui_medium).color(t.text_base))
-                                .child(text(subtitle).font(k.ty.small).color(t.text_muted)),
-                        ),
+                                .items_center()
+                                .gap(12.0)
+                                .child(entity_icon(s, None, name, EntityIconSize::Sm, k, t))
+                                .child(
+                                    col()
+                                        .grow(1.0)
+                                        .min_w(0.0)
+                                        .gap(2.0)
+                                        .child(text(name).font(k.ty.ui_medium).color(t.text_base))
+                                        .child(text(subtitle).font(k.ty.small).color(t.text_muted)),
+                                ),
+                        )
+                        .child(status_pill(
+                            if let Some(mask) = saved_mask {
+                                format!("Configured ({mask})")
+                            } else {
+                                "Not configured".to_string()
+                            },
+                            if connected {
+                                StatusTone::Success
+                            } else {
+                                StatusTone::Neutral
+                            },
+                            k,
+                            t,
+                        )),
                 )
-                .child(status_pill(
-                    if connected {
-                        "Configured"
-                    } else {
-                        "Not configured"
-                    },
-                    if connected {
-                        StatusTone::Success
-                    } else {
-                        StatusTone::Neutral
-                    },
-                    k,
-                    t,
-                )),
+                .child(
+                    row()
+                        .w_full()
+                        .items_center()
+                        .flex_wrap()
+                        .gap(8.0)
+                        .child(
+                            TextInput::new(edit)
+                                .label(format!("{name} API key"))
+                                .placeholder(if connected {
+                                    "Enter replacement API key..."
+                                } else {
+                                    "Paste API key..."
+                                })
+                                .secure()
+                                .width(Some(280.0))
+                                .on_edit(move |s: &mut AppState| {
+                                    if is_exa {
+                                        &mut s.settings_ui.tool_key_exa_edit
+                                    } else {
+                                        &mut s.settings_ui.tool_key_parallel_edit
+                                    }
+                                })
+                                .build(k),
+                        )
+                        .child(
+                            Button::new("Save key")
+                                .variant(ButtonVariant::Outline)
+                                .icon(&icons::KEY)
+                                .control_size(ControlSize::Regular)
+                                .disabled(empty)
+                                .on_press(move |s: &mut AppState| {
+                                    let val = if is_exa {
+                                        s.settings_ui.tool_key_exa_edit.text.trim().to_string()
+                                    } else {
+                                        s.settings_ui.tool_key_parallel_edit.text.trim().to_string()
+                                    };
+                                    if !val.is_empty() {
+                                        s.dispatch(Action::Settings(
+                                            SettingsAction::SetProviderApiKeyForMethod {
+                                                workspace_id: ws_id.clone(),
+                                                provider: "google".to_string(),
+                                                method_id: method_owned.clone(),
+                                                api_key: val,
+                                            },
+                                        ));
+                                        if is_exa {
+                                            s.settings_ui.tool_key_exa_edit =
+                                                rune::TextEdit::new("");
+                                        } else {
+                                            s.settings_ui.tool_key_parallel_edit =
+                                                rune::TextEdit::new("");
+                                        }
+                                    }
+                                })
+                                .build(k),
+                        ),
+                ),
         );
     }
 

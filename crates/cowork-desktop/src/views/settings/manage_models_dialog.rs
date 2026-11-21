@@ -33,10 +33,9 @@ pub fn filter_provider_models<'a>(
 
 /// Returns whether a provider supports manually adding custom model identifiers.
 pub fn can_add_custom_model(provider_id: &str) -> bool {
-    !matches!(
-        provider_id.trim().to_ascii_lowercase().as_str(),
-        "codex-cli" | "openai-codex"
-    )
+    cowork_config::ProviderName::parse(provider_id)
+        .map(|provider| provider.supports_custom_model_ids())
+        .unwrap_or(false)
 }
 
 /// Builds and pushes the Manage Models modal into `overlays` when open.

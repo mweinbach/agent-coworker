@@ -115,8 +115,15 @@ impl ProviderTransport for OpenAiResponsesTransport {
             .unwrap_or_else(|| {
                 crate::default_inference_base_url(cowork_config::ProviderName::Openai)
             })
+            .trim()
             .trim_end_matches('/');
-        let endpoint = format!("{base_url}/responses");
+        let endpoint = if base_url.ends_with("/responses") {
+            base_url.to_string()
+        } else if base_url.eq_ignore_ascii_case("https://api.openai.com") {
+            format!("{base_url}/v1/responses")
+        } else {
+            format!("{base_url}/responses")
+        };
 
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -442,13 +449,16 @@ fn is_astra_model(model_id: &str) -> bool {
 
 fn supports_xhigh_reasoning(model_id: &str) -> bool {
     let lower = model_id.trim().to_ascii_lowercase();
-    lower == "gpt-5.5"
-        || lower.starts_with("gpt-5.5-")
-        || lower == "gpt-5.4"
-        || lower.starts_with("gpt-5.4-")
-        || lower == "gpt-5.2"
-        || lower.starts_with("gpt-5.2-")
-        || lower.starts_with("gpt-6")
+    if lower.starts_with("gpt-6") {
+        return true;
+    }
+    if let Some(rest) = lower.strip_prefix("gpt-5.") {
+        let minor: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = minor.parse::<u32>() {
+            return n >= 2;
+        }
+    }
+    false
 }
 
 fn normalize_openai_reasoning_effort(raw: Option<&str>, model_id: &str) -> Option<String> {
@@ -547,10 +557,16 @@ fn build_openai_responses_payload(
     let summary_raw =
         read_provider_opt(provider_options, "reasoningSummary").and_then(Value::as_str);
 
+    let explicit_disabled = !is_astra
+        && effort_raw.map(str::trim).is_some_and(|raw| {
+            raw.eq_ignore_ascii_case("none") || raw.eq_ignore_ascii_case("dynamic")
+        });
     let effort = normalize_openai_reasoning_effort(effort_raw, model_id)
         .or_else(|| is_astra.then(|| "low".to_string()));
 
-    let reasoning_obj = if effort.is_some() || summary_raw.is_some() {
+    let reasoning_obj = if explicit_disabled {
+        None
+    } else if effort.is_some() || summary_raw.is_some() {
         Some(json!({
             "effort": effort.unwrap_or_else(|| "medium".to_string()),
             "summary": summary_raw.unwrap_or("auto"),

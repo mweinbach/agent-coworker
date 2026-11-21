@@ -125,15 +125,7 @@ impl ServerRuntimeState {
             .and_then(|cfg| cfg.provider_options);
         let mut base_url_overrides = HashMap::new();
         for &provider in &ProviderName::ALL {
-            let env_key = match provider {
-                ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
-                ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
-                ProviderName::Lmstudio => "LM_STUDIO_BASE_URL".to_owned(),
-                other => format!(
-                    "{}_BASE_URL",
-                    other.as_str().to_ascii_uppercase().replace('-', "_")
-                ),
-            };
+            let env_key = cowork_providers::provider_base_url_env_key(provider);
             if let Some(po_url) = provider_options
                 .as_ref()
                 .and_then(|po| po.get(provider.as_str()))
@@ -468,13 +460,19 @@ impl ServerRuntimeState {
             )
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let opts = self.catalog_build_options(&cwd, false);
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let saved_key = read_connection_store(&paths)
+            .await
+            .ok()
+            .and_then(|store| store.provider_api_key(ProviderName::Lmstudio));
         let svc = LmStudioLocalService::new();
         let status = svc
-            .get_status(
+            .get_status_with_key(
                 &self.homedir,
                 &self.env,
                 opts.provider_options.as_ref(),
                 params.base_url.as_deref(),
+                saved_key.as_deref(),
             )
             .await;
         Ok(json!({ "status": status }))
@@ -500,8 +498,16 @@ impl ServerRuntimeState {
         }
 
         let opts = self.catalog_build_options(&cwd, false);
-        let resolved_lms =
-            resolve_lmstudio_options(&self.env, opts.provider_options.as_ref(), None);
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let saved_key = read_connection_store(&paths)
+            .await
+            .ok()
+            .and_then(|store| store.provider_api_key(ProviderName::Lmstudio));
+        let resolved_lms = resolve_lmstudio_options(
+            &self.env,
+            opts.provider_options.as_ref(),
+            saved_key.as_deref(),
+        );
         let target_base_url = params
             .base_url
             .as_deref()
@@ -518,11 +524,12 @@ impl ServerRuntimeState {
 
         let svc = LmStudioLocalService::new();
         let status = svc
-            .start_local(
+            .start_local_with_key(
                 &self.homedir,
                 &self.env,
                 Some(target_base_url),
                 params.timeout_ms,
+                saved_key.as_deref(),
             )
             .await
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;

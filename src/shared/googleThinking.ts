@@ -31,10 +31,11 @@ export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLe
 }
 
 function listGoogleThinkingLevelsForModel(modelId: string): readonly GoogleThinkingLevel[] {
-  if (GOOGLE_FLASH_MODEL_IDS.has(modelId)) {
+  const lower = modelId.trim().toLowerCase();
+  if (GOOGLE_FLASH_MODEL_IDS.has(lower) || lower.includes("flash")) {
     return GOOGLE_FLASH_THINKING_LEVELS;
   }
-  if (GOOGLE_PRO_MODEL_IDS.has(modelId)) {
+  if (GOOGLE_PRO_MODEL_IDS.has(lower)) {
     return GOOGLE_PRO_THINKING_LEVELS;
   }
   return GOOGLE_PRO_THINKING_LEVELS;

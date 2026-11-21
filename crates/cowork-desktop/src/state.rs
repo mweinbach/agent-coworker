@@ -391,6 +391,7 @@ pub enum ThreadBusyPolicy {
 pub enum ReasoningEffortValue {
     None,
     Minimal,
+    Light,
     Low,
     Medium,
     High,
@@ -404,6 +405,7 @@ impl ReasoningEffortValue {
         match self {
             ReasoningEffortValue::None => "none",
             ReasoningEffortValue::Minimal => "minimal",
+            ReasoningEffortValue::Light => "light",
             ReasoningEffortValue::Low => "low",
             ReasoningEffortValue::Medium => "medium",
             ReasoningEffortValue::High => "high",
@@ -859,6 +861,10 @@ pub struct ProviderStatusSummary {
     pub detail: Option<String>,
     #[serde(default)]
     pub saved_api_key_mask: Option<String>,
+    #[serde(default)]
+    pub saved_api_key_masks: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub saved_field_masks: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]
@@ -7647,6 +7653,46 @@ impl AppState {
                     false,
                 );
             }
+            SettingsAction::SetProviderApiKeyForMethod {
+                workspace_id,
+                provider,
+                method_id,
+                api_key,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let params = ProviderAuthSetApiKeyParams {
+                    cwd,
+                    provider,
+                    method_id: Some(method_id),
+                    api_key,
+                };
+                let _ = self.send_ws_typed(
+                    &workspace_id,
+                    "cowork/provider/auth/setApiKey",
+                    &params,
+                    false,
+                );
+            }
+            SettingsAction::SetProviderConfigForMethod {
+                workspace_id,
+                provider,
+                method_id,
+                values,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let params = ProviderAuthSetConfigParams {
+                    cwd,
+                    provider,
+                    method_id,
+                    values,
+                };
+                let _ = self.send_ws_typed(
+                    &workspace_id,
+                    "cowork/provider/auth/setConfig",
+                    &params,
+                    false,
+                );
+            }
             SettingsAction::StartProviderAuth {
                 workspace_id,
                 provider,
@@ -13836,10 +13882,22 @@ fn model_supports_reasoning_effort(
 fn build_reasoning_effort_config_patch(provider: &str, effort: &str) -> Map<String, Value> {
     let mut config = Map::new();
     let provider_section = if provider == "google" {
+        if effort.trim().eq_ignore_ascii_case("dynamic")
+            || effort.trim().eq_ignore_ascii_case("none")
+        {
+            json!({
+                "thinkingConfig": {}
+            })
+        } else {
+            json!({
+                "thinkingConfig": {
+                    "thinkingLevel": effort,
+                }
+            })
+        }
+    } else if provider == "anthropic" {
         json!({
-            "thinkingConfig": {
-                "thinkingLevel": effort,
-            }
+            "effort": effort,
         })
     } else {
         json!({
@@ -14115,16 +14173,33 @@ fn parse_provider_status_summary(v: &Value) -> Option<ProviderStatusSummary> {
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .map(str::to_string);
+    let saved_api_key_masks: std::collections::BTreeMap<String, String> = v
+        .get("savedApiKeyMasks")
+        .and_then(Value::as_object)
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let saved_field_masks: std::collections::BTreeMap<String, String> = v
+        .get("savedFieldMasks")
+        .and_then(Value::as_object)
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
     let saved_api_key_mask = v
         .get("savedApiKeyMask")
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| {
-            v.get("savedApiKeyMasks")
-                .and_then(Value::as_object)
-                .and_then(|m| m.get("api_key").or_else(|| m.get("apiKey")))
-                .and_then(Value::as_str)
-                .map(str::to_string)
+            saved_api_key_masks
+                .get("api_key")
+                .or_else(|| saved_api_key_masks.get("apiKey"))
+                .cloned()
         });
     let source = v.get("source").and_then(Value::as_str).map(str::to_string);
     let usage = v.get("usage").cloned();
@@ -14136,6 +14211,8 @@ fn parse_provider_status_summary(v: &Value) -> Option<ProviderStatusSummary> {
         auth_method,
         detail,
         saved_api_key_mask,
+        saved_api_key_masks,
+        saved_field_masks,
         source,
         usage,
         rate_limits,

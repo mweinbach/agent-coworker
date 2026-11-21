@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -255,7 +255,7 @@ impl ModelRegistry {
             }
             m.provider_options_defaults =
                 self.unbundled_provider_option_defaults(provider, &cached.id, Some(&cached));
-            if uses_generic_discovery_cache(provider) {
+            if uses_generic_discovery_cache(provider) || provider == ProviderName::CodexCli {
                 if !cached.display_name.trim().is_empty() {
                     m.display_name = cached.display_name.clone();
                 }
@@ -351,6 +351,7 @@ pub fn reconcile_reasoning_provider_options(
 ) -> Option<Map<String, Value>> {
     let gated_keys: &[&str] = match provider {
         ProviderName::Openai => &["reasoningEffort", "reasoningSummary", "textVerbosity"],
+        ProviderName::CodexCli => &["reasoningSummary"],
         ProviderName::Google => &["thinkingConfig"],
         ProviderName::Anthropic => &["thinking", "effort"],
         _ => &[],
@@ -391,18 +392,28 @@ fn reasoning_provider_option_keys(provider: ProviderName) -> &'static [&'static 
         ProviderName::Openai => &["reasoningEffort", "reasoningSummary"],
         ProviderName::Google => &["thinkingConfig"],
         ProviderName::Anthropic => &["thinking", "effort"],
+        ProviderName::Bedrock => &["reasoningEffort", "effort", "reasoning"],
+        ProviderName::Fireworks
+        | ProviderName::Firepass
+        | ProviderName::Together
+        | ProviderName::Lmstudio
+        | ProviderName::OpencodeGo
+        | ProviderName::OpencodeZen => &["reasoningEffort"],
         _ => &[],
     }
 }
 
-/// `customModelIdLikelySupportsReasoning`: only OpenAI has an id-only heuristic; every other
-/// provider conservatively assumes a custom id does not reason.
+/// Heuristic for whether a custom (unbundled) model ID likely supports reasoning options.
 fn custom_model_id_likely_supports_reasoning(provider: ProviderName, model_id: &str) -> bool {
-    if provider == ProviderName::Openai {
-        let id = model_id.trim().to_ascii_lowercase();
-        return id.starts_with('o') || id.starts_with("gpt-5");
+    let id = model_id.trim().to_ascii_lowercase();
+    match provider {
+        ProviderName::Openai => {
+            id.starts_with('o') || id.starts_with("gpt-5") || id.starts_with("gpt-6")
+        }
+        ProviderName::Anthropic | ProviderName::Bedrock => id.contains("claude"),
+        ProviderName::Google => id.starts_with("gemini-3") || id.starts_with("gemini-4"),
+        _ => false,
     }
-    false
 }
 
 /// `customModelIdLikelySupportsGpt5Params`: verbosity is GPT-5-family only.
@@ -512,11 +523,57 @@ pub fn find_discovered_model_sync(
     if trimmed.is_empty() {
         return None;
     }
-    let cache = read_model_discovery_cache_sync(paths, provider, None)?;
-    cache
-        .models
-        .into_iter()
-        .find(|m| m.id == trimmed || m.model.as_deref() == Some(trimmed))
+    if let Some(cache) = read_model_discovery_cache_sync(paths, provider, None)
+        && let Some(found) = cache
+            .models
+            .into_iter()
+            .find(|m| m.id == trimmed || m.model.as_deref() == Some(trimmed))
+    {
+        return Some(found);
+    }
+    // Scoped discovery caches (e.g. Bedrock `bedrock-<sha256>.json`): scan matching files
+    // newest-first so discovered model capabilities (vision, display name, reasoning) still
+    // resolve outside the catalog builder.
+    if provider == ProviderName::Bedrock
+        && let Some(cache_dir) =
+            crate::stores::model_discovery_cache_path(paths, provider, None).parent()
+    {
+        let prefix = format!("{}-", provider.as_str());
+        let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(cache_dir)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let name = path.file_name()?.to_str()?;
+                if !name.starts_with(&prefix) || !name.ends_with(".json") {
+                    return None;
+                }
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                Some((modified, path))
+            })
+            .collect();
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.0));
+        for (_, path) in candidates {
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(cache) = serde_json::from_str::<crate::ModelDiscoveryCacheFile>(&raw) else {
+                continue;
+            };
+            if let Some(found) = cache
+                .models
+                .into_iter()
+                .find(|m| m.id == trimmed || m.model.as_deref() == Some(trimmed))
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

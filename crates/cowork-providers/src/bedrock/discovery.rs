@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use cowork_config::CachedModelDiscoveryModel;
+use cowork_config::{CachedModelDiscoveryModel, CachedModelReasoning};
 use cowork_inference::ProviderTransportError;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -10,6 +10,50 @@ use sha2::{Digest, Sha256};
 use crate::bedrock::auth::{BedrockAuthConfig, BedrockAuthMethod, sign_bedrock_request};
 
 const DISCOVERY_TIMEOUT_SECS: u64 = 10;
+
+fn bedrock_claude_discovery_reasoning(model_id: &str) -> Option<CachedModelReasoning> {
+    let lower = model_id.trim().to_ascii_lowercase();
+    if !lower.contains("claude") {
+        return None;
+    }
+    if lower.contains("claude-opus-4-6")
+        || lower.contains("claude-sonnet-4-6")
+        || lower.contains("claude-opus-4-7")
+        || lower.contains("claude-sonnet-4-7")
+        || lower.contains("claude-opus-4-8")
+        || lower.contains("claude-sonnet-4-8")
+        || lower.contains("claude-opus-5")
+        || lower.contains("claude-sonnet-5")
+        || lower.contains("claude-fable-5")
+    {
+        return Some(CachedModelReasoning {
+            default_effort: Some("high".to_string()),
+            available_efforts: Some(vec![
+                "none".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "max".to_string(),
+            ]),
+        });
+    }
+    if lower.contains("claude-3-7-sonnet")
+        || lower.contains("claude-opus-4")
+        || lower.contains("claude-sonnet-4")
+        || lower.contains("claude-haiku-4-5")
+    {
+        return Some(CachedModelReasoning {
+            default_effort: Some("high".to_string()),
+            available_efforts: Some(vec![
+                "none".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+            ]),
+        });
+    }
+    None
+}
 
 pub fn compute_bedrock_auth_fingerprint(auth: &BedrockAuthConfig) -> String {
     let mut hasher = Sha256::new();
@@ -243,6 +287,7 @@ pub async fn discover_bedrock_models(
             .iter()
             .any(|m| m.eq_ignore_ascii_case("IMAGE"));
 
+        let reasoning = bedrock_claude_discovery_reasoning(&id);
         let entry = CachedModelDiscoveryModel {
             id: id.clone(),
             model: None,
@@ -251,7 +296,7 @@ pub async fn discover_bedrock_models(
             knowledge_cutoff: Some("Unknown".to_string()),
             supports_image_input: Some(supports_image),
             is_default: None,
-            reasoning: None,
+            reasoning,
             runtime_options: None,
             runtime_overrides: None,
         };
@@ -318,6 +363,8 @@ pub async fn discover_bedrock_models(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(id)
                 .to_string();
+            let reasoning = bedrock_claude_discovery_reasoning(id)
+                .or_else(|| referenced.iter().find_map(|e| e.reasoning.clone()));
             all_models.push(CachedModelDiscoveryModel {
                 id: id.to_string(),
                 model: None,
@@ -326,7 +373,7 @@ pub async fn discover_bedrock_models(
                 knowledge_cutoff: Some("Unknown".to_string()),
                 supports_image_input: Some(supports_image),
                 is_default: None,
-                reasoning: None,
+                reasoning,
                 runtime_options: None,
                 runtime_overrides: None,
             });

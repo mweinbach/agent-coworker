@@ -105,6 +105,7 @@ pub fn reasoning_effort_label(effort: ReasoningEffortValue) -> &'static str {
     match effort {
         ReasoningEffortValue::None => "Off",
         ReasoningEffortValue::Minimal => "Minimal",
+        ReasoningEffortValue::Light => "Light",
         ReasoningEffortValue::Low => "Low",
         ReasoningEffortValue::Medium => "Medium",
         ReasoningEffortValue::High => "High",
@@ -119,6 +120,7 @@ pub fn parse_reasoning_effort(raw: Option<&str>) -> Option<ReasoningEffortValue>
     match raw?.trim().to_ascii_lowercase().as_str() {
         "none" | "off" => Some(ReasoningEffortValue::None),
         "minimal" => Some(ReasoningEffortValue::Minimal),
+        "light" => Some(ReasoningEffortValue::Light),
         "low" => Some(ReasoningEffortValue::Low),
         "medium" => Some(ReasoningEffortValue::Medium),
         "high" => Some(ReasoningEffortValue::High),

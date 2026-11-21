@@ -4,8 +4,7 @@ use std::collections::HashSet;
 
 use rune::{El, ScrollSpec, col, el, icon, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Checkbox, ControlSize, Dialog, IconButton, IconButtonVariant, Kit,
-    TextInput,
+    Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit, TextInput,
 };
 use serde_json::Value;
 
@@ -27,31 +26,27 @@ use crate::views::settings::providers_utils::{
 };
 use crate::views::settings::shell::PageContent;
 
-const FALLBACK_PROVIDERS: &[(&str, &str)] = &[
-    ("anthropic", "Anthropic"),
-    ("openai", "OpenAI"),
-    ("codex-cli", "Codex"),
-    ("google", "Google"),
-    ("bedrock", "Amazon Bedrock"),
-    ("together", "Together AI"),
-    ("fireworks", "Fireworks AI"),
-    ("nvidia", "NVIDIA"),
-    ("lmstudio", "LM Studio"),
-];
-
-/// Returns static provider placeholders when the server catalog has not hydrated yet.
+/// Returns static user-facing provider placeholders from `config/providers.json` when the
+/// server catalog has not hydrated yet.
 pub fn fallback_providers() -> Vec<ProviderSummary> {
-    FALLBACK_PROVIDERS
+    cowork_config::provider_specs()
         .iter()
-        .map(|(id, name)| ProviderSummary {
-            id: (*id).to_string(),
-            name: (*name).to_string(),
+        .filter(|spec| spec.user_facing)
+        .map(|spec| ProviderSummary {
+            id: spec.id.clone(),
+            name: spec.display_name.clone(),
             configured: false,
             models: Vec::new(),
             config: Value::Null,
             capabilities: Value::Null,
         })
         .collect()
+}
+
+fn is_user_facing_provider(id: &str) -> bool {
+    cowork_config::ProviderName::parse(id)
+        .map(|provider| provider.is_user_facing())
+        .unwrap_or(true)
 }
 
 /// Returns whether a provider is currently connected or configured with a healthy status.
@@ -94,25 +89,48 @@ fn provider_display_title(summary: &ProviderSummary) -> &str {
     }
 }
 
-fn supports_oauth(provider_id: &str, methods: &[String]) -> bool {
-    methods.iter().any(|m| {
-        let lower = m.to_ascii_lowercase();
-        lower.contains("oauth") || lower.contains("device") || lower.contains("cli")
-    }) || matches!(
-        provider_id,
-        "anthropic" | "openai" | "openai-codex" | "codex-cli" | "google"
-    )
-}
-
-fn supports_api_key(provider_id: &str, methods: &[String]) -> bool {
-    if matches!(provider_id, "ollama" | "lmstudio" | "codex-cli") {
-        return false;
+fn resolved_auth_methods(
+    s: &AppState,
+    provider_id: &str,
+) -> Vec<cowork_config::ProviderAuthMethod> {
+    if let Some(provider) = cowork_config::ProviderName::parse(provider_id) {
+        return provider.spec().auth_methods.clone();
     }
-    methods.is_empty()
-        || methods.iter().any(|m| {
-            let lower = m.to_ascii_lowercase();
-            lower.contains("api") || lower.contains("key") || lower == "default"
-        })
+    if let Some(specs) = s.provider_auth_method_specs.get(provider_id) {
+        return specs
+            .iter()
+            .map(|spec| cowork_config::ProviderAuthMethod {
+                id: spec.id.clone(),
+                method_type: spec.method_type.clone(),
+                label: spec
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| format_auth_method_label(&spec.id)),
+                oauth_mode: spec.oauth_mode.clone(),
+                fields: (!spec.fields.is_empty()).then(|| {
+                    spec.fields
+                        .iter()
+                        .map(|fid| cowork_config::ProviderAuthMethodField {
+                            id: fid.clone(),
+                            label: format_auth_method_label(fid),
+                            kind: if fid.to_ascii_lowercase().contains("secret")
+                                || fid.to_ascii_lowercase().contains("key")
+                                || fid.to_ascii_lowercase().contains("token")
+                            {
+                                "password".to_string()
+                            } else {
+                                "text".to_string()
+                            },
+                            required: None,
+                            secret: None,
+                            placeholder: None,
+                        })
+                        .collect()
+                }),
+            })
+            .collect();
+    }
+    Vec::new()
 }
 
 fn safe_auth_link(raw: &str) -> Option<String> {
@@ -389,17 +407,58 @@ fn lmstudio_section(
             ),
     );
 
+    let ws_token = active_ws.map(|w| w.id.clone());
+    let token_empty = s.settings_ui.api_key_edit.text.trim().is_empty();
+    col_el = col_el.child(
+        row()
+            .w_full()
+            .items_end()
+            .flex_wrap()
+            .gap(8.0)
+            .child(
+                TextInput::new(&s.settings_ui.api_key_edit)
+                    .label("API token (optional)")
+                    .placeholder("Optional Bearer token...")
+                    .secure()
+                    .revealed(s.settings_ui.api_key_revealed)
+                    .width(Some(260.0))
+                    .on_edit(|s: &mut AppState| &mut s.settings_ui.api_key_edit)
+                    .build(k),
+            )
+            .child(
+                Button::new("Save token")
+                    .variant(ButtonVariant::Outline)
+                    .icon(&icons::KEY)
+                    .control_size(ControlSize::Regular)
+                    .disabled(!can_mutate || token_empty)
+                    .on_press(move |s: &mut AppState| {
+                        if let Some(ws_id) = &ws_token {
+                            let val = s.settings_ui.api_key_edit.text.trim().to_string();
+                            if !val.is_empty() {
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::SetProviderApiKeyForMethod {
+                                        workspace_id: ws_id.clone(),
+                                        provider: "lmstudio".to_string(),
+                                        method_id: "api_key".to_string(),
+                                        api_key: val,
+                                    },
+                                ));
+                                s.settings_ui.api_key_edit = rune::TextEdit::new("");
+                            }
+                        }
+                    })
+                    .build(k),
+            ),
+    );
+
     if !summary.models.is_empty() {
         let mut models_list = col().w_full().gap(6.0);
         models_list = models_list.child(
-            text("Models shown in chat")
+            text("Discovered local models")
                 .font(k.ty.small_medium)
                 .color(t.text_muted),
         );
         for model in &summary.models {
-            let ws_vis = active_ws.map(|w| w.id.clone());
-            let model_id = model.id.clone();
-            let next_visible = !model.enabled;
             models_list = models_list.child(
                 row()
                     .w_full()
@@ -426,24 +485,6 @@ fn lmstudio_section(
                                     .color(t.text_muted)
                                     .truncate(),
                             ),
-                    )
-                    .child(
-                        Checkbox::new(model.enabled)
-                            .label(format!("Show {}", model.id))
-                            .hide_label()
-                            .disabled(!can_mutate)
-                            .on_toggle(move |s: &mut AppState| {
-                                if let Some(ws_id) = &ws_vis {
-                                    s.dispatch(Action::Settings(
-                                        SettingsAction::SetLmStudioModelVisible {
-                                            workspace_id: ws_id.clone(),
-                                            model: model_id.clone(),
-                                            visible: next_visible,
-                                        },
-                                    ));
-                                }
-                            })
-                            .build(k),
                     ),
             );
         }
@@ -463,11 +504,19 @@ fn expanded_provider_body(
 ) -> El {
     let active_ws_id = active_ws.map(|w| w.id.as_str());
     let can_mutate = active_ws_id.is_some();
-    let methods: Vec<String> = s
-        .provider_auth_methods
-        .get(&summary.id)
-        .cloned()
-        .unwrap_or_default();
+    let auth_methods = resolved_auth_methods(s, &summary.id);
+    let plain_api_methods: Vec<&cowork_config::ProviderAuthMethod> = auth_methods
+        .iter()
+        .filter(|m| m.method_type == "api" && m.fields.as_deref().is_none_or(<[_]>::is_empty))
+        .collect();
+    let structured_methods: Vec<&cowork_config::ProviderAuthMethod> = auth_methods
+        .iter()
+        .filter(|m| m.method_type == "api" && m.fields.as_deref().is_some_and(|f| !f.is_empty()))
+        .collect();
+    let oauth_methods: Vec<&cowork_config::ProviderAuthMethod> = auth_methods
+        .iter()
+        .filter(|m| m.method_type == "oauth")
+        .collect();
 
     let mut body = col()
         .w_full()
@@ -484,16 +533,59 @@ fn expanded_provider_body(
     if summary.id == "lmstudio" {
         body = body.child(lmstudio_section(s, summary, active_ws, k, t));
     } else {
-        if supports_api_key(&summary.id, &methods) {
+        // 1. Plain API key methods (single or multi-method e.g. Google API key + Exa + Parallel)
+        if !plain_api_methods.is_empty() {
+            let active_method = if plain_api_methods.len() == 1 {
+                plain_api_methods[0]
+            } else {
+                s.settings_ui
+                    .selected_auth_method_id
+                    .as_deref()
+                    .and_then(|sel| plain_api_methods.iter().copied().find(|m| m.id == sel))
+                    .unwrap_or(plain_api_methods[0])
+            };
             let saved_mask = status
-                .and_then(|st| st.saved_api_key_mask.as_deref())
+                .and_then(|st| {
+                    st.saved_api_key_masks
+                        .get(&active_method.id)
+                        .map(String::as_str)
+                        .or_else(|| {
+                            (active_method.id == "api_key")
+                                .then_some(st.saved_api_key_mask.as_deref())
+                                .flatten()
+                        })
+                })
                 .filter(|m| !m.trim().is_empty());
+
             let mut key_col = col().w_full().gap(6.0);
-            let mut label_row = row()
-                .w_full()
-                .justify_between()
-                .items_center()
-                .child(text("API key").font(k.ty.small_medium).color(t.text_muted));
+            if plain_api_methods.len() > 1 {
+                let mut method_row = row().w_full().flex_wrap().gap(6.0);
+                for method in &plain_api_methods {
+                    let is_active = method.id == active_method.id;
+                    let mid = method.id.clone();
+                    method_row = method_row.child(
+                        Button::new(method.label.as_str())
+                            .variant(if is_active {
+                                ButtonVariant::Contrast
+                            } else {
+                                ButtonVariant::Outline
+                            })
+                            .control_size(ControlSize::Small)
+                            .on_press(move |s: &mut AppState| {
+                                s.settings_ui.selected_auth_method_id = Some(mid.clone());
+                                s.settings_ui.api_key_edit = rune::TextEdit::new("");
+                            })
+                            .build(k),
+                    );
+                }
+                key_col = key_col.child(method_row);
+            }
+
+            let mut label_row = row().w_full().justify_between().items_center().child(
+                text(active_method.label.as_str())
+                    .font(k.ty.small_medium)
+                    .color(t.text_muted),
+            );
             if let Some(mask) = saved_mask {
                 label_row = label_row.child(status_pill(
                     format!("Saved ({mask})"),
@@ -505,7 +597,11 @@ fn expanded_provider_body(
             key_col = key_col.child(label_row);
 
             let key_input = TextInput::new(&s.settings_ui.api_key_edit)
-                .label(format!("{} API key", provider_display_title(summary)))
+                .label(format!(
+                    "{} {}",
+                    provider_display_title(summary),
+                    active_method.label
+                ))
                 .placeholder(if saved_mask.is_some() {
                     "Enter replacement API key..."
                 } else {
@@ -536,6 +632,7 @@ fn expanded_provider_body(
 
             let ws_key = active_ws_id.map(str::to_owned);
             let prov_key = summary.id.clone();
+            let method_key = active_method.id.clone();
             let key_empty = s.settings_ui.api_key_edit.text.trim().is_empty();
             key_col = key_col.child(
                 row()
@@ -556,9 +653,10 @@ fn expanded_provider_body(
                                     let val = s.settings_ui.api_key_edit.text.trim().to_string();
                                     if !val.is_empty() {
                                         s.dispatch(Action::Settings(
-                                            SettingsAction::SetProviderApiKey {
+                                            SettingsAction::SetProviderApiKeyForMethod {
                                                 workspace_id: ws_id.clone(),
                                                 provider: prov_key.clone(),
+                                                method_id: method_key.clone(),
                                                 api_key: val,
                                             },
                                         ));
@@ -572,19 +670,185 @@ fn expanded_provider_body(
             body = body.child(key_col);
         }
 
-        if supports_oauth(&summary.id, &methods) {
+        // 2. Structured credential methods (e.g. Amazon Bedrock `aws_default`, `aws_profile`, `aws_keys`, `api_key`)
+        if !structured_methods.is_empty() {
+            let active_method = s
+                .settings_ui
+                .selected_auth_method_id
+                .as_deref()
+                .and_then(|sel| structured_methods.iter().copied().find(|m| m.id == sel))
+                .or_else(|| {
+                    status
+                        .and_then(|st| st.auth_method.as_deref())
+                        .and_then(|cur| structured_methods.iter().copied().find(|m| m.id == cur))
+                })
+                .unwrap_or(structured_methods[0]);
+
+            let mut cfg_col = col().w_full().gap(8.0);
+            let mut method_row = row().w_full().flex_wrap().gap(6.0);
+            for method in &structured_methods {
+                let is_active = method.id == active_method.id;
+                let mid = method.id.clone();
+                method_row = method_row.child(
+                    Button::new(method.label.as_str())
+                        .variant(if is_active {
+                            ButtonVariant::Contrast
+                        } else {
+                            ButtonVariant::Outline
+                        })
+                        .control_size(ControlSize::Small)
+                        .on_press(move |s: &mut AppState| {
+                            s.settings_ui.selected_auth_method_id = Some(mid.clone());
+                        })
+                        .build(k),
+                );
+            }
+            cfg_col = cfg_col.child(method_row);
+
+            let empty_edit = rune::TextEdit::new("");
+            let fields = active_method.fields.as_deref().unwrap_or(&[]);
+            let mut missing_required = false;
+            for field in fields {
+                let state_key = format!("{}:{}:{}", summary.id, active_method.id, field.id);
+                let current_edit = s
+                    .settings_ui
+                    .provider_config_field_edits
+                    .get(&state_key)
+                    .unwrap_or(&empty_edit);
+                if field.required == Some(true) && current_edit.text.trim().is_empty() {
+                    missing_required = true;
+                }
+                let saved_mask = status
+                    .and_then(|st| st.saved_field_masks.get(&field.id))
+                    .filter(|m| !m.trim().is_empty());
+                let placeholder = saved_mask
+                    .map(|m| format!("Saved ({m})"))
+                    .or_else(|| field.placeholder.clone())
+                    .unwrap_or_else(|| field.label.clone());
+                let is_secret = field.secret == Some(true) || field.kind == "password";
+                let key_for_edit = state_key.clone();
+                let mut input = TextInput::new(current_edit)
+                    .label(field.label.as_str())
+                    .placeholder(placeholder)
+                    .width(Some(320.0));
+                if is_secret {
+                    input = input.secure().revealed(s.settings_ui.api_key_revealed);
+                }
+                cfg_col = cfg_col.child(
+                    input
+                        .on_edit(move |s: &mut AppState| {
+                            s.settings_ui
+                                .provider_config_field_edits
+                                .entry(key_for_edit.clone())
+                                .or_insert_with(|| rune::TextEdit::new(""))
+                        })
+                        .build(k),
+                );
+            }
+
+            let ws_cfg = active_ws_id.map(str::to_owned);
+            let prov_cfg = summary.id.clone();
+            let method_cfg = active_method.id.clone();
+            let field_ids: Vec<String> = fields.iter().map(|f| f.id.clone()).collect();
+            cfg_col = cfg_col.child(
+                row().items_center().gap(8.0).child(
+                    Button::new("Save credentials")
+                        .variant(ButtonVariant::Contrast)
+                        .icon(&icons::KEY)
+                        .control_size(ControlSize::Regular)
+                        .disabled(!can_mutate || missing_required)
+                        .on_press(move |s: &mut AppState| {
+                            if let Some(ws_id) = &ws_cfg {
+                                let mut values = std::collections::HashMap::new();
+                                for fid in &field_ids {
+                                    let sk = format!("{prov_cfg}:{method_cfg}:{fid}");
+                                    if let Some(edit) =
+                                        s.settings_ui.provider_config_field_edits.get(&sk)
+                                    {
+                                        let trimmed = edit.text.trim();
+                                        if !trimmed.is_empty() {
+                                            values.insert(fid.clone(), trimmed.to_string());
+                                        }
+                                    }
+                                }
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::SetProviderConfigForMethod {
+                                        workspace_id: ws_id.clone(),
+                                        provider: prov_cfg.clone(),
+                                        method_id: method_cfg.clone(),
+                                        values,
+                                    },
+                                ));
+                            }
+                        })
+                        .build(k),
+                ),
+            );
+            body = body.child(cfg_col);
+        }
+
+        // 3. OAuth methods (driven strictly by canonical `authMethods`; hide manual code input for `oauthMode: "auto"`)
+        for oauth_method in oauth_methods {
             let ws_oauth = active_ws_id.map(str::to_owned);
             let prov_oauth = summary.id.clone();
-            let method_id = methods
-                .iter()
-                .find(|m| m.to_ascii_lowercase().contains("oauth"))
-                .cloned()
-                .unwrap_or_else(|| "oauth".to_string());
+            let is_auto = oauth_method.oauth_mode.as_deref() == Some("auto");
 
             let ws_cb = active_ws_id.map(str::to_owned);
             let prov_cb = summary.id.clone();
-            let method_cb = method_id.clone();
+            let method_cb = oauth_method.id.clone();
             let code_empty = s.settings_ui.oauth_code_edit.text.trim().is_empty();
+
+            let mut oauth_actions = row().w_full().items_center().flex_wrap().gap(8.0).child(
+                Button::new(oauth_method.label.as_str())
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Regular)
+                    .disabled(!can_mutate)
+                    .on_press(move |s: &mut AppState| {
+                        if let Some(ws_id) = &ws_oauth {
+                            s.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+                                workspace_id: ws_id.clone(),
+                                provider: prov_oauth.clone(),
+                            }));
+                        }
+                    })
+                    .build(k),
+            );
+
+            if !is_auto {
+                oauth_actions = oauth_actions
+                    .child(
+                        TextInput::new(&s.settings_ui.oauth_code_edit)
+                            .label("OAuth authorization code")
+                            .placeholder("Code or callback URL...")
+                            .width(Some(240.0))
+                            .on_edit(|s: &mut AppState| &mut s.settings_ui.oauth_code_edit)
+                            .build(k),
+                    )
+                    .child(
+                        Button::new("Submit code")
+                            .variant(ButtonVariant::Outline)
+                            .control_size(ControlSize::Regular)
+                            .disabled(!can_mutate || code_empty)
+                            .on_press(move |s: &mut AppState| {
+                                if let Some(ws_id) = &ws_cb {
+                                    let code =
+                                        s.settings_ui.oauth_code_edit.text.trim().to_string();
+                                    if !code.is_empty() {
+                                        s.dispatch(Action::Settings(
+                                            SettingsAction::CompleteProviderAuthCallback {
+                                                workspace_id: ws_id.clone(),
+                                                provider: prov_cb.clone(),
+                                                method_id: method_cb.clone(),
+                                                callback_input: code,
+                                            },
+                                        ));
+                                        s.settings_ui.oauth_code_edit = rune::TextEdit::new("");
+                                    }
+                                }
+                            })
+                            .build(k),
+                    );
+            }
 
             let mut oauth_col = col()
                 .w_full()
@@ -596,62 +860,7 @@ fn expanded_provider_body(
                         .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
-                .child(
-                    row()
-                        .w_full()
-                        .items_center()
-                        .flex_wrap()
-                        .gap(8.0)
-                        .child(
-                            Button::new("Sign in with OAuth")
-                                .variant(ButtonVariant::Outline)
-                                .control_size(ControlSize::Regular)
-                                .disabled(!can_mutate)
-                                .on_press(move |s: &mut AppState| {
-                                    if let Some(ws_id) = &ws_oauth {
-                                        s.dispatch(Action::Settings(
-                                            SettingsAction::StartProviderAuth {
-                                                workspace_id: ws_id.clone(),
-                                                provider: prov_oauth.clone(),
-                                            },
-                                        ));
-                                    }
-                                })
-                                .build(k),
-                        )
-                        .child(
-                            TextInput::new(&s.settings_ui.oauth_code_edit)
-                                .label("OAuth authorization code")
-                                .placeholder("Code or callback URL...")
-                                .width(Some(240.0))
-                                .on_edit(|s: &mut AppState| &mut s.settings_ui.oauth_code_edit)
-                                .build(k),
-                        )
-                        .child(
-                            Button::new("Submit code")
-                                .variant(ButtonVariant::Outline)
-                                .control_size(ControlSize::Regular)
-                                .disabled(!can_mutate || code_empty)
-                                .on_press(move |s: &mut AppState| {
-                                    if let Some(ws_id) = &ws_cb {
-                                        let code =
-                                            s.settings_ui.oauth_code_edit.text.trim().to_string();
-                                        if !code.is_empty() {
-                                            s.dispatch(Action::Settings(
-                                                SettingsAction::CompleteProviderAuthCallback {
-                                                    workspace_id: ws_id.clone(),
-                                                    provider: prov_cb.clone(),
-                                                    method_id: method_cb.clone(),
-                                                    callback_input: code,
-                                                },
-                                            ));
-                                            s.settings_ui.oauth_code_edit = rune::TextEdit::new("");
-                                        }
-                                    }
-                                })
-                                .build(k),
-                        ),
-                );
+                .child(oauth_actions);
 
             if let Some(ch) = extract_challenge(s, &summary.id) {
                 let instr = ch
@@ -659,9 +868,11 @@ fn expanded_provider_body(
                     .unwrap_or(ch)
                     .get("instructions")
                     .and_then(Value::as_str)
-                    .unwrap_or(
-                        "Complete authorization in your browser, then paste the code above.",
-                    );
+                    .unwrap_or(if is_auto {
+                        "Complete authorization in your browser to finish signing in."
+                    } else {
+                        "Complete authorization in your browser, then paste the code above."
+                    });
                 oauth_col =
                     oauth_col.child(text(instr).font(k.ty.small).color(t.text_muted).wrap());
                 if let Some(safe_url) = ch
@@ -691,7 +902,7 @@ fn expanded_provider_body(
         }
     }
 
-    if matches!(summary.id.as_str(), "codex-cli" | "openai-codex") {
+    if summary.id == "codex-cli" {
         body = body.child(codex_runtime_section(s, active_ws_id, k, t));
     }
 
@@ -909,11 +1120,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .unwrap_or(&[]);
 
     let fallback = fallback_providers();
-    let catalog: &[ProviderSummary] = if s.provider_catalog.is_empty() {
-        &fallback
+    let visible_catalog: Vec<ProviderSummary> = if s.provider_catalog.is_empty() {
+        fallback
     } else {
-        &s.provider_catalog
+        s.provider_catalog
+            .iter()
+            .filter(|entry| is_user_facing_provider(&entry.id))
+            .cloned()
+            .collect()
     };
+    let catalog: &[ProviderSummary] = &visible_catalog;
 
     let filtered =
         sort_and_filter_providers(catalog, statuses, &s.settings_ui.provider_search_edit.text);

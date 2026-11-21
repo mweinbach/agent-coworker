@@ -2133,10 +2133,11 @@ async fn bedrock_server_turn_runner_honors_saved_region_isolated_env_and_nested_
     let seen = captured_bdrk.lock().unwrap();
     assert_eq!(seen.len(), 4);
 
-    // Request 0: Bearer token + nested `providerOptions.bedrock.{maxTokens, reasoningEffort}` + top-level `temperature`
+    // Request 0: Bearer token + nested `providerOptions.bedrock.{maxTokens, reasoningEffort}`;
+    // `temperature` is omitted when Claude thinking is enabled (Bedrock rejects custom temperature with thinking).
     assert_eq!(seen[0].1, "Bearer ABSK-server-saved-bearer-token");
     assert_eq!(seen[0].2["inferenceConfig"]["maxTokens"], json!(4096));
-    assert_eq!(seen[0].2["inferenceConfig"]["temperature"], json!(0.4));
+    assert!(seen[0].2["inferenceConfig"].get("temperature").is_none());
     assert_eq!(
         seen[0].2["additionalModelRequestFields"]["output_config"]["effort"],
         json!("high")

@@ -297,6 +297,7 @@ fn model_deny_regex() -> &'static Regex {
 fn is_openai_reasoning_id(model_id: &str) -> bool {
     let lower = model_id.trim().to_ascii_lowercase();
     lower.starts_with("gpt-5")
+        || lower.starts_with("gpt-6")
         || lower == "o1"
         || lower == "o3"
         || lower == "o4"
@@ -306,6 +307,50 @@ fn is_openai_reasoning_id(model_id: &str) -> bool {
         || lower.starts_with("o3.")
         || lower.starts_with("o4-")
         || lower.starts_with("o4.")
+}
+
+fn claude_reasoning_for_model(model_id: &str) -> Option<ProviderCatalogReasoning> {
+    let lower = model_id.trim().to_ascii_lowercase();
+    if !lower.contains("claude") {
+        return None;
+    }
+    let adaptive = lower.contains("claude-opus-4-6")
+        || lower.contains("claude-sonnet-4-6")
+        || lower.contains("claude-opus-4-7")
+        || lower.contains("claude-sonnet-4-7")
+        || lower.contains("claude-opus-4-8")
+        || lower.contains("claude-sonnet-4-8")
+        || lower.contains("claude-opus-5")
+        || lower.contains("claude-sonnet-5")
+        || lower.contains("claude-fable-5");
+    if adaptive {
+        return Some(ProviderCatalogReasoning {
+            default_effort: "high".to_string(),
+            available_efforts: vec![
+                "none".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "max".to_string(),
+            ],
+        });
+    }
+    let budgeted = lower.contains("claude-3-7-sonnet")
+        || lower.contains("claude-opus-4")
+        || lower.contains("claude-sonnet-4")
+        || lower.contains("claude-haiku-4-5");
+    if budgeted {
+        return Some(ProviderCatalogReasoning {
+            default_effort: "high".to_string(),
+            available_efforts: vec![
+                "none".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+            ],
+        });
+    }
+    None
 }
 
 fn google_reasoning_for_model(model_id: &str) -> ProviderCatalogReasoning {
@@ -340,6 +385,7 @@ fn static_reasoning_for_supported(model: &SupportedModel) -> Option<ProviderCata
     let default_effort = model
         .provider_options_defaults
         .get("reasoningEffort")
+        .or_else(|| model.provider_options_defaults.get("effort"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -350,12 +396,29 @@ fn static_reasoning_for_supported(model: &SupportedModel) -> Option<ProviderCata
         .clone()
         .filter(|v| !v.is_empty())
         .or_else(|| {
+            if matches!(
+                model.provider,
+                ProviderName::Anthropic | ProviderName::Bedrock
+            ) {
+                return claude_reasoning_for_model(&model.id).map(|r| r.available_efforts);
+            }
             default_effort
                 .as_ref()
                 .map(|_| vec!["low".to_string(), "medium".to_string(), "high".to_string()])
         })?;
 
-    let default = default_effort.unwrap_or_else(|| available[0].clone());
+    let default = default_effort.unwrap_or_else(|| {
+        if matches!(
+            model.provider,
+            ProviderName::Anthropic | ProviderName::Bedrock
+        ) {
+            claude_reasoning_for_model(&model.id)
+                .map(|r| r.default_effort)
+                .unwrap_or_else(|| available[0].clone())
+        } else {
+            available[0].clone()
+        }
+    });
     let mut deduped = Vec::new();
     for item in available {
         if !deduped.contains(&item) {
@@ -544,7 +607,17 @@ async fn discover_api_models_http(
     if provider == ProviderName::Google {
         let key =
             api_key.ok_or_else(|| "Google API key unavailable for model discovery.".to_string())?;
-        let endpoint = base_url_override.unwrap_or_else(|| default_discovery_base_url(provider));
+        let raw_endpoint = base_url_override
+            .unwrap_or_else(|| default_discovery_base_url(provider))
+            .trim()
+            .trim_end_matches('/');
+        let endpoint = if raw_endpoint.ends_with("/models") {
+            raw_endpoint.to_string()
+        } else if raw_endpoint.ends_with("/v1beta") || raw_endpoint.ends_with("/v1") {
+            format!("{raw_endpoint}/models")
+        } else {
+            format!("{raw_endpoint}/v1beta/models")
+        };
         let url = format!("{endpoint}?pageSize=1000");
         let resp = client
             .get(&url)
@@ -622,51 +695,96 @@ async fn discover_api_models_http(
     if provider == ProviderName::Anthropic {
         let key = api_key
             .ok_or_else(|| "Anthropic API key unavailable for model discovery.".to_string())?;
-        let endpoint = base_url_override.unwrap_or_else(|| default_discovery_base_url(provider));
-        let url = format!("{endpoint}?limit=100");
-        let resp = client
-            .get(&url)
-            .header(ACCEPT, "application/json")
-            .header("anthropic-version", "2023-06-01")
-            .header("x-api-key", key)
-            .timeout(timeout)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("anthropic model list failed: {}", resp.status()));
-        }
-        let payload: Value = resp.json().await.map_err(|e| e.to_string())?;
+        let raw_endpoint = base_url_override
+            .unwrap_or_else(|| default_discovery_base_url(provider))
+            .trim()
+            .trim_end_matches('/');
+        let endpoint = if raw_endpoint.ends_with("/models") {
+            raw_endpoint.to_string()
+        } else if raw_endpoint.ends_with("/v1") {
+            format!("{raw_endpoint}/models")
+        } else {
+            format!("{raw_endpoint}/v1/models")
+        };
+        let is_oauth = key.contains("sk-ant-oat");
         let mut models = Vec::new();
-        for rec in extract_records_from_payload(&payload) {
-            let Some(model_id) = rec.get("id").and_then(Value::as_str) else {
-                continue;
+        let mut after_id: Option<String> = None;
+        for _ in 0..10 {
+            let url = match &after_id {
+                Some(cursor) => format!(
+                    "{endpoint}?limit=100&after_id={}",
+                    url::form_urlencoded::byte_serialize(cursor.as_bytes()).collect::<String>()
+                ),
+                None => format!("{endpoint}?limit=100"),
             };
-            if !model_id.to_ascii_lowercase().starts_with("claude-") {
-                continue;
+            let mut req = client
+                .get(&url)
+                .header(ACCEPT, "application/json")
+                .header("anthropic-version", "2023-06-01")
+                .timeout(timeout);
+            if is_oauth {
+                req = req
+                    .header(AUTHORIZATION, format!("Bearer {key}"))
+                    .header("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                req = req.header("x-api-key", key);
             }
-            let sup = supported_by_id.get(model_id);
-            models.push(CachedModelDiscoveryModel {
-                id: model_id.to_string(),
-                model: None,
-                display_name: rec
-                    .get("display_name")
-                    .or_else(|| rec.get("displayName"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .or_else(|| sup.map(|s| s.display_name.clone()))
-                    .unwrap_or_else(|| humanize_model_id(model_id)),
-                description: None,
-                knowledge_cutoff: sup.map(|s| s.knowledge_cutoff.clone()),
-                supports_image_input: Some(sup.map(|s| s.supports_image_input).unwrap_or(false)),
-                is_default: (static_default_id.as_deref() == Some(model_id)).then_some(true),
-                reasoning: None,
-                runtime_options: Some(Map::from_iter([(
-                    "source".to_string(),
-                    Value::String("models-api".to_string()),
-                )])),
-                runtime_overrides: None,
-            });
+            let resp = req.send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("anthropic model list failed: {}", resp.status()));
+            }
+            let payload: Value = resp.json().await.map_err(|e| e.to_string())?;
+            for rec in extract_records_from_payload(&payload) {
+                let Some(model_id) = rec.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !model_id.to_ascii_lowercase().starts_with("claude-") {
+                    continue;
+                }
+                let sup = supported_by_id.get(model_id);
+                let reasoning = sup
+                    .and_then(static_reasoning_for_supported)
+                    .or_else(|| claude_reasoning_for_model(model_id))
+                    .map(|r| CachedModelReasoning {
+                        default_effort: Some(r.default_effort),
+                        available_efforts: Some(r.available_efforts),
+                    });
+                models.push(CachedModelDiscoveryModel {
+                    id: model_id.to_string(),
+                    model: None,
+                    display_name: rec
+                        .get("display_name")
+                        .or_else(|| rec.get("displayName"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .or_else(|| sup.map(|s| s.display_name.clone()))
+                        .unwrap_or_else(|| humanize_model_id(model_id)),
+                    description: None,
+                    knowledge_cutoff: sup.map(|s| s.knowledge_cutoff.clone()),
+                    supports_image_input: Some(sup.map(|s| s.supports_image_input).unwrap_or(true)),
+                    is_default: (static_default_id.as_deref() == Some(model_id)).then_some(true),
+                    reasoning,
+                    runtime_options: Some(Map::from_iter([(
+                        "source".to_string(),
+                        Value::String("models-api".to_string()),
+                    )])),
+                    runtime_overrides: None,
+                });
+            }
+            let has_more = payload
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let next_cursor = payload
+                .get("last_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
+            if !has_more || next_cursor.is_none() || next_cursor == after_id {
+                break;
+            }
+            after_id = next_cursor;
         }
         return Ok(ModelDiscoveryResult {
             provider,
@@ -767,6 +885,10 @@ async fn discover_api_models_http(
                 || lower_id.contains("vl")
                 || lower_id.contains("multimodal")
                 || lower_id.contains("omni")
+                || (provider == ProviderName::Openai
+                    && (lower_id.starts_with("gpt-5")
+                        || lower_id.starts_with("gpt-6")
+                        || lower_id.starts_with("gpt-4o")))
         });
 
         models.push(CachedModelDiscoveryModel {
@@ -893,29 +1015,66 @@ async fn discover_lmstudio_models_read_only(
         raw_ids.push(id.to_string());
     }
 
-    // Prefer already-loaded ornith model on local host when present, else first LLM
+    // Best-effort enrich with native `/api/v1/models` capabilities (vision + loaded instances).
+    struct LmStudioNativeMeta {
+        display_name: Option<String>,
+        description: Option<String>,
+        vision: Option<bool>,
+        loaded: bool,
+    }
+    let native_meta: HashMap<String, LmStudioNativeMeta> = {
+        let ctl = LmStudioControlClient::new(lm_opts);
+        match ctl.list_native_models().await {
+            Ok(native) => native
+                .into_iter()
+                .map(|m| {
+                    let loaded = !m.loaded_instances.is_empty();
+                    (
+                        m.key,
+                        LmStudioNativeMeta {
+                            display_name: m.display_name,
+                            description: m.description,
+                            vision: m.vision,
+                            loaded,
+                        },
+                    )
+                })
+                .collect(),
+            Err(_) => HashMap::new(),
+        }
+    };
+
     let default_id = raw_ids
         .iter()
-        .find(|id| id.contains("ornith-1.5-122b-uncensored"))
+        .find(|id| native_meta.get(*id).is_some_and(|meta| meta.loaded))
         .or_else(|| raw_ids.first())
         .cloned();
 
     let models = raw_ids
         .into_iter()
-        .map(|id| CachedModelDiscoveryModel {
-            id: id.clone(),
-            model: None,
-            display_name: id.clone(),
-            description: None,
-            knowledge_cutoff: Some("Unknown".into()),
-            supports_image_input: Some(false),
-            is_default: (default_id.as_deref() == Some(id.as_str())).then_some(true),
-            reasoning: None,
-            runtime_options: Some(Map::from_iter([(
-                "source".into(),
-                Value::String("local-http".into()),
-            )])),
-            runtime_overrides: None,
+        .map(|id| {
+            let meta = native_meta.get(&id);
+            let display_name = meta
+                .and_then(|m| m.display_name.clone())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| id.clone());
+            let description = meta.and_then(|m| m.description.clone());
+            let supports_image_input = meta.and_then(|m| m.vision).unwrap_or(false);
+            CachedModelDiscoveryModel {
+                id: id.clone(),
+                model: None,
+                display_name,
+                description,
+                knowledge_cutoff: Some("Unknown".into()),
+                supports_image_input: Some(supports_image_input),
+                is_default: (default_id.as_deref() == Some(id.as_str())).then_some(true),
+                reasoning: None,
+                runtime_options: Some(Map::from_iter([(
+                    "source".into(),
+                    Value::String("local-http".into()),
+                )])),
+                runtime_overrides: None,
+            }
         })
         .collect();
 
@@ -1103,8 +1262,22 @@ fn merge_custom_models_and_preferences(
                 if matches!(provider, ProviderName::Openai) && is_openai_reasoning_id(&cm.id) {
                     Some(ProviderCatalogReasoning {
                         default_effort: "high".into(),
-                        available_efforts: vec!["low".into(), "medium".into(), "high".into()],
+                        available_efforts: vec![
+                            "none".into(),
+                            "minimal".into(),
+                            "low".into(),
+                            "medium".into(),
+                            "high".into(),
+                            "xhigh".into(),
+                        ],
                     })
+                } else if matches!(provider, ProviderName::Anthropic | ProviderName::Bedrock) {
+                    claude_reasoning_for_model(&cm.id)
+                } else if provider == ProviderName::Google
+                    && (cm.id.to_ascii_lowercase().starts_with("gemini-3")
+                        || cm.id.to_ascii_lowercase().starts_with("gemini-4"))
+                {
+                    Some(google_reasoning_for_model(&cm.id))
                 } else {
                     None
                 };
@@ -1149,11 +1322,8 @@ fn merge_custom_models_and_preferences(
 
     let is_default_enabled = |model_id: &str| -> bool {
         discovery_authoritative
-            || (if use_curated {
-                is_curated_open_model_default(model_id)
-            } else {
-                supported_ids.contains(model_id)
-            })
+            || supported_ids.contains(model_id)
+            || (use_curated && is_curated_open_model_default(model_id))
             || custom_ids.contains(model_id)
     };
 
@@ -1296,7 +1466,17 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                 }
             }
             ProviderName::Bedrock => {
-                let auth_opt = resolve_bedrock_auth_config(&opts.homedir, &opts.env, Some(&store));
+                let auth_opt = {
+                    let homedir = opts.homedir.clone();
+                    let env = opts.env.clone();
+                    let store_c = store.clone();
+                    tokio::task::spawn_blocking(move || {
+                        resolve_bedrock_auth_config(&homedir, &env, Some(&store_c))
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                };
                 let is_conn = auth_opt.is_some();
                 if let Some(auth) = auth_opt {
                     let scope = compute_bedrock_auth_fingerprint(&auth);
@@ -1320,7 +1500,8 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                         let base_ov = opts
                             .base_url_overrides
                             .get(&ProviderName::Bedrock)
-                            .map(String::as_str);
+                            .map(String::as_str)
+                            .filter(|u| !u.to_ascii_lowercase().contains("bedrock-runtime."));
                         match discover_bedrock_models(&client, &auth, base_ov).await {
                             Ok(models) => {
                                 let disc = ModelDiscoveryResult {
@@ -1574,10 +1755,8 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                     });
                 let cached = read_model_discovery_cache(&paths, provider, None).await;
                 let cached_fresh = is_model_discovery_cache_fresh(cached.as_ref(), None);
-                let is_public = matches!(
-                    provider,
-                    ProviderName::OpencodeGo | ProviderName::OpencodeZen
-                );
+                let is_public =
+                    ProviderQuirks::for_provider(provider).is_some_and(|q| q.is_public_catalog);
                 let should_use_live = cached.is_some()
                     || (api_key.is_some() && opts.refresh)
                     || (is_public && opts.refresh);
@@ -2019,7 +2198,17 @@ pub async fn build_provider_statuses(
         }
 
         if provider == ProviderName::Bedrock {
-            let auth_opt = resolve_bedrock_auth_config(&opts.homedir, &opts.env, Some(&store));
+            let auth_opt = {
+                let homedir = opts.homedir.clone();
+                let env = opts.env.clone();
+                let store_c = store.clone();
+                tokio::task::spawn_blocking(move || {
+                    resolve_bedrock_auth_config(&homedir, &env, Some(&store_c))
+                })
+                .await
+                .ok()
+                .flatten()
+            };
             if let Some(auth) = auth_opt {
                 let mut verified = false;
                 let mut msg = "Amazon Bedrock credentials detected.".to_string();
@@ -2030,7 +2219,8 @@ pub async fn build_provider_statuses(
                     let base_ov = opts
                         .base_url_overrides
                         .get(&ProviderName::Bedrock)
-                        .map(String::as_str);
+                        .map(String::as_str)
+                        .filter(|u| !u.to_ascii_lowercase().contains("bedrock-runtime."));
                     if let Ok(models) = discover_bedrock_models(&client, &auth, base_ov).await {
                         verified = true;
                         let scope = compute_bedrock_auth_fingerprint(&auth);

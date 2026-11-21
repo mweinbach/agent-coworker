@@ -2944,7 +2944,19 @@ impl ServerRuntimeState {
             ProviderName::Anthropic => {
                 defaults.contains_key("effort") || defaults.contains_key("thinking")
             }
-            ProviderName::CodexCli => true,
+            ProviderName::Bedrock => {
+                let lower = model.trim().to_ascii_lowercase();
+                lower.contains("claude")
+                    || defaults.contains_key("reasoningEffort")
+                    || defaults.contains_key("effort")
+            }
+            ProviderName::CodexCli
+            | ProviderName::Lmstudio
+            | ProviderName::Fireworks
+            | ProviderName::Firepass
+            | ProviderName::Together
+            | ProviderName::OpencodeGo
+            | ProviderName::OpencodeZen => true,
             _ => false,
         };
         if !declares_reasoning {
@@ -4710,7 +4722,19 @@ const EDITABLE_CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES: [&str; 3] = ["low", "medium
 const EDITABLE_GOOGLE_THINKING_LEVEL_VALUES: [&str; 4] = ["minimal", "low", "medium", "high"];
 
 /// `EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES`, in the order the TS merge walks them.
-const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 4] = ["openai", "codex-cli", "google", "lmstudio"];
+const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 11] = [
+    "openai",
+    "codex-cli",
+    "google",
+    "anthropic",
+    "bedrock",
+    "lmstudio",
+    "together",
+    "fireworks",
+    "firepass",
+    "opencode-go",
+    "opencode-zen",
+];
 
 /// Copies `obj[key]` into `dst` when it is exactly one of `allowed` (TS `is*` enum guards).
 fn pick_enum_into(
@@ -4838,8 +4862,15 @@ fn pick_codex_cli_section(obj: &Map<String, Value>) -> Option<Map<String, Value>
 }
 
 /// TS `pickGoogleThinkingConfig`: a valid `thinkingLevel`, or `{}` for an explicit empty
-/// object (which the merge reads as "clear the stored level").
+/// object or `"dynamic"` (which the merge reads as "clear the stored level").
 fn pick_google_thinking_config(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    if obj
+        .get("thinkingLevel")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("dynamic"))
+    {
+        return Some(Map::new());
+    }
     let mut dst = Map::new();
     pick_enum_into(
         &mut dst,
@@ -4894,6 +4925,51 @@ fn pick_lmstudio_section(obj: &Map<String, Value>) -> Option<Map<String, Value>>
             dst.insert(key.to_owned(), Value::Bool(b));
         }
     }
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    (!dst.is_empty()).then_some(dst)
+}
+
+fn pick_anthropic_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    pick_enum_into(&mut dst, obj, "effort", &EDITABLE_REASONING_EFFORT_VALUES);
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    if let Some(thinking) = obj.get("thinking").and_then(Value::as_object) {
+        let mut t_dst = Map::new();
+        pick_enum_into(
+            &mut t_dst,
+            thinking,
+            "type",
+            &["adaptive", "enabled", "disabled"],
+        );
+        if let Some(budget) = pick_positive_integer(thinking.get("budgetTokens")) {
+            t_dst.insert("budgetTokens".to_owned(), Value::from(budget));
+        }
+        if !t_dst.is_empty() {
+            dst.insert("thinking".to_owned(), Value::Object(t_dst));
+        }
+    }
+    (!dst.is_empty()).then_some(dst)
+}
+
+fn pick_reasoning_effort_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    pick_enum_into(&mut dst, obj, "effort", &EDITABLE_REASONING_EFFORT_VALUES);
     (!dst.is_empty()).then_some(dst)
 }
 
@@ -4907,7 +4983,11 @@ fn pick_editable_provider_section(provider: &str, section: &Value) -> Option<Map
         }
         "codex-cli" => pick_codex_cli_section(obj),
         "google" => pick_google_section(obj),
+        "anthropic" => pick_anthropic_section(obj),
         "lmstudio" => pick_lmstudio_section(obj),
+        "bedrock" | "together" | "fireworks" | "firepass" | "opencode-go" | "opencode-zen" => {
+            pick_reasoning_effort_section(obj)
+        }
         _ => None,
     }
 }

@@ -590,8 +590,11 @@ fn providers_and_manage_models_helpers_filter_and_detect_connection() {
     assert_eq!(preview.len(), 8);
     assert_eq!(overflow, 1);
 
-    assert!(can_add_custom_model("openrouter"));
+    assert!(can_add_custom_model("together"));
+    assert!(can_add_custom_model("anthropic"));
     assert!(!can_add_custom_model("codex-cli"));
+    assert!(!can_add_custom_model("lmstudio"));
+    assert!(!can_add_custom_model("openrouter"));
 }
 
 #[test]
@@ -737,7 +740,11 @@ fn slice5_workspace_subagent_and_memory_helpers_match_server_contracts() {
     );
     assert!(model_supports_reasoning("openai:gpt-5"));
     assert!(model_supports_reasoning("codex-cli:gpt-5-codex"));
-    assert!(!model_supports_reasoning("anthropic:claude-sonnet-4-5"));
+    assert!(model_supports_reasoning("anthropic:claude-sonnet-4-5"));
+    assert!(model_supports_reasoning(
+        "bedrock:anthropic.claude-sonnet-4-6-v1"
+    ));
+    assert!(!model_supports_reasoning("minimax:MiniMax-M2.5"));
 
     assert_eq!(resolve_draft_memory_id("   "), HOT_MEMORY_ID);
     assert_eq!(resolve_draft_memory_id("build-notes"), "build-notes");

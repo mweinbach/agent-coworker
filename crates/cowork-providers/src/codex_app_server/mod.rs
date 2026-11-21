@@ -497,10 +497,12 @@ impl ProviderTransport for CodexAppServerTransport {
         }
 
         let turn_id = request.turn_id.clone();
-        let think_stream_id = format!("{turn_id}:codex-think");
+        let mut thinking_segment: usize = 0;
+        let mut think_stream_id = format!("{turn_id}:codex-think");
         let mut thinking_started = false;
         let mut thinking_closed = false;
         let mut thinking_text = String::new();
+        let mut thinking_segment_text = String::new();
         let mut items = CodexAssistantItems::new();
         let mut text_started: Vec<bool> = Vec::new();
         let mut text_ended: Vec<bool> = Vec::new();
@@ -514,7 +516,8 @@ impl ProviderTransport for CodexAppServerTransport {
         // by the step budget the harness hands us (unbounded for Codex) and cancellation.
         let wait_res = budget
             .run(async {
-                // Closes the reasoning stream once assistant text starts (it never reopens).
+                // Closes the active reasoning stream segment; a later post-tool reasoning delta
+                // starts a fresh stream segment with its own ThinkingStart/ThinkingEnd pair.
                 macro_rules! close_thinking {
                     () => {
                         if thinking_started && !thinking_closed {
@@ -523,7 +526,7 @@ impl ProviderTransport for CodexAppServerTransport {
                                 turn_id: turn_id.clone(),
                                 stream_id: think_stream_id.clone(),
                                 mode: ReasoningStreamMode::Summary,
-                                text: thinking_text.clone(),
+                                text: std::mem::take(&mut thinking_segment_text),
                                 signature: None,
                                 redacted: false,
                             });
@@ -547,8 +550,15 @@ impl ProviderTransport for CodexAppServerTransport {
                             if let Some(d) = params.get("delta").and_then(Value::as_str)
                                 && !d.is_empty()
                             {
-                                if !thinking_started {
+                                if !thinking_started || thinking_closed {
+                                    if thinking_closed {
+                                        thinking_segment += 1;
+                                        think_stream_id =
+                                            format!("{turn_id}:codex-think-{thinking_segment}");
+                                        thinking_closed = false;
+                                    }
                                     thinking_started = true;
+                                    thinking_segment_text.clear();
                                     on_event(StreamEvent::ThinkingStart {
                                         turn_id: turn_id.clone(),
                                         stream_id: think_stream_id.clone(),
@@ -556,6 +566,7 @@ impl ProviderTransport for CodexAppServerTransport {
                                     });
                                 }
                                 thinking_text.push_str(d);
+                                thinking_segment_text.push_str(d);
                                 on_event(StreamEvent::ThinkingDelta {
                                     turn_id: turn_id.clone(),
                                     stream_id: think_stream_id.clone(),
@@ -1661,6 +1672,11 @@ fn codex_reasoning_summary(
     model_declares_summary: Option<bool>,
 ) -> Option<String> {
     if model_declares_summary == Some(false) {
+        return None;
+    }
+    if codex_provider_option_str(provider_options, "reasoningEffort")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("none"))
+    {
         return None;
     }
     codex_provider_option_str(provider_options, "reasoningSummary")

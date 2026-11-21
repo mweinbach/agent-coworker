@@ -978,10 +978,14 @@ async fn repl_new_thread_refreshes_provider_and_model_selection() {
         after_new.contains("Current model: claude-opus-4-8 (anthropic)"),
         "output={output}"
     );
-    // `/reasoning` and `/verbosity` are OpenAI-compatible-only (TS `commandRouter`), so on the
-    // adopted anthropic selection both are refused instead of being applied as openai options.
+    // `/reasoning` now applies to anthropic (using anthropic's effort option), while `/verbosity`
+    // remains OpenAI-compatible-only so it is refused on the adopted anthropic selection.
+    assert!(
+        after_new.contains("anthropic reasoning effort set to high"),
+        "output={output}"
+    );
     let required = "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first";
-    assert_eq!(after_new.matches(required).count(), 2, "output={output}");
+    assert_eq!(after_new.matches(required).count(), 1, "output={output}");
     assert!(
         !after_new.replace(required, "").contains("openai"),
         "output={output}"
@@ -1456,9 +1460,10 @@ async fn repl_approval_prompt_escapes_control_characters_in_command() {
     }
 }
 
-/// `/reasoning`, `/verbosity` and `/reasoning-summary` only apply to OpenAI-compatible providers
-/// (TS `commandRouter`: openai or codex-cli), and `/reasoning-summary` accepts only
-/// `auto|concise|detailed` (TS `OPENAI_REASONING_SUMMARY_VALUES`).
+/// `/reasoning` works across reasoning-capable providers (e.g. google, anthropic, openai, codex-cli)
+/// and rejects non-reasoning providers (e.g. minimax), while `/verbosity` and `/reasoning-summary`
+/// only apply to OpenAI-compatible providers (openai or codex-cli), and `/reasoning-summary` accepts
+/// only `auto|concise|detailed` (TS `OPENAI_REASONING_SUMMARY_VALUES`).
 #[tokio::test]
 async fn repl_openai_option_commands_require_openai_compatible_provider() {
     let iso = IsolatedCliEnv::new();
@@ -1469,6 +1474,8 @@ async fn repl_openai_option_commands_require_openai_compatible_provider() {
             "/reasoning high",
             "/verbosity low",
             "/reasoning-summary auto",
+            "/provider minimax",
+            "/reasoning high",
             "/provider openai",
             "/reasoning-summary none",
             "/reasoning-summary concise",
@@ -1480,8 +1487,15 @@ async fn repl_openai_option_commands_require_openai_compatible_provider() {
     .unwrap();
 
     let required = "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first";
-    assert_eq!(output.matches(required).count(), 3, "output={output}");
-    assert!(!output.contains("google reasoning"), "output={output}");
+    assert_eq!(output.matches(required).count(), 2, "output={output}");
+    assert!(
+        output.contains("google reasoning effort set to high"),
+        "output={output}"
+    );
+    assert!(
+        output.contains("reasoning effort is not supported for provider 'minimax'"),
+        "output={output}"
+    );
     assert!(!output.contains("google verbosity"), "output={output}");
     assert!(
         output.contains("usage: /reasoning-summary <auto|concise|detailed>"),

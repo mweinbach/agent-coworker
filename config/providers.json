@@ -240,7 +240,7 @@
       "transport": "chat-completions",
       "userFacing": true,
       "discovery": "api",
-      "apiKeyEnvVars": ["OPENCODE_ZEN_API_KEY"],
+      "apiKeyEnvVars": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
       "inferenceBaseUrl": "https://opencode.ai/zen/v1",
       "discoveryBaseUrl": "https://opencode.ai/zen/v1",
       "defaultModel": "glm-5",

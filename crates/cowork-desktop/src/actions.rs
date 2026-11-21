@@ -262,6 +262,18 @@ pub enum SettingsAction {
         provider: String,
         api_key: String,
     },
+    SetProviderApiKeyForMethod {
+        workspace_id: String,
+        provider: String,
+        method_id: String,
+        api_key: String,
+    },
+    SetProviderConfigForMethod {
+        workspace_id: String,
+        provider: String,
+        method_id: String,
+        values: std::collections::HashMap<String, String>,
+    },
     StartProviderAuth {
         workspace_id: String,
         provider: String,

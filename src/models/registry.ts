@@ -6,12 +6,22 @@ import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7
 import anthropicClaudeOpus48 from "../../config/models/anthropic/claude-opus-4-8.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
+import antigravityAcpGemini31Pro from "../../config/models/antigravity-acp/gemini-3.1-pro.json";
+import antigravityAcpGemini38Flash from "../../config/models/antigravity-acp/gemini-3.8-flash.json";
+import antigravityAcpGemini4Argon from "../../config/models/antigravity-acp/gemini-4-argon.json";
+import antigravityAcpGemini4Carbon from "../../config/models/antigravity-acp/gemini-4-carbon.json";
+import antigravityAcpGemini4Hydrogen from "../../config/models/antigravity-acp/gemini-4-hydrogen.json";
+import antigravityAcpGemini4Neon from "../../config/models/antigravity-acp/gemini-4-neon.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
 import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
 import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-lite-v1-0.json";
 import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
 import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
+import claudeSdkClaudeHaiku45 from "../../config/models/claude-sdk/claude-haiku-4-5.json";
+import claudeSdkClaudeOpus47 from "../../config/models/claude-sdk/claude-opus-4-7.json";
+import claudeSdkClaudeOpus48 from "../../config/models/claude-sdk/claude-opus-4-8.json";
+import claudeSdkClaudeSonnet46 from "../../config/models/claude-sdk/claude-sonnet-4-6.json";
 import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex-spark.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
@@ -161,6 +171,16 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt54,
   codexCliGpt54Mini,
   codexCliGpt53CodexSpark,
+  claudeSdkClaudeOpus48,
+  claudeSdkClaudeOpus47,
+  claudeSdkClaudeSonnet46,
+  claudeSdkClaudeHaiku45,
+  antigravityAcpGemini4Neon,
+  antigravityAcpGemini4Carbon,
+  antigravityAcpGemini4Argon,
+  antigravityAcpGemini4Hydrogen,
+  antigravityAcpGemini38Flash,
+  antigravityAcpGemini31Pro,
   fireworksDeepseekV4Pro,
   fireworksGlm5p1,
   fireworksKimiK2p6,

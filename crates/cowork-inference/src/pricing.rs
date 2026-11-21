@@ -454,23 +454,25 @@ fn build_base_pricing_table() -> HashMap<String, ModelPricing> {
         );
     }
 
-    // Anthropic
-    for opus in ["claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8"] {
+    // Anthropic & Claude SDK
+    for provider in ["anthropic", "claude-sdk"] {
+        for opus in ["claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8"] {
+            put(
+                &format!("{provider}:{opus}"),
+                ModelPricing::with_cache(5.0, 25.0, Some(0.5), Some(6.25)),
+            );
+        }
+        for sonnet in ["claude-sonnet-4-6", "claude-sonnet-4-5"] {
+            put(
+                &format!("{provider}:{sonnet}"),
+                ModelPricing::with_cache(3.0, 15.0, Some(0.3), Some(3.75)),
+            );
+        }
         put(
-            &format!("anthropic:{opus}"),
-            ModelPricing::with_cache(5.0, 25.0, Some(0.5), Some(6.25)),
+            &format!("{provider}:claude-haiku-4-5"),
+            ModelPricing::with_cache(1.0, 5.0, Some(0.1), Some(1.25)),
         );
     }
-    for sonnet in ["claude-sonnet-4-6", "claude-sonnet-4-5"] {
-        put(
-            &format!("anthropic:{sonnet}"),
-            ModelPricing::with_cache(3.0, 15.0, Some(0.3), Some(3.75)),
-        );
-    }
-    put(
-        "anthropic:claude-haiku-4-5",
-        ModelPricing::with_cache(1.0, 5.0, Some(0.1), Some(1.25)),
-    );
 
     // Baseten
     put(

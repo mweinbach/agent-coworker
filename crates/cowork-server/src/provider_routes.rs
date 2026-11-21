@@ -18,11 +18,20 @@ use cowork_protocol::{
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
-    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, error_codes,
+    ProviderModelSetEnabledParams, ProviderRuntimeStatusParams, ProviderRuntimeUpdateParams,
+    ProviderStatusRefreshParams, error_codes,
 };
 use cowork_providers::CatalogBuildOptions;
+use cowork_providers::antigravity_acp::{
+    AntigravityAcpInstallOptions, antigravity_acp_override_configured,
+    resolve_antigravity_acp_status, update_managed_antigravity_acp,
+};
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, is_loopback_lmstudio_url, resolve_lmstudio_options,
+};
+use cowork_providers::claude_sdk::{
+    ClaudeSdkInstallOptions, claude_sdk_override_configured, resolve_claude_sdk_status,
+    update_managed_claude_sdk,
 };
 use cowork_providers::codex_app_server::{
     CodexAppServerClient, CodexNotification, CodexRuntimeInstallOptions,
@@ -447,6 +456,127 @@ impl ServerRuntimeState {
         .await
         .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?;
         Ok(json!({ "status": status }))
+    }
+
+    pub fn handle_provider_runtime_status(
+        &self,
+        params: &ProviderRuntimeStatusParams,
+    ) -> Result<Value, JsonRpcLiteError> {
+        let _cwd = self
+            .resolve_workspace_path(params.cwd.as_deref(), "cowork/provider/runtime/status")
+            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let provider = parse_provider_param(&params.provider)?;
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let status = match provider {
+            ProviderName::CodexCli => {
+                serde_json::to_value(resolve_codex_app_server_status(&paths.root_dir, &self.env))
+                    .map_err(|e| {
+                        JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                    })?
+            }
+            ProviderName::ClaudeSdk => {
+                serde_json::to_value(resolve_claude_sdk_status(&paths.root_dir, &self.env))
+                    .map_err(|e| {
+                        JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                    })?
+            }
+            ProviderName::AntigravityAcp => {
+                serde_json::to_value(resolve_antigravity_acp_status(&paths.root_dir, &self.env))
+                    .map_err(|e| {
+                        JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                    })?
+            }
+            other => {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "Provider '{}' does not use a Cowork-managed downloadable runtime.",
+                        other.as_str()
+                    ),
+                ));
+            }
+        };
+        Ok(json!({
+            "provider": provider.as_str(),
+            "status": status,
+        }))
+    }
+
+    pub async fn handle_provider_runtime_update(
+        &self,
+        params: &ProviderRuntimeUpdateParams,
+    ) -> Result<Value, JsonRpcLiteError> {
+        let _cwd = self
+            .resolve_workspace_path(params.cwd.as_deref(), "cowork/provider/runtime/update")
+            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let provider = parse_provider_param(&params.provider)?;
+        let force = params.force.unwrap_or(false);
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let status = match provider {
+            ProviderName::CodexCli => {
+                let codex_home = resolve_codex_home(&paths.root_dir);
+                self.codex_pool.close_for_home(&codex_home).await;
+                let st = if codex_app_server_override_configured(&self.env) {
+                    resolve_codex_app_server_status(&paths.root_dir, &self.env)
+                } else {
+                    update_managed_codex_app_server(
+                        &paths.root_dir,
+                        force,
+                        &CodexRuntimeInstallOptions::from_env(&self.env),
+                    )
+                    .await
+                    .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?
+                };
+                serde_json::to_value(st).map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?
+            }
+            ProviderName::ClaudeSdk => {
+                let st = if claude_sdk_override_configured(&self.env) {
+                    resolve_claude_sdk_status(&paths.root_dir, &self.env)
+                } else {
+                    update_managed_claude_sdk(
+                        &paths.root_dir,
+                        force,
+                        &ClaudeSdkInstallOptions::from_env(&self.env),
+                    )
+                    .await
+                    .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?
+                };
+                serde_json::to_value(st).map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?
+            }
+            ProviderName::AntigravityAcp => {
+                let st = if antigravity_acp_override_configured(&self.env) {
+                    resolve_antigravity_acp_status(&paths.root_dir, &self.env)
+                } else {
+                    update_managed_antigravity_acp(
+                        &paths.root_dir,
+                        force,
+                        &AntigravityAcpInstallOptions::from_env(&self.env),
+                    )
+                    .await
+                    .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?
+                };
+                serde_json::to_value(st).map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?
+            }
+            other => {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "Provider '{}' does not use a Cowork-managed downloadable runtime.",
+                        other.as_str()
+                    ),
+                ));
+            }
+        };
+        Ok(json!({
+            "provider": provider.as_str(),
+            "status": status,
+        }))
     }
 
     pub async fn handle_lmstudio_local_status(

@@ -314,6 +314,8 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                     }
                     ProviderName::Openai
                     | ProviderName::CodexCli
+                    | ProviderName::ClaudeSdk
+                    | ProviderName::AntigravityAcp
                     | ProviderName::Bedrock
                     | ProviderName::Lmstudio
                     | ProviderName::Fireworks

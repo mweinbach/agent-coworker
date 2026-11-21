@@ -64,6 +64,8 @@ fn is_reasoning_effort_provider(provider: ProviderName) -> bool {
             | ProviderName::Together
             | ProviderName::OpencodeGo
             | ProviderName::OpencodeZen
+            | ProviderName::ClaudeSdk
+            | ProviderName::AntigravityAcp
     )
 }
 

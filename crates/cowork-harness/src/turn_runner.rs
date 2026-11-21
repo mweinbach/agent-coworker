@@ -717,7 +717,10 @@ impl TurnStepRunner {
             //
             // The Codex app-server runs a whole agentic loop per step and TS never capped it at the
             // turn level (only its startup RPCs time out), so it gets no step deadline here.
-            let exempt_from_step_budget = self.cfg.provider == ProviderName::CodexCli;
+            let exempt_from_step_budget = matches!(
+                self.cfg.provider,
+                ProviderName::CodexCli | ProviderName::ClaudeSdk | ProviderName::AntigravityAcp
+            );
             let policy = match step_request_policy(&self.cfg, exempt_from_step_budget) {
                 Ok(policy) => policy,
                 Err(message) => {

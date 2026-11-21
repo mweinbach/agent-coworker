@@ -21,13 +21,14 @@ use cowork_protocol::{
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelPreferencePatch,
-    ProviderModelResetEnabledParams, ProviderModelSetEnabledParams, ProviderStatusRefreshParams,
-    RuntimeDiagnosticsReadParams, RuntimeDiagnosticsReadResult, RuntimeLibreOfficeCheckParams,
-    RuntimeLibreOfficeCheckResult, SessionConfigSetParams, SessionDefaultsApplyParams,
-    SessionDeleteParams, SessionModelSetParams, SessionTitleSetParams, ThreadArchivedSetParams,
-    ThreadForkParams, ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams,
-    ThreadResumeParams, ThreadStartParams, TurnAttachmentInputPart, TurnInput, TurnInterruptParams,
-    TurnReference, TurnRetrySpec, TurnStartParams, TurnSteerParams,
+    ProviderModelResetEnabledParams, ProviderModelSetEnabledParams, ProviderRuntimeStatusParams,
+    ProviderRuntimeUpdateParams, ProviderStatusRefreshParams, RuntimeDiagnosticsReadParams,
+    RuntimeDiagnosticsReadResult, RuntimeLibreOfficeCheckParams, RuntimeLibreOfficeCheckResult,
+    SessionConfigSetParams, SessionDefaultsApplyParams, SessionDeleteParams, SessionModelSetParams,
+    SessionTitleSetParams, ThreadArchivedSetParams, ThreadForkParams, ThreadHydrateParams,
+    ThreadListParams, ThreadPinnedSetParams, ThreadResumeParams, ThreadStartParams,
+    TurnAttachmentInputPart, TurnInput, TurnInterruptParams, TurnReference, TurnRetrySpec,
+    TurnStartParams, TurnSteerParams,
 };
 use rune::TextEdit;
 use rune_kit::PaneState;
@@ -1710,6 +1711,7 @@ pub struct AppState {
     pub last_auth_challenge: Option<Value>,
     pub last_auth_result: Option<Value>,
     pub codex_app_server_status: Option<Value>,
+    pub provider_runtime_status_by_id: HashMap<String, Value>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub mcp_validation_by_server: HashMap<String, Value>,
     pub mcp_auth_challenge: Option<Value>,
@@ -1857,6 +1859,7 @@ impl Default for AppState {
             last_auth_challenge: None,
             last_auth_result: None,
             codex_app_server_status: None,
+            provider_runtime_status_by_id: HashMap::new(),
             mcp_servers: Vec::new(),
             mcp_validation_by_server: HashMap::new(),
             mcp_auth_challenge: None,
@@ -7936,6 +7939,41 @@ impl AppState {
                     false,
                 );
             }
+            SettingsAction::CheckProviderRuntime {
+                workspace_id,
+                provider,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let params = ProviderRuntimeStatusParams {
+                    cwd,
+                    provider,
+                    check_latest: Some(true),
+                };
+                let _ = self.send_ws_typed(
+                    &workspace_id,
+                    "cowork/provider/runtime/status",
+                    &params,
+                    true,
+                );
+            }
+            SettingsAction::UpdateProviderRuntime {
+                workspace_id,
+                provider,
+                force,
+            } => {
+                let cwd = self.workspace_path(&workspace_id);
+                let params = ProviderRuntimeUpdateParams {
+                    cwd,
+                    provider,
+                    force: Some(force),
+                };
+                let _ = self.send_ws_typed(
+                    &workspace_id,
+                    "cowork/provider/runtime/update",
+                    &params,
+                    false,
+                );
+            }
             SettingsAction::UpdateWorkspaceDefaults {
                 workspace_id,
                 defaults,
@@ -10945,7 +10983,28 @@ impl AppState {
                 }
             }
             "cowork/provider/codexAppServer/status" | "cowork/provider/codexAppServer/update" => {
-                self.codex_app_server_status = Some(payload);
+                self.codex_app_server_status = Some(payload.clone());
+                let status_val = payload.get("status").cloned().unwrap_or(payload);
+                self.provider_runtime_status_by_id
+                    .insert("codex-cli".to_string(), status_val);
+            }
+            "cowork/provider/runtime/status" | "cowork/provider/runtime/update" => {
+                if let Some(provider_id) = payload
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    let status_val = payload
+                        .get("status")
+                        .cloned()
+                        .unwrap_or_else(|| payload.clone());
+                    if provider_id == "codex-cli" {
+                        self.codex_app_server_status = Some(payload.clone());
+                    }
+                    self.provider_runtime_status_by_id
+                        .insert(provider_id.to_string(), status_val);
+                }
             }
             "cowork/provider/lmstudio/local/start" => {
                 if let Some(modal) = self.lmstudio_start_modal.take()

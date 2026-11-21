@@ -6,7 +6,7 @@ use crate::provider_specs::{
     ProviderDiscoveryMode, ProviderSpec, ProviderWireProtocol, provider_spec,
 };
 
-/// All 14 supported inference providers. Identity strings, display names and all other static
+/// All 16 supported inference providers. Identity strings, display names and all other static
 /// metadata come from `config/providers.json` (`crate::provider_specs`); declaration order must
 /// match that file's order (enforced by `provider_specs` tests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -25,10 +25,12 @@ pub enum ProviderName {
     OpencodeGo,
     OpencodeZen,
     CodexCli,
+    ClaudeSdk,
+    AntigravityAcp,
 }
 
 impl ProviderName {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Google,
         Self::Openai,
         Self::Anthropic,
@@ -43,6 +45,8 @@ impl ProviderName {
         Self::OpencodeGo,
         Self::OpencodeZen,
         Self::CodexCli,
+        Self::ClaudeSdk,
+        Self::AntigravityAcp,
     ];
 
     /// The provider id (`config/providers.json` `id`).
@@ -66,7 +70,10 @@ impl ProviderName {
 
     /// Providers supporting user-defined custom model IDs (`src/shared/customModels.ts`).
     pub fn supports_custom_model_ids(&self) -> bool {
-        !matches!(self, Self::Lmstudio | Self::CodexCli)
+        !matches!(
+            self,
+            Self::Lmstudio | Self::CodexCli | Self::ClaudeSdk | Self::AntigravityAcp
+        )
     }
 
     /// Providers supporting enabled/disabled model preferences (`src/shared/modelPreferences.ts`).
@@ -120,6 +127,10 @@ pub enum RuntimeName {
     GoogleInteractions,
     #[serde(rename = "codex-app-server")]
     CodexAppServer,
+    #[serde(rename = "claude-sdk")]
+    ClaudeSdk,
+    #[serde(rename = "antigravity-acp")]
+    AntigravityAcp,
 }
 
 impl RuntimeName {
@@ -129,16 +140,21 @@ impl RuntimeName {
             "openai-responses" => Some(Self::OpenaiResponses),
             "google-interactions" => Some(Self::GoogleInteractions),
             "codex-app-server" => Some(Self::CodexAppServer),
+            "claude-sdk" => Some(Self::ClaudeSdk),
+            "antigravity-acp" => Some(Self::AntigravityAcp),
             _ => None,
         }
     }
 }
 
-/// The runtime a provider's wire protocol pins, if any (Codex app-server, OpenAI Responses,
-/// Gemini Interactions); every other protocol runs on the generic `pi` runtime.
+/// The runtime a provider's wire protocol pins, if any (Codex app-server, Claude SDK,
+/// Antigravity ACP, OpenAI Responses, Gemini Interactions); every other protocol runs on the
+/// generic `pi` runtime.
 fn pinned_runtime_name(provider: ProviderName) -> Option<RuntimeName> {
     match provider.spec().transport {
         ProviderWireProtocol::CodexAppServer => Some(RuntimeName::CodexAppServer),
+        ProviderWireProtocol::ClaudeSdk => Some(RuntimeName::ClaudeSdk),
+        ProviderWireProtocol::AntigravityAcp => Some(RuntimeName::AntigravityAcp),
         ProviderWireProtocol::OpenaiResponses => Some(RuntimeName::OpenaiResponses),
         ProviderWireProtocol::GeminiInteractions => Some(RuntimeName::GoogleInteractions),
         ProviderWireProtocol::ChatCompletions
@@ -161,7 +177,9 @@ pub fn normalize_runtime_name_for_provider(
             Some(
                 RuntimeName::OpenaiResponses
                 | RuntimeName::GoogleInteractions
-                | RuntimeName::CodexAppServer,
+                | RuntimeName::CodexAppServer
+                | RuntimeName::ClaudeSdk
+                | RuntimeName::AntigravityAcp,
             )
             | None => default_runtime_name_for_provider(provider),
             Some(rt) => rt,

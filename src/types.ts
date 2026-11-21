@@ -62,6 +62,8 @@ const RUNTIME_NAMES = [
   "openai-responses",
   "google-interactions",
   "codex-app-server",
+  "claude-sdk",
+  "antigravity-acp",
 ] as const;
 
 type RuntimeName = (typeof RUNTIME_NAMES)[number];
@@ -75,6 +77,12 @@ function resolveRuntimeName(v: unknown): RuntimeName | null {
 function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeName {
   if (provider === "codex-cli") {
     return "codex-app-server";
+  }
+  if (provider === "claude-sdk") {
+    return "claude-sdk";
+  }
+  if (provider === "antigravity-acp") {
+    return "antigravity-acp";
   }
   if (provider === "openai") {
     return "openai-responses";
@@ -92,6 +100,12 @@ function normalizeRuntimeNameForProvider(
   if (provider === "codex-cli") {
     return "codex-app-server";
   }
+  if (provider === "claude-sdk") {
+    return "claude-sdk";
+  }
+  if (provider === "antigravity-acp") {
+    return "antigravity-acp";
+  }
   if (provider === "openai") {
     return "openai-responses";
   }
@@ -101,7 +115,9 @@ function normalizeRuntimeNameForProvider(
   if (
     runtime === "openai-responses" ||
     runtime === "google-interactions" ||
-    runtime === "codex-app-server"
+    runtime === "codex-app-server" ||
+    runtime === "claude-sdk" ||
+    runtime === "antigravity-acp"
   ) {
     return defaultRuntimeNameForProvider(provider);
   }

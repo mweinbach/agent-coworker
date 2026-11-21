@@ -35,8 +35,9 @@ use cowork_providers::chat_completions::lmstudio::{
 };
 use cowork_providers::codex_app_server::CodexSandboxRestrictions;
 use cowork_providers::{
-    CodexAppServerTransport, ProviderTransport, provider_base_url_override,
-    resolve_provider_api_key, resolve_provider_base_url, resolve_provider_bedrock_auth,
+    AntigravityAcpTransport, ClaudeSdkTransport, CodexAppServerTransport, ProviderTransport,
+    provider_base_url_override, resolve_provider_api_key, resolve_provider_base_url,
+    resolve_provider_bedrock_auth,
 };
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, policy_allows_network, resolve_sandbox_policy,
@@ -746,6 +747,36 @@ pub(crate) fn select_provider_transport_for_turn(
     built_in_dir: Option<&Path>,
     tools_disabled: bool,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
+    if matches!(
+        provider,
+        ProviderName::ClaudeSdk | ProviderName::AntigravityAcp
+    ) {
+        let handler = if tools_disabled {
+            None
+        } else {
+            codex_tool_ctx.map(|(tctx, im, _steer, overflow, catalog)| {
+                let tools_map = create_builtin_tools(tctx);
+                TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
+                    tools_map,
+                    tctx.clone(),
+                    Arc::clone(im),
+                    overflow,
+                    catalog,
+                )
+            })
+        };
+        return match provider {
+            ProviderName::ClaudeSdk => Ok(Arc::new(
+                ClaudeSdkTransport::with_env_and_handler(env.clone(), handler)
+                    .with_tools_disabled(tools_disabled),
+            )),
+            ProviderName::AntigravityAcp => Ok(Arc::new(
+                AntigravityAcpTransport::with_env_and_handler(env.clone(), handler)
+                    .with_tools_disabled(tools_disabled),
+            )),
+            _ => unreachable!(),
+        };
+    }
     cowork_providers::select_provider_transport(provider, bedrock_auth, homedir, env, || {
         let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx else {
             return CodexAppServerTransport::with_env(env.clone())
@@ -810,14 +841,19 @@ impl ServerRuntimeState {
             cowork_config::parse_child_model_ref(model_ref, Some(current.provider))
                 .ok_or_else(|| format!("invalid memory generation model '{model_ref}'"))?;
         if target == current.provider {
-            let transport = if target == ProviderName::CodexCli {
-                Arc::new(
+            let transport: Arc<dyn ProviderTransport> = match target {
+                ProviderName::CodexCli => Arc::new(
                     CodexAppServerTransport::with_env(self.env.clone())
                         .with_tools_disabled(true)
                         .with_built_in_dir(Some(self.built_in_dir.clone())),
-                ) as Arc<dyn ProviderTransport>
-            } else {
-                Arc::clone(current.transport)
+                ),
+                ProviderName::ClaudeSdk => Arc::new(
+                    ClaudeSdkTransport::with_env(self.env.clone()).with_tools_disabled(true),
+                ),
+                ProviderName::AntigravityAcp => Arc::new(
+                    AntigravityAcpTransport::with_env(self.env.clone()).with_tools_disabled(true),
+                ),
+                _ => Arc::clone(current.transport),
             };
             return Ok(RemoteMemoryModel {
                 transport,
@@ -2912,16 +2948,22 @@ impl ServerRuntimeState {
                             if cur_src == SessionTitleSource::Manual {
                                 return;
                             }
-                            let title_transport: Arc<dyn ProviderTransport> =
-                                if provider == ProviderName::CodexCli {
-                                    Arc::new(
-                                        CodexAppServerTransport::with_env(rt_title.env.clone())
-                                            .with_tools_disabled(true)
-                                            .with_built_in_dir(Some(rt_title.built_in_dir.clone())),
-                                    )
-                                } else {
-                                    transport
-                                };
+                            let title_transport: Arc<dyn ProviderTransport> = match provider {
+                                ProviderName::CodexCli => Arc::new(
+                                    CodexAppServerTransport::with_env(rt_title.env.clone())
+                                        .with_tools_disabled(true)
+                                        .with_built_in_dir(Some(rt_title.built_in_dir.clone())),
+                                ),
+                                ProviderName::ClaudeSdk => Arc::new(
+                                    ClaudeSdkTransport::with_env(rt_title.env.clone())
+                                        .with_tools_disabled(true),
+                                ),
+                                ProviderName::AntigravityAcp => Arc::new(
+                                    AntigravityAcpTransport::with_env(rt_title.env.clone())
+                                        .with_tools_disabled(true),
+                                ),
+                                _ => transport,
+                            };
                             let (new_title, new_src) = generate_remote_session_title(
                                 cur_src,
                                 &cur_title,

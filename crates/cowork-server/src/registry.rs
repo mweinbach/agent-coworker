@@ -2951,6 +2951,8 @@ impl ServerRuntimeState {
                     || defaults.contains_key("effort")
             }
             ProviderName::CodexCli
+            | ProviderName::ClaudeSdk
+            | ProviderName::AntigravityAcp
             | ProviderName::Lmstudio
             | ProviderName::Fireworks
             | ProviderName::Firepass
@@ -4722,9 +4724,11 @@ const EDITABLE_CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES: [&str; 3] = ["low", "medium
 const EDITABLE_GOOGLE_THINKING_LEVEL_VALUES: [&str; 4] = ["minimal", "low", "medium", "high"];
 
 /// `EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES`, in the order the TS merge walks them.
-const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 11] = [
+const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 13] = [
     "openai",
     "codex-cli",
+    "claude-sdk",
+    "antigravity-acp",
     "google",
     "anthropic",
     "bedrock",
@@ -4985,9 +4989,8 @@ fn pick_editable_provider_section(provider: &str, section: &Value) -> Option<Map
         "google" => pick_google_section(obj),
         "anthropic" => pick_anthropic_section(obj),
         "lmstudio" => pick_lmstudio_section(obj),
-        "bedrock" | "together" | "fireworks" | "firepass" | "opencode-go" | "opencode-zen" => {
-            pick_reasoning_effort_section(obj)
-        }
+        "bedrock" | "together" | "fireworks" | "firepass" | "opencode-go" | "opencode-zen"
+        | "claude-sdk" | "antigravity-acp" => pick_reasoning_effort_section(obj),
         _ => None,
     }
 }

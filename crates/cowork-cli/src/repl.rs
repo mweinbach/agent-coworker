@@ -685,6 +685,8 @@ impl ActiveReplSession {
                         | "firepass"
                         | "opencode-go"
                         | "opencode-zen"
+                        | "claude-sdk"
+                        | "antigravity-acp"
                 );
                 if !supports_reasoning {
                     writeln!(

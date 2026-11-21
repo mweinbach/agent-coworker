@@ -2306,6 +2306,48 @@ pub async fn build_provider_statuses(
             }
         }
 
+        if matches!(
+            provider,
+            ProviderName::ClaudeSdk | ProviderName::AntigravityAcp
+        ) {
+            if let Some(entry) = store.services.get(&provider)
+                && entry.mode == ConnectionMode::ApiKey
+                && entry
+                    .api_key
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty())
+            {
+                out.push(ProviderStatusEntry {
+                    provider,
+                    authorized: true,
+                    verified: false,
+                    mode: "api_key".into(),
+                    account: None,
+                    message: "Credentials saved.".into(),
+                    checked_at: checked_at.clone(),
+                    method_id: Some("api_key".into()),
+                    saved_api_key_masks,
+                    saved_field_masks,
+                });
+                continue;
+            }
+            if resolve_provider_api_key(provider, None, &opts.env).is_some() {
+                out.push(ProviderStatusEntry {
+                    provider,
+                    authorized: true,
+                    verified: false,
+                    mode: "api_key".into(),
+                    account: None,
+                    message: "Using an environment API key.".into(),
+                    checked_at: checked_at.clone(),
+                    method_id: Some("api_key".into()),
+                    saved_api_key_masks,
+                    saved_field_masks,
+                });
+                continue;
+            }
+        }
+
         if is_api_discovery_provider(provider)
             && stored_provider_api_key(&store, provider).is_none()
             && resolve_provider_api_key(provider, None, &opts.env).is_some()

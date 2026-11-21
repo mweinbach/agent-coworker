@@ -18,16 +18,16 @@ use cowork_protocol::{
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
-    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, RuntimeDiagnosticsReadParams,
-    RuntimeLibreOfficeCheckParams, ServerInfo, SessionConfigSetParams, SessionDefaultsApplyParams,
-    SessionDeleteParams, SessionFileUploadParams, SessionHarnessContextGetParams,
-    SessionHarnessContextSetParams, SessionModelSetParams, SessionStateReadParams,
-    SessionTitleSetParams, SessionUsageBudgetSetParams, ThreadArchivedSetParams, ThreadForkParams,
-    ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams, ThreadReadParams,
-    ThreadResumeParams, ThreadStartParams, ThreadUnsubscribeParams, TransportDescriptor,
-    TurnInterruptParams, TurnStartParams, TurnSteerParams, WorkspaceBootstrapParams,
-    WorkspaceListParams, WorkspaceSwitchParams, error_codes, parse_initialize_params,
-    parse_initialized_params,
+    ProviderModelSetEnabledParams, ProviderRuntimeStatusParams, ProviderRuntimeUpdateParams,
+    ProviderStatusRefreshParams, RuntimeDiagnosticsReadParams, RuntimeLibreOfficeCheckParams,
+    ServerInfo, SessionConfigSetParams, SessionDefaultsApplyParams, SessionDeleteParams,
+    SessionFileUploadParams, SessionHarnessContextGetParams, SessionHarnessContextSetParams,
+    SessionModelSetParams, SessionStateReadParams, SessionTitleSetParams,
+    SessionUsageBudgetSetParams, ThreadArchivedSetParams, ThreadForkParams, ThreadHydrateParams,
+    ThreadListParams, ThreadPinnedSetParams, ThreadReadParams, ThreadResumeParams,
+    ThreadStartParams, ThreadUnsubscribeParams, TransportDescriptor, TurnInterruptParams,
+    TurnStartParams, TurnSteerParams, WorkspaceBootstrapParams, WorkspaceListParams,
+    WorkspaceSwitchParams, error_codes, parse_initialize_params, parse_initialized_params,
 };
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
@@ -753,6 +753,18 @@ async fn route_ready_request(
             let p: ProviderCodexAppServerUpdateParams =
                 parse_params_optional(method, req.params.as_ref())?;
             runtime.handle_codex_app_server_update(&p).await
+        }
+
+        "cowork/provider/runtime/status" => {
+            let p: ProviderRuntimeStatusParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_runtime_status(&p)
+        }
+
+        "cowork/provider/runtime/update" => {
+            let p: ProviderRuntimeUpdateParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_runtime_update(&p).await
         }
 
         "cowork/provider/lmstudio/local/status" => {

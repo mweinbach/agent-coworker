@@ -191,17 +191,44 @@ fn provider_subtitle(
     }
 }
 
-fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &ThemeTokens) -> El {
+fn managed_runtime_section(
+    s: &AppState,
+    provider_id: &str,
+    active_ws_id: Option<&str>,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    let runtime_title = match provider_id {
+        "codex-cli" => "Codex runtime",
+        "claude-sdk" => "Claude SDK runtime",
+        "antigravity-acp" => "Antigravity ACP runtime",
+        _ => "Managed runtime",
+    };
+    let default_msg = match provider_id {
+        "codex-cli" => "Check runtime status to inspect the Codex app-server installation.",
+        "claude-sdk" => {
+            "Cowork downloads and SHA-256 verifies the pinned Claude Code SDK runtime on demand."
+        }
+        "antigravity-acp" => {
+            "Cowork downloads and SHA-512 verifies the pinned Antigravity ACP runtime on demand."
+        }
+        _ => "Check runtime status to inspect the managed binary installation.",
+    };
     let raw = s
-        .codex_app_server_status
-        .as_ref()
-        .map(|v| v.get("event").unwrap_or(v));
+        .provider_runtime_status_by_id
+        .get(provider_id)
+        .or_else(|| {
+            (provider_id == "codex-cli")
+                .then_some(s.codex_app_server_status.as_ref())
+                .flatten()
+        })
+        .map(|v| v.get("status").or_else(|| v.get("event")).unwrap_or(v));
     let source = raw
         .and_then(|v| v.get("source"))
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let source_label = match source {
-        "system" => "System Codex",
+        "system" => "System",
         "managed" => "Downloaded",
         "override" => "Override",
         _ => "Not downloaded",
@@ -213,7 +240,7 @@ fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &
     let msg = raw
         .and_then(|v| v.get("message"))
         .and_then(Value::as_str)
-        .unwrap_or("Check runtime status to inspect the Codex app-server installation.");
+        .unwrap_or(default_msg);
 
     let mut card = col()
         .w_full()
@@ -226,7 +253,7 @@ fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &
                 .justify_between()
                 .items_center()
                 .child(
-                    text("Codex runtime")
+                    text(runtime_title)
                         .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
@@ -252,6 +279,8 @@ fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &
     if let Some(ws_id) = active_ws_id {
         let ws_check = ws_id.to_string();
         let ws_update = ws_id.to_string();
+        let pid_check = provider_id.to_string();
+        let pid_update = provider_id.to_string();
         card = card.child(
             row()
                 .gap(8.0)
@@ -262,20 +291,22 @@ fn codex_runtime_section(s: &AppState, active_ws_id: Option<&str>, k: &Kit, t: &
                         .icon(&icons::REFRESH_CCW)
                         .control_size(ControlSize::Small)
                         .on_press(move |s: &mut AppState| {
-                            s.dispatch(Action::Settings(SettingsAction::CheckCodexAppServer {
+                            s.dispatch(Action::Settings(SettingsAction::CheckProviderRuntime {
                                 workspace_id: ws_check.clone(),
+                                provider: pid_check.clone(),
                             }));
                         })
                         .build(k),
                 )
                 .child(
-                    Button::new("Update runtime")
+                    Button::new("Download / update runtime")
                         .variant(ButtonVariant::Outline)
                         .icon(&icons::DOWNLOAD)
                         .control_size(ControlSize::Small)
                         .on_press(move |s: &mut AppState| {
-                            s.dispatch(Action::Settings(SettingsAction::UpdateCodexAppServer {
+                            s.dispatch(Action::Settings(SettingsAction::UpdateProviderRuntime {
                                 workspace_id: ws_update.clone(),
+                                provider: pid_update.clone(),
                                 force: true,
                             }));
                         })
@@ -902,8 +933,11 @@ fn expanded_provider_body(
         }
     }
 
-    if summary.id == "codex-cli" {
-        body = body.child(codex_runtime_section(s, active_ws_id, k, t));
+    if matches!(
+        summary.id.as_str(),
+        "codex-cli" | "claude-sdk" | "antigravity-acp"
+    ) {
+        body = body.child(managed_runtime_section(s, &summary.id, active_ws_id, k, t));
     }
 
     if !summary.models.is_empty() || manage_models_dialog::can_add_custom_model(&summary.id) {

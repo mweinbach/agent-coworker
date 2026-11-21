@@ -18,6 +18,8 @@ const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "firepass",
   "opencode-go",
   "opencode-zen",
+  "claude-sdk",
+  "antigravity-acp",
 ] as const;
 
 // Canonical effort ladder shared by OpenAI-compatible providers and Codex.
@@ -159,6 +161,8 @@ export type OpenAiCompatibleProviderOptionsByProvider = Partial<{
   firepass: ReasoningEffortProviderOptions;
   "opencode-go": ReasoningEffortProviderOptions;
   "opencode-zen": ReasoningEffortProviderOptions;
+  "claude-sdk": ReasoningEffortProviderOptions;
+  "antigravity-acp": ReasoningEffortProviderOptions;
 }>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -485,6 +489,8 @@ export function pickEditableOpenAiCompatibleProviderOptions(
     "firepass",
     "opencode-go",
     "opencode-zen",
+    "claude-sdk",
+    "antigravity-acp",
   ] as const) {
     const picked = pickReasoningEffortProviderOptionsSection(providerOptions[provider]);
     if (picked) {

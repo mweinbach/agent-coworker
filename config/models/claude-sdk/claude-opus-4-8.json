@@ -1,0 +1,13 @@
+{
+  "id": "claude-opus-4-8",
+  "provider": "claude-sdk",
+  "displayName": "Claude Opus 4.8 (Claude SDK)",
+  "knowledgeCutoff": "January 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-opus-4-8.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "max"],
+  "isDefault": true
+}

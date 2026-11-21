@@ -39,6 +39,26 @@ pub enum ProviderContinuationState {
         #[serde(skip_serializing_if = "Option::is_none", rename = "requestFingerprint")]
         request_fingerprint: Option<String>,
     },
+    #[serde(rename = "claude-sdk")]
+    ClaudeSdk {
+        model: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "updatedAt")]
+        updated_at: String,
+        #[serde(skip_serializing_if = "Option::is_none", rename = "requestFingerprint")]
+        request_fingerprint: Option<String>,
+    },
+    #[serde(rename = "antigravity-acp")]
+    AntigravityAcp {
+        model: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "updatedAt")]
+        updated_at: String,
+        #[serde(skip_serializing_if = "Option::is_none", rename = "requestFingerprint")]
+        request_fingerprint: Option<String>,
+    },
 }
 
 impl ProviderContinuationState {
@@ -47,6 +67,8 @@ impl ProviderContinuationState {
             Self::OpenAi { .. } => "openai",
             Self::Google { .. } => "google",
             Self::CodexCli { .. } => "codex-cli",
+            Self::ClaudeSdk { .. } => "claude-sdk",
+            Self::AntigravityAcp { .. } => "antigravity-acp",
         }
     }
 
@@ -54,7 +76,9 @@ impl ProviderContinuationState {
         match self {
             Self::OpenAi { model, .. }
             | Self::Google { model, .. }
-            | Self::CodexCli { model, .. } => model.as_str(),
+            | Self::CodexCli { model, .. }
+            | Self::ClaudeSdk { model, .. }
+            | Self::AntigravityAcp { model, .. } => model.as_str(),
         }
     }
 
@@ -69,6 +93,14 @@ impl ProviderContinuationState {
                 ..
             } => Some(request_fingerprint.as_str()),
             Self::CodexCli {
+                request_fingerprint,
+                ..
+            }
+            | Self::ClaudeSdk {
+                request_fingerprint,
+                ..
+            }
+            | Self::AntigravityAcp {
                 request_fingerprint,
                 ..
             } => request_fingerprint.as_deref(),

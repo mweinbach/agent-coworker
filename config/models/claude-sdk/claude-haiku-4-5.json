@@ -1,0 +1,13 @@
+{
+  "id": "claude-haiku-4-5",
+  "provider": "claude-sdk",
+  "displayName": "Claude Haiku 4.5 (Claude SDK)",
+  "knowledgeCutoff": "May 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-haiku-4-5.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high"],
+  "isDefault": false
+}

@@ -154,6 +154,8 @@ pub fn model_supports_reasoning(selection: &str) -> bool {
             | "firepass"
             | "opencode-go"
             | "opencode-zen"
+            | "claude-sdk"
+            | "antigravity-acp"
     )
 }
 

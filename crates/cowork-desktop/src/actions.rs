@@ -446,6 +446,15 @@ pub enum SettingsAction {
         workspace_id: String,
         force: bool,
     },
+    CheckProviderRuntime {
+        workspace_id: String,
+        provider: String,
+    },
+    UpdateProviderRuntime {
+        workspace_id: String,
+        provider: String,
+        force: bool,
+    },
     UpdateWorkspaceDefaults {
         workspace_id: String,
         defaults: Value,

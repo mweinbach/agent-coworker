@@ -174,6 +174,8 @@ const editableProviderOptionsSchema = z
     firepass: providerOptionsReasoningEffortSchema.optional(),
     "opencode-go": providerOptionsReasoningEffortSchema.optional(),
     "opencode-zen": providerOptionsReasoningEffortSchema.optional(),
+    "claude-sdk": providerOptionsReasoningEffortSchema.optional(),
+    "antigravity-acp": providerOptionsReasoningEffortSchema.optional(),
   })
   .strict();
 
@@ -404,6 +406,13 @@ const codexAppServerInstallStatusSchema = z
 
 const codexAppServerInstallStatusEnvelopeSchema = z
   .object({
+    status: codexAppServerInstallStatusSchema,
+  })
+  .strict();
+
+const providerRuntimeInstallStatusEnvelopeSchema = z
+  .object({
+    provider: providerNameSchema,
     status: codexAppServerInstallStatusSchema,
   })
   .strict();
@@ -1632,6 +1641,22 @@ const providerCodexAppServerUpdateRequestSchema = z
   })
   .strict();
 
+const providerRuntimeStatusRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    checkLatest: z.boolean().optional(),
+  })
+  .strict();
+
+const providerRuntimeUpdateRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    force: z.boolean().optional(),
+  })
+  .strict();
+
 const providerLmStudioLocalStatusRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -2172,6 +2197,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/capabilities/check": providerCapabilitiesCheckRequestSchema,
   "cowork/provider/codexAppServer/status": providerCodexAppServerStatusRequestSchema,
   "cowork/provider/codexAppServer/update": providerCodexAppServerUpdateRequestSchema,
+  "cowork/provider/runtime/status": providerRuntimeStatusRequestSchema,
+  "cowork/provider/runtime/update": providerRuntimeUpdateRequestSchema,
   "cowork/provider/lmstudio/local/status": providerLmStudioLocalStatusRequestSchema,
   "cowork/provider/lmstudio/local/start": providerLmStudioLocalStartRequestSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeCheckRequestSchema,
@@ -2270,6 +2297,8 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/capabilities/check": providerCapabilitiesCheckResultSchema,
   "cowork/provider/codexAppServer/status": codexAppServerInstallStatusEnvelopeSchema,
   "cowork/provider/codexAppServer/update": codexAppServerInstallStatusEnvelopeSchema,
+  "cowork/provider/runtime/status": providerRuntimeInstallStatusEnvelopeSchema,
+  "cowork/provider/runtime/update": providerRuntimeInstallStatusEnvelopeSchema,
   "cowork/provider/lmstudio/local/status": lmStudioLocalStatusEnvelopeSchema,
   "cowork/provider/lmstudio/local/start": lmStudioLocalStartEnvelopeSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeDiagnosticEnvelopeSchema,

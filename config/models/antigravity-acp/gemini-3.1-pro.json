@@ -1,0 +1,13 @@
+{
+  "id": "gemini-3.1-pro",
+  "provider": "antigravity-acp",
+  "displayName": "Gemini 3.1 Pro (Antigravity)",
+  "knowledgeCutoff": "January 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3.1-pro-preview.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high"],
+  "isDefault": false
+}

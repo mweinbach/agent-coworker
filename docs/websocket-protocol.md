@@ -181,8 +181,9 @@ workspace-settings permission, because memory holds long-lived private user/proj
 usage state, runs local skill-file edits, and can restore skill backups.
 Routes that start a local process or run a model job also require `turns`:
 `cowork/skills/improvement/run`, `cowork/skills/improvement/restore`,
-`cowork/provider/lmstudio/local/start` (starts the local LM Studio server), and
-`cowork/provider/codexAppServer/update` (replaces the managed Codex app-server binary) require
+`cowork/provider/lmstudio/local/start` (starts the local LM Studio server),
+`cowork/provider/codexAppServer/update` (replaces the managed Codex app-server binary), and
+`cowork/provider/runtime/update` (installs/replaces a Cowork-managed provider runtime binary) require
 `workspaceSettings` and `turns`; `cowork/memory/advanced/generate` and
 `cowork/memory/advanced/folder/generate` (which also read the source thread's conversation)
 require `workspaceSettings`, `conversations`, and `turns`. `cowork/runtime/libreoffice/check` stays
@@ -482,6 +483,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/capabilities/check`
   - `cowork/provider/codexAppServer/status`
   - `cowork/provider/codexAppServer/update`
+  - `cowork/provider/runtime/status`
+  - `cowork/provider/runtime/update`
   - `cowork/provider/lmstudio/local/status`
   - `cowork/provider/lmstudio/local/start`
   - `cowork/provider/auth/authorize`
@@ -1149,6 +1152,7 @@ Changes in `7.32`:
 - Added JSON-RPC controls for the runtime-managed Codex app-server payload:
   - `cowork/provider/codexAppServer/status` returns `{ status }` with source, current version, app-pinned version, and whether the installed managed payload matches the app pin.
   - `cowork/provider/codexAppServer/update` downloads/promotes the app-pinned Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; callers cannot select or pin arbitrary versions.
+  - `cowork/provider/runtime/status` (`{ cwd?, provider, checkLatest? }`) and `cowork/provider/runtime/update` (`{ cwd?, provider, force? }`) generalize managed runtime status and installation across `codex-cli`, `claude-sdk`, and `antigravity-acp`, returning `{ provider, status }`. Every managed binary is verified against repo-pinned SHA-256/SHA-512 checksums before extraction or execution and never resolved from `PATH`.
 - Desktop/runtime Codex app-server resolution now downloads and uses the app-pinned Cowork-managed release. Updating the desktop app can bump the code pin so the next runtime use downloads the replacement payload.
 - The current managed runtime pin is Codex app-server `0.160.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
 

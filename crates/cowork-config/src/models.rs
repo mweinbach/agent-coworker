@@ -69,6 +69,8 @@ fn fallback_supported_model(provider: ProviderName, id: &str) -> SupportedModel 
                 | ProviderName::Openai
                 | ProviderName::Anthropic
                 | ProviderName::CodexCli
+                | ProviderName::ClaudeSdk
+                | ProviderName::AntigravityAcp
         ),
         prompt_template: "default".to_string(),
         provider_options_defaults: Map::new(),
@@ -398,7 +400,9 @@ fn reasoning_provider_option_keys(provider: ProviderName) -> &'static [&'static 
         | ProviderName::Together
         | ProviderName::Lmstudio
         | ProviderName::OpencodeGo
-        | ProviderName::OpencodeZen => &["reasoningEffort"],
+        | ProviderName::OpencodeZen
+        | ProviderName::ClaudeSdk
+        | ProviderName::AntigravityAcp => &["reasoningEffort"],
         _ => &[],
     }
 }

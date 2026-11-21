@@ -524,6 +524,22 @@ pub struct ProviderCodexAppServerUpdateParams {
     pub force: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderRuntimeStatusParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub check_latest: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderRuntimeUpdateParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub force: Option<bool>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderLmStudioLocalStatusParams {
@@ -1197,6 +1213,8 @@ pub fn export_protocol_schema_manifest() -> Value {
     insert_schema!(ProviderCapabilitiesCheckParams);
     insert_schema!(ProviderCodexAppServerStatusParams);
     insert_schema!(ProviderCodexAppServerUpdateParams);
+    insert_schema!(ProviderRuntimeStatusParams);
+    insert_schema!(ProviderRuntimeUpdateParams);
     insert_schema!(ProviderLmStudioLocalStatusParams);
     insert_schema!(ProviderLmStudioLocalStartParams);
     insert_schema!(ProviderAuthAuthorizeParams);

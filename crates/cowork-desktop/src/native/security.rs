@@ -68,6 +68,17 @@ struct RootEntry {
     persisted: bool,
 }
 
+/// Authorization key for a canonical workspace root: case-insensitive only on Windows so
+/// case-sensitive macOS/Linux volumes never conflate roots differing only by case.
+fn workspace_root_auth_key(canonical: &Path) -> String {
+    let platform = host_platform();
+    if platform == "win32" {
+        canonical_key(canonical, "win32")
+    } else {
+        canonical_key(canonical, "linux")
+    }
+}
+
 /// Authorizes filesystem access per workspace against persisted or explicitly approved roots.
 #[derive(Clone, Debug, Default)]
 pub struct WorkspaceRootsController {
@@ -84,7 +95,7 @@ impl WorkspaceRootsController {
 
     pub fn approve_root(&mut self, root_path: &Path, persisted: bool) -> PathBuf {
         let canonical = canonicalize_sync(root_path);
-        let key = canonical_key(&canonical, host_platform());
+        let key = workspace_root_auth_key(&canonical);
         if !persisted {
             self.picked_root_keys.insert(key.clone());
         }
@@ -110,7 +121,7 @@ impl WorkspaceRootsController {
         let retained_unpersisted: HashSet<String> = self
             .unpersisted_by_workspace_id
             .values()
-            .map(|p| canonical_key(p, host_platform()))
+            .map(|p| workspace_root_auth_key(p))
             .collect();
         self.approved_roots_by_key
             .retain(|k, v| v.persisted || retained_unpersisted.contains(k));
@@ -129,7 +140,7 @@ impl WorkspaceRootsController {
     pub fn register_workspace(&mut self, workspace_id: &str, root_path: &Path) -> Result<PathBuf> {
         assert_safe_id(workspace_id, "workspaceId")?;
         let canonical = canonicalize_sync(root_path);
-        let key = canonical_key(&canonical, host_platform());
+        let key = workspace_root_auth_key(&canonical);
         self.approved_roots_by_key
             .entry(key)
             .or_insert_with(|| RootEntry {
@@ -172,7 +183,7 @@ impl WorkspaceRootsController {
             .persisted_by_workspace_id
             .values()
             .chain(self.unpersisted_by_workspace_id.values())
-            .map(|p| canonical_key(p, host_platform()))
+            .map(|p| workspace_root_auth_key(p))
             .collect();
         self.approved_roots_by_key
             .retain(|key, _| referenced.contains(key) || self.picked_root_keys.contains(key));
@@ -215,7 +226,7 @@ impl WorkspaceRootsController {
             bail!("Workspace root mismatch for {workspace_id}");
         }
 
-        let key = canonical_key(&requested, host_platform());
+        let key = workspace_root_auth_key(&requested);
         if !self.approved_roots_by_key.contains_key(&key) {
             bail!(
                 "Workspace root is not approved. Select the folder with the desktop picker before starting."

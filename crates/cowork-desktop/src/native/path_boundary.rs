@@ -2,10 +2,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use cowork_config::{
-    CaseSensitivity, fs_case_sensitivity, host_platform, normalize_lexical_path,
-    strip_windows_verbatim_prefix,
-};
+use cowork_config::{host_platform, normalize_lexical_path, strip_windows_verbatim_prefix};
 
 /// Normalizes a path lexically and losslessly removes Windows `\\?\` verbatim prefixes
 /// so equal paths compare consistently across user input and `fs::canonicalize`.
@@ -52,7 +49,11 @@ pub fn is_path_equal_or_inside_for_platform(
 ) -> bool {
     let root = normalize_for_boundary_check(root_path);
     let target = normalize_for_boundary_check(target_path);
-    let case_insensitive = fs_case_sensitivity(platform) == CaseSensitivity::Insensitive;
+    // Use conservative case-sensitive component comparison on macOS and Linux so case-sensitive
+    // APFS/HFS+ volumes never conflate `/Volumes/CS/Repo` with sibling `/Volumes/CS/repo`.
+    // Callers canonicalize existing paths first, so case-insensitive macOS volumes still match
+    // because canonicalization normalizes both paths to their real on-disk casing.
+    let case_insensitive = platform == "win32";
 
     let root_comps: Vec<Component<'_>> = root.components().collect();
     let target_comps: Vec<Component<'_>> = target.components().collect();
@@ -108,6 +109,11 @@ mod tests {
         assert!(is_path_equal_or_inside_for_platform(
             Path::new("/Users/Alice/Workspace"),
             Path::new("/users/alice/workspace/File.md"),
+            "win32",
+        ));
+        assert!(!is_path_equal_or_inside_for_platform(
+            Path::new("/Volumes/CS/Repo"),
+            Path::new("/Volumes/CS/repo/secret.txt"),
             "darwin",
         ));
         assert!(!is_path_equal_or_inside_for_platform(

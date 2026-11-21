@@ -1472,6 +1472,54 @@ impl ServerManager {
         }
     }
 
+    /// Fetches the current trusted device list via `GET /mobile-h3/trusted` and updates the
+    /// cached `mobileH3` snapshot on the running workspace server.
+    pub async fn refresh_mobile_h3_trusted_devices(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<Value>, String> {
+        let (handle, admin_token, list_url) = self.mobile_h3_admin_base(workspace_id)?;
+        let resp = self
+            .http_client
+            .get(list_url)
+            .bearer_auth(&admin_token)
+            .send()
+            .await
+            .map_err(|err| format!("Failed fetching trusted phones: {err}"))?;
+
+        let status = resp.status();
+        let resp_bytes = resp
+            .bytes()
+            .await
+            .map_err(|err| format!("Failed reading trusted phones response: {err}"))?;
+        let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok();
+
+        if !status.is_success() {
+            return Err(Self::parse_mobile_h3_error_detail(
+                status,
+                resp_json.as_ref(),
+            ));
+        }
+
+        let devices = resp_json
+            .as_ref()
+            .and_then(|v| v.get("trustedDevices"))
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| "Trusted phones response missing trustedDevices array.".to_string())?;
+
+        let mut h3_guard = handle.mobile_h3.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(Value::Object(map)) = h3_guard.as_mut() {
+            if let Some(first) = devices.first() {
+                map.insert("trustedDevice".to_string(), first.clone());
+            } else {
+                map.remove("trustedDevice");
+            }
+            map.insert("trustedDevices".to_string(), Value::Array(devices));
+        }
+        Ok(h3_guard.clone())
+    }
+
     /// Updates a paired phone's permissions via `PATCH /mobile-h3/trusted/<id>/permissions`
     /// and returns the refreshed `mobileH3` snapshot cached on the running workspace server.
     pub async fn update_mobile_h3_trusted_device_permissions(
@@ -1629,6 +1677,34 @@ impl ServerManager {
     ) -> Result<Option<Value>, String> {
         self.send_mobile_h3_admin_delete(workspace_id, None, "Failed revoking trusted phones")
             .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_mobile_h3_handle(
+        &self,
+        workspace_id: &str,
+        port: u16,
+        mobile_h3: Value,
+    ) {
+        let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
+        let handle = Arc::new(RunningServerHandle {
+            instance_id: 1,
+            workspace_path: PathBuf::from("/tmp/ws-test"),
+            stdin: Mutex::new(None),
+            kill_tx: Mutex::new(Some(kill_tx)),
+            ws_url: format!("ws://127.0.0.1:{port}/ws?coworkBrowserToken=tok-ws"),
+            port,
+            browser_access_token: Some("tok-ws".into()),
+            yolo: false,
+            has_mobile_h3: true,
+            mobile_h3: Mutex::new(Some(mobile_h3)),
+            feature_flag_fingerprint: WorkspaceServerFeatureFlags::default().fingerprint(),
+            suppressed_exit: Arc::new(AtomicBool::new(false)),
+            exited: Arc::new(AtomicBool::new(false)),
+            exited_notify: Arc::new(Notify::new()),
+        });
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.servers.insert(workspace_id.to_string(), handle);
     }
 
     async fn graceful_kill_handle(handle: &RunningServerHandle) {

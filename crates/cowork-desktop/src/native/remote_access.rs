@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use serde_json::{Map, Value, json};
@@ -203,7 +203,9 @@ pub fn remote_access_state_from_mobile_h3(
     }
 }
 
-#[derive(Clone, Default)]
+const DEFAULT_TRUSTED_DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(3);
+
+#[derive(Default)]
 struct RemoteAccessRuntime {
     available: bool,
     desired_enabled: bool,
@@ -211,6 +213,8 @@ struct RemoteAccessRuntime {
     known_workspaces: HashMap<String, (PathBuf, bool)>,
     preferred_workspace_id: Option<String>,
     last_state: RemoteAccessState,
+    poll_generation: u64,
+    poll_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Serialized coordinator controlling `--mobile-h3` pairing and `/mobile-h3/trusted` updates.
@@ -222,6 +226,7 @@ pub struct RemoteAccessBridge {
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
     state: Arc<Mutex<RemoteAccessRuntime>>,
     mutation_lock: Arc<AsyncMutex<()>>,
+    poll_interval: Duration,
 }
 
 impl RemoteAccessBridge {
@@ -245,12 +250,84 @@ impl RemoteAccessBridge {
                 ..RemoteAccessRuntime::default()
             })),
             mutation_lock: Arc::new(AsyncMutex::new(())),
+            poll_interval: DEFAULT_TRUSTED_DEVICE_POLL_INTERVAL,
         }
     }
 
     pub fn with_analytics(mut self, analytics: ProductAnalyticsService) -> Self {
         self.analytics = Some(analytics);
         self
+    }
+
+    #[cfg(test)]
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval.max(Duration::from_millis(10));
+        self
+    }
+
+    pub fn stop_polling(&self) {
+        let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        guard.poll_generation = guard.poll_generation.wrapping_add(1);
+        if let Some(handle) = guard.poll_task.take() {
+            handle.abort();
+        }
+    }
+
+    fn sync_poller(&self) {
+        let should_poll = {
+            let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let active =
+                guard.available && guard.last_state.running && guard.active_workspace_id.is_some();
+            if !active {
+                guard.poll_generation = guard.poll_generation.wrapping_add(1);
+                if let Some(handle) = guard.poll_task.take() {
+                    handle.abort();
+                }
+                None
+            } else if guard
+                .poll_task
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished())
+            {
+                None
+            } else {
+                guard.poll_generation = guard.poll_generation.wrapping_add(1);
+                Some(guard.poll_generation)
+            }
+        };
+
+        let Some(generation) = should_poll else {
+            return;
+        };
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+
+        let bridge = self.clone();
+        let interval = self.poll_interval;
+        let handle = rt.spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let keep_polling = {
+                    let guard = bridge.state.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.poll_generation == generation
+                        && guard.available
+                        && guard.last_state.running
+                        && guard.active_workspace_id.is_some()
+                };
+                if !keep_polling {
+                    break;
+                }
+                bridge.refresh_trusted_devices_inner(false).await;
+            }
+        });
+
+        let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.poll_generation == generation {
+            guard.poll_task = Some(handle);
+        } else {
+            handle.abort();
+        }
     }
 
     pub fn current_state(&self) -> RemoteAccessState {
@@ -308,6 +385,7 @@ impl RemoteAccessBridge {
         if let Some(ev) = next_emit {
             (self.emit)(StoreEvent::RemoteAccessChanged(ev));
         }
+        self.sync_poller();
     }
 
     pub fn on_server_started(&self, workspace_id: &str, mobile_h3: Option<&Value>) {
@@ -330,6 +408,7 @@ impl RemoteAccessBridge {
         if let Some(ev) = next_emit {
             (self.emit)(StoreEvent::RemoteAccessChanged(ev));
         }
+        self.sync_poller();
     }
 
     pub fn on_server_exited(&self, workspace_id: &str) {
@@ -350,6 +429,7 @@ impl RemoteAccessBridge {
         if let Some(ev) = next_emit {
             (self.emit)(StoreEvent::RemoteAccessChanged(ev));
         }
+        self.sync_poller();
     }
 
     fn resolve_target(&self) -> Option<(String, PathBuf, bool)> {
@@ -602,6 +682,81 @@ impl RemoteAccessBridge {
         .await;
     }
 
+    pub async fn refresh_trusted_devices(&self) {
+        self.refresh_trusted_devices_inner(true).await;
+    }
+
+    async fn refresh_trusted_devices_inner(&self, wait_for_mutations: bool) {
+        let _lock = if wait_for_mutations {
+            self.mutation_lock.lock().await
+        } else {
+            let Ok(guard) = self.mutation_lock.try_lock() else {
+                return;
+            };
+            guard
+        };
+
+        let (available, active_ws) = {
+            let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if !guard.available || !guard.last_state.running {
+                return;
+            }
+            (guard.available, guard.active_workspace_id.clone())
+        };
+        let Some(ws_id) = active_ws else {
+            return;
+        };
+
+        match self
+            .server_manager
+            .refresh_mobile_h3_trusted_devices(&ws_id)
+            .await
+        {
+            Ok(updated_h3) => {
+                let (next_emit, newly_paired) = {
+                    let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if !guard.available
+                        || !guard.last_state.running
+                        || guard.active_workspace_id.as_deref() != Some(ws_id.as_str())
+                    {
+                        return;
+                    }
+                    let next =
+                        remote_access_state_from_mobile_h3(available, updated_h3.as_ref(), None);
+                    let newly_paired = guard.last_state.trusted_phones.is_empty()
+                        && !next.trusted_phones.is_empty();
+                    if next != guard.last_state {
+                        guard.last_state = next.clone();
+                        (Some(next), newly_paired)
+                    } else {
+                        (None, false)
+                    }
+                };
+                if newly_paired && let Some(analytics) = &self.analytics {
+                    let mut props = BTreeMap::new();
+                    props.insert("status".into(), json!("connected"));
+                    props.insert("mobilePairingEnabled".into(), json!(true));
+                    analytics.capture_event("mobile_pairing_completed", &props);
+                }
+                if let Some(ev) = next_emit {
+                    (self.emit)(StoreEvent::RemoteAccessChanged(ev));
+                }
+            }
+            Err(err) => {
+                if let Some(logger) = &self.logger {
+                    let meta = serde_json::json!({ "workspaceId": ws_id, "error": err });
+                    logger.write(
+                        LocalLogFileName::Server,
+                        LocalLogLevel::Warn,
+                        "remote-access",
+                        "failed refreshing trusted devices",
+                        Some(&meta),
+                    );
+                }
+            }
+        }
+    }
+
     pub async fn revoke_all_trusted_phones(&self) {
         let _lock = self.mutation_lock.lock().await;
         let mgr = self.server_manager.clone();
@@ -617,6 +772,7 @@ impl RemoteAccessBridge {
             guard.last_state = state.clone();
         }
         (self.emit)(StoreEvent::RemoteAccessChanged(state));
+        self.sync_poller();
     }
 
     fn emit_error(&self, available: bool, message: &str) {
@@ -695,5 +851,118 @@ mod tests {
             state.trusted_phones[0].permissions,
             "turns, serverRequests, conversations"
         );
+    }
+
+    #[tokio::test]
+    async fn polls_and_publishes_newly_paired_trusted_devices_while_running() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let paired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let paired_srv = Arc::clone(&paired);
+
+        let server_task = tokio::spawn(async move {
+            for _ in 0..4 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                assert!(req.starts_with("GET /mobile-h3/trusted "));
+                assert!(
+                    req.contains("authorization: Bearer adm-poll")
+                        || req.contains("Authorization: Bearer adm-poll")
+                );
+
+                let body = if paired_srv.load(std::sync::atomic::Ordering::Acquire) {
+                    json!({
+                        "trustedDevices": [{
+                            "deviceId": "phone-99",
+                            "displayName": "Pixel 10",
+                            "lastPairedAt": "2026-11-21T02:00:00.000Z",
+                            "permissions": { "turns": true, "conversations": true }
+                        }]
+                    })
+                    .to_string()
+                } else {
+                    json!({ "trustedDevices": [] }).to_string()
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = ServerManager::new(
+            crate::native::server_manager::ServerManagerRuntime {
+                user_data_dir: tmp.path().to_path_buf(),
+                resources_dir: None,
+                current_exe_dir: None,
+                repo_root: None,
+                is_packaged: false,
+            },
+            None,
+            None,
+        );
+        manager.insert_test_mobile_h3_handle(
+            "ws-1",
+            addr.port(),
+            json!({
+                "url": "https://relay.example",
+                "ticket": "cowork://pair/xyz",
+                "adminToken": "adm-poll",
+                "trustedDevices": []
+            }),
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = RemoteAccessBridge::new(
+            manager,
+            None,
+            Arc::new(move |ev| {
+                let _ = tx.send(ev);
+            }),
+            true,
+        )
+        .with_poll_interval(Duration::from_millis(25));
+
+        bridge.on_server_started(
+            "ws-1",
+            Some(&json!({
+                "url": "https://relay.example",
+                "ticket": "cowork://pair/xyz",
+                "trustedDevices": []
+            })),
+        );
+        // Drain initial started snapshot (0 trusted devices).
+        let initial = rx.recv().await.unwrap();
+        let StoreEvent::RemoteAccessChanged(initial_state) = initial else {
+            panic!("expected RemoteAccessChanged");
+        };
+        assert!(initial_state.running);
+        assert!(initial_state.trusted_phones.is_empty());
+
+        // Phone pairs on the server after startup; background poller must pick it up.
+        paired.store(true, std::sync::atomic::Ordering::Release);
+        let updated = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("expected poller update after phone pairing")
+            .unwrap();
+        let StoreEvent::RemoteAccessChanged(updated_state) = updated else {
+            panic!("expected RemoteAccessChanged");
+        };
+        assert_eq!(updated_state.trusted_phones.len(), 1);
+        assert_eq!(updated_state.trusted_phones[0].id, "phone-99");
+        assert_eq!(updated_state.trusted_phones[0].name, "Pixel 10");
+
+        bridge.stop_polling();
+        server_task.abort();
     }
 }

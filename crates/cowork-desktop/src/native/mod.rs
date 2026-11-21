@@ -464,6 +464,7 @@ pub fn spawn_native_worker(
 /// because Rune runs `fast_exit` immediately after `App::on_quit` returns.
 async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &ShutdownCoordinator) {
     set_shared_analytics(None);
+    runtime_ctx.remote_access.stop_polling();
     runtime_ctx.updater.dispose();
     let _ = runtime_ctx.transcript_buffer.flush();
     runtime_ctx.tray.teardown_for_shutdown();
@@ -1172,6 +1173,78 @@ impl NativeWorkerContext {
             } => {
                 self.dispatch_pick_files(request_id, allow_multiple);
             }
+            NativeCommand::StageComposerUpload {
+                key,
+                workspace_id,
+                workspace_root,
+                uploads_directory,
+                source_path,
+                filename,
+                mime_type,
+            } => {
+                let roots = self.roots.clone();
+                let uploads = self.uploads.clone();
+                let logger = self.logger.clone();
+                let emit = self.emit.clone();
+                tokio::spawn(async move {
+                    let filename_for_task = filename.clone();
+                    let staged = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+                        let (approved_roots, authorized_ws) = {
+                            let guard = roots.lock().unwrap_or_else(|e| e.into_inner());
+                            let ws = guard
+                                .resolve_authorized_workspace_root(
+                                    &workspace_id,
+                                    Some(Path::new(&workspace_root)),
+                                )
+                                .map_err(|err| err.to_string())?;
+                            (guard.approved_roots(), ws)
+                        };
+                        let mut reg = uploads.lock().unwrap_or_else(|e| e.into_inner());
+                        let token = reg
+                            .authorize_file(&source_path)
+                            .map_err(|err| err.to_string())?;
+                        let uploads_override = uploads_directory
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(PathBuf::from);
+                        explorer::copy_authorized_upload_to_workspace(
+                            &mut reg,
+                            &approved_roots,
+                            &authorized_ws,
+                            &source_path,
+                            &token,
+                            &filename_for_task,
+                            uploads_override.as_deref(),
+                        )
+                        .map_err(|err| err.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|err| Err(format!("Attachment upload worker panicked: {err}")));
+
+                    if let Err(ref err) = staged {
+                        let meta = json!({ "error": err });
+                        logger.warn(
+                            "security",
+                            "failed to stage large composer attachment into workspace uploads",
+                            Some(&meta),
+                        );
+                    }
+                    let staged_name = staged
+                        .as_ref()
+                        .ok()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .map(ToString::to_string)
+                        .unwrap_or(filename);
+                    emit(StoreEvent::ComposerUploadStaged {
+                        key,
+                        filename: staged_name,
+                        mime_type,
+                        result: staged,
+                    });
+                });
+            }
             NativeCommand::ListWorkspaceFiles {
                 request_id: _,
                 workspace_id,
@@ -1473,6 +1546,12 @@ impl NativeWorkerContext {
                 let privacy = self.last_privacy.clone();
                 tokio::spawn(async move {
                     remote.rotate_session(flags, privacy).await;
+                });
+            }
+            NativeCommand::RefreshRemoteAccessTrustedDevices => {
+                let remote = self.remote_access.clone();
+                tokio::spawn(async move {
+                    remote.refresh_trusted_devices().await;
                 });
             }
             NativeCommand::UpdateTrustedPhonePermissions {

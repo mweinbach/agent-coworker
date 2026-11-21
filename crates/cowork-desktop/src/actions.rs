@@ -597,6 +597,7 @@ pub enum SettingsAction {
     ExecuteConversationImport,
     SetRemoteAccessEnabled(bool),
     RotateRemoteAccessSession,
+    RefreshRemoteAccess,
     UpdateTrustedPhonePermissions {
         phone_id: String,
         permissions: String,
@@ -796,6 +797,15 @@ pub enum NativeCommand {
         request_id: String,
         allow_multiple: bool,
     },
+    StageComposerUpload {
+        key: String,
+        workspace_id: String,
+        workspace_root: String,
+        uploads_directory: Option<String>,
+        source_path: PathBuf,
+        filename: String,
+        mime_type: String,
+    },
     ListWorkspaceFiles {
         request_id: String,
         workspace_id: String,
@@ -823,6 +833,7 @@ pub enum NativeCommand {
     CopyText(String),
     SetRemoteAccessEnabled(bool),
     RotateRemoteAccessSession,
+    RefreshRemoteAccessTrustedDevices,
     UpdateTrustedPhonePermissions {
         phone_id: String,
         permissions: String,
@@ -887,6 +898,12 @@ pub enum StoreEvent {
     FilesPicked {
         request_id: String,
         paths: Vec<PathBuf>,
+    },
+    ComposerUploadStaged {
+        key: String,
+        filename: String,
+        mime_type: String,
+        result: Result<PathBuf, String>,
     },
     WorkspaceAdded(WorkspaceRecord),
     ImportedWorkspacesLoaded(Vec<WorkspaceRecord>),

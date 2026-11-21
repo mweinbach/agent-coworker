@@ -1066,6 +1066,11 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
             set_or_remove_trimmed_str(&mut map, "model", th.model.as_deref());
             set_or_remove_trimmed_str(&mut map, "reasoningEffort", th.reasoning_effort.as_deref());
             set_or_remove_trimmed_str(&mut map, "preview", th.preview.as_deref());
+            set_or_remove_trimmed_str(
+                &mut map,
+                "legacyTranscriptId",
+                th.legacy_transcript_id.as_deref(),
+            );
             Value::Object(map)
         })
         .collect();
@@ -1989,19 +1994,22 @@ fn set_or_remove_json_object(map: &mut Map<String, Value>, key: &str, value: Opt
     }
 }
 
+fn allows_explicit_null_default(desktop_key: &str) -> bool {
+    desktop_key == "defaultToolOutputOverflowChars"
+}
+
 fn find_workspace_default_value<'a>(
     map: &'a Map<String, Value>,
     desktop_key: &str,
     server_key: &str,
 ) -> Option<&'a Value> {
-    map.get(desktop_key)
-        .or_else(|| map.get(server_key))
-        .or_else(|| {
-            (desktop_key == "defaultAdvancedMemory")
-                .then(|| map.get("advancedMemoryEnabled"))
-                .flatten()
-        })
-        .filter(|v| !v.is_null())
+    let allow_null = allows_explicit_null_default(desktop_key);
+    let pick = |key: &str| map.get(key).filter(|v| allow_null || !v.is_null());
+    pick(desktop_key).or_else(|| pick(server_key)).or_else(|| {
+        (desktop_key == "defaultAdvancedMemory")
+            .then(|| pick("advancedMemoryEnabled"))
+            .flatten()
+    })
 }
 
 fn sync_workspace_defaults_to_doc(map: &mut Map<String, Value>, defaults: &Value) {
@@ -2087,6 +2095,13 @@ fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
             && let Some(val) = find_workspace_default_value(map, desktop_key, server_key)
         {
             defaults_map.insert(desktop_key.to_string(), val.clone());
+        } else if !defaults_map.contains_key(desktop_key)
+            && let Some(val) = defaults_map
+                .get(server_key)
+                .filter(|v| allows_explicit_null_default(desktop_key) || !v.is_null())
+                .cloned()
+        {
+            defaults_map.insert(desktop_key.to_string(), val);
         }
     }
     ws.defaults = Value::Object(defaults_map);
@@ -2119,6 +2134,7 @@ fn core_thread_from_value(value: &Value) -> Option<ThreadRecord> {
         title,
         status,
         session_id: non_empty_string(map.get("sessionId")),
+        legacy_transcript_id: safe_id_from_value(map.get("legacyTranscriptId")),
         pinned: map.get("pinned").and_then(Value::as_bool).unwrap_or(false),
         archived: map
             .get("archived")
@@ -2747,6 +2763,118 @@ mod tests {
     }
 
     #[test]
+    fn preserves_explicit_null_tool_output_overflow_override_across_migration_and_save() {
+        let tmp = tempdir().unwrap();
+        let ws_dir = tmp.path().join("legacy-ws");
+        fs::create_dir_all(&ws_dir).unwrap();
+        let data_dir = tmp.path().join("Cowork");
+        fs::create_dir_all(&data_dir).unwrap();
+
+        let legacy_state = json!({
+            "version": 2,
+            "workspaces": [{
+                "id": "ws-legacy",
+                "name": "Legacy",
+                "path": ws_dir.to_string_lossy(),
+                "workspaceKind": "project",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastOpenedAt": "2026-01-02T00:00:00.000Z",
+                "defaultToolOutputOverflowChars": null
+            }],
+            "threads": []
+        });
+        fs::write(
+            data_dir.join("state.json"),
+            serde_json::to_string_pretty(&legacy_state).unwrap(),
+        )
+        .unwrap();
+
+        let service = PersistenceService::new(data_dir, None, true, None);
+        let loaded = service.load_core_state().unwrap();
+        assert_eq!(loaded.workspaces.len(), 1);
+        assert_eq!(
+            loaded.workspaces[0]
+                .defaults
+                .get("defaultToolOutputOverflowChars"),
+            Some(&Value::Null)
+        );
+
+        let saved_doc = service.merge_and_save_core_snapshot(&loaded).unwrap();
+        assert_eq!(
+            saved_doc["workspaces"][0].get("defaultToolOutputOverflowChars"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            saved_doc["workspaces"][0]["defaults"].get("defaultToolOutputOverflowChars"),
+            Some(&Value::Null)
+        );
+
+        let reloaded = service.load_core_state().unwrap();
+        assert_eq!(
+            reloaded.workspaces[0]
+                .defaults
+                .get("defaultToolOutputOverflowChars"),
+            Some(&Value::Null)
+        );
+    }
+
+    #[test]
+    fn preserves_legacy_transcript_id_across_load_and_save() {
+        let tmp = tempdir().unwrap();
+        let ws_dir = tmp.path().join("ws");
+        fs::create_dir_all(&ws_dir).unwrap();
+        let data_dir = tmp.path().join("Cowork");
+        fs::create_dir_all(&data_dir).unwrap();
+
+        let state = json!({
+            "version": 2,
+            "workspaces": [{
+                "id": "ws-1",
+                "name": "Repo",
+                "path": ws_dir.to_string_lossy(),
+                "workspaceKind": "project",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastOpenedAt": "2026-01-02T00:00:00.000Z"
+            }],
+            "threads": [{
+                "id": "srv-thread-1",
+                "workspaceId": "ws-1",
+                "title": "Migrated",
+                "status": "active",
+                "sessionId": "srv-thread-1",
+                "legacyTranscriptId": "electron-local-42",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "lastMessageAt": "2026-01-02T00:00:00.000Z"
+            }]
+        });
+        fs::write(
+            data_dir.join("state.json"),
+            serde_json::to_string_pretty(&state).unwrap(),
+        )
+        .unwrap();
+
+        let service = PersistenceService::new(data_dir, None, true, None);
+        let loaded = service.load_core_state().unwrap();
+        assert_eq!(loaded.threads.len(), 1);
+        assert_eq!(
+            loaded.threads[0].legacy_transcript_id.as_deref(),
+            Some("electron-local-42")
+        );
+
+        let saved_doc = service.merge_and_save_core_snapshot(&loaded).unwrap();
+        assert_eq!(
+            saved_doc["threads"][0]["legacyTranscriptId"],
+            json!("electron-local-42")
+        );
+
+        let reloaded = service.load_core_state().unwrap();
+        assert_eq!(
+            reloaded.threads[0].legacy_transcript_id.as_deref(),
+            Some("electron-local-42")
+        );
+    }
+
+    #[test]
     fn onboarding_dismissed_completed_steps_and_electron_schema_roundtrip() {
         let tmp = tempdir().unwrap();
         let service = PersistenceService::new(tmp.path().join("Cowork"), None, true, None);
@@ -2885,6 +3013,7 @@ mod tests {
             title: "Renamed chat".to_string(),
             status: ThreadStatus::Disconnected,
             session_id: Some("sess-existing".to_string()),
+            legacy_transcript_id: None,
             pinned: true,
             archived: false,
             draft: false,
@@ -2903,6 +3032,7 @@ mod tests {
             title: "Beta archived".to_string(),
             status: ThreadStatus::Active,
             session_id: Some("th-b".to_string()),
+            legacy_transcript_id: None,
             pinned: false,
             archived: true,
             draft: false,

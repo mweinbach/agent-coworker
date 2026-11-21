@@ -16,7 +16,8 @@ use super::security::{AuthorizedUploadRegistry, MAX_ATTACHMENT_UPLOAD_BYTE_SIZE}
 use super::validation::{assert_directory_entry_within_roots, assert_path_within_roots};
 use crate::state::WorkspaceFileEntry;
 
-const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME: &str = "User Uploads";
+const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME: &str = "uploads";
+const WORKSPACE_USER_UPLOADS_SUBDIR: &str = "User Uploads";
 
 /// Hidden files and noisy dependency folders omitted from explorer listings unless requested.
 pub fn is_explorer_entry_hidden(name: &str) -> bool {
@@ -131,7 +132,8 @@ pub async fn rename_workspace_entry(
     Ok(safe_target)
 }
 
-/// Copies a one-time authorized user-picked file into `<workspace>/User Uploads` safely.
+/// Copies a one-time authorized user-picked file into the workspace's uploads directory
+/// (`<workspace>/uploads/User Uploads` by default, matching `cowork-harness` confinement).
 pub fn copy_authorized_upload_to_workspace(
     registry: &mut AuthorizedUploadRegistry,
     workspace_roots: &[PathBuf],
@@ -149,7 +151,9 @@ pub fn copy_authorized_upload_to_workspace(
     let requested_uploads_dir = match uploads_dir_override {
         Some(rel_or_abs) if rel_or_abs.is_absolute() => rel_or_abs.to_path_buf(),
         Some(rel) => safe_workspace.join(rel),
-        None => safe_workspace.join(DEFAULT_WORKSPACE_UPLOADS_DIR_NAME),
+        None => safe_workspace
+            .join(DEFAULT_WORKSPACE_UPLOADS_DIR_NAME)
+            .join(WORKSPACE_USER_UPLOADS_SUBDIR),
     };
 
     let safe_uploads_base = assert_directory_entry_within_roots(
@@ -157,10 +161,21 @@ pub fn copy_authorized_upload_to_workspace(
         &requested_uploads_dir,
         "uploadsDirectory",
     )?;
-    fs::create_dir_all(&safe_uploads_base)?;
+    // If a configured uploads directory resolves to the workspace root itself, narrow to
+    // `<workspace>/User Uploads` so `cowork-harness`'s `open_uploaded_file` accepts it.
+    let target_uploads_dir = if safe_uploads_base == safe_workspace {
+        assert_directory_entry_within_roots(
+            std::slice::from_ref(&safe_workspace),
+            &safe_workspace.join(WORKSPACE_USER_UPLOADS_SUBDIR),
+            "uploadsDirectory",
+        )?
+    } else {
+        safe_uploads_base
+    };
+    fs::create_dir_all(&target_uploads_dir)?;
     let resolved_uploads_dir = assert_path_within_roots(
         std::slice::from_ref(&safe_workspace),
-        &safe_uploads_base,
+        &target_uploads_dir,
         "uploadsDirectory",
     )?;
 
@@ -259,6 +274,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out1.file_name().and_then(|s| s.to_str()), Some("photo.png"));
+        assert!(
+            out1.starts_with(
+                canonicalize_sync(ws.path())
+                    .join("uploads")
+                    .join("User Uploads")
+            ),
+            "default staged upload must live inside <workspace>/uploads/User Uploads (got {})",
+            out1.display()
+        );
 
         // Reusing a consumed token must fail closed.
         let reuse_err = copy_authorized_upload_to_workspace(

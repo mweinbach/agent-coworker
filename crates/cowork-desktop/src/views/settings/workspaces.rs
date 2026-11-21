@@ -864,15 +864,30 @@ pub fn models_defaults_sections(
             } else {
                 child_m.clone()
             };
-            let defaults = if rm_mod == "same-provider" {
-                json!({
-                    "defaultModel": chosen,
-                    "defaultPreferredChildModel": next_child,
-                    "defaultPreferredChildModelRef": format!("{pid_mod}:{next_child}"),
-                })
-            } else {
-                json!({ "defaultModel": chosen })
-            };
+            let mut patch = serde_json::Map::new();
+            if !pid_mod.trim().is_empty() {
+                patch.insert(
+                    "defaultProvider".to_string(),
+                    Value::String(pid_mod.clone()),
+                );
+            }
+            patch.insert(
+                "defaultModel".to_string(),
+                Value::String(chosen.to_string()),
+            );
+            if rm_mod == "same-provider" {
+                patch.insert(
+                    "defaultPreferredChildModel".to_string(),
+                    Value::String(next_child.clone()),
+                );
+                if !pid_mod.trim().is_empty() {
+                    patch.insert(
+                        "defaultPreferredChildModelRef".to_string(),
+                        Value::String(format!("{pid_mod}:{next_child}")),
+                    );
+                }
+            }
+            let defaults = Value::Object(patch);
             s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                 workspace_id: ws_mod.clone(),
                 defaults,

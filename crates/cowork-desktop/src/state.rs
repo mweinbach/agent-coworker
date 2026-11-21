@@ -26,8 +26,8 @@ use cowork_protocol::{
     RuntimeLibreOfficeCheckResult, SessionConfigSetParams, SessionDefaultsApplyParams,
     SessionDeleteParams, SessionModelSetParams, SessionTitleSetParams, ThreadArchivedSetParams,
     ThreadForkParams, ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams,
-    ThreadStartParams, TurnAttachmentInputPart, TurnInput, TurnInterruptParams, TurnReference,
-    TurnRetrySpec, TurnStartParams, TurnSteerParams,
+    ThreadResumeParams, ThreadStartParams, TurnAttachmentInputPart, TurnInput, TurnInterruptParams,
+    TurnReference, TurnRetrySpec, TurnStartParams, TurnSteerParams,
 };
 use rune::TextEdit;
 use rune_kit::PaneState;
@@ -221,6 +221,7 @@ pub(crate) struct PendingCanvasRpc {
     pub generation: u64,
     pub edit_revision: u64,
     pub target_path: Option<String>,
+    pub submitted_content: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -342,6 +343,8 @@ pub struct ThreadRecord {
     pub status: ThreadStatus,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_transcript_id: Option<String>,
     pub pinned: bool,
     pub archived: bool,
     #[serde(default)]
@@ -1725,6 +1728,7 @@ pub struct AppState {
     pub settings_ui: crate::views::settings::SettingsUiState,
     pub shell_ui: crate::views::shell::ShellUiState,
     pub(crate) pending_draft_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_draft_config_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_picker_composer_by_request: HashMap<String, String>,
     pub native_ready: bool,
     pub is_packaged: bool,
@@ -1753,6 +1757,9 @@ pub struct AppState {
     pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
     pub(crate) pending_presentation_rpcs: HashMap<u64, PendingPresentationRpc>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) subscribed_threads_by_workspace: HashMap<String, HashSet<String>>,
+    pub(crate) pending_upload_stages_by_key: HashMap<String, usize>,
     pub(crate) persisted_active_thread_id: Option<String>,
     pub(crate) rekeyed_thread_ids: HashMap<String, String>,
     pub(crate) latest_creation_preflight_rpc_id: Option<u64>,
@@ -1864,6 +1871,7 @@ impl Default for AppState {
             settings_ui: crate::views::settings::SettingsUiState::default(),
             shell_ui: crate::views::shell::ShellUiState::default(),
             pending_draft_threads_by_rpc_id: HashMap::new(),
+            pending_draft_config_by_rpc_id: HashMap::new(),
             pending_picker_composer_by_request: HashMap::new(),
             native_ready: false,
             is_packaged: false,
@@ -1885,6 +1893,9 @@ impl Default for AppState {
             pending_canvas_rpcs: HashMap::new(),
             pending_presentation_rpcs: HashMap::new(),
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
+            pending_resume_threads_by_rpc_id: HashMap::new(),
+            subscribed_threads_by_workspace: HashMap::new(),
+            pending_upload_stages_by_key: HashMap::new(),
             persisted_active_thread_id: None,
             rekeyed_thread_ids: HashMap::new(),
             latest_creation_preflight_rpc_id: None,
@@ -2866,6 +2877,7 @@ impl AppState {
                 generation,
                 edit_revision: 0,
                 target_path: None,
+                submitted_content: None,
             },
         );
     }
@@ -2924,6 +2936,7 @@ impl AppState {
                 generation,
                 edit_revision: 0,
                 target_path: None,
+                submitted_content: None,
             },
         );
     }
@@ -2985,6 +2998,7 @@ impl AppState {
                 generation,
                 edit_revision,
                 target_path: None,
+                submitted_content: Some(content),
             },
         );
     }
@@ -3031,6 +3045,7 @@ impl AppState {
                 generation,
                 edit_revision,
                 target_path: Some(trimmed),
+                submitted_content: Some(content),
             },
         );
     }
@@ -3060,6 +3075,7 @@ impl AppState {
                 generation,
                 edit_revision,
                 target_path: None,
+                submitted_content: None,
             },
         );
     }
@@ -3232,20 +3248,33 @@ impl AppState {
                         if let Some(rev) = new_rev {
                             doc.revision = Some(rev);
                         }
+                        let is_latest_save = saved_edit_rev >= doc.last_saved_edit_revision;
                         doc.last_saved_edit_revision =
                             doc.last_saved_edit_revision.max(saved_edit_rev);
                         doc.last_saved_at_secs = Some(self.now_secs);
-                        if doc.edit_revision <= saved_edit_rev {
-                            doc.disk_content = doc.draft_content.clone();
-                            doc.dirty_since_secs = None;
-                            doc.status = CanvasDocumentStatus::Ready;
-                        } else {
-                            // Newer keystrokes arrived while this save was in-flight; keep dirty and debounce again.
-                            doc.dirty_since_secs = Some(self.now_secs);
-                            doc.status = CanvasDocumentStatus::Ready;
+                        if is_latest_save {
+                            if let Some(saved_content) =
+                                pending.as_ref().and_then(|p| p.submitted_content.as_ref())
+                            {
+                                doc.disk_content = saved_content.clone();
+                            } else if doc.edit_revision <= saved_edit_rev {
+                                doc.disk_content = doc.draft_content.clone();
+                            }
                         }
-                    } else if doc.edit_revision <= saved_edit_rev {
+                        if doc.dirty() {
+                            // Newer edits or an undo arrived while this save was in-flight; keep dirty and debounce again.
+                            doc.dirty_since_secs = Some(self.now_secs);
+                        } else {
+                            doc.dirty_since_secs = None;
+                        }
                         doc.status = CanvasDocumentStatus::Ready;
+                    } else {
+                        doc.status = CanvasDocumentStatus::Ready;
+                        if doc.dirty() {
+                            doc.dirty_since_secs = Some(self.now_secs);
+                        } else {
+                            doc.dirty_since_secs = None;
+                        }
                     }
                     let save_as_refresh = if save_as {
                         Some((doc.workspace_id.clone(), doc.path.clone()))
@@ -3442,13 +3471,21 @@ impl AppState {
 
     fn request_local_transcript(&mut self, thread_id: &str) {
         let mut candidate_ids = vec![thread_id.to_string()];
-        if let Some(t) = self.threads.iter().find(|t| t.id == thread_id)
-            && let Some(sid) = t
+        if let Some(t) = self.threads.iter().find(|t| t.id == thread_id) {
+            if let Some(sid) = t
                 .session_id
                 .as_ref()
-                .filter(|s| !s.is_empty() && *s != thread_id)
-        {
-            candidate_ids.push(sid.clone());
+                .filter(|s| !s.is_empty() && !candidate_ids.iter().any(|c| c == *s))
+            {
+                candidate_ids.push(sid.clone());
+            }
+            if let Some(legacy_id) = t
+                .legacy_transcript_id
+                .as_ref()
+                .filter(|s| !s.is_empty() && !candidate_ids.iter().any(|c| c == *s))
+            {
+                candidate_ids.push(legacy_id.clone());
+            }
         }
         let request_id = self.next_tag("transcript");
         self.send_native(NativeCommand::ReadLocalTranscript {
@@ -3868,6 +3905,52 @@ impl AppState {
             });
     }
 
+    fn resolve_composer_upload_target(
+        &mut self,
+        key: &str,
+    ) -> Option<(String, String, Option<String>)> {
+        let ws_id = if key == "__new__" {
+            if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
+                let id = self.ensure_or_create_quick_chat_workspace();
+                self.landing_workspace_id = Some(id.clone());
+                Some(id)
+            } else {
+                self.resolve_landing_target_workspace()
+                    .map(|w| w.id.clone())
+            }
+        } else {
+            self.workspace_for_thread(key)
+                .or_else(|| self.active_workspace_id.clone())
+        }?;
+        let ws_root = self.workspace_path(&ws_id)?;
+        let uploads_directory = self
+            .workspace_runtime_by_id
+            .get(&ws_id)
+            .and_then(|rt| rt.control_session_config.as_ref())
+            .and_then(|cfg| cfg.get("uploadsDirectory"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        Some((ws_id, ws_root, uploads_directory))
+    }
+
+    fn report_composer_attachment_error(&mut self, key: &str, message: String) {
+        self.composer_drafts
+            .entry(key.to_string())
+            .or_default()
+            .submission_error = Some(message.clone());
+        let toast_ts = self.wall_clock_secs();
+        self.toasts.retain(|t| t.key != "composer-attachment-error");
+        self.toasts.push(NotificationRecord {
+            key: "composer-attachment-error".to_string(),
+            title: "Unable to attach file".to_string(),
+            description: Some(message),
+            tone: NotificationTone::Warning,
+            created_at_secs: toast_ts,
+        });
+    }
+
     fn ingest_composer_paths(&mut self, key: &str, paths: Vec<PathBuf>) {
         const MAX_INLINE_BYTES: u64 = 10 * 1024 * 1024;
         for path in paths {
@@ -3877,22 +3960,61 @@ impl AppState {
                 .unwrap_or("attachment")
                 .to_string();
             let mime_type = mime_type_for_path(&path).to_string();
-            let meta = std::fs::metadata(&path).ok();
-            if meta.is_some_and(|m| m.is_file() && m.len() <= MAX_INLINE_BYTES)
-                && let Ok(bytes) = std::fs::read(&path)
-            {
-                self.attach_bytes_to_composer(key, filename, mime_type, &bytes);
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(err) => {
+                    self.report_composer_attachment_error(
+                        key,
+                        format!("Unable to read \"{filename}\": {err}"),
+                    );
+                    continue;
+                }
+            };
+            if meta.file_type().is_symlink() || !meta.is_file() {
+                self.report_composer_attachment_error(
+                    key,
+                    format!("\"{filename}\" must be a regular file (not a folder or symlink)."),
+                );
                 continue;
             }
-            self.composer_drafts
+            if meta.len() <= MAX_INLINE_BYTES {
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        self.attach_bytes_to_composer(key, filename, mime_type, &bytes);
+                    }
+                    Err(err) => {
+                        self.report_composer_attachment_error(
+                            key,
+                            format!("Unable to read \"{filename}\": {err}"),
+                        );
+                    }
+                }
+                continue;
+            }
+            let Some((workspace_id, workspace_root, uploads_directory)) =
+                self.resolve_composer_upload_target(key)
+            else {
+                self.report_composer_attachment_error(
+                    key,
+                    format!(
+                        "Select a workspace before attaching \"{filename}\" (files over 10 MB must be staged in workspace uploads)."
+                    ),
+                );
+                continue;
+            };
+            *self
+                .pending_upload_stages_by_key
                 .entry(key.to_string())
-                .or_default()
-                .attachments
-                .push(TurnAttachmentInputPart::UploadedFile {
-                    filename,
-                    path: path.to_string_lossy().to_string(),
-                    mime_type,
-                });
+                .or_insert(0) += 1;
+            self.send_native(NativeCommand::StageComposerUpload {
+                key: key.to_string(),
+                workspace_id,
+                workspace_root,
+                uploads_directory,
+                source_path: path,
+                filename,
+                mime_type,
+            });
         }
     }
 
@@ -4054,6 +4176,38 @@ impl AppState {
                     self.ingest_composer_paths(&key, paths);
                 }
             }
+            StoreEvent::ComposerUploadStaged {
+                key,
+                filename,
+                mime_type,
+                result,
+            } => {
+                if let Some(count) = self.pending_upload_stages_by_key.get_mut(&key) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.pending_upload_stages_by_key.remove(&key);
+                    }
+                }
+                match result {
+                    Ok(staged_path) => {
+                        let draft = self.composer_drafts.entry(key).or_default();
+                        draft.submission_error = None;
+                        draft
+                            .attachments
+                            .push(TurnAttachmentInputPart::UploadedFile {
+                                filename,
+                                path: staged_path.to_string_lossy().to_string(),
+                                mime_type,
+                            });
+                    }
+                    Err(err) => {
+                        self.report_composer_attachment_error(
+                            &key,
+                            format!("Failed to stage \"{filename}\" into workspace uploads: {err}"),
+                        );
+                    }
+                }
+            }
             StoreEvent::ImportedWorkspacesLoaded(workspaces) => {
                 let ids: Vec<_> = workspaces.iter().map(|ws| ws.id.clone()).collect();
                 for workspace in workspaces {
@@ -4193,6 +4347,20 @@ impl AppState {
                 workspace_id,
                 state,
             } => {
+                if !matches!(state, WsConnectionState::Connected) {
+                    self.subscribed_threads_by_workspace.remove(&workspace_id);
+                    let stale_resume_ids: Vec<u64> = self
+                        .pending_resume_threads_by_rpc_id
+                        .iter()
+                        .filter(|(_, tid)| {
+                            self.workspace_for_thread(tid).as_deref() == Some(workspace_id.as_str())
+                        })
+                        .map(|(&id, _)| id)
+                        .collect();
+                    for id in stale_resume_ids {
+                        self.pending_resume_threads_by_rpc_id.remove(&id);
+                    }
+                }
                 let reconnecting = matches!(state, WsConnectionState::Reconnecting { .. });
                 let attempt = match &state {
                     WsConnectionState::Reconnecting { attempt, .. } => *attempt,
@@ -4682,14 +4850,19 @@ impl AppState {
                     .thread_runtime_by_id
                     .get(&thread_id)
                     .is_none_or(|rt| (!rt.hydrated || rt.transcript_only) && !rt.hydrating);
-                if needs_hydrate
-                    && self
-                        .threads
-                        .iter()
-                        .find(|t| t.id == thread_id)
-                        .is_some_and(|t| !t.draft)
-                {
+                let is_non_draft = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == thread_id)
+                    .is_some_and(|t| !t.draft);
+                if needs_hydrate && is_non_draft {
                     self.dispatch(Action::Chat(ChatAction::HydrateThread(thread_id)));
+                } else if is_non_draft
+                    && let Some(ws_id) = self.workspace_for_thread(&thread_id)
+                    && self.is_workspace_ws_connected(&ws_id)
+                    && !self.is_thread_subscribed(&ws_id, &thread_id)
+                {
+                    self.resume_thread_on_ws(&ws_id, &thread_id);
                 }
             }
             NavAction::OpenNewChat { workspace_id } => {
@@ -4749,6 +4922,10 @@ impl AppState {
                 });
                 if canonical == Some(SettingsPageId::ToolAccess) {
                     self.bootstrap_active_workspace_tool_access();
+                } else if canonical == Some(SettingsPageId::RemoteAccess)
+                    && self.remote_access.running
+                {
+                    self.send_native(NativeCommand::RefreshRemoteAccessTrustedDevices);
                 }
             }
             NavAction::OpenSettingsIntent {
@@ -4768,6 +4945,8 @@ impl AppState {
                 });
                 if canonical == SettingsPageId::ToolAccess {
                     self.bootstrap_active_workspace_tool_access();
+                } else if canonical == SettingsPageId::RemoteAccess && self.remote_access.running {
+                    self.send_native(NativeCommand::RefreshRemoteAccessTrustedDevices);
                 }
             }
             NavAction::SelectWorkspace(workspace_id) => {
@@ -5589,7 +5768,7 @@ impl AppState {
                 title: _,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let client_thread_id = Some(self.next_tag("client-thread"));
+                let client_thread_id = Some(format!("client-thread-{}", uuid::Uuid::new_v4()));
                 let ws = self.workspaces.iter().find(|w| w.id == workspace_id);
                 let (provider, model) = self
                     .resolve_submission_model(None, None, ws)
@@ -5723,15 +5902,7 @@ impl AppState {
                     changed = !t.draft;
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
-                    let mut config = Map::new();
-                    config.insert(
-                        "providerOptions".to_string(),
-                        json!({
-                            provider: {
-                                "reasoningEffort": effort.as_str(),
-                            }
-                        }),
-                    );
+                    let config = build_reasoning_effort_config_patch(&provider, effort.as_str());
                     let params = SessionConfigSetParams { thread_id, config };
                     let _ = self.send_ws_typed(&ws_id, "cowork/session/config/set", &params, false);
                 }
@@ -5893,7 +6064,7 @@ impl AppState {
                         None
                     });
                     if let Some((input, references, retry)) = retry_plan {
-                        let cid = self.next_tag("retry");
+                        let cid = format!("retry-{}", uuid::Uuid::new_v4());
                         let params = TurnStartParams {
                             thread_id,
                             client_message_id: Some(cid),
@@ -5995,6 +6166,21 @@ impl AppState {
         attachments: Vec<TurnAttachmentInputPart>,
         references: Vec<TurnReference>,
     ) {
+        let draft_key = thread_id.as_deref().unwrap_or("__new__");
+        if self
+            .pending_upload_stages_by_key
+            .get(draft_key)
+            .copied()
+            .unwrap_or(0)
+            > 0
+        {
+            self.report_composer_attachment_error(
+                draft_key,
+                "Large attachment is still copying into workspace uploads. Try sending again in a moment."
+                    .to_string(),
+            );
+            return;
+        }
         let trimmed = text.trim().to_string();
         if trimmed.is_empty() && attachments.is_empty() {
             return;
@@ -6090,20 +6276,13 @@ impl AppState {
                     && busy_policy == ThreadBusyPolicy::Steer
                     && let Some(ws_id) = self.workspace_for_thread(&tid)
                 {
-                    let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
-                    rt.pending_steer = Some(PendingSteerState {
+                    let pending_msg = PendingThreadMessage {
                         text: trimmed.clone(),
-                        client_message_id: client_message_id.clone(),
-                    });
-                    if let Some(draft) = self.composer_drafts.get_mut(&tid) {
-                        draft.text.clear();
-                        draft.attachments.clear();
-                        draft.references.clear();
-                    }
-                    self.attachment_previews_by_key.remove(&tid);
-                    if self.composer_key() == tid {
-                        self.composer_edit = TextEdit::new("");
-                    }
+                        attachments: attachments.clone(),
+                        references: references.clone(),
+                        client_message_id: Some(client_message_id.clone()),
+                        draft_submission: None,
+                    };
                     let input = build_turn_input(&trimmed, &attachments);
                     let params = TurnSteerParams {
                         thread_id: tid.clone(),
@@ -6117,12 +6296,28 @@ impl AppState {
                                 .collect()
                         }),
                     };
-                    let _ = self.send_ws_typed(&ws_id, "turn/steer", &params, false);
-                    self.emit_client_transcript_user_message(
-                        &tid,
-                        &trimmed,
-                        Some(&client_message_id),
-                    );
+                    if let Some(request_id) =
+                        self.send_ws_typed(&ws_id, "turn/steer", &params, false)
+                    {
+                        let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
+                        rt.pending_steer = Some(PendingSteerState {
+                            text: trimmed,
+                            client_message_id,
+                        });
+                        rt.composer_submission = Some(ComposerSubmissionState {
+                            message: pending_msg,
+                            status: ComposerSubmissionStatus::Sending(request_id),
+                        });
+                        if let Some(draft) = self.composer_drafts.get_mut(&tid) {
+                            draft.text.clear();
+                            draft.attachments.clear();
+                            draft.references.clear();
+                        }
+                        self.attachment_previews_by_key.remove(&tid);
+                        if self.composer_key() == tid {
+                            self.composer_edit = TextEdit::new("");
+                        }
+                    }
                     return;
                 }
 
@@ -6204,7 +6399,7 @@ impl AppState {
                             }
                         }
                     };
-                let draft_thread_id = self.next_tag("__draft");
+                let draft_thread_id = format!("__draft-{}", uuid::Uuid::new_v4());
                 let title = derive_thread_title(&trimmed);
                 let draft_reasoning_effort = self
                     .composer_drafts
@@ -6445,6 +6640,124 @@ impl AppState {
         None
     }
 
+    fn resolve_effective_provider_for_model(
+        &self,
+        workspace_id: &str,
+        model_id: &str,
+    ) -> Option<String> {
+        let ws = self.workspaces.iter().find(|w| w.id == workspace_id);
+        if let Some(pid) = ws
+            .and_then(|w| w.default_provider.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(pid.to_string());
+        }
+        if let Some(pid) = self
+            .workspace_runtime_by_id
+            .get(workspace_id)
+            .and_then(|rt| rt.control_session_config.as_ref())
+            .and_then(|cfg| cfg.get("provider"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(pid.to_string());
+        }
+        if let Some(active_tid) = self.nav.current().active_thread_id.as_deref()
+            && let Some(pid) = self
+                .threads
+                .iter()
+                .find(|t| t.id == active_tid && t.workspace_id == workspace_id)
+                .and_then(|t| t.provider.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        {
+            return Some(pid.to_string());
+        }
+        if let Some(prov) = self
+            .provider_catalog
+            .iter()
+            .filter(|p| p.configured)
+            .find(|p| p.models.iter().any(|m| m.id == model_id))
+            .or_else(|| {
+                self.provider_catalog
+                    .iter()
+                    .find(|p| p.models.iter().any(|m| m.id == model_id))
+            })
+        {
+            return Some(prov.id.clone());
+        }
+        self.resolve_submission_model(None, None, ws)
+            .map(|(provider, _)| provider)
+    }
+
+    fn resolve_effective_model_for_provider(
+        &self,
+        workspace_id: &str,
+        provider_id: &str,
+        prev_provider: Option<&str>,
+    ) -> Option<String> {
+        if let Some(mid) = self
+            .default_model_by_provider
+            .get(provider_id)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(mid.to_string());
+        }
+        if let Some(prov) = self.provider_catalog.iter().find(|p| p.id == provider_id)
+            && let Some(m) = prov
+                .models
+                .iter()
+                .find(|m| m.enabled && !is_hidden_lmstudio_model_id(&prov.id, &m.id))
+                .or_else(|| prov.models.first())
+        {
+            return Some(m.id.clone());
+        }
+        if prev_provider == Some(provider_id) {
+            return self
+                .workspaces
+                .iter()
+                .find(|w| w.id == workspace_id)
+                .and_then(|w| w.default_model.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+        None
+    }
+
+    fn is_thread_subscribed(&self, workspace_id: &str, thread_id: &str) -> bool {
+        self.subscribed_threads_by_workspace
+            .get(workspace_id)
+            .is_some_and(|set| set.contains(thread_id))
+    }
+
+    fn resume_thread_on_ws(&mut self, workspace_id: &str, thread_id: &str) {
+        if self
+            .pending_resume_threads_by_rpc_id
+            .values()
+            .any(|tid| tid == thread_id)
+        {
+            return;
+        }
+        let after_seq = self
+            .thread_runtime_by_id
+            .get(thread_id)
+            .map(|rt| rt.last_event_seq)
+            .filter(|&seq| seq > 0);
+        let params = ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            after_seq,
+        };
+        if let Some(req_id) = self.send_ws_typed(workspace_id, "thread/resume", &params, false) {
+            self.pending_resume_threads_by_rpc_id
+                .insert(req_id, thread_id.to_string());
+        }
+    }
+
     fn flush_next_pending_message(&mut self, workspace_id: &str, thread_id: &str) {
         let Some(pending) = self.shift_pending_thread_message(thread_id) else {
             return;
@@ -6550,6 +6863,67 @@ impl AppState {
                 self.dispatch(Action::Chat(ChatAction::HydrateThread(thread_id)));
             }
         }
+    }
+
+    fn finish_composer_steer(&mut self, request_id: u64, result: &Result<Value, WsRpcError>) {
+        let Some((thread_id, rt, mut submission)) =
+            self.thread_runtime_by_id.iter_mut().find_map(|(id, rt)| {
+                let submission = rt
+                    .composer_submission
+                    .take_if(|sub| sub.status == ComposerSubmissionStatus::Sending(request_id))?;
+                Some((id, rt, submission))
+            })
+        else {
+            return;
+        };
+        if let Err(error) = result {
+            if rt
+                .pending_steer
+                .as_ref()
+                .map(|s| s.client_message_id.as_str())
+                == submission.message.client_message_id.as_deref()
+            {
+                rt.pending_steer = None;
+            }
+            submission.status = ComposerSubmissionStatus::Failed(error.message.clone());
+            rt.composer_submission = Some(submission);
+        } else {
+            let thread_id = thread_id.clone();
+            let cid = submission.message.client_message_id.as_deref();
+            self.emit_client_transcript_user_message(&thread_id, &submission.message.text, cid);
+        }
+    }
+
+    fn resolve_workspace_settings_target_ids(&self, workspace_id: &str) -> Vec<String> {
+        let mut ids: Vec<String> = if !self.desktop_settings.per_workspace_settings {
+            self.workspaces
+                .iter()
+                .filter(|w| !w.archived)
+                .map(|w| w.id.clone())
+                .collect()
+        } else if self
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .is_some_and(|w| w.one_off_chat)
+        {
+            self.workspaces
+                .iter()
+                .filter(|w| w.one_off_chat && !w.archived)
+                .map(|w| w.id.clone())
+                .collect()
+        } else {
+            vec![workspace_id.to_string()]
+        };
+        if !ids.iter().any(|id| id == workspace_id) {
+            ids.insert(0, workspace_id.to_string());
+        } else if let Some(pos) = ids.iter().position(|id| id == workspace_id)
+            && pos > 0
+        {
+            let primary = ids.remove(pos);
+            ids.insert(0, primary);
+        }
+        ids
     }
 
     fn reduce_settings(&mut self, action: SettingsAction) {
@@ -6861,56 +7235,176 @@ impl AppState {
                 workspace_id,
                 defaults,
             } => {
-                let cwd = self.workspace_path(&workspace_id);
-                let mut restart_for_yolo = None;
-                if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
-                    && let Some(obj) = defaults.as_object()
-                {
-                    let prev_yolo = ws.yolo;
-                    apply_defaults_obj_to_workspace(ws, obj);
-                    if ws.yolo != prev_yolo {
-                        restart_for_yolo = Some((ws.path.clone(), ws.yolo));
-                    }
-                }
-                self.persist_state();
+                let target_ids = self.resolve_workspace_settings_target_ids(&workspace_id);
+                let patch_provider = defaults
+                    .get("defaultProvider")
+                    .or_else(|| defaults.get("provider"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let patch_model = defaults
+                    .get("defaultModel")
+                    .or_else(|| defaults.get("model"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let enable_mcp = defaults
+                    .get("defaultEnableMcp")
+                    .or_else(|| defaults.get("enableMcp"))
+                    .and_then(Value::as_bool);
                 let config_map = defaults
                     .as_object()
                     .map(build_session_defaults_config_map)
                     .filter(|m| !m.is_empty());
-                let params = SessionDefaultsApplyParams {
-                    cwd,
-                    thread_id: self.nav.current().active_thread_id.clone(),
-                    provider: defaults
-                        .get("defaultProvider")
-                        .or_else(|| defaults.get("provider"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    model: defaults
-                        .get("defaultModel")
-                        .or_else(|| defaults.get("model"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    enable_mcp: defaults
-                        .get("defaultEnableMcp")
-                        .or_else(|| defaults.get("enableMcp"))
-                        .and_then(Value::as_bool),
-                    config: config_map,
-                };
-                let _ = self.send_ws_typed(
-                    &workspace_id,
-                    "cowork/session/defaults/apply",
-                    &params,
-                    false,
-                );
-                if let Some((path, yolo)) = restart_for_yolo {
-                    self.send_native(NativeCommand::StopWorkspaceServer {
-                        workspace_id: workspace_id.clone(),
+
+                // Resolve the effective `(provider, model)` pair from the primary target first so
+                // every workspace in the shared/grouped scope receives the same coherent selection.
+                let primary_prev_provider = self
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == workspace_id)
+                    .and_then(|w| w.default_provider.clone());
+                let (shared_provider, shared_model) =
+                    match (patch_provider.clone(), patch_model.clone()) {
+                        (Some(p), Some(m)) => (Some(p), Some(m)),
+                        (None, Some(m)) => {
+                            let provider =
+                                self.resolve_effective_provider_for_model(&workspace_id, &m);
+                            if provider.is_some() {
+                                (provider, Some(m))
+                            } else {
+                                (None, None)
+                            }
+                        }
+                        (Some(p), None) => {
+                            let model = self.resolve_effective_model_for_provider(
+                                &workspace_id,
+                                &p,
+                                primary_prev_provider.as_deref(),
+                            );
+                            if model.is_some() {
+                                (Some(p), model)
+                            } else {
+                                (None, None)
+                            }
+                        }
+                        (None, None) => (None, None),
+                    };
+
+                let mut restarts_for_yolo: Vec<(String, String, bool)> = Vec::new();
+                let mut rpcs_to_send: Vec<(String, SessionDefaultsApplyParams)> = Vec::new();
+                let active_tid = self.nav.current().active_thread_id.clone();
+
+                for target_ws_id in target_ids {
+                    let cwd = self.workspace_path(&target_ws_id);
+                    let prev_provider = self
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == target_ws_id)
+                        .and_then(|w| w.default_provider.clone());
+                    if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == target_ws_id)
+                        && let Some(obj) = defaults.as_object()
+                    {
+                        let prev_yolo = ws.yolo;
+                        apply_defaults_obj_to_workspace(ws, obj);
+                        if ws.yolo != prev_yolo {
+                            restarts_for_yolo.push((
+                                target_ws_id.clone(),
+                                ws.path.clone(),
+                                ws.yolo,
+                            ));
+                        }
+                    }
+                    let (resolved_provider, resolved_model) =
+                        if shared_provider.is_some() && shared_model.is_some() {
+                            (shared_provider.clone(), shared_model.clone())
+                        } else {
+                            match (patch_provider.clone(), patch_model.clone()) {
+                                (Some(p), Some(m)) => (Some(p), Some(m)),
+                                (None, Some(m)) => {
+                                    let p = self
+                                        .resolve_effective_provider_for_model(&target_ws_id, &m);
+                                    if p.is_some() {
+                                        (p, Some(m))
+                                    } else {
+                                        (None, None)
+                                    }
+                                }
+                                (Some(p), None) => {
+                                    let m = self.resolve_effective_model_for_provider(
+                                        &target_ws_id,
+                                        &p,
+                                        prev_provider.as_deref(),
+                                    );
+                                    if m.is_some() {
+                                        (Some(p), m)
+                                    } else {
+                                        (None, None)
+                                    }
+                                }
+                                (None, None) => (None, None),
+                            }
+                        };
+                    if let (Some(pid), Some(mid)) = (&resolved_provider, &resolved_model)
+                        && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == target_ws_id)
+                    {
+                        if ws
+                            .default_provider
+                            .as_deref()
+                            .map(str::trim)
+                            .is_none_or(str::is_empty)
+                        {
+                            ws.default_provider = Some(pid.clone());
+                        }
+                        if ws
+                            .default_model
+                            .as_deref()
+                            .map(str::trim)
+                            .is_none_or(str::is_empty)
+                        {
+                            ws.default_model = Some(mid.clone());
+                        }
+                    }
+                    let scoped_thread_id = active_tid.clone().filter(|tid| {
+                        self.threads.iter().find(|t| t.id == *tid).is_some_and(|t| {
+                            t.workspace_id == target_ws_id && !t.draft && t.source_task_id.is_none()
+                        })
                     });
-                    self.send_native(NativeCommand::StartWorkspaceServer {
-                        workspace_id,
-                        path,
-                        yolo,
-                    });
+                    rpcs_to_send.push((
+                        target_ws_id,
+                        SessionDefaultsApplyParams {
+                            cwd,
+                            thread_id: scoped_thread_id,
+                            provider: resolved_provider,
+                            model: resolved_model,
+                            enable_mcp,
+                            config: config_map.clone(),
+                        },
+                    ));
+                }
+
+                self.persist_state();
+                for (target_ws_id, params) in rpcs_to_send {
+                    let _ = self.send_ws_typed(
+                        &target_ws_id,
+                        "cowork/session/defaults/apply",
+                        &params,
+                        false,
+                    );
+                }
+                if !restarts_for_yolo.is_empty() {
+                    for (ws_id, path, yolo) in restarts_for_yolo {
+                        self.send_native(NativeCommand::StopWorkspaceServer {
+                            workspace_id: ws_id.clone(),
+                        });
+                        self.send_native(NativeCommand::StartWorkspaceServer {
+                            workspace_id: ws_id,
+                            path,
+                            yolo,
+                        });
+                    }
                 } else {
                     self.refresh_creation_preflight();
                 }
@@ -7830,6 +8324,9 @@ impl AppState {
             SettingsAction::RotateRemoteAccessSession => {
                 self.send_native(NativeCommand::RotateRemoteAccessSession);
             }
+            SettingsAction::RefreshRemoteAccess => {
+                self.send_native(NativeCommand::RefreshRemoteAccessTrustedDevices);
+            }
             SettingsAction::UpdateTrustedPhonePermissions {
                 phone_id,
                 permissions,
@@ -8113,6 +8610,16 @@ impl AppState {
     }
 
     fn apply_ws_initialized(&mut self, workspace_id: &str, result: InitializeResult) {
+        self.subscribed_threads_by_workspace.remove(workspace_id);
+        let stale_resume_ids: Vec<u64> = self
+            .pending_resume_threads_by_rpc_id
+            .iter()
+            .filter(|(_, tid)| self.workspace_for_thread(tid).as_deref() == Some(workspace_id))
+            .map(|(&id, _)| id)
+            .collect();
+        for id in stale_resume_ids {
+            self.pending_resume_threads_by_rpc_id.remove(&id);
+        }
         let rt = self
             .workspace_runtime_by_id
             .entry(workspace_id.to_string())
@@ -8212,6 +8719,7 @@ impl AppState {
         );
         self.bootstrap_tool_access_catalogs(workspace_id);
 
+        let mut active_handled_tid: Option<String> = None;
         if let Some(active_tid) = self.nav.current().active_thread_id.clone()
             && self.workspace_for_thread(&active_tid).as_deref() == Some(workspace_id)
             && self
@@ -8220,18 +8728,41 @@ impl AppState {
                 .find(|t| t.id == active_tid)
                 .is_none_or(|t| !t.draft)
         {
-            if self
+            active_handled_tid = Some(active_tid.clone());
+            let (needs_hydrate, is_hydrating) = self
                 .thread_runtime_by_id
                 .get(&active_tid)
-                .is_none_or(|rt| (!rt.hydrated || rt.transcript_only) && !rt.hydrating)
-            {
+                .map(|rt| (!rt.hydrated || rt.transcript_only, rt.hydrating))
+                .unwrap_or((true, false));
+            if needs_hydrate && !is_hydrating {
                 self.dispatch(Action::Chat(ChatAction::HydrateThread(active_tid)));
-            } else {
+            } else if !needs_hydrate {
+                self.resume_thread_on_ws(workspace_id, &active_tid);
                 let cmd_params = CommandListParams {
                     thread_id: active_tid,
                 };
                 let _ = self.send_ws_typed(workspace_id, "command/list", &cmd_params, true);
             }
+        }
+
+        let in_flight_tids: Vec<String> = self
+            .threads
+            .iter()
+            .filter(|t| t.workspace_id == workspace_id && !t.draft)
+            .filter(|t| active_handled_tid.as_deref() != Some(t.id.as_str()))
+            .filter(|t| {
+                self.thread_runtime_by_id.get(&t.id).is_some_and(|rt| {
+                    rt.hydrated
+                        && !rt.transcript_only
+                        && (rt.streaming
+                            || rt.pending_turn_count > 0
+                            || !rt.pending_interactions.is_empty())
+                })
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        for tid in in_flight_tids {
+            self.resume_thread_on_ws(workspace_id, &tid);
         }
     }
 
@@ -9019,10 +9550,30 @@ impl AppState {
             }
             "steer_accepted" => {
                 if let Some(id) = tid {
-                    self.thread_runtime_by_id
-                        .entry(id)
-                        .or_default()
-                        .pending_steer = None;
+                    let accepted_submission = {
+                        let rt = self.thread_runtime_by_id.entry(id.clone()).or_default();
+                        let accepted_cid = evt.get("clientMessageId").and_then(Value::as_str);
+                        if accepted_cid.is_none()
+                            || rt
+                                .pending_steer
+                                .as_ref()
+                                .is_some_and(|s| Some(s.client_message_id.as_str()) == accepted_cid)
+                        {
+                            rt.pending_steer = None;
+                        }
+                        rt.composer_submission.take_if(|sub| {
+                            matches!(sub.status, ComposerSubmissionStatus::Sending(_))
+                                && (accepted_cid.is_none()
+                                    || sub.message.client_message_id.as_deref() == accepted_cid)
+                        })
+                    };
+                    if let Some(sub) = accepted_submission {
+                        self.emit_client_transcript_user_message(
+                            &id,
+                            &sub.message.text,
+                            sub.message.client_message_id.as_deref(),
+                        );
+                    }
                 }
             }
             "agent_started" | "agent_completed" | "agent_failed" | "agent_updated" => {
@@ -9271,6 +9822,8 @@ impl AppState {
         }
         if method == "turn/start" {
             self.finish_composer_turn(request_id, &result);
+        } else if method == "turn/steer" {
+            self.finish_composer_steer(request_id, &result);
         }
         let payload = match result {
             Ok(v) => v,
@@ -9293,7 +9846,8 @@ impl AppState {
             }
             "thread/list" => self.apply_thread_list_response(workspace_id, &payload),
             "thread/start" => self.apply_thread_start_response(workspace_id, request_id, &payload),
-            "thread/read" | "thread/hydrate" | "thread/resume" => {
+            "thread/fork" => self.apply_thread_fork_response(workspace_id, &payload),
+            "thread/read" | "thread/hydrate" => {
                 let pending_tid = self.pending_hydrate_threads_by_rpc_id.remove(&request_id);
                 if payload.get("coworkSnapshot").is_some() {
                     self.apply_thread_snapshot_response(workspace_id, &payload);
@@ -9306,6 +9860,46 @@ impl AppState {
                         self.request_local_transcript(&tid);
                     } else if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
                         rt.hydrating = false;
+                    }
+                }
+            }
+            "thread/resume" => {
+                let pending_tid = self
+                    .pending_resume_threads_by_rpc_id
+                    .remove(&request_id)
+                    .or_else(|| self.pending_hydrate_threads_by_rpc_id.remove(&request_id));
+                let resumed_tid = payload
+                    .get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or(pending_tid);
+                if let Some(tid) = resumed_tid {
+                    self.subscribed_threads_by_workspace
+                        .entry(workspace_id.to_string())
+                        .or_default()
+                        .insert(tid.clone());
+                    let needs_snapshot = payload.get("replayHealth").is_some_and(|rh| {
+                        rh.get("snapshotRequired").and_then(Value::as_bool) == Some(true)
+                            || rh.get("trusted").and_then(Value::as_bool) == Some(false)
+                    });
+                    if payload.get("coworkSnapshot").is_some() {
+                        self.apply_thread_snapshot_response(workspace_id, &payload);
+                    } else if needs_snapshot {
+                        if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
+                            rt.last_event_seq = 0;
+                            rt.hydrating = true;
+                        }
+                        let params = ThreadHydrateParams {
+                            thread_id: tid.clone(),
+                            after_seq: None,
+                            include_turns: Some(true),
+                        };
+                        if let Some(req_id) =
+                            self.send_ws_typed(workspace_id, "thread/hydrate", &params, true)
+                        {
+                            self.pending_hydrate_threads_by_rpc_id.insert(req_id, tid);
+                        }
                     }
                 }
             }
@@ -9338,6 +9932,11 @@ impl AppState {
             "cowork/session/defaults/apply" | "cowork/session/config/set" => {
                 let target = payload.get("event").unwrap_or(&payload);
                 self.apply_session_config_event(workspace_id, target);
+                if method == "cowork/session/config/set"
+                    && let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id)
+                {
+                    self.flush_next_pending_message(workspace_id, &tid);
+                }
             }
             "cowork/provider/catalog/read"
             | "cowork/provider/customModel/add"
@@ -9637,6 +10236,14 @@ impl AppState {
             rt.pending_turn_count = 0;
             rt.last_error = Some(err.message.clone());
         }
+        if method == "cowork/session/config/set"
+            && let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id)
+        {
+            self.flush_next_pending_message(workspace_id, &tid);
+        }
+        if method == "thread/resume" {
+            self.pending_resume_threads_by_rpc_id.remove(&request_id);
+        }
         if matches!(method, "thread/read" | "thread/hydrate" | "thread/resume")
             && let Some(tid) = self.pending_hydrate_threads_by_rpc_id.remove(&request_id)
         {
@@ -9668,6 +10275,19 @@ impl AppState {
         let Some(arr) = payload.get("threads").and_then(Value::as_array) else {
             return;
         };
+        let mut prev_legacy_ids: HashMap<String, String> = HashMap::new();
+        for t in self
+            .threads
+            .iter()
+            .filter(|t| t.workspace_id == workspace_id)
+        {
+            if let Some(ref legacy) = t.legacy_transcript_id {
+                prev_legacy_ids.insert(t.id.clone(), legacy.clone());
+                if let Some(ref sid) = t.session_id {
+                    prev_legacy_ids.insert(sid.clone(), legacy.clone());
+                }
+            }
+        }
         self.threads
             .retain(|t| t.workspace_id != workspace_id || t.draft || t.source_task_id.is_some());
         let retained: HashSet<String> = self
@@ -9695,6 +10315,7 @@ impl AppState {
                 title: title.clone(),
                 status: ThreadStatus::Active,
                 session_id: Some(id.to_string()),
+                legacy_transcript_id: prev_legacy_ids.get(id).cloned(),
                 pinned,
                 archived: is_archived,
                 draft: false,
@@ -9788,16 +10409,123 @@ impl AppState {
         };
 
         let draft_id = self.pending_draft_threads_by_rpc_id.remove(&request_id);
-        let draft_reasoning_effort = draft_id.as_ref().and_then(|old_id| {
-            self.threads
-                .iter()
-                .find(|t| t.id == *old_id)
-                .and_then(|t| t.reasoning_effort.clone())
-        });
+        let (draft_reasoning_effort, draft_provider) = draft_id
+            .as_ref()
+            .and_then(|old_id| self.threads.iter().find(|t| t.id == *old_id))
+            .map(|t| (t.reasoning_effort.clone(), t.provider.clone()))
+            .unwrap_or((None, None));
         if let Some(ref old_id) = draft_id {
             self.rekey_thread_runtime_maps(old_id, &server_id);
             self.threads.retain(|t| t.id != *old_id);
         }
+
+        let server_provider = thread_val
+            .get("modelProvider")
+            .or_else(|| thread_val.get("provider"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or(draft_provider);
+        let server_reasoning_effort = thread_val
+            .get("reasoningEffort")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let record = ThreadRecord {
+            id: server_id.clone(),
+            workspace_id: workspace_id.to_string(),
+            title: thread_val
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("New Chat")
+                .to_string(),
+            status: ThreadStatus::Active,
+            session_id: Some(server_id.clone()),
+            legacy_transcript_id: None,
+            pinned: thread_val
+                .get("pinned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            archived: false,
+            draft: false,
+            provider: server_provider.clone(),
+            model: thread_val
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            reasoning_effort: server_reasoning_effort.or_else(|| draft_reasoning_effort.clone()),
+            preview: None,
+            updated_at: parse_timestamp_ms(thread_val.get("updatedAt")),
+            created_at: parse_timestamp_ms(thread_val.get("createdAt")),
+            source_task_id: None,
+            last_event_seq: 0,
+        };
+        if let Some(existing) = self.threads.iter_mut().find(|t| t.id == server_id) {
+            *existing = record;
+        } else {
+            self.threads.insert(0, record);
+        }
+
+        self.subscribed_threads_by_workspace
+            .entry(workspace_id.to_string())
+            .or_default()
+            .insert(server_id.clone());
+
+        let cmd_params = CommandListParams {
+            thread_id: server_id.clone(),
+        };
+        let _ = self.send_ws_typed(workspace_id, "command/list", &cmd_params, true);
+
+        if draft_id.is_some() {
+            let applied_draft_effort = if let (Some(effort), Some(provider)) = (
+                draft_reasoning_effort
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty()),
+                server_provider
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty()),
+            ) {
+                let config = build_reasoning_effort_config_patch(provider, effort);
+                let cfg_params = SessionConfigSetParams {
+                    thread_id: server_id.clone(),
+                    config,
+                };
+                if let Some(cfg_rpc_id) = self.send_ws_typed(
+                    workspace_id,
+                    "cowork/session/config/set",
+                    &cfg_params,
+                    false,
+                ) {
+                    self.pending_draft_config_by_rpc_id
+                        .insert(cfg_rpc_id, server_id.clone());
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if !applied_draft_effort {
+                self.flush_next_pending_message(workspace_id, &server_id);
+            }
+        } else {
+            self.dispatch(Action::Navigate(NavAction::OpenThread(server_id)));
+        }
+        if !self.scene_mode {
+            self.persist_state();
+        }
+    }
+
+    fn apply_thread_fork_response(&mut self, workspace_id: &str, payload: &Value) {
+        let thread_val = payload.get("thread").unwrap_or(payload);
+        let Some(server_id) = thread_val
+            .get("id")
+            .or_else(|| payload.get("threadId"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return;
+        };
 
         let record = ThreadRecord {
             id: server_id.clone(),
@@ -9809,11 +10537,15 @@ impl AppState {
                 .to_string(),
             status: ThreadStatus::Active,
             session_id: Some(server_id.clone()),
+            legacy_transcript_id: None,
             pinned: thread_val
                 .get("pinned")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            archived: false,
+            archived: thread_val
+                .get("archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             draft: false,
             provider: thread_val
                 .get("modelProvider")
@@ -9827,13 +10559,19 @@ impl AppState {
             reasoning_effort: thread_val
                 .get("reasoningEffort")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .or(draft_reasoning_effort),
-            preview: None,
+                .map(str::to_string),
+            preview: thread_val
+                .get("lastMessagePreview")
+                .or_else(|| thread_val.get("preview"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
             updated_at: parse_timestamp_ms(thread_val.get("updatedAt")),
             created_at: parse_timestamp_ms(thread_val.get("createdAt")),
             source_task_id: None,
-            last_event_seq: 0,
+            last_event_seq: thread_val
+                .get("lastEventSeq")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
         };
         if let Some(existing) = self.threads.iter_mut().find(|t| t.id == server_id) {
             *existing = record;
@@ -9841,16 +10579,16 @@ impl AppState {
             self.threads.insert(0, record);
         }
 
+        self.subscribed_threads_by_workspace
+            .entry(workspace_id.to_string())
+            .or_default()
+            .insert(server_id.clone());
+
         let cmd_params = CommandListParams {
             thread_id: server_id.clone(),
         };
         let _ = self.send_ws_typed(workspace_id, "command/list", &cmd_params, true);
-
-        if draft_id.is_some() {
-            self.flush_next_pending_message(workspace_id, &server_id);
-        } else {
-            self.dispatch(Action::Navigate(NavAction::OpenThread(server_id)));
-        }
+        self.dispatch(Action::Navigate(NavAction::OpenThread(server_id)));
         if !self.scene_mode {
             self.persist_state();
         }
@@ -9910,18 +10648,21 @@ impl AppState {
             self.persist_state();
         }
 
-        let rt = self.thread_runtime_by_id.entry(session_id).or_default();
+        let rt = self
+            .thread_runtime_by_id
+            .entry(session_id.clone())
+            .or_default();
         rt.hydrating = false;
         rt.hydrated = true;
         rt.transcript_only = false;
 
         // Guard against out-of-order stale snapshots when live events already advanced `last_event_seq`.
-        if snap_seq > 0 && rt.last_event_seq > snap_seq {
-            return;
+        let stale_snapshot = snap_seq > 0 && rt.last_event_seq > snap_seq;
+        if !stale_snapshot {
+            rt.last_event_seq = rt.last_event_seq.max(snap_seq);
         }
-        rt.last_event_seq = rt.last_event_seq.max(snap_seq);
 
-        if let Some(feed_arr) = snapshot.get("feed").and_then(Value::as_array) {
+        if !stale_snapshot && let Some(feed_arr) = snapshot.get("feed").and_then(Value::as_array) {
             let mut next_feed: Vec<FeedItem> = feed_arr
                 .iter()
                 .filter_map(parse_snapshot_feed_item)
@@ -9982,24 +10723,42 @@ impl AppState {
             }
             rt.feed = next_feed;
         }
-        if let Some(todos_arr) = snapshot.get("todos").and_then(Value::as_array) {
+        if !stale_snapshot && let Some(todos_arr) = snapshot.get("todos").and_then(Value::as_array)
+        {
             rt.todos = todos_arr
                 .iter()
                 .filter_map(|v| serde_json::from_value(v.clone()).ok())
                 .collect();
         }
-        if let Some(agents_arr) = snapshot.get("agents").and_then(Value::as_array) {
+        if !stale_snapshot
+            && let Some(agents_arr) = snapshot.get("agents").and_then(Value::as_array)
+        {
             rt.agents = agents_arr
                 .iter()
                 .filter_map(|v| serde_json::from_value(v.clone()).ok())
                 .collect();
         }
-        if let Some(usage_val) = snapshot
-            .get("sessionUsage")
-            .or_else(|| snapshot.get("lastTurnUsage"))
-            .filter(|v| !v.is_null())
+        if !stale_snapshot
+            && let Some(usage_val) = snapshot
+                .get("sessionUsage")
+                .or_else(|| snapshot.get("lastTurnUsage"))
+                .filter(|v| !v.is_null())
         {
             rt.usage = Some(parse_usage_summary(usage_val));
+        }
+        if self.is_workspace_ws_connected(workspace_id)
+            && !self.is_thread_subscribed(workspace_id, &session_id)
+            && (self.nav.current().active_thread_id.as_deref() == Some(session_id.as_str())
+                || self
+                    .thread_runtime_by_id
+                    .get(&session_id)
+                    .is_some_and(|rt| {
+                        rt.streaming
+                            || rt.pending_turn_count > 0
+                            || !rt.pending_interactions.is_empty()
+                    }))
+        {
+            self.resume_thread_on_ws(workspace_id, &session_id);
         }
     }
 
@@ -11283,6 +12042,28 @@ fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, V
     if let Some(po) = obj.get("providerOptions") {
         ws.provider_options = Some(po.clone());
     }
+}
+
+fn build_reasoning_effort_config_patch(provider: &str, effort: &str) -> Map<String, Value> {
+    let mut config = Map::new();
+    let provider_section = if provider == "google" {
+        json!({
+            "thinkingConfig": {
+                "thinkingLevel": effort,
+            }
+        })
+    } else {
+        json!({
+            "reasoningEffort": effort,
+        })
+    };
+    config.insert(
+        "providerOptions".to_string(),
+        json!({
+            provider: provider_section,
+        }),
+    );
+    config
 }
 
 fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Value> {
@@ -15407,6 +16188,7 @@ mod tests {
                 generation: 1,
                 edit_revision: 1,
                 target_path: None,
+                submitted_content: None,
             },
         );
         state.apply_canvas_rpc_error(
@@ -16993,5 +17775,748 @@ mod tests {
             s.pending_menu_command.as_deref(),
             Some("view.toggle_show_menu_bar")
         );
+    }
+
+    #[test]
+    fn new_chat_and_create_thread_use_restart_safe_client_thread_ids() {
+        let mut s1 = AppState::default();
+        s1.workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        s1.active_workspace_id = Some("ws-1".to_string());
+        s1.landing_workspace_id = Some("ws-1".to_string());
+
+        let mut s2 = AppState::default();
+        s2.workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        s2.active_workspace_id = Some("ws-1".to_string());
+        s2.landing_workspace_id = Some("ws-1".to_string());
+
+        // Simulated restart: identical new-chat send sequence on two fresh AppState instances
+        // must produce distinct `clientThreadId` values.
+        s1.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "first chat".to_string(),
+            busy_policy: ThreadBusyPolicy::Queue,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+        s2.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "second chat after restart".to_string(),
+            busy_policy: ThreadBusyPolicy::Queue,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+
+        let first_cid = s1
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "thread/start" => params
+                    .get("clientThreadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                _ => None,
+            })
+            .expect("s1 thread/start clientThreadId");
+        let second_cid = s2
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "thread/start" => params
+                    .get("clientThreadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                _ => None,
+            })
+            .expect("s2 thread/start clientThreadId");
+        assert!(first_cid.starts_with("__draft-"));
+        assert!(second_cid.starts_with("__draft-"));
+        assert_ne!(first_cid, second_cid);
+
+        // Explicit CreateThread across two fresh instances must also produce distinct IDs.
+        s1.services.emitted_ws_commands.clear();
+        s2.services.emitted_ws_commands.clear();
+        s1.dispatch(Action::Chat(ChatAction::CreateThread {
+            workspace_id: "ws-1".to_string(),
+            title: None,
+        }));
+        s2.dispatch(Action::Chat(ChatAction::CreateThread {
+            workspace_id: "ws-1".to_string(),
+            title: None,
+        }));
+        let create1 = s1
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "thread/start" => params
+                    .get("clientThreadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                _ => None,
+            })
+            .expect("s1 CreateThread clientThreadId");
+        let create2 = s2
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. } if method == "thread/start" => params
+                    .get("clientThreadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                _ => None,
+            })
+            .expect("s2 CreateThread clientThreadId");
+        assert!(create1.starts_with("client-thread-"));
+        assert!(create2.starts_with("client-thread-"));
+        assert_ne!(create1, create2);
+    }
+
+    #[test]
+    fn ws_reconnect_resumes_hydrated_active_thread_and_hydrates_on_untrusted_replay() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.threads.push(ThreadRecord {
+            id: "th-live".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Streaming".to_string(),
+            draft: false,
+            last_event_seq: 42,
+            ..ThreadRecord::default()
+        });
+        state.thread_runtime_by_id.insert(
+            "th-live".to_string(),
+            ThreadRuntime {
+                hydrated: true,
+                transcript_only: false,
+                streaming: true,
+                last_event_seq: 42,
+                ..Default::default()
+            },
+        );
+        state.nav.update(NavigationPatch {
+            view: Some(ViewId::Chat),
+            active_thread_id: Some(Some("th-live".to_string())),
+            ..Default::default()
+        });
+        state
+            .subscribed_threads_by_workspace
+            .entry("ws-1".to_string())
+            .or_default()
+            .insert("th-live".to_string());
+
+        // Socket drops and reconnects during an active turn.
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-1".to_string(),
+            state: WsConnectionState::Reconnecting {
+                attempt: 1,
+                max_attempts: 5,
+                delay_ms: 500,
+                reason: "socket closed".to_string(),
+            },
+        });
+        assert!(!state.is_thread_subscribed("ws-1", "th-live"));
+
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-1".to_string(),
+            state: WsConnectionState::Connected,
+        });
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-1".to_string(),
+            result: Box::new(init_res),
+        });
+
+        let (resume_rpc_id, resume_params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "thread/resume" => Some((*request_id, params.clone())),
+                _ => None,
+            })
+            .expect("expected thread/resume on reconnect for hydrated thread");
+        assert_eq!(resume_params["threadId"], json!("th-live"));
+        assert_eq!(resume_params["afterSeq"], json!(42));
+
+        // If the server reports untrusted replay health, desktop triggers full thread/hydrate.
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: resume_rpc_id,
+            method: "thread/resume".to_string(),
+            result: Ok(json!({
+                "thread": { "id": "th-live" },
+                "replayHealth": {
+                    "trusted": false,
+                    "snapshotRequired": true,
+                    "reason": "after_seq_beyond_tail",
+                    "tailSeq": 10,
+                    "failedWriteCount": 0,
+                    "droppedEventCount": 0
+                }
+            })),
+        });
+        assert!(state.is_thread_subscribed("ws-1", "th-live"));
+        assert!(state.services.emitted_ws_commands.iter().any(|c| {
+            matches!(
+                c,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "thread/hydrate"
+                        && params["threadId"] == json!("th-live")
+                        && params.get("afterSeq").is_none_or(Value::is_null)
+            )
+        }));
+    }
+
+    #[test]
+    fn canvas_save_advances_disk_baseline_when_user_undoes_while_save_in_flight() {
+        let mut state = AppState {
+            now_secs: 10.0,
+            canvas_document: Some(CanvasDocumentSession {
+                workspace_id: "ws-1".to_string(),
+                document_id: "doc-1".to_string(),
+                generation: 1,
+                path: "notes.md".to_string(),
+                disk_content: "A".to_string(),
+                draft_content: "B".to_string(),
+                edit_revision: 1,
+                last_saved_edit_revision: 0,
+                truncated: false,
+                revision: None,
+                status: CanvasDocumentStatus::Ready,
+                last_saved_at_secs: None,
+                dirty_since_secs: Some(9.0),
+                last_poll_secs: 10.0,
+            }),
+            ..AppState::default()
+        };
+
+        // Start saving "B".
+        state.request_canvas_save();
+        let save_rpc_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/save" => Some(*request_id),
+                _ => None,
+            })
+            .expect("canvas save rpc");
+
+        // Before the save response returns, user undoes back to "A".
+        {
+            let doc = state.canvas_document.as_mut().unwrap();
+            doc.draft_content = "A".to_string();
+            doc.edit_revision = 2;
+        }
+
+        // Server confirms "B" was written to disk.
+        state.now_secs = 10.5;
+        state.apply_canvas_rpc_response(
+            save_rpc_id,
+            "cowork/workspace/document/save",
+            &json!({
+                "ok": true,
+                "status": "saved",
+                "documentId": "doc-1",
+                "generation": 1,
+                "editRevision": 1,
+                "revision": { "mtimeMs": 1234.0, "size": 1 }
+            }),
+        );
+
+        let doc = state.canvas_document.as_ref().unwrap();
+        assert_eq!(doc.disk_content, "B");
+        assert_eq!(doc.draft_content, "A");
+        assert!(
+            doc.dirty(),
+            "undo back to A must remain dirty against disk B"
+        );
+        assert_eq!(doc.dirty_since_secs, Some(10.5));
+        assert_eq!(doc.status, CanvasDocumentStatus::Ready);
+    }
+
+    #[test]
+    fn update_workspace_defaults_resolves_effective_provider_when_only_default_model_changes() {
+        let mut state = AppState::default();
+        let mut ws = WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1);
+        ws.default_provider = Some("openai".to_string());
+        ws.default_model = Some("gpt-5.2".to_string());
+        state.workspaces.push(ws);
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "defaultModel": "gpt-5.4" }),
+        }));
+
+        let params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("cowork/session/defaults/apply request");
+        assert_eq!(params["provider"], json!("openai"));
+        assert_eq!(params["model"], json!("gpt-5.4"));
+    }
+
+    #[test]
+    fn large_selected_attachment_stages_via_native_worker_before_attaching() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws_dir = tmp.path().join("workspace");
+        let downloads_dir = tmp.path().join("downloads");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::create_dir_all(&downloads_dir).unwrap();
+        let big_file = downloads_dir.join("dataset.csv");
+        // Create a sparse >10 MiB file cheaply so metadata reports > MAX_INLINE_BYTES.
+        let f = std::fs::File::create(&big_file).unwrap();
+        f.set_len(11 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord::new(
+            "ws-1",
+            "Workspace",
+            ws_dir.to_string_lossy().as_ref(),
+            1,
+        ));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.landing_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Native(NativeAction::IngestDroppedFiles {
+            key: "__new__".to_string(),
+            paths: vec![big_file.clone()],
+        }));
+
+        // Must NOT attach the raw outside-workspace path directly; must stage via NativeWorker.
+        assert!(
+            state
+                .composer_drafts
+                .get("__new__")
+                .is_none_or(|d| d.attachments.is_empty())
+        );
+        let stage_cmd = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .find_map(|c| match c {
+                NativeCommand::StageComposerUpload {
+                    key,
+                    workspace_id,
+                    source_path,
+                    filename,
+                    ..
+                } => Some((
+                    key.clone(),
+                    workspace_id.clone(),
+                    source_path.clone(),
+                    filename.clone(),
+                )),
+                _ => None,
+            })
+            .expect("expected StageComposerUpload command");
+        assert_eq!(stage_cmd.0, "__new__");
+        assert_eq!(stage_cmd.1, "ws-1");
+        assert_eq!(stage_cmd.2, big_file);
+        assert_eq!(stage_cmd.3, "dataset.csv");
+
+        let staged_path = ws_dir
+            .join("uploads")
+            .join("User Uploads")
+            .join("dataset.csv");
+        state.apply_store_event(StoreEvent::ComposerUploadStaged {
+            key: "__new__".to_string(),
+            filename: "dataset.csv".to_string(),
+            mime_type: "text/csv".to_string(),
+            result: Ok(staged_path.clone()),
+        });
+        let draft = state.composer_drafts.get("__new__").unwrap();
+        assert_eq!(draft.attachments.len(), 1);
+        match &draft.attachments[0] {
+            TurnAttachmentInputPart::UploadedFile { filename, path, .. } => {
+                assert_eq!(filename, "dataset.csv");
+                assert_eq!(path, &staged_path.to_string_lossy());
+            }
+            other => panic!("expected UploadedFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_workspace_defaults_propagates_across_shared_and_grouped_chat_scopes() {
+        let mut state = AppState::default();
+        state.desktop_settings.per_workspace_settings = false;
+        let ws_a = WorkspaceRecord::new("ws-a", "Alpha", "/tmp/alpha", 1);
+        let ws_b = WorkspaceRecord::new("ws-b", "Beta", "/tmp/beta", 2);
+        let mut ws_chat_1 = WorkspaceRecord::new("ws-chat-1", "Chats 1", "/tmp/chats/1", 3);
+        ws_chat_1.one_off_chat = true;
+        let mut ws_chat_2 = WorkspaceRecord::new("ws-chat-2", "Chats 2", "/tmp/chats/2", 4);
+        ws_chat_2.one_off_chat = true;
+        state.workspaces = vec![ws_a, ws_b, ws_chat_1, ws_chat_2];
+
+        // Shared settings (default) must propagate to all workspaces and emit RPCs for each.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-a".to_string(),
+            defaults: json!({ "defaultEnableMcp": false }),
+        }));
+        assert!(state.workspaces.iter().all(|w| !w.default_enable_mcp));
+        let shared_targets: Vec<String> = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .filter_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    ..
+                } if method == "cowork/session/defaults/apply" => Some(workspace_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shared_targets.len(), 4);
+        for id in ["ws-a", "ws-b", "ws-chat-1", "ws-chat-2"] {
+            assert!(shared_targets.contains(&id.to_string()));
+        }
+
+        // Per-workspace settings on a grouped Chats workspace propagates only to one-off chats.
+        state.desktop_settings.per_workspace_settings = true;
+        state.services.emitted_ws_commands.clear();
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-chat-1".to_string(),
+            defaults: json!({ "defaultEnableMcp": true }),
+        }));
+        assert!(!state.workspaces[0].default_enable_mcp);
+        assert!(!state.workspaces[1].default_enable_mcp);
+        assert!(state.workspaces[2].default_enable_mcp);
+        assert!(state.workspaces[3].default_enable_mcp);
+        let chat_targets: Vec<String> = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .filter_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    ..
+                } if method == "cowork/session/defaults/apply" => Some(workspace_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chat_targets, vec!["ws-chat-1", "ws-chat-2"]);
+    }
+
+    #[test]
+    fn landing_draft_reasoning_effort_is_applied_before_first_turn_starts() {
+        let mut state = AppState::default();
+        let mut ws = WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1);
+        ws.default_provider = Some("openai".to_string());
+        ws.default_model = Some("gpt-5.4".to_string());
+        state.workspaces.push(ws);
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.landing_workspace_id = Some("ws-1".to_string());
+
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftEffort {
+            key: "__new__".to_string(),
+            effort: Some(ReasoningEffortValue::Xhigh),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "Solve carefully".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+
+        let start_rpc_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "thread/start" => Some(*request_id),
+                _ => None,
+            })
+            .expect("thread/start rpc");
+
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: start_rpc_id,
+            method: "thread/start".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-srv-effort",
+                    "modelProvider": "openai",
+                    "model": "gpt-5.4"
+                }
+            })),
+        });
+
+        // Must send `cowork/session/config/set` with reasoningEffort BEFORE `turn/start`.
+        assert!(
+            !state.services.emitted_ws_commands.iter().any(
+                |c| matches!(c, WsCommand::SendRequest { method, .. } if method == "turn/start")
+            ),
+            "turn/start must wait until draft reasoningEffort config/set settles"
+        );
+        let (cfg_rpc_id, cfg_params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/session/config/set" => Some((*request_id, params.clone())),
+                _ => None,
+            })
+            .expect("cowork/session/config/set rpc");
+        assert_eq!(cfg_params["threadId"], json!("th-srv-effort"));
+        assert_eq!(
+            cfg_params["config"]["providerOptions"]["openai"]["reasoningEffort"],
+            json!("xhigh")
+        );
+
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: cfg_rpc_id,
+            method: "cowork/session/config/set".to_string(),
+            result: Ok(json!({ "event": { "config": {} } })),
+        });
+        assert!(state.services.emitted_ws_commands.iter().any(|c| {
+            matches!(
+                c,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "turn/start" && params["threadId"] == json!("th-srv-effort")
+            )
+        }));
+
+        // Google models use `providerOptions.google.thinkingConfig.thinkingLevel`.
+        let google_patch = build_reasoning_effort_config_patch("google", "high");
+        assert_eq!(
+            google_patch["providerOptions"]["google"]["thinkingConfig"]["thinkingLevel"],
+            json!("high")
+        );
+    }
+
+    #[test]
+    fn failed_steer_retains_submission_for_retry_after_turn_finishes() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Active".to_string(),
+            ..ThreadRecord::default()
+        });
+        state.thread_runtime_by_id.insert(
+            "th-1".to_string(),
+            ThreadRuntime {
+                streaming: true,
+                active_turn_id: Some("turn-1".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let att = TurnAttachmentInputPart::UploadedFile {
+            filename: "report.pdf".to_string(),
+            path: "/tmp/repo/uploads/report.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+        };
+        let reference = TurnReference {
+            kind: "skill".to_string(),
+            name: "audit".to_string(),
+        };
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: Some("th-1".to_string()),
+            text: "Actually include charts".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: vec![att.clone()],
+            references: vec![reference.clone()],
+        }));
+
+        let steer_rpc_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "turn/steer" => Some(*request_id),
+                _ => None,
+            })
+            .expect("turn/steer rpc");
+
+        // Turn finishes right before steer arrives at the server.
+        state.apply_ws_notification(
+            "ws-1",
+            "turn/completed",
+            json!({ "threadId": "th-1", "turnId": "turn-1", "status": "completed" }),
+        );
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: steer_rpc_id,
+            method: "turn/steer".to_string(),
+            result: Err(WsRpcError {
+                code: -32602,
+                message: "No active turn to steer.".to_string(),
+                data: None,
+            }),
+        });
+
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        assert!(rt.pending_steer.is_none());
+        let sub = rt
+            .composer_submission
+            .as_ref()
+            .expect("failed steer must remain retryable");
+        assert_eq!(sub.message.text, "Actually include charts");
+        assert_eq!(sub.message.attachments, vec![att]);
+        assert_eq!(sub.message.references, vec![reference]);
+        assert_eq!(
+            sub.status,
+            ComposerSubmissionStatus::Failed("No active turn to steer.".to_string())
+        );
+
+        // Retrying sends the retained submission as a normal turn/start.
+        state.services.emitted_ws_commands.clear();
+        state.dispatch(Action::Chat(ChatAction::RetryComposerSubmission(
+            "th-1".to_string(),
+        )));
+        assert!(state.services.emitted_ws_commands.iter().any(|c| {
+            matches!(
+                c,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "turn/start" && params["threadId"] == json!("th-1")
+            )
+        }));
+    }
+
+    #[test]
+    fn thread_fork_response_inserts_and_opens_forked_thread() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-parent".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Parent".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 77,
+            method: "thread/fork".to_string(),
+            result: Ok(json!({
+                "sourceThreadId": "th-parent",
+                "forked": true,
+                "queued": false,
+                "thread": {
+                    "id": "th-fork-1",
+                    "title": "Parent (branch)",
+                    "modelProvider": "anthropic",
+                    "model": "claude-sonnet-4-6"
+                }
+            })),
+        });
+
+        assert!(state.threads.iter().any(|t| t.id == "th-fork-1"));
+        assert_eq!(
+            state.nav.current().active_thread_id.as_deref(),
+            Some("th-fork-1")
+        );
+        assert!(state.is_thread_subscribed("ws-1", "th-fork-1"));
+    }
+
+    #[test]
+    fn fallback_local_transcript_includes_preserved_legacy_transcript_id() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.threads.push(ThreadRecord {
+            id: "srv-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Legacy".to_string(),
+            session_id: Some("srv-1".to_string()),
+            legacy_transcript_id: Some("electron-old-99".to_string()),
+            ..ThreadRecord::default()
+        });
+
+        // A thread/list refresh from the server must preserve client-side legacy_transcript_id.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 1,
+            method: "thread/list".to_string(),
+            result: Ok(json!({
+                "threads": [{
+                    "id": "srv-1",
+                    "title": "Legacy",
+                    "archived": false,
+                    "pinned": false
+                }]
+            })),
+        });
+        assert_eq!(
+            state.threads[0].legacy_transcript_id.as_deref(),
+            Some("electron-old-99")
+        );
+
+        // Disconnected hydration fallback includes legacyTranscriptId in candidate_ids.
+        state.dispatch(Action::Chat(ChatAction::HydrateThread("srv-1".to_string())));
+        let candidates = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                NativeCommand::ReadLocalTranscript {
+                    thread_id,
+                    candidate_ids,
+                    ..
+                } if thread_id == "srv-1" => Some(candidate_ids.clone()),
+                _ => None,
+            })
+            .expect("ReadLocalTranscript command");
+        assert!(candidates.contains(&"srv-1".to_string()));
+        assert!(candidates.contains(&"electron-old-99".to_string()));
     }
 }

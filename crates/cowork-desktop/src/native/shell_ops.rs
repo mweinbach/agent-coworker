@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+#[cfg(any(target_os = "windows", test))]
+use cowork_config::strip_windows_verbatim_prefix;
 use cowork_config::{
     canonicalize_sync, cowork_home, env_map_from_process, get_one_off_chats_root, host_platform,
     resolve_home_dir,
@@ -82,6 +84,101 @@ fn spawn_detached_os_command(program: &str, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_shell_target(raw: &str) -> Result<String> {
+    if raw.contains('\0') {
+        bail!("Target path or URL must not contain NUL bytes");
+    }
+    Ok(strip_windows_verbatim_prefix(raw).unwrap_or_else(|| raw.to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn open_target_windows_shell_execute(raw: &str) -> Result<()> {
+    use std::ffi::c_void;
+    use std::ptr::{null, null_mut};
+
+    const SW_SHOWNORMAL: i32 = 1;
+    const COINIT_APARTMENTTHREADED: u32 = 0x2;
+    const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
+    const S_OK: i32 = 0;
+    const S_FALSE: i32 = 1;
+
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(pv_reserved: *mut c_void, dw_co_init: u32) -> i32;
+        fn CoUninitialize();
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut c_void,
+            lp_operation: *const u16,
+            lp_file: *const u16,
+            lp_parameters: *const u16,
+            lp_directory: *const u16,
+            n_show_cmd: i32,
+        ) -> isize;
+    }
+
+    let normalized = normalize_windows_shell_target(raw)?;
+    let verb: Vec<u16> = "open\0".encode_utf16().collect();
+    let file: Vec<u16> = normalized
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: `CoInitializeEx` initializes COM for shell verb handlers on the calling thread;
+    // we only call `CoUninitialize` when initialization succeeded (`S_OK` or `S_FALSE`).
+    let hr = unsafe {
+        CoInitializeEx(
+            null_mut(),
+            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+        )
+    };
+    let should_uninit = hr == S_OK || hr == S_FALSE;
+
+    // SAFETY: `verb` and `file` are valid NUL-terminated UTF-16 strings that outlive the call;
+    // null pointers for hwnd/parameters/directory are documented as optional by Win32 ShellExecuteW.
+    let result = unsafe {
+        ShellExecuteW(
+            null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if should_uninit {
+        // SAFETY: Matches the successful `CoInitializeEx` on this thread above.
+        unsafe {
+            CoUninitialize();
+        }
+    }
+
+    if (result as usize) <= 32 {
+        bail!("Windows ShellExecuteW failed with code {result}");
+    }
+    Ok(())
+}
+
+fn open_target_in_os(target: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        spawn_detached_os_command("open", &[target.to_string()])
+    }
+    #[cfg(target_os = "windows")]
+    {
+        open_target_windows_shell_execute(target)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        spawn_detached_os_command("xdg-open", &[target.to_string()])
+    }
+}
+
 /// Opens the OS file manager highlighting `requested_path`.
 pub fn reveal_in_os(workspace_roots: &[PathBuf], requested_path: &Path) -> Result<()> {
     let roots = resolve_allowed_reveal_roots(workspace_roots);
@@ -128,13 +225,7 @@ pub fn open_in_default_app(
     }
 
     let path_str = safe_path.to_string_lossy().into_owned();
-    match host_platform() {
-        "darwin" => spawn_detached_os_command("open", &[path_str])?,
-        "win32" => {
-            spawn_detached_os_command("cmd", &["/C".into(), "start".into(), "".into(), path_str])?
-        }
-        _ => spawn_detached_os_command("xdg-open", &[path_str])?,
-    }
+    open_target_in_os(&path_str)?;
 
     Ok(OpenInDefaultAppOutcome::Opened)
 }
@@ -155,14 +246,7 @@ pub fn trash_workspace_entry(workspace_roots: &[PathBuf], requested_path: &Path)
 /// Opens an allowlisted external URL (`http:`, `https:`, `mailto:`) via the OS handler.
 pub fn open_external_url_os(raw_url: &str) -> Result<()> {
     let parsed = assert_allowed_external_url(raw_url)?;
-    let url_str = parsed.to_string();
-    match host_platform() {
-        "darwin" => spawn_detached_os_command("open", &[url_str]),
-        "win32" => {
-            spawn_detached_os_command("cmd", &["/C".into(), "start".into(), "".into(), url_str])
-        }
-        _ => spawn_detached_os_command("xdg-open", &[url_str]),
-    }
+    open_target_in_os(parsed.as_str())
 }
 
 fn decode_base64_bytes(input: &str) -> Result<Vec<u8>> {
@@ -556,5 +640,22 @@ mod tests {
         )]);
         let roots = resolve_allowed_reveal_roots_with(&[], &env, "linux", Some(&res));
         assert!(roots.contains(&res.join("dist")));
+    }
+
+    #[test]
+    fn normalize_windows_shell_target_strips_verbatim_preserves_metacharacters_and_rejects_nul() {
+        assert_eq!(
+            normalize_windows_shell_target(r"\\?\C:\repo\payload.exe&invoice.pdf").unwrap(),
+            r"C:\repo\payload.exe&invoice.pdf"
+        );
+        assert_eq!(
+            normalize_windows_shell_target(r"C:\repo\a&calc&b.txt").unwrap(),
+            r"C:\repo\a&calc&b.txt"
+        );
+        assert_eq!(
+            normalize_windows_shell_target("https://example.com/view?a=1&b=2").unwrap(),
+            "https://example.com/view?a=1&b=2"
+        );
+        assert!(normalize_windows_shell_target("C:\\repo\\bad\0file.pdf").is_err());
     }
 }

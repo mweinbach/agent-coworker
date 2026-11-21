@@ -74,7 +74,10 @@ const converter = await createSubprocessConverter({
   maxInitRetries: 1, // Zero falls back to upstream defaults via `||`.
   maxConversionRetries: 1,
   restartOnMemoryError: false,
-  verbose: true,
+  // Upstream `verbose: true` monkey-patches Emscripten `FS.open` and proxies
+  // pthread `print`/`printErr` through `console.*`, triggering an intermittent
+  // main-thread / em-pthread `WasmI32AtomicWait` deadlock on macOS ARM64.
+  verbose: false,
 });
 const results = { node: process.version, initMs: performance.now() - started, files: [] };
 try {

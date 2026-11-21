@@ -84,11 +84,15 @@ impl MenuBarUiState {
             && (s.desktop_settings.show_menu_bar || self.temp_revealed || self.is_active())
     }
 
-    /// Updates cached layout bounds of top-level menu button `idx`.
-    pub fn set_button_rect(&mut self, idx: usize, rect: [f32; 4]) {
-        if let Some(slot) = self.button_rects.get_mut(idx) {
+    /// Updates cached layout bounds of top-level menu button `idx`, returning whether it changed.
+    pub fn set_button_rect(&mut self, idx: usize, rect: [f32; 4]) -> bool {
+        if let Some(slot) = self.button_rects.get_mut(idx)
+            && *slot != rect
+        {
             *slot = rect;
+            return true;
         }
+        false
     }
 
     /// Switches the open dropdown in wide mode when hovering or pressing Left/Right.
@@ -835,8 +839,13 @@ pub fn build_menu_bar_strip(
                 t.glass_hover
             })
             .border(1.0, border_color)
-            .on_layout(move |s: &mut AppState, rect| {
-                s.shell_ui.menu_bar.set_button_rect(idx, rect);
+            .on_layout_tx(move |s: &mut AppState, rect, tx| {
+                let changed = s.shell_ui.menu_bar.set_button_rect(idx, rect);
+                if !changed
+                    || (!s.shell_ui.menu_bar.is_active() && !s.shell_ui.menu_bar.temp_revealed)
+                {
+                    tx.live_only();
+                }
             })
             .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
                 if s.shell_ui.menu_bar.open_menu_idx == Some(idx) {

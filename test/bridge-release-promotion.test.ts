@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +52,55 @@ import {
 import { scratchRoots } from "../src/platform/scratchRoots";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Compile the Rust persistence continuity test binary at suite load, outside
+// Bun's per-test timeout (matching `test/helpers/rustServerHarness.ts`). Cold
+// `cowork-desktop` builds compile Rune's `opt-level = 3` dependency graph and
+// routinely exceed a 120s per-test timeout on hosted CI runners.
+function buildBridgeContinuityTestBinary(): string {
+  const args = [
+    "test",
+    "-p",
+    "cowork-desktop",
+    "--test",
+    "bridge_profile_continuity",
+    "--no-run",
+    "--message-format=json-render-diagnostics",
+  ];
+  const build = spawnSync("cargo", args, {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: ["ignore", "pipe", "inherit"],
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (build.error || build.status !== 0) {
+    throw new Error(
+      `Failed to build bridge_profile_continuity test binary with cargo ${args.join(" ")}: ${build.error?.message ?? `exit ${build.status ?? build.signal}`}`,
+    );
+  }
+  for (const line of build.stdout.trim().split("\n")) {
+    if (!line) continue;
+    const event = JSON.parse(line) as {
+      reason?: string;
+      target?: { name?: string };
+      executable?: string | null;
+    };
+    if (
+      event.reason === "compiler-artifact" &&
+      event.target?.name === "bridge_profile_continuity" &&
+      typeof event.executable === "string" &&
+      existsSync(event.executable)
+    ) {
+      return event.executable;
+    }
+  }
+  throw new Error(
+    "Cargo test --no-run succeeded but did not report an executable for bridge_profile_continuity.",
+  );
+}
+
+const bridgeProfileContinuityBinary = buildBridgeContinuityTestBinary();
 
 async function makeTempDir(prefix: string): Promise<string> {
   return await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", prefix));
@@ -920,14 +971,8 @@ describe("pinned historical fixture, disposable guards, profile continuity, and 
       const runRunePersistenceCheck = async (extraEnv?: Record<string, string>) => {
         const proc = Bun.spawn(
           [
-            "cargo",
-            "test",
-            "-p",
-            "cowork-desktop",
-            "--test",
-            "bridge_profile_continuity",
+            bridgeProfileContinuityBinary,
             "seeded_bridge_profile_from_env_roundtrips_through_rune_persistence",
-            "--",
             "--exact",
             "--nocapture",
           ],

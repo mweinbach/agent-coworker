@@ -916,6 +916,7 @@ pub enum StoreEvent {
         entries: Vec<WorkspaceFileEntry>,
     },
     FilePreviewLoaded {
+        request_id: String,
         workspace_id: String,
         path: String,
         result: Result<FilePreviewState, String>,

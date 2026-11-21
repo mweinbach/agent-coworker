@@ -294,7 +294,7 @@ pub fn view_tab(
     };
 
     let ws_for_add = ws_id.to_string();
-    let mut servers: Vec<&McpServerSummary> = s.mcp_servers.iter().collect();
+    let mut servers: Vec<&McpServerSummary> = s.mcp_servers_for_workspace(ws_id).iter().collect();
     servers.sort_by(|a, b| compare_mcp_servers(a, b));
 
     let query = s

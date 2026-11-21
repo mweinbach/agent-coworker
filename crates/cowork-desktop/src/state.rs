@@ -222,6 +222,7 @@ pub(crate) struct PendingCanvasRpc {
     pub edit_revision: u64,
     pub target_path: Option<String>,
     pub submitted_content: Option<String>,
+    pub preserved_draft: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,6 +319,8 @@ pub struct WorkspaceRuntime {
     pub config: Option<Value>,
     pub control_session_config: Option<Value>,
     pub provider_statuses: Vec<ProviderStatusSummary>,
+    pub mcp_servers: Vec<McpServerSummary>,
+    pub mcp_servers_loaded: bool,
     pub reconnecting: bool,
     pub reconnect_attempt: u32,
     pub last_error: Option<String>,
@@ -439,9 +442,11 @@ impl ToolRunStatus {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoItemView {
+    #[serde(default)]
     pub id: String,
     pub content: String,
     pub status: String,
+    #[serde(default)]
     pub priority: Option<String>,
 }
 
@@ -1764,6 +1769,7 @@ pub struct AppState {
     pub(crate) canvas_generation_seq: u64,
     pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
     pub(crate) pending_presentation_rpcs: HashMap<u64, PendingPresentationRpc>,
+    pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_delete_threads_by_rpc_id: HashMap<u64, String>,
@@ -1902,6 +1908,7 @@ impl Default for AppState {
             canvas_generation_seq: 1,
             pending_canvas_rpcs: HashMap::new(),
             pending_presentation_rpcs: HashMap::new(),
+            active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
             pending_delete_threads_by_rpc_id: HashMap::new(),
@@ -2160,7 +2167,7 @@ impl AppState {
         if let Some(obj) = cfg.as_object()
             && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
         {
-            apply_defaults_obj_to_workspace(ws, obj);
+            apply_defaults_obj_to_workspace(ws, obj, true);
         }
         if let Some(tid) = evt
             .get("sessionId")
@@ -2906,6 +2913,7 @@ impl AppState {
             .filter(|s| !s.is_empty())
             .unwrap_or(&resolved_path)
             .to_string();
+        self.active_file_preview_request_id = None;
         self.active_file_preview = Some(FilePreviewState {
             workspace_id: workspace_id.clone(),
             path: resolved_path.clone(),
@@ -3006,6 +3014,7 @@ impl AppState {
         let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
         self.close_canvas_document();
         self.pending_presentation_rpcs.clear();
+        self.active_file_preview_request_id = None;
         self.active_file_preview = None;
         self.sync_preview_ui();
         self.context_sidebar.set_open(true);
@@ -3046,6 +3055,77 @@ impl AppState {
                 edit_revision: 0,
                 target_path: None,
                 submitted_content: None,
+                preserved_draft: None,
+            },
+        );
+    }
+
+    fn reopen_canvas_document_after_rename(&mut self, new_path: String) {
+        let Some(prev) = self.canvas_document.take() else {
+            return;
+        };
+        let preserved_draft = prev.dirty().then(|| prev.draft_content.clone());
+        let preserved_edit_revision = if preserved_draft.is_some() {
+            prev.edit_revision.max(1)
+        } else {
+            0
+        };
+        let preserved_dirty_since = preserved_draft
+            .as_ref()
+            .and_then(|_| prev.dirty_since_secs.or(Some(self.now_secs)));
+
+        let _ = self.send_ws_request(
+            &prev.workspace_id,
+            "cowork/workspace/document/close",
+            json!({
+                "documentId": prev.document_id,
+                "generation": prev.generation,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs
+            .retain(|_, pending| pending.generation != prev.generation);
+
+        let resolved_path = self.resolve_workspace_fs_path(&prev.workspace_id, &new_path);
+        self.canvas_generation_seq += 1;
+        let generation = self.canvas_generation_seq;
+        let workspace_id = prev.workspace_id;
+        let document_id = prev.document_id;
+        self.canvas_document = Some(CanvasDocumentSession {
+            workspace_id: workspace_id.clone(),
+            document_id: document_id.clone(),
+            generation,
+            path: resolved_path.clone(),
+            disk_content: prev.disk_content,
+            draft_content: preserved_draft.clone().unwrap_or_default(),
+            edit_revision: preserved_edit_revision,
+            last_saved_edit_revision: 0,
+            truncated: false,
+            revision: None,
+            status: CanvasDocumentStatus::Loading,
+            last_saved_at_secs: prev.last_saved_at_secs,
+            dirty_since_secs: preserved_dirty_since,
+            last_poll_secs: self.now_secs,
+        });
+        let req_id = self.send_ws_request(
+            &workspace_id,
+            "cowork/workspace/document/open",
+            json!({
+                "path": resolved_path,
+                "documentId": document_id,
+                "generation": generation,
+            }),
+            false,
+        );
+        self.pending_canvas_rpcs.insert(
+            req_id,
+            PendingCanvasRpc {
+                document_id,
+                generation,
+                edit_revision: preserved_edit_revision,
+                target_path: None,
+                submitted_content: None,
+                preserved_draft,
             },
         );
     }
@@ -3105,6 +3185,7 @@ impl AppState {
                 edit_revision: 0,
                 target_path: None,
                 submitted_content: None,
+                preserved_draft: None,
             },
         );
     }
@@ -3167,6 +3248,7 @@ impl AppState {
                 edit_revision,
                 target_path: None,
                 submitted_content: Some(content),
+                preserved_draft: None,
             },
         );
     }
@@ -3214,6 +3296,7 @@ impl AppState {
                 edit_revision,
                 target_path: Some(trimmed),
                 submitted_content: Some(content),
+                preserved_draft: None,
             },
         );
     }
@@ -3244,6 +3327,7 @@ impl AppState {
                 edit_revision,
                 target_path: None,
                 submitted_content: None,
+                preserved_draft: None,
             },
         );
     }
@@ -3302,11 +3386,21 @@ impl AppState {
                     });
                     doc.path = path;
                     doc.disk_content = content.clone();
-                    doc.draft_content = content;
                     doc.truncated = truncated;
                     doc.revision = revision;
-                    doc.last_saved_edit_revision = doc.edit_revision;
-                    doc.dirty_since_secs = None;
+                    if let Some(preserved) = pending.and_then(|p| p.preserved_draft) {
+                        doc.draft_content = preserved;
+                        if doc.dirty() {
+                            doc.dirty_since_secs = doc.dirty_since_secs.or(Some(self.now_secs));
+                        } else {
+                            doc.last_saved_edit_revision = doc.edit_revision;
+                            doc.dirty_since_secs = None;
+                        }
+                    } else {
+                        doc.draft_content = content;
+                        doc.last_saved_edit_revision = doc.edit_revision;
+                        doc.dirty_since_secs = None;
+                    }
                     doc.last_poll_secs = self.now_secs;
                     doc.status = CanvasDocumentStatus::Ready;
                 } else {
@@ -4514,7 +4608,16 @@ impl AppState {
                     self.sync_active_explorer_dir();
                 }
             }
-            StoreEvent::FilePreviewLoaded { path, result, .. } => {
+            StoreEvent::FilePreviewLoaded {
+                request_id,
+                path,
+                result,
+                ..
+            } => {
+                if self.active_file_preview_request_id.as_deref() != Some(request_id.as_str()) {
+                    return;
+                }
+                self.active_file_preview_request_id = None;
                 match result {
                     Ok(preview) => self.active_file_preview = Some(preview),
                     Err(err) => {
@@ -4845,11 +4948,24 @@ impl AppState {
                 if renamed_preview {
                     self.sync_preview_ui();
                 }
-                if let Some(ref mut doc) = self.canvas_document
-                    && doc.workspace_id == workspace_id
-                    && (doc.path == old_path || doc.path == norm_old)
-                {
-                    doc.path = new_path;
+                let renamed_canvas_path = self.canvas_document.as_ref().and_then(|doc| {
+                    if doc.workspace_id != workspace_id {
+                        return None;
+                    }
+                    if doc.path == old_path || doc.path == norm_old {
+                        return Some(new_path.clone());
+                    }
+                    let doc_p = Path::new(&doc.path);
+                    if let Ok(rel) = doc_p.strip_prefix(Path::new(&old_path)) {
+                        return Some(Path::new(&new_path).join(rel).to_string_lossy().to_string());
+                    }
+                    if let Ok(rel) = doc_p.strip_prefix(Path::new(&norm_old)) {
+                        return Some(Path::new(&new_path).join(rel).to_string_lossy().to_string());
+                    }
+                    None
+                });
+                if let Some(next_path) = renamed_canvas_path {
+                    self.reopen_canvas_document_after_rename(next_path);
                 }
             }
             StoreEvent::WorkspaceEntryRenameFailed { error, .. } => {
@@ -5259,6 +5375,23 @@ impl AppState {
         {
             self.settings_ui.conversation_import = None;
         }
+        if self.active_workspace_id != prev_ws {
+            self.sync_active_workspace_mcp_servers();
+            if let Some(ws_id) = self.active_workspace_id.clone()
+                && self.is_workspace_ws_connected(&ws_id)
+            {
+                let loaded = self
+                    .workspace_runtime_by_id
+                    .get(&ws_id)
+                    .is_some_and(|rt| rt.mcp_servers_loaded);
+                if !loaded
+                    || (self.route().view == ViewId::Settings
+                        && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
+                {
+                    self.bootstrap_tool_access_catalogs(&ws_id);
+                }
+            }
+        }
         if self.active_workspace_id != prev_ws || self.landing_workspace_id != prev_landing {
             self.shared_dirty = true;
         }
@@ -5377,11 +5510,13 @@ impl AppState {
             }
             ShellAction::OpenFilePreview(preview) => {
                 self.pending_presentation_rpcs.clear();
+                self.active_file_preview_request_id = None;
                 self.active_file_preview = Some(preview);
                 self.sync_preview_ui();
             }
             ShellAction::CloseFilePreview => {
                 self.pending_presentation_rpcs.clear();
+                self.active_file_preview_request_id = None;
                 self.active_file_preview = None;
                 self.sync_preview_ui();
             }
@@ -6006,8 +6141,16 @@ impl AppState {
                 }
             }
             ChatAction::ClearThreadUsageHardCap(thread_id) => {
-                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
-                    rt.usage_hard_cap_reached = false;
+                if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
+                    let _ = self.send_ws_request(
+                        &ws_id,
+                        "cowork/session/usageBudget/set",
+                        json!({
+                            "threadId": thread_id,
+                            "stopAtUsd": Value::Null,
+                        }),
+                        false,
+                    );
                 }
             }
             ChatAction::HydrateThread(thread_id) => {
@@ -7739,7 +7882,7 @@ impl AppState {
                         && let Some(obj) = defaults.as_object()
                     {
                         let prev_yolo = ws.yolo;
-                        apply_defaults_obj_to_workspace(ws, obj);
+                        apply_defaults_obj_to_workspace(ws, obj, false);
                         if ws.yolo != prev_yolo {
                             restarts_for_yolo.push((
                                 target_ws_id.clone(),
@@ -7875,7 +8018,7 @@ impl AppState {
             SettingsAction::DeleteMcpServer { workspace_id, name } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let matching_sources: Vec<String> = self
-                    .mcp_servers
+                    .mcp_servers_for_workspace(&workspace_id)
                     .iter()
                     .filter(|s| s.name == name)
                     .filter_map(|s| s.source.clone())
@@ -7944,7 +8087,8 @@ impl AppState {
                 enabled,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let mut params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                let mut params =
+                    self.build_mcp_target_params(&workspace_id, cwd.as_deref(), &name, &source);
                 params.insert("enabled".to_string(), json!(enabled));
                 let _ = self.send_ws_request(
                     &workspace_id,
@@ -7960,7 +8104,8 @@ impl AppState {
                 api_key,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let mut params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                let mut params =
+                    self.build_mcp_target_params(&workspace_id, cwd.as_deref(), &name, &source);
                 params.insert("apiKey".to_string(), json!(api_key));
                 let _ = self.send_ws_request(
                     &workspace_id,
@@ -7975,7 +8120,8 @@ impl AppState {
                 source,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                let params =
+                    self.build_mcp_target_params(&workspace_id, cwd.as_deref(), &name, &source);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/validate",
@@ -7989,7 +8135,8 @@ impl AppState {
                 source,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                let params =
+                    self.build_mcp_target_params(&workspace_id, cwd.as_deref(), &name, &source);
                 let _ = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/auth/authorize",
@@ -8004,7 +8151,8 @@ impl AppState {
                 callback_url,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
-                let mut params = self.build_mcp_target_params(cwd.as_deref(), &name, &source);
+                let mut params =
+                    self.build_mcp_target_params(&workspace_id, cwd.as_deref(), &name, &source);
                 params.insert("code".to_string(), json!(callback_url));
                 let _ = self.send_ws_request(
                     &workspace_id,
@@ -8893,6 +9041,7 @@ impl AppState {
                 self.workspaces.push(ws);
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
+                self.sync_active_workspace_mcp_servers();
                 self.sync_active_explorer_dir();
                 self.persist_state();
                 self.send_native(NativeCommand::StartWorkspaceServer {
@@ -8920,6 +9069,7 @@ impl AppState {
                 if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
                     self.active_workspace_id = self.workspaces.first().map(|w| w.id.clone());
                 }
+                self.sync_active_workspace_mcp_servers();
                 if self
                     .canvas_document
                     .as_ref()
@@ -8992,6 +9142,7 @@ impl AppState {
                         self.shell_ui.right_overlay_open = false;
                         self.context_sidebar.set_open(false);
                         let request_id = self.next_tag("preview");
+                        self.active_file_preview_request_id = Some(request_id.clone());
                         self.send_native(NativeCommand::ReadFilePreview {
                             request_id,
                             workspace_id,
@@ -9967,21 +10118,14 @@ impl AppState {
                 }
             }
             "session_usage" => {
-                let usage = parse_usage_summary(evt.get("usage").unwrap_or(evt));
-                if let Some(id) = tid {
-                    self.thread_runtime_by_id
-                        .entry(id.clone())
-                        .or_default()
-                        .usage = Some(usage.clone());
-                    self.usage_by_thread.insert(id, evt.clone());
-                }
-                self.usage_summary = Some(usage);
+                self.apply_session_usage_event(evt);
             }
             "budget_warning" | "budget_exceeded" | "usage_hard_cap" => {
                 if let Some(id) = tid {
                     let rt = self.thread_runtime_by_id.entry(id).or_default();
                     if let Some(cap) = evt
                         .get("capUsd")
+                        .or_else(|| evt.get("thresholdUsd"))
                         .or_else(|| evt.get("limit"))
                         .and_then(Value::as_f64)
                     {
@@ -9998,10 +10142,7 @@ impl AppState {
                 if let Some(id) = tid
                     && let Some(items_val) = evt.get("todos").and_then(Value::as_array)
                 {
-                    let todos: Vec<TodoItemView> = items_val
-                        .iter()
-                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                        .collect();
+                    let todos = parse_todo_items(items_val);
                     let rt = self.thread_runtime_by_id.entry(id).or_default();
                     rt.todos = todos.clone();
                     rt.feed.push(FeedItem::Todos {
@@ -10213,16 +10354,16 @@ impl AppState {
                 self.apply_skills_list_event(evt);
             }
             "mcp_servers" => {
-                self.update_mcp_servers_from_event(evt);
+                self.update_mcp_servers_from_event(workspace_id, evt);
             }
             "mcp_server_validation" => {
-                self.apply_mcp_validation_event(evt);
+                self.apply_mcp_validation_event(workspace_id, evt);
             }
             "mcp_server_auth_challenge" => {
                 self.apply_mcp_auth_challenge_event(evt);
             }
             "mcp_server_auth_result" => {
-                self.apply_mcp_auth_result_event(evt);
+                self.apply_mcp_auth_result_event(workspace_id, evt);
             }
             "session_config" => {
                 self.apply_session_config_event(workspace_id, evt);
@@ -10275,66 +10416,68 @@ impl AppState {
         match method {
             "item/commandExecution/requestApproval" => {
                 let category = params.get("category").and_then(Value::as_str);
-                if category == Some("filesystem") {
-                    rt.pending_interactions
-                        .push(ChatInteraction::FileChangeApproval {
-                            request_id: id,
-                            item_id: params
-                                .get("itemId")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            path: params
-                                .get("path")
-                                .or_else(|| params.get("command"))
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                            reason: params
-                                .get("reason")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                        });
+                let interaction = if category == Some("filesystem") {
+                    ChatInteraction::FileChangeApproval {
+                        request_id: id,
+                        item_id: params
+                            .get("itemId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        path: params
+                            .get("path")
+                            .or_else(|| params.get("command"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        reason: params
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    }
                 } else {
-                    rt.pending_interactions
-                        .push(ChatInteraction::CommandApproval {
-                            request_id: id,
-                            item_id: params
-                                .get("itemId")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            command: params
-                                .get("command")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                            cwd: params
-                                .get("cwd")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                            reason: params
-                                .get("reason")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                            risk_code: params
-                                .get("riskCode")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                        });
-                }
+                    ChatInteraction::CommandApproval {
+                        request_id: id,
+                        item_id: params
+                            .get("itemId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        command: params
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        cwd: params
+                            .get("cwd")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        reason: params
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        risk_code: params
+                            .get("riskCode")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    }
+                };
+                upsert_pending_interaction(&mut rt.pending_interactions, interaction);
             }
             "item/tool/requestUserInput" => {
-                rt.pending_interactions.push(ChatInteraction::UserInput {
-                    request_id: id,
-                    item_id: params
-                        .get("itemId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    questions: params
-                        .get("questions")
-                        .cloned()
-                        .unwrap_or_else(|| params.clone()),
-                });
+                upsert_pending_interaction(
+                    &mut rt.pending_interactions,
+                    ChatInteraction::UserInput {
+                        request_id: id,
+                        item_id: params
+                            .get("itemId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        questions: params
+                            .get("questions")
+                            .cloned()
+                            .unwrap_or_else(|| params.clone()),
+                    },
+                );
             }
             _ => {}
         }
@@ -10517,6 +10660,10 @@ impl AppState {
                     self.flush_next_pending_message(workspace_id, &tid);
                 }
             }
+            "cowork/session/usageBudget/set" => {
+                let target = payload.get("event").unwrap_or(&payload);
+                self.apply_session_usage_event(target);
+            }
             "cowork/provider/catalog/read"
             | "cowork/provider/customModel/add"
             | "cowork/provider/customModel/delete"
@@ -10577,17 +10724,17 @@ impl AppState {
             | "cowork/mcp/server/delete"
             | "cowork/mcp/server/setEnabled" => {
                 let evt = payload.get("event").unwrap_or(&payload);
-                self.update_mcp_servers_from_event(evt);
+                self.update_mcp_servers_from_event(workspace_id, evt);
             }
             "cowork/mcp/server/validate" => {
                 let evt = payload.get("event").unwrap_or(&payload);
-                self.apply_mcp_validation_event(evt);
+                self.apply_mcp_validation_event(workspace_id, evt);
             }
             "cowork/mcp/server/auth/authorize"
             | "cowork/mcp/server/auth/callback"
             | "cowork/mcp/server/auth/setApiKey" => {
                 let evt = payload.get("event").unwrap_or(&payload);
-                self.apply_mcp_auth_event(evt);
+                self.apply_mcp_auth_event(workspace_id, evt);
             }
             "cowork/agentProfiles/catalog/read"
             | "cowork/agentProfiles/upsert"
@@ -11411,10 +11558,7 @@ impl AppState {
         }
         if !stale_snapshot && let Some(todos_arr) = snapshot.get("todos").and_then(Value::as_array)
         {
-            rt.todos = todos_arr
-                .iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                .collect();
+            rt.todos = parse_todo_items(todos_arr);
         }
         if !stale_snapshot
             && let Some(agents_arr) = snapshot.get("agents").and_then(Value::as_array)
@@ -11431,6 +11575,7 @@ impl AppState {
                 .filter(|v| !v.is_null())
         {
             rt.usage = Some(parse_usage_summary(usage_val));
+            reconcile_usage_budget_status(rt, usage_val);
         }
         if self.is_workspace_ws_connected(workspace_id)
             && !self.is_thread_subscribed(workspace_id, &session_id)
@@ -11631,8 +11776,63 @@ impl AppState {
         }
     }
 
+    pub fn mcp_servers_for_workspace(&self, workspace_id: &str) -> &[McpServerSummary] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.mcp_servers_loaded
+        {
+            return &rt.mcp_servers;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.mcp_servers_loaded)
+            && (self.active_workspace_id.as_deref() == Some(workspace_id)
+                || self.active_workspace_id.is_none())
+        {
+            return &self.mcp_servers;
+        }
+        &[]
+    }
+
+    fn is_active_or_sole_workspace(&self, workspace_id: &str) -> bool {
+        self.active_workspace_id.as_deref() == Some(workspace_id)
+            || self.active_workspace_id.is_none()
+    }
+
+    fn sync_active_workspace_mcp_servers(&mut self) {
+        if let Some(ws_id) = self.active_workspace_id.as_deref() {
+            self.mcp_servers = self
+                .workspace_runtime_by_id
+                .get(ws_id)
+                .filter(|rt| rt.mcp_servers_loaded)
+                .map(|rt| rt.mcp_servers.clone())
+                .unwrap_or_default();
+        } else {
+            self.mcp_servers.clear();
+        }
+    }
+
+    fn apply_session_usage_event(&mut self, evt: &Value) {
+        let usage_val = evt.get("usage").unwrap_or(evt);
+        let usage = parse_usage_summary(usage_val);
+        let tid = evt
+            .get("sessionId")
+            .or_else(|| evt.get("threadId"))
+            .or_else(|| usage_val.get("sessionId"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if let Some(id) = tid {
+            let rt = self.thread_runtime_by_id.entry(id.clone()).or_default();
+            rt.usage = Some(usage.clone());
+            reconcile_usage_budget_status(rt, usage_val);
+            self.usage_by_thread.insert(id, evt.clone());
+        }
+        self.usage_summary = Some(usage);
+    }
+
     fn build_mcp_target_params(
         &self,
+        workspace_id: &str,
         cwd: Option<&str>,
         name: &str,
         source: &str,
@@ -11643,9 +11843,13 @@ impl AppState {
         if !source.is_empty() {
             params.insert("source".to_string(), json!(source));
         }
-        if let Some(srv) = self.mcp_servers.iter().find(|srv| {
-            srv.name == name && (source.is_empty() || srv.source.as_deref() == Some(source))
-        }) {
+        if let Some(srv) = self
+            .mcp_servers_for_workspace(workspace_id)
+            .iter()
+            .find(|srv| {
+                srv.name == name && (source.is_empty() || srv.source.as_deref() == Some(source))
+            })
+        {
             if let Some(plugin_id) = srv
                 .plugin_id
                 .as_deref()
@@ -11744,7 +11948,7 @@ impl AppState {
         self.skills = updated;
     }
 
-    fn update_mcp_servers_from_event(&mut self, evt: &Value) {
+    fn update_mcp_servers_from_event(&mut self, workspace_id: &str, evt: &Value) {
         let mut servers = Vec::new();
         for key in ["workspaceServers", "userServers", "servers"] {
             let default_source = if key == "userServers" {
@@ -11765,7 +11969,15 @@ impl AppState {
             || evt.get("workspaceServers").is_some()
             || evt.get("userServers").is_some()
         {
-            self.mcp_servers = servers;
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            rt.mcp_servers = servers.clone();
+            rt.mcp_servers_loaded = true;
+            if self.is_active_or_sole_workspace(workspace_id) {
+                self.mcp_servers = servers;
+            }
         }
     }
 
@@ -11851,7 +12063,7 @@ impl AppState {
         self.refresh_creation_preflight();
     }
 
-    fn apply_mcp_validation_event(&mut self, evt: &Value) {
+    fn apply_mcp_validation_event(&mut self, workspace_id: &str, evt: &Value) {
         let Some(name) = evt.get("name").and_then(Value::as_str) else {
             return;
         };
@@ -11864,11 +12076,19 @@ impl AppState {
             .map(str::to_string);
         self.mcp_validation_by_server
             .insert(name.to_string(), evt.clone());
-        for srv in &mut self.mcp_servers {
-            if srv.name == name {
-                srv.status = Some(if ok { "connected" } else { "error" }.to_string());
-                srv.error = if ok { None } else { message.clone() };
+        let apply_to_list = |list: &mut [McpServerSummary]| {
+            for srv in list {
+                if srv.name == name {
+                    srv.status = Some(if ok { "connected" } else { "error" }.to_string());
+                    srv.error = if ok { None } else { message.clone() };
+                }
             }
+        };
+        if let Some(rt) = self.workspace_runtime_by_id.get_mut(workspace_id) {
+            apply_to_list(&mut rt.mcp_servers);
+        }
+        if self.is_active_or_sole_workspace(workspace_id) {
+            apply_to_list(&mut self.mcp_servers);
         }
         self.toasts.push(NotificationRecord {
             key: format!("mcp-validate:{name}"),
@@ -11887,10 +12107,10 @@ impl AppState {
         });
     }
 
-    fn apply_mcp_auth_event(&mut self, evt: &Value) {
+    fn apply_mcp_auth_event(&mut self, workspace_id: &str, evt: &Value) {
         match evt.get("type").and_then(Value::as_str) {
             Some("mcp_server_auth_challenge") => self.apply_mcp_auth_challenge_event(evt),
-            _ => self.apply_mcp_auth_result_event(evt),
+            _ => self.apply_mcp_auth_result_event(workspace_id, evt),
         }
     }
 
@@ -11923,7 +12143,7 @@ impl AppState {
         });
     }
 
-    fn apply_mcp_auth_result_event(&mut self, evt: &Value) {
+    fn apply_mcp_auth_result_event(&mut self, workspace_id: &str, evt: &Value) {
         self.mcp_auth_result = Some(evt.clone());
         let Some(name) = evt.get("name").and_then(Value::as_str) else {
             return;
@@ -11936,18 +12156,26 @@ impl AppState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        for srv in &mut self.mcp_servers {
-            if srv.name == name {
-                if let Some(m) = mode.clone() {
-                    srv.auth_mode = Some(m.clone());
-                    srv.auth_status = Some(m.clone());
-                    if let Some(obj) = srv.config.as_object_mut() {
-                        obj.insert("authMode".to_string(), json!(m));
+        let apply_to_list = |list: &mut [McpServerSummary]| {
+            for srv in list {
+                if srv.name == name {
+                    if let Some(m) = mode.clone() {
+                        srv.auth_mode = Some(m.clone());
+                        srv.auth_status = Some(m.clone());
+                        if let Some(obj) = srv.config.as_object_mut() {
+                            obj.insert("authMode".to_string(), json!(m));
+                        }
                     }
+                    srv.auth_message = message.clone();
+                    srv.error = if ok { None } else { message.clone() };
                 }
-                srv.auth_message = message.clone();
-                srv.error = if ok { None } else { message.clone() };
             }
+        };
+        if let Some(rt) = self.workspace_runtime_by_id.get_mut(workspace_id) {
+            apply_to_list(&mut rt.mcp_servers);
+        }
+        if self.is_active_or_sole_workspace(workspace_id) {
+            apply_to_list(&mut self.mcp_servers);
         }
         self.toasts.push(NotificationRecord {
             key: format!("mcp-auth-result:{name}"),
@@ -12942,12 +13170,19 @@ fn should_clear_default(obj: &Map<String, Value>, spec: &ClearableDefaultKey) ->
         || obj.get(spec.clear_server_key).and_then(Value::as_bool) == Some(true)
 }
 
-fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, Value>) {
+fn apply_defaults_obj_to_workspace(
+    ws: &mut WorkspaceRecord,
+    obj: &Map<String, Value>,
+    from_session_config: bool,
+) {
     if !ws.defaults.is_object() {
         ws.defaults = json!({});
     }
     if let Some(dst) = ws.defaults.as_object_mut() {
         for (k, v) in obj {
+            if from_session_config && k == "toolOutputOverflowChars" {
+                continue;
+            }
             dst.insert(k.clone(), v.clone());
         }
         for spec in &CLEARABLE_DEFAULT_KEYS {
@@ -12956,9 +13191,25 @@ fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, V
                 dst.remove(spec.server_key);
                 dst.remove(spec.clear_desktop_key);
                 dst.remove(spec.clear_server_key);
+            } else if from_session_config && spec.desktop_key == "defaultToolOutputOverflowChars" {
+                // `build_session_config_event` always emits effective `toolOutputOverflowChars`,
+                // while emitting `defaultToolOutputOverflowChars` only when a project override
+                // exists (number or explicit `null`). Never persist the inherited effective value
+                // back as a desktop override, and drop stale local overrides when omitted.
+                if let Some(val) = obj.get(spec.desktop_key) {
+                    dst.insert(spec.desktop_key.to_string(), val.clone());
+                    dst.insert(spec.server_key.to_string(), val.clone());
+                    dst.remove(spec.clear_desktop_key);
+                    dst.remove(spec.clear_server_key);
+                } else if obj.contains_key(spec.server_key) {
+                    dst.remove(spec.desktop_key);
+                    dst.remove(spec.server_key);
+                    dst.remove(spec.clear_desktop_key);
+                    dst.remove(spec.clear_server_key);
+                }
             } else if let Some(val) = obj
-                .get(spec.server_key)
-                .or_else(|| obj.get(spec.desktop_key))
+                .get(spec.desktop_key)
+                .or_else(|| obj.get(spec.server_key))
             {
                 dst.insert(spec.desktop_key.to_string(), val.clone());
                 dst.insert(spec.server_key.to_string(), val.clone());
@@ -13782,6 +14033,48 @@ fn request_id_key(id: &JsonRpcLiteId) -> String {
     match id {
         JsonRpcLiteId::String(s) => s.clone(),
         JsonRpcLiteId::Number(n) => n.to_string(),
+    }
+}
+
+fn upsert_pending_interaction(interactions: &mut Vec<ChatInteraction>, incoming: ChatInteraction) {
+    let incoming_id = interaction_request_id(&incoming);
+    if let Some(existing) = interactions
+        .iter_mut()
+        .find(|item| interaction_request_id(item) == incoming_id)
+    {
+        *existing = incoming;
+    } else {
+        interactions.push(incoming);
+    }
+}
+
+fn parse_todo_items(items: &[Value]) -> Vec<TodoItemView> {
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, v)| {
+            let mut item: TodoItemView = serde_json::from_value(v.clone()).ok()?;
+            if item.id.trim().is_empty() {
+                item.id = format!("todo-{idx}");
+            }
+            Some(item)
+        })
+        .collect()
+}
+
+fn reconcile_usage_budget_status(rt: &mut ThreadRuntime, usage_val: &Value) {
+    let Some(budget) = usage_val
+        .get("budgetStatus")
+        .or_else(|| usage_val.get("budget"))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    if let Some(stop_val) = budget.get("stopAtUsd") {
+        rt.usage_hard_cap = stop_val.as_f64();
+    }
+    if let Some(stop_triggered) = budget.get("stopTriggered").and_then(Value::as_bool) {
+        rt.usage_hard_cap_reached = stop_triggered;
     }
 }
 
@@ -17514,6 +17807,7 @@ mod tests {
                 edit_revision: 1,
                 target_path: None,
                 submitted_content: None,
+                preserved_draft: None,
             },
         );
         state.apply_canvas_rpc_error(
@@ -21418,5 +21712,583 @@ mod tests {
         assert_eq!(reloaded.agents[0].name, "Auditor");
         assert_eq!(reloaded.agents[0].status, "running");
         assert_eq!(count_active_child_agents(&reloaded.agents), 1);
+    }
+
+    #[test]
+    fn reset_overflow_default_keeps_inherited_value_out_of_persisted_defaults() {
+        use crate::views::settings::developer::resolve_workspace_overflow_config;
+
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        // Set explicit override first.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "defaultToolOutputOverflowChars": 32768 }),
+        }));
+        assert_eq!(
+            state.workspaces[0].defaults["defaultToolOutputOverflowChars"],
+            json!(32768)
+        );
+
+        // Reset to default.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "clearDefaultToolOutputOverflowChars": true }),
+        }));
+        let rpc_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/session/defaults/apply" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected defaults/apply RPC");
+
+        // Server responds with effective inherited `toolOutputOverflowChars` and omits
+        // `defaultToolOutputOverflowChars` (no project override).
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: rpc_id,
+            method: "cowork/session/defaults/apply".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "toolOutputOverflowChars": 65536
+                    }
+                }
+            })),
+        });
+        assert!(
+            state.workspaces[0]
+                .defaults
+                .get("defaultToolOutputOverflowChars")
+                .is_none(),
+            "inherited effective overflow must not be written back as a persisted override"
+        );
+        assert!(
+            state.workspaces[0]
+                .defaults
+                .get("toolOutputOverflowChars")
+                .is_none()
+        );
+        let (enabled, uses_inherited, inherited_is_null, threshold) =
+            resolve_workspace_overflow_config(
+                Some(&state.workspaces[0]),
+                state.workspace_runtime_by_id.get("ws-1"),
+            );
+        assert!(enabled);
+        assert!(uses_inherited);
+        assert!(!inherited_is_null);
+        assert_eq!(threshold, 65536);
+
+        // An explicit `null` override from the server IS preserved.
+        state.apply_session_config_event(
+            "ws-1",
+            &json!({
+                "type": "session_config",
+                "config": {
+                    "toolOutputOverflowChars": Value::Null,
+                    "defaultToolOutputOverflowChars": Value::Null
+                }
+            }),
+        );
+        assert_eq!(
+            state.workspaces[0]
+                .defaults
+                .get("defaultToolOutputOverflowChars"),
+            Some(&Value::Null)
+        );
+        // A subsequent authoritative snapshot omitting `defaultToolOutputOverflowChars` clears it.
+        state.apply_session_config_event(
+            "ws-1",
+            &json!({
+                "type": "session_config",
+                "config": {
+                    "toolOutputOverflowChars": 65536
+                }
+            }),
+        );
+        assert!(
+            state.workspaces[0]
+                .defaults
+                .get("defaultToolOutputOverflowChars")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn stale_file_preview_results_are_ignored_on_switch_and_close() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+
+        let next_preview_req = |state: &AppState| {
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .rev()
+                .find_map(|c| match c {
+                    NativeCommand::ReadFilePreview { request_id, .. } => Some(request_id.clone()),
+                    _ => None,
+                })
+                .expect("expected ReadFilePreview command")
+        };
+
+        // Open binary/image preview A, then immediately switch to B before A completes.
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/demo/a.png".to_string(),
+        }));
+        let req_a = next_preview_req(&state);
+
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/demo/b.png".to_string(),
+        }));
+        let req_b = next_preview_req(&state);
+        assert_ne!(req_a, req_b);
+
+        let make_preview = |path: &str, title: &str| FilePreviewState {
+            workspace_id: "ws-1".to_string(),
+            path: path.to_string(),
+            title: title.to_string(),
+            content: None,
+            is_binary: true,
+            is_markdown: false,
+            truncated: false,
+            error: None,
+            spreadsheet: None,
+            presentation: None,
+        };
+
+        // Late result for A must be ignored.
+        state.apply_store_event(StoreEvent::FilePreviewLoaded {
+            request_id: req_a,
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/demo/a.png".to_string(),
+            result: Ok(make_preview("/tmp/demo/a.png", "a.png")),
+        });
+        assert!(state.active_file_preview.is_none());
+
+        // Current result for B is installed.
+        state.apply_store_event(StoreEvent::FilePreviewLoaded {
+            request_id: req_b,
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/demo/b.png".to_string(),
+            result: Ok(make_preview("/tmp/demo/b.png", "b.png")),
+        });
+        assert_eq!(
+            state.active_file_preview.as_ref().map(|p| p.path.as_str()),
+            Some("/tmp/demo/b.png")
+        );
+
+        // Closing preview while C is pending invalidates C so it cannot reopen the pane.
+        state.dispatch(Action::Native(NativeAction::LoadFilePreview {
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/demo/c.png".to_string(),
+        }));
+        let req_c = next_preview_req(&state);
+        state.dispatch(Action::Shell(ShellAction::CloseFilePreview));
+        state.apply_store_event(StoreEvent::FilePreviewLoaded {
+            request_id: req_c,
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/demo/c.png".to_string(),
+            result: Ok(make_preview("/tmp/demo/c.png", "c.png")),
+        });
+        assert!(state.active_file_preview.is_none());
+    }
+
+    #[test]
+    fn canvas_rename_reopens_harness_session_and_preserves_unsaved_edits() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.open_canvas_document("ws-1".to_string(), "/tmp/demo/notes.md".to_string());
+        let open_req_1 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/open" => Some(*request_id),
+                _ => None,
+            })
+            .unwrap();
+        let initial_gen = state.canvas_document.as_ref().unwrap().generation;
+        state.apply_canvas_rpc_response(
+            open_req_1,
+            "cowork/workspace/document/open",
+            &json!({
+                "ok": true,
+                "document": {
+                    "documentId": state.canvas_document.as_ref().unwrap().document_id,
+                    "generation": initial_gen,
+                    "path": "/tmp/demo/notes.md",
+                    "content": "original",
+                    "truncated": false
+                }
+            }),
+        );
+        // Simulate unsaved user edit before renaming the file.
+        {
+            let doc = state.canvas_document.as_mut().unwrap();
+            doc.draft_content = "unsaved edits".to_string();
+            doc.edit_revision += 1;
+            doc.dirty_since_secs = Some(10.0);
+        }
+        let cmds_before = state.services.emitted_ws_commands.len();
+
+        state.apply_store_event(StoreEvent::WorkspaceEntryRenamed {
+            workspace_id: "ws-1".to_string(),
+            old_path: "/tmp/demo/notes.md".to_string(),
+            new_path: "/tmp/demo/renamed.md".to_string(),
+        });
+
+        let new_cmds = &state.services.emitted_ws_commands[cmds_before..];
+        assert!(new_cmds.iter().any(|c| matches!(
+            c,
+            WsCommand::SendRequest { method, params, .. }
+                if method == "cowork/workspace/document/close"
+                    && params["generation"] == json!(initial_gen)
+        )));
+        let (reopen_req_id, reopen_gen) = new_cmds
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/workspace/document/open"
+                    && params["path"] == json!("/tmp/demo/renamed.md") =>
+                {
+                    Some((*request_id, params["generation"].as_u64().unwrap()))
+                }
+                _ => None,
+            })
+            .expect("rename must reopen canvas session at new path");
+        assert!(reopen_gen > initial_gen);
+
+        state.apply_canvas_rpc_response(
+            reopen_req_id,
+            "cowork/workspace/document/open",
+            &json!({
+                "ok": true,
+                "document": {
+                    "documentId": state.canvas_document.as_ref().unwrap().document_id,
+                    "generation": reopen_gen,
+                    "path": "/tmp/demo/renamed.md",
+                    "content": "original",
+                    "truncated": false
+                }
+            }),
+        );
+        let doc = state.canvas_document.as_ref().unwrap();
+        assert_eq!(doc.path, "/tmp/demo/renamed.md");
+        assert_eq!(doc.generation, reopen_gen);
+        assert_eq!(doc.disk_content, "original");
+        assert_eq!(doc.draft_content, "unsaved edits");
+        assert!(doc.dirty());
+        assert_eq!(doc.status, CanvasDocumentStatus::Ready);
+
+        // Saving now targets the reopened generation.
+        state.request_canvas_save();
+        assert!(state.services.emitted_ws_commands.iter().rev().any(|c| {
+            matches!(
+                c,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/workspace/document/save"
+                        && params["generation"] == json!(reopen_gen)
+                        && params["content"] == json!("unsaved edits")
+            )
+        }));
+    }
+
+    #[test]
+    fn canonical_idless_todo_entries_deserialize_in_live_events_and_snapshots() {
+        let mut state = AppState::default();
+        let canonical_todos = json!([
+            { "content": "Inspect bug", "status": "in_progress", "activeForm": "Inspecting bug" },
+            { "content": "Write fix", "status": "pending", "activeForm": "Writing fix" }
+        ]);
+
+        state.reduce_cowork_event(
+            "ws-1",
+            &json!({
+                "type": "todos",
+                "sessionId": "th-live",
+                "todos": canonical_todos
+            }),
+            100,
+        );
+        let live_rt = state.thread_runtime_by_id.get("th-live").unwrap();
+        assert_eq!(live_rt.todos.len(), 2);
+        assert_eq!(live_rt.todos[0].content, "Inspect bug");
+        assert_eq!(live_rt.todos[0].status, "in_progress");
+        assert!(!live_rt.todos[0].id.is_empty());
+        assert_ne!(live_rt.todos[0].id, live_rt.todos[1].id);
+
+        state.apply_thread_snapshot_response(
+            "ws-1",
+            &json!({
+                "coworkSnapshot": {
+                    "sessionId": "th-snap",
+                    "lastEventSeq": 5,
+                    "todos": canonical_todos
+                }
+            }),
+        );
+        let snap_rt = state.thread_runtime_by_id.get("th-snap").unwrap();
+        assert_eq!(snap_rt.todos.len(), 2);
+        assert_eq!(snap_rt.todos[1].content, "Write fix");
+        assert_ne!(snap_rt.todos[0].id, snap_rt.todos[1].id);
+    }
+
+    #[test]
+    fn clear_thread_usage_hard_cap_updates_server_budget_and_reconciles_response() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Budget test".to_string(),
+            ..Default::default()
+        });
+
+        state.reduce_cowork_event(
+            "ws-1",
+            &json!({
+                "type": "budget_exceeded",
+                "sessionId": "th-1",
+                "thresholdUsd": 2.5
+            }),
+            10,
+        );
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        assert_eq!(rt.usage_hard_cap, Some(2.5));
+        assert!(rt.usage_hard_cap_reached);
+
+        state.dispatch(Action::Chat(ChatAction::ClearThreadUsageHardCap(
+            "th-1".to_string(),
+        )));
+        let (rpc_id, params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/session/usageBudget/set" => {
+                    Some((*request_id, params.clone()))
+                }
+                _ => None,
+            })
+            .expect("expected cowork/session/usageBudget/set RPC");
+        assert_eq!(params["threadId"], json!("th-1"));
+        assert_eq!(params.get("stopAtUsd"), Some(&Value::Null));
+        // Must wait for server acknowledgement before clearing cap state.
+        assert!(
+            state
+                .thread_runtime_by_id
+                .get("th-1")
+                .unwrap()
+                .usage_hard_cap_reached
+        );
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: rpc_id,
+            method: "cowork/session/usageBudget/set".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "session_usage",
+                    "sessionId": "th-1",
+                    "usage": {
+                        "totalPromptTokens": 500,
+                        "totalCompletionTokens": 200,
+                        "estimatedTotalCostUsd": 2.6,
+                        "budgetStatus": {
+                            "configured": false,
+                            "warnAtUsd": Value::Null,
+                            "stopAtUsd": Value::Null,
+                            "warningTriggered": false,
+                            "stopTriggered": false,
+                            "currentCostUsd": 2.6
+                        }
+                    }
+                }
+            })),
+        });
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        assert_eq!(rt.usage_hard_cap, None);
+        assert!(!rt.usage_hard_cap_reached);
+    }
+
+    #[test]
+    fn replayed_server_interaction_requests_upsert_by_request_id() {
+        let mut state = AppState::default();
+        let req_input = json!({
+            "threadId": "th-1",
+            "itemId": "item-ask",
+            "questions": [{ "id": "q1", "question": "Proceed?" }]
+        });
+        let req_approval = json!({
+            "threadId": "th-1",
+            "itemId": "item-cmd",
+            "command": "git status"
+        });
+
+        state.apply_ws_server_request(
+            "ws-1",
+            JsonRpcLiteId::Number(42),
+            "item/tool/requestUserInput",
+            req_input.clone(),
+        );
+        state.apply_ws_server_request(
+            "ws-1",
+            JsonRpcLiteId::Number(43),
+            "item/commandExecution/requestApproval",
+            req_approval.clone(),
+        );
+        // Replaying the same request IDs after reconnect must upsert instead of duplicating.
+        state.apply_ws_server_request(
+            "ws-1",
+            JsonRpcLiteId::Number(42),
+            "item/tool/requestUserInput",
+            req_input,
+        );
+        state.apply_ws_server_request(
+            "ws-1",
+            JsonRpcLiteId::Number(43),
+            "item/commandExecution/requestApproval",
+            req_approval,
+        );
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        assert_eq!(rt.pending_interactions.len(), 2);
+    }
+
+    #[test]
+    fn mcp_server_snapshots_stay_isolated_per_workspace() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), WsConnectionState::Connected);
+        state
+            .workspace_socket_by_id
+            .insert("ws-b".to_string(), WsConnectionState::Connected);
+
+        // Project A loads its workspace-scoped connector `shared-name`.
+        state.apply_ws_response(
+            "ws-a",
+            1,
+            "cowork/mcp/servers/read",
+            Ok(json!({
+                "event": {
+                    "type": "mcp_servers",
+                    "servers": [{
+                        "name": "shared-name",
+                        "transport": { "type": "stdio", "command": "node", "args": ["a.js"] },
+                        "enabled": true,
+                        "source": "workspace"
+                    }]
+                }
+            })),
+        );
+        assert_eq!(state.mcp_servers_for_workspace("ws-a").len(), 1);
+        assert_eq!(
+            state.mcp_servers_for_workspace("ws-a")[0].name,
+            "shared-name"
+        );
+        assert!(state.mcp_servers_for_workspace("ws-b").is_empty());
+
+        // Switching to already-connected project B must clear active mirror and request B's snapshot.
+        let before_switch = state.services.emitted_ws_commands.len();
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-b".to_string(),
+        )));
+        assert!(state.mcp_servers.is_empty());
+        assert!(state.mcp_servers_for_workspace("ws-b").is_empty());
+        assert!(
+            state.services.emitted_ws_commands[before_switch..]
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    WsCommand::SendRequest {
+                        workspace_id,
+                        method,
+                        ..
+                    } if workspace_id == "ws-b" && method == "cowork/mcp/servers/read"
+                ))
+        );
+
+        // A late response from project A must NOT pollute project B's visible list.
+        state.apply_ws_response(
+            "ws-a",
+            2,
+            "cowork/mcp/servers/read",
+            Ok(json!({
+                "event": {
+                    "type": "mcp_servers",
+                    "servers": [{
+                        "name": "only-in-a",
+                        "transport": { "type": "stdio", "command": "node" },
+                        "enabled": true,
+                        "source": "workspace"
+                    }]
+                }
+            })),
+        );
+        assert!(state.mcp_servers.is_empty());
+        assert!(state.mcp_servers_for_workspace("ws-b").is_empty());
+        assert_eq!(state.mcp_servers_for_workspace("ws-a")[0].name, "only-in-a");
+
+        // Project B's own response updates B without affecting A.
+        state.apply_ws_response(
+            "ws-b",
+            3,
+            "cowork/mcp/servers/read",
+            Ok(json!({
+                "event": {
+                    "type": "mcp_servers",
+                    "servers": [{
+                        "name": "only-in-b",
+                        "transport": { "type": "stdio", "command": "python" },
+                        "enabled": true,
+                        "source": "user"
+                    }]
+                }
+            })),
+        );
+        assert_eq!(state.mcp_servers.len(), 1);
+        assert_eq!(state.mcp_servers[0].name, "only-in-b");
+        assert_eq!(state.mcp_servers_for_workspace("ws-b")[0].name, "only-in-b");
+        assert_eq!(state.mcp_servers_for_workspace("ws-a")[0].name, "only-in-a");
     }
 }

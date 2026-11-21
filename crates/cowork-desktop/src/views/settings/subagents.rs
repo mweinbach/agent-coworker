@@ -1175,7 +1175,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
         // MCP servers checklist
         let mcp_checks: Vec<El> = s
-            .mcp_servers
+            .mcp_servers_for_workspace(&ws.id)
             .iter()
             .map(|srv| {
                 let checked = s.settings_ui.subagent_draft_mcp_servers.contains(&srv.name);

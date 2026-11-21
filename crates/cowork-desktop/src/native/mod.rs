@@ -1328,7 +1328,7 @@ impl NativeWorkerContext {
                 });
             }
             NativeCommand::ReadFilePreview {
-                request_id: _,
+                request_id,
                 workspace_id,
                 workspace_root,
                 path,
@@ -1344,6 +1344,7 @@ impl NativeWorkerContext {
                                 Some(&meta),
                             );
                             (self.emit)(StoreEvent::FilePreviewLoaded {
+                                request_id,
                                 workspace_id,
                                 path,
                                 result: Err(err),
@@ -1371,6 +1372,7 @@ impl NativeWorkerContext {
                         Err(err) => Err(format!("Preview reader failed: {err}")),
                     };
                     emit(StoreEvent::FilePreviewLoaded {
+                        request_id,
                         workspace_id,
                         path,
                         result,

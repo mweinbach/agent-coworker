@@ -321,6 +321,9 @@ pub struct WorkspaceRuntime {
     pub provider_statuses: Vec<ProviderStatusSummary>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub mcp_servers_loaded: bool,
+    pub agent_profiles_catalog: AgentProfilesCatalogState,
+    pub agent_profiles_loaded: bool,
+    pub subagents: Vec<SubagentProfile>,
     pub backups: Vec<BackupSummary>,
     pub backups_loaded: bool,
     pub backup_delta: Option<BackupDeltaView>,
@@ -5317,6 +5320,9 @@ impl AppState {
                 });
                 if canonical == Some(SettingsPageId::ToolAccess) {
                     self.bootstrap_active_workspace_tool_access();
+                } else if canonical == Some(SettingsPageId::Subagents) {
+                    self.sync_active_workspace_agent_profiles();
+                    self.refresh_active_workspace_agent_profiles();
                 } else if canonical == Some(SettingsPageId::Backup) {
                     self.refresh_active_workspace_backups();
                 } else if canonical == Some(SettingsPageId::RemoteAccess)
@@ -5342,6 +5348,9 @@ impl AppState {
                 });
                 if canonical == SettingsPageId::ToolAccess {
                     self.bootstrap_active_workspace_tool_access();
+                } else if canonical == SettingsPageId::Subagents {
+                    self.sync_active_workspace_agent_profiles();
+                    self.refresh_active_workspace_agent_profiles();
                 } else if canonical == SettingsPageId::Backup {
                     self.refresh_active_workspace_backups();
                 } else if canonical == SettingsPageId::RemoteAccess && self.remote_access.running {
@@ -5421,6 +5430,7 @@ impl AppState {
         }
         if self.active_workspace_id != prev_ws {
             self.sync_active_workspace_mcp_servers();
+            self.sync_active_workspace_agent_profiles();
             self.sync_active_workspace_backups();
             if let Some(ws_id) = self.active_workspace_id.clone() {
                 self.ensure_workspace_server_started(&ws_id);
@@ -5434,6 +5444,12 @@ impl AppState {
                             && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
                     {
                         self.bootstrap_tool_access_catalogs(&ws_id);
+                    }
+                    if self.route().view == ViewId::Settings
+                        && self.route().settings_page.canonical() == SettingsPageId::Subagents
+                        && self.settings_ui.subagent_workspace_id.is_none()
+                    {
+                        self.refresh_active_workspace_agent_profiles();
                     }
                     if self.route().view == ViewId::Settings
                         && self.route().settings_page.canonical() == SettingsPageId::Backup
@@ -8251,7 +8267,7 @@ impl AppState {
                     })
                     .unwrap_or_else(|| "default".to_string());
                 let existing = self
-                    .agent_profiles_catalog
+                    .agent_profiles_catalog_for_workspace(&workspace_id)
                     .profiles
                     .iter()
                     .find(|e| e.profile.id == profile.id && e.scope == scope)
@@ -8285,13 +8301,13 @@ impl AppState {
             SettingsAction::DeleteSubagent { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let scope = self
-                    .agent_profiles_catalog
+                    .agent_profiles_catalog_for_workspace(&workspace_id)
                     .profiles
                     .iter()
                     .find(|p| p.profile.id == id)
                     .map(|p| p.scope.clone())
                     .or_else(|| {
-                        self.subagents
+                        self.subagents_for_workspace(&workspace_id)
                             .iter()
                             .find(|p| p.id == id)
                             .and_then(|p| p.scope.clone())
@@ -8305,6 +8321,7 @@ impl AppState {
                 );
             }
             SettingsAction::ReadAgentProfilesCatalog { workspace_id } => {
+                self.ensure_workspace_server_started(&workspace_id);
                 let cwd = self.workspace_path(&workspace_id);
                 let _ = self.send_ws_request(
                     &workspace_id,
@@ -9111,6 +9128,7 @@ impl AppState {
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
                 self.sync_active_workspace_mcp_servers();
+                self.sync_active_workspace_agent_profiles();
                 self.sync_active_workspace_backups();
                 self.sync_active_explorer_dir();
                 self.persist_state();
@@ -9140,7 +9158,15 @@ impl AppState {
                 if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
                     self.active_workspace_id = self.workspaces.first().map(|w| w.id.clone());
                 }
+                if self.settings_ui.subagent_workspace_id.as_deref() == Some(workspace_id.as_str())
+                {
+                    self.settings_ui.subagent_workspace_id = None;
+                    self.settings_ui.subagent_delete_confirm = None;
+                    self.settings_ui.subagent_dialog_open = false;
+                    self.settings_ui.subagent_editing_id = None;
+                }
                 self.sync_active_workspace_mcp_servers();
+                self.sync_active_workspace_agent_profiles();
                 self.sync_active_workspace_backups();
                 if self
                     .canvas_document
@@ -9818,13 +9844,12 @@ impl AppState {
                 }
             }
             "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "toolCall" => {
-                let tool_name = item
+                let parsed_tool_name = item
                     .get("tool")
                     .or_else(|| item.get("toolName"))
                     .or_else(|| item.get("name"))
                     .and_then(Value::as_str)
-                    .unwrap_or(item_type)
-                    .to_string();
+                    .filter(|s| !s.is_empty());
                 let title = item
                     .get("title")
                     .and_then(Value::as_str)
@@ -9833,32 +9858,65 @@ impl AppState {
                     .get("callId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let input = item
-                    .get("arguments")
-                    .or_else(|| item.get("input"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let status = parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Running);
-                let completed_at_ms = item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)));
-                let output_truncated = item
+                let next_input = extract_tool_input(item);
+                let parsed_status = parse_tool_status_from_item(item);
+                let completed_at = item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)));
+                let truncated = item
                     .get("outputTruncated")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
+                if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id) {
+                    if let FeedItem::Tool {
+                        tool_name,
+                        title: existing_title,
+                        call_id: existing_call_id,
+                        status,
+                        input,
+                        streaming,
+                        completed_at_ms,
+                        output_truncated,
+                        ..
+                    } = existing
+                    {
+                        if let Some(name) = parsed_tool_name {
+                            *tool_name = name.to_string();
+                        }
+                        if let Some(t) = title {
+                            *existing_title = Some(t);
+                        }
+                        if let Some(cid) = call_id {
+                            *existing_call_id = Some(cid);
+                        }
+                        if !status.is_terminal()
+                            && let Some(next_status) = parsed_status
+                        {
+                            *status = next_status;
+                        }
+                        merge_tool_input(input, next_input);
+                        if let Some(c) = completed_at {
+                            *completed_at_ms = Some(c);
+                        }
+                        if truncated {
+                            *output_truncated = true;
+                        }
+                        *streaming = !status.is_terminal();
+                    }
+                } else {
+                    let status = parsed_status.unwrap_or(ToolRunStatus::Running);
                     rt.feed.push(FeedItem::Tool {
                         id: item_id,
-                        tool_name,
+                        tool_name: parsed_tool_name.unwrap_or(item_type).to_string(),
                         title,
                         call_id,
                         status,
-                        input,
+                        input: next_input.unwrap_or(Value::Null),
                         output: None,
                         error: None,
                         diff: None,
                         streaming: !status.is_terminal(),
                         timestamp_ms: now_ms,
-                        completed_at_ms,
-                        output_truncated,
+                        completed_at_ms: completed_at,
+                        output_truncated: truncated,
                     });
                 }
             }
@@ -10001,8 +10059,11 @@ impl AppState {
                     *streaming = false;
                 }
                 FeedItem::Tool {
+                    tool_name,
                     title,
+                    call_id,
                     status,
+                    input,
                     output,
                     error,
                     diff,
@@ -10016,11 +10077,28 @@ impl AppState {
                         *status =
                             parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Completed);
                     }
-                    if let Some(t) = item.get("title").and_then(Value::as_str) {
-                        *title = Some(t.to_string());
+                    if let Some(name) = item
+                        .get("tool")
+                        .or_else(|| item.get("toolName"))
+                        .or_else(|| item.get("name"))
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                    {
+                        *tool_name = name.to_string();
                     }
+                    if let Some(cid) = item.get("callId").and_then(Value::as_str) {
+                        *call_id = Some(cid.to_string());
+                    }
+                    merge_tool_input(input, extract_tool_input(item));
                     if let Some(out) = item.get("result").or_else(|| item.get("output")) {
                         *output = Some(out.clone());
+                    }
+                    if let Some(t) = item
+                        .get("title")
+                        .or_else(|| output.as_ref().and_then(|out| out.get("title")))
+                        .and_then(Value::as_str)
+                    {
+                        *title = Some(t.to_string());
                     }
                     if let Some(err) = item
                         .get("error")
@@ -10045,18 +10123,34 @@ impl AppState {
                     {
                         *error = Some(err);
                     }
-                    if let Some(d) = item.get("diff").and_then(Value::as_str) {
+                    if let Some(d) = item
+                        .get("diff")
+                        .or_else(|| output.as_ref().and_then(|out| out.get("diff")))
+                        .and_then(Value::as_str)
+                    {
                         *diff = Some(d.to_string());
                     }
-                    *completed_at_ms = Some(
-                        item.get("completedAt")
-                            .map(|v| parse_timestamp_ms(Some(v)))
-                            .unwrap_or(now_ms),
-                    );
-                    if item.get("outputTruncated").and_then(Value::as_bool) == Some(true) {
+                    if status.is_terminal() {
+                        *completed_at_ms = Some(
+                            item.get("completedAt")
+                                .map(|v| parse_timestamp_ms(Some(v)))
+                                .unwrap_or(now_ms),
+                        );
+                        *streaming = false;
+                    } else {
+                        if let Some(c) = item.get("completedAt") {
+                            *completed_at_ms = Some(parse_timestamp_ms(Some(c)));
+                        }
+                        *streaming = matches!(*status, ToolRunStatus::Running);
+                    }
+                    if item
+                        .get("outputTruncated")
+                        .or_else(|| output.as_ref().and_then(|out| out.get("outputTruncated")))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
                         *output_truncated = true;
                     }
-                    *streaming = false;
                 }
                 _ => {}
             }
@@ -10112,6 +10206,30 @@ impl AppState {
                             })
                             .flatten()
                     });
+                let title = item
+                    .get("title")
+                    .or_else(|| output.as_ref().and_then(|out| out.get("title")))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let diff = item
+                    .get("diff")
+                    .or_else(|| output.as_ref().and_then(|out| out.get("diff")))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let output_truncated = item
+                    .get("outputTruncated")
+                    .or_else(|| output.as_ref().and_then(|out| out.get("outputTruncated")))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let completed_at_ms = if status.is_terminal() {
+                    Some(
+                        item.get("completedAt")
+                            .map(|v| parse_timestamp_ms(Some(v)))
+                            .unwrap_or(now_ms),
+                    )
+                } else {
+                    item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)))
+                };
                 rt.feed.push(FeedItem::Tool {
                     id: item_id.to_string(),
                     tool_name: item
@@ -10121,34 +10239,20 @@ impl AppState {
                         .and_then(Value::as_str)
                         .unwrap_or(item_type)
                         .to_string(),
-                    title: item
-                        .get("title")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    title,
                     call_id: item
                         .get("callId")
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     status,
-                    input: item
-                        .get("arguments")
-                        .or_else(|| item.get("input"))
-                        .cloned()
-                        .unwrap_or(Value::Null),
+                    input: extract_tool_input(item).unwrap_or(Value::Null),
                     output,
                     error,
-                    diff: item.get("diff").and_then(Value::as_str).map(str::to_string),
-                    streaming: false,
+                    diff,
+                    streaming: matches!(status, ToolRunStatus::Running),
                     timestamp_ms: now_ms,
-                    completed_at_ms: Some(
-                        item.get("completedAt")
-                            .map(|v| parse_timestamp_ms(Some(v)))
-                            .unwrap_or(now_ms),
-                    ),
-                    output_truncated: item
-                        .get("outputTruncated")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
+                    completed_at_ms,
+                    output_truncated,
                 });
             }
             _ => {}
@@ -10415,7 +10519,7 @@ impl AppState {
                 }
             }
             "agent_profiles_catalog" => {
-                self.apply_agent_profiles_catalog_event(evt);
+                self.apply_agent_profiles_catalog_event(workspace_id, evt);
             }
             "provider_catalog" => {
                 self.apply_provider_catalog_event(evt);
@@ -10828,7 +10932,7 @@ impl AppState {
             | "cowork/agentProfiles/copy"
             | "cowork/agentProfiles/workspaceAvailability/set" => {
                 let evt = payload.get("event").unwrap_or(&payload);
-                self.apply_agent_profiles_catalog_event(evt);
+                self.apply_agent_profiles_catalog_event(workspace_id, evt);
             }
             "cowork/memory/list" | "cowork/memory/upsert" | "cowork/memory/delete" => {
                 let target = payload.get("event").unwrap_or(&payload);
@@ -11679,26 +11783,35 @@ impl AppState {
         }
     }
 
-    fn apply_agent_profiles_catalog_event(&mut self, evt: &Value) {
+    fn apply_agent_profiles_catalog_event(&mut self, workspace_id: &str, evt: &Value) {
         let Some(catalog_val) = evt.get("catalog") else {
             return;
         };
-        if let Ok(catalog) =
+        let (parsed_catalog, parsed_subagents) = if let Ok(catalog) =
             serde_json::from_value::<AgentProfilesCatalogState>(catalog_val.clone())
         {
-            self.agent_profiles_catalog = catalog;
-            if !self.agent_profiles_catalog.profiles.is_empty() {
-                self.subagents = self
-                    .agent_profiles_catalog
+            let subagents = if !catalog.profiles.is_empty() {
+                catalog
                     .profiles
                     .iter()
                     .map(catalog_entry_to_subagent_profile)
-                    .collect();
-                return;
-            }
-        }
-        if let Some(profiles) = catalog_val.get("profiles").and_then(Value::as_array) {
-            self.subagents = profiles
+                    .collect()
+            } else if let Some(profiles) = catalog_val.get("profiles").and_then(Value::as_array) {
+                profiles
+                    .iter()
+                    .filter_map(|v| {
+                        serde_json::from_value::<AgentProfileCatalogEntry>(v.clone())
+                            .ok()
+                            .map(|entry| catalog_entry_to_subagent_profile(&entry))
+                            .or_else(|| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (catalog, subagents)
+        } else if let Some(profiles) = catalog_val.get("profiles").and_then(Value::as_array) {
+            let subagents = profiles
                 .iter()
                 .filter_map(|v| {
                     serde_json::from_value::<AgentProfileCatalogEntry>(v.clone())
@@ -11707,6 +11820,23 @@ impl AppState {
                         .or_else(|| serde_json::from_value::<SubagentProfile>(v.clone()).ok())
                 })
                 .collect();
+            (AgentProfilesCatalogState::default(), subagents)
+        } else {
+            return;
+        };
+
+        {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            rt.agent_profiles_catalog = parsed_catalog.clone();
+            rt.subagents = parsed_subagents.clone();
+            rt.agent_profiles_loaded = true;
+        }
+        if self.is_effective_subagent_workspace(workspace_id) {
+            self.agent_profiles_catalog = parsed_catalog;
+            self.subagents = parsed_subagents;
         }
     }
 
@@ -11892,6 +12022,95 @@ impl AppState {
         } else {
             self.mcp_servers.clear();
         }
+    }
+
+    fn effective_subagent_workspace_id(&self) -> Option<&str> {
+        if let Some(ws) = crate::views::settings::subagents::resolve_subagent_workspace(self) {
+            return Some(ws.id.as_str());
+        }
+        self.settings_ui
+            .subagent_workspace_id
+            .as_deref()
+            .or(self.active_workspace_id.as_deref())
+    }
+
+    fn is_effective_subagent_workspace(&self, workspace_id: &str) -> bool {
+        self.effective_subagent_workspace_id()
+            .is_none_or(|effective| effective == workspace_id)
+    }
+
+    pub fn agent_profiles_catalog_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> &AgentProfilesCatalogState {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.agent_profiles_loaded
+        {
+            return &rt.agent_profiles_catalog;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.agent_profiles_loaded)
+            && self.is_effective_subagent_workspace(workspace_id)
+        {
+            return &self.agent_profiles_catalog;
+        }
+        static EMPTY: std::sync::OnceLock<AgentProfilesCatalogState> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(AgentProfilesCatalogState::default)
+    }
+
+    pub fn subagents_for_workspace(&self, workspace_id: &str) -> &[SubagentProfile] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.agent_profiles_loaded
+        {
+            return &rt.subagents;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.agent_profiles_loaded)
+            && self.is_effective_subagent_workspace(workspace_id)
+        {
+            return &self.subagents;
+        }
+        &[]
+    }
+
+    pub(crate) fn sync_active_workspace_agent_profiles(&mut self) {
+        if let Some(ws_id) = self.effective_subagent_workspace_id().map(str::to_string) {
+            if let Some(rt) = self
+                .workspace_runtime_by_id
+                .get(&ws_id)
+                .filter(|rt| rt.agent_profiles_loaded)
+            {
+                self.agent_profiles_catalog = rt.agent_profiles_catalog.clone();
+                self.subagents = rt.subagents.clone();
+            } else {
+                self.agent_profiles_catalog = AgentProfilesCatalogState::default();
+                self.subagents.clear();
+            }
+        } else {
+            self.agent_profiles_catalog = AgentProfilesCatalogState::default();
+            self.subagents.clear();
+        }
+    }
+
+    fn refresh_active_workspace_agent_profiles(&mut self) {
+        let Some(ws_id) = self.effective_subagent_workspace_id().map(str::to_string) else {
+            return;
+        };
+        self.ensure_workspace_server_started(&ws_id);
+        if !self.is_workspace_ws_connected(&ws_id) {
+            return;
+        }
+        let cwd = self.workspace_path(&ws_id);
+        let _ = self.send_ws_request(
+            &ws_id,
+            "cowork/agentProfiles/catalog/read",
+            json!({ "cwd": cwd }),
+            true,
+        );
     }
 
     pub fn backups_for_workspace(&self, workspace_id: &str) -> &[BackupSummary] {
@@ -12929,6 +13148,29 @@ fn parse_tool_status_from_item(item: &Value) -> Option<ToolRunStatus> {
             .or_else(|| item.get("status"))
             .and_then(Value::as_str),
     )
+}
+
+fn extract_tool_input(item: &Value) -> Option<Value> {
+    item.get("args")
+        .or_else(|| item.get("arguments"))
+        .or_else(|| item.get("input"))
+        .filter(|v| !v.is_null())
+        .cloned()
+}
+
+fn merge_tool_input(current: &mut Value, next: Option<Value>) {
+    let Some(next_input) = next else {
+        return;
+    };
+    let preserve_populated = current
+        .as_object()
+        .is_some_and(|existing| !existing.is_empty())
+        && next_input
+            .as_object()
+            .is_some_and(|incoming| incoming.is_empty());
+    if !preserve_populated {
+        *current = next_input;
+    }
 }
 
 fn parse_usage_summary(val: &Value) -> UsageSummary {
@@ -14712,11 +14954,7 @@ fn parse_snapshot_feed_item(v: &Value) -> Option<FeedItem> {
                     .map(str::to_string),
                 call_id: v.get("callId").and_then(Value::as_str).map(str::to_string),
                 status,
-                input: v
-                    .get("input")
-                    .or_else(|| v.get("args"))
-                    .cloned()
-                    .unwrap_or(Value::Null),
+                input: extract_tool_input(v).unwrap_or(Value::Null),
                 output,
                 error,
                 diff,
@@ -22979,5 +23217,301 @@ mod tests {
             state.backups_for_workspace("ws-a")[0].target_session_id,
             "sess-a-late"
         );
+    }
+
+    #[test]
+    fn agent_profiles_catalogs_stay_isolated_per_workspace() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), WsConnectionState::Connected);
+        state
+            .workspace_socket_by_id
+            .insert("ws-b".to_string(), WsConnectionState::Connected);
+
+        let catalog_payload = |id: &str, name: &str, ws_dir: &str, mcp: &str| {
+            json!({
+                "event": {
+                    "type": "agent_profiles_catalog",
+                    "catalog": {
+                        "profiles": [
+                            {
+                                "scope": "workspace",
+                                "builtIn": false,
+                                "locked": false,
+                                "effective": true,
+                                "shadowed": false,
+                                "profile": {
+                                    "version": 1,
+                                    "id": id,
+                                    "displayName": name,
+                                    "description": format!("{name} desc"),
+                                    "enabled": true,
+                                    "baseRole": "worker",
+                                    "prompt": format!("{name} prompt"),
+                                    "allowedBuiltInTools": ["read"],
+                                    "allowedMcpServers": [mcp],
+                                    "skillNames": []
+                                }
+                            }
+                        ],
+                        "effectiveProfiles": [],
+                        "diagnostics": [],
+                        "roots": {
+                            "globalDir": "/tmp/.cowork/agent-profiles",
+                            "workspaceDir": ws_dir
+                        }
+                    }
+                }
+            })
+        };
+
+        state.apply_ws_response(
+            "ws-a",
+            1,
+            "cowork/agentProfiles/catalog/read",
+            Ok(catalog_payload(
+                "reviewer",
+                "Project A Reviewer",
+                "/tmp/a/.cowork/agent-profiles",
+                "mcp-a",
+            )),
+        );
+        assert_eq!(
+            state
+                .agent_profiles_catalog_for_workspace("ws-a")
+                .profiles
+                .len(),
+            1
+        );
+        assert_eq!(
+            state.agent_profiles_catalog_for_workspace("ws-a").profiles[0]
+                .profile
+                .display_name,
+            "Project A Reviewer"
+        );
+        assert!(
+            state
+                .agent_profiles_catalog_for_workspace("ws-b")
+                .profiles
+                .is_empty(),
+            "unloaded workspace B must not inherit workspace A's subagent catalog"
+        );
+        assert!(state.subagents_for_workspace("ws-b").is_empty());
+
+        // Switching the Subagents target picker to workspace B clears the active mirror and
+        // loads workspace B's catalog without leaking workspace A's profiles.
+        state.settings_ui.subagent_workspace_id = Some("ws-b".to_string());
+        state.sync_active_workspace_agent_profiles();
+        assert!(state.agent_profiles_catalog.profiles.is_empty());
+        assert!(state.subagents.is_empty());
+
+        // A late catalog response from workspace A must NOT overwrite workspace B's view.
+        state.apply_ws_response(
+            "ws-a",
+            2,
+            "cowork/agentProfiles/catalog/read",
+            Ok(catalog_payload(
+                "reviewer",
+                "Project A Late",
+                "/tmp/a/.cowork/agent-profiles",
+                "mcp-a-late",
+            )),
+        );
+        assert!(state.agent_profiles_catalog.profiles.is_empty());
+        assert!(
+            state
+                .agent_profiles_catalog_for_workspace("ws-b")
+                .profiles
+                .is_empty()
+        );
+        assert_eq!(
+            state.agent_profiles_catalog_for_workspace("ws-a").profiles[0]
+                .profile
+                .display_name,
+            "Project A Late"
+        );
+
+        // Workspace B's own response populates B without affecting A.
+        state.apply_ws_response(
+            "ws-b",
+            3,
+            "cowork/agentProfiles/catalog/read",
+            Ok(catalog_payload(
+                "reviewer",
+                "Project B Reviewer",
+                "/tmp/b/.cowork/agent-profiles",
+                "mcp-b",
+            )),
+        );
+        assert_eq!(
+            state.agent_profiles_catalog.profiles[0]
+                .profile
+                .display_name,
+            "Project B Reviewer"
+        );
+        assert_eq!(
+            state.agent_profiles_catalog_for_workspace("ws-b").profiles[0]
+                .profile
+                .display_name,
+            "Project B Reviewer"
+        );
+        assert_eq!(
+            state.agent_profiles_catalog_for_workspace("ws-a").profiles[0]
+                .profile
+                .display_name,
+            "Project A Late"
+        );
+
+        // UpsertSubagent against workspace A consults A's catalog metadata (not B's active mirror).
+        let mut a_profile = state.subagents_for_workspace("ws-a")[0].clone();
+        a_profile.system_prompt = "Updated A prompt".to_string();
+        state.dispatch(Action::Settings(SettingsAction::UpsertSubagent {
+            workspace_id: "ws-a".to_string(),
+            profile: a_profile,
+        }));
+        let upsert_a = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    params,
+                    ..
+                } if workspace_id == "ws-a" && method == "cowork/agentProfiles/upsert" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("upsert sent for ws-a");
+        assert_eq!(
+            upsert_a["profile"]["allowedMcpServers"],
+            json!(["mcp-a-late"])
+        );
+    }
+
+    #[test]
+    fn live_tool_items_reconcile_canonical_args_across_start_and_completion() {
+        let mut state = AppState::default();
+
+        // 1. Initial `item/started` with canonical `args` empty/partial while streaming.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/started".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "tool-live-1",
+                    "type": "toolCall",
+                    "toolName": "bash",
+                    "state": "input-streaming",
+                    "args": {}
+                }
+            }),
+        });
+        assert!(matches!(
+            &state.thread_runtime_by_id["th-1"].feed[0],
+            FeedItem::Tool {
+                status: ToolRunStatus::Running,
+                streaming: true,
+                input,
+                ..
+            } if *input == json!({})
+        ));
+
+        // 2. Intermediate `item/completed` carrying canonical `args` once input finishes streaming.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/completed".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "tool-live-1",
+                    "type": "toolCall",
+                    "toolName": "bash",
+                    "state": "input-available",
+                    "args": { "command": "cargo test" }
+                }
+            }),
+        });
+        assert!(matches!(
+            &state.thread_runtime_by_id["th-1"].feed[0],
+            FeedItem::Tool {
+                status: ToolRunStatus::Running,
+                streaming: true,
+                completed_at_ms: None,
+                input,
+                ..
+            } if input["command"] == "cargo test"
+        ));
+
+        // 3. Final `item/completed` with `output-available`, preserving/reconciling `args` and `result`.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/completed".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "tool-live-1",
+                    "type": "toolCall",
+                    "toolName": "bash",
+                    "state": "output-available",
+                    "args": { "command": "cargo test", "cwd": "/tmp/demo" },
+                    "result": { "stdout": "ok", "diff": "@@ -1 +1 @@" }
+                }
+            }),
+        });
+        assert!(matches!(
+            &state.thread_runtime_by_id["th-1"].feed[0],
+            FeedItem::Tool {
+                status: ToolRunStatus::Completed,
+                streaming: false,
+                completed_at_ms: Some(_),
+                input,
+                output: Some(out),
+                diff: Some(diff),
+                ..
+            } if input["command"] == "cargo test"
+                && input["cwd"] == "/tmp/demo"
+                && out["stdout"] == "ok"
+                && diff == "@@ -1 +1 @@"
+        ));
+
+        // 4. Fallback creation on `item/completed` without prior `item/started` also reads `args`.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/completed".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "tool-live-2",
+                    "type": "toolCall",
+                    "toolName": "read",
+                    "state": "output-available",
+                    "args": { "path": "src/main.rs" },
+                    "result": { "content": "fn main() {}" }
+                }
+            }),
+        });
+        assert!(matches!(
+            &state.thread_runtime_by_id["th-1"].feed[1],
+            FeedItem::Tool {
+                id,
+                tool_name,
+                status: ToolRunStatus::Completed,
+                input,
+                ..
+            } if id == "tool-live-2" && tool_name == "read" && input["path"] == "src/main.rs"
+        ));
     }
 }

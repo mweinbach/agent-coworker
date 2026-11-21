@@ -191,11 +191,12 @@ fn collect_model_options(s: &AppState, ws: Option<&WorkspaceRecord>) -> Vec<(Str
     out
 }
 
-fn catalog_entries(s: &AppState) -> Vec<AgentProfileCatalogEntry> {
-    if !s.agent_profiles_catalog.profiles.is_empty() {
-        return s.agent_profiles_catalog.profiles.clone();
+fn catalog_entries(s: &AppState, workspace_id: &str) -> Vec<AgentProfileCatalogEntry> {
+    let catalog = s.agent_profiles_catalog_for_workspace(workspace_id);
+    if !catalog.profiles.is_empty() {
+        return catalog.profiles.clone();
     }
-    s.subagents
+    s.subagents_for_workspace(workspace_id)
         .iter()
         .map(legacy_subagent_to_catalog_entry)
         .collect()
@@ -543,7 +544,20 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .on_choose(move |s: &mut AppState, chosen, _tx| {
                         s.settings_ui.open_select_key = None;
                         if let Some((_, id)) = pairs.iter().find(|(lbl, _)| lbl == chosen) {
+                            let changed = resolve_subagent_workspace(s).map(|w| w.id.as_str())
+                                != Some(id.as_str());
                             s.settings_ui.subagent_workspace_id = Some(id.clone());
+                            if changed {
+                                s.settings_ui.subagent_delete_confirm = None;
+                                s.settings_ui.subagent_dialog_open = false;
+                                s.settings_ui.subagent_editing_id = None;
+                            }
+                            s.sync_active_workspace_agent_profiles();
+                            s.dispatch(Action::Settings(
+                                SettingsAction::ReadAgentProfilesCatalog {
+                                    workspace_id: id.clone(),
+                                },
+                            ));
                         }
                     })
                     .build(k, &mut overlays),
@@ -563,9 +577,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     sections.push(controls_col);
 
     // 3. Diagnostics & Profiles list
-    if !s.agent_profiles_catalog.diagnostics.is_empty() {
-        let diag_lines: Vec<String> = s
-            .agent_profiles_catalog
+    let workspace_catalog = s.agent_profiles_catalog_for_workspace(&ws.id);
+    if !workspace_catalog.diagnostics.is_empty() {
+        let diag_lines: Vec<String> = workspace_catalog
             .diagnostics
             .iter()
             .take(5)
@@ -585,7 +599,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .text
         .trim()
         .to_ascii_lowercase();
-    let entries = catalog_entries(s);
+    let entries = catalog_entries(s, &ws.id);
     let mut filtered: Vec<AgentProfileCatalogEntry> = entries
         .iter()
         .filter(|entry| {
@@ -1345,7 +1359,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             s.settings_ui.subagent_scope.clone()
                         };
                         let existing_meta = s
-                            .agent_profiles_catalog
+                            .agent_profiles_catalog_for_workspace(&ws_save)
                             .profiles
                             .iter()
                             .find(|e| e.profile.id == id && e.scope == save_scope);

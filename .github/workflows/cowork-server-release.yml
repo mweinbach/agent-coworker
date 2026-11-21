@@ -39,9 +39,13 @@ jobs:
           df -h /
 
       # Rust sandbox tests and the black-box rust-server suites run real
-      # sandboxed shell tools, which need bubblewrap and unprivileged userns.
+      # sandboxed shell tools, which need bubblewrap and unprivileged userns;
+      # workspace and bridge tests also link and run cowork-desktop on Linux.
       - name: Setup Linux sandbox
         uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Setup Linux desktop dependencies
+        uses: ./.github/actions/setup-linux-desktop
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun

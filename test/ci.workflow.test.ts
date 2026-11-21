@@ -242,6 +242,37 @@ describe("main CI workflow", () => {
     expect(sandboxAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
+  test("installs Linux desktop linking and software Vulkan deps before cowork-desktop tests", () => {
+    for (const job of ["rust-test", "test"]) {
+      expect(
+        jobs[job]?.steps.some((step) => step.uses === "./.github/actions/setup-linux-desktop"),
+        job,
+      ).toBe(true);
+    }
+    const desktopAction = readFileSync(
+      new URL("../.github/actions/setup-linux-desktop/action.yml", import.meta.url),
+      "utf8",
+    );
+    expect(desktopAction).toContain("libxkbcommon-dev");
+    expect(desktopAction).toContain("mesa-vulkan-drivers");
+    for (const relWorkflow of [
+      ".github/workflows/cowork-server-release.yml",
+      ".github/workflows/desktop-rune-release.yml",
+    ]) {
+      const release = Bun.YAML.parse(
+        readFileSync(new URL(`../${relWorkflow}`, import.meta.url), "utf8"),
+      ) as {
+        jobs: Record<string, { steps: Array<{ uses?: string }> }>;
+      };
+      expect(
+        release.jobs.validate?.steps.some(
+          (step) => step.uses === "./.github/actions/setup-linux-desktop",
+        ),
+        relWorkflow,
+      ).toBe(true);
+    }
+  });
+
   test("release validate jobs mirror CI sandbox setup, Cargo debuginfo bounds, and disk cleanup", () => {
     // Release workflows only run on tags, so a drift from ci.yml stays hidden
     // until a release fails in `validate`.

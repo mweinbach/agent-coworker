@@ -141,9 +141,13 @@ jobs:
         run: bun install --cwd apps/mobile --frozen-lockfile
 
       # The black-box rust-server suites compile and spawn the native server and
-      # run real sandboxed shell tools through it.
+      # run real sandboxed shell tools through it; bridge continuity tests also
+      # compile and execute cowork-desktop's persistence test binary.
       - name: Setup Linux sandbox
         uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Setup Linux desktop dependencies
+        uses: ./.github/actions/setup-linux-desktop
 
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
@@ -198,6 +202,9 @@ jobs:
 
       - name: Setup Linux sandbox
         uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Setup Linux desktop dependencies
+        uses: ./.github/actions/setup-linux-desktop
 
       # cowork-server's desktop sidecar seam tests drive the Bun schema tooling.
       - name: Setup dependencies

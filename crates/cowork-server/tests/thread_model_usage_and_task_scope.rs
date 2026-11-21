@@ -1297,3 +1297,226 @@ async fn session_child_routing_overrides_apply_to_agent_spawns() {
         "{removed}"
     );
 }
+
+/// Real local `cowork-server` `task/list` RPC returns exact scoped summaries across canonical,
+/// alias, and symlink stored rows in descending `updatedAt` order with nontrivial counts, excludes
+/// unrelated workspaces, and returns empty for a workspace with no tasks.
+#[tokio::test]
+async fn task_list_rpc_scopes_aliases_symlinks_counts_order_and_empty_workspaces() {
+    let mut iso = Iso::new("cowork-task-list-rpc-");
+    iso.env
+        .insert("COWORK_WEB_DESKTOP_SERVICE".into(), "1".into());
+    let other_ws = iso.base.join("other-project");
+    let empty_ws = iso.base.join("empty-project");
+    let unrelated_ws = iso.base.join("unrelated-project");
+    fs::create_dir_all(&other_ws).unwrap();
+    fs::create_dir_all(&empty_ws).unwrap();
+    fs::create_dir_all(&unrelated_ws).unwrap();
+
+    let active_ws_str = iso.workspace.to_string_lossy().into_owned();
+    let other_ws_str = other_ws.to_string_lossy().into_owned();
+    let empty_ws_str = empty_ws.to_string_lossy().into_owned();
+    let unrelated_ws_str = unrelated_ws.to_string_lossy().into_owned();
+    let trailing_alias = format!("{active_ws_str}{}", std::path::MAIN_SEPARATOR);
+    #[cfg(unix)]
+    let symlink_alias = {
+        let link = iso.base.join("active-ws-symlink");
+        std::os::unix::fs::symlink(&iso.workspace, &link).unwrap();
+        link.to_string_lossy().into_owned()
+    };
+    #[cfg(not(unix))]
+    let symlink_alias = format!("{active_ws_str}{}.", std::path::MAIN_SEPARATOR);
+
+    let server = start_server(iso.options()).await.unwrap();
+    server
+        .runtime()
+        .desktop_service
+        .as_ref()
+        .expect("desktop service")
+        .save_state_json(json!({
+            "workspaces": [
+                {
+                    "id": "ws-other",
+                    "name": "Other",
+                    "path": other_ws_str,
+                    "workspaceKind": "project",
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                    "id": "ws-empty",
+                    "name": "Empty",
+                    "path": empty_ws_str,
+                    "workspaceKind": "project",
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+                }
+            ]
+        }))
+        .unwrap();
+
+    // Seed tasks directly into the server's live SQLite DB across active (canonical + alias +
+    // symlink), registered other, and unregistered unrelated workspaces.
+    let db_path = server.runtime().session_db.db_path().to_path_buf();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    for (id, ws_path, title, updated_at) in [
+        (
+            "rpc-active-canon",
+            active_ws_str.as_str(),
+            "Active Canon",
+            "2026-04-19T10:05:00.000Z",
+        ),
+        (
+            "rpc-other-1",
+            other_ws_str.as_str(),
+            "Other Task",
+            "2026-04-19T10:04:00.000Z",
+        ),
+        (
+            "rpc-active-alias",
+            trailing_alias.as_str(),
+            "Active Alias",
+            "2026-04-19T10:03:00.000Z",
+        ),
+        (
+            "rpc-unrelated",
+            unrelated_ws_str.as_str(),
+            "Unrelated",
+            "2026-04-19T10:02:00.000Z",
+        ),
+        (
+            "rpc-active-symlink",
+            symlink_alias.as_str(),
+            "Active Symlink",
+            "2026-04-19T10:01:00.000Z",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO tasks (
+                task_id, workspace_path, title, objective, context,
+                source_session_id, creation_origin, creation_idempotency_key,
+                status, revision, review_required, review_rounds, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'Obj', '', NULL, 'manual', NULL, 'working', 2, 1, 0, '2026-04-19T10:00:00.000Z', ?4)",
+            rusqlite::params![id, ws_path, title, updated_at],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO task_threads (thread_id, task_id, session_id, title, created_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'Primary', 'coordinator', '2026-04-19T10:00:00.000Z', ?4)",
+            rusqlite::params![format!("th-{id}"), id, format!("sess-{id}"), updated_at],
+        )
+        .unwrap();
+    }
+    // Add nontrivial child rows to active-canon and other-1 and unrelated.
+    conn.execute(
+        "INSERT INTO task_threads (thread_id, task_id, session_id, title, created_by, created_at, updated_at)
+         VALUES ('th-rpc-active-canon-2', 'rpc-active-canon', 'sess-rpc-active-canon-2', 'Sub', 'coordinator', '2026-04-19T10:00:00.000Z', '2026-04-19T10:05:00.000Z')",
+        [],
+    )
+    .unwrap();
+    for (wid, task_id, status, pos) in [
+        ("wi-1", "rpc-active-canon", "done", 0),
+        ("wi-2", "rpc-active-canon", "done", 1),
+        ("wi-3", "rpc-active-canon", "pending", 2),
+        ("wi-4", "rpc-other-1", "done", 0),
+        ("wi-5", "rpc-unrelated", "done", 0),
+    ] {
+        conn.execute(
+            "INSERT INTO task_work_items (
+                work_item_id, task_id, title, description, status, assigned_thread_id,
+                expected_outputs_json, completion_evidence, position, created_at, updated_at
+             ) VALUES (?1, ?2, 'WI', 'Desc', ?3, NULL, '[]', NULL, ?4, '2026-04-19T10:00:00.000Z', '2026-04-19T10:00:00.000Z')",
+            rusqlite::params![wid, task_id, status, pos],
+        )
+        .unwrap();
+    }
+    for (bid, task_id, status) in [
+        ("blk-1", "rpc-active-canon", "active"),
+        ("blk-2", "rpc-active-canon", "resolved"),
+        ("blk-3", "rpc-active-symlink", "active"),
+        ("blk-4", "rpc-unrelated", "active"),
+    ] {
+        conn.execute(
+            "INSERT INTO task_blockers (blocker_id, task_id, work_item_id, description, blocking, status, created_at, resolved_at)
+             VALUES (?1, ?2, NULL, 'Blocker', 1, ?3, '2026-04-19T10:00:00.000Z', NULL)",
+            rusqlite::params![bid, task_id, status],
+        )
+        .unwrap();
+    }
+    for (qid, task_id, blocking, status) in [
+        ("q-1", "rpc-active-canon", 1, "pending"),
+        ("q-2", "rpc-active-canon", 0, "pending"),
+        ("q-3", "rpc-active-canon", 1, "answered"),
+        ("q-4", "rpc-other-1", 1, "pending"),
+    ] {
+        conn.execute(
+            "INSERT INTO task_questions (
+                question_id, task_id, thread_id, work_item_id, header, question, context,
+                blocking, urgency, default_action, options_json, recommended_option_id,
+                status, provisional_decision_id, answer, answer_option_id, resolution_source,
+                supersedes, created_at, resolved_at
+             ) VALUES (?1, ?2, NULL, NULL, 'H', 'Q', '', ?3, 'normal', NULL, '[]', NULL, ?4, NULL, NULL, NULL, NULL, NULL, '2026-04-19T10:00:00.000Z', NULL)",
+            rusqlite::params![qid, task_id, blocking, status],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("COMMIT;").unwrap();
+    drop(conn);
+
+    let mut ws = connect(server.ws_url()).await;
+    let mut ignored = Vec::new();
+
+    // 1. Default workspace returns canonical + alias + symlink in descending updatedAt order.
+    let active_res = call(&mut ws, "list-active", "task/list", json!({}), &mut ignored).await;
+    assert!(active_res.get("error").is_none(), "{active_res}");
+    assert_eq!(active_res["result"]["total"], 3);
+    let active_tasks = active_res["result"]["tasks"].as_array().unwrap();
+    let active_ids: Vec<&str> = active_tasks
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        active_ids,
+        vec!["rpc-active-canon", "rpc-active-alias", "rpc-active-symlink"]
+    );
+    assert_eq!(active_tasks[0]["threadCount"], 2);
+    assert_eq!(active_tasks[0]["completedWorkItemCount"], 2);
+    assert_eq!(active_tasks[0]["totalWorkItemCount"], 3);
+    assert_eq!(active_tasks[0]["activeBlockerCount"], 1);
+    assert_eq!(active_tasks[0]["pendingQuestionCount"], 2);
+    assert_eq!(active_tasks[0]["blockingQuestionCount"], 1);
+    assert_eq!(active_tasks[1]["activeBlockerCount"], 0);
+    assert_eq!(active_tasks[2]["activeBlockerCount"], 1);
+
+    // 2. Registered single-spelling workspace returns only its task with exact counts.
+    let other_res = call(
+        &mut ws,
+        "list-other",
+        "task/list",
+        json!({ "cwd": other_ws_str }),
+        &mut ignored,
+    )
+    .await;
+    assert!(other_res.get("error").is_none(), "{other_res}");
+    assert_eq!(other_res["result"]["total"], 1);
+    let other_tasks = other_res["result"]["tasks"].as_array().unwrap();
+    assert_eq!(other_tasks[0]["id"], "rpc-other-1");
+    assert_eq!(other_tasks[0]["completedWorkItemCount"], 1);
+    assert_eq!(other_tasks[0]["totalWorkItemCount"], 1);
+    assert_eq!(other_tasks[0]["pendingQuestionCount"], 1);
+    assert_eq!(other_tasks[0]["blockingQuestionCount"], 1);
+
+    // 3. Registered empty workspace returns zero tasks.
+    let empty_res = call(
+        &mut ws,
+        "list-empty",
+        "task/list",
+        json!({ "cwd": empty_ws_str }),
+        &mut ignored,
+    )
+    .await;
+    assert!(empty_res.get("error").is_none(), "{empty_res}");
+    assert_eq!(empty_res["result"]["total"], 0);
+    assert_eq!(empty_res["result"]["tasks"], json!([]));
+}

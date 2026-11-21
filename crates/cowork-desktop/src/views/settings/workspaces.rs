@@ -1103,10 +1103,13 @@ pub fn models_defaults_sections(
                     Button::new("Manage profiles")
                         .variant(ButtonVariant::Outline)
                         .control_size(ControlSize::Small)
-                        .on_press(|s: &mut AppState| {
-                            s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
-                                SettingsPageId::Subagents,
-                            ))));
+                        .on_press_tx(|s: &mut AppState, tx| {
+                            s.dispatch_tx(
+                                Action::Navigate(NavAction::OpenSettings(Some(
+                                    SettingsPageId::Subagents,
+                                ))),
+                                tx,
+                            );
                         })
                         .build(k),
                 ),

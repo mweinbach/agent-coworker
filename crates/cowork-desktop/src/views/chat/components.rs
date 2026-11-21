@@ -422,8 +422,11 @@ pub fn locked_task_bar(k: &Kit, t: &ThemeTokens, task_id: String, task_title: St
                     Button::new("Open task")
                         .variant(ButtonVariant::Contrast)
                         .control_size(ControlSize::Small)
-                        .on_press(move |s: &mut AppState| {
-                            s.dispatch(Action::Navigate(NavAction::OpenTask(task_id.clone())));
+                        .on_press_tx(move |s: &mut AppState, tx| {
+                            s.dispatch_tx(
+                                Action::Navigate(NavAction::OpenTask(task_id.clone())),
+                                tx,
+                            );
                         })
                         .build(k),
                 ),

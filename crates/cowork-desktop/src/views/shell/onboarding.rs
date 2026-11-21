@@ -1810,15 +1810,18 @@ fn build_first_thread_step(s: &AppState, k: &Kit, t: &ThemeTokens) -> (El, El) {
             Button::new(finish_label)
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Large)
-                .on_press(move |s: &mut AppState| {
+                .on_press_tx(move |s: &mut AppState, tx| {
                     s.dispatch(Action::Shell(ShellAction::CompleteOnboardingStep(
                         "step-5".to_owned(),
                     )));
                     s.dispatch(Action::Shell(ShellAction::CompleteOnboarding));
                     if let Some(ws_id) = &ws_blank {
-                        s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                            workspace_id: Some(ws_id.clone()),
-                        }));
+                        s.dispatch_tx(
+                            Action::Navigate(NavAction::OpenNewChat {
+                                workspace_id: Some(ws_id.clone()),
+                            }),
+                            tx,
+                        );
                     }
                 })
                 .build(k)

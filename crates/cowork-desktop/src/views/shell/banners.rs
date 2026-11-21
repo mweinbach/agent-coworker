@@ -192,13 +192,16 @@ fn workspace_runtime_progress_view(
             Button::new("Runtime settings")
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                        page: SettingsPageId::Diagnostics,
-                        tab: None,
-                        section: None,
-                        new_provider: false,
-                    }));
+                .on_press_tx(|s: &mut AppState, tx| {
+                    s.dispatch_tx(
+                        Action::Navigate(NavAction::OpenSettingsIntent {
+                            page: SettingsPageId::Diagnostics,
+                            tab: None,
+                            section: None,
+                            new_provider: false,
+                        }),
+                        tx,
+                    );
                 })
                 .build(k),
         )
@@ -264,8 +267,8 @@ fn startup_recovery_view(
             Button::new("Open Settings")
                 .variant(ButtonVariant::Ghost)
                 .icon(&icons::SETTINGS)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
+                .on_press_tx(|s: &mut AppState, tx| {
+                    s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
                 })
                 .build(k),
         )
@@ -425,13 +428,16 @@ fn build_creation_readiness_notice(
         Button::new("Provider settings")
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                    page: SettingsPageId::Models,
-                    tab: None,
-                    section: None,
-                    new_provider: false,
-                }));
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.dispatch_tx(
+                    Action::Navigate(NavAction::OpenSettingsIntent {
+                        page: SettingsPageId::Models,
+                        tab: None,
+                        section: None,
+                        new_provider: false,
+                    }),
+                    tx,
+                );
             })
             .build(k),
     );

@@ -413,6 +413,7 @@ fn build_floating_toggle(
         .gap(CLUSTER_GAP)
         .center_y()
         .absolute(x, y)
+        .transition(Transition::none())
         .child(toggle_el)
         .children(nav)
 }
@@ -494,6 +495,9 @@ fn build_pane_slot(
         .h_full()
         .motion(width_spring)
         .clip_soft(0.0);
+    if !leading {
+        slot = slot.transition(Transition::none());
+    }
 
     if leading {
         // Keep the sidebar fill, native vibrancy material, and tint on the slot rather than on

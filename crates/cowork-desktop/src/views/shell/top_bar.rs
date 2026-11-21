@@ -118,8 +118,8 @@ pub fn build_nav_buttons(s: &AppState, k: &Kit) -> Vec<El> {
         .control_size(ControlSize::Regular)
         .disabled(!s.nav.can_go_back())
         .help("Back")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::GoBack));
+        .on_press_tx(|s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::GoBack), tx);
         })
         .build(k)
         .key("topbar-back");
@@ -129,8 +129,8 @@ pub fn build_nav_buttons(s: &AppState, k: &Kit) -> Vec<El> {
         .control_size(ControlSize::Regular)
         .disabled(!s.nav.can_go_forward())
         .help("Forward")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::GoForward));
+        .on_press_tx(|s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::GoForward), tx);
         })
         .build(k)
         .key("topbar-forward");
@@ -336,8 +336,8 @@ pub fn build_toolbar(
         .control_size(ControlSize::Regular)
         .help("Settings")
         .shortcut(crate::shortcut_label("Cmd+,"))
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
+        .on_press_tx(|s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
         })
         .build(k)
         .key("topbar-settings");

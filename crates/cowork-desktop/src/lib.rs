@@ -595,10 +595,10 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
             tx.wake_at(state.app_elapsed_secs + delay);
         }
     }
-    // After everything above that can navigate. A handler's navigation lands here on the next
-    // frame, a poll's on this one: either way the pane stops animating at once (`Tx::settle`).
-    if std::mem::take(&mut state.settle_after_navigation) {
-        tx.settle();
+    // Fallback for navigations triggered inside `poll_app` (menu commands, deep links, focus
+    // handoffs) or handlers without `Tx`. Input handlers settle on their own frame via
+    // `AppState::dispatch_tx` / `take_navigation_settle` so no mid-fade frame presents.
+    if state.take_navigation_settle(tx) {
         changed = true;
     }
     changed
@@ -609,7 +609,10 @@ fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         state.dispatch(Action::Shell(ShellAction::ToggleSidebar));
         return true;
     }
-    views::shell::handle_key(state, ev, tx) || handle_global_menu_shortcut(state, ev, tx)
+    let handled =
+        views::shell::handle_key(state, ev, tx) || handle_global_menu_shortcut(state, ev, tx);
+    state.take_navigation_settle(tx);
+    handled
 }
 
 /// Handles global menu bar accelerators that sit outside view-local handlers

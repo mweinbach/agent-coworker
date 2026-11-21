@@ -98,14 +98,16 @@ pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El
             .icon(&icons::SETTINGS)
             .height(ROW_H)
             .selected(s.route().view == ViewId::Settings)
-            .on_select(|s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
+            .on_select(|s: &mut AppState, tx| {
+                s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
             })
             .build(k)
             .key("sidebar-settings"),
     );
 
-    sb.footer(footer).build(k)
+    sb.footer(footer)
+        .build(k)
+        .transition(rune::Transition::none())
 }
 
 fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
@@ -113,11 +115,12 @@ fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
         .icon(&icons::PLUS)
         .detail(crate::shortcut_label("Cmd+N"))
         .height(ROW_H)
-        .on_select(|s: &mut AppState, _| {
+        .on_select(|s: &mut AppState, tx| {
             let ws = s.active_workspace_id.clone();
-            s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                workspace_id: ws,
-            }));
+            s.dispatch_tx(
+                Action::Navigate(NavAction::OpenNewChat { workspace_id: ws }),
+                tx,
+            );
         })
         .build(k)
         .key("sidebar-new-chat");
@@ -160,8 +163,8 @@ fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
                 .icon(&icons::CHECK_SQUARE)
                 .height(ROW_H)
                 .selected(s.route().view == ViewId::Task)
-                .on_select(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
+                .on_select(|s: &mut AppState, tx| {
+                    s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Task)), tx);
                 })
                 .build(k)
                 .key("sidebar-tasks-link"),
@@ -172,10 +175,11 @@ fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
         SidebarRow::new("Plugins & tools")
             .icon(&icons::PLUGINS)
             .height(ROW_H)
-            .on_select(|s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
-                    SettingsPageId::ToolAccess,
-                ))));
+            .on_select(|s: &mut AppState, tx| {
+                s.dispatch_tx(
+                    Action::Navigate(NavAction::OpenSettings(Some(SettingsPageId::ToolAccess))),
+                    tx,
+                );
             })
             .build(k)
             .key("sidebar-plugins-link"),
@@ -189,13 +193,13 @@ fn hover_add_button(
     k: &Kit,
     help: &'static str,
     key: String,
-    on_press: impl Fn(&mut AppState) + 'static,
+    on_press: impl Fn(&mut AppState, &mut rune::Tx) + 'static,
 ) -> El {
     IconButton::new(&icons::PLUS)
         .variant(IconButtonVariant::GhostMuted)
         .control_size(ControlSize::Mini)
         .help(help)
-        .on_press_tx(move |s: &mut AppState, _| on_press(s))
+        .on_press_tx(move |s: &mut AppState, tx| on_press(s, tx))
         .build(k)
         .key(key)
         .group_opacity(0.0, 1.0)
@@ -302,8 +306,8 @@ fn build_tasks_section(
         let mut r = SidebarRow::new(task.title.clone())
             .height(ROW_H)
             .selected(s.route().view == ViewId::Task && active_task_id == Some(task.id.as_str()))
-            .on_select(move |s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenTask(task_id.clone())));
+            .on_select(move |s: &mut AppState, tx| {
+                s.dispatch_tx(Action::Navigate(NavAction::OpenTask(task_id.clone())), tx);
             });
         if let Some(st) = status {
             r = r.status(st);
@@ -341,10 +345,13 @@ fn build_chats_section(
             k,
             "New chat",
             "new-oneoff-chat",
-            move |s| {
-                s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                    workspace_id: one_off_ws.clone(),
-                }));
+            move |s, tx| {
+                s.dispatch_tx(
+                    Action::Navigate(NavAction::OpenNewChat {
+                        workspace_id: one_off_ws.clone(),
+                    }),
+                    tx,
+                );
             },
         ));
 
@@ -404,13 +411,13 @@ fn section_add_button(
     k: &Kit,
     help: &'static str,
     key: &'static str,
-    on_press: impl Fn(&mut AppState) + 'static,
+    on_press: impl Fn(&mut AppState, &mut rune::Tx) + 'static,
 ) -> El {
     IconButton::new(&icons::PLUS)
         .variant(IconButtonVariant::GhostMuted)
         .control_size(ControlSize::Mini)
         .help(help)
-        .on_press_tx(move |s: &mut AppState, _| on_press(s))
+        .on_press_tx(move |s: &mut AppState, tx| on_press(s, tx))
         .build(k)
         .key(key)
 }
@@ -436,7 +443,7 @@ fn build_workspaces_section(
             k,
             "Add project folder",
             "projects-add-btn",
-            |s| s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder)),
+            |s, _| s.dispatch(Action::Native(NativeAction::PickWorkspaceFolder)),
         ));
 
     if projects.is_empty() {
@@ -496,10 +503,13 @@ fn build_workspaces_section(
                 k,
                 "New chat in project",
                 format!("ws-new-chat-{}", ws.id),
-                move |s| {
-                    s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                        workspace_id: Some(ws_id_new.clone()),
-                    }));
+                move |s, tx| {
+                    s.dispatch_tx(
+                        Action::Navigate(NavAction::OpenNewChat {
+                            workspace_id: Some(ws_id_new.clone()),
+                        }),
+                        tx,
+                    );
                 },
             ))
             .reorder(
@@ -514,8 +524,11 @@ fn build_workspaces_section(
                     }
                 },
             )
-            .on_select(move |s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::SelectWorkspace(ws_id.clone())));
+            .on_select(move |s: &mut AppState, tx| {
+                s.dispatch_tx(
+                    Action::Navigate(NavAction::SelectWorkspace(ws_id.clone())),
+                    tx,
+                );
             })
             .build(k)
             .grow(1.0)
@@ -618,8 +631,11 @@ fn build_thread_row(
     let mut r = SidebarRow::new(title.clone())
         .height(ROW_H)
         .selected(selected)
-        .on_select(move |s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenThread(tid_select.clone())));
+        .on_select(move |s: &mut AppState, tx| {
+            s.dispatch_tx(
+                Action::Navigate(NavAction::OpenThread(tid_select.clone())),
+                tx,
+            );
         })
         .on_close(move |s: &mut AppState, _| {
             s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_archive.clone())));

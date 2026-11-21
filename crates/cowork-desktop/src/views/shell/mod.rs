@@ -248,6 +248,9 @@ fn build_settings_frame(
         layer,
     );
 
+    // Keep the shared `"shell"` key from `FullBleedSplit::build` so swapping between workspace
+    // views and Settings preserves the opaque main column and native vibrancy sidebar slot
+    // without unmounting or crossfading the entire window frame.
     split
         .hide_sidebar_toggle()
         .titlebar_inset(leading_lights)
@@ -255,7 +258,6 @@ fn build_settings_frame(
         .spring(Spring::new(0.3, 0.0))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
-        .key("settings-shell-frame")
 }
 
 fn build_workspace_split_frame(
@@ -1199,5 +1201,182 @@ mod tests {
         });
         rt.frame(0.0);
         assert_eq!(rt.state.preview_ui.active_slide, 2);
+    }
+
+    #[test]
+    fn swapping_to_settings_and_between_pages_lands_settled_on_first_frame_without_opacity_dip() {
+        use rune::{Key, KeyEvent, Mods};
+
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.onboarding.completed = true;
+        s.desktop_settings.reduce_motion = false;
+        s.workspaces.push(crate::state::WorkspaceRecord::new(
+            "ws-1",
+            "Demo",
+            "/tmp/demo",
+            1,
+        ));
+        s.active_workspace_id = Some("ws-1".into());
+        s.threads.push(crate::state::ThreadRecord {
+            id: "th-1".into(),
+            workspace_id: "ws-1".into(),
+            title: "Active chat".into(),
+            ..Default::default()
+        });
+        s.dispatch(Action::Navigate(crate::actions::NavAction::OpenThread(
+            "th-1".into(),
+        )));
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.poll = Some(crate::perf_hooks::poll);
+        rt.on_key = Some(crate::views::shell::handle_key);
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
+
+        let click = |rt: &mut Runtime<AppState>, key: &str| {
+            let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+        };
+
+        let assert_settled_swap = |rt: &mut Runtime<AppState>, step: &str, keys: &[&str]| {
+            let commits_before = rt.stats.commits;
+            rt.frame(1.0 / 60.0);
+            assert!(
+                !rt.state.settle_after_navigation,
+                "{step}: navigation must settle on the triggering frame, not wait for poll_app"
+            );
+            let els = rt.elements();
+            let exiting: Vec<&str> = els
+                .iter()
+                .filter(|e| e.exiting)
+                .map(|e| e.key.as_deref().unwrap_or(e.path.as_str()))
+                .collect();
+            assert!(
+                exiting.is_empty(),
+                "{step}: outgoing elements must unmount immediately without exiting fade: {exiting:?}"
+            );
+            let moving: Vec<&str> = els
+                .iter()
+                .filter(|e| e.moving)
+                .map(|e| e.key.as_deref().unwrap_or(e.path.as_str()))
+                .collect();
+            assert!(
+                moving.is_empty(),
+                "{step}: view swap must not leave elements mid-motion on frame 1: {moving:?}"
+            );
+            for key in keys {
+                let (_, op) = rt
+                    .presented(key)
+                    .unwrap_or_else(|| panic!("{step}: missing {key} on frame 1"));
+                assert!(
+                    (op - 1.0).abs() < 1e-3,
+                    "{step}: {key} dipped opacity to {op} on frame 1"
+                );
+            }
+            let commits_after_first = rt.stats.commits;
+            assert!(
+                commits_after_first > commits_before,
+                "{step}: frame 1 should commit the navigation"
+            );
+            rt.frame(1.0 / 60.0);
+            assert_eq!(
+                rt.stats.commits, commits_after_first,
+                "{step}: frame 2 must not trigger a deferred settle commit"
+            );
+        };
+
+        // 1. Click sidebar Settings row: Frame 1 must show Settings settled at full opacity with
+        //    the shared shell frame intact and zero exiting chat elements.
+        click(&mut rt, "sidebar-settings");
+        assert_settled_swap(
+            &mut rt,
+            "sidebar-settings -> Settings",
+            &[
+                "shell",
+                "sidebar-pane",
+                "main-column",
+                "settings-nav-rail",
+                "settings-main-pane",
+                "settings-page-models",
+            ],
+        );
+        assert_eq!(rt.state.route().view, ViewId::Settings);
+        assert!(
+            rt.presented("chat-view").is_none()
+                && rt.presented("sidebar-toolbar-cluster").is_none(),
+            "outgoing chat chrome must unmount immediately on settings entry frame"
+        );
+
+        // 2. Switch Settings page (Models -> Desktop): Frame 1 must land settled at full opacity.
+        click(&mut rt, "settings-nav-desktop");
+        assert_settled_swap(
+            &mut rt,
+            "Models -> Desktop",
+            &["shell", "settings-main-pane", "settings-page-desktop"],
+        );
+        assert!(rt.presented("settings-page-models").is_none());
+
+        // 3. Click Back to chat: Frame 1 must return to Chat settled at full opacity.
+        click(&mut rt, "settings-back-button");
+        assert_settled_swap(
+            &mut rt,
+            "settings-back-button -> Chat",
+            &["shell", "sidebar-pane", "main-column", "chat-view"],
+        );
+        assert_eq!(rt.state.route().view, ViewId::Chat);
+        assert!(rt.presented("settings-main-pane").is_none());
+
+        // 4. Collapse sidebar in Chat, then open Settings via topbar gear button and Escape back.
+        rt.state.sidebar.set_open(false);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
+
+        click(&mut rt, "topbar-settings");
+        assert_settled_swap(
+            &mut rt,
+            "collapsed Chat topbar-settings -> Settings",
+            &["shell", "sidebar-pane", "main-column", "settings-main-pane"],
+        );
+        assert_eq!(rt.state.route().view, ViewId::Settings);
+        let (sb_rect, sb_op) = rt
+            .presented("sidebar-pane")
+            .expect("settings sidebar-pane must present immediately");
+        assert!(
+            (sb_op - 1.0).abs() < 1e-3
+                && (sb_rect[2] - rt.state.settings_ui.nav_pane.width()).abs() < 1.0,
+            "settings sidebar-pane should snap to full width & opacity on frame 1: rect={sb_rect:?}, op={sb_op}"
+        );
+
+        rt.key(KeyEvent {
+            key: Key::Escape,
+            mods: Mods::default(),
+        });
+        assert_settled_swap(
+            &mut rt,
+            "Escape -> Chat",
+            &["shell", "main-column", "chat-view"],
+        );
+        assert_eq!(rt.state.route().view, ViewId::Chat);
+
+        // 5. Cmd+, opens Settings settled on frame 1.
+        rt.key(KeyEvent {
+            key: Key::Command(','),
+            mods: Mods {
+                cmd: true,
+                ..Default::default()
+            },
+        });
+        assert_settled_swap(
+            &mut rt,
+            "Cmd+, -> Settings",
+            &["shell", "sidebar-pane", "main-column", "settings-main-pane"],
+        );
+        assert_eq!(rt.state.route().view, ViewId::Settings);
     }
 }

@@ -301,14 +301,17 @@ fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
                 Button::new("Provider settings")
                     .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Small)
-                    .on_press_tx(|s: &mut AppState, _| {
+                    .on_press_tx(|s: &mut AppState, tx| {
                         s.dispatch(Action::Shell(ShellAction::DismissLmStudioStartModal));
-                        s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                            page: SettingsPageId::Models,
-                            tab: None,
-                            section: None,
-                            new_provider: false,
-                        }));
+                        s.dispatch_tx(
+                            Action::Navigate(NavAction::OpenSettingsIntent {
+                                page: SettingsPageId::Models,
+                                tab: None,
+                                section: None,
+                                new_provider: false,
+                            }),
+                            tx,
+                        );
                     })
                     .build(k),
             )
@@ -491,7 +494,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
         .on_change(|s: &mut AppState, _| {
             s.shell_ui.search_selected = 0;
         })
-        .on_key(|s: &mut AppState, ev, _| {
+        .on_key(|s: &mut AppState, ev, tx| {
             let items = collect_search_overlay_items(s);
             let max_idx = items.len().saturating_sub(1);
             for (slot, digit) in ['1', '2', '3', '4', '5', '6', '7', '8', '9']
@@ -505,7 +508,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
-                    s.dispatch(item.action.clone());
+                    s.dispatch_tx(item.action.clone(), tx);
                     return true;
                 }
             }
@@ -528,11 +531,11 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 _ => false,
             }
         })
-        .on_action(move |s: &mut AppState, _| {
+        .on_action(move |s: &mut AppState, tx| {
             if let Some(act) = selected_action.as_ref() {
                 s.shell_ui.search_overlay_open = false;
                 s.shell_ui.search_selected = 0;
-                s.dispatch(act.clone());
+                s.dispatch_tx(act.clone(), tx);
             }
         })
         .build(k);
@@ -621,10 +624,10 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 .gap(10.0)
                 .center_y()
                 .hover(t.hover)
-                .on_press_tx(move |s: &mut AppState, _| {
+                .on_press_tx(move |s: &mut AppState, tx| {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
-                    s.dispatch(action.clone());
+                    s.dispatch_tx(action.clone(), tx);
                 })
                 .child(icon(item.icon_glyph, 15.0).color(if selected {
                     t.accent

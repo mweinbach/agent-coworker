@@ -158,10 +158,11 @@ pub fn build_task_view(
                             .icon(&icons::MESSAGE)
                             .closable(false)
                     }))
-                    .on_select(|s: &mut AppState, session_id, _| {
-                        s.dispatch(Action::Navigate(NavAction::OpenThread(
-                            session_id.to_owned(),
-                        )));
+                    .on_select(|s: &mut AppState, session_id, tx| {
+                        s.dispatch_tx(
+                            Action::Navigate(NavAction::OpenThread(session_id.to_owned())),
+                            tx,
+                        );
                     })
                     .build(k);
                 Some(
@@ -446,8 +447,8 @@ fn task_list_row(s: &AppState, task: &TaskSummaryView, k: &Kit, t: &ThemeTokens)
         .fill(t.card_bg)
         .border(1.0, t.border)
         .hover(t.hover)
-        .on_press_tx(move |s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenTask(task_id.clone())));
+        .on_press_tx(move |s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::OpenTask(task_id.clone())), tx);
         })
         .child(row_el.child(Badge::new(badge_txt).build(k)))
 }
@@ -639,8 +640,8 @@ fn build_active_task_workspace(
         Button::new("All tasks")
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Task)), tx);
             })
             .build(k)
             .key("task-all-tasks"),

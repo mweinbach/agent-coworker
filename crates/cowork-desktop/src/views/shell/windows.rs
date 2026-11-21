@@ -260,10 +260,13 @@ pub fn build_quick_chat_window(
                 .variant(IconButtonVariant::GhostMuted)
                 .control_size(ControlSize::Small)
                 .help("New chat")
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-                        workspace_id: new_chat_ws.clone(),
-                    }));
+                .on_press_tx(move |s: &mut AppState, tx| {
+                    s.dispatch_tx(
+                        Action::Navigate(NavAction::OpenNewChat {
+                            workspace_id: new_chat_ws.clone(),
+                        }),
+                        tx,
+                    );
                 })
                 .build(k)
                 .key("quick-chat-new-chat"),

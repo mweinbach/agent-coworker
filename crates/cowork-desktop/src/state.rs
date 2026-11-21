@@ -2564,6 +2564,7 @@ impl AppState {
             _ => None,
         } {
             self.apply_store_event(StoreEvent::MenuInvoked(legacy_id.to_string()));
+            self.take_navigation_settle(tx);
             return true;
         }
         self.dispatch_menu_window_or_tx(Some(tx), command_id)
@@ -4512,6 +4513,23 @@ impl AppState {
         }
     }
 
+    /// Applies any pending navigation settle to `tx` so view, thread, task, and settings page
+    /// swaps land on the triggering frame instead of animating for one frame until `poll_app`.
+    pub fn take_navigation_settle(&mut self, tx: &mut rune::Tx) -> bool {
+        if std::mem::take(&mut self.settle_after_navigation) {
+            tx.settle();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Dispatches an action and immediately settles `tx` when it performed a pane-swapping navigation.
+    pub fn dispatch_tx(&mut self, action: Action, tx: &mut rune::Tx) {
+        self.dispatch(action);
+        self.take_navigation_settle(tx);
+    }
+
     /// Synchronous state transition entrypoint called by views, keyboard shortcuts, and tests.
     pub fn dispatch(&mut self, action: Action) {
         if !matches!(
@@ -4532,7 +4550,9 @@ impl AppState {
 
     fn reduce_nav(&mut self, action: NavAction) {
         let prev_tid = self.nav.current().active_thread_id.clone();
+        let prev_task_id = self.nav.current().active_task_id.clone();
         let prev_view = self.nav.current().view;
+        let prev_settings_page = self.nav.current().settings_page.canonical();
         let prev_ws = self.active_workspace_id.clone();
         let prev_landing = self.landing_workspace_id.clone();
         let restore_task = matches!(
@@ -4824,10 +4844,16 @@ impl AppState {
         if self.active_workspace_id != prev_ws || self.landing_workspace_id != prev_landing {
             self.shared_dirty = true;
         }
-        // Another thread or view replaces the whole pane. Animating that swap keeps a long
-        // transcript in motion for about a second, with full layout and paint every frame;
-        // land it settled instead (`poll_app`).
-        if self.nav.current().view != prev_view || self.nav.current().active_thread_id != prev_tid {
+        // Another thread, task, view, or settings page replaces the whole pane. Animating that
+        // swap keeps long transcripts or full pages in motion (or dips shell opacity for one
+        // frame); land it settled immediately (`dispatch_tx` on the triggering frame, with
+        // `poll_app` as a fallback for non-handler navigations).
+        if self.nav.current().view != prev_view
+            || self.nav.current().active_thread_id != prev_tid
+            || self.nav.current().active_task_id != prev_task_id
+            || (self.nav.current().view == ViewId::Settings
+                && self.nav.current().settings_page.canonical() != prev_settings_page)
+        {
             self.settle_after_navigation = true;
         }
         if !already_persisted

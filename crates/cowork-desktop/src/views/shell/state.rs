@@ -237,6 +237,12 @@ pub(crate) fn any_non_menu_overlay_open(s: &AppState) -> bool {
 
 /// Global keyboard dispatcher for shell shortcuts (`Cmd/Ctrl+K`, `Cmd/Ctrl+Shift+B`, `Cmd/Ctrl+.`, `Escape`).
 pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    let handled = handle_key_inner(s, ev, tx);
+    s.take_navigation_settle(tx);
+    handled
+}
+
+fn handle_key_inner(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if rune_kit::shell::is_sidebar_toggle(ev)
         || (ev.is_command('b') && !ev.mods.shift && !ev.mods.alt)
     {

@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cowork_config::{AgentConfig, ProviderName, SandboxConfig, SandboxMode, UserProfile};
 use cowork_inference::{
-    CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, SessionCostTracker,
-    SessionUsageSnapshot, TurnUsage, migrate_stored_message,
+    CanonicalMessage, MessageRole, SessionCostTracker, SessionUsageSnapshot, TurnUsage,
+    migrate_stored_message,
 };
 use cowork_storage::{
     AgentExecutionState, PersistedSessionMutation, PersistedSessionRecord,
@@ -708,7 +708,7 @@ impl AgentControl {
                 }
                 "brief" => {
                     if let Some(b) = briefing {
-                        initial_messages.push(make_canonical_user_message(&format!(
+                        initial_messages.push(crate::turn_runner::new_user_text_message(format!(
                             "Parent briefing:\n{b}"
                         )));
                     }
@@ -1736,26 +1736,6 @@ struct PreparedChildSpawn {
     effective_task_type: Option<String>,
 }
 
-fn make_canonical_user_message(text: &str) -> CanonicalMessage {
-    CanonicalMessage {
-        id: Uuid::new_v4().to_string(),
-        role: MessageRole::User,
-        content: vec![ContentBlock::Text {
-            text: text.to_owned(),
-            phase: None,
-            citations: Vec::new(),
-            provider_meta: ProviderOpaqueMeta::default(),
-        }],
-        phase: None,
-        provider: None,
-        api: None,
-        model: None,
-        stop_reason: None,
-        provider_meta: ProviderOpaqueMeta::default(),
-        created_at: Utc::now().to_rfc3339(),
-    }
-}
-
 /// Built-in tool / MCP server / skill allowlists for a child. Matches the TS
 /// `filterToolsForProfile` semantics: with a profile, every list is an explicit allowlist (an
 /// empty list denies all) intersected with the base role's tool ceiling; `None` (no
@@ -2208,9 +2188,10 @@ fn build_child_session_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cowork_inference::{ContentBlock, ProviderOpaqueMeta};
 
     fn assistant_with_texts(texts: &[&str]) -> CanonicalMessage {
-        let mut message = make_canonical_user_message("");
+        let mut message = crate::turn_runner::new_user_text_message("");
         message.role = MessageRole::Assistant;
         message.content = texts
             .iter()
@@ -2229,7 +2210,7 @@ mod tests {
         let head = "a".repeat(200);
         let tail = "<agent_report>{\"status\":\"completed\",\"summary\":\"ok\"}</agent_report>";
         let messages = vec![
-            make_canonical_user_message("task"),
+            crate::turn_runner::new_user_text_message("task"),
             assistant_with_texts(&[&head, tail]),
         ];
         let full = format!("{head}\n{tail}");

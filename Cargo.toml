@@ -16,7 +16,6 @@ members = [
   "crates/cowork-cli",
   "crates/cowork-desktop",
 ]
-exclude = ["crates/cowork-win-sandbox"]
 
 # `cargo run` (and `bun run desktop:rune`) builds the dev profile. Rune's layout, text shaping and
 # paint run every frame and are roughly 3x slower unoptimized (see `crates/cowork-desktop/benches/

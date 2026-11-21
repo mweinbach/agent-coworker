@@ -985,7 +985,7 @@ pub async fn execute_non_login_shell(
             "No compatible shell executable was found for platform {platform}."
         ))
     })?;
-    let _temp_script = materialize_temp_script(&plan).map_err(|err| {
+    let temp_script = materialize_temp_script(&plan).map_err(|err| {
         EnvError::ShellFailed(format!("Failed to write the shell temp script: {err}"))
     })?;
 
@@ -1011,6 +1011,9 @@ pub async fn execute_non_login_shell(
     req.env_source = Some(opts.base_env);
     req.child_env_source = Some(canonical_env);
     req.extra_env = caller_extra_env;
+    if let Some(script) = &temp_script {
+        req.read_allowed_roots.push(script.path().to_path_buf());
+    }
     req.read_denied_roots = opts.read_denied_roots;
 
     let res = runner

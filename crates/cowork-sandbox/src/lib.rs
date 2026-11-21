@@ -14,9 +14,10 @@
 //!     realpaths and `anchor apple` code-signature validation.
 //!   - **Linux**: `bwrap` namespaces + `<self_exe> __sandbox-exec --linux-seccomp` native Rust
 //!     `pre_exec` classic-BPF syscall filter (zero `/usr/bin/python3` dependency).
-//!   - **Windows**: `cowork-win-sandbox.exe` restricted-token + Job Object integration, offline-safe
-//!     native `WinVerifyTrust` Authenticode verification, unified `~/.cowork` sandbox home, and
-//!     newest-wins v5 setup state synchronization.
+//!   - **Windows**: Native Microsoft Execution Containers (MXC) `ProcessContainer` (`mxc-sdk`,
+//!     Windows PSEC kernel isolation) with explicit `readwritePaths`/`readonlyPaths`/`deniedPaths`,
+//!     protected `.git`/`.cowork` exclusions, directional network isolation, and zero sidecar
+//!     helper binaries or UAC setup step.
 //! - **Denial classification & approval escalation** (`denial`, `approval`): Distinguishes genuine
 //!   OS network and filesystem sandbox denials from ordinary tool errors without substring false
 //!   positives and computes minimum widened retry policies.
@@ -56,11 +57,11 @@ pub use denial::{
 };
 pub use detect::{
     BWRAP_RETRY_COOLDOWN_MS, BwrapProbeOptions, ProbeCommandOutput, SEATBELT_RETRY_COOLDOWN_MS,
-    SeatbeltCheckOptions, WINDOWS_SANDBOX_PROBE_TIMEOUT_MS, WINDOWS_SANDBOX_PROBE_TTL_MS,
-    WindowsProbeOptions, WindowsSandboxProbeResult, find_bwrap, find_windows_helper, has_seatbelt,
-    has_seatbelt_with_options, is_bwrap_usable, is_bwrap_usable_with_options,
-    probe_windows_sandbox_bundle, reset_bwrap_cache_for_tests, reset_seatbelt_cache_for_tests,
-    reset_windows_probe_cache_for_tests,
+    SeatbeltCheckOptions, WINDOWS_SANDBOX_PROBE_TTL_MS, WindowsMxcProbeSnapshot,
+    WindowsProbeOptions, WindowsSandboxProbeResult, find_bwrap, has_seatbelt,
+    has_seatbelt_with_options, interpret_windows_mxc_probe, is_bwrap_usable,
+    is_bwrap_usable_with_options, probe_windows_mxc_sandbox, reset_bwrap_cache_for_tests,
+    reset_seatbelt_cache_for_tests, reset_windows_probe_cache_for_tests,
 };
 pub use env_utils::{
     PARENT_MANAGED_ENV_VAR, find_env_key, get_env, host_arch, host_platform, minimal_sandbox_env,
@@ -95,11 +96,9 @@ pub use seatbelt::{
     build_seatbelt_command_with_read_denies,
 };
 pub use windows::{
-    CODEX_WINDOWS_SANDBOX_SETUP_VERSION, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-    WINDOWS_SANDBOX_HASH_MANIFEST_NAME, WINDOWS_SANDBOX_HELPER_NAME, WINDOWS_SANDBOX_SETUP_NAME,
-    build_windows_sandbox_command, is_native_windows_binary, read_windows_pe_machine,
-    sync_codex_windows_sandbox_setup_state, sync_codex_windows_sandbox_setup_state_between,
-    verify_windows_authenticode, windows_sandbox_home, windows_sandbox_home_for_platform,
+    WindowsMxcBuildOptions, WindowsMxcRequestSpec, build_windows_mxc_spec,
+    build_windows_sandbox_command, ensure_required_mxc_child_env, format_windows_command_line,
+    normalize_mxc_windows_path, windows_sandbox_home, windows_sandbox_home_for_platform,
 };
 
 /// Resolved sandbox execution modes enforced by `cowork-sandbox` (`read-only`, `no-project-write`,

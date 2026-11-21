@@ -88,10 +88,10 @@ fn multi_thousand_file_workspace_avoids_repeated_walks_and_updates_via_notify() 
     let seatbelt_caps = SandboxCapabilities {
         backend: SandboxType::Seatbelt,
         bwrap_path: None,
-        windows_helper_path: None,
         enforcement: SandboxEnforcement::FULL,
         warning: None,
-        setup_required: false,
+        windows_supports_deny_paths: false,
+        windows_supports_ingress_host_loopback_allow: false,
     };
 
     // 1. First command populates the cache once via `ignore::WalkBuilder`.

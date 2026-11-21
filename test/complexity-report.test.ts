@@ -27,7 +27,7 @@ describe("repository complexity report", () => {
         { path: "src/shared/protocol.ts", lines: 10 },
         { path: "apps/mobile/src/main.tsx", lines: 12 },
         { path: "crates/cowork-desktop/src/main.rs", lines: 15 },
-        { path: "crates/cowork-win-sandbox/src/main.rs", lines: 14 },
+        { path: "crates/cowork-sandbox/src/windows.rs", lines: 14 },
         { path: "docs/image.png", lines: null },
         { path: ".agents/skills/example/SKILL.md", lines: 3 },
       ],

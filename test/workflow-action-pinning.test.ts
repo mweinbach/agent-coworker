@@ -77,11 +77,7 @@ describe("GitHub Actions supply-chain pinning", () => {
   });
 
   test("release-publishing jobs pin softprops/action-gh-release to a SHA", () => {
-    for (const name of [
-      "cowork-server-release.yml",
-      "desktop-rune-release.yml",
-      "win-sandbox-release.yml",
-    ]) {
+    for (const name of ["cowork-server-release.yml", "desktop-rune-release.yml"]) {
       const content = readFileSync(path.join(workflowsDir, name), "utf8");
       expect(content).toMatch(/uses: softprops\/action-gh-release@[0-9a-f]{40}\b/);
       expect(content).not.toMatch(/uses: softprops\/action-gh-release@v\d/);

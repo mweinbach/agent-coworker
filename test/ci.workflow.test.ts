@@ -130,20 +130,16 @@ describe("main CI workflow", () => {
     expect(windowsSmokeJob).toMatch(
       /- name: Setup dependencies[\s\S]*?uses: \.\/\.github\/actions\/setup-bun[\s\S]*?with:[\s\S]*?cache-scope: windows-smoke-\$\{\{ matrix\.arch \}\}[\s\S]*?save-cache: "false"/,
     );
-    expect(workflow).toContain("- name: Windows sandbox helper enforcement");
-    expect(workflow).toContain(
-      "cargo build --release --bins --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",
+    expect(workflow).toContain("- name: Windows MXC sandbox enforcement");
+    expect(windowsSmokeJob).toContain('MXC_TELEMETRY_COMPONENT_PATH: ""');
+    expect(windowsSmokeJob).toContain(
+      "cargo test -p cowork-sandbox --test windows_mxc_live -- --nocapture",
     );
-    expect(workflow).toContain(
-      '$binaryRoot = Join-Path (Get-Location) "crates\\cowork-win-sandbox\\target\\release"',
+    expect(windowsSmokeJob).toContain(
+      "cargo test -p cowork-tools --test bash_approval_parity_tests windows_bash_uses_host_sandbox -- --exact",
     );
-    expect(workflow).toContain('$helperPath = Join-Path $binaryRoot "cowork-win-sandbox.exe"');
-    expect(workflow).toContain("$env:COWORK_WIN_SANDBOX_HELPER = $helperPath");
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER_SHA256");
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_SETUP_SHA256");
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256");
-    expect(workflow).toContain("$helperPath setup --sandbox-home");
-    expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER=%CD%");
+    expect(workflow).not.toContain("cowork-win-sandbox");
+    expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER");
     expect(workflow).not.toContain("test/platform/sandbox");
     expect(workflow).toContain("test/build-desktop-resources.test.ts");
     expect(workflow).toContain("- name: Windows path and server smoke tests");
@@ -347,7 +343,7 @@ describe("main CI workflow", () => {
     // Third-party actions stay pinned to immutable commit SHAs.
     expect(setupRustAction).toMatch(/uses: Swatinem\/rust-cache@[0-9a-f]{40}\b/);
     expect(setupRustAction).toContain("rustup toolchain install");
-    expect(setupRustAction).toContain("crates/cowork-win-sandbox -> target");
+    expect(setupRustAction).not.toContain("crates/cowork-win-sandbox");
     // macOS runners ship bash 3.2, which has no globstar.
     expect(setupRustAction).not.toContain("globstar");
   });

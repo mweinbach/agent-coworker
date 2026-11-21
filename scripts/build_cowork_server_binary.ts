@@ -5,7 +5,6 @@ import { writeFileAtomic } from "../src/platform/fs";
 import { hostArch, hostPlatform } from "../src/platform/host";
 import { buildSidecarManifest, SIDECAR_MANIFEST_NAME } from "../src/platform/sidecar";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/windowsSandboxHelper";
 import {
   copyDir,
   pathExists,
@@ -14,9 +13,10 @@ import {
   rmrf,
   type runCommand,
 } from "./releaseBuildUtils";
-import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
-import { computeSourceFingerprint } from "./winSandboxPrebuilt";
-import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
+import {
+  buildWindowsRustCommandRunner,
+  buildWorkspaceReleaseBinaries,
+} from "./workspaceRustBinary";
 
 const defaultRoot = path.resolve(import.meta.dirname, "..");
 // Runtime resources the Rust server reads from next to its executable.
@@ -201,19 +201,6 @@ export async function buildServerBinary(
   );
 
   const bundledDirs = await copyBundledResourceDirs(root, outDir);
-  if (target.platform === "win32") {
-    await syncWindowsSandboxHelper({
-      root,
-      dest: path.join(outDir, WINDOWS_SANDBOX_HELPER_NAME),
-      previousFingerprint: null,
-      nextFingerprint: await computeSourceFingerprint(
-        path.join(root, "crates", "cowork-win-sandbox"),
-      ),
-      platform: target.platform,
-      arch: target.arch,
-      commandRunner: options.commandRunner,
-    });
-  }
 
   console.log(`[build] cowork-server binary: ${path.relative(root, outfile)}`);
   console.log(

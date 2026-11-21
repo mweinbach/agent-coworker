@@ -1,5 +1,5 @@
 name: Setup Rust cache
-description: Install the pinned Rust toolchain and restore Cargo registry and build caches for the Rust workspace (plus the Windows sandbox helper workspace on Windows).
+description: Install the pinned Rust toolchain and restore Cargo registry and build caches for the Rust workspace.
 
 inputs:
   cache-scope:
@@ -23,23 +23,6 @@ runs:
         rustc --version
         cargo --version
 
-    - name: Select Cargo workspaces
-      id: workspaces
-      shell: bash
-      env:
-        RUNNER_OS_NAME: ${{ runner.os }}
-      run: |
-        {
-          echo "value<<EOF"
-          echo ". -> target"
-          # The Windows sandbox helpers are a separate Cargo workspace that only
-          # Windows jobs build (crates/cowork-win-sandbox is excluded from the root).
-          if [ "$RUNNER_OS_NAME" = "Windows" ]; then
-            echo "crates/cowork-win-sandbox -> target"
-          fi
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
-
     # Keys on rustc version, Cargo.lock, every Cargo.toml / build.rs, and the
     # selected scope; prunes stale workspace artifacts before saving so the
     # target cache does not grow without bound across restores.
@@ -47,5 +30,5 @@ runs:
       uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         shared-key: ${{ inputs.cache-scope }}
-        workspaces: ${{ steps.workspaces.outputs.value }}
+        workspaces: ". -> target"
         save-if: ${{ inputs.save-cache == 'true' }}

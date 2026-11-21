@@ -1424,7 +1424,7 @@ describe("pinned historical fixture, disposable guards, profile continuity, and 
     );
 
     // Other non-desktop release workflows must NEVER displace GitHub's Latest tag
-    for (const nonDesktopWorkflow of ["win-sandbox-release.yml", "cowork-server-release.yml"]) {
+    for (const nonDesktopWorkflow of ["cowork-server-release.yml"]) {
       const content = await fs.readFile(
         path.join(repoRoot, ".github", "workflows", nonDesktopWorkflow),
         "utf8",

@@ -19,14 +19,12 @@ crates/cowork-sandbox/
   src/seatbelt.rs         macOS: /usr/bin/sandbox-exec -p <.sbpl> -D... -- <cmd>
   src/bwrap.rs            Linux: bwrap <mounts> --unshare-net? -- <cmd>
   src/linux_seccomp.rs    Linux: native Rust pre_exec seccomp-BPF syscall filter (zero Python)
-  src/windows.rs          Windows: cowork-win-sandbox.exe run + native WinVerifyTrust + v5 setup sync
-  src/detect.rs           Capability and integrity probes (sandbox-exec / bwrap / helper bundle)
+  src/windows.rs          Windows: in-process Microsoft Execution Containers (MXC / mxc-sdk ProcessContainer)
+  src/detect.rs           Capability probes (sandbox-exec / bwrap / Windows MXC PSEC)
   src/denial.rs           Structured network vs filesystem denial classification
-src/platform/windowsSandboxHelper.ts  Desktop-side Windows helper lookup + setup constants
-crates/cowork-win-sandbox/ Windows setup, sandbox, and command-runner helpers
 ```
 
-`SandboxManager` (`crates/cowork-sandbox/src/manager.rs`) is the single abstraction every platform flows through. Given the command argv and a policy it selects a backend (`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and invokes the self-exec `cowork-server __sandbox-exec` wrapper or native helper, mirroring Codex's `SandboxManager::transform`. The bash tool (`crates/cowork-tools/src/bash.rs`) and `SofficeRunner` (`crates/cowork-env/src/soffice.rs`) wrap commands before spawning and attach marker env vars (`COWORK_SANDBOX`, `COWORK_SANDBOX_NETWORK_DISABLED`) to the child.
+`SandboxManager` (`crates/cowork-sandbox/src/manager.rs`) is the single abstraction every platform flows through. Given the command argv and a policy it selects a backend (`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and wraps or runs it directly in-process via MXC on Windows (with `cowork-server __sandbox-exec --windows-mxc` for CLI/print-command invocations), mirroring Codex's `SandboxManager::transform`. The bash tool (`crates/cowork-tools/src/bash.rs`) and `SofficeRunner` (`crates/cowork-env/src/soffice.rs`) wrap commands before spawning and attach marker env vars (`COWORK_SANDBOX`, `COWORK_SANDBOX_NETWORK_DISABLED`) to the child.
 
 ## Policy model
 
@@ -57,8 +55,11 @@ children (`targetPaths`) keep their sandbox even under YOLO. An explicit
 host without a network-enforcing backend fails closed instead of falling back
 to an unsandboxed (network-capable) run.
 
-Reads are full-disk in every sandboxed mode, so global skills/plugins/config
-under `~/.cowork` (e.g. `~/.cowork/skills`, `~/.cowork/plugins`), built-in/bundled
+Reads on macOS and Linux are full-disk (minus explicit credential denies), while
+Windows MXC `ProcessContainer` is deny-by-default for reads and explicitly grants
+the workspace, discovered skill/plugin read roots, non-credential `~/.cowork/{skills,plugins,runtime,config}`,
+built-in/managed runtime paths, and MXC's discovered tool/profile read-only paths.
+Global skills/plugins/config under `~/.cowork` (e.g. `~/.cowork/skills`, `~/.cowork/plugins`), built-in/bundled
 skill assets, and any skill/plugin scripts the agent runs via `bash` remain
 readable and runnable inside the sandbox — they are just read-only (writes there
 are denied, as `~/.cowork` lives outside the writable roots and `.cowork` is
@@ -127,7 +128,7 @@ manual approval, and recheck them after an approval wait. Scoped file grants
 must name a permitted root and targets; ambiguous escalation requests fail closed.
 Codex's wire-level `dangerFullAccess` cannot disable networking, so network-disabled
 full-access turns use a narrower workspace-write policy. Both the Codex adapter
-and Windows helper disable implicit temp grants and use explicitly filtered
+and the Windows MXC backend disable implicit temp grants and use explicitly filtered
 scratch roots, preventing a temp-based checkout from regaining blanket temp writes.
 
 ## Per-platform backends
@@ -163,62 +164,44 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   nested submodule/worktree metadata, but it does not fabricate missing metadata
   mountpoints because doing so can create host directories during sandbox setup.
   Prefer narrow `targetPaths` when a child must not create new metadata paths.
-- **Windows — capability ACLs + WFP** (`crates/cowork-win-sandbox`): the runner is
-  pinned to the OpenAI Codex Windows sandbox implementation. A one-time elevated
-  `setup` provisions dedicated online/offline identities, capability-SID ACLs,
-  WFP network rules, and versioned readiness state. `run` launches the child with
-  the appropriate restricted token inside a kill-on-close Job Object. Writable
-  roots are limited to the resolved workspace/`targetPaths` plus TEMP/TMP;
-  protected `.git`, `.agents`, `.codex`, and `.cowork` roots are denied. The
-  native `probe` must demonstrate workspace and temp writes, outside/metadata/
-  junction/child escape denial, and network denial before the server reports
-  filesystem, network, process, and integrity enforcement.
+- **Windows — Microsoft Execution Containers (MXC)** (`crates/cowork-sandbox/src/windows.rs`, `mxc-sdk`):
+  runs commands directly in-process inside a Windows `ProcessContainer` backed by
+  the native OS Process Security Environment (`processmodel.dll` PSEC, Windows 11
+  24H2 build 26100.9278+ / 25H2 / 26H1 / 26H2). There are no bundled Windows
+  sandbox sidecar executables, no local `CodexSandboxOffline/Online` user accounts,
+  and no elevated UAC setup step.
 
-  Desktop resources contain `cowork-win-sandbox.exe`,
-  `codex-windows-sandbox-setup.exe`, `codex-command-runner.exe`, and a SHA-256
-  manifest. Development builds stage the bundle via `scripts/build_desktop_resources.ts`
-  and pass absolute helper paths plus expected SHA-256 digests to `cowork-server`.
-  Packaged builds additionally require valid Authenticode signatures when the
-  release is signed; unsigned releases skip signature checks but still verify
-  the bundled helper hashes. A missing helper, hash/signature mismatch, cancelled UAC prompt, or
-  failed/stale probe leaves restricted commands fail-closed and records repair
-  diagnostics. Only the setup/health path runs automatically in that state;
-  free-form shell execution still requires the explicit sandbox-escape approval
-  where policy permits it.
+  `probe_windows_mxc_sandbox` calls `mxc_sdk::v1::probe(None)` (30s TTL cache)
+  to verify `base_container_api_present` and detect optional `deniedPaths` support.
+  On hosts without native PSEC support, capability detection reports `none` so
+  hard floors and `sandbox.requireBackend: true` fail closed (`SANDBOX_REQUIRED`)
+  and non-hard-floor `workspace-write` prompts for explicit unsandboxed approval.
 
-  The managed Codex app-server drives the *same* upstream engine with the same
-  machine-global `CodexSandboxOffline/Online` accounts, but keys its setup
-  state off its own `CODEX_HOME` (`~/.cowork/auth/codex-cli`). Because every
-  full setup resets those shared accounts' passwords, independent provisioning
-  from two homes invalidates the other home's stored credentials (each side
-  then re-runs an elevated setup — a clobber loop). Cowork prevents this two
-  ways (`crates/cowork-sandbox/src/windows.rs`): the pooled app-server
-  client newest-wins syncs the setup marker + DPAPI credentials between
-  `~/.cowork` and the app-server home before spawn, so neither Cowork-spawned
-  engine ever sees a stale marker and triggers a full re-setup over the
-  other; and the managed install pins version-matched
-  `codex-command-runner`/`codex-windows-sandbox-setup` siblings next to the
-  app-server binary (`crates/cowork-providers/src/codex_app_server/`), so helper
-  resolution never falls back to a foreign, version-skewed binary via PATH.
-  The native Codex home (`~/.codex`) is never read or written by this sync —
-  foreign setup state must not leak into the Cowork-managed runtime (a
-  version- or proxy-skewed marker would trigger the very full setup it
-  prevents); when a native Codex install re-provisions the shared accounts,
-  Cowork's own one-time setup repair is the intended recovery.
+  Each execution constructs an explicit `FilesystemPolicy` (`readwritePaths`,
+  `readonlyPaths`, `deniedPaths`), directional `NetworkPolicy` (egress + ingress +
+  host loopback allow/deny), locked clipboard/input `UiPolicy` (with Win32k kept
+  enabled so tools linking `user32`/`gdi32` such as headless LibreOffice work),
+  and an explicit secret-stripped child environment (`inherit_default_environment: false`)
+  guaranteeing `SystemRoot` and `LOCALAPPDATA`. Because Windows BaseContainer
+  resolves overlapping grants by longest-prefix match, `.git` and `.cowork`
+  (direct and nested via `WorkspaceProtectedPathsCache`) are placed in
+  `readonlyPaths`, while credential `read_denied_roots` are placed in `deniedPaths`
+  (when supported by host PSEC) and stripped from all read/write grants.
+
+  Note: OpenAI's external `codex-app-server` runtime still manages its own
+  upstream companion binaries under `~/.cowork/auth/codex-cli`
+  (`crates/cowork-providers/src/codex_app_server/`), completely separate from
+  Cowork's Windows MXC sandbox.
 
 ## Verification
 
 - Unit & Rust integration: `cargo test -p cowork-sandbox -p cowork-server` asserts exact argv / policy text per policy × platform, cached `.git`/`.cowork` discovery, credential read-deny masks, escalate-on-failure detection, and the `__sandbox-exec` CLI (including `--print-command`, which prints the transformed backend launch as one JSON line without executing it).
 - **Enforcement (real OS sandbox):** `crates/cowork-sandbox/tests/backends_and_seccomp.rs`,
-  `seatbelt_live_macos.rs`, and `crates/cowork-server/tests/sandbox_exec_e2e.rs` spawn the
-  actual backend and assert allow/deny on a real kernel. Dedicated GitHub Linux x64/ARM64
-  and macOS ARM64 jobs install prerequisites and run `cargo test -p cowork-sandbox` natively.
+  `seatbelt_live_macos.rs`, `windows_mxc_live.rs`, and `crates/cowork-server/tests/sandbox_exec_e2e.rs` spawn the
+  actual backend and assert allow/deny on a real kernel. Dedicated GitHub Linux x64/ARM64,
+  macOS ARM64, and Windows x64/ARM64 jobs run `cargo test -p cowork-sandbox` natively.
   - Linux: production `cowork-server __sandbox-exec` uses native Rust seccomp-BPF (`crates/cowork-sandbox/src/linux_seccomp.rs`) with zero Python runtime dependency; install `bubblewrap` and enable usable user namespaces.
-  - Windows: build all helpers (`cargo build --release --bins --manifest-path
-    crates/cowork-win-sandbox/Cargo.toml`), set the three absolute
-    `COWORK_WIN_SANDBOX_*` paths and SHA-256 values, and run the helper's one-time
-    `setup` probe. CI runs this natively on both x64 (`windows-latest`) and ARM64
-    (`windows-11-arm`).
+  - Windows: `cargo test -p cowork-sandbox --test windows_mxc_live` verifies live MXC `ProcessContainer` kernel enforcement on PSEC-capable Windows hosts and fail-closed `SANDBOX_REQUIRED` gating on hosts without PSEC. CI runs this natively on both x64 (`windows-latest`) and ARM64 (`windows-11-arm`).
 - The Office conversion qualification (`scripts/officeWasmQualification.ts`) runs its
   converter under the Rust sandbox via `cowork-server __sandbox-exec --print-command`
   and only tightens the printed launch (positive Linux mount view, extra Seatbelt denies).

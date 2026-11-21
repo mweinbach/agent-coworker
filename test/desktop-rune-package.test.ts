@@ -9,7 +9,6 @@ import {
   loadPackagerBaseConfig,
   parsePackageCliArgs,
   prepareMacSigningEnv,
-  refreshWindowsSandboxHashManifests,
   resolveCargoBuildEnv,
   resolveMacArchiveNames,
   resolvePackageVersion,
@@ -333,7 +332,7 @@ describe("desktop_rune_package CLI and build config helpers", () => {
     ).not.toThrow();
   });
 
-  test("buildPackagerConfig toggles signing fields and windows-sandbox resource cleanly", async () => {
+  test("buildPackagerConfig toggles signing fields cleanly without external windows-sandbox bundle", async () => {
     const baseConfig = await loadPackagerBaseConfig(repoRoot);
     const unsigned = buildPackagerConfig({
       root: repoRoot,
@@ -343,7 +342,6 @@ describe("desktop_rune_package CLI and build config helpers", () => {
       binariesDir: "/tmp/bin",
       stagedDir: "/tmp/staged",
       targetTriple: "aarch64-apple-darwin",
-      includeWindowsSandbox: false,
     });
     expect(unsigned.macos?.signingIdentity).toBeUndefined();
     expect(unsigned.windows?.certificateThumbprint).toBeUndefined();
@@ -367,12 +365,11 @@ describe("desktop_rune_package CLI and build config helpers", () => {
       binariesDir: "/tmp/bin",
       stagedDir: "/tmp/staged",
       targetTriple: "x86_64-pc-windows-msvc",
-      includeWindowsSandbox: true,
       windowsCertificateThumbprint: "ABCDEF123456",
     });
     expect(winSigned.windows?.certificateThumbprint).toBe("ABCDEF123456");
     expect(winSigned.binaries).toEqual([{ path: "cowork-desktop", main: true }]);
-    expect(winSigned.resources.map((item) => item.target)).toContain("windows-sandbox");
+    expect(winSigned.resources.map((item) => item.target)).not.toContain("windows-sandbox");
   });
 
   test("resolvePackageVersion reads Packager.toml without apps/desktop and honors overrides", async () => {
@@ -448,7 +445,7 @@ describe("desktop_rune_package CLI and build config helpers", () => {
     expect(runeWorkflow).toContain("desktop_rune_package.ts --print-version");
   });
 
-  test("stageRuntimeResources stages dist/sidecar/tray/windows-sandbox without apps/desktop and refreshes sandbox sha256 manifests", async () => {
+  test("stageRuntimeResources stages dist/sidecar/tray without apps/desktop or external sandbox helpers", async () => {
     const tempRoot = await makeTempDir("cowork-stage-");
     try {
       for (const subdir of ["prompts", "config", "skills", "workflows"]) {
@@ -468,21 +465,6 @@ describe("desktop_rune_package CLI and build config helpers", () => {
         path.join(binSrcDir, "cowork-server-manifest.json"),
         JSON.stringify(buildSidecarManifest("win32", "x64")),
       );
-      await fs.writeFile(path.join(binSrcDir, "cowork-win-sandbox.exe"), "sandbox-v1");
-      await fs.writeFile(path.join(binSrcDir, "codex-windows-sandbox-setup.exe"), "setup-v1");
-      await fs.writeFile(path.join(binSrcDir, "codex-command-runner.exe"), "runner-v1");
-      await fs.writeFile(
-        path.join(binSrcDir, "cowork-win-sandbox.sha256.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          rustTarget: "x86_64-pc-windows-msvc",
-          files: {
-            "cowork-win-sandbox.exe": "stale",
-            "codex-windows-sandbox-setup.exe": "stale",
-            "codex-command-runner.exe": "stale",
-          },
-        }),
-      );
 
       const iconsDir = path.join(tempRoot, "crates", "cowork-desktop", "packaging", "icons");
       await fs.mkdir(iconsDir, { recursive: true });
@@ -490,13 +472,12 @@ describe("desktop_rune_package CLI and build config helpers", () => {
       await fs.writeFile(path.join(iconsDir, "icon.ico"), "ico");
 
       const stagedDir = path.join(tempRoot, "staged");
-      const { hasWindowsSandbox } = await stageRuntimeResources({
+      await stageRuntimeResources({
         root: tempRoot,
         platform: "win32",
         rustTarget: "x86_64-pc-windows-msvc",
         stagedDir,
       });
-      expect(hasWindowsSandbox).toBe(true);
 
       const ignoredMapExists = await fs
         .stat(path.join(stagedDir, "dist", "prompts", "ignored.js.map"))
@@ -504,26 +485,12 @@ describe("desktop_rune_package CLI and build config helpers", () => {
         .catch(() => false);
       expect(ignoredMapExists).toBe(false);
 
-      // Simulate Authenticode signing mutating the staged sandbox executables.
-      const resignedContent = Buffer.from("sandbox-signed-v2");
-      await fs.writeFile(
-        path.join(stagedDir, "binaries", "cowork-win-sandbox.exe"),
-        resignedContent,
-      );
-      await fs.writeFile(
-        path.join(stagedDir, "windows-sandbox", "cowork-win-sandbox.exe"),
-        resignedContent,
-      );
-
-      await refreshWindowsSandboxHashManifests(stagedDir);
-
-      const expectedHash = createHash("sha256").update(resignedContent).digest("hex");
-      for (const folder of ["binaries", "windows-sandbox"]) {
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(stagedDir, folder, "cowork-win-sandbox.sha256.json"), "utf8"),
-        ) as { files: Record<string, string> };
-        expect(manifest.files["cowork-win-sandbox.exe"]).toBe(expectedHash);
-      }
+      expect(
+        await fs.readFile(
+          path.join(stagedDir, "binaries", "cowork-server-x86_64-pc-windows-msvc.exe"),
+          "utf8",
+        ),
+      ).toBe("server-bin");
 
       // Reject a mismatched sidecar manifest instead of packaging stale wrong-target artifacts.
       await fs.writeFile(
@@ -1201,7 +1168,6 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
         const binariesDir = path.join(archDir, "release-bin");
         await fs.mkdir(outDir, { recursive: true });
         await fs.mkdir(path.join(stagedDir, "binaries"), { recursive: true });
-        await fs.mkdir(path.join(stagedDir, "windows-sandbox"), { recursive: true });
         await fs.mkdir(binariesDir, { recursive: true });
 
         const installerName = resolveLegacyWindowsInstallerName(arch, version);
@@ -1219,34 +1185,6 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
         await fs.writeFile(
           path.join(stagedDir, "binaries", "cowork-server-manifest.json"),
           JSON.stringify(buildSidecarManifest("win32", arch)),
-          "utf8",
-        );
-
-        const helperFiles: Record<string, string> = {};
-        for (const helperName of [
-          "cowork-win-sandbox.exe",
-          "codex-windows-sandbox-setup.exe",
-          "codex-command-runner.exe",
-        ]) {
-          const helperBytes = makePeBinary(expectedMachine, `${helperName}-${arch}`);
-          const hash = createHash("sha256").update(helperBytes).digest("hex");
-          helperFiles[helperName] = hash;
-          await fs.writeFile(path.join(stagedDir, "binaries", helperName), helperBytes);
-          await fs.writeFile(path.join(stagedDir, "windows-sandbox", helperName), helperBytes);
-        }
-        const sandboxManifest = JSON.stringify({
-          schemaVersion: 1,
-          rustTarget,
-          files: helperFiles,
-        });
-        await fs.writeFile(
-          path.join(stagedDir, "binaries", "cowork-win-sandbox.sha256.json"),
-          sandboxManifest,
-          "utf8",
-        );
-        await fs.writeFile(
-          path.join(stagedDir, "windows-sandbox", "cowork-win-sandbox.sha256.json"),
-          sandboxManifest,
           "utf8",
         );
 
@@ -1270,7 +1208,6 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
         expect(verified.installerPe.arch).toBe("x86");
         expect(verified.mainBinaryPe?.arch).toBe(arch);
         expect(verified.sidecarPe?.arch).toBe(arch);
-        expect(verified.verifiedSandboxFiles.length).toBe(6);
 
         // Verify PE inspection directly
         const peInfo = await inspectPeMachine(mainExePath);
@@ -1310,28 +1247,7 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
         }),
       ).rejects.toThrow(/PE machine mismatch/);
 
-      // Negative 3: tampered sandbox helper fails closed.
-      const armStagedDir = path.join(tempDir, "arm64", "staged");
-      await fs.writeFile(
-        path.join(armBinDir, "cowork-desktop.exe"),
-        makePeBinary(PE_MACHINE_ARM64, "restored-arm64"),
-      );
-      await fs.appendFile(
-        path.join(armStagedDir, "binaries", "cowork-win-sandbox.exe"),
-        Buffer.from("tampered"),
-      );
-      await expect(
-        verifyWindowsReleaseOutputs({
-          outDir: path.join(tempDir, "arm64", "out"),
-          stagedDir: armStagedDir,
-          binariesDir: armBinDir,
-          version,
-          arch: "arm64",
-          verifyChannelYmlPath: path.join(tempDir, "arm64", "out", "latest-arm64.yml"),
-        }),
-      ).rejects.toThrow(/Sandbox hash mismatch/);
-
-      // Negative 4: requiring Authenticode verification on non-Windows host never silently passes.
+      // Negative 3: requiring Authenticode verification on non-Windows host never silently passes.
       if (hostPlatform() !== "win32") {
         await expect(
           verifyWindowsReleaseOutputs({
@@ -1362,7 +1278,6 @@ describe("legacy Windows updater handoff (latest.yml, latest-arm64.yml, migratio
       binariesDir: "/tmp/bin",
       stagedDir: "/tmp/staged",
       targetTriple: "x86_64-pc-windows-msvc",
-      includeWindowsSandbox: true,
     });
     expect(resolvedConfig.nsis?.template).toBe(
       path.join(repoRoot, "crates", "cowork-desktop", "packaging", "nsis", "installer.nsi"),

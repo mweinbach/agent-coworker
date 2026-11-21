@@ -1,6 +1,6 @@
 # Packaging configuration for the native Rune desktop app (`crates/cowork-desktop`).
 # Passed to `cargo packager` via `bun run desktop:rune:package` (`scripts/desktop_rune_package.ts`),
-# which dynamically stages runtime resources (`dist/`, `binaries/`, `tray/`, `windows-sandbox/`),
+# which dynamically stages runtime resources (`dist/`, `binaries/`, `tray/`),
 # resolves target-specific paths/version, and applies env/CI signing credentials.
 
 name = "cowork-desktop"

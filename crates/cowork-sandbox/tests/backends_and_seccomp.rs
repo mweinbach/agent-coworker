@@ -13,19 +13,17 @@ use cowork_sandbox::linux_seccomp::{
 };
 use cowork_sandbox::{
     BWRAP_RETRY_COOLDOWN_MS, BwrapBuildOptions, BwrapProbeOptions, ClassifyDenialOptions,
-    CommandApprovalReasonCode, CommandRiskLevel, ProbeCommandOutput, SEATBELT_RETRY_COOLDOWN_MS,
+    CommandApprovalReasonCode, CommandRiskLevel, ParsedSandboxExecArgs, SEATBELT_RETRY_COOLDOWN_MS,
     SandboxCommand, SandboxDenialCategory, SandboxDenialDetailKind, SandboxPolicy, SandboxType,
-    SeatbeltCheckOptions, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME, WINDOWS_SANDBOX_HELPER_NAME,
-    WINDOWS_SANDBOX_PROBE_TTL_MS, WINDOWS_SANDBOX_SETUP_NAME, WindowsProbeOptions,
-    WritableRootKind, build_bwrap_command, build_linux_socket_filter,
-    build_windows_sandbox_command, classify_command_detailed, classify_sandbox_denial,
-    classify_sandbox_denial_detailed, describe_sandbox_denial, evaluate_seccomp_bpf, find_bwrap,
-    has_seatbelt_with_options, is_bwrap_usable_with_options, is_native_windows_binary,
-    plan_sandbox_escalation, probe_windows_sandbox_bundle, reset_bwrap_cache_for_tests,
-    reset_seatbelt_cache_for_tests, reset_windows_probe_cache_for_tests,
-    sync_codex_windows_sandbox_setup_state, windows_sandbox_home_for_platform,
+    SeatbeltCheckOptions, WINDOWS_SANDBOX_PROBE_TTL_MS, WindowsMxcBuildOptions,
+    WindowsMxcProbeSnapshot, WindowsProbeOptions, WritableRootKind, build_bwrap_command,
+    build_linux_socket_filter, build_windows_sandbox_command, classify_command_detailed,
+    classify_sandbox_denial, classify_sandbox_denial_detailed, describe_sandbox_denial,
+    evaluate_seccomp_bpf, find_bwrap, has_seatbelt_with_options, is_bwrap_usable_with_options,
+    parse_sandbox_exec_args, plan_sandbox_escalation, probe_windows_mxc_sandbox,
+    reset_bwrap_cache_for_tests, reset_seatbelt_cache_for_tests,
+    reset_windows_probe_cache_for_tests, windows_sandbox_home_for_platform,
 };
-use sha2::{Digest, Sha256};
 
 fn canonical_temp_dir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
     // macOS keeps the canonical `/private/tmp` Seatbelt scratch root; other hosts use the
@@ -368,7 +366,7 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
     assert_eq!(bwrap_probes.load(Ordering::SeqCst), 2);
     reset_bwrap_cache_for_tests();
 
-    // 3. Windows unified `~/.cowork` sandbox home & PE header verification + offline probe TTL.
+    // 3. Windows unified `~/.cowork` sandbox home & MXC ProcessContainer probe + 30s TTL cache.
     let mut win_env = HashMap::new();
     win_env.insert("USERPROFILE".to_owned(), r"C:\Users\Alice".to_owned());
     win_env.insert("HOME".to_owned(), r"C:\GitBashPoisonedHome".to_owned());
@@ -377,162 +375,108 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
         PathBuf::from(r"C:\Users\Alice\.cowork")
     );
 
-    let (_tmp, bundle_dir) = canonical_temp_dir("cowork-win-bundle-");
-    let helper = bundle_dir.join(WINDOWS_SANDBOX_HELPER_NAME);
-    let setup = bundle_dir.join(WINDOWS_SANDBOX_SETUP_NAME);
-    let runner = bundle_dir.join(WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);
-
-    // Minimal valid PE header (`MZ` ... `e_lfanew = 0x40` ... `PE\0\0` + `0x8664` x64).
-    let mut pe_bytes = vec![0u8; 128];
-    pe_bytes[0] = b'M';
-    pe_bytes[1] = b'Z';
-    pe_bytes[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
-    pe_bytes[0x40..0x44].copy_from_slice(b"PE\0\0");
-    pe_bytes[0x44..0x46].copy_from_slice(&0x8664u16.to_le_bytes());
-
-    std::fs::write(&helper, &pe_bytes).unwrap();
-    std::fs::write(&setup, b"setup-payload").unwrap();
-    std::fs::write(&runner, b"runner-payload").unwrap();
-    assert!(is_native_windows_binary(&helper, "x64"));
-    assert!(!is_native_windows_binary(&helper, "arm64"));
-
-    let sha_hex = |data: &[u8]| hex::encode(Sha256::digest(data));
-    let mut probe_env = HashMap::new();
-    probe_env.insert(
-        "COWORK_WIN_SANDBOX_HOME".to_owned(),
-        bundle_dir.join("sbx-home").to_string_lossy().into_owned(),
-    );
-
-    // Missing SHA-256 fails closed without spawning probe child!
-    let spawns = AtomicUsize::new(0);
-    let probe_runner = |_: &Path, _: &[String]| -> Result<ProbeCommandOutput, String> {
-        spawns.fetch_add(1, Ordering::SeqCst);
-        Ok(ProbeCommandOutput {
-            exit_code: Some(0),
-            signaled: false,
-            stdout: r#"{"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":false}"#.to_owned(),
-            stderr: String::new(),
-        })
+    let mxc_probes = AtomicUsize::new(0);
+    let psec_present = std::sync::atomic::AtomicBool::new(false);
+    let mxc_probe_fn = || -> Result<WindowsMxcProbeSnapshot, String> {
+        mxc_probes.fetch_add(1, Ordering::SeqCst);
+        if psec_present.load(Ordering::SeqCst) {
+            Ok(WindowsMxcProbeSnapshot {
+                tier: Some("base_container".to_owned()),
+                base_container_api_present: true,
+                supports_deny_paths: true,
+                supports_ingress_host_loopback_allow: true,
+                warnings: Vec::new(),
+                error: None,
+            })
+        } else {
+            Ok(WindowsMxcProbeSnapshot {
+                tier: None,
+                base_container_api_present: false,
+                supports_deny_paths: false,
+                supports_ingress_host_loopback_allow: false,
+                warnings: Vec::new(),
+                error: Some("PSEC not present".to_owned()),
+            })
+        }
     };
-    let missing_hash_res = probe_windows_sandbox_bundle(
-        &helper,
-        &probe_env,
-        WindowsProbeOptions {
-            now_ms: Some(1_000),
-            cwd: Some(&bundle_dir),
-            probe_runner: Some(&probe_runner),
-            authenticode_verifier: None,
-        },
-    );
-    assert!(!missing_hash_res.integrity);
+
+    let unavail = probe_windows_mxc_sandbox(WindowsProbeOptions {
+        now_ms: Some(1_000),
+        platform: Some("win32"),
+        probe_fn: Some(&mxc_probe_fn),
+    });
+    assert!(!unavail.ready && !unavail.integrity && !unavail.filesystem && !unavail.network);
     assert!(
-        missing_hash_res
+        unavail
             .warning
             .as_deref()
             .unwrap_or("")
-            .contains("trusted SHA-256 is missing")
+            .contains("PSEC not present")
     );
-    assert_eq!(spawns.load(Ordering::SeqCst), 0);
-    reset_windows_probe_cache_for_tests();
+    assert_eq!(mxc_probes.load(Ordering::SeqCst), 1);
 
-    // Valid SHA-256 + Authenticode verification across all 3 binaries + 30s TTL memoization.
-    probe_env.insert(
-        "COWORK_WIN_SANDBOX_HELPER_SHA256".to_owned(),
-        sha_hex(&pe_bytes),
-    );
-    probe_env.insert(
-        "COWORK_WIN_SANDBOX_SETUP_SHA256".to_owned(),
-        sha_hex(b"setup-payload"),
-    );
-    probe_env.insert(
-        "COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256".to_owned(),
-        sha_hex(b"runner-payload"),
-    );
-    probe_env.insert(
-        "COWORK_WIN_SANDBOX_REQUIRE_AUTHENTICODE".to_owned(),
-        "1".to_owned(),
-    );
+    // Cached within 30s TTL -> no extra probe call even if host state flips.
+    psec_present.store(true, Ordering::SeqCst);
+    let still_cached = probe_windows_mxc_sandbox(WindowsProbeOptions {
+        now_ms: Some(15_000),
+        platform: Some("win32"),
+        probe_fn: Some(&mxc_probe_fn),
+    });
+    assert_eq!(still_cached, unavail);
+    assert_eq!(mxc_probes.load(Ordering::SeqCst), 1);
 
-    // Fail Authenticode on 3rd binary (`codex-command-runner.exe`) -> still 0 spawns!
-    let reject_third = |p: &Path| !p.ends_with(WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);
-    let bad_sig = probe_windows_sandbox_bundle(
-        &helper,
-        &probe_env,
-        WindowsProbeOptions {
-            now_ms: Some(2_000),
-            cwd: Some(&bundle_dir),
-            probe_runner: Some(&probe_runner),
-            authenticode_verifier: Some(&reject_third),
-        },
-    );
-    assert!(!bad_sig.integrity);
+    // Expired at +30s -> re-probes and observes native MXC ProcessContainer readiness.
+    let ok1 = probe_windows_mxc_sandbox(WindowsProbeOptions {
+        now_ms: Some(1_000 + WINDOWS_SANDBOX_PROBE_TTL_MS),
+        platform: Some("win32"),
+        probe_fn: Some(&mxc_probe_fn),
+    });
     assert!(
-        bad_sig
-            .warning
-            .as_deref()
-            .unwrap_or("")
-            .contains("Authenticode signature is invalid for codex-command-runner.exe")
+        ok1.ready
+            && ok1.integrity
+            && ok1.filesystem
+            && ok1.network
+            && ok1.process
+            && ok1.supports_deny_paths
+            && ok1.supports_ingress_host_loopback_allow
+            && ok1.warning.is_none()
     );
-    assert_eq!(spawns.load(Ordering::SeqCst), 0);
+    assert_eq!(mxc_probes.load(Ordering::SeqCst), 2);
     reset_windows_probe_cache_for_tests();
 
-    let accept_all = |_: &Path| true;
-    let ok1 = probe_windows_sandbox_bundle(
-        &helper,
-        &probe_env,
-        WindowsProbeOptions {
-            now_ms: Some(10_000),
-            cwd: Some(&bundle_dir),
-            probe_runner: Some(&probe_runner),
-            authenticode_verifier: Some(&accept_all),
-        },
-    );
-    assert!(ok1.ready && ok1.integrity && ok1.filesystem && ok1.network && ok1.process);
-    assert_eq!(spawns.load(Ordering::SeqCst), 1);
-
-    // Cached within 30s TTL -> no extra spawn.
-    let ok2 = probe_windows_sandbox_bundle(
-        &helper,
-        &probe_env,
-        WindowsProbeOptions {
-            now_ms: Some(20_000),
-            cwd: Some(&bundle_dir),
-            probe_runner: Some(&probe_runner),
-            authenticode_verifier: Some(&accept_all),
-        },
-    );
-    assert_eq!(ok2, ok1);
-    assert_eq!(spawns.load(Ordering::SeqCst), 1);
-
-    // Expired at +30s -> re-probes.
-    let _ = probe_windows_sandbox_bundle(
-        &helper,
-        &probe_env,
-        WindowsProbeOptions {
-            now_ms: Some(10_000 + WINDOWS_SANDBOX_PROBE_TTL_MS),
-            cwd: Some(&bundle_dir),
-            probe_runner: Some(&probe_runner),
-            authenticode_verifier: Some(&accept_all),
-        },
-    );
-    assert_eq!(spawns.load(Ordering::SeqCst), 2);
-    reset_windows_probe_cache_for_tests();
-
-    // 4. Windows command builder & v5 setup marker newest-wins sync.
+    // 4. Windows MXC self-exec CLI wrapper command builder & arg parser round-trip.
+    let (_tmp, bundle_dir) = canonical_temp_dir("cowork-win-mxc-");
+    let self_bin = Path::new(r"C:\Program Files\Cowork\cowork-server.exe");
     let win_cmd = build_windows_sandbox_command(
-        &helper,
         &SandboxCommand::new("pwsh.exe", ["-NoProfile", "-Command", "Get-Location"]),
         &SandboxPolicy::DangerFullAccess {
             network: Some(false),
         },
         &bundle_dir,
-        &probe_env,
+        &win_env,
+        WindowsMxcBuildOptions {
+            sandbox_exec_path: Some(self_bin),
+            read_allowed_roots: &[PathBuf::from(r"C:\shared\skills")],
+            read_denied_roots: &[PathBuf::from(r"C:\Users\Alice\.ssh")],
+            supports_deny_paths: true,
+            ..Default::default()
+        },
     );
+    assert_eq!(win_cmd.file, self_bin.to_string_lossy());
     assert_eq!(win_cmd.sandbox, SandboxType::Windows);
     assert_eq!(
         win_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
         Some("windows-sandbox")
     );
+    assert_eq!(
+        win_cmd
+            .env
+            .get("COWORK_SANDBOX_NETWORK_DISABLED")
+            .map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(win_cmd.args[0], "__sandbox-exec");
+    assert_eq!(win_cmd.args[1], "--windows-mxc");
     assert!(
         win_cmd
             .args
@@ -541,167 +485,33 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
     );
     assert!(!win_cmd.args.iter().any(|a| a == "--allow-network"));
 
-    let sbx_home = bundle_dir.join("sbx-home");
-    let codex_home = bundle_dir.join("codex-home");
-    let ambient_codex = bundle_dir.join(".codex");
-    std::fs::create_dir_all(sbx_home.join(".sandbox")).unwrap();
-    std::fs::create_dir_all(sbx_home.join(".sandbox-secrets")).unwrap();
-    std::fs::create_dir_all(ambient_codex.join(".sandbox")).unwrap();
-    std::fs::create_dir_all(ambient_codex.join(".sandbox-secrets")).unwrap();
-
-    // Legacy `users: [...]` array or wrong version MUST be rejected by v5 setup state validator.
-    std::fs::write(
-        sbx_home.join(".sandbox").join("setup_marker.json"),
-        r#"{"version":5,"created_at":"2026-03-20T12:00:00Z"}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        sbx_home.join(".sandbox-secrets").join("sandbox_users.json"),
-        r#"{"version":5,"users":[{"username":"legacy_array_must_not_sync"}]}"#,
-    )
-    .unwrap();
-    sync_codex_windows_sandbox_setup_state(&codex_home, &probe_env, Some("win32"));
-    assert!(
-        !codex_home
-            .join(".sandbox-secrets")
-            .join("sandbox_users.json")
-            .exists(),
-        "legacy users[] schema without offline/online objects must not be treated as valid v5 state"
-    );
-
-    // Wrong `sandbox_users.json` version (`version: 4`) MUST also be rejected.
-    std::fs::write(
-        sbx_home.join(".sandbox-secrets").join("sandbox_users.json"),
-        r#"{"version":4,"offline":{"username":"CodexSandboxOffline","password":"p1"},"online":{"username":"CodexSandboxOnline","password":"p2"}}"#,
-    )
-    .unwrap();
-    sync_codex_windows_sandbox_setup_state(&codex_home, &probe_env, Some("win32"));
-    assert!(
-        !codex_home
-            .join(".sandbox-secrets")
-            .join("sandbox_users.json")
-            .exists(),
-        "mismatched sandbox_users.json version must not be synced"
-    );
-
-    // Real v5 schema `{ version: 5, offline: { username, password }, online: { username, password } }` syncs cleanly!
-    std::fs::write(
-        sbx_home.join(".sandbox-secrets").join("sandbox_users.json"),
-        r#"{"version":5,"offline":{"username":"CodexSandboxOffline","password":"dpapi-offline-v5"},"online":{"username":"CodexSandboxOnline","password":"dpapi-online-v5"}}"#,
-    )
-    .unwrap();
-    // Poisoned ambient `~/.codex` with newer timestamp MUST NEVER be read!
-    std::fs::write(
-        ambient_codex.join(".sandbox").join("setup_marker.json"),
-        r#"{"version":5,"created_at":"2099-01-01T00:00:00Z"}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        ambient_codex
-            .join(".sandbox-secrets")
-            .join("sandbox_users.json"),
-        r#"{"version":5,"offline":{"username":"POISONED","password":"x"},"online":{"username":"POISONED","password":"y"}}"#,
-    )
-    .unwrap();
-
-    sync_codex_windows_sandbox_setup_state(&codex_home, &probe_env, Some("win32"));
-    let synced_users = std::fs::read_to_string(
-        codex_home
-            .join(".sandbox-secrets")
-            .join("sandbox_users.json"),
-    )
-    .unwrap();
-    assert!(synced_users.contains("dpapi-offline-v5"));
-    assert!(!synced_users.contains("POISONED"));
-
-    // 5. `probe_windows_sandbox_bundle` AND `build_windows_sandbox_command` automatically sync
-    //    between `<cowork_home>` and `<cowork_home>/auth/codex-cli` BEFORE probing / building!
-    let auto_home_root = bundle_dir.join("auto-home-root");
-    let auto_cowork_home = auto_home_root.join(".cowork");
-    let auto_app_server_home = auto_cowork_home.join("auth").join("codex-cli");
-    std::fs::create_dir_all(auto_app_server_home.join(".sandbox")).unwrap();
-    std::fs::create_dir_all(auto_app_server_home.join(".sandbox-secrets")).unwrap();
-    std::fs::write(
-        auto_app_server_home
-            .join(".sandbox")
-            .join("setup_marker.json"),
-        r#"{"version":5,"created_at":"2026-07-01T00:00:00Z"}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        auto_app_server_home
-            .join(".sandbox-secrets")
-            .join("sandbox_users.json"),
-        r#"{"version":5,"offline":{"username":"CodexSandboxOffline","password":"from-app-server"},"online":{"username":"CodexSandboxOnline","password":"from-app-server"}}"#,
-    )
-    .unwrap();
-
-    let mut auto_env = probe_env.clone();
-    auto_env.remove("COWORK_WIN_SANDBOX_HOME");
-    auto_env.insert(
-        "COWORK_HOME_OVERRIDE".to_owned(),
-        auto_home_root.to_string_lossy().into_owned(),
-    );
-    reset_windows_probe_cache_for_tests();
-    let seen_before_probe = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let seen_clone = std::sync::Arc::clone(&seen_before_probe);
-    let check_cowork_home = auto_cowork_home.clone();
-    let checking_probe_runner = move |_helper: &Path,
-                                      _args: &[String]|
-          -> Result<ProbeCommandOutput, String> {
-        if check_cowork_home
-            .join(".sandbox-secrets")
-            .join("sandbox_users.json")
-            .is_file()
-            && check_cowork_home
-                .join(".sandbox")
-                .join("setup_marker.json")
-                .is_file()
-        {
-            seen_clone.store(true, Ordering::SeqCst);
-        }
-        Ok(ProbeCommandOutput {
-            exit_code: Some(0),
-            signaled: false,
-            stdout: r#"{"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":false}"#.to_owned(),
-            stderr: String::new(),
-        })
+    let parsed_mxc = parse_sandbox_exec_args(&win_cmd.args[1..]).expect("parse --windows-mxc");
+    let ParsedSandboxExecArgs::WindowsMxc {
+        mode,
+        read_allowed_roots,
+        read_denied_roots,
+        allow_network,
+        command,
+        ..
+    } = parsed_mxc
+    else {
+        panic!("expected ParsedSandboxExecArgs::WindowsMxc");
     };
-    let probe_res = probe_windows_sandbox_bundle(
-        &helper,
-        &auto_env,
-        WindowsProbeOptions {
-            now_ms: Some(99_000),
-            cwd: Some(&bundle_dir),
-            probe_runner: Some(&checking_probe_runner),
-            authenticode_verifier: Some(&accept_all),
-        },
+    assert_eq!(mode, "network-only");
+    assert!(!allow_network);
+    assert_eq!(read_allowed_roots, vec![PathBuf::from(r"C:\shared\skills")]);
+    assert_eq!(
+        read_denied_roots,
+        vec![PathBuf::from(r"C:\Users\Alice\.ssh")]
     );
-    assert!(probe_res.ready);
-    assert!(
-        seen_before_probe.load(Ordering::SeqCst),
-        "probe_windows_sandbox_bundle must sync v5 setup state BEFORE invoking helper probe!"
-    );
-
-    // Wipe `<cowork_home>` setup files and verify `build_windows_sandbox_command` also restores them before building.
-    std::fs::remove_dir_all(auto_cowork_home.join(".sandbox")).unwrap();
-    std::fs::remove_dir_all(auto_cowork_home.join(".sandbox-secrets")).unwrap();
-    let _ = build_windows_sandbox_command(
-        &helper,
-        &SandboxCommand::new("pwsh.exe", ["-NoProfile", "-Command", "Get-Location"]),
-        &SandboxPolicy::ReadOnly { network: false },
-        &bundle_dir,
-        &auto_env,
-    );
-    assert!(
-        std::fs::read_to_string(
-            auto_cowork_home
-                .join(".sandbox-secrets")
-                .join("sandbox_users.json")
-        )
-        .unwrap_or_default()
-        .contains("from-app-server"),
-        "build_windows_sandbox_command must sync v5 setup state before returning command!"
+    assert_eq!(
+        command,
+        vec![
+            "pwsh.exe".to_owned(),
+            "-NoProfile".to_owned(),
+            "-Command".to_owned(),
+            "Get-Location".to_owned(),
+        ]
     );
 }
 

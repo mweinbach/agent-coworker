@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,12 +11,6 @@ import {
   resolveStagedBinariesDir,
   SIDECAR_MANIFEST_NAME,
 } from "../src/platform/sidecar";
-import {
-  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
-  WINDOWS_SANDBOX_HELPER_NAME,
-  WINDOWS_SANDBOX_SETUP_NAME,
-} from "../src/platform/windowsSandboxHelper";
 import {
   normalizeSemverVersion,
   type UpdaterFragment,
@@ -122,14 +115,6 @@ const VALID_PACKAGER_FORMATS = new Set<PackagerFormat>([
   "deb",
   "appimage",
 ]);
-
-const WINDOWS_SANDBOX_FILES = [
-  WINDOWS_SANDBOX_HELPER_NAME,
-  WINDOWS_SANDBOX_SETUP_NAME,
-  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-] as const;
-
-const WINDOWS_SANDBOX_MANIFEST_NAME = WINDOWS_SANDBOX_HASH_MANIFEST_NAME;
 
 const TELEMETRY_BUILD_ENV_KEYS = [
   "COWORK_SENTRY_DSN",
@@ -376,6 +361,9 @@ export function resolveCargoBuildEnv(
     }
   }
   out.COWORK_APP_VERSION = normalizeSemverVersion(version);
+  if (baseEnv.MXC_TELEMETRY_COMPONENT_PATH === undefined) {
+    out.MXC_TELEMETRY_COMPONENT_PATH = "";
+  }
 
   const pubkey =
     baseEnv.COWORK_UPDATER_PUBKEY?.trim() ||
@@ -675,7 +663,6 @@ export function buildPackagerConfig(params: {
   binariesDir: string;
   stagedDir: string;
   targetTriple: string;
-  includeWindowsSandbox: boolean;
   macosSigningIdentity?: string;
   windowsCertificateThumbprint?: string;
   windowsSignCommand?: string;
@@ -731,12 +718,6 @@ export function buildPackagerConfig(params: {
     { src: path.join(stagedDir, "binaries"), target: "binaries" },
     { src: path.join(stagedDir, "tray"), target: "tray" },
   ];
-  if (params.includeWindowsSandbox) {
-    resources.push({
-      src: path.join(stagedDir, "windows-sandbox"),
-      target: "windows-sandbox",
-    });
-  }
 
   const rawBinaries = Array.isArray(baseConfig.binaries)
     ? (baseConfig.binaries as Array<{ path: string; main: boolean }>)
@@ -802,7 +783,7 @@ export async function stageRuntimeResources(params: {
   platform: NodeJS.Platform;
   rustTarget: string;
   stagedDir: string;
-}): Promise<{ hasWindowsSandbox: boolean }> {
+}): Promise<void> {
   const { root, platform, rustTarget, stagedDir } = params;
   await rmrf(stagedDir);
   await fs.mkdir(stagedDir, { recursive: true });
@@ -847,73 +828,11 @@ export async function stageRuntimeResources(params: {
     await fs.chmod(sidecarDest, 0o755);
   }
 
-  let hasWindowsSandbox = false;
-  if (platform === "win32") {
-    const winSandboxDest = path.join(stagedDir, "windows-sandbox");
-    const sandboxManifestSrc = path.join(stagedBinariesSrcDir, WINDOWS_SANDBOX_MANIFEST_NAME);
-    if (await pathExists(sandboxManifestSrc)) {
-      await fs.mkdir(winSandboxDest, { recursive: true });
-      await fs.copyFile(
-        sandboxManifestSrc,
-        path.join(stagedBinariesDir, WINDOWS_SANDBOX_MANIFEST_NAME),
-      );
-      await fs.copyFile(
-        sandboxManifestSrc,
-        path.join(winSandboxDest, WINDOWS_SANDBOX_MANIFEST_NAME),
-      );
-      for (const fileName of WINDOWS_SANDBOX_FILES) {
-        const helperSrc = path.join(stagedBinariesSrcDir, fileName);
-        if (await pathExists(helperSrc)) {
-          await fs.copyFile(helperSrc, path.join(stagedBinariesDir, fileName));
-          await fs.copyFile(helperSrc, path.join(winSandboxDest, fileName));
-        }
-      }
-      hasWindowsSandbox = true;
-    }
-  }
-
   const packagingIconsDir = path.join(root, "crates", "cowork-desktop", "packaging", "icons");
   const stagedTrayDir = path.join(stagedDir, "tray");
   await fs.mkdir(stagedTrayDir, { recursive: true });
   await fs.copyFile(path.join(packagingIconsDir, "icon.png"), path.join(stagedTrayDir, "icon.png"));
   await fs.copyFile(path.join(packagingIconsDir, "icon.ico"), path.join(stagedTrayDir, "icon.ico"));
-
-  return { hasWindowsSandbox };
-}
-
-async function sha256File(filePath: string): Promise<string> {
-  const data = await fs.readFile(filePath);
-  return createHash("sha256").update(data).digest("hex");
-}
-
-export async function refreshWindowsSandboxHashManifests(stagedDir: string): Promise<void> {
-  for (const dir of [path.join(stagedDir, "binaries"), path.join(stagedDir, "windows-sandbox")]) {
-    const manifestPath = path.join(dir, WINDOWS_SANDBOX_MANIFEST_NAME);
-    if (!(await pathExists(manifestPath))) {
-      continue;
-    }
-    const parsed = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
-      schemaVersion?: number;
-      rustTarget?: string;
-      files?: Record<string, string>;
-    };
-    if (parsed.schemaVersion !== 1 || !parsed.files || typeof parsed.files !== "object") {
-      throw new Error(`Unsupported Windows sandbox hash manifest at ${manifestPath}.`);
-    }
-    const nextFiles: Record<string, string> = {};
-    for (const fileName of Object.keys(parsed.files)) {
-      const targetPath = path.join(dir, fileName);
-      if (!(await pathExists(targetPath))) {
-        throw new Error(`Missing staged Windows sandbox binary: ${targetPath}`);
-      }
-      nextFiles[fileName] = await sha256File(targetPath);
-    }
-    await fs.writeFile(
-      manifestPath,
-      `${JSON.stringify({ schemaVersion: 1, rustTarget: parsed.rustTarget, files: nextFiles }, null, 2)}\n`,
-      "utf8",
-    );
-  }
 }
 
 async function findCargoPackagerBin(env: NodeJS.ProcessEnv): Promise<string> {
@@ -982,13 +901,11 @@ async function prepareWindowsAuthenticode(
   const resolved = resolveWindowsSigningInput(env);
   if (resolved.kind === "command" && resolved.signCommand) {
     await signStagedWindowsExesWithCommand(stagedDir, resolved.signCommand);
-    await refreshWindowsSandboxHashManifests(stagedDir);
     return { signCommand: resolved.signCommand };
   }
 
   if (resolved.kind === "thumbprint" && resolved.thumbprint) {
     await signStagedWindowsExesWithThumbprint(stagedDir, resolved.thumbprint, env);
-    await refreshWindowsSandboxHashManifests(stagedDir);
     return { thumbprint: resolved.thumbprint };
   }
 
@@ -1031,7 +948,6 @@ async function prepareWindowsAuthenticode(
 
   try {
     await signStagedWindowsExesWithThumbprint(stagedDir, thumbprint, env);
-    await refreshWindowsSandboxHashManifests(stagedDir);
   } catch (err) {
     await removeWindowsCert(thumbprint, pfxPath);
     throw err;
@@ -1058,9 +974,8 @@ async function removeWindowsCert(thumbprint: string, pfxPath: string): Promise<v
 
 async function listStagedWindowsExes(stagedDir: string): Promise<string[]> {
   const candidates: string[] = [];
-  for (const subdir of ["binaries", "windows-sandbox"]) {
-    const dir = path.join(stagedDir, subdir);
-    if (!(await pathExists(dir))) continue;
+  const dir = path.join(stagedDir, "binaries");
+  if (await pathExists(dir)) {
     for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
       if (entry.isFile() && entry.name.toLowerCase().endsWith(".exe")) {
         candidates.push(path.join(dir, entry.name));
@@ -1314,7 +1229,7 @@ export async function runRunePackage(
   await rmrf(outDir);
   await fs.mkdir(outDir, { recursive: true });
 
-  const { hasWindowsSandbox } = await stageRuntimeResources({
+  await stageRuntimeResources({
     root,
     platform: cli.platform,
     rustTarget,
@@ -1382,7 +1297,6 @@ export async function runRunePackage(
       binariesDir: packagerBinariesDir,
       stagedDir,
       targetTriple: rustTarget,
-      includeWindowsSandbox: hasWindowsSandbox,
       macosSigningIdentity: macSigning.signingIdentity,
       windowsCertificateThumbprint,
       windowsSignCommand,

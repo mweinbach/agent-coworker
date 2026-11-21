@@ -10,7 +10,6 @@ import {
   SIDECAR_MANIFEST_NAME,
 } from "../src/platform/sidecar";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/windowsSandboxHelper";
 import {
   copyDir,
   pathExists,
@@ -18,10 +17,12 @@ import {
   resolveRustCompileTarget,
   rmrf,
 } from "./releaseBuildUtils";
-import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
-import { buildWorkspaceReleaseBinaries } from "./workspaceRustBinary";
+import {
+  buildWindowsRustCommandRunner,
+  buildWorkspaceReleaseBinaries,
+} from "./workspaceRustBinary";
 
-const CACHE_VERSION = 17;
+const CACHE_VERSION = 18;
 // Maintainer-only research notes that live next to the model prompts but are never loaded at runtime.
 const PROMPTS_EXCLUDED_PATHS = [path.join("system-models", ".research")];
 
@@ -34,7 +35,6 @@ type DesktopResourcesCache = {
   configFingerprint: string;
   skillsFingerprint: string;
   workflowsFingerprint: string;
-  windowsSandboxHelperFingerprint: string | null;
 };
 
 async function walkForFingerprint(
@@ -67,12 +67,6 @@ async function walkForFingerprint(
         continue;
       }
       const childPath = path.join(target, entry.name);
-      if (
-        entry.isDirectory() &&
-        path.relative(relativeTo, childPath) === path.join("crates", "cowork-win-sandbox")
-      ) {
-        continue;
-      }
       await walkForFingerprint(childPath, relativeTo, acc);
     }
     return;
@@ -121,9 +115,7 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
-      typeof parsed.workflowsFingerprint !== "string" ||
-      (parsed.windowsSandboxHelperFingerprint !== null &&
-        typeof parsed.windowsSandboxHelperFingerprint !== "string")
+      typeof parsed.workflowsFingerprint !== "string"
     ) {
       return null;
     }
@@ -209,11 +201,7 @@ function resolveSidecarInputs(root: string): string[] {
 }
 
 async function main() {
-  const rawArgs = process.argv.slice(2);
-  const forceWindowsSandboxBuild = rawArgs.includes("--force-windows-sandbox-build");
-  const target = resolveBuildTarget(
-    rawArgs.filter((arg) => arg !== "--force-windows-sandbox-build"),
-  );
+  const target = resolveBuildTarget(process.argv.slice(2));
   const { platform, arch } = target;
   const rustTarget = resolveRustCompileTarget(platform, arch);
   const root = path.resolve(import.meta.dirname, "..");
@@ -233,20 +221,6 @@ async function main() {
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
   const workflowsFingerprint = await fingerprintInputs([workflowsSrc], root);
-  const windowsSandboxHelperInputs =
-    platform === "win32"
-      ? [
-          path.join(root, "crates", "cowork-win-sandbox", "Cargo.toml"),
-          path.join(root, "crates", "cowork-win-sandbox", "Cargo.lock"),
-          path.join(root, "crates", "cowork-win-sandbox", "build.rs"),
-          path.join(root, "crates", "cowork-win-sandbox", "codex-windows-sandbox-setup.manifest"),
-          path.join(root, "crates", "cowork-win-sandbox", "src"),
-          path.join(root, "crates", "cowork-win-sandbox", "vendor"),
-        ]
-      : null;
-  const windowsSandboxHelperFingerprint = windowsSandboxHelperInputs
-    ? await fingerprintInputs(windowsSandboxHelperInputs, root)
-    : null;
   const sidecarFingerprint = await fingerprintInputs(
     sidecarInputs,
     root,
@@ -259,7 +233,6 @@ async function main() {
     resolvePackagedSidecarFilename(platform, arch),
   );
   const sidecarManifestPath = path.join(desktopBinariesDir, SIDECAR_MANIFEST_NAME);
-  const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
   const sidecarNeedsBuild =
     cache?.platform !== platform ||
     cache?.arch !== arch ||
@@ -349,16 +322,6 @@ async function main() {
     nextFingerprint: workflowsFingerprint,
   });
 
-  await syncWindowsSandboxHelper({
-    root,
-    dest: windowsSandboxHelperDest,
-    previousFingerprint: cache?.windowsSandboxHelperFingerprint ?? null,
-    nextFingerprint: windowsSandboxHelperFingerprint,
-    platform,
-    arch,
-    forceBuild: forceWindowsSandboxBuild,
-  });
-
   await writeCache(cachePath, {
     version: CACHE_VERSION,
     platform,
@@ -368,7 +331,6 @@ async function main() {
     configFingerprint,
     skillsFingerprint,
     workflowsFingerprint,
-    windowsSandboxHelperFingerprint,
   });
 
   await pruneStaleDesktopBinaryArtifacts(desktopBinariesDir);
@@ -424,6 +386,5 @@ export const __internal = {
   resolveSidecarInputs,
   fingerprintInputs,
   clearDesktopSidecarArtifacts,
-  syncWindowsSandboxHelper,
   pruneStaleDesktopBinaryArtifacts,
 };

@@ -1,11 +1,8 @@
 {
   "scripts/open_xcode_workspace.ts": 1,
-  "scripts/releaseBuildUtils.ts": 3,
-  "scripts/winSandboxPrebuilt.ts": 2,
+  "scripts/releaseBuildUtils.ts": 2,
   "src/utils/workspacePath.ts": 1,
-  "test/build-desktop-resources.test.ts": 9,
   "test/cli-entrypoint.test.ts": 2,
   "test/harness.raw-loop-validation.test.ts": 2,
-  "test/win-sandbox-prebuilt.test.ts": 2,
   "test/workspace-path.test.ts": 1
 }

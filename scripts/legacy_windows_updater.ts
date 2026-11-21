@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hostPlatform } from "../src/platform/host";
 import { isSidecarManifest, SIDECAR_MANIFEST_NAME } from "../src/platform/sidecar";
-import { WINDOWS_SANDBOX_HASH_MANIFEST_NAME } from "../src/platform/windowsSandboxHelper";
 import { normalizeSemverVersion } from "./desktop_rune_release_manifest";
 import { pathExists, resolveRustCompileTarget } from "./releaseBuildUtils";
 
@@ -56,7 +55,6 @@ export interface WindowsProducerVerificationResult {
   channelYmlPath?: string;
   mainBinaryPe?: PeInspectionResult;
   sidecarPe?: PeInspectionResult;
-  verifiedSandboxFiles: string[];
   verifiedSignatures: WindowsAuthenticodeResult[];
 }
 
@@ -575,11 +573,6 @@ export async function verifyWindowsAuthenticodeSignature(
   };
 }
 
-async function sha256HexFile(filePath: string): Promise<string> {
-  const bytes = await fs.readFile(filePath);
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 export async function verifyWindowsReleaseOutputs(params: {
   outDir: string;
   version: string;
@@ -654,7 +647,6 @@ export async function verifyWindowsReleaseOutputs(params: {
   }
 
   let sidecarPe: PeInspectionResult | undefined;
-  const verifiedSandboxFiles: string[] = [];
 
   if (params.stagedDir) {
     const rustTarget = resolveRustCompileTarget("win32", arch);
@@ -689,41 +681,6 @@ export async function verifyWindowsReleaseOutputs(params: {
       );
     }
     filesToVerifyAuthenticode.push(sidecarPath);
-
-    for (const dirName of ["binaries", "windows-sandbox"] as const) {
-      const dirPath = path.join(params.stagedDir, dirName);
-      const manifestPath = path.join(dirPath, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
-      if (!(await pathExists(manifestPath))) continue;
-      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
-        schemaVersion?: number;
-        files?: Record<string, string>;
-      };
-      if (manifest.schemaVersion !== 1 || !manifest.files || typeof manifest.files !== "object") {
-        throw new Error(`Invalid Windows sandbox hash manifest at ${manifestPath}.`);
-      }
-      for (const [fileName, expectedHash] of Object.entries(manifest.files)) {
-        const helperPath = path.join(dirPath, fileName);
-        if (!(await pathExists(helperPath))) {
-          throw new Error(`Missing staged Windows sandbox helper: ${helperPath}`);
-        }
-        const helperPe = await inspectPeMachine(helperPath);
-        if (helperPe.arch === "unknown") {
-          throw new Error(
-            `Windows sandbox helper ${helperPath} is not a recognized PE executable.`,
-          );
-        }
-        const actualHash = await sha256HexFile(helperPath);
-        if (actualHash.toLowerCase() !== expectedHash.toLowerCase()) {
-          throw new Error(
-            `Sandbox hash mismatch for ${helperPath} (actual=${actualHash}, expected=${expectedHash}).`,
-          );
-        }
-        verifiedSandboxFiles.push(`${dirName}/${fileName}`);
-        if (fileName.toLowerCase().endsWith(".exe")) {
-          filesToVerifyAuthenticode.push(helperPath);
-        }
-      }
-    }
   }
 
   const verifiedSignatures: WindowsAuthenticodeResult[] = [];
@@ -744,7 +701,6 @@ export async function verifyWindowsReleaseOutputs(params: {
     channelYmlPath: params.verifyChannelYmlPath,
     mainBinaryPe,
     sidecarPe,
-    verifiedSandboxFiles,
     verifiedSignatures,
   };
 }

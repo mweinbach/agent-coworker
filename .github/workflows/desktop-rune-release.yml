@@ -343,6 +343,8 @@ jobs:
           WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
           # Required for running appimagetool inside containers without FUSE
           APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Keep Windows release builds of `mxc-sdk` unrouted (no bundled Microsoft telemetry DLL)
+          MXC_TELEMETRY_COMPONENT_PATH: ""
         run: |
           set -euo pipefail
           args=(
@@ -407,7 +409,7 @@ jobs:
 
           bun scripts/legacy_mac_updater.ts "${verify_args[@]}"
 
-      - name: Verify Windows PE architecture, sandbox hashes, legacy channel, and Authenticode
+      - name: Verify Windows PE architecture, legacy channel, and Authenticode
         if: matrix.platform == 'win32'
         shell: pwsh
         env:
@@ -672,6 +674,7 @@ jobs:
           WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
           WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
           WINDOWS_SIGN_PUBLISHER: ${{ vars.WINDOWS_SIGN_PUBLISHER }}
+          MXC_TELEMETRY_COMPONENT_PATH: ""
         run: |
           set -euo pipefail
           bun run desktop:rune:package -- \

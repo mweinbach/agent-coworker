@@ -53,9 +53,8 @@ use crate::jsonrpc_turn::{
 use crate::registry::{LiveSession, ServerRuntimeState, overlay_session_provider_options};
 
 /// Points a turn's tool env (`HOME`, `COWORK_HOME_OVERRIDE`) at the user home. Both name the
-/// home, not the Cowork dir: consumers such as Windows sandbox detection
-/// (`windows_sandbox_home`) and `resolve_home_dir` append `.cowork` themselves, so passing
-/// `~/.cowork` would make Bash look for sandbox setup under `~/.cowork/.cowork`.
+/// home, not the Cowork dir: consumers such as `windows_sandbox_home` and `resolve_home_dir`
+/// append `.cowork` themselves, so passing `~/.cowork` would resolve `~/.cowork/.cowork`.
 pub(crate) fn insert_tool_home_env(env: &mut HashMap<String, String>, homedir: &Path) {
     let home = homedir.to_string_lossy().into_owned();
     env.insert("HOME".to_owned(), home.clone());

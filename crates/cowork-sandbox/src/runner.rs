@@ -42,6 +42,10 @@ pub struct SandboxExecutionRequest {
     pub extra_env: HashMap<String, String>,
     pub capabilities_override: Option<SandboxCapabilities>,
     pub sandbox_exec_path: Option<PathBuf>,
+    /// Additional directories/files the sandboxed command must be able to read on deny-by-default
+    /// backends (Windows MXC ProcessContainer), e.g. discovered skill/plugin roots, a materialized
+    /// shell temp script, or a LibreOffice input document outside `cwd`.
+    pub read_allowed_roots: Vec<PathBuf>,
     /// Credential directories/files (`~/.ssh`, `~/.cowork/auth`, `<ws>/.cowork/auth`, ...) the
     /// sandboxed command may neither read nor write, applied to every policy the OS backend
     /// wraps (including danger-full-access with `network: false`). Commands that run fully
@@ -66,6 +70,7 @@ impl SandboxExecutionRequest {
             extra_env: HashMap::new(),
             capabilities_override: None,
             sandbox_exec_path: None,
+            read_allowed_roots: Vec::new(),
             read_denied_roots: Vec::new(),
         }
     }
@@ -139,6 +144,7 @@ impl SandboxRunner {
                 capabilities: req.capabilities_override.as_ref(),
                 sandbox_exec_path: req.sandbox_exec_path.as_deref(),
                 env_source: Some(env_src),
+                read_allowed_roots: &req.read_allowed_roots,
                 read_denied_roots: &req.read_denied_roots,
             },
         );
@@ -233,6 +239,52 @@ impl SandboxRunner {
         }
         remove_env(&mut child_env, PARENT_MANAGED_ENV_VAR, platform);
 
+        #[cfg(windows)]
+        let raw = if sandbox_used == SandboxType::Windows
+            && !unsandboxed
+            && req.sandbox_exec_path.is_none()
+        {
+            let supports_deny_paths = req
+                .capabilities_override
+                .as_ref()
+                .map(|c| c.windows_supports_deny_paths)
+                .unwrap_or_else(|| {
+                    self.manager
+                        .detect_capabilities(Some(platform), Some(env_src))
+                        .windows_supports_deny_paths
+                });
+            crate::windows::run_windows_mxc_in_process(
+                &req.command,
+                &req.policy,
+                &req.cwd,
+                &child_env,
+                env_src,
+                crate::windows::WindowsMxcBuildOptions {
+                    sandbox_exec_path: None,
+                    cache: Some(self.manager.protected_paths_cache()),
+                    read_allowed_roots: &req.read_allowed_roots,
+                    read_denied_roots: &req.read_denied_roots,
+                    supports_deny_paths,
+                    extra_tool_readonly_paths: &[],
+                },
+                req.timeout,
+                req.max_buffer,
+                cancel_rx,
+            )
+            .await
+        } else {
+            spawn_isolated_process_group(
+                &exec_file,
+                &exec_args,
+                &req.cwd,
+                &child_env,
+                req.timeout,
+                req.max_buffer,
+                cancel_rx,
+            )
+            .await
+        };
+        #[cfg(not(windows))]
         let raw = spawn_isolated_process_group(
             &exec_file,
             &exec_args,
@@ -295,11 +347,11 @@ impl SandboxRunner {
     }
 }
 
-struct RawProcessOutcome {
-    stdout: String,
-    stderr: String,
-    exit_code: i32,
-    error_code: Option<SandboxErrorCode>,
+pub(crate) struct RawProcessOutcome {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) exit_code: i32,
+    pub(crate) error_code: Option<SandboxErrorCode>,
 }
 
 async fn spawn_isolated_process_group(
@@ -491,7 +543,7 @@ async fn spawn_isolated_process_group(
     finish_outcome(&out_buf, &err_buf, &overflow, exit_code, error_code)
 }
 
-fn finish_outcome(
+pub(crate) fn finish_outcome(
     out_buf: &Mutex<Vec<u8>>,
     err_buf: &Mutex<Vec<u8>>,
     overflow: &OverflowSignal,
@@ -515,7 +567,7 @@ fn finish_outcome(
 
 /// How long readers may keep draining after a timeout/cancel/overflow kill before they are
 /// aborted.
-const KILLED_PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
+pub(crate) const KILLED_PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -523,7 +575,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Awaits a reader task unless its result was already consumed. A `JoinHandle` panics when
 /// polled again after completion, and the completion future may have joined one reader before
 /// a timeout/cancel/overflow branch won the race.
-async fn join_reader(task: &mut tokio::task::JoinHandle<()>) {
+pub(crate) async fn join_reader(task: &mut tokio::task::JoinHandle<()>) {
     if !task.is_finished() {
         let _ = task.await;
     }
@@ -531,20 +583,20 @@ async fn join_reader(task: &mut tokio::task::JoinHandle<()>) {
 
 /// Set by a reader whose stream exceeded `max_buffer` (TS `terminate("overflow")`).
 #[derive(Default)]
-struct OverflowSignal {
+pub(crate) struct OverflowSignal {
     hit: AtomicBool,
-    notify: tokio::sync::Notify,
+    pub(crate) notify: tokio::sync::Notify,
 }
 
 impl OverflowSignal {
-    fn trip(&self) {
+    pub(crate) fn trip(&self) {
         self.hit.store(true, Ordering::SeqCst);
         // `notify_one` stores a permit, so the wake-up survives even if the select has not
         // polled its `notified()` branch yet.
         self.notify.notify_one();
     }
 
-    fn tripped(&self) -> bool {
+    pub(crate) fn tripped(&self) -> bool {
         self.hit.load(Ordering::SeqCst)
     }
 }

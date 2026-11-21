@@ -1410,44 +1410,37 @@ fn core_composer_drafts_from_document(
         return out;
     };
     let valid_threads: HashSet<&str> = threads.iter().map(|t| t.id.as_str()).collect();
-    let preferred_new_key = active_new_chat_draft_doc_key(workspaces, active_workspace_id);
-    let mut best_new_draft: Option<(u8, i64, ComposerDraft)> = None;
+    let valid_project_workspaces: HashSet<&str> = workspaces
+        .iter()
+        .filter(|w| !w.one_off_chat && !w.archived)
+        .map(|w| w.id.as_str())
+        .collect();
+    let mut legacy_unscoped_new: Option<ComposerDraft> = None;
 
     for (raw_key, val) in raw_drafts {
-        let Some((draft, updated_ms)) = core_composer_draft_from_value(val) else {
+        let Some((draft, _updated_ms)) = core_composer_draft_from_value(val) else {
             continue;
         };
         if let Some(tid) = raw_key.strip_prefix("thread:") {
             if valid_threads.contains(tid) {
                 out.insert(tid.to_string(), draft);
             }
-        } else if raw_key == "__new__"
-            || raw_key == "new:oneOff"
-            || raw_key.starts_with("new:project:")
-        {
-            let priority = if raw_key == &preferred_new_key {
-                3
-            } else if raw_key == "__new__" {
-                2
-            } else {
-                1
-            };
-            let replace = match &best_new_draft {
-                None => true,
-                Some((cur_pri, cur_ts, _)) => {
-                    priority > *cur_pri || (priority == *cur_pri && updated_ms >= *cur_ts)
-                }
-            };
-            if replace {
-                best_new_draft = Some((priority, updated_ms, draft));
+        } else if let Some(ws_id) = raw_key.strip_prefix("new:project:") {
+            if valid_project_workspaces.contains(ws_id) {
+                out.insert(raw_key.clone(), draft);
             }
+        } else if raw_key == "new:oneOff" {
+            out.insert("new:oneOff".to_string(), draft);
+        } else if raw_key == "__new__" {
+            legacy_unscoped_new = Some(draft);
         } else if valid_threads.contains(raw_key.as_str()) {
             out.entry(raw_key.clone()).or_insert(draft);
         }
     }
 
-    if let Some((_, _, draft)) = best_new_draft {
-        out.insert("__new__".to_string(), draft);
+    if let Some(draft) = legacy_unscoped_new {
+        let fallback_key = active_new_chat_draft_doc_key(workspaces, active_workspace_id);
+        out.entry(fallback_key).or_insert(draft);
     }
 
     out
@@ -1511,33 +1504,41 @@ fn sync_composer_drafts_into_document(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let active_new_key = active_new_chat_draft_doc_key(
-        &snapshot.workspaces,
-        snapshot.active_workspace_id.as_deref(),
-    );
     let valid_threads: HashSet<&str> = snapshot.threads.iter().map(|t| t.id.as_str()).collect();
+    let valid_project_workspaces: HashSet<&str> = snapshot
+        .workspaces
+        .iter()
+        .filter(|w| !w.one_off_chat && !w.archived)
+        .map(|w| w.id.as_str())
+        .collect();
 
     let mut next_map = Map::new();
-    // Preserve saved new-chat drafts belonging to other workspaces so switching workspaces does
-    // not erase their persisted drafts.
-    for (k, v) in &existing_map {
-        if (k.starts_with("new:project:") || k == "new:oneOff") && k != &active_new_key {
-            next_map.insert(k.clone(), v.clone());
-        }
-    }
-
     for (key, draft) in &snapshot.composer_drafts {
         if is_empty_composer_draft(draft) {
             continue;
         }
-        if key == "__new__" {
-            let serialized = serialize_composer_draft_value(
-                draft,
-                existing_map
-                    .get(&active_new_key)
-                    .or_else(|| existing_map.get("__new__")),
+        if let Some(ws_id) = key.strip_prefix("new:project:") {
+            if valid_project_workspaces.contains(ws_id) {
+                let serialized = serialize_composer_draft_value(draft, existing_map.get(key));
+                next_map.insert(key.clone(), serialized);
+            }
+        } else if key == "new:oneOff" {
+            let serialized = serialize_composer_draft_value(draft, existing_map.get(key));
+            next_map.insert(key.clone(), serialized);
+        } else if key == "__new__" {
+            let fallback_key = active_new_chat_draft_doc_key(
+                &snapshot.workspaces,
+                snapshot.active_workspace_id.as_deref(),
             );
-            next_map.insert(active_new_key.clone(), serialized);
+            if !next_map.contains_key(&fallback_key) {
+                let serialized = serialize_composer_draft_value(
+                    draft,
+                    existing_map
+                        .get(&fallback_key)
+                        .or_else(|| existing_map.get("__new__")),
+                );
+                next_map.insert(fallback_key, serialized);
+            }
         } else if valid_threads.contains(key.as_str()) {
             let doc_key = format!("thread:{key}");
             let serialized = serialize_composer_draft_value(

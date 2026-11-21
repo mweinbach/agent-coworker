@@ -2395,12 +2395,35 @@ impl AppState {
         self.thread_runtime_by_id.get(id)
     }
 
+    pub fn landing_composer_key(&self) -> String {
+        if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
+            return "new:oneOff".to_string();
+        }
+        match self.resolve_landing_target_workspace() {
+            Some(ws) if ws.one_off_chat => "new:oneOff".to_string(),
+            Some(ws) => format!("new:project:{}", ws.id),
+            None => "new:oneOff".to_string(),
+        }
+    }
+
+    fn resolve_composer_draft_key(&self, key: &str) -> String {
+        if key == "__new__" {
+            self.landing_composer_key()
+        } else {
+            key.to_string()
+        }
+    }
+
+    fn is_new_chat_composer_key(key: &str) -> bool {
+        key == "__new__" || key == "new:oneOff" || key.starts_with("new:project:")
+    }
+
     pub fn composer_key(&self) -> String {
         self.nav
             .current()
             .active_thread_id
             .clone()
-            .unwrap_or_else(|| "__new__".to_string())
+            .unwrap_or_else(|| self.landing_composer_key())
     }
 
     /// Emits a `NativeCommand` to the attached native worker (or test buffer).
@@ -4063,7 +4086,29 @@ impl AppState {
         &mut self,
         key: &str,
     ) -> Option<(String, String, Option<String>)> {
-        let ws_id = if key == "__new__" {
+        let ws_id = if let Some(project_ws_id) = key.strip_prefix("new:project:") {
+            self.workspaces
+                .iter()
+                .find(|w| w.id == project_ws_id && !w.archived)
+                .map(|w| w.id.clone())
+                .or_else(|| {
+                    self.resolve_landing_target_workspace()
+                        .map(|w| w.id.clone())
+                })
+        } else if key == "new:oneOff" {
+            let existing = self
+                .workspaces
+                .iter()
+                .find(|w| w.one_off_chat && !w.archived)
+                .map(|w| w.id.clone());
+            Some(existing.unwrap_or_else(|| {
+                let id = self.ensure_or_create_quick_chat_workspace();
+                if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
+                    self.landing_workspace_id = Some(id.clone());
+                }
+                id
+            }))
+        } else if key == "__new__" {
             if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
                 let id = self.ensure_or_create_quick_chat_workspace();
                 self.landing_workspace_id = Some(id.clone());
@@ -4107,6 +4152,8 @@ impl AppState {
 
     fn ingest_composer_paths(&mut self, key: &str, paths: Vec<PathBuf>) {
         const MAX_INLINE_BYTES: u64 = 10 * 1024 * 1024;
+        let resolved_key = self.resolve_composer_draft_key(key);
+        let key = resolved_key.as_str();
         for path in paths {
             let filename = path
                 .file_name()
@@ -4317,11 +4364,30 @@ impl AppState {
                     .filter(|t| !t.draft && !t.archived && t.source_task_id.is_none())
                     .map(|t| t.id.clone())
                     .collect();
-                self.composer_drafts = persisted
-                    .composer_drafts
-                    .into_iter()
-                    .filter(|(k, _)| k == "__new__" || valid_draft_threads.contains(k))
+                let valid_project_workspaces: HashSet<String> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| !w.one_off_chat && !w.archived)
+                    .map(|w| w.id.clone())
                     .collect();
+                let mut restored_drafts = HashMap::new();
+                let mut legacy_unscoped = None;
+                for (k, draft) in persisted.composer_drafts {
+                    if k == "new:oneOff"
+                        || k.strip_prefix("new:project:")
+                            .is_some_and(|ws_id| valid_project_workspaces.contains(ws_id))
+                        || valid_draft_threads.contains(&k)
+                    {
+                        restored_drafts.insert(k, draft);
+                    } else if k == "__new__" {
+                        legacy_unscoped = Some(draft);
+                    }
+                }
+                if let Some(draft) = legacy_unscoped {
+                    let landing_key = self.landing_composer_key();
+                    restored_drafts.entry(landing_key).or_insert(draft);
+                }
+                self.composer_drafts = restored_drafts;
                 let active_composer_key = self.composer_key();
                 if let Some(draft) = self.composer_drafts.get(&active_composer_key)
                     && !draft.text.is_empty()
@@ -4354,6 +4420,7 @@ impl AppState {
                 mime_type,
                 result,
             } => {
+                let key = self.resolve_composer_draft_key(&key);
                 if let Some(count) = self.pending_upload_stages_by_key.get_mut(&key) {
                     *count = count.saturating_sub(1);
                     if *count == 0 {
@@ -5319,10 +5386,14 @@ impl AppState {
                 self.sync_preview_ui();
             }
             ShellAction::SetLandingWorkspace(ws_id) => {
+                let old_key = self.composer_key();
                 self.landing_workspace_id = ws_id;
+                let new_key = self.composer_key();
+                self.sync_composer_edit_across_switch(&old_key, &new_key);
                 self.refresh_creation_preflight();
             }
             ShellAction::SelectLandingQuickChat => {
+                let old_key = self.composer_key();
                 let existing = self
                     .workspaces
                     .iter()
@@ -5330,6 +5401,8 @@ impl AppState {
                     .map(|w| w.id.clone());
                 self.landing_workspace_id =
                     Some(existing.unwrap_or_else(|| ONE_OFF_LANDING_SENTINEL.to_string()));
+                let new_key = self.composer_key();
+                self.sync_composer_edit_across_switch(&old_key, &new_key);
                 self.refresh_creation_preflight();
             }
             ShellAction::RequestExternalUrl(url) => {
@@ -5823,6 +5896,7 @@ impl AppState {
                 self.dispatch(Action::Navigate(NavAction::OpenThread(thread_id)));
             }
             ChatAction::SetComposerDraftText { key, text } => {
+                let key = self.resolve_composer_draft_key(&key);
                 if key == self.composer_key() && self.composer_edit.text != text {
                     self.composer_edit = TextEdit::new(&text);
                 }
@@ -5833,7 +5907,8 @@ impl AppState {
                 provider,
                 model,
             } => {
-                let is_landing_draft = key == "__new__";
+                let key = self.resolve_composer_draft_key(&key);
+                let is_landing_draft = Self::is_new_chat_composer_key(&key);
                 let (prev_provider, prev_model) = {
                     let existing_draft = self.composer_drafts.get(&key);
                     let thread_fallback = (!is_landing_draft)
@@ -5874,12 +5949,14 @@ impl AppState {
                 }
             }
             ChatAction::SetComposerDraftEffort { key, effort } => {
+                let key = self.resolve_composer_draft_key(&key);
                 self.composer_drafts
                     .entry(key)
                     .or_default()
                     .reasoning_effort = effort;
             }
             ChatAction::AddComposerAttachment { key, attachment } => {
+                let key = self.resolve_composer_draft_key(&key);
                 self.composer_drafts
                     .entry(key)
                     .or_default()
@@ -5887,6 +5964,7 @@ impl AppState {
                     .push(attachment);
             }
             ChatAction::RemoveComposerAttachment { key, index } => {
+                let key = self.resolve_composer_draft_key(&key);
                 if let Some(draft) = self.composer_drafts.get_mut(&key)
                     && index < draft.attachments.len()
                 {
@@ -5899,6 +5977,7 @@ impl AppState {
                 }
             }
             ChatAction::ClearComposerDraft(key) => {
+                let key = self.resolve_composer_draft_key(&key);
                 self.composer_drafts.remove(&key);
                 self.attachment_previews_by_key.remove(&key);
                 if key == self.composer_key() {
@@ -6448,16 +6527,18 @@ impl AppState {
         attachments: Vec<TurnAttachmentInputPart>,
         references: Vec<TurnReference>,
     ) {
-        let draft_key = thread_id.as_deref().unwrap_or("__new__");
+        let draft_key = thread_id
+            .clone()
+            .unwrap_or_else(|| self.landing_composer_key());
         if self
             .pending_upload_stages_by_key
-            .get(draft_key)
+            .get(&draft_key)
             .copied()
             .unwrap_or(0)
             > 0
         {
             self.report_composer_attachment_error(
-                draft_key,
+                &draft_key,
                 "Large attachment is still copying into workspace uploads. Try sending again in a moment."
                     .to_string(),
             );
@@ -6640,16 +6721,13 @@ impl AppState {
                 let target_ws = self.resolve_landing_target_workspace();
                 let (chosen_provider, chosen_model) = match self.resolve_submission_model(
                     None,
-                    self.composer_drafts.get("__new__"),
+                    self.composer_drafts.get(&draft_key),
                     target_ws,
                 ) {
                     Some((provider, model)) => (Some(provider), Some(model)),
                     None if !self.provider_catalog.is_empty() => {
                         let message = "No configured provider or model is available. Connect a provider in Settings before sending.".to_string();
-                        let draft = self
-                            .composer_drafts
-                            .entry("__new__".to_string())
-                            .or_default();
+                        let draft = self.composer_drafts.entry(draft_key.clone()).or_default();
                         draft.submission_error = Some(message.clone());
                         let toast_ts = self.wall_clock_secs();
                         self.toasts.retain(|t| t.key != "no-configured-model");
@@ -6693,7 +6771,7 @@ impl AppState {
                 let title = derive_thread_title(&trimmed);
                 let draft_reasoning_effort = self
                     .composer_drafts
-                    .get("__new__")
+                    .get(&draft_key)
                     .and_then(|d| d.reasoning_effort);
                 let draft_thread = ThreadRecord {
                     id: draft_thread_id.clone(),
@@ -6719,13 +6797,13 @@ impl AppState {
                     },
                     false,
                 );
-                if let Some(draft) = self.composer_drafts.get_mut("__new__") {
+                if let Some(draft) = self.composer_drafts.get_mut(&draft_key) {
                     draft.text.clear();
                     draft.attachments.clear();
                     draft.references.clear();
                     draft.submission_error = None;
                 }
-                self.attachment_previews_by_key.remove("__new__");
+                self.attachment_previews_by_key.remove(&draft_key);
                 self.composer_edit = TextEdit::new("");
                 self.nav.update(NavigationPatch {
                     view: Some(ViewId::Chat),
@@ -6764,11 +6842,12 @@ impl AppState {
 
     fn resolve_creation_preflight_request(&self) -> Option<(String, CreationPreflightParams)> {
         let cur = self.nav.current();
+        let landing_key = self.landing_composer_key();
         if cur.view == ViewId::Task && cur.active_task_id.is_none() {
             let ws = self
                 .active_workspace()
                 .or_else(|| self.resolve_landing_target_workspace())?;
-            let draft = self.composer_drafts.get("__new__");
+            let draft = self.composer_drafts.get(&landing_key);
             let resolved = self.resolve_submission_model(None, draft, Some(ws));
             return Some((
                 ws.id.clone(),
@@ -6781,7 +6860,7 @@ impl AppState {
             ));
         }
 
-        let draft = self.composer_drafts.get("__new__");
+        let draft = self.composer_drafts.get(&landing_key);
         if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
             let transport_ws = self
                 .resolve_management_workspace_id()
@@ -9005,8 +9084,9 @@ impl AppState {
         if self.latest_creation_preflight_rpc_id.is_none()
             && self.workspaces.iter().all(|w| w.id != workspace_id)
         {
+            let landing_key = self.landing_composer_key();
             let resolved =
-                self.resolve_submission_model(None, self.composer_drafts.get("__new__"), None);
+                self.resolve_submission_model(None, self.composer_drafts.get(&landing_key), None);
             let preflight_params = CreationPreflightParams {
                 kind: "chat".to_string(),
                 cwd: cwd.clone(),
@@ -12135,10 +12215,20 @@ impl AppState {
             .filter(|t| !t.draft && !t.archived && t.source_task_id.is_none())
             .map(|t| t.id.as_str())
             .collect();
+        let valid_project_workspaces: HashSet<&str> = self
+            .workspaces
+            .iter()
+            .filter(|w| !w.one_off_chat && !w.archived)
+            .map(|w| w.id.as_str())
+            .collect();
         drafts
             .into_iter()
             .filter(|(k, d)| {
-                (k == "__new__" || valid_threads.contains(k.as_str()))
+                let valid_key = k == "new:oneOff"
+                    || k.strip_prefix("new:project:")
+                        .is_some_and(|ws_id| valid_project_workspaces.contains(ws_id))
+                    || valid_threads.contains(k.as_str());
+                valid_key
                     && (!d.text.is_empty()
                         || !d.attachments.is_empty()
                         || !d.references.is_empty()
@@ -18005,7 +18095,7 @@ mod tests {
         assert!(
             state
                 .composer_drafts
-                .get("__new__")
+                .get(&state.landing_composer_key())
                 .and_then(|d| d.submission_error.as_deref())
                 .is_some()
         );
@@ -19120,7 +19210,7 @@ mod tests {
         assert!(
             state
                 .composer_drafts
-                .get("__new__")
+                .get("new:project:ws-1")
                 .is_none_or(|d| d.attachments.is_empty())
         );
         let stage_cmd = state
@@ -19143,7 +19233,7 @@ mod tests {
                 _ => None,
             })
             .expect("expected StageComposerUpload command");
-        assert_eq!(stage_cmd.0, "__new__");
+        assert_eq!(stage_cmd.0, "new:project:ws-1");
         assert_eq!(stage_cmd.1, "ws-1");
         assert_eq!(stage_cmd.2, big_file);
         assert_eq!(stage_cmd.3, "dataset.csv");
@@ -19153,12 +19243,12 @@ mod tests {
             .join("User Uploads")
             .join("dataset.csv");
         state.apply_store_event(StoreEvent::ComposerUploadStaged {
-            key: "__new__".to_string(),
+            key: "new:project:ws-1".to_string(),
             filename: "dataset.csv".to_string(),
             mime_type: "text/csv".to_string(),
             result: Ok(staged_path.clone()),
         });
-        let draft = state.composer_drafts.get("__new__").unwrap();
+        let draft = state.composer_drafts.get("new:project:ws-1").unwrap();
         assert_eq!(draft.attachments.len(), 1);
         match &draft.attachments[0] {
             TurnAttachmentInputPart::UploadedFile { filename, path, .. } => {
@@ -20369,7 +20459,7 @@ mod tests {
         assert_eq!(
             loaded
                 .composer_drafts
-                .get("__new__")
+                .get("new:project:ws-1")
                 .map(|d| (d.text.as_str(), d.reasoning_effort)),
             Some(("new chat draft", Some(ReasoningEffortValue::Max)))
         );
@@ -20410,10 +20500,112 @@ mod tests {
         assert_eq!(
             reloaded
                 .composer_drafts
-                .get("__new__")
+                .get("new:project:ws-1")
                 .map(|d| d.text.as_str()),
             Some("new chat draft")
         );
+    }
+
+    #[test]
+    fn workspace_keyed_new_chat_drafts_do_not_overwrite_each_other_across_switches() {
+        let multi_doc = json!({
+            "version": 2,
+            "workspaces": [
+                { "id": "ws-a", "name": "Alpha", "path": "/tmp/alpha", "workspaceKind": "project" },
+                { "id": "ws-b", "name": "Beta", "path": "/tmp/beta", "workspaceKind": "project" }
+            ],
+            "threads": [
+                { "id": "th-b", "workspaceId": "ws-b", "title": "Beta chat" }
+            ],
+            "activeWorkspaceId": "ws-a",
+            "activeThreadId": null,
+            "composerDrafts": {
+                "new:project:ws-a": {
+                    "text": "draft for alpha",
+                    "attachments": [
+                        { "filename": "alpha.txt", "mimeType": "text/plain", "contentBase64": "QQ==" }
+                    ],
+                    "references": []
+                },
+                "new:project:ws-b": {
+                    "text": "draft for beta",
+                    "attachments": [],
+                    "references": []
+                },
+                "new:oneOff": {
+                    "text": "quick chat draft",
+                    "attachments": [],
+                    "references": []
+                }
+            }
+        });
+
+        let loaded = crate::native::persistence::core_state_from_document(&multi_doc);
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::NativeReady {
+            persisted: Box::new(loaded),
+            is_packaged: false,
+            system_dark: None,
+        });
+        assert_eq!(state.composer_key(), "new:project:ws-a");
+        assert_eq!(state.composer_edit.text, "draft for alpha");
+
+        // Opening an existing thread in Beta switches `active_workspace_id` to `ws-b` and
+        // persists state — Alpha's draft MUST stay on `new:project:ws-a` and MUST NOT clobber Beta.
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-b".to_string())));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-b"));
+        state.persist_state_for_shutdown();
+
+        let saved_snapshot = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                NativeCommand::SavePersistedState(snap) => Some(snap.as_ref().clone()),
+                _ => None,
+            })
+            .expect("expected SavePersistedState");
+        let saved_doc = crate::native::persistence::merge_core_snapshot_into_document(
+            multi_doc,
+            &saved_snapshot,
+        );
+        assert_eq!(
+            saved_doc["composerDrafts"]["new:project:ws-a"]["text"],
+            json!("draft for alpha")
+        );
+        assert_eq!(
+            saved_doc["composerDrafts"]["new:project:ws-a"]["attachments"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            saved_doc["composerDrafts"]["new:project:ws-b"]["text"],
+            json!("draft for beta")
+        );
+        assert_eq!(
+            saved_doc["composerDrafts"]["new:oneOff"]["text"],
+            json!("quick chat draft")
+        );
+
+        // Navigating back to landing and switching between Alpha, Beta, and Quick Chat restores
+        // each workspace's distinct draft into `composer_edit`.
+        state.dispatch(Action::Navigate(NavAction::OpenNewChat {
+            workspace_id: Some("ws-b".to_string()),
+        }));
+        assert_eq!(state.composer_key(), "new:project:ws-b");
+        assert_eq!(state.composer_edit.text, "draft for beta");
+
+        state.dispatch(Action::Shell(ShellAction::SelectLandingQuickChat));
+        assert_eq!(state.composer_key(), "new:oneOff");
+        assert_eq!(state.composer_edit.text, "quick chat draft");
+
+        state.dispatch(Action::Shell(ShellAction::SetLandingWorkspace(Some(
+            "ws-a".to_string(),
+        ))));
+        assert_eq!(state.composer_key(), "new:project:ws-a");
+        assert_eq!(state.composer_edit.text, "draft for alpha");
     }
 
     #[test]

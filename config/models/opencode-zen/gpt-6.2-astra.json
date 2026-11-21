@@ -1,0 +1,11 @@
+{
+  "id": "gpt-6.2-astra",
+  "provider": "opencode-zen",
+  "displayName": "GPT-6.2 Astra",
+  "knowledgeCutoff": "May 18, 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

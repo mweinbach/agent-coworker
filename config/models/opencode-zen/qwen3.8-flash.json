@@ -1,0 +1,11 @@
+{
+  "id": "qwen3.8-flash",
+  "provider": "opencode-zen",
+  "displayName": "Qwen3.8 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "xhigh"],
+  "isDefault": false
+}

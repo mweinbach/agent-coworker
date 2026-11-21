@@ -1,0 +1,16 @@
+{
+  "id": "gemini-4-argon",
+  "provider": "google",
+  "displayName": "Gemini 4 Argon",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3.1-pro-preview.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "dynamic",
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
+  },
+  "supportedReasoningEfforts": ["dynamic", "low", "medium", "high"],
+  "isDefault": false
+}

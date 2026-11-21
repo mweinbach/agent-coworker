@@ -2576,10 +2576,11 @@ fn tool_providers_section(s: &AppState, ws: &WorkspaceRecord, k: &Kit, t: &Theme
             Button::new("Configure in Models")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)
-                .on_press(|s: &mut AppState| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
-                        SettingsPageId::Models,
-                    ))));
+                .on_press_tx(|s: &mut AppState, tx| {
+                    s.dispatch_tx(
+                        Action::Navigate(NavAction::OpenSettings(Some(SettingsPageId::Models))),
+                        tx,
+                    );
                 })
                 .build(k),
         );

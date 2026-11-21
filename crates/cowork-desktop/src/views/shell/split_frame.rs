@@ -57,6 +57,7 @@ impl ShellToolbar {
             .center_y()
             .window_drag()
             .motion(motion)
+            .transition(Transition::none())
             .child(
                 row()
                     .key("leading")
@@ -64,6 +65,7 @@ impl ShellToolbar {
                     .center_y()
                     .shrink()
                     .min_w(0.0)
+                    .transition(Transition::none())
                     .children(self.leading),
             )
             .child(el().key("spacer").grow(1.0).a11y_hidden())
@@ -72,6 +74,7 @@ impl ShellToolbar {
                     .key("trailing")
                     .gap(4.0)
                     .center_y()
+                    .transition(Transition::none())
                     .children(self.trailing),
             )
     }
@@ -316,6 +319,7 @@ impl FullBleedSplit {
             .min_w(0.0)
             .min_h(0.0)
             .h_full()
+            .transition(Transition::none())
             .child(self.main.grow(1.0).min_h(0.0));
 
         let mut below = row()
@@ -324,6 +328,7 @@ impl FullBleedSplit {
             .grow(1.0)
             .min_h(0.0)
             .motion(width_spring)
+            .transition(Transition::none())
             .child(main_pane);
         if let Some(insp) = inspector_el {
             below = below.child(insp);
@@ -336,10 +341,16 @@ impl FullBleedSplit {
             .h_full()
             .fill(k.c.bg_base)
             .motion(width_spring)
+            .transition(Transition::none())
             .child(toolbar_el)
             .child(below);
 
-        let mut split = row().key("split").w_full().h_full().motion(width_spring);
+        let mut split = row()
+            .key("split")
+            .w_full()
+            .h_full()
+            .motion(width_spring)
+            .transition(Transition::none());
         if let Some(sb) = sidebar_el {
             split = split.child(sb);
         }
@@ -356,6 +367,7 @@ impl FullBleedSplit {
             .w_full()
             .h_full()
             .fill(root_fill)
+            .transition(Transition::none())
             .child(split.child(main_column));
         if let Some(toggle) = floating_toggle {
             root = root.child(toggle);
@@ -413,6 +425,7 @@ fn build_floating_toggle(
         .gap(CLUSTER_GAP)
         .center_y()
         .absolute(x, y)
+        .transition(Transition::none())
         .child(toggle_el)
         .children(nav)
 }
@@ -436,7 +449,8 @@ fn build_pane_slot(
         .w(w)
         .h_full()
         .pl(pane.padding[0])
-        .pr(pane.padding[1]);
+        .pr(pane.padding[1])
+        .transition(Transition::none());
 
     if leading {
         let titlebar = row()
@@ -469,6 +483,7 @@ fn build_pane_slot(
             .w_full()
             .grow(1.0)
             .min_h(0.0)
+            .transition(Transition::none())
             .child(pane.content.w_full().h_full()),
     );
     let divider = if leading {
@@ -493,6 +508,7 @@ fn build_pane_slot(
         .w(s.shown_width())
         .h_full()
         .motion(width_spring)
+        .transition(Transition::none())
         .clip_soft(0.0);
 
     if leading {
@@ -505,6 +521,7 @@ fn build_pane_slot(
                 el().key("sidebar-vibrancy-tint")
                     .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                     .motion(width_spring)
+                    .transition(Transition::none())
                     .fill(k.c.bg_deep.alpha(alpha))
                     .a11y_hidden(),
             );

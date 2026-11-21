@@ -255,7 +255,7 @@ impl ModelRegistry {
             }
             m.provider_options_defaults =
                 self.unbundled_provider_option_defaults(provider, &cached.id, Some(&cached));
-            if uses_generic_discovery_cache(provider) {
+            if uses_generic_discovery_cache(provider) || provider == ProviderName::ClaudeCli {
                 if !cached.display_name.trim().is_empty() {
                     m.display_name = cached.display_name.clone();
                 }
@@ -389,7 +389,7 @@ pub fn is_openai_reasoning_effort(value: &str) -> bool {
 fn reasoning_provider_option_keys(provider: ProviderName) -> &'static [&'static str] {
     match provider {
         ProviderName::Openai => &["reasoningEffort", "reasoningSummary"],
-        ProviderName::Google => &["thinkingConfig"],
+        ProviderName::Google => &["thinkingConfig", "reasoningEffort"],
         ProviderName::Anthropic => &["thinking", "effort"],
         _ => &[],
     }
@@ -400,15 +400,16 @@ fn reasoning_provider_option_keys(provider: ProviderName) -> &'static [&'static 
 fn custom_model_id_likely_supports_reasoning(provider: ProviderName, model_id: &str) -> bool {
     if provider == ProviderName::Openai {
         let id = model_id.trim().to_ascii_lowercase();
-        return id.starts_with('o') || id.starts_with("gpt-5");
+        return id.starts_with('o') || id.starts_with("gpt-5") || id.starts_with("gpt-6");
     }
     false
 }
 
-/// `customModelIdLikelySupportsGpt5Params`: verbosity is GPT-5-family only.
+/// `customModelIdLikelySupportsGpt5Params`: verbosity is GPT-5 / GPT-6 family only.
 fn custom_model_id_likely_supports_gpt5_params(provider: ProviderName, model_id: &str) -> bool {
     if provider == ProviderName::Openai {
-        return model_id.trim().to_ascii_lowercase().starts_with("gpt-5");
+        let id = model_id.trim().to_ascii_lowercase();
+        return id.starts_with("gpt-5") || id.starts_with("gpt-6");
     }
     true
 }
@@ -621,7 +622,10 @@ pub fn normalize_child_routing_config(
 fn is_runtime_catalog_provider(provider: ProviderName) -> bool {
     matches!(
         provider,
-        ProviderName::Lmstudio | ProviderName::Bedrock | ProviderName::CodexCli
+        ProviderName::Lmstudio
+            | ProviderName::Bedrock
+            | ProviderName::CodexCli
+            | ProviderName::ClaudeCli
     )
 }
 
@@ -788,7 +792,10 @@ mod tests {
         let kept =
             discovered_provider_option_defaults(ProviderName::Google, &reasoning, &google_defaults);
         assert!(kept.contains_key("thinkingConfig"));
-        assert!(!kept.contains_key("reasoningEffort"));
+        assert_eq!(
+            kept.get("reasoningEffort").and_then(Value::as_str),
+            Some("high")
+        );
 
         let available_only = discovered("gemini-y", efforts(None, &["low"]));
         assert!(discovered_model_supports_reasoning(&available_only));
@@ -801,6 +808,7 @@ mod tests {
             let pruned =
                 discovered_provider_option_defaults(ProviderName::Google, &plain, &google_defaults);
             assert!(!pruned.contains_key("thinkingConfig"));
+            assert!(!pruned.contains_key("reasoningEffort"));
         }
 
         // Custom (non-discovered) Google ids keep the conservative no-reasoning heuristic.

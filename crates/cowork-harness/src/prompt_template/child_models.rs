@@ -42,6 +42,10 @@ const KIMI26_TURBO: &str =
 
 /// Legacy `CHILD_AGENT_MODEL_INFO_BY_KEY`: `(provider, modelId, bestFor)`.
 const CHILD_AGENT_MODEL_BEST_FOR: &[(&str, &str, &str)] = &[
+    ("openai", "gpt-6.2-astra", FRONTIER_CODING),
+    ("openai", "gpt-6.2-sol", BALANCED_GENERAL),
+    ("openai", "gpt-6.1-terra", BALANCED_GENERAL),
+    ("openai", "gpt-6-luna", FAST_GENERAL),
     ("openai", "gpt-5.5", FRONTIER_CODING),
     ("openai", "gpt-5.4-pro", DEEP_REASONING),
     ("openai", "gpt-5.4", FRONTIER_CODING),
@@ -50,6 +54,12 @@ const CHILD_AGENT_MODEL_BEST_FOR: &[(&str, &str, &str)] = &[
     ("openai", "gpt-5.2", BALANCED_GENERAL),
     ("openai", "gpt-5.2-pro", DEEP_REASONING),
     ("openai", "gpt-5-mini", FAST_GENERAL),
+    ("codex-cli", "gpt-6.2-astra", FRONTIER_CODING),
+    ("codex-cli", "gpt-6.2-sol", BALANCED_GENERAL),
+    ("codex-cli", "gpt-6.1-sol", FRONTIER_CODING),
+    ("codex-cli", "gpt-6.1-terra", BALANCED_GENERAL),
+    ("codex-cli", "gpt-6-astra", FRONTIER_CODING),
+    ("codex-cli", "gpt-6-luna", FAST_GENERAL),
     ("codex-cli", "gpt-5.5", FRONTIER_CODING),
     ("codex-cli", "gpt-5.6-sol", FRONTIER_CODING),
     ("codex-cli", "gpt-5.6-terra", BALANCED_GENERAL),
@@ -57,12 +67,41 @@ const CHILD_AGENT_MODEL_BEST_FOR: &[(&str, &str, &str)] = &[
     ("codex-cli", "gpt-5.4", FRONTIER_CODING),
     ("codex-cli", "gpt-5.4-mini", FRONTIER_CODING),
     ("codex-cli", "gpt-5.3-codex-spark", FAST_GENERAL),
+    ("anthropic", "claude-fable-5-2", CLAUDE_FRONTIER),
+    ("anthropic", "claude-fable-5-1", CLAUDE_FRONTIER),
+    ("anthropic", "claude-fable-5", CLAUDE_FRONTIER),
+    ("anthropic", "claude-opus-5-5", CLAUDE_FRONTIER),
+    ("anthropic", "claude-opus-5", CLAUDE_FRONTIER),
+    ("anthropic", "claude-sonnet-5-5", CLAUDE_BALANCED),
+    ("anthropic", "claude-sonnet-5", CLAUDE_BALANCED),
+    ("anthropic", "claude-haiku-5-5", CLAUDE_FAST),
     ("anthropic", "claude-opus-4-6", CLAUDE_FRONTIER),
     ("anthropic", "claude-opus-4-7", CLAUDE_FRONTIER),
     ("anthropic", "claude-opus-4-8", CLAUDE_FRONTIER),
     ("anthropic", "claude-sonnet-4-6", CLAUDE_BALANCED),
     ("anthropic", "claude-sonnet-4-5", CLAUDE_BALANCED),
     ("anthropic", "claude-haiku-4-5", CLAUDE_FAST),
+    ("claude-cli", "claude-fable-5-2", CLAUDE_FRONTIER),
+    ("claude-cli", "claude-fable-5-1", CLAUDE_FRONTIER),
+    ("claude-cli", "claude-fable-5", CLAUDE_FRONTIER),
+    ("claude-cli", "claude-opus-5-5", CLAUDE_FRONTIER),
+    ("claude-cli", "claude-opus-5", CLAUDE_FRONTIER),
+    ("claude-cli", "claude-sonnet-5-5", CLAUDE_BALANCED),
+    ("claude-cli", "claude-sonnet-5", CLAUDE_BALANCED),
+    ("claude-cli", "claude-haiku-5-5", CLAUDE_FAST),
+    (
+        "bedrock",
+        "global.anthropic.claude-opus-5-5",
+        CLAUDE_FRONTIER,
+    ),
+    (
+        "bedrock",
+        "global.anthropic.claude-sonnet-5-5",
+        CLAUDE_BALANCED,
+    ),
+    ("bedrock", "global.anthropic.claude-haiku-5-5", CLAUDE_FAST),
+    ("bedrock", "global.amazon.nova-2-lite-v1:0", FAST_GENERAL),
+    ("bedrock", "amazon.nova-pro-v1:0", BALANCED_GENERAL),
     ("bedrock", "amazon.nova-lite-v1:0", FAST_GENERAL),
     ("bedrock", "amazon.nova-micro-v1:0", FAST_GENERAL),
     (
@@ -70,6 +109,13 @@ const CHILD_AGENT_MODEL_BEST_FOR: &[(&str, &str, &str)] = &[
         "anthropic.claude-3-5-haiku-20241022-v1:0",
         CLAUDE_FAST,
     ),
+    ("google", "gemini-4-neon", GEMINI_PRO),
+    ("google", "gemini-4-hydrogen", GEMINI_PRO),
+    ("google", "gemini-4-argon", GEMINI_PRO),
+    ("google", "gemini-4-carbon", GEMINI_PRO),
+    ("google", "gemini-3.8-flash", GEMINI_FLASH),
+    ("google", "gemini-3.6-flash", GEMINI_FLASH),
+    ("google", "gemini-3.5-flash-lite", GEMINI_FLASH),
     ("google", "gemini-3.1-pro-preview", GEMINI_PRO),
     ("google", "gemini-3.1-pro-preview-customtools", GEMINI_PRO),
     ("google", "gemini-3-flash-preview", GEMINI_FLASH),
@@ -264,7 +310,10 @@ fn likely_provider_matches(provider: ProviderName, model_id: &str) -> Option<boo
         return None;
     }
     if normalized.starts_with("claude-") {
-        return Some(provider == ProviderName::Anthropic);
+        return Some(matches!(
+            provider,
+            ProviderName::Anthropic | ProviderName::ClaudeCli
+        ));
     }
     if normalized.starts_with("gemini-") {
         return Some(provider == ProviderName::Google);

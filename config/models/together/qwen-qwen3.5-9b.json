@@ -1,0 +1,10 @@
+{
+  "id": "Qwen/Qwen3.5-9B",
+  "provider": "together",
+  "displayName": "Qwen3.5 9B",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

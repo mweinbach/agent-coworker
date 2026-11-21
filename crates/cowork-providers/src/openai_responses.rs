@@ -440,32 +440,102 @@ fn is_astra_model(model_id: &str) -> bool {
     lower == "gpt-6-astra" || lower.starts_with("gpt-6-astra-")
 }
 
-fn supports_xhigh_reasoning(model_id: &str) -> bool {
+fn is_gpt_62_model(model_id: &str) -> bool {
     let lower = model_id.trim().to_ascii_lowercase();
-    lower == "gpt-5.5"
-        || lower.starts_with("gpt-5.5-")
-        || lower == "gpt-5.4"
-        || lower.starts_with("gpt-5.4-")
-        || lower == "gpt-5.2"
-        || lower.starts_with("gpt-5.2-")
+    lower == "gpt-6.2" || lower.starts_with("gpt-6.2-")
+}
+
+fn is_gpt_62_astra_or_sol(model_id: &str) -> bool {
+    let lower = model_id.trim().to_ascii_lowercase();
+    lower.starts_with("gpt-6.2-astra") || lower.starts_with("gpt-6.2-sol")
+}
+
+fn is_gpt_61_sol(model_id: &str) -> bool {
+    model_id
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("gpt-6.1-sol")
+}
+
+fn is_pro_model(model_id: &str) -> bool {
+    let lower = model_id.trim().to_ascii_lowercase();
+    lower.starts_with("gpt-") && lower.contains("-pro")
+}
+
+fn requires_reasoning(model_id: &str) -> bool {
+    is_astra_model(model_id) || is_gpt_61_sol(model_id) || is_gpt_62_astra_or_sol(model_id)
+}
+
+fn supports_none_reasoning(model_id: &str) -> bool {
+    let lower = model_id.trim().to_ascii_lowercase();
+    if requires_reasoning(model_id) || is_pro_model(model_id) {
+        return false;
+    }
+    lower.starts_with("gpt-5.2")
+        || lower.starts_with("gpt-5.4")
+        || lower.starts_with("gpt-5.5")
+        || lower.starts_with("gpt-5.6")
         || lower.starts_with("gpt-6")
 }
 
+fn supports_minimal_reasoning(model_id: &str) -> bool {
+    let lower = model_id.trim().to_ascii_lowercase();
+    lower == "gpt-5"
+        || lower.starts_with("gpt-5-")
+        || lower.starts_with("gpt-5.1")
+        || lower.starts_with("gpt-5.3-codex")
+}
+
+fn supports_xhigh_reasoning(model_id: &str) -> bool {
+    let lower = model_id.trim().to_ascii_lowercase();
+    lower.starts_with("gpt-5.2")
+        || lower.starts_with("gpt-5.4")
+        || lower.starts_with("gpt-5.5")
+        || lower.starts_with("gpt-5.6")
+        || lower.starts_with("gpt-6")
+}
+
+fn supports_max_reasoning(model_id: &str) -> bool {
+    let lower = model_id.trim().to_ascii_lowercase();
+    lower.starts_with("gpt-5.6") || lower.starts_with("gpt-6")
+}
+
 fn normalize_openai_reasoning_effort(raw: Option<&str>, model_id: &str) -> Option<String> {
-    let is_astra = is_astra_model(model_id);
     let normalized = raw
         .map(str::trim)
         .filter(|s| !s.is_empty())?
         .to_ascii_lowercase();
 
-    // GPT-6 Astra (`agent_docs/astra.md`): `none` is unsupported; migrate `none` or `minimal` -> `low`.
-    if is_astra && (normalized == "none" || normalized == "minimal") {
+    // Pro models start at medium; Astra, GPT-6.1 Sol, and GPT-6.2 Astra/Sol reject none.
+    if is_pro_model(model_id) && matches!(normalized.as_str(), "none" | "minimal" | "low") {
+        return Some("medium".to_string());
+    }
+    if requires_reasoning(model_id) && matches!(normalized.as_str(), "none" | "minimal") {
         return Some("low".to_string());
     }
     if normalized == "none" {
-        return None;
+        if supports_none_reasoning(model_id) {
+            return Some("none".to_string());
+        }
+        // GPT-5/5-mini do not support none; preserve their non-reasoning behavior where possible.
+        return supports_minimal_reasoning(model_id).then(|| "minimal".to_string());
     }
-    if normalized == "xhigh" || normalized == "max" {
+    if normalized == "minimal" && !supports_minimal_reasoning(model_id) {
+        return Some("low".to_string());
+    }
+    if normalized == "max" {
+        return Some(
+            if supports_max_reasoning(model_id) {
+                "max"
+            } else if supports_xhigh_reasoning(model_id) {
+                "xhigh"
+            } else {
+                "high"
+            }
+            .to_string(),
+        );
+    }
+    if normalized == "xhigh" {
         return Some(if supports_xhigh_reasoning(model_id) {
             "xhigh".to_string()
         } else {
@@ -538,7 +608,22 @@ fn build_openai_responses_payload(
     previous_response_id: Option<&str>,
 ) -> Value {
     let is_astra = is_astra_model(model_id);
+    let is_gpt_62 = is_gpt_62_model(model_id);
+    let modern_request_constraints = is_astra || is_gpt_62;
     let mut input_items = convert_messages_to_responses_input(model_id, messages, full_messages);
+
+    // GPT-6.2 appends top-level instructions after input. Keep stable reusable instructions at
+    // the front of a full input so they remain inside the prompt-cache prefix. A stored response
+    // already contains that prefix, so do not duplicate it on continuation deltas.
+    if is_gpt_62 && previous_response_id.is_none() && !system_prompt.is_empty() {
+        input_items.insert(
+            0,
+            json!({
+                "role": "developer",
+                "content": [{"type": "input_text", "text": system_prompt}]
+            }),
+        );
+    }
 
     let effort_raw = read_provider_opt(provider_options, "reasoningEffort")
         .or_else(|| read_provider_opt(provider_options, "reasoning_effort"))
@@ -546,18 +631,39 @@ fn build_openai_responses_payload(
         .and_then(Value::as_str);
     let summary_raw =
         read_provider_opt(provider_options, "reasoningSummary").and_then(Value::as_str);
+    let mode_raw = read_provider_opt(provider_options, "reasoningMode")
+        .or_else(|| read_provider_opt(provider_options, "reasoning_mode"))
+        .and_then(Value::as_str);
+    let context_raw = read_provider_opt(provider_options, "reasoningContext")
+        .or_else(|| read_provider_opt(provider_options, "reasoning_context"))
+        .and_then(Value::as_str);
 
     let effort = normalize_openai_reasoning_effort(effort_raw, model_id)
-        .or_else(|| is_astra.then(|| "low".to_string()));
+        .or_else(|| is_astra.then(|| "low".to_string()))
+        .or_else(|| (!is_astra && requires_reasoning(model_id)).then(|| "medium".to_string()));
 
-    let reasoning_obj = if effort.is_some() || summary_raw.is_some() {
-        Some(json!({
-            "effort": effort.unwrap_or_else(|| "medium".to_string()),
-            "summary": summary_raw.unwrap_or("auto"),
-        }))
-    } else {
-        None
-    };
+    let reasoning_obj =
+        if effort.is_some() || summary_raw.is_some() || mode_raw.is_some() || context_raw.is_some()
+        {
+            let mut reasoning = Map::new();
+            reasoning.insert(
+                "effort".to_string(),
+                Value::String(effort.unwrap_or_else(|| "medium".to_string())),
+            );
+            reasoning.insert(
+                "summary".to_string(),
+                Value::String(summary_raw.unwrap_or("auto").to_string()),
+            );
+            if let Some(mode) = mode_raw {
+                reasoning.insert("mode".to_string(), Value::String(mode.to_string()));
+            }
+            if let Some(context) = context_raw {
+                reasoning.insert("context".to_string(), Value::String(context.to_string()));
+            }
+            Some(Value::Object(reasoning))
+        } else {
+            None
+        };
 
     // Non-reasoning GPT-5 calls append `# Juice: 0 !important` developer instruction (`openaiNativeResponses.ts`),
     // except on an empty `previous_response_id` continuation step (`program_output` -> final answer).
@@ -573,10 +679,12 @@ fn build_openai_responses_payload(
 
     let mut body = Map::new();
     body.insert("model".to_string(), Value::String(model_id.to_string()));
-    body.insert(
-        "instructions".to_string(),
-        Value::String(system_prompt.to_string()),
-    );
+    if !is_gpt_62 {
+        body.insert(
+            "instructions".to_string(),
+            Value::String(system_prompt.to_string()),
+        );
+    }
     body.insert("input".to_string(), Value::Array(input_items));
     body.insert("stream".to_string(), Value::Bool(true));
     body.insert("store".to_string(), Value::Bool(true));
@@ -603,8 +711,8 @@ fn build_openai_responses_payload(
         body.insert("max_output_tokens".to_string(), json!(max_toks));
     }
 
-    // Sampling / logprobs rules: Astra forbids `temperature`, `top_p`, `top_logprobs`, and `message.output_text.logprobs`.
-    if !is_astra {
+    // Astra and GPT-6.2 forbid sampling/logprob controls on Responses requests.
+    if !modern_request_constraints {
         if let Some(temp) =
             read_provider_opt(provider_options, "temperature").and_then(Value::as_f64)
         {
@@ -629,7 +737,9 @@ fn build_openai_responses_payload(
         .map(|arr| {
             arr.iter()
                 .filter_map(Value::as_str)
-                .filter(|item| !(is_astra && *item == "message.output_text.logprobs"))
+                .filter(|item| {
+                    !(modern_request_constraints && *item == "message.output_text.logprobs")
+                })
                 .map(ToOwned::to_owned)
                 .collect()
         })
@@ -654,12 +764,12 @@ fn build_openai_responses_payload(
         body.insert("text".to_string(), json!({ "verbosity": verbosity }));
     }
 
-    // Prompt cache migration: Astra replaces `prompt_cache_retention` with `prompt_cache_options.ttl: "30m"`.
+    // Astra and GPT-6.2 use prompt_cache_options instead of legacy prompt_cache_retention.
     if let Some(retention) = read_provider_opt(provider_options, "promptCacheRetention")
         .or_else(|| read_provider_opt(provider_options, "prompt_cache_retention"))
         .and_then(Value::as_str)
     {
-        if is_astra {
+        if modern_request_constraints {
             if retention != "none" {
                 body.insert("prompt_cache_options".to_string(), json!({ "ttl": "30m" }));
             }
@@ -669,7 +779,7 @@ fn build_openai_responses_payload(
                 Value::String(retention.to_string()),
             );
         }
-    } else if is_astra
+    } else if modern_request_constraints
         && let Some(cache_opts) = read_provider_opt(provider_options, "prompt_cache_options")
     {
         body.insert("prompt_cache_options".to_string(), cache_opts.clone());
@@ -1004,10 +1114,14 @@ fn convert_messages_to_responses_input(
                                         .unwrap_or_else(|_| "{}".to_string()),
                                 ),
                             );
-                            if is_same_model
-                                && let Some(caller) = provider_meta.extra.get("openaiCaller")
-                            {
-                                fc_obj.insert("caller".to_string(), caller.clone());
+                            if is_same_model {
+                                if let Some(caller) = provider_meta.extra.get("openaiCaller") {
+                                    fc_obj.insert("caller".to_string(), caller.clone());
+                                }
+                                if let Some(namespace) = provider_meta.extra.get("openaiNamespace")
+                                {
+                                    fc_obj.insert("namespace".to_string(), namespace.clone());
+                                }
                             }
                             pending_calls.push((call_id.to_string(), name.clone()));
                             items.push(Value::Object(fc_obj));
@@ -1414,7 +1528,12 @@ impl OpenAiStreamState {
                         self.last_slot = Some(slot);
                     }
                     "program" => {
-                        let key = item_id.clone();
+                        let key = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .filter(|call_id| !call_id.is_empty())
+                            .unwrap_or(&item_id)
+                            .to_string();
                         let initial_code = item
                             .get("code")
                             .or_else(|| item.get("program"))
@@ -1761,6 +1880,16 @@ impl OpenAiStreamState {
                         {
                             extra.insert("openaiCaller".to_string(), caller.clone());
                         }
+                        if let Some(namespace) = item
+                            .get("namespace")
+                            .and_then(Value::as_str)
+                            .filter(|namespace| !namespace.is_empty())
+                        {
+                            extra.insert(
+                                "openaiNamespace".to_string(),
+                                Value::String(namespace.to_string()),
+                            );
+                        }
 
                         self.finished_blocks.insert(
                             slot,
@@ -1901,6 +2030,7 @@ impl OpenAiStreamState {
                             .or_else(|| item.get("program"))
                             .or_else(|| item.get("source"))
                             .and_then(Value::as_str)
+                            .filter(|code| !code.is_empty())
                             .map(ToOwned::to_owned)
                             .or_else(|| match &removed_active {
                                 Some(OpenAiActiveItem::ServerItem { code_buf, .. })
@@ -1913,19 +2043,36 @@ impl OpenAiStreamState {
                             .unwrap_or_default();
                         let mut args_map = Map::new();
                         if !code.is_empty() {
-                            args_map.insert("code".to_string(), Value::String(code));
+                            args_map.insert("code".to_string(), Value::String(code.clone()));
                         }
-                        self.pending_program_keys.push_back(item_id.clone());
+                        let key = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .filter(|call_id| !call_id.is_empty())
+                            .unwrap_or(&item_id)
+                            .to_string();
+                        self.pending_program_keys.push_back(key.clone());
                         emit(StreamEvent::ToolCallEnd {
                             turn_id: self.turn_id.clone(),
-                            key: item_id.clone(),
+                            key,
                             name: "programmatic_tool_calling".to_string(),
                             arguments: Some(args_map.clone()),
                             retry_of: None,
                             input_digest: None,
                         });
+                        let mut raw_item = item_val.clone();
+                        if let Some(raw_obj) = raw_item.as_object_mut()
+                            && raw_obj
+                                .get("code")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .is_empty()
+                            && !code.is_empty()
+                        {
+                            raw_obj.insert("code".to_string(), Value::String(code));
+                        }
                         let mut extra = Map::new();
-                        extra.insert("openaiRawItem".to_string(), item_val);
+                        extra.insert("openaiRawItem".to_string(), raw_item);
                         self.finished_blocks.insert(
                             slot,
                             ContentBlock::ProviderNativeTool {
@@ -1952,9 +2099,9 @@ impl OpenAiStreamState {
                         };
                         let item_id = done_item_id.unwrap_or(fallback_id).to_string();
                         let key = item
-                            .get("program_id")
+                            .get("call_id")
+                            .or_else(|| item.get("program_id"))
                             .or_else(|| item.get("caller_id"))
-                            .or_else(|| item.get("call_id"))
                             .and_then(Value::as_str)
                             .filter(|s| !s.is_empty())
                             .map(ToOwned::to_owned)
@@ -1968,7 +2115,8 @@ impl OpenAiStreamState {
                             || status == "error"
                             || item.get("error").is_some_and(|e| !e.is_null());
                         let output_payload = item
-                            .get("output")
+                            .get("result")
+                            .or_else(|| item.get("output"))
                             .cloned()
                             .unwrap_or_else(|| json!({ "status": status }));
                         emit(StreamEvent::ToolResult {
@@ -2165,5 +2313,188 @@ impl OpenAiStreamState {
             continuation,
             raw_events: self.raw_events,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpt_62_payload_preserves_cache_prefix_and_modern_reasoning_options() {
+        let mut options = Map::new();
+        options.insert("reasoningEffort".to_string(), json!("max"));
+        options.insert("reasoningSummary".to_string(), json!("detailed"));
+        options.insert("reasoningMode".to_string(), json!("pro"));
+        options.insert("reasoningContext".to_string(), json!("current_turn"));
+        options.insert("temperature".to_string(), json!(0.4));
+        options.insert("topP".to_string(), json!(0.8));
+        options.insert("topLogprobs".to_string(), json!(3));
+        options.insert("promptCacheRetention".to_string(), json!("short"));
+        options.insert(
+            "include".to_string(),
+            json!(["message.output_text.logprobs"]),
+        );
+
+        let body = build_openai_responses_payload(
+            "gpt-6.2-astra",
+            "Stable instructions",
+            &[],
+            &[],
+            &[],
+            &options,
+            None,
+        );
+
+        assert!(body.get("instructions").is_none());
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert_eq!(
+            body["input"][0]["content"][0]["text"],
+            "Stable instructions"
+        );
+        assert_eq!(body["reasoning"]["effort"], "max");
+        assert_eq!(body["reasoning"]["mode"], "pro");
+        assert_eq!(body["reasoning"]["context"], "current_turn");
+        assert_eq!(body["prompt_cache_options"]["ttl"], "30m");
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_logprobs").is_none());
+        assert!(
+            !body["include"]
+                .as_array()
+                .expect("include array")
+                .contains(&json!("message.output_text.logprobs"))
+        );
+
+        let continuation = build_openai_responses_payload(
+            "gpt-6.2-astra",
+            "Stable instructions",
+            &[],
+            &[],
+            &[],
+            &options,
+            Some("resp_previous"),
+        );
+        assert_eq!(continuation["previous_response_id"], "resp_previous");
+        assert_eq!(continuation["input"], json!([]));
+
+        assert_eq!(
+            normalize_openai_reasoning_effort(Some("none"), "gpt-5.4"),
+            Some("none".to_string())
+        );
+        assert_eq!(
+            normalize_openai_reasoning_effort(Some("low"), "gpt-5.4-pro"),
+            Some("medium".to_string())
+        );
+        assert_eq!(
+            normalize_openai_reasoning_effort(Some("max"), "gpt-5.4"),
+            Some("xhigh".to_string())
+        );
+        assert_eq!(
+            normalize_openai_reasoning_effort(Some("none"), "gpt-6.2-sol"),
+            Some("low".to_string())
+        );
+    }
+
+    #[test]
+    fn programmatic_tool_calling_uses_official_call_id_result_and_replay_shape() {
+        fn handle(state: &mut OpenAiStreamState, raw: Value, events: &mut Vec<StreamEvent>) {
+            let env: OpenAiResponsesSseEnvelope =
+                serde_json::from_value(raw).expect("valid test event");
+            state
+                .handle_event(env, &mut |event| events.push(event))
+                .expect("event should decode");
+        }
+
+        let mut state =
+            OpenAiStreamState::new("turn-program".to_string(), "gpt-6.2-astra".to_string());
+        let mut events = Vec::new();
+        for raw in [
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "program",
+                    "id": "prog_123",
+                    "call_id": "call_prog_123",
+                    "code": ""
+                }
+            }),
+            json!({
+                "type": "response.program.delta",
+                "output_index": 0,
+                "item_id": "prog_123",
+                "delta": "text('done')"
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "program",
+                    "id": "prog_123",
+                    "call_id": "call_prog_123",
+                    "code": "",
+                    "fingerprint": "opaque_replay_state"
+                }
+            }),
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {
+                    "type": "program_output",
+                    "id": "prog_out_123",
+                    "call_id": "call_prog_123",
+                    "status": "completed"
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": {
+                    "type": "program_output",
+                    "id": "prog_out_123",
+                    "call_id": "call_prog_123",
+                    "result": "{\"status\":\"done\"}",
+                    "status": "completed"
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {"id": "resp_program_123", "status": "completed"}
+            }),
+        ] {
+            handle(&mut state, raw, &mut events);
+        }
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            StreamEvent::ToolCallEnd { key, name, .. }
+                if key == "call_prog_123" && name == "programmatic_tool_calling"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            StreamEvent::ToolResult { key, result, .. }
+                if key == "call_prog_123" && result == &json!("{\"status\":\"done\"}")
+        )));
+
+        let result = state.finish(String::new()).expect("completed stream");
+        let replay = convert_messages_to_responses_input(
+            "gpt-6.2-astra",
+            std::slice::from_ref(&result.assistant),
+            std::slice::from_ref(&result.assistant),
+        );
+        let program = replay
+            .iter()
+            .find(|item| item["type"] == "program")
+            .expect("replayed program");
+        assert_eq!(program["call_id"], "call_prog_123");
+        assert_eq!(program["code"], "text('done')");
+        assert_eq!(program["fingerprint"], "opaque_replay_state");
+        let output = replay
+            .iter()
+            .find(|item| item["type"] == "program_output")
+            .expect("replayed program output");
+        assert_eq!(output["call_id"], "call_prog_123");
+        assert_eq!(output["result"], "{\"status\":\"done\"}");
     }
 }

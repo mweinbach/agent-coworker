@@ -2,9 +2,10 @@
   "id": "north-mini-code-free",
   "provider": "opencode-zen",
   "displayName": "North Mini Code Free",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "September 23, 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["none", "high"],
   "isDefault": false
 }

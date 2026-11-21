@@ -397,41 +397,52 @@ fn normalizes_nvidia_payload_and_together_opencode_baseten_quirks() {
         "max_tokens": 4096,
         "max_completion_tokens": 4096,
         "reasoning_budget": 2048,
-        "reasoning_effort": "high",
         "enable_thinking": false,
         "chat_template_kwargs": { "custom_flag": 1 }
     });
     let norm = normalize_nvidia_chat_completions_body(raw_nvidia);
-    for forbidden in [
-        "store",
-        "max_tokens",
-        "max_completion_tokens",
-        "reasoning_budget",
-        "reasoning_effort",
-        "enable_thinking",
-    ] {
+    for forbidden in ["store", "max_completion_tokens", "enable_thinking"] {
         assert!(
             norm.get(forbidden).is_none(),
             "NVIDIA payload must strip {forbidden}"
         );
     }
+    assert_eq!(norm["max_tokens"], json!(4096));
+    assert_eq!(norm["reasoning_budget"], json!(2048));
     assert_eq!(norm["chat_template_kwargs"]["custom_flag"], json!(1));
     assert_eq!(norm["chat_template_kwargs"]["enable_thinking"], json!(true));
+
+    // Third-party models on NVIDIA NIM do not receive Nemotron enable_thinking injection.
+    let raw_third_party = json!({
+        "model": "moonshotai/kimi-k3.1-pro",
+        "max_tokens": 2048,
+        "reasoning_effort": "high"
+    });
+    let norm_tp = normalize_nvidia_chat_completions_body(raw_third_party);
+    assert_eq!(norm_tp["max_tokens"], json!(2048));
+    assert_eq!(norm_tp["reasoning_effort"], json!("high"));
+    assert!(norm_tp.get("chat_template_kwargs").is_none());
 
     // 2. Baseten UI gating & discovery header prefix
     assert!(!is_user_facing_provider_enabled(ProviderName::Baseten));
     assert!(is_user_facing_provider_enabled(ProviderName::Together));
     let baseten_quirks = ProviderQuirks::for_provider(ProviderName::Baseten).unwrap();
     assert!(!baseten_quirks.is_user_facing_enabled);
-    assert_eq!(baseten_quirks.discovery_auth_prefix, "Api-Key");
+    assert_eq!(baseten_quirks.discovery_auth_prefix, "Bearer");
 
     // 3. OpenCode Go & OpenCode Zen quirks and per-provider model allowlists
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let registry = InferenceModelRegistry::load_from_repo_root(&repo_root).unwrap();
     let go_quirks = ProviderQuirks::for_provider(ProviderName::OpencodeGo).unwrap();
     let zen_quirks = ProviderQuirks::for_provider(ProviderName::OpencodeZen).unwrap();
-    assert_eq!(go_quirks.default_base_url, "https://opencode.ai/zen/go/v1");
-    assert_eq!(zen_quirks.default_base_url, "https://opencode.ai/zen/v1");
+    assert_eq!(
+        go_quirks.default_base_url,
+        "https://opencode.ai/inference/go/openai/v1"
+    );
+    assert_eq!(
+        zen_quirks.default_base_url,
+        "https://opencode.ai/inference/openai/v1"
+    );
     assert!(go_quirks.is_public_catalog);
     assert!(zen_quirks.is_public_catalog);
     assert!(is_opencode_model_supported(
@@ -454,7 +465,7 @@ fn normalizes_nvidia_payload_and_together_opencode_baseten_quirks() {
     let together_quirks = ProviderQuirks::for_provider(ProviderName::Together).unwrap();
     assert!(!together_quirks.supports_store);
     assert!(!together_quirks.supports_developer_role);
-    assert!(!together_quirks.supports_reasoning_effort);
+    assert!(together_quirks.supports_reasoning_effort);
 
     let schema = json!({
         "type": "object",

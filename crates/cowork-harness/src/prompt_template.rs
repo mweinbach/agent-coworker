@@ -1359,6 +1359,10 @@ Available model overrides for the current provider (OpenAI):
 - **GPT-5.4 Nano** (`gpt-5.4-nano`): fast lower-cost general work, smaller coding tasks, and lightweight verification passes.
 - **GPT-5.4 Pro** (`gpt-5.4-pro`): highest-accuracy deep analysis and difficult tasks where latency matters less.
 - **GPT-5.5** (`gpt-5.5`): frontier coding, agentic workflows, and the hardest reasoning-heavy tasks.
+- **GPT-6 Luna** (`gpt-6-luna`): fast lower-cost general work, smaller coding tasks, and lightweight verification passes.
+- **GPT-6.1 Terra** (`gpt-6.1-terra`): strong general-purpose coding and reasoning with a balanced quality-latency tradeoff.
+- **GPT-6.2 Astra** (`gpt-6.2-astra`): frontier coding, agentic workflows, and the hardest reasoning-heavy tasks.
+- **GPT-6.2 Sol** (`gpt-6.2-sol`): strong general-purpose coding and reasoning with a balanced quality-latency tradeoff.
 - If you omit `model`, the child stays on **GPT-5.4** (`gpt-5.4`).";
         assert!(body.ends_with(expected), "unexpected body:\n{body}");
         assert!(!body.contains("specialized subagent profiles"));

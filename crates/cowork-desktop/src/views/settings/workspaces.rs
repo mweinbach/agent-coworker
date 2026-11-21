@@ -270,10 +270,10 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         s.settings_ui.open_select_key = None;
                     }
                 })
-                .on_choose(move |s: &mut AppState, chosen, _tx| {
+                .on_choose(move |s: &mut AppState, chosen, tx| {
                     s.settings_ui.open_select_key = None;
                     if let Some((_, id)) = pairs.iter().find(|(lbl, _)| lbl == chosen) {
-                        s.dispatch(Action::Navigate(NavAction::SelectWorkspace(id.clone())));
+                        s.dispatch_tx(Action::Navigate(NavAction::SelectWorkspace(id.clone())), tx);
                     }
                 })
                 .build(k, &mut overlays);
@@ -866,12 +866,16 @@ pub fn models_defaults_sections(
             };
             let defaults = if rm_mod == "same-provider" {
                 json!({
+                    "defaultProvider": pid_mod,
                     "defaultModel": chosen,
                     "defaultPreferredChildModel": next_child,
                     "defaultPreferredChildModelRef": format!("{pid_mod}:{next_child}"),
                 })
             } else {
-                json!({ "defaultModel": chosen })
+                json!({
+                    "defaultProvider": pid_mod,
+                    "defaultModel": chosen,
+                })
             };
             s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                 workspace_id: ws_mod.clone(),
@@ -1103,10 +1107,13 @@ pub fn models_defaults_sections(
                     Button::new("Manage profiles")
                         .variant(ButtonVariant::Outline)
                         .control_size(ControlSize::Small)
-                        .on_press(|s: &mut AppState| {
-                            s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
-                                SettingsPageId::Subagents,
-                            ))));
+                        .on_press_tx(|s: &mut AppState, tx| {
+                            s.dispatch_tx(
+                                Action::Navigate(NavAction::OpenSettings(Some(
+                                    SettingsPageId::Subagents,
+                                ))),
+                                tx,
+                            );
                         })
                         .build(k),
                 ),

@@ -2941,7 +2941,7 @@ impl ServerRuntimeState {
         let declares_reasoning = match provider {
             ProviderName::Openai => defaults.contains_key("reasoningEffort"),
             ProviderName::Google => defaults.contains_key("thinkingConfig"),
-            ProviderName::Anthropic => {
+            ProviderName::Anthropic | ProviderName::ClaudeCli => {
                 defaults.contains_key("effort") || defaults.contains_key("thinking")
             }
             ProviderName::CodexCli => true,

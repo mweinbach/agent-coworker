@@ -1,0 +1,10 @@
+{
+  "id": "longcat-2.0",
+  "provider": "opencode-go",
+  "displayName": "LongCat-2.0",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

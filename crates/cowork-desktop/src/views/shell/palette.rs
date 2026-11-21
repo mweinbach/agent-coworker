@@ -267,9 +267,9 @@ fn palette_row(item: PaletteItem, highlighted: bool, k: &Kit, t: &ThemeTokens) -
         .radius(7.0)
         .fill(row_bg)
         .hover(t.hover)
-        .on_press_tx(move |s: &mut AppState, _| {
+        .on_press_tx(move |s: &mut AppState, tx| {
             close_command_palette(s);
-            s.dispatch(act.clone());
+            s.dispatch_tx(act.clone(), tx);
         })
         .child(r)
 }

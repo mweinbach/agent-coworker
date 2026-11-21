@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/glm-5p3-flash",
+  "provider": "fireworks",
+  "displayName": "GLM 5.3 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

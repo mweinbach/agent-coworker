@@ -219,10 +219,10 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     s.settings_ui.open_select_key = None;
                 }
             })
-            .on_choose(move |s: &mut AppState, chosen, _tx| {
+            .on_choose(move |s: &mut AppState, chosen, tx| {
                 s.settings_ui.open_select_key = None;
                 if let Some((_, id)) = pairs.iter().find(|(lbl, _)| lbl == chosen) {
-                    s.dispatch(Action::Navigate(NavAction::SelectWorkspace(id.clone())));
+                    s.dispatch_tx(Action::Navigate(NavAction::SelectWorkspace(id.clone())), tx);
                 }
             })
             .build(k, &mut overlays);

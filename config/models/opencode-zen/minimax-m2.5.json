@@ -1,8 +1,8 @@
 {
   "id": "minimax-m2.5",
   "provider": "opencode-zen",
-  "displayName": "MiniMax M2.5",
-  "knowledgeCutoff": "Unknown",
+  "displayName": "MiniMax-M2.5",
+  "knowledgeCutoff": "January 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

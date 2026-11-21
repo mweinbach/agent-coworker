@@ -1,0 +1,10 @@
+{
+  "id": "longcat-2.5-free",
+  "provider": "opencode-zen",
+  "displayName": "LongCat 2.5 Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

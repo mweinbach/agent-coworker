@@ -2,7 +2,7 @@
   "id": "accounts/fireworks/models/qwen3p6-plus",
   "provider": "fireworks",
   "displayName": "Qwen3.6 Plus",
-  "knowledgeCutoff": "Mid 2025",
+  "knowledgeCutoff": "Unknown",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

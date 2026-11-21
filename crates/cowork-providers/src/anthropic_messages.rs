@@ -491,8 +491,9 @@ fn anthropic_model_spec(model_id: &str) -> AnthropicModelSpec {
         | "claude-sonnet-4-5"
         | "claude-sonnet-4-5-20250929" => BUDGET_THINKING_64K,
         "claude-opus-4-6" | "claude-sonnet-4-6" | "claude-opus-4-7" | "claude-opus-4-8"
-        | "claude-sonnet-5" | "claude-fable-5" | "claude-fable-5-1" | "claude-opus-5"
-        | "claude-opus-5-5" | "claude-sonnet-5-5" => ADAPTIVE_THINKING_128K,
+        | "claude-sonnet-5" | "claude-fable-5" | "claude-fable-5-1" | "claude-fable-5-2"
+        | "claude-mythos-5" | "claude-mythos-5-1" | "claude-mythos-5-2" | "claude-opus-5"
+        | "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5" => ADAPTIVE_THINKING_128K,
         other => AnthropicModelSpec {
             max_tokens: 8_192,
             reasoning: other.to_ascii_lowercase().contains("claude"),
@@ -577,7 +578,10 @@ fn build_anthropic_messages_payload(
     let thinking_type = thinking_cfg
         .and_then(|t| t.get("type"))
         .and_then(Value::as_str);
-    let thinking_enabled = matches!(thinking_type, Some("adaptive" | "enabled"));
+    let thinking_enabled = matches!(
+        thinking_type,
+        Some("adaptive" | "enabled" | "between_tools")
+    );
     let explicit_effort = read_anthropic_opt(provider_options, "effort")
         .or_else(|| read_anthropic_opt(provider_options, "reasoningEffort"))
         .or_else(|| read_anthropic_opt(provider_options, "reasoning_effort"))
@@ -601,7 +605,13 @@ fn build_anthropic_messages_payload(
     let mut active_effort: Option<String> = None;
 
     if spec.reasoning && thinking_enabled {
-        if spec.force_adaptive_thinking {
+        if thinking_type == Some("between_tools") {
+            thinking_payload = Some(json!({
+                "type": "between_tools",
+                "display": "summarized",
+            }));
+            active_effort = explicit_effort;
+        } else if spec.force_adaptive_thinking {
             thinking_payload = Some(json!({
                 "type": "adaptive",
                 "display": "summarized",

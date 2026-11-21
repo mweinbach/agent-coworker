@@ -3,14 +3,16 @@
 //! Ported from `apps/desktop/src/ui/ContextSidebar.tsx`, `WorkflowRunsPanel.tsx`, and
 //! workspace file explorer integration.
 
-use rune::{El, Key, ScrollSpec, col, el, row, text, text_input};
+use std::collections::HashSet;
+
+use rune::{Cursor, El, Icon, Key, ScrollSpec, col, el, row, text, text_input};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Divider, IconButton,
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, IconButton,
     IconButtonVariant, Kit, Menu, MenuItem, Placement, glyphs,
 };
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
-use crate::state::{AppState, ThreadRuntime};
+use crate::state::{AppState, FeedItem, ThreadRuntime};
 use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{format_bytes, format_cost_usd, format_tokens};
 use crate::views::shell::icons;
@@ -29,6 +31,375 @@ fn open_agent_run_from_context(s: &mut AppState, agent_id: String, title: String
         agent_id,
         title: Some(title),
     }));
+}
+
+/// Clean rounded inspector section card with aligned icon/title header and optional header action.
+fn context_section_card(
+    key: &'static str,
+    title: impl Into<String>,
+    glyph: &'static Icon,
+    trailing: Option<El>,
+    body: El,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    let title_text = title.into();
+    let mut header = row()
+        .w_full()
+        .gap(7.0)
+        .center_y()
+        .child(rune::icon(glyph, 13.0).color(t.text_muted).a11y_hidden())
+        .child(
+            text(title_text.clone())
+                .font(k.ty.small_medium)
+                .color(t.text_base)
+                .truncate()
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0),
+        );
+    if let Some(action) = trailing {
+        header = header.child(el().shrink().child(action));
+    }
+
+    col()
+        .key(key)
+        .role("group")
+        .label(title_text)
+        .w_full()
+        .px(12.0)
+        .py(10.0)
+        .gap(10.0)
+        .radius(10.0)
+        .continuous_corners()
+        .fill(t.elevated_bg)
+        .border(1.0, t.border_muted)
+        .child(header)
+        .child(body)
+}
+
+/// A workspace file created, modified, or read during the active session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionOutputFile {
+    pub path: String,
+    pub title: String,
+    pub ext_tag: String,
+    pub written: bool,
+}
+
+/// A tool capability, connector, skill, or memory source used during the active session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionUsedItem {
+    pub label: String,
+    pub detail: String,
+}
+
+fn is_file_write_tool(lower: &str) -> bool {
+    matches!(
+        lower,
+        "write"
+            | "write_file"
+            | "create_file"
+            | "edit"
+            | "edit_file"
+            | "multi_edit"
+            | "apply_patch"
+            | "save_file"
+            | "notebook_edit"
+            | "file_change"
+            | "filechange"
+    )
+}
+
+fn is_file_read_tool(lower: &str) -> bool {
+    matches!(lower, "read" | "read_file" | "view_file" | "open_file")
+}
+
+fn extract_tool_file_paths(input: &serde_json::Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    let Some(obj) = input.as_object() else {
+        return paths;
+    };
+    for key in ["path", "file_path", "filePath", "target_file", "filename"] {
+        if let Some(s) = obj
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            paths.push(s.to_string());
+        }
+    }
+    if let Some(arr) = obj.get("paths").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(s) = v.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                paths.push(s.to_string());
+            }
+        }
+    }
+    paths
+}
+
+fn split_output_display(path: &str) -> (String, String) {
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path).trim();
+    if let Some((stem, ext)) = file_name.rsplit_once('.')
+        && !stem.is_empty()
+        && !ext.is_empty()
+        && ext.len() <= 6
+    {
+        let humanized = stem.replace(['_', '-'], " ");
+        let mut chars = humanized.chars();
+        let title = match chars.next() {
+            Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+            None => file_name.to_string(),
+        };
+        return (title, ext.to_ascii_uppercase());
+    }
+    (file_name.to_string(), "FILE".to_string())
+}
+
+/// Extracts deduplicated session output/referenced files and capabilities used from a thread feed.
+pub fn collect_session_outputs_and_used(
+    rt: &ThreadRuntime,
+) -> (Vec<SessionOutputFile>, Vec<SessionUsedItem>) {
+    let mut written_files: Vec<SessionOutputFile> = Vec::new();
+    let mut read_files: Vec<SessionOutputFile> = Vec::new();
+    let mut seen_paths: HashSet<String> = HashSet::new();
+
+    let mut memory_ops = 0usize;
+    let mut web_ops = 0usize;
+    let mut shell_ops = 0usize;
+    let mut mcp_servers: Vec<String> = Vec::new();
+    let mut mcp_seen: HashSet<String> = HashSet::new();
+
+    for item in &rt.feed {
+        let FeedItem::Tool {
+            tool_name, input, ..
+        } = item
+        else {
+            continue;
+        };
+        let lower = tool_name.to_ascii_lowercase();
+        if is_file_write_tool(&lower) || is_file_read_tool(&lower) {
+            let written = is_file_write_tool(&lower);
+            for raw_path in extract_tool_file_paths(input) {
+                if seen_paths.insert(raw_path.clone()) {
+                    let (title, ext_tag) = split_output_display(&raw_path);
+                    let entry = SessionOutputFile {
+                        path: raw_path,
+                        title,
+                        ext_tag,
+                        written,
+                    };
+                    if written {
+                        written_files.push(entry);
+                    } else {
+                        read_files.push(entry);
+                    }
+                } else if written {
+                    // Promote an earlier read-only entry to written.
+                    if let Some(pos) = read_files.iter().position(|f| f.path == raw_path) {
+                        let mut promoted = read_files.remove(pos);
+                        promoted.written = true;
+                        written_files.push(promoted);
+                    }
+                }
+            }
+        }
+        if lower.contains("memory") {
+            memory_ops += 1;
+        } else if lower.contains("web") || lower.contains("search") || lower.contains("fetch") {
+            web_ops += 1;
+        } else if matches!(
+            lower.as_str(),
+            "bash" | "commandexecution" | "command_execution" | "execute"
+        ) {
+            shell_ops += 1;
+        } else if let Some(rest) = tool_name.strip_prefix("mcp__")
+            && let Some((server, _)) = rest.split_once("__")
+            && !server.is_empty()
+            && mcp_seen.insert(server.to_string())
+        {
+            mcp_servers.push(server.to_string());
+        }
+    }
+
+    written_files.extend(read_files);
+
+    let mut used = Vec::new();
+    if memory_ops > 0 {
+        used.push(SessionUsedItem {
+            label: "Memory".to_string(),
+            detail: if memory_ops == 1 {
+                "1 lookup".to_string()
+            } else {
+                format!("{memory_ops} lookups")
+            },
+        });
+    }
+    if web_ops > 0 {
+        used.push(SessionUsedItem {
+            label: "Web".to_string(),
+            detail: if web_ops == 1 {
+                "1 query".to_string()
+            } else {
+                format!("{web_ops} queries")
+            },
+        });
+    }
+    if shell_ops > 0 {
+        used.push(SessionUsedItem {
+            label: "Terminal".to_string(),
+            detail: if shell_ops == 1 {
+                "1 command".to_string()
+            } else {
+                format!("{shell_ops} commands")
+            },
+        });
+    }
+    for srv in mcp_servers {
+        used.push(SessionUsedItem {
+            label: srv,
+            detail: "MCP".to_string(),
+        });
+    }
+    if !rt.agents.is_empty() {
+        let count = rt.agents.len();
+        used.push(SessionUsedItem {
+            label: "Subagents".to_string(),
+            detail: if count == 1 {
+                "1 run".to_string()
+            } else {
+                format!("{count} runs")
+            },
+        });
+    }
+
+    (written_files, used)
+}
+
+fn build_outputs_card(
+    s: &AppState,
+    outputs: &[SessionOutputFile],
+    k: &Kit,
+    t: &ThemeTokens,
+) -> Option<El> {
+    if outputs.is_empty() {
+        return None;
+    }
+    let ws_id = s.active_workspace_id.clone();
+    let mut list = col().w_full().gap(2.0);
+    for (idx, file) in outputs.iter().take(12).enumerate() {
+        let path_open = file.path.clone();
+        let ws_open = ws_id.clone();
+        let mut item_row = row()
+            .key(format!("context-output:{idx}"))
+            .w_full()
+            .items_center()
+            .gap(8.0)
+            .px(8.0)
+            .py(6.5)
+            .radius(7.0)
+            .continuous_corners()
+            .hover(t.hover)
+            .cursor(Cursor::Pointer)
+            .role("button")
+            .label(format!("Open {}", file.title))
+            .child(
+                rune::icon(&icons::FILE_TEXT, 13.0)
+                    .color(if file.written {
+                        t.text_base
+                    } else {
+                        t.text_muted
+                    })
+                    .a11y_hidden(),
+            )
+            .child(
+                text(file.title.clone())
+                    .font(if file.written {
+                        k.ty.small_medium
+                    } else {
+                        k.ty.small
+                    })
+                    .color(t.text_base)
+                    .truncate()
+                    .grow(1.0)
+                    .shrink()
+                    .min_w(0.0),
+            )
+            .child(
+                text(file.ext_tag.clone())
+                    .font(k.ty.text_xsmall)
+                    .color(t.text_faint),
+            );
+        if let Some(wid) = ws_open {
+            item_row = item_row.on_press(move |s: &mut AppState| {
+                s.shell_ui.canvas_overlay_dismissed_key = None;
+                if !(s.is_canvas_enabled()
+                    && crate::views::chat::is_canvas_document_path(&path_open))
+                {
+                    close_context_inspector(s);
+                }
+                s.dispatch(Action::Native(NativeAction::LoadFilePreview {
+                    workspace_id: wid.clone(),
+                    path: path_open.clone(),
+                }));
+            });
+        }
+        list = list.child(item_row);
+    }
+
+    Some(context_section_card(
+        "context-outputs-card",
+        "Outputs",
+        &icons::FILE_TEXT,
+        Some(
+            Badge::new(outputs.len().to_string())
+                .variant(BadgeVariant::Subtle)
+                .build(k),
+        ),
+        list,
+        k,
+        t,
+    ))
+}
+
+fn build_used_in_session_card(used: &[SessionUsedItem], k: &Kit, t: &ThemeTokens) -> Option<El> {
+    if used.is_empty() {
+        return None;
+    }
+    let mut list = col().w_full().gap(6.0);
+    for (idx, item) in used.iter().enumerate() {
+        list = list.child(
+            row()
+                .key(format!("context-used:{idx}"))
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(8.0)
+                .px(4.0)
+                .child(
+                    text(item.label.clone())
+                        .font(k.ty.small)
+                        .color(t.text_base)
+                        .truncate(),
+                )
+                .child(
+                    text(item.detail.clone())
+                        .font(k.ty.text_xsmall)
+                        .color(t.text_faint),
+                ),
+        );
+    }
+    Some(context_section_card(
+        "context-used-card",
+        "Used in this session",
+        &icons::PLUGINS,
+        None,
+        list,
+        k,
+        t,
+    ))
 }
 
 /// Renders the right inspector sidebar panel for the active chat or task route.
@@ -55,30 +426,44 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
 
     let mut sections = Vec::new();
     if let Some(rt) = s.active_thread_runtime() {
-        if let Some(usage_card) = build_usage_card(s, rt, k, t) {
-            sections.push(usage_card);
+        let (outputs, used) = collect_session_outputs_and_used(rt);
+        if let Some(outputs_card) = build_outputs_card(s, &outputs, k, t) {
+            sections.push(outputs_card);
+        }
+        if let Some(used_card) = build_used_in_session_card(&used, k, t) {
+            sections.push(used_card);
         }
         if !rt.todos.is_empty() {
             sections.push(build_plan_card(rt, k, t));
         }
         if !rt.agents.is_empty() {
-            sections.push(build_subagents_card(rt, k));
+            sections.push(build_subagents_card(rt, k, t));
+        }
+        if let Some(usage_card) = build_usage_card(s, rt, k, t) {
+            sections.push(usage_card);
         }
     }
 
     if !s.workflow_runs.is_empty() {
-        sections.push(build_workflow_runs_card(s, k));
+        sections.push(build_workflow_runs_card(s, k, t));
     }
 
     sections.push(build_workspace_files_card(s, k, t, layer));
 
     if sections.is_empty() {
-        sections.push(
-            Card::new()
-                .title("No active context", Some(&icons::INFO))
-                .description("Select a workspace or start a thread to inspect plans, subagents, workflow runs, and workspace files.")
-                .build(k),
-        );
+        sections.push(context_section_card(
+            "context-empty-card",
+            "No active context",
+            &icons::INFO,
+            None,
+            text("Select a workspace or start a thread to inspect plans, subagents, workflow runs, and workspace files.")
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .wrap()
+                .w_full(),
+            k,
+            t,
+        ));
     }
 
     col()
@@ -160,13 +545,15 @@ fn build_usage_card(s: &AppState, rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) 
         );
     }
 
-    Some(
-        Card::new()
-            .title("Usage", Some(&icons::SPARKLES))
-            .child(card_body)
-            .build(k)
-            .key("context-usage-card"),
-    )
+    Some(context_section_card(
+        "context-usage-card",
+        "Usage",
+        &icons::SPARKLES,
+        None,
+        card_body,
+        k,
+        t,
+    ))
 }
 
 fn build_plan_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
@@ -223,14 +610,18 @@ fn build_plan_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
         );
     }
 
-    Card::new()
-        .title("Plan", Some(&icons::CHECK_SQUARE))
-        .child(list)
-        .build(k)
-        .key("context-plan-card")
+    context_section_card(
+        "context-plan-card",
+        "Plan",
+        &icons::CHECK_SQUARE,
+        None,
+        list,
+        k,
+        t,
+    )
 }
 
-fn build_subagents_card(rt: &ThreadRuntime, k: &Kit) -> El {
+fn build_subagents_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
     let mut list = col().w_full().gap(6.0);
     for agent in &rt.agents {
         let aid = agent.agent_id.clone();
@@ -242,7 +633,8 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit) -> El {
                 .w_full()
                 .padding(8.0)
                 .radius(k.radius.md)
-                .fill(k.c.layer_02)
+                .fill(t.panel_bg)
+                .border(1.0, t.border_muted)
                 .hover(k.c.hover)
                 .justify_between()
                 .items_center()
@@ -271,17 +663,18 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit) -> El {
         );
     }
 
-    Card::new()
-        .title(
-            format!("Subagents ({})", rt.agents.len()),
-            Some(&icons::SPARKLES),
-        )
-        .child(list)
-        .build(k)
-        .key("context-subagents-card")
+    context_section_card(
+        "context-subagents-card",
+        format!("Subagents ({})", rt.agents.len()),
+        &icons::SPARKLES,
+        None,
+        list,
+        k,
+        t,
+    )
 }
 
-fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
+fn build_workflow_runs_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
     let mut runs = s.workflow_runs.clone();
     runs.sort_by_key(|b| std::cmp::Reverse(b.started_at));
 
@@ -294,7 +687,8 @@ fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
                 .w_full()
                 .padding(8.0)
                 .radius(k.radius.md)
-                .fill(k.c.layer_02)
+                .fill(t.panel_bg)
+                .border(1.0, t.border_muted)
                 .hover(k.c.hover)
                 .gap(4.0)
                 .on_press_tx(move |s: &mut AppState, _| {
@@ -324,11 +718,15 @@ fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
         );
     }
 
-    Card::new()
-        .title("Workflow runs", Some(&icons::CLOCK))
-        .child(list)
-        .build(k)
-        .key("context-workflow-runs-card")
+    context_section_card(
+        "context-workflow-runs-card",
+        "Workflow runs",
+        &icons::CLOCK,
+        None,
+        list,
+        k,
+        t,
+    )
 }
 
 pub(crate) fn explorer_dir_state_key(workspace_id: &str, dir: &str) -> String {
@@ -880,11 +1278,17 @@ fn push_explorer_tree(
 
 fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
     let Some(ws) = s.active_workspace() else {
-        return Card::new()
-            .title("Workspace files", Some(&icons::FOLDER))
-            .description("No workspace selected.")
-            .build(k)
-            .key("context-files-empty");
+        return context_section_card(
+            "context-files-empty",
+            "Workspace files",
+            &icons::FOLDER,
+            None,
+            text("No workspace selected.")
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+            k,
+            t,
+        );
     };
 
     let ws_id_refresh = ws.id.clone();
@@ -929,12 +1333,15 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mu
         }
     };
 
-    Card::new()
-        .title(format!("Files · {}", ws.name), Some(&icons::FOLDER))
-        .action(refresh_btn)
-        .child(body)
-        .build(k)
-        .key("context-files-card")
+    context_section_card(
+        "context-files-card",
+        format!("Files · {}", ws.name),
+        &icons::FOLDER,
+        Some(refresh_btn),
+        body,
+        k,
+        t,
+    )
 }
 
 #[cfg(test)]
@@ -1155,5 +1562,82 @@ mod tests {
             "explorer menu must expand to >= 220px to avoid label truncation, got w={}",
             menu_rect[2]
         );
+    }
+
+    #[test]
+    fn collect_session_outputs_and_used_prioritizes_written_files_and_summarizes_capabilities() {
+        let mut rt = ThreadRuntime::default();
+        rt.feed.push(FeedItem::Tool {
+            id: "t1".into(),
+            tool_name: "read".into(),
+            title: None,
+            status: crate::state::ToolRunStatus::Completed,
+            input: serde_json::json!({ "path": "docs/notes.md" }),
+            output: None,
+            error: None,
+            diff: None,
+            timestamp_ms: 1,
+            completed_at_ms: Some(2),
+            output_truncated: false,
+            streaming: false,
+            call_id: None,
+        });
+        rt.feed.push(FeedItem::Tool {
+            id: "t2".into(),
+            tool_name: "write_file".into(),
+            title: None,
+            status: crate::state::ToolRunStatus::Completed,
+            input: serde_json::json!({ "file_path": "brief/atlas-polish-brief.md" }),
+            output: None,
+            error: None,
+            diff: None,
+            timestamp_ms: 3,
+            completed_at_ms: Some(4),
+            output_truncated: false,
+            streaming: false,
+            call_id: None,
+        });
+        rt.feed.push(FeedItem::Tool {
+            id: "t3".into(),
+            tool_name: "mcp__chrome__click".into(),
+            title: None,
+            status: crate::state::ToolRunStatus::Completed,
+            input: serde_json::json!({}),
+            output: None,
+            error: None,
+            diff: None,
+            timestamp_ms: 5,
+            completed_at_ms: Some(6),
+            output_truncated: false,
+            streaming: false,
+            call_id: None,
+        });
+        rt.feed.push(FeedItem::Tool {
+            id: "t4".into(),
+            tool_name: "read_memory".into(),
+            title: None,
+            status: crate::state::ToolRunStatus::Completed,
+            input: serde_json::json!({}),
+            output: None,
+            error: None,
+            diff: None,
+            timestamp_ms: 7,
+            completed_at_ms: Some(8),
+            output_truncated: false,
+            streaming: false,
+            call_id: None,
+        });
+
+        let (outputs, used) = collect_session_outputs_and_used(&rt);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].path, "brief/atlas-polish-brief.md");
+        assert_eq!(outputs[0].title, "Atlas polish brief");
+        assert_eq!(outputs[0].ext_tag, "MD");
+        assert!(outputs[0].written);
+        assert_eq!(outputs[1].path, "docs/notes.md");
+        assert!(!outputs[1].written);
+
+        let used_labels: Vec<&str> = used.iter().map(|u| u.label.as_str()).collect();
+        assert_eq!(used_labels, vec!["Memory", "chrome"]);
     }
 }

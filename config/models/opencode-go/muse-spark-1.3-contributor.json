@@ -1,0 +1,11 @@
+{
+  "id": "muse-spark-1.3-contributor",
+  "provider": "opencode-go",
+  "displayName": "Muse Spark 1.3 Contributor",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high", "xhigh"],
+  "isDefault": false
+}

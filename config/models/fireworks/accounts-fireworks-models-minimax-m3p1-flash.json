@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/minimax-m3p1-flash",
+  "provider": "fireworks",
+  "displayName": "MiniMax M3.1 Flash",
+  "knowledgeCutoff": "January 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

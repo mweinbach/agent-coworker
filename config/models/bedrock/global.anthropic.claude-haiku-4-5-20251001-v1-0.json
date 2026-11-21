@@ -1,0 +1,13 @@
+{
+  "id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "provider": "bedrock",
+  "displayName": "Claude Haiku 4.5 (Bedrock)",
+  "knowledgeCutoff": "February 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high"],
+  "isDefault": false
+}

@@ -1,0 +1,11 @@
+{
+  "id": "gemini-3.6-flash",
+  "provider": "opencode-zen",
+  "displayName": "Gemini 3.6 Flash",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high"],
+  "isDefault": false
+}

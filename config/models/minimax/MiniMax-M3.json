@@ -2,7 +2,7 @@
   "id": "MiniMax-M3",
   "provider": "minimax",
   "displayName": "MiniMax M3",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "January 2026",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

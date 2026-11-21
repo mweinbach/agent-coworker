@@ -1,0 +1,13 @@
+{
+  "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+  "provider": "baseten",
+  "displayName": "DeepSeek V4.1 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "low", "high", "max"],
+  "isDefault": false
+}

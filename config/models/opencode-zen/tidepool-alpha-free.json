@@ -1,0 +1,11 @@
+{
+  "id": "tidepool-alpha-free",
+  "provider": "opencode-zen",
+  "displayName": "Tidepool Alpha Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

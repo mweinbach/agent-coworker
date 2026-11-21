@@ -15,8 +15,8 @@ use crate::theme::ThemeTokens;
 
 use super::activity::{ActivityCardContext, build_activity_group_card};
 use super::components::{
-    day_separator_row, empty_feed_state, scroll_to_latest_pill, transcript_only_banner,
-    working_placeholder_row,
+    CHAT_COLUMN_MAX_WIDTH, day_separator_row, empty_feed_state, scroll_to_latest_pill,
+    transcript_only_banner, working_placeholder_row,
 };
 use super::feed_row::{FeedRowContext, build_feed_row};
 use super::interaction::{build_interaction_card, interaction_card_key};
@@ -244,7 +244,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
             empty_col = empty_col.child(
                 col()
                     .w_full()
-                    .max_w(768.0)
+                    .max_w(CHAT_COLUMN_MAX_WIDTH)
                     .pb(16.0)
                     .child(transcript_only_banner(k, t)),
             );
@@ -273,7 +273,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
             key: "transcript-only-banner".into(),
             el: col()
                 .w_full()
-                .max_w(768.0)
+                .max_w(CHAT_COLUMN_MAX_WIDTH)
                 .child(transcript_only_banner(k, t)),
         });
     }
@@ -296,7 +296,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
             key: "older-messages".into(),
             el: row()
                 .w_full()
-                .max_w(768.0)
+                .max_w(CHAT_COLUMN_MAX_WIDTH)
                 .justify_center()
                 .py(4.0)
                 .child(older_btn),
@@ -353,11 +353,14 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
             if prev_bucket != Some(bucket) {
                 rows.push(RowSpec::Ready {
                     key: format!("day:{}:{}", bucket.0, bucket.1),
-                    el: row().w_full().max_w(768.0).child(day_separator_row(
-                        k,
-                        t,
-                        format_day_separator(ts, s.now_secs),
-                    )),
+                    el: row()
+                        .w_full()
+                        .max_w(CHAT_COLUMN_MAX_WIDTH)
+                        .child(day_separator_row(
+                            k,
+                            t,
+                            format_day_separator(ts, s.now_secs),
+                        )),
                 });
             }
             prev_bucket = Some(bucket);
@@ -456,9 +459,9 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         .w_full()
         .items_center()
         .px(24.0)
-        .pt(20.0)
-        .pb(20.0)
-        .gap(14.0)
+        .pt(16.0)
+        .pb(28.0)
+        .gap(16.0)
         .growth(GrowthSpec::default())
         .virtual_rows(
             row_count,
@@ -480,6 +483,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         .w_full()
         .grow(1.0)
         .min_h(0.0)
+        .clip_fade_linear(0.0, 12.0, 0.0, 24.0)
         .scroll(ScrollSpec { stick_bottom: true })
         .on_at_bottom(move |s: &mut AppState, at| {
             s.chat_ui
@@ -516,6 +520,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
                 .key("jump-to-latest-wrap")
                 .pin(Some(0.0), None, Some(0.0), Some(14.0))
                 .justify_center()
+                .transition(rune::Transition::none())
                 .child(pill),
         );
     }

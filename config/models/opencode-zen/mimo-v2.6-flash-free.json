@@ -1,0 +1,10 @@
+{
+  "id": "mimo-v2.6-flash-free",
+  "provider": "opencode-zen",
+  "displayName": "MiMo-V2.6-Flash Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -35,7 +35,7 @@ pub fn filter_provider_models<'a>(
 pub fn can_add_custom_model(provider_id: &str) -> bool {
     !matches!(
         provider_id.trim().to_ascii_lowercase().as_str(),
-        "codex-cli" | "openai-codex"
+        "codex-cli" | "openai-codex" | "claude-cli"
     )
 }
 

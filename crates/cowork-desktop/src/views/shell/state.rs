@@ -301,7 +301,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 if let Some(item) = items.get(s.shell_ui.command_palette_selected.min(max_idx)) {
                     let act = item.action.clone();
                     super::palette::close_command_palette(s);
-                    s.dispatch(act);
+                    s.dispatch_tx(act, tx);
                 }
                 return true;
             }
@@ -323,7 +323,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
             {
                 s.shell_ui.search_overlay_open = false;
                 s.shell_ui.search_selected = 0;
-                s.dispatch(item.action.clone());
+                s.dispatch_tx(item.action.clone(), tx);
                 return true;
             }
         }
@@ -342,7 +342,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 if let Some(item) = items.get(s.shell_ui.search_selected.min(max_idx)) {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
-                    s.dispatch(item.action.clone());
+                    s.dispatch_tx(item.action.clone(), tx);
                 }
                 return true;
             }
@@ -385,14 +385,15 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
     if ev.is_command('n') && !ev.mods.shift && !ev.mods.alt {
         let ws = s.active_workspace_id.clone();
-        s.dispatch(Action::Navigate(NavAction::OpenNewChat {
-            workspace_id: ws,
-        }));
+        s.dispatch_tx(
+            Action::Navigate(NavAction::OpenNewChat { workspace_id: ws }),
+            tx,
+        );
         return true;
     }
 
     if ev.is_command(',') && !ev.mods.shift {
-        s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
+        s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
         return true;
     }
 
@@ -414,6 +415,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
     if ev.key == Key::Escape {
         if handle_escape(s) {
+            s.flush_navigation_settle(tx);
             return true;
         }
         if matches!(s.window_mode, WindowMode::QuickChat | WindowMode::Utility) {

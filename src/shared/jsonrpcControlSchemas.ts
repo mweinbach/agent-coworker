@@ -1509,6 +1509,9 @@ const nativeToolSearchKindSchema = z.enum([
   "openRouterResponses",
   "anthropicBm25",
   "anthropicRegex",
+  "googleInteractions",
+  "claudeAgentSdk",
+  "codexDynamicTools",
 ]);
 
 const nativeProgrammaticToolCallingKindSchema = z.enum([

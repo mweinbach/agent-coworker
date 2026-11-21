@@ -248,6 +248,9 @@ fn build_settings_frame(
         layer,
     );
 
+    // Keep the shared `FullBleedSplit` root key ("shell") so swapping between workspace views
+    // and Settings keeps the vibrant macOS sidebar material and opaque main column mounted
+    // continuously without unmounting/re-fading over a transparent window.
     split
         .hide_sidebar_toggle()
         .titlebar_inset(leading_lights)
@@ -255,7 +258,6 @@ fn build_settings_frame(
         .spring(Spring::new(0.3, 0.0))
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
-        .key("settings-shell-frame")
 }
 
 fn build_workspace_split_frame(
@@ -295,6 +297,7 @@ fn build_workspace_split_frame(
                 .grow(1.0)
                 .shrink()
                 .min_h(0.0)
+                .transition(rune::Transition::none())
                 .children(canvas_content),
             None,
         )
@@ -1199,5 +1202,71 @@ mod tests {
         });
         rt.frame(0.0);
         assert_eq!(rt.state.preview_ui.active_slide, 2);
+    }
+
+    #[test]
+    fn switching_into_settings_pages_and_back_lands_opaque_without_single_frame_flash() {
+        let mut s = AppState {
+            scene_mode: true,
+            ..Default::default()
+        };
+        s.shell_ui.viewport_width = 1280.0;
+
+        let mut rt = Runtime::new(s, test_shell_root, (1280.0, 820.0), Env::new(true, 1.0));
+        rt.on_key = Some(handle_key);
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+
+        let click = |rt: &mut Runtime<AppState>, key: &str| {
+            let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(1.0 / 60.0);
+        };
+
+        let assert_settled_opaque = |rt: &Runtime<AppState>, phase: &str, active_key: &str| {
+            assert!(
+                !rt.state.settle_after_navigation,
+                "{phase}: navigation settle must be flushed on the click frame"
+            );
+            for shell_key in ["shell", "sidebar-pane", "main-column", active_key] {
+                let (_, opacity) = rt
+                    .presented(shell_key)
+                    .unwrap_or_else(|| panic!("{phase}: missing {shell_key}"));
+                assert!(
+                    opacity >= 0.99,
+                    "{phase}: {shell_key} flashed with opacity {opacity} on first frame"
+                );
+            }
+            let exiting: Vec<_> = rt
+                .elements()
+                .into_iter()
+                .filter(|e| e.exiting && e.key.as_deref().is_some())
+                .map(|e| e.key.unwrap_or_default())
+                .collect();
+            assert!(
+                exiting.is_empty(),
+                "{phase}: unexpected exiting ghost nodes on first frame: {exiting:?}"
+            );
+        };
+
+        // 1. Chat -> Settings (click sidebar Settings row)
+        click(&mut rt, "sidebar-settings");
+        assert_eq!(rt.state.route().view, ViewId::Settings);
+        assert_settled_opaque(&rt, "chat->settings", "settings-main-pane");
+
+        // 2. Settings Models -> Settings Desktop
+        click(&mut rt, "settings-nav-desktop");
+        assert_eq!(
+            rt.state.route().settings_page,
+            crate::router::SettingsPageId::Desktop
+        );
+        assert_settled_opaque(&rt, "settings->desktop", "settings-page-desktop");
+
+        // 3. Settings -> Back to Chat
+        click(&mut rt, "settings-back-button");
+        assert_eq!(rt.state.route().view, ViewId::Chat);
+        assert_settled_opaque(&rt, "settings->chat", "chat-view");
     }
 }

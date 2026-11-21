@@ -35,14 +35,14 @@ fn test_temp_base() -> PathBuf {
 const BUILTIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 #[test]
-fn masks_api_keys_and_exposes_all_14_provider_auth_methods() {
+fn masks_api_keys_and_exposes_all_provider_auth_methods() {
     assert_eq!(mask_api_key(""), "****");
     assert_eq!(mask_api_key("abc"), "****");
     assert_eq!(mask_api_key("12345678"), "********");
     assert_eq!(mask_api_key("sk-proj-1234567890abcd"), "sk-p...abcd");
 
     let methods = default_provider_auth_methods();
-    assert_eq!(methods.len(), 14);
+    assert_eq!(methods.len(), ProviderName::ALL.len());
     for provider in ProviderName::ALL {
         assert!(
             methods.contains_key(provider.as_str()),
@@ -50,6 +50,10 @@ fn masks_api_keys_and_exposes_all_14_provider_auth_methods() {
             provider.as_str()
         );
     }
+
+    let claude_cli = methods["claude-cli"].as_array().unwrap();
+    let claude_cli_ids: Vec<&str> = claude_cli.iter().filter_map(|m| m["id"].as_str()).collect();
+    assert_eq!(claude_cli_ids, vec!["oauth_cli"]);
 
     let google = methods["google"].as_array().unwrap();
     let google_ids: Vec<&str> = google.iter().filter_map(|m| m["id"].as_str()).collect();
@@ -173,7 +177,7 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
     assert_eq!(hits.load(Ordering::SeqCst), 1);
     assert_eq!(
         auth_seen.lock().unwrap().as_slice(),
-        &["Api-Key bst-secret-token-1234"]
+        &["Bearer bst-secret-token-1234"]
     );
     let baseten_entry = cat1
         .all
@@ -280,7 +284,7 @@ async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_m
         base_url_overrides: base_url_overrides.clone(),
     })
     .await;
-    assert_eq!(cat_initial.all.len(), 14);
+    assert_eq!(cat_initial.all.len(), ProviderName::ALL.len());
 
     let openai_initial = cat_initial
         .all

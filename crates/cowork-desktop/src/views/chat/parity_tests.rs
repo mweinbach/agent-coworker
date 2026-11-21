@@ -2703,3 +2703,134 @@ fn long_transcript_builds_only_the_rows_near_the_viewport() {
     );
     assert!(built.len() < 60, "built {} transcript rows", built.len());
 }
+
+#[test]
+fn activity_and_reasoning_disclosures_open_and_close_without_ghost_overlap_or_fade() {
+    let mut s = build_populated_thread_state(false);
+    let rt_thread = s.thread_runtime_by_id.get_mut("th-demo").unwrap();
+    rt_thread.pending_interactions.clear();
+    rt_thread.feed = vec![
+        FeedItem::Message {
+            id: "u1".into(),
+            role: FeedMessageRole::User,
+            content: "what else can you tell me about it?".into(),
+            client_message_id: None,
+            attachments: vec![],
+            references: vec![],
+            citations: vec![],
+            streaming: false,
+            timestamp_ms: 1_763_100_000_000,
+        },
+        FeedItem::Reasoning {
+            id: "r1".into(),
+            content: "**Uncovering Additional Details**\n\nChecking primary sources.\n\n**Analyzing Recent Coverage**\n\nCross-referencing The Verge and PetaPixel on the leadership changes.\n\n**Deepening The Dive**\n\nReviewing timeline impacts.".into(),
+            mode: "reasoning".into(),
+            streaming: false,
+            timestamp_ms: 1_763_100_001_000,
+        },
+        FeedItem::Tool {
+            id: "t1".into(),
+            tool_name: "web_search".into(),
+            title: Some("Searching the web".into()),
+            status: ToolRunStatus::Completed,
+            input: json!({ "query": "Apple camera team leadership" }),
+            output: Some(json!({ "results": ["Article 1", "Article 2"] })),
+            error: None,
+            diff: None,
+            timestamp_ms: 1_763_100_002_000,
+            completed_at_ms: Some(1_763_100_004_000),
+            output_truncated: false,
+            streaming: false,
+            call_id: None,
+        },
+        FeedItem::Message {
+            id: "a1".into(),
+            role: FeedMessageRole::Assistant,
+            content: "There are a few really interesting layers underneath the reshuffle.".into(),
+            client_message_id: None,
+            attachments: vec![],
+            references: vec![],
+            citations: vec![],
+            streaming: false,
+            timestamp_ms: 1_763_100_010_000,
+        },
+    ];
+
+    let mut rt = Runtime::new(s, test_chat_root, SNAP_VIEWPORT, Env::new(true, 1.0));
+    rt.frame(0.0);
+    for _ in 0..8 {
+        rt.frame(1.0 / 120.0);
+    }
+
+    let assert_no_exiting_ghosts = |rt: &Runtime<AppState>, phase: &str, frame: usize| {
+        let ghosts: Vec<String> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| {
+                e.exiting
+                    && e.key.as_deref().is_some_and(|k| {
+                        k.starts_with("group-body:")
+                            || k.starts_with("reason:")
+                            || k.starts_with("tool:")
+                            || k.contains(":node:")
+                    })
+            })
+            .filter_map(|e| e.key)
+            .collect();
+        assert!(
+            ghosts.is_empty(),
+            "{phase} frame {frame}: found overlapping exiting disclosure ghosts: {ghosts:?}"
+        );
+    };
+
+    // 1. Open the activity group.
+    rt.update(|st, tx| {
+        st.chat_ui.toggle_activity("group-r1", false);
+        tx.keep_on_screen("group-hdr:group-r1");
+    });
+    for f in 0..36 {
+        rt.frame(1.0 / 120.0);
+        assert_no_exiting_ghosts(&rt, "open-group", f);
+        if let Some(body) = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("group-body:group-r1"))
+        {
+            assert!(
+                body.opacity >= 0.99,
+                "open-group frame {f}: group-body must not fade in at partial opacity ({})",
+                body.opacity
+            );
+        }
+    }
+
+    // 2. Open an inner reasoning section, then close it — sibling nodes below must never overlap a fading body.
+    rt.update(|st, tx| {
+        st.chat_ui
+            .expanded_reasoning_sections
+            .insert("reason:r1:1".into());
+        tx.keep_on_screen("reason:r1:1");
+    });
+    for f in 0..24 {
+        rt.frame(1.0 / 120.0);
+        assert_no_exiting_ghosts(&rt, "open-reason", f);
+    }
+    rt.update(|st, tx| {
+        st.chat_ui.expanded_reasoning_sections.remove("reason:r1:1");
+        tx.keep_on_screen("reason:r1:1");
+    });
+    for f in 0..24 {
+        rt.frame(1.0 / 120.0);
+        assert_no_exiting_ghosts(&rt, "close-reason", f);
+    }
+
+    // 3. Close the outer activity group — must leave zero fading ghosts overlapping the reply below.
+    rt.update(|st, tx| {
+        st.chat_ui.toggle_activity("group-r1", true);
+        tx.keep_on_screen("group-hdr:group-r1");
+    });
+    for f in 0..48 {
+        rt.frame(1.0 / 120.0);
+        assert_no_exiting_ghosts(&rt, "close-group", f);
+    }
+}

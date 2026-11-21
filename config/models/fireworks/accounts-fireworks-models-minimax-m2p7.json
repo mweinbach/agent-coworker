@@ -2,7 +2,7 @@
   "id": "accounts/fireworks/models/minimax-m2p7",
   "provider": "fireworks",
   "displayName": "MiniMax M2.7",
-  "knowledgeCutoff": "March 2025",
+  "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

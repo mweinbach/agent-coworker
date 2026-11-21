@@ -6,9 +6,11 @@
   "supportsImageInput": true,
   "promptTemplate": "system-models/gemini-3.5-flash.md",
   "providerOptionsDefaults": {
+    "reasoningEffort": "dynamic",
     "thinkingConfig": {
       "includeThoughts": true
     }
   },
+  "supportedReasoningEfforts": ["dynamic", "minimal", "low", "medium", "high"],
   "isDefault": false
 }

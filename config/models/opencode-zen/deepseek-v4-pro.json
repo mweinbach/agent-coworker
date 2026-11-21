@@ -1,0 +1,11 @@
+{
+  "id": "deepseek-v4-pro",
+  "provider": "opencode-zen",
+  "displayName": "DeepSeek V4 Pro",
+  "knowledgeCutoff": "May 2025",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["high", "max"],
+  "isDefault": false
+}

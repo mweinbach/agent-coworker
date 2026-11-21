@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,13 +25,63 @@ use crate::transport::{
 };
 
 const DEFAULT_GOOGLE_API_VERSION: &str = "v1beta";
+const GOOGLE_NATIVE_TOOL_SEARCH_PLAN_KIND: &str = "googleInteractions";
 
-const GOOGLE_FLASH_MODELS: &[&str] = &[
+const GOOGLE_MINIMAL_THINKING_MODELS: &[&str] = &[
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite-preview",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
 ];
+const GOOGLE_XHIGH_THINKING_MODELS: &[&str] = &["gemini-4-hydrogen", "gemini-4-neon"];
+
+/// Gemini Tool retrieval is a preview Interactions API feature (`v1beta` only). Keep this list
+/// limited to the models explicitly named in https://aistudio.google.com/docs/tool-retrieval.
+pub fn google_model_supports_native_tool_search(model_id: &str) -> bool {
+    let normalized = model_id
+        .trim()
+        .trim_start_matches("models/")
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "gemini-4-carbon"
+            | "gemini-4-argon"
+            | "gemini-4-neon"
+            | "gemini-4-hydrogen"
+            | "gemini-3.8-flash"
+            | "gemini-3.6-flash"
+    )
+}
+
+/// Read the serialized native plan without depending on the shared enum variant. This keeps the
+/// Google wire implementation compilable before central capability wiring adds
+/// `NativeToolSearchKind::GoogleInteractions` (serialized as `googleInteractions`).
+fn google_deferred_tool_names<'a>(
+    model_id: &str,
+    provider_options: &'a Map<String, Value>,
+) -> Option<HashSet<&'a str>> {
+    if !google_model_supports_native_tool_search(model_id) {
+        return None;
+    }
+    let plan = provider_options
+        .get(crate::endpoint_capabilities::COWORK_NATIVE_TOOL_CALLING_OPTION_KEY)?
+        .as_object()?;
+    if plan.get("toolSearch").and_then(Value::as_str) != Some(GOOGLE_NATIVE_TOOL_SEARCH_PLAN_KIND) {
+        return None;
+    }
+    let names = plan
+        .get("deferredToolNames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    Some(names)
+}
 
 /// Summary of `repair_google_tool_call_signatures` over a replay transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,6 +461,20 @@ struct GoogleSseEvent {
 
 #[async_trait]
 impl ProviderTransport for GoogleInteractionsTransport {
+    fn native_tool_capabilities(
+        &self,
+        base_url: Option<&str>,
+        model_id: &str,
+        strategy: cowork_config::ToolCallingStrategy,
+    ) -> crate::endpoint_capabilities::EndpointToolCapabilities {
+        crate::endpoint_capabilities::resolve_endpoint_tool_capabilities(
+            cowork_config::ProviderName::Google,
+            base_url,
+            model_id,
+            strategy,
+        )
+    }
+
     async fn stream_step(
         &self,
         request: ProviderStepRequest,
@@ -779,10 +843,16 @@ fn normalize_google_thinking_level(model_id: &str, raw: Option<&str>) -> Option<
     if level == "dynamic" {
         return None;
     }
-    let is_flash = GOOGLE_FLASH_MODELS
+    let normalized_model = model_id.trim().to_ascii_lowercase();
+    let allowed: &[&str] = if GOOGLE_XHIGH_THINKING_MODELS
         .iter()
-        .any(|id| model_id.trim().eq_ignore_ascii_case(id));
-    let allowed: &[&str] = if is_flash {
+        .any(|id| normalized_model == *id)
+    {
+        &["low", "medium", "high", "xhigh"]
+    } else if GOOGLE_MINIMAL_THINKING_MODELS
+        .iter()
+        .any(|id| normalized_model == *id)
+    {
         &["minimal", "low", "medium", "high"]
     } else {
         &["low", "medium", "high"]
@@ -876,21 +946,43 @@ fn build_google_interactions_payload(
         gen_cfg.insert("max_output_tokens".to_string(), json!(max_out));
     }
     let tools_disabled = crate::transport::request_disables_all_tools(provider_options);
+    let deferred_tool_names = if tools_disabled {
+        None
+    } else {
+        google_deferred_tool_names(model_id, provider_options)
+    };
+    let mut has_deferred_tools = false;
     let mut wire_tools: Vec<Value> = if tools_disabled {
         Vec::new()
     } else {
         tools
             .iter()
             .map(|t| {
-                json!({
+                let mut wire_tool = json!({
                     "type": "function",
                     "name": t.name,
                     "description": t.description,
                     "parameters": t.parameters,
-                })
+                });
+                if deferred_tool_names
+                    .as_ref()
+                    .is_some_and(|names| names.contains(t.name.as_str()))
+                {
+                    wire_tool
+                        .as_object_mut()
+                        .expect("Google function tool is an object")
+                        .insert("defer_loading".to_string(), Value::Bool(true));
+                    has_deferred_tools = true;
+                }
+                wire_tool
             })
             .collect()
     };
+    if has_deferred_tools {
+        // Google's server-side Tool retrieval requires one tool_search entry and at least one
+        // deferred function. Tool declarations are still sent in full on every request.
+        wire_tools.insert(0, json!({ "type": "tool_search" }));
+    }
 
     // TS `buildGoogleStreamOptions`: `getGoogleNativeWebSearchFromProviderOptions` (default on).
     let native_web_requested = !tools_disabled
@@ -1255,6 +1347,7 @@ fn media_source_to_google_part(kind: MediaKind, source: &MediaSource) -> Option<
 fn canonical_native_google_name(wire_type: &str) -> Option<&'static str> {
     match wire_type {
         "google_search_call" | "google_search_result" => Some("nativeWebSearch"),
+        "tool_search_call" | "tool_search_result" => Some("tool_search"),
         "url_context_call" | "url_context_result" => Some("nativeUrlContext"),
         "file_search_call" | "file_search_result" => Some("nativeFileSearch"),
         "google_maps_call" | "google_maps_result" => Some("nativeGoogleMaps"),
@@ -1267,6 +1360,8 @@ fn native_google_wire_type(name: &str, role: ProviderNativeToolRole) -> Option<&
     match (name, role) {
         ("nativeWebSearch", ProviderNativeToolRole::Call) => Some("google_search_call"),
         ("nativeWebSearch", ProviderNativeToolRole::Result) => Some("google_search_result"),
+        ("tool_search", ProviderNativeToolRole::Call) => Some("tool_search_call"),
+        ("tool_search", ProviderNativeToolRole::Result) => Some("tool_search_result"),
         ("nativeUrlContext", ProviderNativeToolRole::Call) => Some("url_context_call"),
         ("nativeUrlContext", ProviderNativeToolRole::Result) => Some("url_context_result"),
         ("nativeFileSearch", ProviderNativeToolRole::Call) => Some("file_search_call"),
@@ -1375,6 +1470,20 @@ fn native_google_tool_result_output(
                 entries.push(record.clone());
             }
             out.insert("results".into(), Value::Array(entries));
+        }
+        "tool_search" => {
+            out.insert(
+                "functionNames".into(),
+                Value::Array(native_string_array(call_arguments, "function_names")),
+            );
+            let declarations = result_entries();
+            let loaded_names: Vec<Value> = declarations
+                .iter()
+                .filter_map(|entry| entry.get("name").and_then(Value::as_str))
+                .map(|name| Value::String(name.to_string()))
+                .collect();
+            out.insert("tools".into(), Value::Array(loaded_names));
+            out.insert("results".into(), Value::Array(declarations));
         }
         "nativeMcpServerTool" => {
             let non_empty = |key: &str| {
@@ -2437,16 +2546,20 @@ impl GoogleStreamState {
             "reasoning_output_tokens",
             "reasoningOutputTokens",
         ]);
+        // Tool-use prompts are separate from both total_input_tokens and total_tokens in the
+        // Interactions API usage schema, and are billed at the model's input-token rate.
+        let tool_use = pick_u64(&["total_tool_use_tokens", "totalToolUseTokens"]).unwrap_or(0);
         let total = pick_u64(&[
             "total_tokens",
             "totalTokens",
             "total_token_count",
             "totalTokenCount",
         ])
-        .unwrap_or(input + output);
+        .unwrap_or(input + output + reasoning.unwrap_or(0))
+            + tool_use;
 
         self.usage = TurnUsage {
-            prompt_tokens: input,
+            prompt_tokens: input + tool_use,
             completion_tokens: output,
             total_tokens: total,
             cached_prompt_tokens: cached.filter(|&n| n > 0),
@@ -2592,6 +2705,168 @@ mod native_web_search_tests {
             .filter(|kind| *kind != "function")
             .map(str::to_owned)
             .collect()
+    }
+
+    fn tool_retrieval_options(deferred_tool_names: &[&str]) -> Map<String, Value> {
+        let mut options = Map::new();
+        options.insert(
+            crate::endpoint_capabilities::COWORK_NATIVE_TOOL_CALLING_OPTION_KEY.to_owned(),
+            json!({
+                "toolSearch": "googleInteractions",
+                "deferredToolNames": deferred_tool_names,
+            }),
+        );
+        options
+    }
+
+    #[test]
+    fn thinking_levels_match_current_model_capabilities() {
+        assert_eq!(
+            normalize_google_thinking_level("gemini-4-hydrogen", Some("xhigh")),
+            Some("xhigh".to_string())
+        );
+        assert_eq!(
+            normalize_google_thinking_level("gemini-4-neon", Some("xhigh")),
+            Some("xhigh".to_string())
+        );
+        assert_eq!(
+            normalize_google_thinking_level("gemini-4-carbon", Some("xhigh")),
+            None
+        );
+        assert_eq!(
+            normalize_google_thinking_level("gemini-3.8-flash", Some("minimal")),
+            None
+        );
+        assert_eq!(
+            normalize_google_thinking_level("gemini-3.6-flash", Some("minimal")),
+            Some("minimal".to_string())
+        );
+        assert_eq!(
+            normalize_google_thinking_level("gemini-3.5-flash-lite", Some("minimal")),
+            Some("minimal".to_string())
+        );
+        assert_eq!(
+            normalize_google_thinking_level("gemini-4-argon", Some("dynamic")),
+            None
+        );
+    }
+
+    #[test]
+    fn native_tool_search_defers_only_planned_tools_on_supported_models() {
+        let tools = [tool("read"), tool("write"), tool("customTool")];
+        let options = tool_retrieval_options(&["read", "customTool", "notPresent"]);
+        let payload = build_google_interactions_payload(
+            "gemini-4-hydrogen",
+            "system",
+            &[],
+            &tools,
+            None,
+            &options,
+            None,
+            false,
+        );
+        let wire_tools = payload["tools"].as_array().unwrap();
+        assert_eq!(wire_tools[0], json!({ "type": "tool_search" }));
+        for name in ["read", "customTool"] {
+            let deferred = wire_tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(deferred["defer_loading"], Value::Bool(true));
+            assert_eq!(deferred["type"], "function");
+            assert!(deferred["parameters"].is_object());
+        }
+        let eager = wire_tools
+            .iter()
+            .find(|tool| tool["name"] == "write")
+            .unwrap();
+        assert!(eager.get("defer_loading").is_none());
+    }
+
+    #[test]
+    fn native_tool_search_requires_supported_model_and_matching_deferred_tool() {
+        let tools = [tool("read")];
+        for (model, deferred_names) in [
+            ("gemini-3.1-pro-preview", vec!["read"]),
+            ("gemini-4-hydrogen", vec!["notPresent"]),
+            ("gemini-3.5-flash-lite", vec!["read"]),
+        ] {
+            let options = tool_retrieval_options(&deferred_names);
+            let payload = build_google_interactions_payload(
+                model,
+                "system",
+                &[],
+                &tools,
+                None,
+                &options,
+                None,
+                false,
+            );
+            let wire_tools = payload["tools"].as_array().unwrap();
+            assert!(wire_tools.iter().all(|tool| tool["type"] != "tool_search"));
+            assert!(wire_tools[0].get("defer_loading").is_none());
+        }
+
+        for supported in [
+            "gemini-4-carbon",
+            "gemini-4-argon",
+            "gemini-4-neon",
+            "gemini-4-hydrogen",
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+        ] {
+            assert!(google_model_supports_native_tool_search(supported));
+        }
+    }
+
+    #[test]
+    fn native_tool_search_steps_round_trip_and_project_loaded_tools() {
+        assert_eq!(
+            canonical_native_google_name("tool_search_call"),
+            Some("tool_search")
+        );
+        assert_eq!(
+            canonical_native_google_name("tool_search_result"),
+            Some("tool_search")
+        );
+        assert_eq!(
+            native_google_wire_type("tool_search", ProviderNativeToolRole::Call),
+            Some("tool_search_call")
+        );
+        assert_eq!(
+            native_google_wire_type("tool_search", ProviderNativeToolRole::Result),
+            Some("tool_search_result")
+        );
+
+        let arguments = json!({ "function_names": ["convert_currency"] });
+        let result = json!([{
+            "type": "function",
+            "name": "convert_currency",
+            "parameters": { "type": "object" }
+        }]);
+        let projected = native_google_tool_result_output(
+            "tool_search",
+            "tsc_abc123",
+            arguments.as_object().unwrap(),
+            Some(&result),
+        );
+        assert_eq!(projected["functionNames"], json!(["convert_currency"]));
+        assert_eq!(projected["tools"], json!(["convert_currency"]));
+        assert_eq!(projected["raw"], result);
+    }
+
+    #[test]
+    fn usage_includes_separately_reported_tool_use_prompt_tokens_once() {
+        let usage = json!({
+            "total_input_tokens": 100,
+            "total_output_tokens": 25,
+            "total_thought_tokens": 0,
+            "total_tokens": 125,
+            "total_tool_use_tokens": 50
+        });
+        let mut state = GoogleStreamState::new("turn".to_string(), "model".to_string());
+        state.parse_usage(usage.as_object().unwrap());
+        assert_eq!(state.usage.prompt_tokens, 150);
+        assert_eq!(state.usage.completion_tokens, 25);
+        assert_eq!(state.usage.total_tokens, 175);
+        assert_eq!(state.usage.reasoning_output_tokens, Some(0));
     }
 
     #[test]

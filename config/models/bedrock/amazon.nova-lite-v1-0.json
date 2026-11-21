@@ -2,9 +2,10 @@
   "id": "amazon.nova-lite-v1:0",
   "provider": "bedrock",
   "displayName": "Amazon Nova Lite",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "October 2024",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["none"],
   "isDefault": true
 }

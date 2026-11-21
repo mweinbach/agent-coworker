@@ -16,7 +16,10 @@ use super::primitives::{
     StatusTone, entity_palette_index, format_byte_size, management_targets, name_initials,
 };
 use super::privacy_telemetry::apply_privacy_patch;
-use super::providers::{fallback_providers, is_provider_connected, provider_model_preview};
+use super::providers::{
+    fallback_providers, is_provider_connected, provider_model_preview, provider_supports_api_key,
+    provider_supports_oauth,
+};
 use super::providers_utils::{
     extract_rate_limit_hint, provider_status_badge, sort_and_filter_providers,
 };
@@ -535,6 +538,30 @@ fn providers_and_manage_models_helpers_filter_and_detect_connection() {
     let defaults = fallback_providers();
     assert!(defaults.iter().any(|p| p.id == "anthropic"));
     assert!(defaults.iter().any(|p| p.id == "lmstudio"));
+
+    // Default auth methods match config/providers.json: Google/OpenAI/Anthropic are API-key only,
+    // while Codex CLI exposes browser OAuth.
+    let mut auth_state = AppState::default();
+    assert!(!provider_supports_oauth(&auth_state, "google"));
+    assert!(!provider_supports_oauth(&auth_state, "openai"));
+    assert!(!provider_supports_oauth(&auth_state, "anthropic"));
+    assert!(provider_supports_oauth(&auth_state, "codex-cli"));
+    assert!(provider_supports_api_key(&auth_state, "google"));
+    assert!(!provider_supports_api_key(&auth_state, "codex-cli"));
+
+    // Explicit server specs always win over fallback heuristics.
+    auth_state.provider_auth_method_specs.insert(
+        "google".to_string(),
+        vec![crate::state::ProviderAuthMethodSpec {
+            id: "api_key".to_string(),
+            method_type: "api".to_string(),
+            label: Some("API key".to_string()),
+            oauth_mode: None,
+            fields: Vec::new(),
+        }],
+    );
+    assert!(!provider_supports_oauth(&auth_state, "google"));
+    assert!(provider_supports_api_key(&auth_state, "google"));
 
     let lm = ProviderSummary {
         id: "lmstudio".to_string(),

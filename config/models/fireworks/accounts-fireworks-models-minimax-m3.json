@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/minimax-m3",
+  "provider": "fireworks",
+  "displayName": "MiniMax M3",
+  "knowledgeCutoff": "January 2026",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

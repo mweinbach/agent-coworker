@@ -2,9 +2,10 @@
   "id": "gpt-5.4-pro",
   "provider": "opencode-zen",
   "displayName": "GPT-5.4 Pro",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "August 31, 2025",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["medium", "high", "xhigh"],
   "isDefault": false
 }

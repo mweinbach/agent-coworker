@@ -1,0 +1,16 @@
+{
+  "id": "gemini-4-hydrogen",
+  "provider": "google",
+  "displayName": "Gemini 4 Hydrogen",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3.5-flash.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "dynamic",
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
+  },
+  "supportedReasoningEfforts": ["dynamic", "low", "medium", "high", "xhigh"],
+  "isDefault": false
+}

@@ -14,7 +14,7 @@ use crate::router::SettingsPageId;
 use crate::state::{
     AppState, ConfirmDialogRequest, NotificationTone, WorkflowRunView, dismiss_toast,
 };
-use crate::theme::ThemeTokens;
+use crate::theme::{ThemeTokens, composite_srgb_over, warning_ink};
 
 pub(crate) use super::onboarding::is_onboarding_visible;
 use super::{helpers, icons, onboarding, palette};
@@ -90,21 +90,22 @@ fn build_toast_region(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
     let mut region = ToastRegion::new();
     for toast in visible.into_iter().take(5) {
         let key_for_close = toast.key.clone();
-        let (glyph, tint) = match toast.tone {
-            NotificationTone::Success => (&icons::CHECK_CIRCLE, t.success),
-            NotificationTone::Warning => (&icons::ALERT_TRIANGLE, t.warning),
-            NotificationTone::Error => (&icons::ALERT_TRIANGLE, t.danger),
-            NotificationTone::Info => (&icons::INFO, t.info),
+        let (glyph, tint, icon_ink) = match toast.tone {
+            NotificationTone::Success => (&icons::CHECK_CIRCLE, t.success, t.success),
+            NotificationTone::Warning => (&icons::ALERT_TRIANGLE, t.warning, warning_ink(t)),
+            NotificationTone::Error => (&icons::ALERT_TRIANGLE, t.danger, t.danger),
+            NotificationTone::Info => (&icons::INFO, t.info, t.info),
         };
         let mut built = Toast::new(toast.key.clone(), toast.title.clone())
-            .icon(k, glyph)
+            .lead(icon(glyph, 16.0).color(icon_ink))
             .on_close(move |s: &mut AppState| {
                 dismiss_toast(s, key_for_close.clone());
             });
         if let Some(desc) = toast.description.as_deref() {
             built = built.description(desc);
         }
-        let el_toast = built.build(k).border(1.0, tint);
+        let border_alpha = if t.dark { 0.30 } else { 0.28 };
+        let el_toast = built.build(k).border(1.0, k.alpha(tint, border_alpha));
         region = region.toast(el_toast);
     }
 
@@ -277,12 +278,17 @@ fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
 
     let mut body = col().gap(12.0);
     if let Some(err) = modal.error.as_deref() {
+        let err_bg = composite_srgb_over(
+            t.danger.alpha(if t.dark { 0.12 } else { 0.07 }),
+            t.elevated_bg,
+        );
         body = body.child(
             el().w_full()
                 .padding(10.0)
-                .radius(6.0)
-                .fill(t.elevated_bg)
-                .border(1.0, t.danger)
+                .radius(8.0)
+                .continuous_corners()
+                .fill(err_bg)
+                .border(1.0, k.alpha(t.danger, 0.30))
                 .child(text(err).font(t.caption).color(t.danger).wrap()),
         );
     }
@@ -301,14 +307,17 @@ fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
                 Button::new("Provider settings")
                     .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Small)
-                    .on_press_tx(|s: &mut AppState, _| {
+                    .on_press_tx(|s: &mut AppState, tx| {
                         s.dispatch(Action::Shell(ShellAction::DismissLmStudioStartModal));
-                        s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                            page: SettingsPageId::Models,
-                            tab: None,
-                            section: None,
-                            new_provider: false,
-                        }));
+                        s.dispatch_tx(
+                            Action::Navigate(NavAction::OpenSettingsIntent {
+                                page: SettingsPageId::Models,
+                                tab: None,
+                                section: None,
+                                new_provider: false,
+                            }),
+                            tx,
+                        );
                     })
                     .build(k),
             )
@@ -621,10 +630,10 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 .gap(10.0)
                 .center_y()
                 .hover(t.hover)
-                .on_press_tx(move |s: &mut AppState, _| {
+                .on_press_tx(move |s: &mut AppState, tx| {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
-                    s.dispatch(action.clone());
+                    s.dispatch_tx(action.clone(), tx);
                 })
                 .child(icon(item.icon_glyph, 15.0).color(if selected {
                     t.accent

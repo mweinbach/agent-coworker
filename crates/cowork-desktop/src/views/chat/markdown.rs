@@ -89,14 +89,14 @@ pub fn markdown_style(
         .link_hover(t.accent_hover)
         .inline_code_bg(t.code_bg)
         .inline_code_pad(1.5)
-        .code_block(t.code_bg, t.border)
-        .code_block_padding(12.0, 10.0)
+        .code_block(Color::TRANSPARENT, Color::TRANSPARENT)
+        .code_block_padding(14.0, 12.0)
         .code_block_font(TextStyle {
             size: if compact { 12.0 } else { 12.5 },
             line_height: if compact { 18.0 } else { 19.0 },
             ..t.code
         })
-        .code_margin(8.0, 12.0)
+        .code_margin(0.0, 0.0)
         .quote(t.border_strong, 2.5, 12.0, t.text_muted)
         .rule(t.border_muted)
         .body_font(body)
@@ -640,11 +640,12 @@ fn desktop_markdown_chunk(
             let header = row()
                 .w_full()
                 .items_center()
-                .px(8.0)
-                .py(2.0)
+                .px(12.0)
+                .py(5.0)
+                .border_sides([0.0, 0.0, 1.0, 0.0], tok_code.border_muted)
                 .child(
                     text(lang_label)
-                        .font(kit_code.ty.small_medium)
+                        .font(kit_code.ty.text_xsmall)
                         .color(tok_code.text_muted),
                 )
                 .child(spacer())
@@ -653,7 +654,13 @@ fn desktop_markdown_chunk(
             col()
                 .key(block_key)
                 .w_full()
-                .gap(4.0)
+                .my(6.0)
+                .radius(10.0)
+                .continuous_corners()
+                .fill(tok_code.code_bg)
+                .border(1.0, tok_code.border_muted)
+                .border_layout()
+                .clip_rounded(10.0)
                 .child(header)
                 .child(card)
         })
@@ -809,7 +816,12 @@ pub fn citation_sources_carousel(
         .child(row().items_center().child(trigger));
 
     if expanded {
-        let mut strip = row().w_full().flex_wrap().gap(8.0);
+        let mut strip = row()
+            .key(format!("{message_key}:sources-strip"))
+            .w_full()
+            .flex_wrap()
+            .gap(8.0)
+            .transition(rune::Transition::none());
         for (idx, source) in sources.iter().enumerate() {
             let domain = display_domain(&source.url);
             let title_text = source
@@ -831,6 +843,7 @@ pub fn citation_sources_carousel(
                 .fill(t.card_bg)
                 .hover(t.elevated_bg)
                 .border(1.0, t.border_muted)
+                .transition(rune::Transition::none())
                 .help(source.url.clone());
             if is_allowed_external_url(&open_url) {
                 card = card

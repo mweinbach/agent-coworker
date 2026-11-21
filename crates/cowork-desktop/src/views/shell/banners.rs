@@ -2,19 +2,51 @@
 //! creation readiness notices, and the inline file preview split pane.
 
 use cowork_protocol::{CreationReadinessCheck, CreationRepairAction};
-use rune::{El, ScrollSpec, col, el, icon, row, text};
+use rune::{Color, El, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, IconButton, IconButtonVariant,
-    Kit, Spinner,
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit,
+    Spinner,
 };
 
 use crate::actions::{Action, NativeAction, NavAction, SettingsAction, ShellAction};
 use crate::router::{SettingsPageId, ViewId};
 use crate::state::{AppState, FilePreviewState, ServerLifecycleState, WorkspaceRuntime};
-use crate::theme::ThemeTokens;
+use crate::theme::{ThemeTokens, composite_srgb_over, warning_ink};
 use crate::ws::WsConnectionState;
 
 use super::{helpers, icons};
+
+const TOP_BANNER_MAX_WIDTH: f32 = 860.0;
+
+struct BannerSurface {
+    fill: Color,
+    border: Color,
+    badge_bg: Color,
+}
+
+/// Computes cohesive tinted banner fill, subtle semantic border, and icon badge surface
+/// without harsh 100%-opacity outlines or overlapping left accent stripes.
+fn banner_surface(tone: Color, t: &ThemeTokens) -> BannerSurface {
+    let tint_alpha = if t.dark { 0.09 } else { 0.055 };
+    let border_alpha = if t.dark { 0.28 } else { 0.30 };
+    let badge_alpha = if t.dark { 0.16 } else { 0.13 };
+    BannerSurface {
+        fill: composite_srgb_over(tone.alpha(tint_alpha), t.elevated_bg),
+        border: tone.alpha(border_alpha),
+        badge_bg: tone.alpha(badge_alpha),
+    }
+}
+
+fn banner_icon_badge(child: El, badge_bg: Color, size: f32, radius: f32) -> El {
+    el().size(size, size)
+        .shrink()
+        .radius(radius)
+        .continuous_corners()
+        .fill(badge_bg)
+        .center()
+        .child(child)
+        .a11y_hidden()
+}
 
 /// Wrap the active center subview (`chat::view`, `tasks`, etc.) with workspace
 /// readiness banners, runtime startup/recovery gates, and optional inline file preview.
@@ -90,6 +122,7 @@ pub fn build_primary_content(
                 .grow(1.0)
                 .shrink()
                 .min_h(0.0)
+                .transition(rune::Transition::none())
                 .child(build_inline_file_preview(s, preview, k, t))
         } else {
             row()
@@ -99,6 +132,7 @@ pub fn build_primary_content(
                 .grow(1.0)
                 .shrink()
                 .min_h(0.0)
+                .transition(rune::Transition::none())
                 .child(
                     el().key("primary-subview-pane")
                         .grow(1.0)
@@ -106,6 +140,7 @@ pub fn build_primary_content(
                         .min_w(240.0)
                         .min_h(0.0)
                         .h_full()
+                        .transition(rune::Transition::none())
                         .child(main_subview),
                 )
                 .child(el().w(1.0).h_full().fill(t.border_muted))
@@ -118,30 +153,42 @@ pub fn build_primary_content(
             .grow(1.0)
             .shrink()
             .min_h(0.0)
+            .transition(rune::Transition::none())
             .child(main_subview)
     };
 
-    if top_banners.is_empty() {
-        return body;
-    }
-
-    col()
+    // Keep `"primary-content-stack"` mounted continuously whether banners are present or not so
+    // toggling top banners never changes the parent key and remounts the active subview.
+    let mut stack = col()
         .key("primary-content-stack")
         .w_full()
         .h_full()
         .grow(1.0)
         .shrink()
         .min_h(0.0)
-        .child(
+        .transition(rune::Transition::none());
+
+    if !top_banners.is_empty() {
+        stack = stack.child(
             col()
                 .key("primary-top-banners")
                 .w_full()
-                .px(16.0)
-                .py(10.0)
-                .gap(8.0)
-                .children(top_banners),
-        )
-        .child(body)
+                .items_center()
+                .px(20.0)
+                .pt(12.0)
+                .pb(4.0)
+                .transition(rune::Transition::none())
+                .child(
+                    col()
+                        .w_full()
+                        .max_w(TOP_BANNER_MAX_WIDTH)
+                        .gap(8.0)
+                        .children(top_banners),
+                ),
+        );
+    }
+
+    stack.child(body)
 }
 
 fn workspace_runtime_progress_view(
@@ -165,59 +212,104 @@ fn workspace_runtime_progress_view(
     };
 
     let progress_row = row()
-        .gap(8.0)
+        .w_full()
+        .px(12.0)
+        .py(10.0)
+        .radius(8.0)
+        .continuous_corners()
+        .fill(t.panel_bg)
+        .border(1.0, t.border_muted)
+        .gap(10.0)
         .center_y()
-        .child(Spinner::new().size(15.0).color(t.accent).build(k))
-        .child(text(status_label).font(t.body).color(t.text_base));
+        .child(Spinner::new().size(14.0).color(t.accent).build(k))
+        .child(
+            text(status_label)
+                .font(k.ty.small_medium)
+                .color(t.text_base),
+        );
 
     let ws_id_owned = ws_id.to_owned();
-    let card = Card::new()
-        .accent(t.accent)
-        .title(format!("Starting {ws_name}"), Some(&icons::SPARKLES))
-        .description(detail)
-        .child(col().gap(10.0).pt(4.0).child(progress_row))
-        .action(
-            Button::new("Restart server")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .icon(&icons::REFRESH)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Native(NativeAction::RestartWorkspaceServer(
-                        ws_id_owned.clone(),
-                    )));
-                })
-                .build(k),
+    let card = col()
+        .role("group")
+        .label(format!("Starting {ws_name}"))
+        .w_full()
+        .max_w(480.0)
+        .shrink()
+        .padding(20.0)
+        .gap(16.0)
+        .radius(14.0)
+        .continuous_corners()
+        .fill(t.popover_bg)
+        .border(1.0, t.border)
+        .child(
+            row()
+                .w_full()
+                .gap(12.0)
+                .items_start()
+                .child(banner_icon_badge(
+                    icon(&icons::SPARKLES, 16.0).color(t.accent),
+                    t.accent_soft,
+                    36.0,
+                    9.0,
+                ))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .shrink()
+                        .min_w(0.0)
+                        .gap(4.0)
+                        .child(
+                            text(format!("Starting {ws_name}"))
+                                .font(t.title)
+                                .color(t.text_base),
+                        )
+                        .child(text(detail).font(t.body).color(t.text_muted).wrap()),
+                ),
         )
-        .action(
-            Button::new("Runtime settings")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                        page: SettingsPageId::Diagnostics,
-                        tab: None,
-                        section: None,
-                        new_provider: false,
-                    }));
-                })
-                .build(k),
-        )
-        .build(k);
+        .child(progress_row)
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(spacer())
+                .child(
+                    Button::new("Runtime settings")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Small)
+                        .on_press_tx(|s: &mut AppState, tx| {
+                            s.dispatch_tx(
+                                Action::Navigate(NavAction::OpenSettingsIntent {
+                                    page: SettingsPageId::Diagnostics,
+                                    tab: None,
+                                    section: None,
+                                    new_provider: false,
+                                }),
+                                tx,
+                            );
+                        })
+                        .build(k),
+                )
+                .child(
+                    Button::new("Restart server")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Small)
+                        .icon(&icons::REFRESH)
+                        .on_press_tx(move |s: &mut AppState, _| {
+                            s.dispatch(Action::Native(NativeAction::RestartWorkspaceServer(
+                                ws_id_owned.clone(),
+                            )));
+                        })
+                        .build(k),
+                ),
+        );
 
     el().key("workspace-runtime-progress")
         .w_full()
         .h_full()
         .center()
         .padding(24.0)
-        .child(
-            el().w(500.0)
-                .shrink()
-                .fill(t.card_bg)
-                .radius(12.0)
-                .border(1.0, t.border)
-                .padding(8.0)
-                .child(card),
-        )
+        .child(k.elevate(card, &k.elevation.raised))
 }
 
 fn startup_recovery_view(
@@ -233,58 +325,90 @@ fn startup_recovery_view(
         .or_else(|| rt.last_error.clone())
         .unwrap_or_else(|| "Workspace server is not responding.".to_owned());
 
+    let surface = banner_surface(t.danger, t);
     let ws_id_restart = ws_id.to_owned();
-    let card = Card::new()
-        .accent(t.danger)
-        .title(
-            format!("{ws_name} server unavailable"),
-            Some(&icons::ALERT_TRIANGLE),
+    let card = col()
+        .role("group")
+        .label(format!("{ws_name} server unavailable"))
+        .w_full()
+        .max_w(500.0)
+        .shrink()
+        .padding(20.0)
+        .gap(16.0)
+        .radius(14.0)
+        .continuous_corners()
+        .fill(t.popover_bg)
+        .border(1.0, surface.border)
+        .child(
+            row()
+                .w_full()
+                .gap(12.0)
+                .items_start()
+                .child(banner_icon_badge(
+                    icon(&icons::ALERT_TRIANGLE, 16.0).color(t.danger),
+                    surface.badge_bg,
+                    36.0,
+                    9.0,
+                ))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .shrink()
+                        .min_w(0.0)
+                        .gap(4.0)
+                        .child(
+                            text(format!("{ws_name} server unavailable"))
+                                .font(t.title)
+                                .color(t.text_base),
+                        )
+                        .child(text(err_msg).font(t.body).color(t.text_muted).wrap()),
+                ),
         )
-        .description(err_msg)
-        .action(
-            Button::new("Retry server start")
-                .variant(ButtonVariant::Contrast)
-                .icon(&icons::REFRESH)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.dispatch(Action::Native(NativeAction::RestartWorkspaceServer(
-                        ws_id_restart.clone(),
-                    )));
-                })
-                .build(k),
-        )
-        .action(
-            Button::new("Export diagnostics")
-                .variant(ButtonVariant::Ghost)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Settings(SettingsAction::ExportDiagnosticsBundle));
-                })
-                .build(k),
-        )
-        .action(
-            Button::new("Open Settings")
-                .variant(ButtonVariant::Ghost)
-                .icon(&icons::SETTINGS)
-                .on_press_tx(|s: &mut AppState, _| {
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
-                })
-                .build(k),
-        )
-        .build(k);
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    Button::new("Open Settings")
+                        .variant(ButtonVariant::Ghost)
+                        .control_size(ControlSize::Small)
+                        .icon(&icons::SETTINGS)
+                        .on_press_tx(|s: &mut AppState, tx| {
+                            s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
+                        })
+                        .build(k),
+                )
+                .child(spacer())
+                .child(
+                    Button::new("Export diagnostics")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Small)
+                        .on_press_tx(|s: &mut AppState, _| {
+                            s.dispatch(Action::Settings(SettingsAction::ExportDiagnosticsBundle));
+                        })
+                        .build(k),
+                )
+                .child(
+                    Button::new("Retry server start")
+                        .variant(ButtonVariant::Contrast)
+                        .control_size(ControlSize::Small)
+                        .icon(&icons::REFRESH)
+                        .on_press_tx(move |s: &mut AppState, _| {
+                            s.dispatch(Action::Native(NativeAction::RestartWorkspaceServer(
+                                ws_id_restart.clone(),
+                            )));
+                        })
+                        .build(k),
+                ),
+        );
 
     el().key("startup-recovery-view")
         .w_full()
         .h_full()
         .center()
         .padding(24.0)
-        .child(
-            el().w(520.0)
-                .shrink()
-                .fill(t.card_bg)
-                .radius(12.0)
-                .border(1.0, t.border_strong)
-                .padding(8.0)
-                .child(card),
-        )
+        .child(k.elevate(card, &k.elevation.raised))
 }
 
 fn build_connection_recovery_banner(
@@ -294,67 +418,84 @@ fn build_connection_recovery_banner(
     t: &ThemeTokens,
 ) -> Option<El> {
     let socket = s.workspace_socket_by_id.get(ws_id)?;
-    let (label, tone_color, detail): (String, rune::Color, String) = match socket {
-        WsConnectionState::Connected => return None,
-        WsConnectionState::Connecting | WsConnectionState::Handshaking => (
-            "Connecting to workspace server...".to_owned(),
-            t.info,
-            "Establishing WebSocket JSON-RPC session.".to_owned(),
-        ),
-        WsConnectionState::Reconnecting {
-            attempt,
-            max_attempts,
-            reason,
-            ..
-        } => (
-            format!("Reconnecting to workspace (attempt {attempt}/{max_attempts})..."),
-            t.warning,
-            if reason.is_empty() {
-                "Live turns will resume automatically once connected.".to_owned()
-            } else {
-                reason.clone()
-            },
-        ),
-        WsConnectionState::Exhausted { reason } | WsConnectionState::Failed { reason } => (
-            "Workspace connection lost".to_owned(),
-            t.danger,
-            if reason.is_empty() {
-                "Restart the workspace server to restore live updates.".to_owned()
-            } else {
-                reason.clone()
-            },
-        ),
-        WsConnectionState::Disconnected => (
-            "Disconnected from workspace server".to_owned(),
-            t.danger,
-            "Socket closed. Restart to restore live updates.".to_owned(),
-        ),
-    };
+    let (label, tone_color, icon_ink, is_busy, detail): (String, Color, Color, bool, String) =
+        match socket {
+            WsConnectionState::Connected => return None,
+            WsConnectionState::Connecting | WsConnectionState::Handshaking => (
+                "Connecting to workspace server...".to_owned(),
+                t.info,
+                t.info,
+                true,
+                "Establishing WebSocket JSON-RPC session.".to_owned(),
+            ),
+            WsConnectionState::Reconnecting {
+                attempt,
+                max_attempts,
+                reason,
+                ..
+            } => (
+                format!("Reconnecting to workspace (attempt {attempt}/{max_attempts})..."),
+                t.warning,
+                warning_ink(t),
+                true,
+                if reason.is_empty() {
+                    "Live turns will resume automatically once connected.".to_owned()
+                } else {
+                    reason.clone()
+                },
+            ),
+            WsConnectionState::Exhausted { reason } | WsConnectionState::Failed { reason } => (
+                "Workspace connection lost".to_owned(),
+                t.danger,
+                t.danger,
+                false,
+                if reason.is_empty() {
+                    "Restart the workspace server to restore live updates.".to_owned()
+                } else {
+                    reason.clone()
+                },
+            ),
+            WsConnectionState::Disconnected => (
+                "Disconnected from workspace server".to_owned(),
+                t.danger,
+                t.danger,
+                false,
+                "Socket closed. Restart to restore live updates.".to_owned(),
+            ),
+        };
 
+    let surface = banner_surface(tone_color, t);
+    let leading = if is_busy {
+        Spinner::new().size(13.0).color(icon_ink).build(k)
+    } else {
+        icon(&icons::ALERT_TRIANGLE, 14.0).color(icon_ink)
+    };
     let ws_id_owned = ws_id.to_owned();
     Some(
         row()
             .key("connection-recovery-banner")
             .w_full()
-            .px(12.0)
-            .py(8.0)
-            .radius(8.0)
-            .fill(t.elevated_bg)
-            .border(1.0, tone_color)
-            .gap(10.0)
+            .px(14.0)
+            .py(10.0)
+            .radius(10.0)
+            .continuous_corners()
+            .fill(surface.fill)
+            .border(1.0, surface.border)
+            .gap(12.0)
             .center_y()
-            .child(icon(&icons::ALERT_TRIANGLE, 15.0).color(tone_color))
+            .child(banner_icon_badge(leading, surface.badge_bg, 28.0, 7.0))
             .child(
                 col()
                     .grow(1.0)
                     .shrink()
+                    .min_w(0.0)
                     .gap(2.0)
-                    .child(text(label).font(t.label).color(t.text_base))
-                    .child(text(detail).font(t.caption).color(t.text_muted)),
+                    .child(text(label).font(k.ty.small_medium).color(t.text_base))
+                    .child(text(detail).font(k.ty.small).color(t.text_muted).wrap()),
             )
             .child(
                 Button::new("Restart server")
-                    .variant(ButtonVariant::Ghost)
+                    .variant(ButtonVariant::Outline)
                     .control_size(ControlSize::Small)
                     .icon(&icons::REFRESH)
                     .on_press_tx(move |s: &mut AppState, _| {
@@ -392,22 +533,40 @@ fn build_creation_readiness_notice(
     let detail = first_issue
         .map(|c| c.message.as_str())
         .unwrap_or("Connect a provider or finish runtime checks before starting new chats.");
-    let accent = if first_issue.is_some_and(|c| c.status == "pending") {
-        t.accent
+    let is_pending = first_issue.is_some_and(|c| c.status == "pending");
+    let tone = if is_pending { t.accent } else { t.warning };
+    let icon_ink = if is_pending { t.accent } else { warning_ink(t) };
+    let surface = banner_surface(tone, t);
+
+    let leading = if is_pending {
+        Spinner::new().size(13.0).color(icon_ink).build(k)
     } else {
-        t.warning
+        icon(&icons::ALERT_TRIANGLE, 14.0).color(icon_ink)
     };
 
-    let mut card = Card::new()
-        .accent(accent)
-        .title(title, Some(&icons::INFO))
-        .description(detail);
-
+    let mut action_buttons: Vec<El> = Vec::new();
+    action_buttons.push(
+        Button::new("Provider settings")
+            .variant(ButtonVariant::Outline)
+            .control_size(ControlSize::Small)
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.dispatch_tx(
+                    Action::Navigate(NavAction::OpenSettingsIntent {
+                        page: SettingsPageId::Models,
+                        tab: None,
+                        section: None,
+                        new_provider: false,
+                    }),
+                    tx,
+                );
+            })
+            .build(k),
+    );
     if let Some(repair) = first_issue.and_then(|c| c.repair_action.as_ref()) {
         let label = repair_action_label(repair);
         let repair_cloned = repair.clone();
         let ws_cloned = ws_id;
-        card = card.action(
+        action_buttons.push(
             Button::new(label)
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Small)
@@ -421,29 +580,63 @@ fn build_creation_readiness_notice(
         );
     }
 
-    card = card.action(
-        Button::new("Provider settings")
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenSettingsIntent {
-                    page: SettingsPageId::Models,
-                    tab: None,
-                    section: None,
-                    new_provider: false,
-                }));
-            })
-            .build(k),
-    );
+    let copy = col()
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .gap(2.0)
+        .child(text(title).font(k.ty.small_medium).color(t.text_base))
+        .child(text(detail).font(k.ty.small).color(t.text_muted).wrap());
 
-    Some(
-        el().key("creation-readiness-notice")
+    let actions_row = row()
+        .shrink()
+        .items_center()
+        .gap(8.0)
+        .children(action_buttons);
+
+    let narrow = s.shell_ui.viewport_width > 0.0 && s.shell_ui.viewport_width < 640.0;
+    let notice = if narrow {
+        col()
+            .key("creation-readiness-notice")
+            .role("group")
+            .label(title)
             .w_full()
-            .fill(t.card_bg)
-            .radius(8.0)
-            .border(1.0, t.border)
-            .child(card.build(k)),
-    )
+            .px(14.0)
+            .py(11.0)
+            .gap(10.0)
+            .radius(10.0)
+            .continuous_corners()
+            .fill(surface.fill)
+            .border(1.0, surface.border)
+            .child(
+                row()
+                    .w_full()
+                    .gap(12.0)
+                    .items_start()
+                    .child(banner_icon_badge(leading, surface.badge_bg, 28.0, 7.0))
+                    .child(copy),
+            )
+            .child(el().w_full().pl(40.0).child(actions_row))
+    } else {
+        row()
+            .key("creation-readiness-notice")
+            .role("group")
+            .label(title)
+            .w_full()
+            .px(14.0)
+            .py(11.0)
+            .gap(12.0)
+            .radius(10.0)
+            .continuous_corners()
+            .fill(surface.fill)
+            .border(1.0, surface.border)
+            .center_y()
+            .child(banner_icon_badge(leading, surface.badge_bg, 28.0, 7.0))
+            .child(copy)
+            .child(actions_row)
+    };
+
+    Some(notice)
 }
 
 fn readiness_issue_title(issue: Option<&CreationReadinessCheck>) -> &'static str {
@@ -523,32 +716,40 @@ fn build_updater_banner(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
                 parts.join(" · ")
             };
 
+            let surface = banner_surface(t.accent, t);
             Some(
                 row()
                     .key("updater-download-banner")
                     .w_full()
-                    .px(12.0)
-                    .py(8.0)
-                    .radius(8.0)
-                    .fill(t.elevated_bg)
-                    .border(1.0, t.accent)
-                    .gap(10.0)
+                    .px(14.0)
+                    .py(10.0)
+                    .radius(10.0)
+                    .continuous_corners()
+                    .fill(surface.fill)
+                    .border(1.0, surface.border)
+                    .gap(12.0)
                     .center_y()
-                    .child(Spinner::new().size(14.0).color(t.accent).build(k))
+                    .child(banner_icon_badge(
+                        Spinner::new().size(13.0).color(t.accent).build(k),
+                        surface.badge_bg,
+                        28.0,
+                        7.0,
+                    ))
                     .child(
                         col()
                             .grow(1.0)
                             .shrink()
+                            .min_w(0.0)
                             .gap(2.0)
-                            .child(text(title).font(t.label).color(t.text_base))
-                            .child(text(detail).font(t.caption).color(t.text_muted)),
+                            .child(text(title).font(k.ty.small_medium).color(t.text_base))
+                            .child(text(detail).font(k.ty.small).color(t.text_muted)),
                     )
                     .child(
                         el().w(140.0)
-                            .h(5.0)
-                            .radius(3.0)
-                            .fill(t.border_muted)
-                            .child(el().w(140.0 * ratio).h(5.0).radius(3.0).fill(t.accent)),
+                            .h(6.0)
+                            .radius(999.0)
+                            .fill(t.border)
+                            .child(el().w(140.0 * ratio).h(6.0).radius(999.0).fill(t.accent)),
                     ),
             )
         }
@@ -557,27 +758,35 @@ fn build_updater_banner(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
                 Some(v) => format!("Update {v} ready to install"),
                 None => "Update ready to install".to_owned(),
             };
+            let surface = banner_surface(t.success, t);
             Some(
                 row()
                     .key("updater-ready-banner")
                     .w_full()
-                    .px(12.0)
-                    .py(8.0)
-                    .radius(8.0)
-                    .fill(t.elevated_bg)
-                    .border(1.0, t.success)
-                    .gap(10.0)
+                    .px(14.0)
+                    .py(10.0)
+                    .radius(10.0)
+                    .continuous_corners()
+                    .fill(surface.fill)
+                    .border(1.0, surface.border)
+                    .gap(12.0)
                     .center_y()
-                    .child(icon(&icons::CHECK_CIRCLE, 15.0).color(t.success))
+                    .child(banner_icon_badge(
+                        icon(&icons::CHECK_CIRCLE, 14.0).color(t.success),
+                        surface.badge_bg,
+                        28.0,
+                        7.0,
+                    ))
                     .child(
                         col()
                             .grow(1.0)
                             .shrink()
+                            .min_w(0.0)
                             .gap(2.0)
-                            .child(text(title).font(t.label).color(t.text_base))
+                            .child(text(title).font(k.ty.small_medium).color(t.text_base))
                             .child(
                                 text("Restart Cowork to finish applying the update.")
-                                    .font(t.caption)
+                                    .font(k.ty.small)
                                     .color(t.text_muted),
                             ),
                     )
@@ -725,7 +934,7 @@ fn build_inline_file_preview(
             scroll_col = scroll_col.child(
                 text("Preview truncated for large file.")
                     .font(t.caption)
-                    .color(t.warning),
+                    .color(warning_ink(t)),
             );
         }
         scroll_col.child(
@@ -879,6 +1088,85 @@ mod tests {
             !thread_rt
                 .a11y_json()
                 .contains("Provider credentials required")
+        );
+    }
+
+    #[test]
+    fn creation_readiness_notice_aligns_copy_cleanly_and_stays_compact() {
+        let check = CreationReadinessCheck {
+            id: "credentials".into(),
+            status: "blocked".into(),
+            message: "Connect Google before starting this chat.".into(),
+            repair_action: Some(CreationRepairAction::ConnectProvider {
+                provider: "google".into(),
+            }),
+        };
+
+        let mut wide_state = AppState {
+            workspace_creation_preflight: Some(CreationPreflightResult {
+                ready: false,
+                checks: vec![check.clone()],
+            }),
+            ..Default::default()
+        };
+        wide_state.shell_ui.viewport_width = 1024.0;
+
+        fn primary_view(state: &AppState, cx: &mut rune::Cx<AppState>) -> El {
+            let dark = state.effective_dark(cx.system_dark());
+            let (kit, tok) = crate::theme::build_kit_with_accent(
+                dark,
+                state.desktop_settings.reduced_transparency,
+                state.desktop_settings.high_contrast,
+                state.desktop_settings.accent_palette,
+            );
+            build_primary_content(state, &kit, &tok, el().w_full().h_full(), false)
+        }
+
+        let mut rt = rune::Runtime::new(
+            wide_state,
+            primary_view,
+            (1024.0, 200.0),
+            rune::Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        let els = rt.elements();
+        let notice = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("creation-readiness-notice"))
+            .expect("notice element present");
+        let title_el = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Provider credentials required"))
+            .expect("title text present");
+        let detail_el = els
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Connect Google before starting this chat."))
+            .expect("detail text present");
+
+        assert!(
+            (title_el.rect[0] - detail_el.rect[0]).abs() < 0.5,
+            "title x ({}) and detail x ({}) must align without zig-zag indent",
+            title_el.rect[0],
+            detail_el.rect[0]
+        );
+        assert!(
+            notice.rect[2] <= TOP_BANNER_MAX_WIDTH + 0.5,
+            "desktop notice width ({}) should stay bounded to {TOP_BANNER_MAX_WIDTH}",
+            notice.rect[2]
+        );
+        assert!(
+            notice.rect[3] <= 72.0,
+            "desktop horizontal notice height ({}) should remain compact",
+            notice.rect[3]
+        );
+
+        // Light-mode warning ink must maintain readable contrast against the tinted banner surface.
+        let light_tok = crate::theme::resolve_tokens(false, false, false);
+        let light_surface = banner_surface(light_tok.warning, &light_tok);
+        let ratio = crate::theme::contrast_ratio(warning_ink(&light_tok), light_surface.fill);
+        assert!(
+            ratio >= 3.5,
+            "light-mode warning ink contrast ({ratio:.2}) must be >= 3.5 against banner fill"
         );
     }
 }

@@ -16,6 +16,7 @@ pub mod anthropic_messages;
 pub mod bedrock;
 pub mod catalog;
 pub mod chat_completions;
+pub mod claude_agent_sdk;
 pub mod codex_app_server;
 pub mod connection;
 pub mod endpoint_capabilities;
@@ -39,22 +40,25 @@ pub use catalog::{
     resolve_provider_auth_method, validate_structured_provider_config,
 };
 pub use chat_completions::{ChatCompletionsTransport, ProviderQuirks};
+pub use claude_agent_sdk::ClaudeAgentSdkTransport;
 pub use codex_app_server::CodexAppServerTransport;
 pub use connection::{
     ResolvedProviderConnection, provider_base_url_env_key, provider_base_url_override,
     resolve_provider_base_url, resolve_provider_bedrock_auth, resolve_provider_connection,
-    select_provider_transport,
+    select_provider_transport, select_provider_transport_with_claude,
 };
 pub use endpoint_capabilities::{
     COWORK_NATIVE_TOOL_CALLING_OPTION_KEY, EndpointCapabilitySource, EndpointToolCapabilities,
     NATIVE_EAGER_CORE_TOOLS, NativeProgrammaticToolCallingKind, NativeToolCallingPlan,
-    NativeToolSearchKind, anthropic_model_supports_native_tool_features,
+    NativeToolSearchKind, anthropic_model_supports_native_ptc,
+    anthropic_model_supports_native_tool_features, anthropic_model_supports_native_tool_search,
     check_endpoint_capabilities, classify_static_endpoint_capabilities,
     clear_endpoint_capability_cache_for_tests, has_cached_endpoint_check,
     is_native_eager_core_tool, is_openrouter_host, is_programmatic_eligible_tool,
-    openai_model_supports_native_tool_features, parse_endpoint_host, read_native_tool_calling_plan,
-    record_rejected_native_capability, resolve_endpoint_tool_capabilities,
-    strip_native_tool_calling_plan, write_native_tool_calling_plan,
+    openai_model_supports_native_tool_features, openai_model_supports_programmatic_tool_calling,
+    parse_endpoint_host, read_native_tool_calling_plan, record_rejected_native_capability,
+    resolve_endpoint_tool_capabilities, strip_native_tool_calling_plan,
+    write_native_tool_calling_plan,
 };
 pub use google_interactions::{
     GoogleInteractionsTransport, GoogleSignatureRepairOutcome, repair_google_tool_call_signatures,
@@ -97,6 +101,7 @@ pub enum ProviderTransportKind {
     ChatCompletionsSse,
     BedrockConverseStream,
     CodexAppServerStdio,
+    ClaudeAgentSdkStdio,
 }
 
 impl From<ProviderWireProtocol> for ProviderTransportKind {
@@ -108,6 +113,7 @@ impl From<ProviderWireProtocol> for ProviderTransportKind {
             ProviderWireProtocol::ChatCompletions => Self::ChatCompletionsSse,
             ProviderWireProtocol::BedrockConverse => Self::BedrockConverseStream,
             ProviderWireProtocol::CodexAppServer => Self::CodexAppServerStdio,
+            ProviderWireProtocol::ClaudeAgentSdk => Self::ClaudeAgentSdkStdio,
         }
     }
 }

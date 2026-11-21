@@ -3,9 +3,9 @@
 use std::rc::Rc;
 
 use rune::{
-    Cursor, El, Link, LinkPaint, Span, TextStyle, Tx, col, el, icon, rich, row, spacer, text,
+    Color, Cursor, El, Link, LinkPaint, Span, TextStyle, Tx, col, el, icon, rich, row, text,
 };
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Spinner};
 
 use crate::actions::{Action, NavAction};
 use crate::state::{AppState, ToolRunStatus};
@@ -13,6 +13,10 @@ use crate::theme::ThemeTokens;
 
 use super::icons;
 use super::model::{ComposerSegment, MentionCatalog, MentionItem, parse_composer_segments};
+
+/// Shared reading and composer column width so transcript content, user bubbles, activity
+/// timelines, and the floating composer align on one clean vertical grid.
+pub const CHAT_COLUMN_MAX_WIDTH: f32 = 768.0;
 
 pub type MentionClickHandler = Rc<dyn Fn(&mut AppState, usize, &mut Tx)>;
 
@@ -161,7 +165,7 @@ pub fn status_pill(k: &Kit, t: &ThemeTokens, label: impl Into<String>, tone: Sta
         StatusPillTone::Danger => (k.alpha(t.danger, 0.14), t.danger, k.alpha(t.danger, 0.35)),
         StatusPillTone::Warning => (
             k.alpha(t.warning, 0.14),
-            t.warning,
+            crate::theme::warning_ink(t),
             k.alpha(t.warning, 0.35),
         ),
         StatusPillTone::Success => (
@@ -182,88 +186,69 @@ pub fn status_pill(k: &Kit, t: &ThemeTokens, label: impl Into<String>, tone: Sta
         .child(text(label).font(k.ty.small_medium).color(fg))
 }
 
-/// Renders a day boundary divider centered across the feed (`Today`, `Yesterday`, `Mar 4`).
+/// Renders a quiet day boundary label centered across the feed (`Today`, `Yesterday`, `Mar 4`).
 pub fn day_separator_row(k: &Kit, t: &ThemeTokens, label: impl Into<String>) -> El {
-    let hairline = || el().h(1.0).grow(1.0).fill(k.alpha(t.border, 0.45));
     row()
         .w_full()
+        .justify_center()
         .items_center()
-        .gap(12.0)
-        .py(4.0)
-        .child(hairline())
+        .py(6.0)
         .child(
             text(label)
                 .font(k.ty.small_medium)
-                .color(k.alpha(t.text_muted, 0.85)),
+                .color(k.alpha(t.text_faint, 0.9)),
         )
-        .child(hairline())
 }
 
-/// Renders the initial pending/working row displayed before the first tool/reasoning/reply item lands.
+/// Renders the initial pending/thinking indicator displayed before the first tool/reasoning/reply item lands.
 pub fn working_placeholder_row(k: &Kit, t: &ThemeTokens) -> El {
-    row().w_full().max_w(768.0).child(
-        row()
-            .grow(1.0)
-            .min_w(0.0)
-            .items_center()
-            .gap(10.0)
-            .px(12.0)
-            .py(8.0)
-            .radius(12.0)
-            .fill(k.alpha(t.elevated_bg, 0.45))
-            .border(1.0, t.border_muted)
-            .child(
-                el().size(16.0, 16.0)
-                    .shrink()
-                    .center()
-                    .child(el().size(7.0, 7.0).radius(9999.0).fill(t.accent)),
-            )
-            .child(text("Working").font(k.ty.ui_medium).color(t.text_base))
-            .child(spacer())
-            .child(
-                row()
-                    .items_center()
-                    .gap(4.0)
-                    .child(el().size(4.0, 4.0).radius(9999.0).fill(t.text_muted))
-                    .child(
-                        el().size(4.0, 4.0)
-                            .radius(9999.0)
-                            .fill(k.alpha(t.text_muted, 0.7)),
-                    )
-                    .child(
-                        el().size(4.0, 4.0)
-                            .radius(9999.0)
-                            .fill(k.alpha(t.text_muted, 0.45)),
-                    ),
-            ),
-    )
+    row()
+        .w_full()
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
+        .items_center()
+        .gap(8.0)
+        .px(4.0)
+        .py(4.0)
+        .child(Spinner::new().size(13.0).color(t.accent).build(k))
+        .child(
+            text("Thinking…")
+                .font(k.ty.small_medium)
+                .color(t.text_muted),
+        )
 }
 
-/// Renders a single vertical timeline rail node (`TimelineNode`: 20px icon dot + vertical connector).
+/// Renders a single vertical timeline rail node with a clean borderless icon and delicate guide rail.
 pub fn timeline_node(k: &Kit, t: &ThemeTokens, dot_icon: El, is_last: bool, content: El) -> El {
-    let mut rail = col().items_center().shrink().child(
-        el().mt(2.0)
-            .size(20.0, 20.0)
-            .radius(9999.0)
-            .fill(t.card_bg)
-            .border(1.0, t.border_muted)
-            .center()
-            .child(dot_icon),
-    );
+    let mut rail = col()
+        .items_center()
+        .shrink()
+        .w(18.0)
+        .child(el().mt(4.0).size(16.0, 16.0).center().child(dot_icon));
     if !is_last {
-        rail = rail.child(el().mt(4.0).w(1.0).grow(1.0).fill(k.alpha(t.border, 0.45)));
+        rail = rail.child(
+            el().mt(4.0)
+                .w(1.0)
+                .grow(1.0)
+                .fill(k.alpha(t.border, if t.dark { 0.42 } else { 0.38 })),
+        );
     }
 
     row()
         .w_full()
         .min_w(0.0)
         .items_stretch()
-        .gap(10.0)
+        .gap(8.0)
         .child(rail)
-        .child(col().grow(1.0).min_w(0.0).pb(12.0).child(content))
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .pb(if is_last { 2.0 } else { 8.0 })
+                .child(content),
+        )
 }
 
-/// Renders the tool status badge/dot on timeline rows (`Pending`, `Running`, `Failed`, `Declined`, approval).
+/// Renders the tool status badge/indicator on timeline rows (`Pending`, `Running`, `Failed`, `Declined`, approval).
 pub fn tool_state_indicator(
     k: &Kit,
     t: &ThemeTokens,
@@ -279,7 +264,7 @@ pub fn tool_state_indicator(
             Some(icon(&icons::X_CIRCLE, 12.0).color(t.danger))
         }
         ToolRunStatus::Pending | ToolRunStatus::Running => {
-            Some(icon(&icons::CIRCLE_DASHED, 12.0).color(t.accent))
+            Some(Spinner::new().size(11.0).color(t.accent).build(k))
         }
     }
 }
@@ -322,8 +307,10 @@ pub fn empty_feed_state(
 
     col()
         .w_full()
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .min_h(288.0)
-        .radius(12.0)
+        .radius(14.0)
+        .continuous_corners()
         .border(1.0, t.border_muted)
         .fill(k.alpha(t.elevated_bg, 0.25))
         .center()
@@ -333,6 +320,7 @@ pub fn empty_feed_state(
         .child(
             el().size(40.0, 40.0)
                 .radius(10.0)
+                .continuous_corners()
                 .fill(k.c.layer_02)
                 .border(1.0, t.border_muted)
                 .center()
@@ -355,6 +343,7 @@ pub fn transcript_only_banner(k: &Kit, t: &ThemeTokens) -> El {
         .gap(12.0)
         .padding(12.0)
         .radius(12.0)
+        .continuous_corners()
         .border(1.0, t.border_muted)
         .fill(k.alpha(t.elevated_bg, 0.45))
         .child(
@@ -387,19 +376,20 @@ pub fn locked_task_bar(k: &Kit, t: &ThemeTokens, task_id: String, task_title: St
         .items_center()
         .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
         .fill(t.panel_bg)
-        .px(16.0)
+        .px(24.0)
         .py(12.0)
         .child(
             row()
                 .w_full()
-                .max_w(768.0)
+                .max_w(CHAT_COLUMN_MAX_WIDTH)
                 .items_center()
                 .gap(12.0)
                 .px(16.0)
                 .py(12.0)
-                .radius(10.0)
+                .radius(12.0)
+                .continuous_corners()
                 .border(1.0, t.border)
-                .fill(k.alpha(t.elevated_bg, 0.35))
+                .fill(k.alpha(t.elevated_bg, 0.45))
                 .child(icon(&icons::LOCK, 16.0).color(t.text_muted))
                 .child(
                     col()
@@ -422,8 +412,11 @@ pub fn locked_task_bar(k: &Kit, t: &ThemeTokens, task_id: String, task_title: St
                     Button::new("Open task")
                         .variant(ButtonVariant::Contrast)
                         .control_size(ControlSize::Small)
-                        .on_press(move |s: &mut AppState| {
-                            s.dispatch(Action::Navigate(NavAction::OpenTask(task_id.clone())));
+                        .on_press_tx(move |s: &mut AppState, tx| {
+                            s.dispatch_tx(
+                                Action::Navigate(NavAction::OpenTask(task_id.clone())),
+                                tx,
+                            );
                         })
                         .build(k),
                 ),
@@ -440,14 +433,15 @@ pub fn read_only_notice_bar(
 ) -> El {
     let mut inner = row()
         .w_full()
-        .max_w(768.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .items_center()
         .gap(12.0)
         .px(16.0)
         .py(12.0)
-        .radius(10.0)
+        .radius(12.0)
+        .continuous_corners()
         .border(1.0, t.border)
-        .fill(k.alpha(t.elevated_bg, 0.35))
+        .fill(k.alpha(t.elevated_bg, 0.45))
         .child(icon(&icons::LOCK, 16.0).color(t.text_muted))
         .child(
             col()
@@ -475,30 +469,49 @@ pub fn read_only_notice_bar(
         .items_center()
         .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
         .fill(t.panel_bg)
-        .px(16.0)
+        .px(24.0)
         .py(12.0)
         .child(inner)
 }
 
-/// Floating pill shown when the user scrolls away from the bottom of the transcript.
+/// Floating button shown when the user scrolls away from the bottom of the transcript.
+/// Renders as a crisp circular `↓` icon button when caught up, or a compact pill with update count.
 pub fn scroll_to_latest_pill(
     k: &Kit,
     t: &ThemeTokens,
     unseen_count: usize,
     on_press: impl Fn(&mut AppState, &mut Tx) + 'static,
 ) -> El {
-    let label = if unseen_count > 0 {
-        format!(
-            "{unseen_count} new {}",
-            if unseen_count == 1 {
-                "update"
-            } else {
-                "updates"
-            }
-        )
+    let shadow_color = if t.dark {
+        Color::BLACK.alpha(0.38)
     } else {
-        "Scroll to bottom".to_string()
+        Color::BLACK.alpha(0.08)
     };
+
+    if unseen_count == 0 {
+        return row()
+            .size(34.0, 34.0)
+            .center()
+            .radius(9999.0)
+            .fill(t.popover_bg)
+            .hover(t.elevated_bg)
+            .border(1.0, t.border_muted)
+            .shadow(2.0, 10.0, shadow_color)
+            .cursor(Cursor::Pointer)
+            .role("button")
+            .label("Scroll to bottom")
+            .on_press_tx(on_press)
+            .child(icon(&icons::ARROW_DOWN, 14.0).color(t.text_muted));
+    }
+
+    let label = format!(
+        "{unseen_count} new {}",
+        if unseen_count == 1 {
+            "update"
+        } else {
+            "updates"
+        }
+    );
 
     row()
         .items_center()
@@ -508,10 +521,13 @@ pub fn scroll_to_latest_pill(
         .radius(9999.0)
         .fill(t.popover_bg)
         .hover(t.elevated_bg)
-        .border(1.0, t.border_strong)
+        .border(1.0, t.border_muted)
+        .shadow(2.0, 10.0, shadow_color)
         .cursor(Cursor::Pointer)
+        .role("button")
+        .label(label.clone())
         .on_press_tx(on_press)
-        .child(icon(&icons::ARROW_DOWN, 14.0).color(t.text_base))
+        .child(icon(&icons::ARROW_DOWN, 13.0).color(t.text_muted))
         .child(text(label).font(k.ty.text_xsmall_medium).color(t.text_base))
 }
 

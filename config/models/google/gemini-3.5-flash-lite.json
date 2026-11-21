@@ -1,0 +1,16 @@
+{
+  "id": "gemini-3.5-flash-lite",
+  "provider": "google",
+  "displayName": "Gemini 3.5 Flash-Lite",
+  "knowledgeCutoff": "March 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3.5-flash.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "dynamic",
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
+  },
+  "supportedReasoningEfforts": ["dynamic", "minimal", "low", "medium", "high"],
+  "isDefault": false
+}

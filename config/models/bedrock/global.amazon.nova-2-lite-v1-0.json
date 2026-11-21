@@ -1,0 +1,13 @@
+{
+  "id": "global.amazon.nova-2-lite-v1:0",
+  "provider": "bedrock",
+  "displayName": "Amazon Nova 2 Lite (Bedrock)",
+  "knowledgeCutoff": "October 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "medium"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high"],
+  "isDefault": false
+}

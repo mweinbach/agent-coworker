@@ -150,8 +150,8 @@
       "userFacing": true,
       "discovery": "api",
       "apiKeyEnvVars": ["TOGETHER_API_KEY"],
-      "inferenceBaseUrl": "https://api.together.xyz/v1",
-      "discoveryBaseUrl": "https://api.together.xyz/v1",
+      "inferenceBaseUrl": "https://api.together.ai/v1",
+      "discoveryBaseUrl": "https://api.together.ai/v1",
       "defaultModel": "moonshotai/Kimi-K2.5",
       "titleModel": "moonshotai/Kimi-K2.5",
       "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
@@ -201,7 +201,7 @@
       "transport": "chat-completions",
       "userFacing": true,
       "discovery": "local",
-      "apiKeyEnvVars": ["LM_STUDIO_API_KEY", "LM_STUDIO_API_TOKEN"],
+      "apiKeyEnvVars": ["LM_STUDIO_API_KEY", "LM_STUDIO_API_TOKEN", "LM_API_TOKEN"],
       "inferenceBaseUrl": "http://localhost:1234/v1",
       "discoveryBaseUrl": "http://localhost:1234",
       "defaultModel": "local-model",
@@ -228,8 +228,8 @@
       "userFacing": true,
       "discovery": "api",
       "apiKeyEnvVars": ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"],
-      "inferenceBaseUrl": "https://opencode.ai/zen/go/v1",
-      "discoveryBaseUrl": "https://opencode.ai/zen/go/v1",
+      "inferenceBaseUrl": "https://opencode.ai/inference/go/openai/v1",
+      "discoveryBaseUrl": "https://opencode.ai/inference/go/v1",
       "defaultModel": "glm-5",
       "titleModel": "glm-5",
       "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
@@ -241,8 +241,8 @@
       "userFacing": true,
       "discovery": "api",
       "apiKeyEnvVars": ["OPENCODE_ZEN_API_KEY"],
-      "inferenceBaseUrl": "https://opencode.ai/zen/v1",
-      "discoveryBaseUrl": "https://opencode.ai/zen/v1",
+      "inferenceBaseUrl": "https://opencode.ai/inference/openai/v1",
+      "discoveryBaseUrl": "https://opencode.ai/inference/v1",
       "defaultModel": "glm-5",
       "titleModel": "glm-5",
       "authMethods": [{ "id": "api_key", "type": "api", "label": "API key" }]
@@ -264,6 +264,27 @@
           "id": "oauth_cli",
           "type": "oauth",
           "label": "Sign in with ChatGPT (browser)",
+          "oauthMode": "auto"
+        }
+      ]
+    },
+    {
+      "id": "claude-cli",
+      "displayName": "Claude",
+      "promptDisplayName": "Claude Code",
+      "transport": "claude-agent-sdk",
+      "userFacing": true,
+      "discovery": "static",
+      "apiKeyEnvVars": [],
+      "inferenceBaseUrl": null,
+      "discoveryBaseUrl": null,
+      "defaultModel": "claude-opus-4-8",
+      "titleModel": "claude-haiku-4-5",
+      "authMethods": [
+        {
+          "id": "oauth_cli",
+          "type": "oauth",
+          "label": "Sign in with Claude (browser)",
           "oauthMode": "auto"
         }
       ]

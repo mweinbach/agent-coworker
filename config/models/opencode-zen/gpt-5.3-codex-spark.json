@@ -2,9 +2,10 @@
   "id": "gpt-5.3-codex-spark",
   "provider": "opencode-zen",
   "displayName": "GPT-5.3 Codex Spark",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "August 31, 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
   "isDefault": false
 }

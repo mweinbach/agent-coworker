@@ -25,7 +25,10 @@ use crate::views::settings::icons as settings_icons;
 use crate::views::settings::primitives::{
     EntityIconSize, StatusTone, entity_icon, mini_switch, status_pill,
 };
-use crate::views::settings::providers::{fallback_providers, is_provider_connected};
+use crate::views::settings::providers::{
+    fallback_providers, is_provider_connected, provider_display_title, provider_oauth_spec,
+    provider_supports_api_key, provider_supports_oauth,
+};
 use crate::views::settings::providers_utils::sort_and_filter_providers;
 
 use super::icons;
@@ -255,8 +258,18 @@ pub(crate) fn push_onboarding_overlays(
         .fill(t.popover_bg)
         .token_motion(k.motion.overlay)
         .child(top_bar)
-        .child(step_body)
-        .child(footer);
+        .child(
+            el().key(format!("onboarding-step-body-{step_idx}"))
+                .w_full()
+                .transition(rune::Transition::none())
+                .child(step_body),
+        )
+        .child(
+            el().key(format!("onboarding-step-footer-{step_idx}"))
+                .w_full()
+                .transition(rune::Transition::none())
+                .child(footer),
+        );
 
     let elevated_card = k.elevate(card, &k.elevation.overlay);
 
@@ -776,27 +789,6 @@ fn build_workspace_step(
     (body, footer)
 }
 
-fn supports_oauth(provider_id: &str, methods: &[String]) -> bool {
-    methods.iter().any(|m| {
-        let lower = m.to_ascii_lowercase();
-        lower.contains("oauth") || lower.contains("device") || lower.contains("cli")
-    }) || matches!(
-        provider_id,
-        "anthropic" | "openai" | "openai-codex" | "codex-cli" | "google"
-    )
-}
-
-fn supports_api_key(provider_id: &str, methods: &[String]) -> bool {
-    if matches!(provider_id, "ollama" | "lmstudio" | "codex-cli") {
-        return false;
-    }
-    methods.is_empty()
-        || methods.iter().any(|m| {
-            let lower = m.to_ascii_lowercase();
-            lower.contains("api") || lower.contains("key") || lower == "default"
-        })
-}
-
 fn extract_challenge<'a>(s: &'a AppState, provider_id: &str) -> Option<&'a Value> {
     let val = s.last_auth_challenge.as_ref()?;
     let target = val.get("event").unwrap_or(val);
@@ -842,11 +834,7 @@ fn build_provider_step(s: &AppState, k: &Kit, t: &ThemeTokens) -> (El, El) {
         let status = statuses.iter().find(|st| st.provider == prov.id);
         let connected = is_provider_connected(prov, status, active_ws);
         let expanded = s.shell_ui.onboarding_expanded_provider.as_deref() == Some(prov.id.as_str());
-        let display_name = if prov.name.trim().is_empty() {
-            prov.id.as_str()
-        } else {
-            prov.name.trim()
-        };
+        let display_name = provider_display_title(prov);
 
         let (badge_label, badge_tone) = if prov.id == "lmstudio" {
             let lm_enabled = active_ws
@@ -1104,8 +1092,8 @@ fn build_expanded_provider_controls(
         .get(&prov.id)
         .cloned()
         .unwrap_or_default();
-    let has_api = supports_api_key(&prov.id, &methods);
-    let has_oauth = supports_oauth(&prov.id, &methods);
+    let has_api = provider_supports_api_key(s, &prov.id);
+    let has_oauth = provider_supports_oauth(s, &prov.id);
 
     if has_api {
         let mask_non_empty = saved_mask.filter(|m| !m.trim().is_empty());
@@ -1195,12 +1183,80 @@ fn build_expanded_provider_controls(
         let prov_oauth = prov.id.clone();
         let ws_cb = ws_id.to_owned();
         let prov_cb = prov.id.clone();
-        let method_id = methods
-            .iter()
-            .find(|m| m.to_ascii_lowercase().contains("oauth"))
-            .cloned()
-            .unwrap_or_else(|| "oauth".to_owned());
+        let oauth_spec = provider_oauth_spec(s, &prov.id);
+        let method_id = oauth_spec
+            .map(|m| m.id.clone())
+            .or_else(|| {
+                methods
+                    .iter()
+                    .find(|m| m.to_ascii_lowercase().contains("oauth"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| {
+                if matches!(prov.id.as_str(), "codex-cli" | "claude-cli") {
+                    "oauth_cli".to_owned()
+                } else {
+                    "oauth".to_owned()
+                }
+            });
+        let button_label = oauth_spec
+            .and_then(|m| m.label.as_deref())
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .unwrap_or("Sign in");
+        let challenge = extract_challenge(s, &prov.id);
+        let show_code_input =
+            oauth_spec.and_then(|m| m.oauth_mode.as_deref()) != Some("auto") || challenge.is_some();
         let code_empty = s.shell_ui.onboarding_oauth_code_edit.text.trim().is_empty();
+
+        let mut oauth_row = row().w_full().gap(8.0).flex_wrap().center_y().child(
+            Button::new(button_label)
+                .variant(if has_api {
+                    ButtonVariant::Outline
+                } else {
+                    ButtonVariant::Contrast
+                })
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+                        workspace_id: ws_oauth.clone(),
+                        provider: prov_oauth.clone(),
+                    }));
+                })
+                .build(k),
+        );
+        if show_code_input {
+            oauth_row = oauth_row
+                .child(
+                    TextInput::new(&s.shell_ui.onboarding_oauth_code_edit)
+                        .label("OAuth authorization code")
+                        .placeholder("Paste code if prompted…")
+                        .width(Some(272.0))
+                        .on_edit(|s: &mut AppState| &mut s.shell_ui.onboarding_oauth_code_edit)
+                        .build(k),
+                )
+                .child(
+                    Button::new("Submit")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Regular)
+                        .disabled(code_empty)
+                        .on_press(move |s: &mut AppState| {
+                            let code = s.shell_ui.onboarding_oauth_code_edit.text.trim().to_owned();
+                            if !code.is_empty() {
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::CompleteProviderAuthCallback {
+                                        workspace_id: ws_cb.clone(),
+                                        provider: prov_cb.clone(),
+                                        method_id: method_id.clone(),
+                                        callback_input: code,
+                                    },
+                                ));
+                                s.shell_ui.onboarding_oauth_code_edit = TextEdit::new("");
+                            }
+                        })
+                        .build(k),
+                );
+        }
 
         let mut oauth_col = col().w_full().gap(6.0);
         if has_api {
@@ -1214,61 +1270,9 @@ fn build_expanded_provider_controls(
                     .font(k.ty.small_medium)
                     .color(t.text_muted),
             )
-            .child(
-                row()
-                    .w_full()
-                    .gap(8.0)
-                    .flex_wrap()
-                    .center_y()
-                    .child(
-                        Button::new("Sign in")
-                            .variant(if has_api {
-                                ButtonVariant::Outline
-                            } else {
-                                ButtonVariant::Contrast
-                            })
-                            .control_size(ControlSize::Regular)
-                            .on_press(move |s: &mut AppState| {
-                                s.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
-                                    workspace_id: ws_oauth.clone(),
-                                    provider: prov_oauth.clone(),
-                                }));
-                            })
-                            .build(k),
-                    )
-                    .child(
-                        TextInput::new(&s.shell_ui.onboarding_oauth_code_edit)
-                            .label("OAuth authorization code")
-                            .placeholder("Paste code if prompted…")
-                            .width(Some(272.0))
-                            .on_edit(|s: &mut AppState| &mut s.shell_ui.onboarding_oauth_code_edit)
-                            .build(k),
-                    )
-                    .child(
-                        Button::new("Submit")
-                            .variant(ButtonVariant::Outline)
-                            .control_size(ControlSize::Regular)
-                            .disabled(code_empty)
-                            .on_press(move |s: &mut AppState| {
-                                let code =
-                                    s.shell_ui.onboarding_oauth_code_edit.text.trim().to_owned();
-                                if !code.is_empty() {
-                                    s.dispatch(Action::Settings(
-                                        SettingsAction::CompleteProviderAuthCallback {
-                                            workspace_id: ws_cb.clone(),
-                                            provider: prov_cb.clone(),
-                                            method_id: method_id.clone(),
-                                            callback_input: code,
-                                        },
-                                    ));
-                                    s.shell_ui.onboarding_oauth_code_edit = TextEdit::new("");
-                                }
-                            })
-                            .build(k),
-                    ),
-            );
+            .child(oauth_row);
 
-        if let Some(ch) = extract_challenge(s, &prov.id) {
+        if let Some(ch) = challenge {
             let inner = ch.get("challenge").unwrap_or(ch);
             if let Some(instr) = inner
                 .get("instructions")
@@ -1503,6 +1507,7 @@ fn build_defaults_step(
             s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                 workspace_id: ws_id.clone(),
                 defaults: json!({
+                    "defaultProvider": pid_for_mod,
                     "defaultModel": chosen,
                     "defaultPreferredChildModel": chosen,
                     "defaultPreferredChildModelRef": format!("{pid_for_mod}:{chosen}"),

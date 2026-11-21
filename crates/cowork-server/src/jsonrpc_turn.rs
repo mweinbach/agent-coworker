@@ -35,8 +35,9 @@ use cowork_providers::chat_completions::lmstudio::{
 };
 use cowork_providers::codex_app_server::CodexSandboxRestrictions;
 use cowork_providers::{
-    CodexAppServerTransport, ProviderTransport, provider_base_url_override,
-    resolve_provider_api_key, resolve_provider_base_url, resolve_provider_bedrock_auth,
+    ClaudeAgentSdkTransport, CodexAppServerTransport, ProviderTransport,
+    provider_base_url_override, resolve_provider_api_key, resolve_provider_base_url,
+    resolve_provider_bedrock_auth,
 };
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, policy_allows_network, resolve_sandbox_policy,
@@ -746,6 +747,38 @@ pub(crate) fn select_provider_transport_for_turn(
     built_in_dir: Option<&Path>,
     tools_disabled: bool,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
+    if provider == ProviderName::ClaudeCli {
+        let Some((tctx, im, _steer, overflow, catalog)) = codex_tool_ctx else {
+            return Ok(Arc::new(
+                ClaudeAgentSdkTransport::with_env(env.clone())
+                    .with_homedir(homedir.to_path_buf())
+                    .with_tools_disabled(tools_disabled),
+            ));
+        };
+        if tools_disabled {
+            return Ok(Arc::new(
+                ClaudeAgentSdkTransport::with_env(env.clone())
+                    .with_homedir(homedir.to_path_buf())
+                    .with_cwd(Some(tctx.working_directory.clone()))
+                    .with_tools_disabled(true),
+            ));
+        }
+        let tools_map = create_builtin_tools(tctx);
+        let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
+            tools_map,
+            tctx.clone(),
+            Arc::clone(im),
+            overflow,
+            catalog,
+        );
+        return Ok(Arc::new(
+            ClaudeAgentSdkTransport::with_env(env.clone())
+                .with_homedir(homedir.to_path_buf())
+                .with_cwd(Some(tctx.working_directory.clone()))
+                .with_tool_handler(Some(dyn_handler)),
+        ));
+    }
+
     cowork_providers::select_provider_transport(provider, bedrock_auth, homedir, env, || {
         let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx else {
             return CodexAppServerTransport::with_env(env.clone())

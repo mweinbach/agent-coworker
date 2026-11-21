@@ -2,7 +2,7 @@
   "id": "nemotron-3-ultra-free",
   "provider": "opencode-zen",
   "displayName": "Nemotron 3 Ultra Free",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "September 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

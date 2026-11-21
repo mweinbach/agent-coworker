@@ -606,10 +606,13 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
 
 fn handle_key(state: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if rune_kit::shell::is_sidebar_toggle(ev) {
-        state.dispatch(Action::Shell(ShellAction::ToggleSidebar));
+        state.dispatch_tx(Action::Shell(ShellAction::ToggleSidebar), tx);
         return true;
     }
-    views::shell::handle_key(state, ev, tx) || handle_global_menu_shortcut(state, ev, tx)
+    let handled =
+        views::shell::handle_key(state, ev, tx) || handle_global_menu_shortcut(state, ev, tx);
+    state.flush_navigation_settle(tx);
+    handled
 }
 
 /// Handles global menu bar accelerators that sit outside view-local handlers

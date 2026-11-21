@@ -1,0 +1,10 @@
+{
+  "id": "poolside/laguna-xs-2.1",
+  "provider": "nvidia",
+  "displayName": "Laguna XS 2.1",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -399,13 +399,13 @@ fn cache_points_follow_ts_model_predicate_and_retention() {
         "anthropic.claude-opus-4-1-20250805-v1:0",
         "anthropic.claude-3-7-sonnet-20250219-v1:0",
         "anthropic.claude-3-5-haiku-20241022-v1:0",
+        "amazon.nova-pro-v1:0",
     ] {
         let body = build_converse_request_body(model, "Sys", &user, &[], &empty);
         assert_eq!(cache_points(&body), 2, "{model}: {body}");
     }
     for model in [
         "anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "amazon.nova-pro-v1:0",
         "meta.llama3-70b-instruct-v1:0",
     ] {
         let body = build_converse_request_body(model, "Sys", &user, &[], &empty);

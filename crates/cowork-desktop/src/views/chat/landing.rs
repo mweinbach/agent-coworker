@@ -54,6 +54,7 @@ pub fn build_landing_view(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut
         .w_full()
         .grow(1.0)
         .min_h(0.0)
+        .transition(rune::Transition::none())
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
@@ -98,7 +99,7 @@ fn build_greeting_header(
         .gap(6.0)
         .child(
             text(heading)
-                .font(rune::TextStyle::new(26.0, 600.0).lh(32.0))
+                .font(rune::TextStyle::new(26.0, 580.0).lh(32.0))
                 .color(t.text_base),
         )
         .child(text(subtitle).font(k.ty.ui).color(t.text_muted))
@@ -128,9 +129,13 @@ fn build_workspace_target_picker(
         .px(10.0)
         .py(5.0)
         .radius(9999.0)
-        .fill(k.alpha(t.elevated_bg, 0.65))
-        .hover(t.elevated_bg)
-        .border(1.0, t.border)
+        .fill(if t.dark {
+            k.alpha(t.elevated_bg, 0.65)
+        } else {
+            k.alpha(t.text_base, 0.045)
+        })
+        .hover(t.hover)
+        .border(1.0, t.border_muted)
         .cursor(Cursor::Pointer)
         .help("Select workspace target")
         .on_press(|s: &mut AppState| {
@@ -232,9 +237,15 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
             .gap(3.0)
             .px(14.0)
             .py(11.0)
-            .radius(12.0)
-            .fill(k.alpha(t.elevated_bg, 0.45))
+            .radius(14.0)
+            .continuous_corners()
+            .fill(if t.dark {
+                k.alpha(t.elevated_bg, 0.45)
+            } else {
+                k.alpha(t.text_base, 0.03)
+            })
             .border(1.0, t.border_muted)
+            .hover_group()
             .child(
                 row()
                     .w_full()
@@ -255,7 +266,11 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
                                     .truncate(),
                             ),
                     )
-                    .child(icon(&icons::ARROW_UP, 12.0).color(t.text_faint)),
+                    .child(
+                        icon(&icons::ARROW_UP, 12.0)
+                            .color(t.text_faint)
+                            .group_opacity(0.45, 1.0),
+                    ),
             )
             .child(
                 text(prompt.detail)
@@ -266,7 +281,7 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
 
         if !hidden {
             card = card
-                .hover(t.elevated_bg)
+                .hover(if t.dark { t.elevated_bg } else { t.hover })
                 .cursor(Cursor::Pointer)
                 .help("Insert starter prompt")
                 .on_press(move |s: &mut AppState| {

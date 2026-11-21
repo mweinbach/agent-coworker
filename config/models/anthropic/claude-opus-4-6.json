@@ -12,5 +12,6 @@
     },
     "disableParallelToolUse": true
   },
+  "supportedReasoningEfforts": ["low", "medium", "high", "max"],
   "isDefault": false
 }

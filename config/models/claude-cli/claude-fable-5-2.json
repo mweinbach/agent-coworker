@@ -1,0 +1,16 @@
+{
+  "id": "claude-fable-5-2",
+  "provider": "claude-cli",
+  "displayName": "Claude Fable 5.2",
+  "knowledgeCutoff": "June 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "thinking": {
+      "type": "adaptive"
+    },
+    "effort": "medium"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

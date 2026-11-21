@@ -18,7 +18,9 @@ use crate::state::{AppState, FeedItem, FeedMessageRole, TodoItemView};
 use crate::theme::ThemeTokens;
 
 use super::attachments::user_attachment_group;
-use super::components::{StatusPillTone, canvas_request_pill, mention_rich_text, status_pill};
+use super::components::{
+    CHAT_COLUMN_MAX_WIDTH, StatusPillTone, canvas_request_pill, mention_rich_text, status_pill,
+};
 use super::icons;
 use super::markdown::{
     MarkdownHooks, citation_sources_carousel, desktop_markdown, is_allowed_external_url,
@@ -107,7 +109,10 @@ pub fn build_feed_row(
         FeedItem::Todos { id, items, .. } => build_todos_row(k, t, id, items).arrives_whole(),
         FeedItem::Reasoning { id, .. } | FeedItem::Tool { id, .. } => {
             // Standalone reasoning/tool items are normally grouped via `ActivityGroup`.
-            col().key(format!("row:{id}")).w_full().max_w(768.0)
+            col()
+                .key(format!("row:{id}"))
+                .w_full()
+                .max_w(CHAT_COLUMN_MAX_WIDTH)
         }
     }
 }
@@ -133,15 +138,21 @@ fn build_user_message_row(
     let copy_key = format!("msg:{id}:user-copy");
     let copied = ctx.copied_key == Some(copy_key.as_str());
 
+    let bubble_fill = if t.dark {
+        t.elevated_bg
+    } else {
+        k.alpha(t.text_base, 0.05)
+    };
+
     let mut bubble = col()
         .key(anchor_key.clone())
         .max_w(580.0)
         .gap(8.0)
-        .px(16.0)
-        .py(10.0)
-        .radius(16.0)
-        .fill(t.elevated_bg)
-        .border(1.0, k.alpha(t.border, 0.55));
+        .px(15.0)
+        .py(9.5)
+        .radius(14.0)
+        .continuous_corners()
+        .fill(bubble_fill);
 
     if let Some(title) = visible.canvas_title {
         let spreadsheet = content.contains("<spreadsheet_canvas_request>");
@@ -196,6 +207,7 @@ fn build_user_message_row(
                     .px(8.0)
                     .py(3.0)
                     .radius(8.0)
+                    .continuous_corners()
                     .fill(k.c.layer_02)
                     .border(1.0, t.border_muted)
                     .child(icon(&icons::PAPERCLIP, 12.0).color(t.text_muted))
@@ -212,20 +224,27 @@ fn build_user_message_row(
     let mut outer = col()
         .key(format!("row:{id}"))
         .w_full()
-        .max_w(768.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .items_end()
-        .gap(4.0)
+        .gap(3.0)
+        .hover_group()
         .child(row().w_full().justify_end().child(bubble));
 
     if !visible.text.is_empty() {
-        outer = outer.child(row().w_full().justify_end().child(build_copy_chip_button(
-            k,
-            t,
-            copy_key,
-            visible.text,
-            copied,
-            "Copy message",
-        )));
+        outer = outer.child(
+            row()
+                .w_full()
+                .justify_end()
+                .group_opacity(if copied { 1.0 } else { 0.0 }, 1.0)
+                .child(build_copy_chip_button(
+                    k,
+                    t,
+                    copy_key,
+                    visible.text,
+                    copied,
+                    "Copy message",
+                )),
+        );
     }
 
     outer
@@ -301,8 +320,9 @@ fn build_assistant_message_row(
     let mut container = col()
         .key(format!("row:{id}"))
         .w_full()
-        .max_w(768.0)
-        .gap(8.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
+        .gap(6.0)
+        .hover_group()
         .child(col().key(md_anchor).w_full().child(md_el));
 
     if let Some(carousel) = citation_sources_carousel(
@@ -321,14 +341,20 @@ fn build_assistant_message_row(
     }
 
     if !streaming && !body_text.trim().is_empty() {
-        container = container.child(row().w_full().items_center().child(build_copy_chip_button(
-            k,
-            t,
-            copy_key,
-            body_text.into_owned(),
-            copied,
-            "Copy response",
-        )));
+        container = container.child(
+            row()
+                .w_full()
+                .items_center()
+                .group_opacity(if copied { 1.0 } else { 0.0 }, 1.0)
+                .child(build_copy_chip_button(
+                    k,
+                    t,
+                    copy_key,
+                    body_text.into_owned(),
+                    copied,
+                    "Copy response",
+                )),
+        );
     }
 
     container
@@ -396,11 +422,12 @@ fn build_error_row(
     col()
         .key(format!("row:{id}"))
         .w_full()
-        .max_w(768.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .gap(8.0)
         .px(14.0)
         .py(12.0)
         .radius(12.0)
+        .continuous_corners()
         .fill(k.alpha(t.danger, 0.10))
         .border(1.0, k.alpha(t.danger, 0.25))
         .child(header)
@@ -433,12 +460,13 @@ fn build_diagnostic_row(
     row()
         .key(format!("row:{id}"))
         .w_full()
-        .max_w(768.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .items_start()
         .gap(8.0)
         .px(12.0)
         .py(8.0)
         .radius(10.0)
+        .continuous_corners()
         .fill(k.alpha(t.elevated_bg, 0.45))
         .border(1.0, t.border_muted)
         .child(status_pill(k, t, badge, tone))
@@ -457,11 +485,12 @@ fn build_todos_row(k: &Kit, t: &ThemeTokens, id: &str, items: &[TodoItemView]) -
     let mut card = col()
         .key(format!("row:{id}"))
         .w_full()
-        .max_w(768.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .gap(8.0)
         .px(14.0)
         .py(12.0)
         .radius(12.0)
+        .continuous_corners()
         .fill(t.card_bg)
         .border(1.0, t.border_muted)
         .child(

@@ -1,0 +1,11 @@
+{
+  "id": "deepseek-v4.1-flash-free",
+  "provider": "opencode-zen",
+  "displayName": "DeepSeek V4.1 Flash Free",
+  "knowledgeCutoff": "May 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "high", "max"],
+  "isDefault": false
+}

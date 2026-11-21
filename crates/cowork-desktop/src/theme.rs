@@ -701,6 +701,16 @@ pub fn resolve_tokens_with_accent(
     tok
 }
 
+/// Returns a crisp, WCAG-legible amber ink for warning icons/labels on light surfaces
+/// while preserving `t.warning` in dark mode.
+pub fn warning_ink(t: &ThemeTokens) -> Color {
+    if t.dark {
+        t.warning
+    } else {
+        srgb(0xb4, 0x69, 0x06)
+    }
+}
+
 /// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, and radii
 /// using the default accent palette.
 pub fn build_kit(
@@ -739,6 +749,7 @@ pub fn build_kit_with_accent(
     kit.c.layer_02 = tok.elevated_bg;
     kit.c.bg_accent = tok.cta_bg;
     kit.c.bg_contrast = tok.cta_bg;
+    kit.c.bg_button_neutral = tok.elevated_bg;
     kit.c.bg_icon_button_contrast = tok.send_bg;
     kit.c.text_contrast = tok.cta_on;
     kit.c.icon_contrast = tok.cta_on;
@@ -784,6 +795,8 @@ pub fn build_kit_with_accent(
     kit.c.warning.bg = tok.warning.alpha(0.12);
     kit.c.info.fg = tok.info;
     kit.c.info.icon = tok.info;
+    kit.c.info.border = tok.info.alpha(0.35);
+    kit.c.info.bg = tok.info.alpha(0.12);
 
     kit.ty.ui = tok.body;
     kit.ty.ui_medium = TextStyle {

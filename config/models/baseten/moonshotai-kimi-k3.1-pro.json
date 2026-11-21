@@ -1,0 +1,13 @@
+{
+  "id": "moonshotai/Kimi-K3.1-Pro",
+  "provider": "baseten",
+  "displayName": "Kimi K3.1 Pro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "max"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "max"],
+  "isDefault": false
+}

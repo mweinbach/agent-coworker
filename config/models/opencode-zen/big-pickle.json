@@ -2,7 +2,7 @@
   "id": "big-pickle",
   "provider": "opencode-zen",
   "displayName": "Big Pickle",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "January 2025",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

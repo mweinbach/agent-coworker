@@ -24,6 +24,7 @@ use cowork_providers::CatalogBuildOptions;
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, is_loopback_lmstudio_url, resolve_lmstudio_options,
 };
+use cowork_providers::claude_agent_sdk::{logout_claude_account, start_claude_login};
 use cowork_providers::codex_app_server::{
     CodexAppServerClient, CodexNotification, CodexRuntimeInstallOptions,
     await_codex_chatgpt_login_completion, codex_app_server_override_configured,
@@ -679,6 +680,49 @@ impl ServerRuntimeState {
             }));
         }
 
+        if provider == ProviderName::ClaudeCli && method_id == "oauth_cli" {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            let status = start_claude_login(&self.homedir, &self.env)
+                .await
+                .map_err(|msg| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, msg))?;
+            if status.logged_in {
+                let conn = StoredConnection {
+                    service: provider,
+                    mode: ConnectionMode::Oauth,
+                    api_key: None,
+                    method_id: Some("oauth_cli".to_owned()),
+                    values: None,
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                };
+                save_provider_connection(&paths, conn).await.map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?;
+                return Ok(json!({
+                    "event": {
+                        "type": "provider_auth_result",
+                        "sessionId": session_id,
+                        "provider": "claude-cli",
+                        "methodId": "oauth_cli",
+                        "ok": true,
+                        "mode": "oauth",
+                        "message": status.message,
+                    }
+                }));
+            }
+            return Ok(json!({
+                "event": {
+                    "type": "provider_auth_challenge",
+                    "sessionId": session_id,
+                    "provider": "claude-cli",
+                    "methodId": "oauth_cli",
+                    "challenge": {
+                        "method": "auto",
+                        "instructions": status.message,
+                    }
+                }
+            }));
+        }
+
         Err(JsonRpcLiteError::new(
             error_codes::INVALID_REQUEST,
             format!("OAuth is not configured for {}.", provider.as_str()),
@@ -896,6 +940,9 @@ impl ServerRuntimeState {
             };
             let _ = logout_codex_account(&codex_home, active_client.as_deref()).await;
             self.codex_pool.close_for_home(&codex_home).await;
+        }
+        if provider == ProviderName::ClaudeCli {
+            let _ = logout_claude_account(&self.homedir, &self.env).await;
         }
 
         let session_id = self.get_or_create_workspace_state_id(&cwd);

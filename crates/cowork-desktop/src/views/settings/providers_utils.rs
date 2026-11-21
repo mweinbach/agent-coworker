@@ -7,7 +7,9 @@ use crate::views::settings::primitives::StatusTone;
 
 const BUILT_IN_PROVIDER_PRIORITY: &[&str] = &[
     "anthropic",
+    "claude-cli",
     "openai",
+    "codex-cli",
     "openai-codex",
     "google",
     "openrouter",

@@ -2,7 +2,7 @@
   "id": "mimo-v2.5-free",
   "provider": "opencode-zen",
   "displayName": "MiMo V2.5 Free",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "December 2024",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

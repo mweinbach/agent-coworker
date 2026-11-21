@@ -2108,7 +2108,7 @@ impl AppState {
         {
             return id.clone();
         }
-        if provider == "codex-cli" {
+        if matches!(provider, "codex-cli" | "claude-cli") {
             "oauth_cli".to_string()
         } else {
             "oauth".to_string()
@@ -2564,9 +2564,12 @@ impl AppState {
             _ => None,
         } {
             self.apply_store_event(StoreEvent::MenuInvoked(legacy_id.to_string()));
+            self.flush_navigation_settle(tx);
             return true;
         }
-        self.dispatch_menu_window_or_tx(Some(tx), command_id)
+        let handled = self.dispatch_menu_window_or_tx(Some(tx), command_id);
+        self.flush_navigation_settle(tx);
+        handled
     }
 
     fn dispatch_unhandled_menu_event(&mut self, command_id: &str) {
@@ -4530,9 +4533,27 @@ impl AppState {
         }
     }
 
+    /// Dispatches an action from a Rune event handler and immediately settles any route/pane
+    /// swap on the current frame (`Tx::settle`) so the transition never flashes for one frame
+    /// waiting on `poll_app`.
+    pub fn dispatch_tx(&mut self, action: Action, tx: &mut rune::Tx) {
+        self.dispatch(action);
+        self.flush_navigation_settle(tx);
+    }
+
+    /// Consumes a pending navigation settle request into `tx` on the active commit frame.
+    pub fn flush_navigation_settle(&mut self, tx: &mut rune::Tx) {
+        if std::mem::take(&mut self.settle_after_navigation) {
+            tx.settle();
+        }
+    }
+
     fn reduce_nav(&mut self, action: NavAction) {
         let prev_tid = self.nav.current().active_thread_id.clone();
+        let prev_task_id = self.nav.current().active_task_id.clone();
         let prev_view = self.nav.current().view;
+        let prev_settings_page = self.nav.current().settings_page;
+        let prev_settings_tab = self.nav.current().settings_tab.clone();
         let prev_ws = self.active_workspace_id.clone();
         let prev_landing = self.landing_workspace_id.clone();
         let restore_task = matches!(
@@ -4824,10 +4845,17 @@ impl AppState {
         if self.active_workspace_id != prev_ws || self.landing_workspace_id != prev_landing {
             self.shared_dirty = true;
         }
-        // Another thread or view replaces the whole pane. Animating that swap keeps a long
-        // transcript in motion for about a second, with full layout and paint every frame;
-        // land it settled instead (`poll_app`).
-        if self.nav.current().view != prev_view || self.nav.current().active_thread_id != prev_tid {
+        // Route, page, thread, task, or workspace changes swap the active pane. Settling on the
+        // same commit frame (`dispatch_tx` / `flush_navigation_settle`, with `poll_app` fallback
+        // for async events) avoids Rune's default 0.2s enter / 0.15s exit opacity crossfade flash.
+        let cur_route = self.nav.current();
+        if cur_route.view != prev_view
+            || cur_route.active_thread_id != prev_tid
+            || cur_route.active_task_id != prev_task_id
+            || cur_route.settings_page != prev_settings_page
+            || cur_route.settings_tab != prev_settings_tab
+            || self.active_workspace_id != prev_ws
+        {
             self.settle_after_navigation = true;
         }
         if !already_persisted
@@ -6539,6 +6567,7 @@ impl AppState {
                 }
             }
             SettingsAction::RefreshProviderCatalog { workspace_id } => {
+                self.settings_mutation_error = None;
                 let cwd = self.workspace_path(&workspace_id);
                 let params = ProviderCatalogReadParams {
                     cwd: cwd.clone(),
@@ -6835,6 +6864,7 @@ impl AppState {
                 workspace_id,
                 defaults,
             } => {
+                self.settings_mutation_error = None;
                 let cwd = self.workspace_path(&workspace_id);
                 let mut restart_for_yolo = None;
                 if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
@@ -6851,19 +6881,83 @@ impl AppState {
                     .as_object()
                     .map(build_session_defaults_config_map)
                     .filter(|m| !m.is_empty());
+                let raw_provider = defaults
+                    .get("defaultProvider")
+                    .or_else(|| defaults.get("provider"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let raw_model = defaults
+                    .get("defaultModel")
+                    .or_else(|| defaults.get("model"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                // `cowork/session/defaults/apply` requires `provider` and `model` to be supplied
+                // together. When a caller updates only one side (e.g. picking a default model
+                // under the current provider), pair it with the workspace's resolved counterpart.
+                let (paired_provider, paired_model) =
+                    if raw_provider.is_some() || raw_model.is_some() {
+                        let ws_ref = self.workspaces.iter().find(|w| w.id == workspace_id);
+                        let p = raw_provider
+                            .or_else(|| {
+                                ws_ref
+                                    .and_then(|w| w.default_provider.as_deref())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string)
+                            })
+                            .or_else(|| {
+                                self.provider_catalog
+                                    .iter()
+                                    .find(|c| c.configured)
+                                    .map(|c| c.id.clone())
+                            });
+                        let m = raw_model
+                            .or_else(|| {
+                                p.as_deref().and_then(|pid| {
+                                    self.default_model_by_provider
+                                        .get(pid)
+                                        .map(String::as_str)
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(str::to_string)
+                                })
+                            })
+                            .or_else(|| {
+                                ws_ref
+                                    .and_then(|w| w.default_model.as_deref())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string)
+                            })
+                            .or_else(|| {
+                                p.as_deref().and_then(|pid| {
+                                    self.provider_catalog.iter().find(|c| c.id == pid).and_then(
+                                        |c| {
+                                            c.models
+                                                .iter()
+                                                .find(|m| m.enabled)
+                                                .or_else(|| c.models.first())
+                                                .map(|m| m.id.clone())
+                                        },
+                                    )
+                                })
+                            });
+                        match (p, m) {
+                            (Some(pv), Some(mv)) => (Some(pv), Some(mv)),
+                            _ => (None, None),
+                        }
+                    } else {
+                        (None, None)
+                    };
                 let params = SessionDefaultsApplyParams {
                     cwd,
                     thread_id: self.nav.current().active_thread_id.clone(),
-                    provider: defaults
-                        .get("defaultProvider")
-                        .or_else(|| defaults.get("provider"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    model: defaults
-                        .get("defaultModel")
-                        .or_else(|| defaults.get("model"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    provider: paired_provider,
+                    model: paired_model,
                     enable_mcp: defaults
                         .get("defaultEnableMcp")
                         .or_else(|| defaults.get("enableMcp"))
@@ -13315,6 +13409,67 @@ mod tests {
         let ws = state.workspaces.iter().find(|w| w.id == "ws-1").unwrap();
         assert!(ws.defaults.get("defaultToolOutputOverflowChars").is_none());
         assert!(ws.defaults.get("toolOutputOverflowChars").is_none());
+    }
+
+    #[test]
+    fn update_workspace_defaults_pairs_provider_and_model_together() {
+        let mut state = AppState::default();
+        let mut ws = WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1);
+        ws.default_provider = Some("claude-cli".to_string());
+        ws.default_model = Some("claude-opus-4-8".to_string());
+        state.workspaces.push(ws);
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.settings_mutation_error =
+            Some("provider and model must be provided together".to_string());
+
+        // Sending only defaultModel must pair with workspace's default_provider.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "defaultModel": "claude-opus-5-5" }),
+        }));
+        assert!(state.settings_mutation_error.is_none());
+
+        let params = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected cowork/session/defaults/apply request");
+        assert_eq!(params["provider"], "claude-cli");
+        assert_eq!(params["model"], "claude-opus-5-5");
+
+        // Sending only defaultProvider must pair with provider's known default model.
+        state
+            .default_model_by_provider
+            .insert("codex-cli".to_string(), "gpt-5.6-sol".to_string());
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "defaultProvider": "codex-cli" }),
+        }));
+        let params2 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/session/defaults/apply" =>
+                {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected second cowork/session/defaults/apply request");
+        assert_eq!(params2["provider"], "codex-cli");
+        assert_eq!(params2["model"], "gpt-5.6-sol");
     }
 
     #[test]

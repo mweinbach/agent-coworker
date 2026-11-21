@@ -1,0 +1,11 @@
+{
+  "id": "step-5-preview",
+  "provider": "opencode-go",
+  "displayName": "Step 5 Preview",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high"],
+  "isDefault": false
+}

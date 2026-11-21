@@ -210,9 +210,9 @@ fn nav_pane(k: &Kit, active_page: SettingsPageId, groups: &[SettingsNavGroup]) -
     let back_button = SidebarRow::new("Back to chat")
         .icon(&icons::ARROW_LEFT)
         .height(30.0)
-        .on_select(|s: &mut AppState, _| {
+        .on_select(|s: &mut AppState, tx| {
             s.settings_ui.mobile_nav_open = false;
-            s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
+            s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Chat)), tx);
         })
         .build(k)
         .key("settings-back-button");
@@ -234,10 +234,10 @@ fn nav_pane(k: &Kit, active_page: SettingsPageId, groups: &[SettingsNavGroup]) -
                 .icon(item.icon)
                 .height(30.0)
                 .selected(is_active)
-                .on_select(move |s: &mut AppState, _| {
+                .on_select(move |s: &mut AppState, tx| {
                     s.settings_ui.mobile_nav_open = false;
                     s.settings_ui.open_select_key = None;
-                    s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(page_id))));
+                    s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(Some(page_id))), tx);
                 })
                 .build(k)
                 .key(format!("settings-nav-{}", page_key(page_id)));
@@ -246,7 +246,9 @@ fn nav_pane(k: &Kit, active_page: SettingsPageId, groups: &[SettingsNavGroup]) -
         sb = sb.section(sec);
     }
 
-    sb.build(k).key("settings-nav-rail")
+    sb.build(k)
+        .key("settings-nav-rail")
+        .transition(Transition::none())
 }
 
 /// Structural pieces of the Settings surface mounted by `views::shell` (or wrapped in `SplitView`

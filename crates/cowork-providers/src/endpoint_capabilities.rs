@@ -42,6 +42,9 @@ pub enum NativeToolSearchKind {
     OpenRouterResponses,
     AnthropicBm25,
     AnthropicRegex,
+    GoogleInteractions,
+    ClaudeAgentSdk,
+    CodexDynamicTools,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,9 +140,20 @@ impl EndpointToolCapabilities {
                             );
                         }
                     }
-                    ProviderName::CodexCli if self.native_programmatic_tool_calling.is_none() => {
-                        self.native_programmatic_tool_calling =
-                            Some(NativeProgrammaticToolCallingKind::CodexCodeMode);
+                    ProviderName::Google if self.native_tool_search.is_none() => {
+                        self.native_tool_search = Some(NativeToolSearchKind::GoogleInteractions);
+                    }
+                    ProviderName::ClaudeCli if self.native_tool_search.is_none() => {
+                        self.native_tool_search = Some(NativeToolSearchKind::ClaudeAgentSdk);
+                    }
+                    ProviderName::CodexCli => {
+                        if self.native_tool_search.is_none() {
+                            self.native_tool_search = Some(NativeToolSearchKind::CodexDynamicTools);
+                        }
+                        if self.native_programmatic_tool_calling.is_none() {
+                            self.native_programmatic_tool_calling =
+                                Some(NativeProgrammaticToolCallingKind::CodexCodeMode);
+                        }
                     }
                     _ => {}
                 }
@@ -302,8 +316,7 @@ pub fn is_openrouter_host(host: &str) -> bool {
     host == "openrouter.ai" || host.ends_with(".openrouter.ai")
 }
 
-/// OpenAI Responses native `tool_search` and `programmatic_tool_calling` require GPT-5.4+ models.
-pub fn openai_model_supports_native_tool_features(model_id: &str) -> bool {
+fn openai_gpt_version_at_least(model_id: &str, major: u32, minor: u32) -> bool {
     let bare = strip_provider_prefix(model_id).to_ascii_lowercase();
     let Some(rest) = bare.strip_prefix("gpt-") else {
         return false;
@@ -316,19 +329,35 @@ pub fn openai_model_supports_native_tool_features(model_id: &str) -> bool {
         return false;
     }
     let mut parts = version_head.split('.');
-    let Some(major) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
+    let Some(actual_major) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
         return false;
     };
-    let minor = parts
+    let actual_minor = parts
         .next()
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(0);
-    major > 5 || (major == 5 && minor >= 4)
+    actual_major > major || (actual_major == major && actual_minor >= minor)
 }
 
-/// Anthropic Messages native `tool_search_tool_*` and `code_execution_20260120` PTC are supported
-/// on Claude Sonnet 4+ and Claude Opus 4+ models (Opus 4.5/4.6, Sonnet 4.5/4.6, and newer).
-pub fn anthropic_model_supports_native_tool_features(model_id: &str) -> bool {
+/// OpenAI Responses native `tool_search` requires GPT-5.4+, except documented exclusions
+/// (`gpt-5.4-nano` and `gpt-5.5-pro`).
+pub fn openai_model_supports_native_tool_features(model_id: &str) -> bool {
+    let bare = strip_provider_prefix(model_id).to_ascii_lowercase();
+    if bare.starts_with("gpt-5.4-nano") || bare.starts_with("gpt-5.5-pro") {
+        return false;
+    }
+    openai_gpt_version_at_least(&bare, 5, 4)
+}
+
+/// OpenAI Responses native `programmatic_tool_calling` was introduced with GPT-5.6.
+pub fn openai_model_supports_programmatic_tool_calling(model_id: &str) -> bool {
+    openai_gpt_version_at_least(model_id, 5, 6)
+}
+
+/// Anthropic Messages native `tool_search_tool_*` is supported on all Claude 4.5+ and 5.x models
+/// (including Haiku 4.5 / 5.5, Sonnet 4.5 / 4.6 / 5 / 5.5, Opus 4.5–4.8 / 5 / 5.5, Fable 5–5.2,
+/// and Mythos 5–5.2). Claude Opus 4.1, Opus 4, Sonnet 4, and 3.x models do not support it.
+pub fn anthropic_model_supports_native_tool_search(model_id: &str) -> bool {
     let bare = strip_provider_prefix(model_id).to_ascii_lowercase();
     if !bare.starts_with("claude-") {
         return false;
@@ -336,16 +365,41 @@ pub fn anthropic_model_supports_native_tool_features(model_id: &str) -> bool {
     if bare.contains("haiku-3") || bare.contains("sonnet-3") || bare.contains("opus-3") {
         return false;
     }
-    // Haiku 4.5 does not support programmatic tool calling / tool search in Anthropic's model matrix.
-    if bare.contains("haiku-4-5") || bare.contains("haiku-4.5") {
+    if bare == "claude-opus-4"
+        || bare.starts_with("claude-opus-4-0")
+        || bare.starts_with("claude-opus-4-1")
+        || bare.starts_with("claude-opus-4-2025")
+        || bare == "claude-sonnet-4"
+        || bare.starts_with("claude-sonnet-4-0")
+        || bare.starts_with("claude-sonnet-4-2025")
+    {
         return false;
     }
     bare.contains("opus-4")
         || bare.contains("sonnet-4")
+        || bare.contains("haiku-4-5")
+        || bare.contains("haiku-4.5")
         || bare.contains("opus-5")
         || bare.contains("sonnet-5")
-        || bare.contains("claude-4")
+        || bare.contains("haiku-5")
+        || bare.contains("fable-5")
+        || bare.contains("mythos-5")
         || bare.contains("claude-5")
+}
+
+/// Anthropic Messages native `code_execution_20260120` programmatic tool calling is supported on
+/// Claude 4.5+ and 5.x models except Haiku 4.5.
+pub fn anthropic_model_supports_native_ptc(model_id: &str) -> bool {
+    let bare = strip_provider_prefix(model_id).to_ascii_lowercase();
+    if bare.contains("haiku-4-5") || bare.contains("haiku-4.5") {
+        return false;
+    }
+    anthropic_model_supports_native_tool_search(&bare)
+}
+
+/// Backwards-compatible alias for [`anthropic_model_supports_native_tool_search`].
+pub fn anthropic_model_supports_native_tool_features(model_id: &str) -> bool {
+    anthropic_model_supports_native_tool_search(model_id)
 }
 
 pub fn classify_static_endpoint_capabilities(
@@ -361,39 +415,76 @@ pub fn classify_static_endpoint_capabilities(
             provider: provider.as_str().to_string(),
             model_id: model_id.to_string(),
             endpoint_host: None,
-            native_tool_search: None,
+            native_tool_search: Some(NativeToolSearchKind::CodexDynamicTools),
             native_programmatic_tool_calling: Some(
                 NativeProgrammaticToolCallingKind::CodexCodeMode,
             ),
             source: EndpointCapabilitySource::StaticClassifier,
             checked_at_ms: None,
-            detail: Some("Codex App-Server native code_mode feature".to_string()),
+            detail: Some(
+                "Codex App-Server native dynamicTools deferLoading + code_mode feature".to_string(),
+            ),
         },
+        ProviderName::ClaudeCli => EndpointToolCapabilities {
+            provider: provider.as_str().to_string(),
+            model_id: model_id.to_string(),
+            endpoint_host: None,
+            native_tool_search: Some(NativeToolSearchKind::ClaudeAgentSdk),
+            native_programmatic_tool_calling: None,
+            source: EndpointCapabilitySource::StaticClassifier,
+            checked_at_ms: None,
+            detail: Some(
+                "Claude Code ToolSearch over only the in-process cowork SDK MCP server".to_string(),
+            ),
+        },
+        ProviderName::Google => {
+            let model_ok =
+                crate::google_interactions::google_model_supports_native_tool_search(model_id);
+            let official = host.as_deref() == Some("generativelanguage.googleapis.com");
+            let native_tool_search =
+                (model_ok && official).then_some(NativeToolSearchKind::GoogleInteractions);
+            EndpointToolCapabilities {
+                provider: provider.as_str().to_string(),
+                model_id: model_id.to_string(),
+                endpoint_host: host,
+                native_tool_search,
+                native_programmatic_tool_calling: None,
+                source: EndpointCapabilitySource::StaticClassifier,
+                checked_at_ms: None,
+                detail: Some(if native_tool_search.is_some() {
+                    "Gemini Interactions v1beta native Tool retrieval".to_string()
+                } else {
+                    format!(
+                        "Google model '{model_id}' or endpoint uses Cowork harness toolSearch/codeMode"
+                    )
+                }),
+            }
+        }
         ProviderName::Openai => {
-            let model_ok = openai_model_supports_native_tool_features(model_id);
+            let ts_model_ok = openai_model_supports_native_tool_features(model_id);
+            let ptc_model_ok = openai_model_supports_programmatic_tool_calling(model_id);
             let (ts, ptc, detail) = match host.as_deref() {
                 Some(h) if is_official_openai_host(h) => {
-                    if model_ok {
-                        (
-                            Some(NativeToolSearchKind::OpenAiResponses),
-                            Some(NativeProgrammaticToolCallingKind::OpenAiResponses),
-                            Some(
-                                "OpenAI Responses native tool_search + programmatic_tool_calling"
-                                    .to_string(),
-                            ),
-                        )
-                    } else {
-                        (
-                            None,
-                            None,
-                            Some(format!(
-                                "Model '{model_id}' uses Cowork harness (OpenAI native tool_search/PTC requires gpt-5.4+)"
-                            )),
-                        )
-                    }
+                    let ts = ts_model_ok.then_some(NativeToolSearchKind::OpenAiResponses);
+                    let ptc =
+                        ptc_model_ok.then_some(NativeProgrammaticToolCallingKind::OpenAiResponses);
+                    let detail = match (ts.is_some(), ptc.is_some()) {
+                        (true, true) => {
+                            "OpenAI Responses native tool_search + programmatic_tool_calling"
+                                .to_string()
+                        }
+                        (true, false) => {
+                            "OpenAI Responses native tool_search + Cowork QuickJS codeMode (PTC requires gpt-5.6+)"
+                                .to_string()
+                        }
+                        _ => format!(
+                            "Model '{model_id}' uses Cowork harness (OpenAI native tool_search requires gpt-5.4+ excluding gpt-5.4-nano/gpt-5.5-pro)"
+                        ),
+                    };
+                    (ts, ptc, Some(detail))
                 }
                 Some(h) if is_openrouter_host(h) => {
-                    if model_ok {
+                    if ts_model_ok {
                         (
                             Some(NativeToolSearchKind::OpenRouterResponses),
                             None,
@@ -428,27 +519,31 @@ pub fn classify_static_endpoint_capabilities(
             }
         }
         ProviderName::Anthropic => {
-            let model_ok = anthropic_model_supports_native_tool_features(model_id);
+            let ts_model_ok = anthropic_model_supports_native_tool_search(model_id);
+            let ptc_model_ok = anthropic_model_supports_native_ptc(model_id);
             let (ts, ptc, detail) = match host.as_deref() {
                 Some(h) if is_official_anthropic_host(h) => {
-                    if model_ok {
-                        (
-                            Some(NativeToolSearchKind::AnthropicBm25),
-                            Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120),
-                            Some("Anthropic Messages native BM25 tool search + code_execution_20260120 PTC".to_string()),
-                        )
-                    } else {
-                        (
-                            None,
-                            None,
-                            Some(format!(
-                                "Model '{model_id}' uses Cowork harness (Anthropic native tool search/PTC requires Claude Sonnet/Opus 4+)"
-                            )),
-                        )
-                    }
+                    let ts = ts_model_ok.then_some(NativeToolSearchKind::AnthropicBm25);
+                    let ptc = ptc_model_ok.then_some(
+                        NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120,
+                    );
+                    let detail = match (ts.is_some(), ptc.is_some()) {
+                        (true, true) => {
+                            "Anthropic Messages native BM25 tool search + code_execution_20260120 PTC"
+                                .to_string()
+                        }
+                        (true, false) => {
+                            "Anthropic Messages native BM25 tool search + Cowork QuickJS codeMode"
+                                .to_string()
+                        }
+                        _ => format!(
+                            "Model '{model_id}' uses Cowork harness (Anthropic native tool search requires Claude 4.5+)"
+                        ),
+                    };
+                    (ts, ptc, Some(detail))
                 }
                 Some(h) if is_openrouter_host(h) => {
-                    if model_ok {
+                    if ts_model_ok {
                         (
                             Some(NativeToolSearchKind::AnthropicRegex),
                             None,
@@ -813,20 +908,23 @@ async fn probe_anthropic_model_endpoint(
             ts.as_bool()
                 .or_else(|| ts.get("supported").and_then(Value::as_bool))
         });
-        let model_ok = anthropic_model_supports_native_tool_features(
-            json.get("id").and_then(Value::as_str).unwrap_or(model_id),
-        );
+        let resolved_id = json.get("id").and_then(Value::as_str).unwrap_or(model_id);
+        let ts_model_ok = anthropic_model_supports_native_tool_search(resolved_id);
+        let ptc_model_ok = anthropic_model_supports_native_ptc(resolved_id);
         let is_anthropic_model_payload = json.get("type").and_then(Value::as_str) == Some("model");
 
         let native_ptc = match code_exec_supported {
-            Some(true) if !is_openrouter && model_ok => {
+            Some(true) if !is_openrouter && ptc_model_ok => {
                 Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120)
             }
             Some(true) if !is_openrouter && caps_obj.is_some() => {
                 Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120)
             }
             Some(false) => None,
-            None if (is_official || is_anthropic_model_payload) && !is_openrouter && model_ok => {
+            None if (is_official || is_anthropic_model_payload)
+                && !is_openrouter
+                && ptc_model_ok =>
+            {
                 Some(NativeProgrammaticToolCallingKind::AnthropicCodeExecution20260120)
             }
             _ => None,
@@ -839,10 +937,8 @@ async fn probe_anthropic_model_endpoint(
                 NativeToolSearchKind::AnthropicBm25
             }),
             Some(false) => None,
-            None if is_openrouter && model_ok => Some(NativeToolSearchKind::AnthropicRegex),
-            None if (is_official || is_anthropic_model_payload) && model_ok => {
-                // If `capabilities` explicitly disabled `code_execution` on an older/small model,
-                // keep tool_search aligned with `model_ok`.
+            None if is_openrouter && ts_model_ok => Some(NativeToolSearchKind::AnthropicRegex),
+            None if (is_official || is_anthropic_model_payload) && ts_model_ok => {
                 Some(NativeToolSearchKind::AnthropicBm25)
             }
             _ => None,
@@ -990,9 +1086,9 @@ async fn probe_openai_model_endpoint(
             .to_ascii_lowercase();
         let is_openai_owned = matches!(owned_by.as_str(), "openai" | "system" | "openai-internal")
             || has_openai_processing_header;
-        let model_ok = openai_model_supports_native_tool_features(
-            json.get("id").and_then(Value::as_str).unwrap_or(model_id),
-        );
+        let resolved_id = json.get("id").and_then(Value::as_str).unwrap_or(model_id);
+        let ts_model_ok = openai_model_supports_native_tool_features(resolved_id);
+        let ptc_model_ok = openai_model_supports_programmatic_tool_calling(resolved_id);
 
         let native_ts = match explicit_ts {
             Some(true) => Some(if is_openrouter {
@@ -1001,8 +1097,8 @@ async fn probe_openai_model_endpoint(
                 NativeToolSearchKind::OpenAiResponses
             }),
             Some(false) => None,
-            None if is_openrouter && model_ok => Some(NativeToolSearchKind::OpenRouterResponses),
-            None if (is_official || is_openai_owned) && model_ok => {
+            None if is_openrouter && ts_model_ok => Some(NativeToolSearchKind::OpenRouterResponses),
+            None if (is_official || is_openai_owned) && ts_model_ok => {
                 Some(NativeToolSearchKind::OpenAiResponses)
             }
             _ => None,
@@ -1013,7 +1109,7 @@ async fn probe_openai_model_endpoint(
                 Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
             }
             Some(false) => None,
-            None if (is_official || is_openai_owned) && !is_openrouter && model_ok => {
+            None if (is_official || is_openai_owned) && !is_openrouter && ptc_model_ok => {
                 Some(NativeProgrammaticToolCallingKind::OpenAiResponses)
             }
             _ => None,

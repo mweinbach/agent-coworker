@@ -26,7 +26,7 @@ use super::model::{
 };
 use super::{components, state::ChatUiState};
 
-const COMPOSER_MAX_WIDTH: f32 = 896.0;
+const COMPOSER_MAX_WIDTH: f32 = components::CHAT_COLUMN_MAX_WIDTH;
 const MENTION_POPUP_WIDTH: f32 = 384.0;
 const COMPOSER_HEIGHT_DEFAULT: f32 = 160.0;
 const COMPOSER_HEIGHT_MIN: f32 = 88.0;
@@ -168,21 +168,28 @@ pub fn build_composer(
         build_suggestion_popup(s, k, &catalog, slash_commands, is_landing, overlays);
     }
 
-    let radius = if is_landing { 22.0 } else { 16.0 };
+    let radius = if is_landing { 20.0 } else { 15.0 };
     let border_color = if s.chat_ui.composer_drop_hover && !file_drop_disabled {
         t.accent
     } else if s.composer_edit.focused && !input_disabled {
-        t.border_strong
+        k.alpha(t.accent, if t.dark { 0.45 } else { 0.36 })
     } else {
-        t.border
+        t.border_muted
+    };
+    let shadow_color = if t.dark {
+        Color::BLACK.alpha(0.24)
+    } else {
+        Color::BLACK.alpha(0.04)
     };
 
     let mut card = col()
         .key("chat-composer-card")
         .w_full()
         .radius(radius)
+        .continuous_corners()
         .fill(t.input_bg)
-        .border(1.0, border_color);
+        .border(1.0, border_color)
+        .shadow(1.5, 10.0, shadow_color);
     if !file_drop_disabled {
         card = card
             .on_drop_hover(|s: &mut AppState, over, _| {
@@ -228,8 +235,8 @@ pub fn build_composer(
         .key("chat-composer-dock")
         .w_full()
         .items_center()
-        .px(16.0)
-        .pt(10.0)
+        .px(24.0)
+        .pt(6.0)
         .pb(16.0)
         .fill(t.panel_bg)
         .child(col().w_full().max_w(COMPOSER_MAX_WIDTH).child(stack))
@@ -260,9 +267,9 @@ fn build_composer_input_area(
             "Write a message to reconnect..."
         }
     } else if is_landing {
-        "Ask anything, @ to mention a skill or plugin, / for commands..."
+        "Ask anything…"
     } else {
-        "Reply... (@ for skills, / for commands)"
+        "Reply…"
     };
 
     let mut field = text_input(&s.composer_edit, t.body_lg)
@@ -632,25 +639,22 @@ fn build_composer_footer(
     let model_picker = build_model_selector(s, k, t, overlays, &ctx, resolved_model.as_ref());
     let reasoning_picker = build_reasoning_selector(s, k, overlays, &ctx, resolved_model.as_ref());
 
-    let mut left_controls = row()
-        .items_center()
-        .gap(6.0)
-        .child(attach_btn)
-        .child(model_picker);
-    if let Some(rp) = reasoning_picker {
-        left_controls = left_controls.child(rp);
-    }
+    let left_controls = row().items_center().gap(4.0).child(attach_btn);
 
-    let right_controls = build_right_submit_controls(k, t, &ctx);
+    let mut right_controls = row().items_center().gap(6.0).child(model_picker);
+    if let Some(rp) = reasoning_picker {
+        right_controls = right_controls.child(rp);
+    }
+    right_controls = right_controls.child(build_right_submit_controls(k, t, &ctx));
 
     row()
         .w_full()
         .items_center()
         .justify_between()
         .gap(8.0)
-        .px(12.0)
-        .pt(6.0)
-        .pb(if ctx.is_landing { 12.0 } else { 10.0 })
+        .px(10.0)
+        .pt(4.0)
+        .pb(if ctx.is_landing { 10.0 } else { 8.0 })
         .child(left_controls)
         .child(right_controls)
 }
@@ -691,7 +695,7 @@ fn build_model_selector(
                 } else {
                     t.text_base
                 })
-                .max_w(180.0)
+                .max_w(260.0)
                 .truncate(),
         )
         .child(icon(k.glyph.chevron_down, 12.0).color(t.text_muted));
@@ -702,9 +706,9 @@ fn build_model_selector(
     }
 
     let placement = if ctx.is_landing {
-        Placement::BottomStart
+        Placement::BottomEnd
     } else {
-        Placement::TopStart
+        Placement::TopEnd
     };
     let key_choose = ctx.key.to_string();
     let tid_choose = ctx.thread.filter(|tr| !tr.draft).map(|tr| tr.id.clone());
@@ -770,9 +774,9 @@ fn build_reasoning_selector(
     let provider_choose = model.provider_id.clone();
 
     let placement = if ctx.is_landing {
-        Placement::BottomStart
+        Placement::BottomEnd
     } else {
-        Placement::TopStart
+        Placement::TopEnd
     };
 
     let reasoning_disabled = ctx.input_disabled || ctx.streaming || ctx.non_draft_locked;

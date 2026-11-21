@@ -118,8 +118,8 @@ pub fn build_nav_buttons(s: &AppState, k: &Kit) -> Vec<El> {
         .control_size(ControlSize::Regular)
         .disabled(!s.nav.can_go_back())
         .help("Back")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::GoBack));
+        .on_press_tx(|s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::GoBack), tx);
         })
         .build(k)
         .key("topbar-back");
@@ -129,8 +129,8 @@ pub fn build_nav_buttons(s: &AppState, k: &Kit) -> Vec<El> {
         .control_size(ControlSize::Regular)
         .disabled(!s.nav.can_go_forward())
         .help("Forward")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::GoForward));
+        .on_press_tx(|s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::GoForward), tx);
         })
         .build(k)
         .key("topbar-forward");
@@ -183,6 +183,7 @@ pub fn build_toolbar(
         .center_y()
         .shrink()
         .min_w(0.0)
+        .transition(rune::Transition::none())
         .child(
             text(title)
                 .key("topbar-title")
@@ -200,13 +201,11 @@ pub fn build_toolbar(
             row()
                 .key("topbar-busy-indicator")
                 .gap(5.0)
-                .px(8.0)
+                .px(6.0)
                 .h(22.0)
-                .radius(999.0)
-                .fill(t.accent_soft)
                 .center_y()
-                .child(Spinner::new().size(12.0).color(t.accent).build(k))
-                .child(text("Busy").font(k.ty.small_medium).color(t.accent)),
+                .child(Spinner::new().size(11.0).color(t.accent).build(k))
+                .child(text("Working").font(k.ty.small_medium).color(t.text_muted)),
         );
         if let Some(thread_id) = s.route().active_thread_id.clone() {
             heading = heading.child(
@@ -295,57 +294,108 @@ pub fn build_toolbar(
     } else {
         s.context_sidebar.is_open()
     };
-    let inspector_btn = IconButton::new(&shell::INSPECTOR)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Regular)
-        .expanded(inspector_open && !canvas_max)
-        .help(if canvas_active {
-            if inspector_open {
-                "Hide canvas"
-            } else {
-                "Show canvas"
-            }
-        } else if inspector_open {
-            "Hide context sidebar"
+    let output_count = if canvas_active {
+        0
+    } else {
+        s.active_thread_runtime()
+            .map(|rt| {
+                super::context_sidebar::collect_session_outputs_and_used(rt)
+                    .0
+                    .len()
+            })
+            .unwrap_or(0)
+    };
+    let inspector_help = if canvas_active {
+        if inspector_open {
+            "Hide canvas"
         } else {
-            "Show context sidebar"
-        })
-        .shortcut(crate::shortcut_label("Opt+Cmd+I"))
-        .on_press_tx(move |s: &mut AppState, _| {
-            if super::state::right_rail_uses_overlay(s) {
-                let next_open = !super::state::is_right_overlay_visible(s);
-                s.shell_ui.right_overlay_open = next_open;
-                if next_open {
-                    s.shell_ui.left_overlay_open = false;
-                    s.shell_ui.canvas_overlay_dismissed_key = None;
-                } else {
-                    s.shell_ui.canvas_overlay_dismissed_key =
-                        super::state::active_canvas_target_key(s);
-                }
-            } else if super::state::active_canvas_target_key(s).is_some() {
-                s.shell_ui.canvas_pane.toggle();
+            "Show canvas"
+        }
+    } else if inspector_open {
+        "Hide context sidebar"
+    } else {
+        "Show context sidebar"
+    };
+    let toggle_inspector = move |s: &mut AppState, _: &mut rune::Tx| {
+        if super::state::right_rail_uses_overlay(s) {
+            let next_open = !super::state::is_right_overlay_visible(s);
+            s.shell_ui.right_overlay_open = next_open;
+            if next_open {
+                s.shell_ui.left_overlay_open = false;
+                s.shell_ui.canvas_overlay_dismissed_key = None;
             } else {
-                s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
+                s.shell_ui.canvas_overlay_dismissed_key = super::state::active_canvas_target_key(s);
             }
-        })
-        .build(k)
-        .key("topbar-inspector-toggle");
+        } else if super::state::active_canvas_target_key(s).is_some() {
+            s.shell_ui.canvas_pane.toggle();
+        } else {
+            s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
+        }
+    };
+    let inspector_btn = if output_count > 0 {
+        let mut pill = row()
+            .key("topbar-inspector-toggle")
+            .h(28.0)
+            .px(8.0)
+            .gap(5.0)
+            .items_center()
+            .radius(7.0)
+            .continuous_corners()
+            .hover(t.hover)
+            .cursor(rune::Cursor::Pointer)
+            .role("button")
+            .expanded(inspector_open && !canvas_max)
+            .label(format!("{inspector_help} ({output_count} outputs)"))
+            .on_press_tx(toggle_inspector)
+            .child(
+                rune::icon(&shell::INSPECTOR, 15.0)
+                    .color(if inspector_open && !canvas_max {
+                        t.text_base
+                    } else {
+                        t.text_muted
+                    })
+                    .a11y_hidden(),
+            )
+            .child(
+                text(output_count.to_string())
+                    .font(k.ty.text_xsmall_medium)
+                    .color(if inspector_open && !canvas_max {
+                        t.text_base
+                    } else {
+                        t.text_muted
+                    }),
+            );
+        if inspector_open && !canvas_max {
+            pill = pill.fill(t.hover).border(1.0, t.border_muted);
+        }
+        pill
+    } else {
+        IconButton::new(&shell::INSPECTOR)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(ControlSize::Regular)
+            .expanded(inspector_open && !canvas_max)
+            .help(inspector_help)
+            .shortcut(crate::shortcut_label("Opt+Cmd+I"))
+            .on_press_tx(toggle_inspector)
+            .build(k)
+            .key("topbar-inspector-toggle")
+    };
 
     let settings_btn = IconButton::new(&icons::SETTINGS)
         .variant(IconButtonVariant::GhostMuted)
         .control_size(ControlSize::Regular)
         .help("Settings")
         .shortcut(crate::shortcut_label("Cmd+,"))
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenSettings(None)));
+        .on_press_tx(|s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
         })
         .build(k)
         .key("topbar-settings");
 
     toolbar = toolbar
-        .trailing(quick_chat_btn)
-        .trailing(inspector_btn)
-        .trailing(settings_btn);
+        .trailing(quick_chat_btn.transition(rune::Transition::none()))
+        .trailing(inspector_btn.transition(rune::Transition::none()))
+        .trailing(settings_btn.transition(rune::Transition::none()));
 
     append_caption_reserve(toolbar, chrome)
 }

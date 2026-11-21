@@ -6,10 +6,9 @@
   "supportsImageInput": true,
   "promptTemplate": "system-models/gpt-5.4.md",
   "providerOptionsDefaults": {
-    "reasoningEffort": "high",
-    "reasoningSummary": "detailed",
+    "reasoningEffort": "none",
     "textVerbosity": "medium"
   },
-  "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"],
   "isDefault": false
 }

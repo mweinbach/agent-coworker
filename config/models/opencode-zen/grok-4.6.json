@@ -1,0 +1,11 @@
+{
+  "id": "grok-4.6",
+  "provider": "opencode-zen",
+  "displayName": "Grok 4.6",
+  "knowledgeCutoff": "February 1, 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+  "isDefault": false
+}

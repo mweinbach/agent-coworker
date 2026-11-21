@@ -236,16 +236,6 @@ fn item_timestamp_ms(item: &FeedItem) -> i64 {
     }
 }
 
-fn item_is_streaming(item: &FeedItem) -> bool {
-    match item {
-        FeedItem::Message { streaming, .. } | FeedItem::Reasoning { streaming, .. } => *streaming,
-        FeedItem::Tool {
-            status, streaming, ..
-        } => *streaming || matches!(status, ToolRunStatus::Pending | ToolRunStatus::Running),
-        _ => false,
-    }
-}
-
 /// Builds grouped render items from filtered feed items (`buildChatRenderItems` + `mergeTurnActivity`).
 pub fn build_chat_render_items<'a>(
     items: &[&'a FeedItem],
@@ -331,10 +321,13 @@ pub fn build_chat_render_items<'a>(
     }
 
     // Live ownership: only the latest top-level item can be live when the thread is busy.
+    // Keep a trailing ActivityGroup live across inter-step pauses (e.g. after a tool finishes
+    // and before the next reasoning/tool/reply delta lands) so it never collapses into a
+    // completed bar alongside a duplicate "Working" placeholder.
     if let Some(last) = raw_groups.last_mut() {
         match last {
             ChatRenderItem::ActivityGroup(group) => {
-                group.is_live = thread_busy && group.items.iter().any(|it| item_is_streaming(it));
+                group.is_live = thread_busy;
                 let has_failures = group.error_count > 0;
                 group.is_retryable = !thread_busy && has_failures && !group.has_pending_approval;
             }
@@ -345,6 +338,17 @@ pub fn build_chat_render_items<'a>(
     raw_groups
 }
 
+fn item_end_timestamp_ms(item: &FeedItem) -> i64 {
+    match item {
+        FeedItem::Tool {
+            timestamp_ms,
+            completed_at_ms,
+            ..
+        } => completed_at_ms.unwrap_or(*timestamp_ms).max(*timestamp_ms),
+        other => item_timestamp_ms(other),
+    }
+}
+
 fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
     let first = items.first().copied();
     let id = first
@@ -352,16 +356,16 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
         .unwrap_or_else(|| "activity-empty".to_string());
     let started_at_ms = first.map(item_timestamp_ms).unwrap_or(0);
     let ended_at_ms = items
-        .last()
-        .copied()
-        .map(item_timestamp_ms)
+        .iter()
+        .map(|it| item_end_timestamp_ms(it))
+        .max()
         .unwrap_or(started_at_ms);
 
     let mut tool_count = 0usize;
     let mut has_reasoning = false;
     let mut error_count = 0usize;
     let mut nodes: Vec<ActivityNode<'a>> = Vec::new();
-    let mut last_tool_label: Option<String> = None;
+    let mut active_tool_label: Option<String> = None;
     let mut cluster_idx = 0usize;
 
     let mut idx = 0usize;
@@ -392,11 +396,13 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
                 if matches!(status, ToolRunStatus::Failed | ToolRunStatus::Declined) {
                     error_count += 1;
                 }
-                last_tool_label = Some(if formatted.subtitle.is_empty() {
-                    title.clone()
-                } else {
-                    format!("{title} · {}", formatted.subtitle)
-                });
+                if matches!(status, ToolRunStatus::Pending | ToolRunStatus::Running) {
+                    active_tool_label = Some(if formatted.subtitle.is_empty() {
+                        title.clone()
+                    } else {
+                        format!("{title} · {}", formatted.subtitle)
+                    });
+                }
                 idx += 1;
 
                 while idx < items.len() {
@@ -424,11 +430,16 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
                             ) {
                                 error_count += 1;
                             }
-                            last_tool_label = Some(if next_fmt.subtitle.is_empty() {
-                                next_fmt.title
-                            } else {
-                                format!("{} · {}", next_fmt.title, next_fmt.subtitle)
-                            });
+                            if matches!(
+                                next_status,
+                                ToolRunStatus::Pending | ToolRunStatus::Running
+                            ) {
+                                active_tool_label = Some(if next_fmt.subtitle.is_empty() {
+                                    next_fmt.title
+                                } else {
+                                    format!("{} · {}", next_fmt.title, next_fmt.subtitle)
+                                });
+                            }
                             cluster.push(items[idx]);
                             idx += 1;
                             continue;
@@ -450,30 +461,37 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
         }
     }
 
-    let current_action = if let Some(label) = last_tool_label {
+    let tail_reasoning_title = items.last().and_then(|item| match item {
+        FeedItem::Reasoning { content, .. } => parse_reasoning_sections(content)
+            .into_iter()
+            .rev()
+            .map(|sec| sec.title)
+            .find(|title| !title.trim().is_empty() && title != "Thinking"),
+        _ => None,
+    });
+    let latest_reasoning_title = tail_reasoning_title.clone().or_else(|| {
+        items.iter().rev().find_map(|item| match item {
+            FeedItem::Reasoning { content, .. } => parse_reasoning_sections(content)
+                .into_iter()
+                .rev()
+                .map(|sec| sec.title)
+                .find(|title| !title.trim().is_empty() && title != "Thinking"),
+            _ => None,
+        })
+    });
+
+    let current_action = if let Some(label) = active_tool_label {
         label
+    } else if let Some(title) = tail_reasoning_title {
+        title
     } else if has_reasoning {
         "Thinking…".to_string()
     } else {
         "Working…".to_string()
     };
 
-    let mut summary_parts = Vec::new();
-    if tool_count > 0 {
-        summary_parts.push(if tool_count == 1 {
-            "1 tool used".to_string()
-        } else {
-            format!("{tool_count} tools used")
-        });
-    }
-    if has_reasoning {
-        summary_parts.push("Reasoning".to_string());
-    }
-    let summary_label = if summary_parts.is_empty() {
-        "Activity".to_string()
-    } else {
-        summary_parts.join(" · ")
-    };
+    let summary_label =
+        build_natural_activity_summary(&nodes, tool_count, has_reasoning, latest_reasoning_title);
 
     ActivityGroup {
         id,
@@ -489,6 +507,133 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
         is_retryable: false,
         current_action,
         summary_label,
+    }
+}
+
+/// Synthesizes a calm, human-readable one-line summary for a completed activity group,
+/// e.g. `"Finalizing design decisions"` for a reasoning block or `"Read 2 files, ran 1 command"`
+/// / `"Read theme.rs, edited style.rs, and 3 more steps"` for multi-step tool groups.
+fn build_natural_activity_summary(
+    nodes: &[ActivityNode<'_>],
+    tool_count: usize,
+    has_reasoning: bool,
+    latest_reasoning_title: Option<String>,
+) -> String {
+    if tool_count == 0 {
+        if let Some(title) = latest_reasoning_title {
+            return truncate_text(title.trim(), 72);
+        }
+        return if has_reasoning {
+            "Reasoning".to_string()
+        } else {
+            "Activity".to_string()
+        };
+    }
+
+    let mut phrases: Vec<String> = Vec::new();
+    let mut covered_tools: usize = 0;
+
+    for node in nodes {
+        let ActivityNode::ToolCluster { title, items, .. } = node else {
+            continue;
+        };
+        if phrases.len() >= 2 {
+            break;
+        }
+        let count = items.len();
+        let phrase = if count == 1 {
+            match items[0] {
+                FeedItem::Tool {
+                    tool_name,
+                    input,
+                    output,
+                    error,
+                    status,
+                    ..
+                } => {
+                    let fmt = format_tool_card(
+                        tool_name,
+                        input,
+                        output.as_ref(),
+                        error.as_deref(),
+                        *status,
+                    );
+                    let raw_sub = fmt.subtitle.trim();
+                    let is_status_word = matches!(
+                        raw_sub.to_ascii_lowercase().as_str(),
+                        "" | "completed" | "running" | "pending" | "failed" | "declined" | "ok"
+                    );
+                    let concise_target = if is_status_word {
+                        None
+                    } else if raw_sub.contains('/') || raw_sub.contains('\\') {
+                        raw_sub
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .filter(|s| !s.is_empty() && s.chars().count() <= 32)
+                            .map(str::to_owned)
+                    } else if raw_sub.chars().count() <= 28 {
+                        Some(raw_sub.to_owned())
+                    } else {
+                        None
+                    };
+                    let verb = match fmt.title.as_str() {
+                        "Read file" => "Read",
+                        "Write file" => "Wrote",
+                        "Edit file" => "Edited",
+                        "Subagent" => "Used subagent",
+                        other => other,
+                    };
+                    match concise_target {
+                        Some(target) => format!("{verb} {target}"),
+                        None => verb.to_string(),
+                    }
+                }
+                _ => title.clone(),
+            }
+        } else {
+            format!("{title} ({count})")
+        };
+        if !phrase.trim().is_empty() {
+            phrases.push(phrase);
+            covered_tools += count;
+        }
+    }
+
+    let remaining = tool_count.saturating_sub(covered_tools);
+    if phrases.is_empty() {
+        return if tool_count == 1 {
+            "Ran 1 step".to_string()
+        } else {
+            format!("Ran {tool_count} steps")
+        };
+    }
+
+    // Sentence-case the first phrase, lowercase the leading verb of subsequent clauses.
+    let mut clauses: Vec<String> = Vec::with_capacity(phrases.len() + 1);
+    for (idx, p) in phrases.into_iter().enumerate() {
+        if idx == 0 {
+            clauses.push(p);
+        } else {
+            let mut chars = p.chars();
+            let lowered = match chars.next() {
+                Some(first) if first.is_ascii_uppercase() => {
+                    format!("{}{}", first.to_ascii_lowercase(), chars.as_str())
+                }
+                _ => p,
+            };
+            clauses.push(lowered);
+        }
+    }
+
+    if remaining > 0 {
+        let step_word = if remaining == 1 { "step" } else { "steps" };
+        if clauses.len() == 1 {
+            format!("{} and {remaining} more {step_word}", clauses[0])
+        } else {
+            format!("{}, and {remaining} more {step_word}", clauses.join(", "))
+        }
+    } else {
+        clauses.join(", ")
     }
 }
 
@@ -2032,5 +2177,60 @@ mod tests {
         assert_eq!(sections[0].body, "Check files");
         assert_eq!(sections[1].title, "Plan");
         assert_eq!(sections[1].body, "Edit mod.rs");
+    }
+
+    #[test]
+    fn busy_trailing_activity_stays_live_between_completed_tool_and_next_step() {
+        let feed = vec![
+            FeedItem::Message {
+                id: "u1".into(),
+                role: FeedMessageRole::User,
+                content: "Research news".into(),
+                client_message_id: None,
+                attachments: vec![],
+                references: vec![],
+                citations: vec![],
+                streaming: false,
+                timestamp_ms: 1_000,
+            },
+            FeedItem::Reasoning {
+                id: "r1".into(),
+                content: "**Searching**\nLooking up updates.".into(),
+                mode: "reasoning".into(),
+                streaming: false,
+                timestamp_ms: 1_500,
+            },
+            FeedItem::Tool {
+                id: "t1".into(),
+                tool_name: "web_search".into(),
+                title: None,
+                call_id: None,
+                status: ToolRunStatus::Completed,
+                input: json!({ "query": "updates" }),
+                output: Some(json!({ "ok": true })),
+                error: None,
+                diff: None,
+                streaming: false,
+                timestamp_ms: 2_000,
+                completed_at_ms: Some(5_000),
+                output_truncated: false,
+            },
+        ];
+
+        let prepared = prepare_feed(&feed, false);
+        let rendered = build_chat_render_items(&prepared, true);
+        assert_eq!(rendered.len(), 2);
+        match &rendered[1] {
+            ChatRenderItem::ActivityGroup(group) => {
+                assert!(group.is_live);
+                assert_eq!(group.current_action, "Thinking…");
+                assert_eq!(group.ended_at_ms, 5_000);
+            }
+            _ => panic!("expected trailing ActivityGroup"),
+        }
+        assert!(
+            !should_show_working_placeholder(&rendered, true),
+            "should not show duplicate working placeholder below live activity group"
+        );
     }
 }

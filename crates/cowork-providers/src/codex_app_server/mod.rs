@@ -343,14 +343,34 @@ impl ProviderTransport for CodexAppServerTransport {
                 && !dynamic_tools.is_empty(),
             extra_writable_roots: native_ctx.writable_roots,
         });
+        let native_deferred_tools: std::collections::HashSet<String> = if tools_disabled {
+            std::collections::HashSet::new()
+        } else {
+            crate::endpoint_capabilities::read_native_tool_calling_plan(&request.provider_options)
+                .filter(|plan| {
+                    matches!(
+                        plan.tool_search,
+                        Some(crate::endpoint_capabilities::NativeToolSearchKind::CodexDynamicTools)
+                    )
+                })
+                .map(|plan| plan.deferred_tool_names.into_iter().collect())
+                .unwrap_or_default()
+        };
         let wire_dynamic_tools: Vec<Value> = dynamic_tools
             .iter()
             .map(|t| {
-                json!({
+                let mut spec = json!({
                     "name": t.name,
                     "description": t.description,
                     "inputSchema": t.parameters,
-                })
+                });
+                let orig_name = from_codex_mcp_tool_name(&t.name);
+                if native_deferred_tools.contains(&t.name)
+                    || native_deferred_tools.contains(&orig_name)
+                {
+                    spec["deferLoading"] = Value::Bool(true);
+                }
+                spec
             })
             .collect();
 

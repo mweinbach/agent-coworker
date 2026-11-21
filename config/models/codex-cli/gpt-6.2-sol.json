@@ -1,0 +1,15 @@
+{
+  "id": "gpt-6.2-sol",
+  "provider": "codex-cli",
+  "displayName": "GPT-6.2 Sol (Codex CLI)",
+  "knowledgeCutoff": "June 1, 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gpt-5.5.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high",
+    "reasoningSummary": "detailed",
+    "textVerbosity": "medium"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

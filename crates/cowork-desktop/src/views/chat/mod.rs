@@ -67,7 +67,8 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .w_full()
             .grow(1.0)
             .min_w(0.0)
-            .min_h(0.0);
+            .min_h(0.0)
+            .transition(rune::Transition::none());
 
         if let Some(notice) = rt.and_then(|r| r.read_only_notice.as_ref()) {
             main_col = main_col.child(read_only_notice_bar(
@@ -109,6 +110,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .w_full()
             .grow(1.0)
             .min_h(0.0)
+            .transition(rune::Transition::none())
             .child(feed_el);
         main_col = main_col.child(feed_wrap);
 
@@ -153,6 +155,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .grow(1.0)
             .min_w(0.0)
             .min_h(0.0)
+            .transition(rune::Transition::none())
             .child(main_col);
         if let Some(drawer) = build_agent_run_drawer(s, k, &t, chat_view_width) {
             if chat_view_width.is_some_and(|w| w < 820.0) {
@@ -180,6 +183,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             .w_full()
             .grow(1.0)
             .min_h(0.0)
+            .transition(rune::Transition::none())
             .child(landing::build_landing_view(s, k, &t, &mut overlays))
     };
 

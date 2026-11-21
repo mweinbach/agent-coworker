@@ -1,0 +1,11 @@
+{
+  "id": "gemini-4-argon",
+  "provider": "opencode-go",
+  "displayName": "Gemini 4 Argon",
+  "knowledgeCutoff": "2026-03",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high"],
+  "isDefault": false
+}

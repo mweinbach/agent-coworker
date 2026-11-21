@@ -1,0 +1,10 @@
+{
+  "id": "mimo-v2.6-pro",
+  "provider": "opencode-go",
+  "displayName": "MiMo-V2.6-Pro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

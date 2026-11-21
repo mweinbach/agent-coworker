@@ -3,13 +3,13 @@
 
 use rune::{Cx, El, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::shell::{TabItem, TabOrientation, TabStrip};
-use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Kit, TextInput};
+use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Kit, TextInput};
 use serde_json::Value;
 
 use crate::actions::{Action, NavAction, TaskAction, TaskQuestionAnswerParam};
 use crate::router::ViewId;
 use crate::state::{AppState, TaskArtifactView, TaskRecordView, TaskSummaryView, WorkflowRunView};
-use crate::theme::ThemeTokens;
+use crate::theme::{ThemeTokens, composite_srgb_over, warning_ink};
 
 use super::{helpers, icons};
 
@@ -158,10 +158,11 @@ pub fn build_task_view(
                             .icon(&icons::MESSAGE)
                             .closable(false)
                     }))
-                    .on_select(|s: &mut AppState, session_id, _| {
-                        s.dispatch(Action::Navigate(NavAction::OpenThread(
-                            session_id.to_owned(),
-                        )));
+                    .on_select(|s: &mut AppState, session_id, tx| {
+                        s.dispatch_tx(
+                            Action::Navigate(NavAction::OpenThread(session_id.to_owned())),
+                            tx,
+                        );
                     })
                     .build(k);
                 Some(
@@ -216,12 +217,43 @@ fn build_new_task_landing(
     })
     .build(k);
 
-    let hero = Card::new()
-        .accent(t.accent)
-        .title("Tasks & Structured Workflows", Some(&icons::CHECK_SQUARE))
-        .description(description)
-        .action(new_task)
-        .build(k);
+    let hero = row()
+        .role("group")
+        .label("Tasks & Structured Workflows")
+        .w_full()
+        .max_w(860.0)
+        .px(18.0)
+        .py(16.0)
+        .gap(14.0)
+        .radius(12.0)
+        .continuous_corners()
+        .fill(t.elevated_bg)
+        .border(1.0, t.border)
+        .center_y()
+        .child(
+            el().size(36.0, 36.0)
+                .shrink()
+                .radius(9.0)
+                .continuous_corners()
+                .fill(t.accent_soft)
+                .center()
+                .child(icon(&icons::CHECK_SQUARE, 16.0).color(t.accent))
+                .a11y_hidden(),
+        )
+        .child(
+            col()
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .gap(3.0)
+                .child(
+                    text("Tasks & Structured Workflows")
+                        .font(t.title)
+                        .color(t.text_base),
+                )
+                .child(text(description).font(t.body).color(t.text_muted).wrap()),
+        )
+        .child(el().shrink().child(new_task));
 
     let create_form = s
         .shell_ui
@@ -236,7 +268,8 @@ fn build_new_task_landing(
     let tasks_section = if tasks.peek().is_none() {
         el().w_full()
             .padding(14.0)
-            .radius(8.0)
+            .radius(10.0)
+            .continuous_corners()
             .fill(t.card_bg)
             .border(1.0, t.border_muted)
             .child(
@@ -264,14 +297,7 @@ fn build_new_task_landing(
         })
         .padding(24.0)
         .gap(18.0)
-        .child(
-            el().w_full()
-                .max_w(860.0)
-                .fill(t.card_bg)
-                .radius(10.0)
-                .border(1.0, t.border)
-                .child(hero),
-        )
+        .child(hero)
         .children(create_form.map(|form| el().w_full().max_w(860.0).child(form)))
         .child(
             col()
@@ -313,9 +339,10 @@ fn build_task_create_card(
         .key("task-create-card")
         .w_full()
         .padding(16.0)
-        .radius(10.0)
-        .fill(t.card_bg)
-        .border(1.0, t.accent)
+        .radius(12.0)
+        .continuous_corners()
+        .fill(t.elevated_bg)
+        .border(1.0, k.alpha(t.accent, 0.32))
         .gap(10.0)
         .child(
             text("Create structured task")
@@ -446,8 +473,8 @@ fn task_list_row(s: &AppState, task: &TaskSummaryView, k: &Kit, t: &ThemeTokens)
         .fill(t.card_bg)
         .border(1.0, t.border)
         .hover(t.hover)
-        .on_press_tx(move |s: &mut AppState, _| {
-            s.dispatch(Action::Navigate(NavAction::OpenTask(task_id.clone())));
+        .on_press_tx(move |s: &mut AppState, tx| {
+            s.dispatch_tx(Action::Navigate(NavAction::OpenTask(task_id.clone())), tx);
         })
         .child(row_el.child(Badge::new(badge_txt).build(k)))
 }
@@ -639,8 +666,8 @@ fn build_active_task_workspace(
         Button::new("All tasks")
             .variant(ButtonVariant::Ghost)
             .control_size(ControlSize::Small)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Task)), tx);
             })
             .build(k)
             .key("task-all-tasks"),
@@ -691,8 +718,9 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
                 .w_full()
                 .padding(12.0)
                 .radius(10.0)
-                .fill(t.card_bg)
-                .border(1.0, t.accent)
+                .continuous_corners()
+                .fill(t.elevated_bg)
+                .border(1.0, k.alpha(t.accent, 0.32))
                 .gap(8.0)
                 .center_y()
                 .child(
@@ -737,25 +765,38 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
         );
     }
 
+    let goal_text = if !task.prompt.is_empty() {
+        task.prompt.as_str()
+    } else if !task.summary.objective.is_empty() {
+        task.summary.objective.as_str()
+    } else {
+        "No prompt recorded for this task."
+    };
+
     main_pane = main_pane.child(
-        el().w_full()
-            .padding(14.0)
+        col()
+            .role("group")
+            .label("Task Prompt & Goal")
+            .w_full()
+            .padding(16.0)
+            .gap(8.0)
             .radius(10.0)
-            .fill(t.card_bg)
-            .border(1.0, t.border)
+            .continuous_corners()
+            .fill(t.elevated_bg)
+            .border(1.0, t.border_muted)
             .child(
-                Card::new()
-                    .accent(t.accent)
-                    .title("Task Prompt & Goal", Some(&icons::SPARKLES))
-                    .description(if !task.prompt.is_empty() {
-                        task.prompt.as_str()
-                    } else if !task.summary.objective.is_empty() {
-                        task.summary.objective.as_str()
-                    } else {
-                        "No prompt recorded for this task."
-                    })
-                    .build(k),
-            ),
+                row()
+                    .w_full()
+                    .gap(8.0)
+                    .center_y()
+                    .child(icon(&icons::SPARKLES, 14.0).color(t.accent))
+                    .child(
+                        text("Task Prompt & Goal")
+                            .font(k.ty.small_medium)
+                            .color(t.text_base),
+                    ),
+            )
+            .child(text(goal_text).font(t.body).color(t.text_muted).wrap()),
     );
 
     let questions = extract_task_questions(&task.questions);
@@ -794,8 +835,12 @@ fn build_task_questions_card(
         .w_full()
         .gap(8.0)
         .center_y()
-        .child(icon(&icons::INFO, 15.0).color(t.warning))
-        .child(text("Open Questions").font(t.label).color(t.text_base))
+        .child(icon(&icons::ALERT_TRIANGLE, 14.0).color(warning_ink(t)))
+        .child(
+            text("Open Questions")
+                .font(k.ty.small_medium)
+                .color(t.text_base),
+        )
         .child(
             Badge::new(questions.len().to_string())
                 .variant(BadgeVariant::Accent)
@@ -810,13 +855,18 @@ fn build_task_questions_card(
         );
     }
 
+    let question_card_bg = composite_srgb_over(
+        t.warning.alpha(if t.dark { 0.08 } else { 0.05 }),
+        t.elevated_bg,
+    );
     let mut card = col()
         .key("task-questions-card")
         .w_full()
         .padding(14.0)
         .radius(10.0)
-        .fill(t.card_bg)
-        .border(1.0, t.warning)
+        .continuous_corners()
+        .fill(question_card_bg)
+        .border(1.0, k.alpha(t.warning, 0.30))
         .gap(12.0)
         .child(header);
 
@@ -1347,12 +1397,17 @@ fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTo
     if let Some(blockers) = task.blockers.as_array()
         && !blockers.is_empty()
     {
+        let blocker_bg = composite_srgb_over(
+            t.danger.alpha(if t.dark { 0.10 } else { 0.06 }),
+            t.elevated_bg,
+        );
         let mut b_card = col()
             .w_full()
-            .padding(10.0)
-            .radius(8.0)
-            .fill(t.card_bg)
-            .border(1.0, t.danger)
+            .padding(12.0)
+            .radius(10.0)
+            .continuous_corners()
+            .fill(blocker_bg)
+            .border(1.0, t.danger.alpha(0.30))
             .gap(4.0)
             .child(text("Active Blockers").font(t.label).color(t.danger));
         for b in blockers.iter().take(6) {

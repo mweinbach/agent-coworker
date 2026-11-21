@@ -3,9 +3,12 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use rune::{Cursor, Direction, El, ImageCache, Tx, col, icon, row, spacer, text};
+use rune::{
+    Color, Cursor, Direction, El, ImageCache, Spring, Transition, Tx, col, el, icon, row, spacer,
+    text,
+};
 use rune_kit::diff::{DiffMode, DiffState, DiffView, FileDiff, LineKind};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Spinner};
 use serde_json::Value;
 
 use crate::actions::{Action, ChatAction, ShellAction};
@@ -14,14 +17,14 @@ use crate::state::{
 };
 use crate::theme::ThemeTokens;
 
-use super::components::{StatusPillTone, status_pill, timeline_node, tool_state_indicator};
+use super::components::{CHAT_COLUMN_MAX_WIDTH, StatusPillTone, status_pill, tool_state_indicator};
 use super::feed_row::to_chat_citations;
 use super::icons;
 use super::markdown::{MarkdownHooks, desktop_markdown};
 use super::model::{
     ActivityGroup, ActivityNode, active_child_agent_labels, extract_tool_diff,
     format_duration_compact, format_tool_card, middle_truncate_path, parse_reasoning_sections,
-    tool_icon_category, truncate_text,
+    truncate_text,
 };
 
 const RAW_JSON_PREVIEW_LIMIT: usize = 12_000;
@@ -58,35 +61,66 @@ pub fn build_activity_group_card(
         .key(format!("group:{}", group.id))
         .w_full()
         .min_w(0.0)
-        .max_w(768.0)
+        .max_w(CHAT_COLUMN_MAX_WIDTH)
         .gap(6.0)
+        .transition(Transition::none())
         .child(header);
 
     if expanded && !group.nodes.is_empty() {
-        let total_nodes = group.nodes.len();
-        let mut timeline = col()
+        let reasoning_only = group.tool_count == 0 && group.has_reasoning;
+        let duration_ms = (group.ended_at_ms - group.started_at_ms).max(0);
+        let thought_hdr =
+            (reasoning_only && !group.is_live && group.started_at_ms > 0 && duration_ms >= 1000)
+                .then(|| format!("Thought for {}", format_duration_compact(duration_ms)));
+
+        let surface_fill = if t.dark {
+            k.alpha(t.elevated_bg, 0.55)
+        } else {
+            t.input_bg
+        };
+
+        let mut sheet = col()
             .key(format!("group-body:{}", group.id))
             .w_full()
-            .pl(6.0)
-            .gap(2.0);
+            .min_w(0.0)
+            .radius(10.0)
+            .continuous_corners()
+            .fill(surface_fill)
+            .border(1.0, t.border_muted)
+            .border_layout()
+            .clip_rounded(10.0)
+            .transition(Transition::none());
+
+        if let Some(thought_label) = thought_hdr {
+            sheet = sheet.child(
+                row().w_full().px(14.0).pt(10.0).pb(4.0).child(
+                    text(thought_label)
+                        .font(k.ty.text_xsmall)
+                        .color(t.text_faint),
+                ),
+            );
+        }
+
+        let total_nodes = group.nodes.len();
         for (idx, node) in group.nodes.iter().enumerate() {
-            timeline = timeline.child(build_activity_node(
+            sheet = sheet.child(build_activity_node(
                 s,
                 k,
                 t,
                 &group.id,
                 (idx, total_nodes),
+                reasoning_only,
                 node,
                 ctx,
             ));
         }
-        card = card.child(timeline);
+        card = card.child(sheet);
     }
 
     if group.is_live {
         card.streaming(true)
     } else {
-        card.arrives_whole()
+        card.fold_glide(Spring::new(0.16, 0.0)).fold_feather(0.0)
     }
 }
 
@@ -117,72 +151,82 @@ fn build_live_group_header(
         )
     };
 
+    let mut meta_parts: Vec<String> = Vec::new();
+    if group.tool_count > 0 {
+        meta_parts.push(if group.tool_count == 1 {
+            "1 step".to_string()
+        } else {
+            format!("{} steps", group.tool_count)
+        });
+    }
+    if elapsed_ms >= 1000 {
+        meta_parts.push(format_duration_compact(elapsed_ms));
+    }
+
     let chevron = if expanded {
         &icons::CHEVRON_DOWN
     } else {
         &icons::CHEVRON_RIGHT
     };
 
+    let hdr_key = format!("group-hdr:{}", group.id);
+    let keep_key = hdr_key.clone();
     let mut header = row()
-        .key(format!("group-hdr:{}", group.id))
-        .w_full()
+        .key(hdr_key)
         .items_center()
         .gap(8.0)
-        .px(12.0)
-        .py(8.0)
-        .radius(10.0)
-        .fill(k.alpha(t.elevated_bg, 0.72))
-        .hover(t.elevated_bg)
-        .border(
-            1.0,
-            if group.has_pending_approval {
-                k.alpha(t.danger, 0.45)
-            } else {
-                t.border_muted
-            },
-        )
+        .px(8.0)
+        .py(5.0)
+        .radius(8.0)
+        .continuous_corners()
+        .hover(t.hover)
+        .hover_group()
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
         .label(action_text.clone())
-        .on_press(move |s: &mut AppState| s.chat_ui.toggle_activity(&toggle_id, expanded))
-        .child(icon(&icons::CLOCK, 13.0).color(t.accent))
+        .transition(Transition::none())
+        .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
+            s.chat_ui.toggle_activity(&toggle_id, expanded);
+            tx.keep_on_screen(&keep_key);
+        });
+
+    if group.has_pending_approval {
+        header = header
+            .w_full()
+            .fill(k.alpha(t.danger, if t.dark { 0.12 } else { 0.06 }))
+            .border(1.0, k.alpha(t.danger, 0.35));
+    } else {
+        header = header.w_full().fill(Color::TRANSPARENT);
+    }
+
+    header = header
+        .child(Spinner::new().size(13.0).color(t.accent).build(k))
         .child(
             text(action_text)
                 .font(k.ty.small_medium)
                 .color(t.text_base)
                 .truncate()
-                .grow(1.0)
+                .shrink()
                 .min_w(0.0),
         );
 
     if group.has_pending_approval {
         header = header.child(status_pill(k, t, "Needs review", StatusPillTone::Danger));
     }
-    if group.tool_count > 0 {
-        header = header.child(status_pill(
-            k,
-            t,
-            format!(
-                "{} {}",
-                group.tool_count,
-                if group.tool_count == 1 {
-                    "step"
-                } else {
-                    "steps"
-                }
-            ),
-            StatusPillTone::Neutral,
-        ));
-    }
-    if elapsed_ms >= 1000 {
+    if !meta_parts.is_empty() {
         header = header.child(
-            text(format_duration_compact(elapsed_ms))
+            text(meta_parts.join(" · "))
                 .font(k.ty.text_xsmall)
                 .color(t.text_faint),
         );
     }
-    header.child(icon(chevron, 13.0).color(t.text_muted))
+    header = header.child(
+        icon(chevron, 12.0)
+            .color(t.text_faint)
+            .group_color(t.text_muted),
+    );
+    header
 }
 
 fn build_completed_group_header(
@@ -202,6 +246,11 @@ fn build_completed_group_header(
             Some(d) => format!("Couldn't finish after {d}"),
             None => "Couldn't finish".to_string(),
         }
+    } else if group.summary_label == "Reasoning" {
+        match &dur_str {
+            Some(d) => format!("Thought for {d}"),
+            None => "Thought".to_string(),
+        }
     } else if group.summary_label.trim().is_empty() {
         match &dur_str {
             Some(d) => format!("Worked for {d}"),
@@ -219,51 +268,54 @@ fn build_completed_group_header(
         &icons::CHEVRON_RIGHT
     };
 
-    let trigger = row()
-        .key(format!("group-hdr:{}", group.id))
+    let hdr_key = format!("group-hdr:{}", group.id);
+    let keep_key = hdr_key.clone();
+    let mut trigger = row()
+        .key(hdr_key)
         .items_center()
-        .gap(6.0)
-        .px(8.0)
-        .py(4.0)
-        .radius(8.0)
-        .hover(t.elevated_bg)
+        .gap(5.0)
+        .px(4.0)
+        .py(3.0)
+        .radius(6.0)
+        .continuous_corners()
+        .hover(t.hover)
+        .hover_group()
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
         .label(label.clone())
-        .on_press(move |s: &mut AppState| s.chat_ui.toggle_activity(&toggle_id, expanded))
-        .child(
-            icon(
-                if group.is_retryable {
-                    &icons::ALERT
-                } else {
-                    &icons::SPARKLES
-                },
-                12.0,
-            )
-            .color(if group.is_retryable {
-                t.danger
-            } else {
-                t.text_faint
-            }),
-        )
+        .transition(Transition::none())
+        .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
+            s.chat_ui.toggle_activity(&toggle_id, expanded);
+            tx.keep_on_screen(&keep_key);
+        });
+
+    if group.is_retryable {
+        trigger = trigger.child(icon(&icons::ALERT, 12.0).color(t.danger));
+    }
+
+    trigger = trigger
         .child(
             text(label)
-                .font(k.ty.small_medium)
+                .font(k.ty.small)
                 .color(if group.is_retryable {
                     t.danger
                 } else {
                     t.text_muted
+                })
+                .group_color(if group.is_retryable {
+                    t.danger
+                } else {
+                    t.text_base
                 }),
         )
-        .child(icon(chevron, 12.0).color(t.text_faint));
+        .child(
+            icon(chevron, 11.5)
+                .color(t.text_faint)
+                .group_color(t.text_muted),
+        );
 
-    let mut bar = row()
-        .w_full()
-        .items_center()
-        .gap(8.0)
-        .child(trigger)
-        .child(rune::el().h(1.0).grow(1.0).fill(k.alpha(t.border, 0.4)));
+    let mut bar = row().w_full().items_center().gap(8.0).child(trigger);
 
     if group.error_count > 0 && !group.is_retryable {
         bar = bar.child(status_pill(
@@ -284,7 +336,7 @@ fn build_completed_group_header(
 
     if group.is_retryable {
         let retry_tid = thread_id.to_string();
-        bar = bar.child(
+        bar = bar.child(spacer()).child(
             Button::new("Retry")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)
@@ -302,63 +354,44 @@ fn build_completed_group_header(
     bar
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_activity_node(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
     group_id: &str,
     pos: (usize, usize),
+    reasoning_only: bool,
     node: &ActivityNode<'_>,
     ctx: &ActivityCardContext<'_>,
 ) -> El {
-    let (node_idx, total_nodes) = pos;
-    let is_last = node_idx + 1 == total_nodes;
-    match node {
-        ActivityNode::Reasoning(item) => {
-            let content = build_reasoning_node(s, k, t, item, ctx);
-            timeline_node(
-                k,
-                t,
-                icon(&icons::BRAIN, 11.0).color(t.text_muted),
-                is_last,
-                content,
-            )
-            .key(format!("{group_id}:node:{node_idx}"))
-        }
-        ActivityNode::ProgressMessage(item) => {
-            let content = build_progress_note_node(s, k, t, item, ctx);
-            timeline_node(
-                k,
-                t,
-                icon(&icons::LIGHTBULB, 11.0).color(t.text_muted),
-                is_last,
-                content,
-            )
-            .key(format!("{group_id}:node:{node_idx}"))
-        }
+    let (node_idx, _total_nodes) = pos;
+    let needs_divider = !reasoning_only && node_idx > 0;
+    let inner = match node {
+        ActivityNode::Reasoning(item) => build_reasoning_node(s, k, t, item, reasoning_only, ctx),
+        ActivityNode::ProgressMessage(item) => build_progress_note_node(s, k, t, item, ctx),
         ActivityNode::ToolCluster {
             cluster_id,
             title,
             items,
         } => {
-            let first_tool_name = items
-                .first()
-                .and_then(|item| match item {
-                    FeedItem::Tool { tool_name, .. } => Some(tool_name.as_str()),
-                    _ => None,
-                })
-                .unwrap_or("tool");
-            let dot = icon(icons::tool_icon(tool_icon_category(first_tool_name)), 11.0)
-                .color(t.text_muted);
-
-            let content = if items.len() == 1 {
+            if items.len() == 1 {
                 build_tool_card(s, k, t, items[0], ctx)
             } else {
                 build_tool_cluster_card(s, k, t, group_id, cluster_id, title, items, ctx)
-            };
-            timeline_node(k, t, dot, is_last, content).key(format!("{group_id}:node:{node_idx}"))
+            }
         }
+    };
+    let mut row_wrap = col()
+        .key(format!("{group_id}:node:{node_idx}"))
+        .w_full()
+        .min_w(0.0)
+        .transition(Transition::none())
+        .child(inner);
+    if needs_divider {
+        row_wrap = row_wrap.border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted);
     }
+    row_wrap
 }
 
 fn build_reasoning_node(
@@ -366,6 +399,7 @@ fn build_reasoning_node(
     k: &Kit,
     t: &ThemeTokens,
     item: &FeedItem,
+    reasoning_only: bool,
     ctx: &ActivityCardContext<'_>,
 ) -> El {
     let FeedItem::Reasoning {
@@ -381,40 +415,40 @@ fn build_reasoning_node(
 
     let sections = parse_reasoning_sections(content);
     let md_hooks = activity_markdown_hooks(s, ctx.copied_key);
+    let muted_t = ThemeTokens {
+        text_base: t.text_muted,
+        ..*t
+    };
 
-    if sections.len() <= 1 {
-        let heading = sections
-            .first()
-            .map(|sec| sec.title.as_str())
-            .filter(|t| !t.is_empty())
-            .unwrap_or(if mode.is_empty() {
-                "Thinking"
-            } else {
-                mode.as_str()
-            });
-        let body_src = sections
-            .first()
-            .map(|sec| sec.body.as_str())
-            .unwrap_or(content.as_str());
-
-        let mut card = col()
+    if sections.is_empty() {
+        let fallback_label = if mode.is_empty() || mode == "reasoning" {
+            "Thinking…".to_string()
+        } else {
+            mode.clone()
+        };
+        return row()
             .key(format!("reason:{id}"))
             .w_full()
+            .px(14.0)
+            .py(8.5)
+            .transition(Transition::none())
+            .child(text(fallback_label).font(k.ty.small).color(t.text_muted));
+    }
+
+    // Untitled single prose block: render cleanly inside the unified thought card.
+    if sections.len() == 1 && sections[0].title == "Thinking" {
+        let body_src = sections[0].body.as_str();
+        let mut block = col()
+            .key(format!("reason:{id}"))
+            .w_full()
+            .px(14.0)
+            .py(if reasoning_only { 6.0 } else { 9.0 })
             .gap(4.0)
-            .px(10.0)
-            .py(8.0)
-            .radius(8.0)
-            .fill(k.alpha(t.elevated_bg, 0.35))
-            .border(1.0, k.alpha(t.border_muted, 0.7))
-            .child(
-                text(heading.to_string())
-                    .font(k.ty.small_medium)
-                    .color(t.text_muted),
-            );
+            .transition(Transition::none());
         if !body_src.trim().is_empty() {
-            card = card.child(desktop_markdown(
+            block = block.child(desktop_markdown(
                 k,
-                t,
+                &muted_t,
                 body_src,
                 &format!("reason:{id}"),
                 true,
@@ -426,68 +460,106 @@ fn build_reasoning_node(
                 ctx.external_cache.clone(),
                 md_hooks,
             ));
+        } else {
+            block = block.child(text("Thinking…").font(k.ty.small).color(t.text_muted));
         }
-        return card;
+        return block;
     }
 
-    let mut stack = col().key(format!("reason:{id}")).w_full().gap(6.0);
+    // Clean stacked thought rows (matching Claude's expanded thought card).
+    // Inside a multi-step card, each section is hairline-separated; inside a reasoning-only card,
+    // sections stack calmly with generous vertical rhythm.
+    let mut stack = col()
+        .key(format!("reason:{id}"))
+        .w_full()
+        .py(if reasoning_only { 4.0 } else { 0.0 })
+        .transition(Transition::none());
     let total = sections.len();
     for (idx, sec) in sections.iter().enumerate() {
         let sec_key = format!("reason:{id}:{idx}");
-        let is_open = (*streaming && idx + 1 == total)
-            || s.chat_ui.expanded_reasoning_sections.contains(&sec_key);
+        let has_body = !sec.body.trim().is_empty();
+        let is_live_tail = *streaming && idx + 1 == total;
+        let is_open =
+            has_body && (is_live_tail || s.chat_ui.expanded_reasoning_sections.contains(&sec_key));
         let toggle_key = sec_key.clone();
+        let keep_key = sec_key.clone();
         let chevron = if is_open {
             &icons::CHEVRON_DOWN
         } else {
             &icons::CHEVRON_RIGHT
         };
 
-        let trigger = row()
+        let mut trigger = row()
             .w_full()
             .items_center()
             .gap(6.0)
-            .px(10.0)
-            .py(6.0)
-            .radius(8.0)
-            .fill(k.alpha(t.elevated_bg, 0.35))
-            .hover(t.elevated_bg)
-            .cursor(Cursor::Pointer)
-            .role("button")
-            .expanded(is_open)
-            .label(sec.title.clone())
-            .on_press(move |s: &mut AppState| {
-                if !s.chat_ui.expanded_reasoning_sections.remove(&toggle_key) {
-                    s.chat_ui
-                        .expanded_reasoning_sections
-                        .insert(toggle_key.clone());
-                }
-            })
-            .child(icon(chevron, 12.0).color(t.text_faint))
+            .px(14.0)
+            .py(if reasoning_only { 6.5 } else { 9.0 })
+            .hover_group()
             .child(
                 text(sec.title.clone())
-                    .font(k.ty.small_medium)
-                    .color(t.text_muted)
+                    .font(k.ty.small)
+                    .color(if is_open { t.text_base } else { t.text_muted })
+                    .group_color(t.text_base)
                     .truncate()
-                    .grow(1.0),
+                    .shrink()
+                    .min_w(0.0),
             );
 
-        let mut sec_col = col().key(sec_key.clone()).w_full().gap(4.0).child(trigger);
-        if is_open && !sec.body.trim().is_empty() {
-            sec_col = sec_col.child(col().w_full().pl(10.0).child(desktop_markdown(
-                k,
-                t,
-                &sec.body,
-                &sec_key,
-                true,
-                *streaming && idx + 1 == total,
-                s.desktop_settings.reduce_motion,
-                ctx.workspace_id,
-                ctx.workspace_path,
-                &[],
-                ctx.external_cache.clone(),
-                md_hooks.clone(),
-            )));
+        if has_body {
+            trigger = trigger
+                .hover(t.hover)
+                .cursor(Cursor::Pointer)
+                .role("button")
+                .expanded(is_open)
+                .label(sec.title.clone())
+                .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
+                    if !s.chat_ui.expanded_reasoning_sections.remove(&toggle_key) {
+                        s.chat_ui
+                            .expanded_reasoning_sections
+                            .insert(toggle_key.clone());
+                    }
+                    tx.keep_on_screen(&keep_key);
+                })
+                .child(
+                    icon(chevron, 11.0)
+                        .color(t.text_faint)
+                        .group_color(t.text_muted),
+                );
+        }
+
+        let mut sec_col = col()
+            .key(sec_key.clone())
+            .w_full()
+            .transition(Transition::none())
+            .child(trigger);
+        if !reasoning_only && idx > 0 {
+            sec_col = sec_col.border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted);
+        }
+        if is_open {
+            sec_col = sec_col.child(
+                col()
+                    .key(format!("{sec_key}:body"))
+                    .w_full()
+                    .px(14.0)
+                    .pt(2.0)
+                    .pb(10.0)
+                    .transition(Transition::none())
+                    .child(desktop_markdown(
+                        k,
+                        &muted_t,
+                        &sec.body,
+                        &sec_key,
+                        true,
+                        is_live_tail,
+                        s.desktop_settings.reduce_motion,
+                        ctx.workspace_id,
+                        ctx.workspace_path,
+                        &[],
+                        ctx.external_cache.clone(),
+                        md_hooks.clone(),
+                    )),
+            );
         }
         stack = stack.child(sec_col);
     }
@@ -513,16 +585,19 @@ fn build_progress_note_node(
         return col().w_full();
     };
     let chat_citations = to_chat_citations(citations);
+    let muted_t = ThemeTokens {
+        text_base: t.text_muted,
+        ..*t
+    };
     col()
         .key(format!("prog:{id}"))
         .w_full()
-        .px(10.0)
-        .py(6.0)
-        .radius(8.0)
-        .fill(k.alpha(t.elevated_bg, 0.35))
+        .px(14.0)
+        .py(9.0)
+        .transition(Transition::none())
         .child(desktop_markdown(
             k,
-            t,
+            &muted_t,
             content,
             &format!("prog:{id}"),
             true,
@@ -571,39 +646,21 @@ fn build_tool_cluster_card(
         })
         .count();
 
-    let status_pill_el = if fail_count > 0 {
-        Some(status_pill(
-            k,
-            t,
-            format!("{fail_count} failed"),
-            StatusPillTone::Danger,
-        ))
-    } else if any_running {
-        Some(status_pill(k, t, "Running", StatusPillTone::Accent))
-    } else {
-        None
-    };
-
-    let preview_lines: Vec<String> = items
-        .iter()
-        .rev()
-        .take(2)
-        .filter_map(|item| match item {
-            FeedItem::Tool {
-                tool_name,
-                input,
-                output,
-                error,
-                status,
-                ..
-            } => {
-                let fmt =
-                    format_tool_card(tool_name, input, output.as_ref(), error.as_deref(), *status);
-                (!fmt.subtitle.is_empty()).then_some(fmt.subtitle)
-            }
-            _ => None,
-        })
-        .collect();
+    let preview_summary: Option<String> = items.iter().rev().find_map(|item| match item {
+        FeedItem::Tool {
+            tool_name,
+            input,
+            output,
+            error,
+            status,
+            ..
+        } => {
+            let fmt =
+                format_tool_card(tool_name, input, output.as_ref(), error.as_deref(), *status);
+            (!fmt.subtitle.is_empty()).then_some(fmt.subtitle)
+        }
+        _ => None,
+    });
 
     let chevron = if expanded {
         &icons::CHEVRON_DOWN
@@ -611,65 +668,101 @@ fn build_tool_cluster_card(
         &icons::CHEVRON_RIGHT
     };
     let toggle_key = cluster_key.clone();
+    let keep_key = cluster_key.clone();
 
     let mut hdr = row()
         .w_full()
         .items_center()
         .gap(8.0)
-        .child(
-            text(title.to_string())
-                .font(k.ty.small_medium)
-                .color(t.text_base),
-        )
-        .child(status_pill(
-            k,
-            t,
-            format!("×{}", items.len()),
-            StatusPillTone::Neutral,
-        ))
-        .child(spacer());
-    if let Some(pill) = status_pill_el {
-        hdr = hdr.child(pill);
-    }
-    hdr = hdr.child(icon(chevron, 12.0).color(t.text_faint));
-
-    let mut trigger = col()
-        .w_full()
-        .gap(4.0)
-        .px(10.0)
-        .py(8.0)
-        .radius(8.0)
-        .fill(k.alpha(t.elevated_bg, 0.45))
-        .hover(t.elevated_bg)
-        .border(1.0, t.border_muted)
+        .px(14.0)
+        .py(9.0)
+        .fill(if fail_count > 0 {
+            k.alpha(t.danger, if t.dark { 0.10 } else { 0.05 })
+        } else {
+            Color::TRANSPARENT
+        })
+        .hover(t.hover)
+        .hover_group()
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
         .label(format!("{title} ×{}", items.len()))
-        .on_press(move |s: &mut AppState| {
+        .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
             if !s.chat_ui.expanded_tool_clusters.remove(&toggle_key) {
                 s.chat_ui.expanded_tool_clusters.insert(toggle_key.clone());
             }
+            tx.keep_on_screen(&keep_key);
         })
-        .child(hdr);
+        .child(
+            text(title.to_string())
+                .font(k.ty.small)
+                .color(if fail_count > 0 {
+                    t.danger
+                } else {
+                    t.text_muted
+                }),
+        )
+        .child(
+            text(format!("×{}", items.len()))
+                .font(k.ty.text_xsmall)
+                .color(t.text_faint),
+        );
 
-    if !expanded && !preview_lines.is_empty() {
-        for preview in preview_lines {
-            trigger = trigger.child(
-                text(truncate_text(&preview, 92))
-                    .font(k.ty.text_xsmall)
-                    .color(t.text_muted)
-                    .truncate()
-                    .w_full(),
-            );
-        }
+    if !expanded && let Some(preview) = preview_summary {
+        hdr = hdr.child(
+            text(truncate_text(&preview, 68))
+                .font(k.ty.small)
+                .color(t.text_base)
+                .truncate()
+                .grow(1.0)
+                .min_w(0.0),
+        );
+    } else {
+        hdr = hdr.child(spacer());
     }
 
-    let mut container = col().key(cluster_key).w_full().gap(6.0).child(trigger);
+    if fail_count > 0 {
+        hdr = hdr.child(status_pill(
+            k,
+            t,
+            format!("{fail_count} failed"),
+            StatusPillTone::Danger,
+        ));
+    } else if any_running {
+        hdr = hdr.child(Spinner::new().size(11.0).color(t.accent).build(k));
+    }
+    hdr = hdr.child(
+        icon(chevron, 11.0)
+            .color(t.text_faint)
+            .group_color(t.text_muted),
+    );
+
+    let mut container = col()
+        .key(cluster_key.clone())
+        .w_full()
+        .transition(Transition::none())
+        .child(hdr);
     if expanded {
-        let mut nested = col().w_full().pl(8.0).gap(6.0);
-        for item in items {
-            nested = nested.child(build_tool_card(s, k, t, item, ctx));
+        let sub_fill = if t.dark {
+            k.alpha(t.panel_bg, 0.35)
+        } else {
+            k.alpha(t.elevated_bg, 0.45)
+        };
+        let mut nested = col()
+            .key(format!("{cluster_key}:body"))
+            .w_full()
+            .fill(sub_fill)
+            .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
+            .transition(Transition::none());
+        for (sub_idx, item) in items.iter().enumerate() {
+            let mut sub_row = col()
+                .w_full()
+                .pl(12.0)
+                .child(build_tool_card(s, k, t, item, ctx));
+            if sub_idx > 0 {
+                sub_row = sub_row.border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted);
+            }
+            nested = nested.child(sub_row);
         }
         container = container.child(nested);
     }
@@ -708,7 +801,8 @@ fn build_tool_card(
         ChatInteraction::UserInput { .. } => false,
     });
 
-    let default_open = awaiting_approval || matches!(status, ToolRunStatus::Failed);
+    let failed = matches!(status, ToolRunStatus::Failed);
+    let default_open = awaiting_approval || failed;
     let expanded = s.chat_ui.is_tool_expanded(id, default_open);
     let diff_files = extract_tool_diff(tool_name, input, output.as_ref(), diff.as_deref());
 
@@ -719,6 +813,7 @@ fn build_tool_card(
     };
 
     let toggle_id = id.clone();
+    let keep_tool_key = format!("tool:{id}");
     let preload_diff = diff_files.clone();
     let chevron = if expanded {
         &icons::CHEVRON_DOWN
@@ -730,24 +825,20 @@ fn build_tool_card(
         .w_full()
         .items_center()
         .gap(8.0)
-        .px(10.0)
-        .py(8.0)
-        .radius(8.0)
-        .fill(k.alpha(t.elevated_bg, 0.45))
-        .hover(t.elevated_bg)
-        .border(
-            1.0,
-            if awaiting_approval || matches!(status, ToolRunStatus::Failed) {
-                k.alpha(t.danger, 0.4)
-            } else {
-                t.border_muted
-            },
-        )
+        .px(14.0)
+        .py(9.0)
+        .fill(if failed || awaiting_approval {
+            k.alpha(t.danger, if t.dark { 0.09 } else { 0.045 })
+        } else {
+            Color::TRANSPARENT
+        })
+        .hover(t.hover)
+        .hover_group()
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
         .label(formatted.title.clone())
-        .on_press(move |s: &mut AppState| {
+        .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
             s.chat_ui.toggle_tool(&toggle_id, expanded);
             if !expanded && let Some(files) = &preload_diff {
                 s.chat_ui
@@ -755,18 +846,21 @@ fn build_tool_card(
                     .entry(toggle_id.clone())
                     .or_insert_with(|| DiffState::new(files.clone()));
             }
+            tx.keep_on_screen(&keep_tool_key);
         })
-        .child(
-            text(formatted.title.clone())
-                .font(k.ty.small_medium)
-                .color(t.text_base),
-        );
+        .child(text(formatted.title.clone()).font(k.ty.small).color(
+            if failed || awaiting_approval {
+                t.danger
+            } else {
+                t.text_muted
+            },
+        ));
 
     if !display_subtitle.is_empty() {
         hdr = hdr.child(
-            text(truncate_text(&display_subtitle, 72))
-                .font(k.ty.text_xsmall)
-                .color(t.text_muted)
+            text(truncate_text(&display_subtitle, 76))
+                .font(k.ty.small)
+                .color(t.text_base)
                 .truncate()
                 .grow(1.0)
                 .min_w(0.0),
@@ -815,27 +909,47 @@ fn build_tool_card(
         }
     }
 
-    hdr = hdr.child(icon(chevron, 12.0).color(t.text_faint));
+    hdr = hdr.child(
+        icon(chevron, 11.0)
+            .color(t.text_faint)
+            .group_color(t.text_muted),
+    );
+
+    if !expanded {
+        return col()
+            .key(format!("tool:{id}"))
+            .w_full()
+            .min_w(0.0)
+            .transition(Transition::none())
+            .child(hdr);
+    }
+
+    let detail_fill = if failed || awaiting_approval {
+        k.alpha(t.danger, if t.dark { 0.06 } else { 0.03 })
+    } else if t.dark {
+        k.alpha(t.panel_bg, 0.35)
+    } else {
+        k.alpha(t.elevated_bg, 0.45)
+    };
 
     let mut card = col()
         .key(format!("tool:{id}"))
         .w_full()
         .min_w(0.0)
-        .gap(6.0)
+        .transition(Transition::none())
         .child(hdr);
 
     if expanded {
         let mut details_col = col()
+            .key(format!("tool:{id}:details"))
             .w_full()
             .min_w(0.0)
             .gap(8.0)
-            .px(12.0)
+            .px(14.0)
             .py(10.0)
-            .radius(8.0)
-            .fill(t.card_bg)
-            .border(1.0, t.border_muted)
-            .border_layout()
-            .clip_rounded(8.0);
+            .fill(detail_fill)
+            .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
+            .transition(Transition::none());
 
         if let Some(err_msg) = error.as_deref().filter(|e| !e.trim().is_empty()) {
             details_col = details_col.child(
@@ -846,6 +960,7 @@ fn build_tool_card(
                     .px(10.0)
                     .py(8.0)
                     .radius(8.0)
+                    .continuous_corners()
                     .fill(k.alpha(t.danger, 0.10))
                     .border(1.0, k.alpha(t.danger, 0.25))
                     .child(icon(&icons::ALERT, 13.0).color(t.danger).mt(2.0))
@@ -868,6 +983,7 @@ fn build_tool_card(
                     .w_full()
                     .items_start()
                     .gap(10.0)
+                    .transition(Transition::none())
                     .child(
                         text(label.clone())
                             .font(k.ty.small_medium)
@@ -910,7 +1026,9 @@ fn build_tool_card(
             ctx.copied_key,
         ));
 
-        card = card.child(details_col);
+        card = card
+            .child(el().w_full().h(1.0).fill(t.border_muted))
+            .child(details_col);
     }
 
     card
@@ -1128,6 +1246,7 @@ fn build_raw_io_section(
 
     root = root.child(
         col()
+            .key(format!("tool:{tool_id}:raw-box"))
             .dir(Direction::Ltr)
             .w_full()
             .min_w(0.0)
@@ -1139,6 +1258,7 @@ fn build_raw_io_section(
             .border(1.0, t.border_muted)
             .border_layout()
             .clip_rounded(8.0)
+            .transition(Transition::none())
             .child(
                 row()
                     .w_full()

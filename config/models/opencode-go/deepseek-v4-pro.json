@@ -2,9 +2,10 @@
   "id": "deepseek-v4-pro",
   "provider": "opencode-go",
   "displayName": "DeepSeek V4 Pro",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "2025-05",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["high", "max"],
   "isDefault": false
 }

@@ -1,0 +1,11 @@
+{
+  "id": "grok-4.7",
+  "provider": "opencode-zen",
+  "displayName": "Grok 4.7",
+  "knowledgeCutoff": "May 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+  "isDefault": false
+}

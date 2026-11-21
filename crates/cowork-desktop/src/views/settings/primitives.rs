@@ -390,7 +390,7 @@ pub fn status_pill(label: impl Into<String>, tone: StatusTone, k: &Kit, t: &Them
         StatusTone::Warning => (
             k.alpha(t.warning, 0.14),
             k.alpha(t.warning, 0.35),
-            t.warning,
+            theme::warning_ink(t),
         ),
         StatusTone::Danger => (k.alpha(t.danger, 0.14), k.alpha(t.danger, 0.35), t.danger),
         StatusTone::Neutral => (k.c.layer_02, t.border_muted, t.text_muted),
@@ -424,7 +424,7 @@ pub fn callout_banner(
             k.alpha(t.warning, 0.10),
             k.alpha(t.warning, 0.32),
             &icons::ALERT_TRIANGLE,
-            t.warning,
+            theme::warning_ink(t),
         ),
         StatusTone::Success => (
             k.alpha(t.success, 0.08),
@@ -843,7 +843,10 @@ pub fn compact_tabs(
         SegmentedControl::new(labels, Some(active))
             .label(a11y_label)
             .fit()
-            .on_pick(move |s: &mut AppState, idx, tx| cb(s, idx, tx))
+            .on_pick(move |s: &mut AppState, idx, tx| {
+                cb(s, idx, tx);
+                tx.instant();
+            })
             .build(k),
     )
 }

@@ -2,9 +2,10 @@
   "id": "gpt-5.1-codex-mini",
   "provider": "opencode-zen",
   "displayName": "GPT-5.1 Codex Mini",
-  "knowledgeCutoff": "Unknown",
+  "knowledgeCutoff": "September 30, 2024",
   "supportsImageInput": true,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},
+  "supportedReasoningEfforts": ["low", "medium", "high"],
   "isDefault": false
 }

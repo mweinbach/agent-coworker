@@ -29,8 +29,9 @@ use crate::views::settings::shell::PageContent;
 
 const FALLBACK_PROVIDERS: &[(&str, &str)] = &[
     ("anthropic", "Anthropic"),
+    ("claude-cli", "Claude Subscription"),
     ("openai", "OpenAI"),
-    ("codex-cli", "Codex"),
+    ("codex-cli", "ChatGPT Subscription"),
     ("google", "Google"),
     ("bedrock", "Amazon Bedrock"),
     ("together", "Together AI"),
@@ -86,33 +87,74 @@ pub fn provider_model_preview(models: &[ProviderModelSummary]) -> (Vec<&str>, us
     (preview, hidden)
 }
 
-fn provider_display_title(summary: &ProviderSummary) -> &str {
-    if summary.name.trim().is_empty() {
-        summary.id.as_str()
-    } else {
-        summary.name.trim()
+/// Desktop-branded display name matching Electron's `DESKTOP_DISPLAY_NAME_OVERRIDES`.
+pub(crate) fn provider_display_title(summary: &ProviderSummary) -> &str {
+    match summary.id.as_str() {
+        "codex-cli" => "ChatGPT Subscription",
+        "claude-cli" => "Claude Subscription",
+        _ if summary.name.trim().is_empty() => summary.id.as_str(),
+        _ => summary.name.trim(),
     }
 }
 
-fn supports_oauth(provider_id: &str, methods: &[String]) -> bool {
-    methods.iter().any(|m| {
-        let lower = m.to_ascii_lowercase();
-        lower.contains("oauth") || lower.contains("device") || lower.contains("cli")
-    }) || matches!(
-        provider_id,
-        "anthropic" | "openai" | "openai-codex" | "codex-cli" | "google"
-    )
+/// Returns the first OAuth auth method spec advertised by the server for `provider_id`, if any.
+pub(crate) fn provider_oauth_spec<'a>(
+    s: &'a AppState,
+    provider_id: &str,
+) -> Option<&'a crate::state::ProviderAuthMethodSpec> {
+    s.provider_auth_method_specs
+        .get(provider_id)?
+        .iter()
+        .find(|m| m.method_type == "oauth")
 }
 
-fn supports_api_key(provider_id: &str, methods: &[String]) -> bool {
-    if matches!(provider_id, "ollama" | "lmstudio" | "codex-cli") {
+/// Returns whether `provider_id` exposes an OAuth / browser sign-in auth method according to the
+/// server's `provider_auth_method_specs` / `provider_auth_methods`, falling back to
+/// `config/providers.json` defaults (`codex-cli`, `claude-cli`) before the server responds.
+pub(crate) fn provider_supports_oauth(s: &AppState, provider_id: &str) -> bool {
+    if let Some(specs) = s.provider_auth_method_specs.get(provider_id)
+        && !specs.is_empty()
+    {
+        return specs.iter().any(|m| m.method_type == "oauth");
+    }
+    if let Some(methods) = s.provider_auth_methods.get(provider_id)
+        && !methods.is_empty()
+    {
+        return methods.iter().any(|m| {
+            let lower = m.to_ascii_lowercase();
+            lower.contains("oauth") || lower.contains("device") || lower.contains("cli")
+        });
+    }
+    matches!(provider_id, "codex-cli" | "openai-codex" | "claude-cli")
+}
+
+/// Returns whether `provider_id` accepts an API key according to the server's
+/// `provider_auth_method_specs` / `provider_auth_methods`, falling back to non-local,
+/// non-subscription-CLI providers before the server responds.
+pub(crate) fn provider_supports_api_key(s: &AppState, provider_id: &str) -> bool {
+    if matches!(
+        provider_id,
+        "ollama" | "lmstudio" | "codex-cli" | "claude-cli"
+    ) {
         return false;
     }
-    methods.is_empty()
-        || methods.iter().any(|m| {
+    if let Some(specs) = s.provider_auth_method_specs.get(provider_id)
+        && !specs.is_empty()
+    {
+        return specs.iter().any(|m| {
+            m.method_type == "api" && !matches!(m.id.as_str(), "exa_api_key" | "parallel_api_key")
+        });
+    }
+    if let Some(methods) = s.provider_auth_methods.get(provider_id)
+        && !methods.is_empty()
+    {
+        return methods.iter().any(|m| {
             let lower = m.to_ascii_lowercase();
-            lower.contains("api") || lower.contains("key") || lower == "default"
-        })
+            (lower.contains("api") || lower.contains("key") || lower == "default")
+                && !matches!(lower.as_str(), "exa_api_key" | "parallel_api_key")
+        });
+    }
+    true
 }
 
 fn safe_auth_link(raw: &str) -> Option<String> {
@@ -484,7 +526,10 @@ fn expanded_provider_body(
     if summary.id == "lmstudio" {
         body = body.child(lmstudio_section(s, summary, active_ws, k, t));
     } else {
-        if supports_api_key(&summary.id, &methods) {
+        let has_api = provider_supports_api_key(s, &summary.id);
+        let has_oauth = provider_supports_oauth(s, &summary.id);
+
+        if has_api {
             let saved_mask = status
                 .and_then(|st| st.saved_api_key_mask.as_deref())
                 .filter(|m| !m.trim().is_empty());
@@ -572,88 +617,109 @@ fn expanded_provider_body(
             body = body.child(key_col);
         }
 
-        if supports_oauth(&summary.id, &methods) {
+        if has_oauth {
             let ws_oauth = active_ws_id.map(str::to_owned);
             let prov_oauth = summary.id.clone();
-            let method_id = methods
-                .iter()
-                .find(|m| m.to_ascii_lowercase().contains("oauth"))
-                .cloned()
-                .unwrap_or_else(|| "oauth".to_string());
+            let oauth_spec = provider_oauth_spec(s, &summary.id);
+            let method_id = oauth_spec
+                .map(|m| m.id.clone())
+                .or_else(|| {
+                    methods
+                        .iter()
+                        .find(|m| m.to_ascii_lowercase().contains("oauth"))
+                        .cloned()
+                })
+                .unwrap_or_else(|| {
+                    if matches!(summary.id.as_str(), "codex-cli" | "claude-cli") {
+                        "oauth_cli".to_string()
+                    } else {
+                        "oauth".to_string()
+                    }
+                });
+            let button_label = oauth_spec
+                .and_then(|m| m.label.as_deref())
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .unwrap_or("Sign in with OAuth");
+            let challenge = extract_challenge(s, &summary.id);
+            let show_code_input = oauth_spec.and_then(|m| m.oauth_mode.as_deref()) != Some("auto")
+                || challenge.is_some();
 
             let ws_cb = active_ws_id.map(str::to_owned);
             let prov_cb = summary.id.clone();
             let method_cb = method_id.clone();
             let code_empty = s.settings_ui.oauth_code_edit.text.trim().is_empty();
 
-            let mut oauth_col = col()
-                .w_full()
-                .gap(8.0)
-                .pt(10.0)
-                .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
+            let mut oauth_row = row().w_full().items_center().flex_wrap().gap(8.0).child(
+                Button::new(button_label)
+                    .variant(if has_api {
+                        ButtonVariant::Outline
+                    } else {
+                        ButtonVariant::Contrast
+                    })
+                    .control_size(ControlSize::Regular)
+                    .disabled(!can_mutate)
+                    .on_press(move |s: &mut AppState| {
+                        if let Some(ws_id) = &ws_oauth {
+                            s.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+                                workspace_id: ws_id.clone(),
+                                provider: prov_oauth.clone(),
+                            }));
+                        }
+                    })
+                    .build(k),
+            );
+            if show_code_input {
+                oauth_row = oauth_row
+                    .child(
+                        TextInput::new(&s.settings_ui.oauth_code_edit)
+                            .label("OAuth authorization code")
+                            .placeholder("Code or callback URL...")
+                            .width(Some(240.0))
+                            .on_edit(|s: &mut AppState| &mut s.settings_ui.oauth_code_edit)
+                            .build(k),
+                    )
+                    .child(
+                        Button::new("Submit code")
+                            .variant(ButtonVariant::Outline)
+                            .control_size(ControlSize::Regular)
+                            .disabled(!can_mutate || code_empty)
+                            .on_press(move |s: &mut AppState| {
+                                if let Some(ws_id) = &ws_cb {
+                                    let code =
+                                        s.settings_ui.oauth_code_edit.text.trim().to_string();
+                                    if !code.is_empty() {
+                                        s.dispatch(Action::Settings(
+                                            SettingsAction::CompleteProviderAuthCallback {
+                                                workspace_id: ws_id.clone(),
+                                                provider: prov_cb.clone(),
+                                                method_id: method_cb.clone(),
+                                                callback_input: code,
+                                            },
+                                        ));
+                                        s.settings_ui.oauth_code_edit = rune::TextEdit::new("");
+                                    }
+                                }
+                            })
+                            .build(k),
+                    );
+            }
+
+            let mut oauth_col = col().w_full().gap(8.0);
+            if has_api {
+                oauth_col = oauth_col
+                    .pt(10.0)
+                    .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted);
+            }
+            oauth_col = oauth_col
                 .child(
                     text("OAuth sign-in")
                         .font(k.ty.small_medium)
                         .color(t.text_muted),
                 )
-                .child(
-                    row()
-                        .w_full()
-                        .items_center()
-                        .flex_wrap()
-                        .gap(8.0)
-                        .child(
-                            Button::new("Sign in with OAuth")
-                                .variant(ButtonVariant::Outline)
-                                .control_size(ControlSize::Regular)
-                                .disabled(!can_mutate)
-                                .on_press(move |s: &mut AppState| {
-                                    if let Some(ws_id) = &ws_oauth {
-                                        s.dispatch(Action::Settings(
-                                            SettingsAction::StartProviderAuth {
-                                                workspace_id: ws_id.clone(),
-                                                provider: prov_oauth.clone(),
-                                            },
-                                        ));
-                                    }
-                                })
-                                .build(k),
-                        )
-                        .child(
-                            TextInput::new(&s.settings_ui.oauth_code_edit)
-                                .label("OAuth authorization code")
-                                .placeholder("Code or callback URL...")
-                                .width(Some(240.0))
-                                .on_edit(|s: &mut AppState| &mut s.settings_ui.oauth_code_edit)
-                                .build(k),
-                        )
-                        .child(
-                            Button::new("Submit code")
-                                .variant(ButtonVariant::Outline)
-                                .control_size(ControlSize::Regular)
-                                .disabled(!can_mutate || code_empty)
-                                .on_press(move |s: &mut AppState| {
-                                    if let Some(ws_id) = &ws_cb {
-                                        let code =
-                                            s.settings_ui.oauth_code_edit.text.trim().to_string();
-                                        if !code.is_empty() {
-                                            s.dispatch(Action::Settings(
-                                                SettingsAction::CompleteProviderAuthCallback {
-                                                    workspace_id: ws_id.clone(),
-                                                    provider: prov_cb.clone(),
-                                                    method_id: method_cb.clone(),
-                                                    callback_input: code,
-                                                },
-                                            ));
-                                            s.settings_ui.oauth_code_edit = rune::TextEdit::new("");
-                                        }
-                                    }
-                                })
-                                .build(k),
-                        ),
-                );
+                .child(oauth_row);
 
-            if let Some(ch) = extract_challenge(s, &summary.id) {
+            if let Some(ch) = challenge {
                 let instr = ch
                     .get("challenge")
                     .unwrap_or(ch)

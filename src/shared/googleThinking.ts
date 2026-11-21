@@ -1,6 +1,6 @@
 export const GOOGLE_DYNAMIC_REASONING_EFFORT = "dynamic" as const;
 
-export const GOOGLE_THINKING_LEVEL_VALUES = ["minimal", "low", "medium", "high"] as const;
+export const GOOGLE_THINKING_LEVEL_VALUES = ["minimal", "low", "medium", "high", "xhigh"] as const;
 export type GoogleThinkingLevel = (typeof GOOGLE_THINKING_LEVEL_VALUES)[number];
 
 const GOOGLE_REASONING_EFFORT_VALUES = [
@@ -11,17 +11,25 @@ export type GoogleReasoningEffort = (typeof GOOGLE_REASONING_EFFORT_VALUES)[numb
 
 const GOOGLE_FLASH_THINKING_LEVELS = ["minimal", "low", "medium", "high"] as const;
 const GOOGLE_PRO_THINKING_LEVELS = ["low", "medium", "high"] as const;
+const GOOGLE_XHIGH_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
 const GOOGLE_FLASH_MODEL_IDS = new Set([
   "gemini-3-flash-preview",
   "gemini-3.1-flash-lite",
   "gemini-3.1-flash-lite-preview",
   "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
 ]);
+
+const GOOGLE_XHIGH_MODEL_IDS = new Set(["gemini-4-neon", "gemini-4-hydrogen"]);
 
 const GOOGLE_PRO_MODEL_IDS = new Set([
   "gemini-3.1-pro-preview",
   "gemini-3.1-pro-preview-customtools",
+  "gemini-3.8-flash",
+  "gemini-4-carbon",
+  "gemini-4-argon",
 ]);
 
 export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLevel {
@@ -31,6 +39,9 @@ export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLe
 }
 
 function listGoogleThinkingLevelsForModel(modelId: string): readonly GoogleThinkingLevel[] {
+  if (GOOGLE_XHIGH_MODEL_IDS.has(modelId)) {
+    return GOOGLE_XHIGH_THINKING_LEVELS;
+  }
   if (GOOGLE_FLASH_MODEL_IDS.has(modelId)) {
     return GOOGLE_FLASH_THINKING_LEVELS;
   }

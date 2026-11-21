@@ -1,0 +1,10 @@
+{
+  "id": "iceman-contributor-free",
+  "provider": "opencode-go",
+  "displayName": "Iceman Contributor Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

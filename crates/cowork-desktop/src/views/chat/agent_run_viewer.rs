@@ -26,10 +26,15 @@ pub fn build_agent_run_drawer(
 ) -> Option<El> {
     let viewer = s.agent_viewer.as_ref()?;
     let rt = s.thread_runtime_by_id.get(&viewer.thread_id);
+    let child_rt = s.thread_runtime_by_id.get(&viewer.agent_id);
     let agent = rt.and_then(|r| r.agents.iter().find(|a| a.agent_id == viewer.agent_id));
-    let raw_feed: &[FeedItem] = rt
-        .and_then(|r| r.agent_run_feeds.get(&viewer.agent_id))
-        .map(Vec::as_slice)
+    let raw_feed: &[FeedItem] = child_rt
+        .map(|r| r.feed.as_slice())
+        .filter(|items| !items.is_empty())
+        .or_else(|| {
+            rt.and_then(|r| r.agent_run_feeds.get(&viewer.agent_id))
+                .map(Vec::as_slice)
+        })
         .unwrap_or(&[]);
 
     let thread = s.threads.iter().find(|th| th.id == viewer.thread_id);
@@ -38,7 +43,9 @@ pub fn build_agent_run_drawer(
     let workspace_path = workspace.map(|w| w.path.as_str());
 
     let title = resolve_agent_title(&viewer.title, agent);
-    let is_active = agent.is_some_and(is_active_child_agent);
+    let is_active = agent.is_some_and(is_active_child_agent)
+        || child_rt.is_some_and(|r| r.streaming || r.active_turn_id.is_some());
+    let is_hydrating = child_rt.is_some_and(|r| r.hydrating) || (is_active && raw_feed.is_empty());
     let (status_label, status_tone) = resolve_agent_status(agent, is_active);
     let subtitle = format_agent_metadata(agent);
 
@@ -115,7 +122,7 @@ pub fn build_agent_run_drawer(
     }
 
     let agent_feed_key = format!("agent:{}", viewer.agent_id);
-    let body = if raw_feed.is_empty() && !is_active {
+    let body = if raw_feed.is_empty() && !is_active && !is_hydrating {
         col()
             .w_full()
             .grow(1.0)
@@ -143,7 +150,7 @@ pub fn build_agent_run_drawer(
                     agent_id: viewer.agent_id.clone(),
                 },
                 thread_busy: is_active,
-                hydrating: is_active && raw_feed.is_empty(),
+                hydrating: is_hydrating,
                 transcript_only: false,
                 disconnected: false,
                 reconnecting: false,

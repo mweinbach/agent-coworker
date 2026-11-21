@@ -135,7 +135,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .variant(ButtonVariant::Outline)
         .control_size(ControlSize::Regular)
         .on_press(|s: &mut AppState| {
-            s.dispatch(Action::Shell(ShellAction::SetQuickChatOpen(true)));
+            s.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
         })
         .build(k);
 

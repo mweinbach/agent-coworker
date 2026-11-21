@@ -67,9 +67,15 @@ impl FeedSource {
             } => FeedRefs {
                 feed: s
                     .thread_runtime_by_id
-                    .get(thread_id)
-                    .and_then(|r| r.agent_run_feeds.get(agent_id))
-                    .map(Vec::as_slice)
+                    .get(agent_id)
+                    .map(|r| r.feed.as_slice())
+                    .filter(|items| !items.is_empty())
+                    .or_else(|| {
+                        s.thread_runtime_by_id
+                            .get(thread_id)
+                            .and_then(|r| r.agent_run_feeds.get(agent_id))
+                            .map(Vec::as_slice)
+                    })
                     .unwrap_or(&[]),
                 pending_interactions: &[],
                 agents: &[],

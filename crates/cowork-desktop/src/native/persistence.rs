@@ -19,10 +19,12 @@ use super::security::{WorkspaceRootsController, is_temporarily_unavailable_fs_er
 use super::validation::{assert_direction, assert_safe_id, assert_within_transcripts_dir};
 use crate::actions::SidebarSectionKey;
 use crate::state::{
-    DesktopSettings, OnboardingState, PersistedDesktopState, PrivacyTelemetrySettings,
-    ThreadRecord, ThreadStatus, WorkspaceRecord,
+    ComposerDraft, DesktopSettings, OnboardingState, PersistedDesktopState,
+    PrivacyTelemetrySettings, ReasoningEffortValue, ThreadBusyPolicy, ThreadRecord, ThreadStatus,
+    WorkspaceRecord,
 };
 use crate::theme::{AccentPalette, ThemePreference};
+use cowork_protocol::{TurnAttachmentInputPart, TurnReference};
 
 pub const DESKTOP_USER_DATA_DIR_ENV: &str = "COWORK_DESKTOP_USER_DATA_DIR";
 pub const LEGACY_ELECTRON_USER_DATA_DIR_ENV: &str = "COWORK_ELECTRON_USER_DATA_DIR";
@@ -330,7 +332,8 @@ impl PersistenceService {
 
     /// Merges the UI-owned `PersistedDesktopState` into preserved on-disk `state.json`,
     /// keeping task-scoped threads and server-owned fields (`providerState`, per-workspace
-    /// routing, `composerDrafts`, `creationDrafts`) intact, then writes atomically with `0o600`.
+    /// routing, `creationDrafts`) intact while round-tripping `composerDrafts`, then writes
+    /// atomically with `0o600`.
     pub fn merge_and_save_core_snapshot(
         &self,
         snapshot: &PersistedDesktopState,
@@ -570,11 +573,23 @@ impl PersistenceService {
         }
     }
 
+    fn legacy_appearance_theme_fallback(&self) -> Option<ThemePreference> {
+        let prefs = super::appearance::AppearancePreferences::new(&self.user_data_dir);
+        prefs
+            .file_path()
+            .exists()
+            .then(|| prefs.load_theme_preference())
+    }
+
     fn read_state_value_locked(&self) -> Result<Value, PersistenceError> {
         let state_path = self.state_file_path();
         let raw = match fs::read_to_string(&state_path) {
             Ok(raw) => raw,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(default_state_document()),
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                return Ok(default_state_document_with_theme(
+                    self.legacy_appearance_theme_fallback(),
+                ));
+            }
             Err(source) => {
                 return Err(PersistenceError::Io {
                     context: "read state.json",
@@ -587,13 +602,17 @@ impl PersistenceService {
             Ok(value) => value,
             Err(_) => {
                 self.preserve_corrupt_state_file();
-                return Ok(default_state_document());
+                return Ok(default_state_document_with_theme(
+                    self.legacy_appearance_theme_fallback(),
+                ));
             }
         };
 
         if !parsed.is_object() {
             self.preserve_corrupt_state_file();
-            return Ok(default_state_document());
+            return Ok(default_state_document_with_theme(
+                self.legacy_appearance_theme_fallback(),
+            ));
         }
 
         Ok(self.sanitize_state_document(parsed))
@@ -784,7 +803,19 @@ impl PersistenceService {
         obj.insert("showHiddenFiles".to_string(), Value::Bool(show_hidden));
         obj.insert("perWorkspaceSettings".to_string(), Value::Bool(per_ws));
 
-        let desktop_settings = sanitize_desktop_settings(obj.get("desktopSettings"));
+        let has_valid_theme = obj
+            .get("desktopSettings")
+            .and_then(Value::as_object)
+            .and_then(|ds| ds.get("theme"))
+            .and_then(|v| serde_json::from_value::<ThemePreference>(v.clone()).ok())
+            .is_some();
+        let fallback_theme = if has_valid_theme {
+            None
+        } else {
+            self.legacy_appearance_theme_fallback()
+        };
+        let desktop_settings =
+            sanitize_desktop_settings(obj.get("desktopSettings"), fallback_theme);
         obj.insert("desktopSettings".to_string(), desktop_settings);
 
         let privacy = sanitize_privacy_telemetry_settings(obj.get("privacyTelemetrySettings"));
@@ -887,6 +918,13 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
         .get("productAnalytics")
         .filter(|v| v.is_object())
         .cloned();
+
+    out.composer_drafts = core_composer_drafts_from_document(
+        obj,
+        &out.threads,
+        &out.workspaces,
+        out.active_workspace_id.as_deref(),
+    );
 
     out
 }
@@ -1247,7 +1285,274 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         doc.insert("productAnalytics".to_string(), pa.clone());
     }
 
+    sync_composer_drafts_into_document(&mut doc, snapshot);
+
     Value::Object(doc)
+}
+
+fn is_empty_composer_draft(draft: &ComposerDraft) -> bool {
+    draft.text.is_empty()
+        && draft.attachments.is_empty()
+        && draft.references.is_empty()
+        && draft.provider.is_none()
+        && draft.model.is_none()
+        && draft.reasoning_effort.is_none()
+}
+
+fn parse_persisted_reasoning_effort(raw: Option<&str>) -> Option<ReasoningEffortValue> {
+    match raw?.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" => Some(ReasoningEffortValue::None),
+        "minimal" => Some(ReasoningEffortValue::Minimal),
+        "low" => Some(ReasoningEffortValue::Low),
+        "medium" => Some(ReasoningEffortValue::Medium),
+        "high" => Some(ReasoningEffortValue::High),
+        "xhigh" | "extra high" => Some(ReasoningEffortValue::Xhigh),
+        "max" => Some(ReasoningEffortValue::Max),
+        "dynamic" => Some(ReasoningEffortValue::Dynamic),
+        _ => None,
+    }
+}
+
+fn parse_persisted_composer_attachment(value: &Value) -> Option<TurnAttachmentInputPart> {
+    if let Ok(parsed) = serde_json::from_value::<TurnAttachmentInputPart>(value.clone()) {
+        return Some(parsed);
+    }
+    let map = value.as_object()?;
+    let filename = non_empty_string(map.get("filename"))?;
+    let mime_type = non_empty_string(map.get("mimeType"))
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    if let Some(content_base64) = non_empty_string(map.get("contentBase64")) {
+        return Some(TurnAttachmentInputPart::InlineFile {
+            filename,
+            content_base64,
+            mime_type,
+        });
+    }
+    if let Some(path) = non_empty_string(map.get("path")) {
+        return Some(TurnAttachmentInputPart::UploadedFile {
+            filename,
+            path,
+            mime_type,
+        });
+    }
+    None
+}
+
+fn core_composer_draft_from_value(value: &Value) -> Option<(ComposerDraft, i64)> {
+    let map = value.as_object()?;
+    let text = map
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let provider = non_empty_string(map.get("provider"));
+    let model = non_empty_string(map.get("model"));
+    let reasoning_effort =
+        parse_persisted_reasoning_effort(map.get("reasoningEffort").and_then(Value::as_str));
+    let attachments: Vec<TurnAttachmentInputPart> = map
+        .get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(parse_persisted_composer_attachment)
+        .collect();
+    let references: Vec<TurnReference> = map
+        .get("references")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| serde_json::from_value::<TurnReference>(v.clone()).ok())
+        .collect();
+    let busy_policy = map
+        .get("busyPolicy")
+        .and_then(|v| serde_json::from_value::<ThreadBusyPolicy>(v.clone()).ok())
+        .unwrap_or_default();
+    let draft = ComposerDraft {
+        text,
+        provider,
+        model,
+        reasoning_effort,
+        attachments,
+        references,
+        busy_policy,
+        submission_error: None,
+    };
+    if is_empty_composer_draft(&draft) {
+        return None;
+    }
+    let updated_ms = parse_timestamp_value(map.get("updatedAt"))
+        .map(|(_, ms)| ms)
+        .unwrap_or(0);
+    Some((draft, updated_ms))
+}
+
+fn active_new_chat_draft_doc_key(
+    workspaces: &[WorkspaceRecord],
+    active_workspace_id: Option<&str>,
+) -> String {
+    if let Some(ws_id) = active_workspace_id
+        && let Some(ws) = workspaces.iter().find(|w| w.id == ws_id && !w.archived)
+        && !ws.one_off_chat
+    {
+        return format!("new:project:{ws_id}");
+    }
+    "new:oneOff".to_string()
+}
+
+fn core_composer_drafts_from_document(
+    doc: &Map<String, Value>,
+    threads: &[ThreadRecord],
+    workspaces: &[WorkspaceRecord],
+    active_workspace_id: Option<&str>,
+) -> HashMap<String, ComposerDraft> {
+    let mut out = HashMap::new();
+    let Some(raw_drafts) = doc.get("composerDrafts").and_then(Value::as_object) else {
+        return out;
+    };
+    let valid_threads: HashSet<&str> = threads.iter().map(|t| t.id.as_str()).collect();
+    let preferred_new_key = active_new_chat_draft_doc_key(workspaces, active_workspace_id);
+    let mut best_new_draft: Option<(u8, i64, ComposerDraft)> = None;
+
+    for (raw_key, val) in raw_drafts {
+        let Some((draft, updated_ms)) = core_composer_draft_from_value(val) else {
+            continue;
+        };
+        if let Some(tid) = raw_key.strip_prefix("thread:") {
+            if valid_threads.contains(tid) {
+                out.insert(tid.to_string(), draft);
+            }
+        } else if raw_key == "__new__"
+            || raw_key == "new:oneOff"
+            || raw_key.starts_with("new:project:")
+        {
+            let priority = if raw_key == &preferred_new_key {
+                3
+            } else if raw_key == "__new__" {
+                2
+            } else {
+                1
+            };
+            let replace = match &best_new_draft {
+                None => true,
+                Some((cur_pri, cur_ts, _)) => {
+                    priority > *cur_pri || (priority == *cur_pri && updated_ms >= *cur_ts)
+                }
+            };
+            if replace {
+                best_new_draft = Some((priority, updated_ms, draft));
+            }
+        } else if valid_threads.contains(raw_key.as_str()) {
+            out.entry(raw_key.clone()).or_insert(draft);
+        }
+    }
+
+    if let Some((_, _, draft)) = best_new_draft {
+        out.insert("__new__".to_string(), draft);
+    }
+
+    out
+}
+
+fn serialize_composer_draft_value(draft: &ComposerDraft, existing: Option<&Value>) -> Value {
+    let mut map = existing
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    map.insert("text".to_string(), json!(draft.text));
+    match draft.provider.as_deref() {
+        Some(p) if !p.trim().is_empty() => {
+            map.insert("provider".to_string(), json!(p));
+        }
+        _ => {
+            map.insert("provider".to_string(), Value::Null);
+        }
+    }
+    match draft.model.as_deref() {
+        Some(m) if !m.trim().is_empty() => {
+            map.insert("model".to_string(), json!(m));
+        }
+        _ => {
+            map.insert("model".to_string(), Value::Null);
+        }
+    }
+    match draft.reasoning_effort {
+        Some(effort) => {
+            map.insert("reasoningEffort".to_string(), json!(effort.as_str()));
+        }
+        None => {
+            map.insert("reasoningEffort".to_string(), Value::Null);
+        }
+    }
+    map.insert(
+        "attachments".to_string(),
+        serde_json::to_value(&draft.attachments).unwrap_or_else(|_| json!([])),
+    );
+    map.insert(
+        "references".to_string(),
+        serde_json::to_value(&draft.references).unwrap_or_else(|_| json!([])),
+    );
+    map.insert(
+        "busyPolicy".to_string(),
+        serde_json::to_value(draft.busy_policy).unwrap_or_else(|_| json!("steer")),
+    );
+    map.entry("revision".to_string())
+        .or_insert_with(|| json!(1));
+    map.entry("generation".to_string())
+        .or_insert_with(|| json!(0));
+    Value::Object(map)
+}
+
+fn sync_composer_drafts_into_document(
+    doc: &mut Map<String, Value>,
+    snapshot: &PersistedDesktopState,
+) {
+    let existing_map = doc
+        .get("composerDrafts")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let active_new_key = active_new_chat_draft_doc_key(
+        &snapshot.workspaces,
+        snapshot.active_workspace_id.as_deref(),
+    );
+    let valid_threads: HashSet<&str> = snapshot.threads.iter().map(|t| t.id.as_str()).collect();
+
+    let mut next_map = Map::new();
+    // Preserve saved new-chat drafts belonging to other workspaces so switching workspaces does
+    // not erase their persisted drafts.
+    for (k, v) in &existing_map {
+        if (k.starts_with("new:project:") || k == "new:oneOff") && k != &active_new_key {
+            next_map.insert(k.clone(), v.clone());
+        }
+    }
+
+    for (key, draft) in &snapshot.composer_drafts {
+        if is_empty_composer_draft(draft) {
+            continue;
+        }
+        if key == "__new__" {
+            let serialized = serialize_composer_draft_value(
+                draft,
+                existing_map
+                    .get(&active_new_key)
+                    .or_else(|| existing_map.get("__new__")),
+            );
+            next_map.insert(active_new_key.clone(), serialized);
+        } else if valid_threads.contains(key.as_str()) {
+            let doc_key = format!("thread:{key}");
+            let serialized = serialize_composer_draft_value(
+                draft,
+                existing_map.get(&doc_key).or_else(|| existing_map.get(key)),
+            );
+            next_map.insert(doc_key, serialized);
+        }
+    }
+
+    if next_map.is_empty() {
+        doc.remove("composerDrafts");
+    } else {
+        doc.insert("composerDrafts".to_string(), Value::Object(next_map));
+    }
 }
 
 /// Extracts sanitized `(workspace_id, path)` pairs from a persisted state document.
@@ -1265,6 +1570,10 @@ pub fn extract_workspace_id_path_pairs(doc: &Value) -> Vec<(String, PathBuf)> {
 }
 
 pub fn default_state_document() -> Value {
+    default_state_document_with_theme(None)
+}
+
+fn default_state_document_with_theme(fallback_theme: Option<ThemePreference>) -> Value {
     json!({
         "version": 2,
         "workspaces": [],
@@ -1277,7 +1586,7 @@ pub fn default_state_document() -> Value {
         "developerMode": false,
         "showHiddenFiles": false,
         "perWorkspaceSettings": false,
-        "desktopSettings": sanitize_desktop_settings(None),
+        "desktopSettings": sanitize_desktop_settings(None, fallback_theme),
         "privacyTelemetrySettings": sanitize_privacy_telemetry_settings(None),
         "desktopFeatureFlagOverrides": {},
     })
@@ -1316,6 +1625,7 @@ fn migrate_legacy_user_data_if_needed(
 
     for relative in [
         Path::new("state.json"),
+        Path::new("appearance.json"),
         Path::new("transcripts"),
         Path::new("logs").join("server.log").as_path(),
     ] {
@@ -1622,7 +1932,10 @@ fn parse_accent_palette_value(raw: Option<&Value>) -> Option<AccentPalette> {
     raw.and_then(Value::as_str).and_then(AccentPalette::parse)
 }
 
-fn sanitize_desktop_settings(raw: Option<&Value>) -> Value {
+fn sanitize_desktop_settings(
+    raw: Option<&Value>,
+    fallback_theme: Option<ThemePreference>,
+) -> Value {
     let defaults = DesktopSettings::default();
     let mut map = raw.and_then(Value::as_object).cloned().unwrap_or_default();
 
@@ -1662,7 +1975,7 @@ fn sanitize_desktop_settings(raw: Option<&Value>) -> Value {
         && let Ok(serialized) = serde_json::to_value(parsed)
     {
         map.insert("theme".to_string(), serialized);
-    } else if let Ok(serialized) = serde_json::to_value(defaults.theme) {
+    } else if let Ok(serialized) = serde_json::to_value(fallback_theme.unwrap_or(defaults.theme)) {
         map.insert("theme".to_string(), serialized);
     }
 
@@ -3228,5 +3541,61 @@ mod tests {
         let saved_legacy = service.save_state_value(legacy_doc).unwrap();
         assert_eq!(saved_legacy["desktopSettings"]["showMenuBar"], true);
         assert!(service.load_core_state().unwrap().settings.show_menu_bar);
+    }
+
+    #[test]
+    fn legacy_appearance_json_migrates_theme_when_state_json_lacks_theme() {
+        let tmp = tempdir().unwrap();
+        let legacy_dir = tmp.path().join("agent-coworker");
+        let current_dir = tmp.path().join("Cowork");
+        fs::create_dir_all(&legacy_dir).unwrap();
+
+        // Upgraded Electron profile: theme lives in `appearance.json`, absent from `desktopSettings`.
+        fs::write(
+            legacy_dir.join("appearance.json"),
+            r#"{"themeSource":"dark"}"#,
+        )
+        .unwrap();
+        fs::write(
+            legacy_dir.join("state.json"),
+            serde_json::to_string_pretty(&json!({
+                "version": 2,
+                "workspaces": [],
+                "threads": [],
+                "desktopSettings": {
+                    "archivedChatsAutoDeleteDays": 0
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let service = PersistenceService::new(current_dir.clone(), Some(legacy_dir), false, None);
+        let loaded = service.load_core_state().unwrap();
+        assert_eq!(loaded.settings.theme, ThemePreference::Dark);
+        assert!(current_dir.join("appearance.json").exists());
+
+        // An explicit `desktopSettings.theme` in `state.json` takes precedence over `appearance.json`.
+        let mut snap = loaded;
+        snap.settings.theme = ThemePreference::Light;
+        service.merge_and_save_core_snapshot(&snap).unwrap();
+        assert_eq!(
+            service.load_core_state().unwrap().settings.theme,
+            ThemePreference::Light
+        );
+
+        // Missing `state.json` with an existing `appearance.json` still imports the saved theme.
+        let fresh_dir = tmp.path().join("FreshWithAppearance");
+        fs::create_dir_all(&fresh_dir).unwrap();
+        fs::write(
+            fresh_dir.join("appearance.json"),
+            r#"{"themeSource":"dark"}"#,
+        )
+        .unwrap();
+        let fresh_service = PersistenceService::new(fresh_dir, None, true, None);
+        assert_eq!(
+            fresh_service.load_core_state().unwrap().settings.theme,
+            ThemePreference::Dark
+        );
     }
 }

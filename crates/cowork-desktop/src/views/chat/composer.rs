@@ -1351,12 +1351,14 @@ fn resolve_current_effort(
 
 fn parse_reasoning_effort(raw: &str) -> Option<ReasoningEffortValue> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "none" => Some(ReasoningEffortValue::None),
+        "none" | "off" => Some(ReasoningEffortValue::None),
         "minimal" => Some(ReasoningEffortValue::Minimal),
         "low" => Some(ReasoningEffortValue::Low),
         "medium" => Some(ReasoningEffortValue::Medium),
         "high" => Some(ReasoningEffortValue::High),
         "xhigh" | "extra high" => Some(ReasoningEffortValue::Xhigh),
+        "max" => Some(ReasoningEffortValue::Max),
+        "dynamic" => Some(ReasoningEffortValue::Dynamic),
         _ => None,
     }
 }
@@ -1373,6 +1375,8 @@ fn format_effort_label(effort: &str) -> String {
         "medium" => "Medium".to_string(),
         "high" => "High".to_string(),
         "xhigh" => "Extra high".to_string(),
+        "max" => "Max".to_string(),
+        "dynamic" => "Dynamic".to_string(),
         other => other.to_string(),
     }
 }
@@ -1537,6 +1541,44 @@ mod tests {
         assert_eq!(
             decode_model_option_id(&encoded),
             Some(("openrouter".into(), "openai/gpt-5:free".into()))
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_parser_and_resolver_preserve_dynamic_and_max() {
+        assert_eq!(
+            parse_reasoning_effort_label(&format_effort_label("dynamic")),
+            Some(ReasoningEffortValue::Dynamic)
+        );
+        assert_eq!(
+            parse_reasoning_effort_label(&format_effort_label("max")),
+            Some(ReasoningEffortValue::Max)
+        );
+        let thread_dynamic = ThreadRecord {
+            reasoning_effort: Some("dynamic".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_current_effort(
+                None,
+                Some(&thread_dynamic),
+                None,
+                &["none", "minimal", "low", "medium", "high", "dynamic"],
+            ),
+            ReasoningEffortValue::Dynamic
+        );
+        let thread_max = ThreadRecord {
+            reasoning_effort: Some("max".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_current_effort(
+                None,
+                Some(&thread_max),
+                None,
+                &["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            ReasoningEffortValue::Max
         );
     }
 }

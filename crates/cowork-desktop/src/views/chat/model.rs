@@ -103,6 +103,8 @@ pub fn reasoning_effort_label(effort: ReasoningEffortValue) -> &'static str {
         ReasoningEffortValue::Medium => "Medium",
         ReasoningEffortValue::High => "High",
         ReasoningEffortValue::Xhigh => "XHigh",
+        ReasoningEffortValue::Max => "Max",
+        ReasoningEffortValue::Dynamic => "Dynamic",
     }
 }
 
@@ -114,7 +116,9 @@ pub fn parse_reasoning_effort(raw: Option<&str>) -> Option<ReasoningEffortValue>
         "low" => Some(ReasoningEffortValue::Low),
         "medium" => Some(ReasoningEffortValue::Medium),
         "high" => Some(ReasoningEffortValue::High),
-        "xhigh" | "max" => Some(ReasoningEffortValue::Xhigh),
+        "xhigh" | "extra high" => Some(ReasoningEffortValue::Xhigh),
+        "max" => Some(ReasoningEffortValue::Max),
+        "dynamic" => Some(ReasoningEffortValue::Dynamic),
         _ => None,
     }
 }

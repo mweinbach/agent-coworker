@@ -1893,23 +1893,60 @@ fn is_cross_device(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::CrossesDevices || err.raw_os_error() == Some(18)
 }
 
-fn install_macos_app_privileged(new_app: &Path, target_app: &Path, backup: &Path) -> Result<()> {
+/// Builds the privileged macOS bundle replacement shell script.
+///
+/// Copies `new_app` into a sibling `stage` path on the destination volume *before* touching
+/// `target_app`, so partial copy failures (e.g. disk full) never leave `target_app` half-written.
+/// If the final atomic swap fails after backing up `target_app`, any partial `target_app` is
+/// removed and `backup` is unconditionally restored.
+pub(crate) fn build_macos_privileged_install_script(
+    new_app: &Path,
+    target_app: &Path,
+    backup: &Path,
+    stage: &Path,
+) -> String {
     let sh = |p: &Path| {
         let raw = p.to_string_lossy();
         format!("'{}'", raw.replace('\'', "'\"'\"'"))
     };
-    let script = format!(
+    format!(
         "set -e; \
-         if [ -e {target} ]; then /bin/mv -f {target} {backup}; fi; \
-         if ! /bin/cp -pR {src} {target}; then \
-           if [ -e {backup} ] && [ ! -e {target} ]; then /bin/mv -f {backup} {target}; fi; \
+         if ! /bin/cp -pR {src} {stage}; then \
+           /bin/rm -rf {stage}; \
+           exit 1; \
+         fi; \
+         if [ -e {target} ]; then \
+           if ! /bin/mv -f {target} {backup}; then \
+             /bin/rm -rf {stage}; \
+             exit 1; \
+           fi; \
+         fi; \
+         if ! /bin/mv -f {stage} {target}; then \
+           /bin/rm -rf {stage}; \
+           if [ -e {backup} ]; then \
+             /bin/rm -rf {target}; \
+             /bin/mv -f {backup} {target}; \
+           fi; \
            exit 1; \
          fi; \
          /bin/rm -rf {backup} {src}",
         src = sh(new_app),
+        stage = sh(stage),
         target = sh(target_app),
         backup = sh(backup),
-    );
+    )
+}
+
+fn install_macos_app_privileged(new_app: &Path, target_app: &Path, backup: &Path) -> Result<()> {
+    let parent = target_app
+        .parent()
+        .ok_or_else(|| anyhow!("Invalid macOS .app bundle path `{}`", target_app.display()))?;
+    let bundle_file_name = target_app
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Cowork.app");
+    let stage = parent.join(format!(".{bundle_file_name}.stage.{}", Uuid::new_v4()));
+    let script = build_macos_privileged_install_script(new_app, target_app, backup, &stage);
     let applescript_escaped = script.replace('\\', "\\\\").replace('"', "\\\"");
     let status = Command::new("osascript")
         .arg("-e")
@@ -3440,5 +3477,70 @@ mod tests {
                 .to_string();
             assert!(err.contains("symlinked"), "unexpected error: {err}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn privileged_macos_install_script_preserves_original_bundle_on_partial_copy_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let apps_dir = tmp.path().join("Applications");
+        let target_app = apps_dir.join("Cowork.app");
+        let backup = apps_dir.join(".Cowork.app.bak.test");
+        let stage = apps_dir.join(".Cowork.app.stage.test");
+        let new_app = tmp.path().join("staged").join("Cowork.app");
+
+        fs::create_dir_all(target_app.join("Contents/MacOS")).unwrap();
+        fs::write(target_app.join("Contents/MacOS/Cowork"), b"v1-original").unwrap();
+
+        // Populate a staged app where one file is unreadable so `/bin/cp -pR` partially copies
+        // the bundle and then exits non-zero (simulating disk-full / mid-copy failure).
+        fs::create_dir_all(new_app.join("Contents/MacOS")).unwrap();
+        fs::write(new_app.join("Contents/MacOS/Cowork"), b"v2-new").unwrap();
+        let unreadable = new_app.join("Contents/zz-unreadable");
+        fs::write(&unreadable, b"secret").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let script = build_macos_privileged_install_script(&new_app, &target_app, &backup, &stage);
+        // Only assert the permission-denied mid-copy path when not running as root.
+        if fs::read(&unreadable).is_err() {
+            let status = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&script)
+                .status()
+                .expect("run sh");
+            assert!(!status.success(), "expected partial copy failure to fail");
+            assert_eq!(
+                fs::read(target_app.join("Contents/MacOS/Cowork")).unwrap(),
+                b"v1-original",
+                "original bundle must remain intact after partial copy failure"
+            );
+            assert!(
+                !stage.exists(),
+                "partial staging directory must be cleaned up"
+            );
+            assert!(
+                !backup.exists(),
+                "backup must not exist when staging fails before swap"
+            );
+        }
+        // Restore permissions so the clean swap and tempdir cleanup succeed.
+        let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o600));
+
+        // Once the source bundle is readable, the same script atomically replaces `target_app`.
+        let status_ok = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&script)
+            .status()
+            .expect("run sh ok");
+        assert!(status_ok.success(), "expected valid swap to succeed");
+        assert_eq!(
+            fs::read(target_app.join("Contents/MacOS/Cowork")).unwrap(),
+            b"v2-new"
+        );
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(!new_app.exists());
     }
 }

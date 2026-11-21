@@ -385,6 +385,8 @@ pub enum ReasoningEffortValue {
     Medium,
     High,
     Xhigh,
+    Max,
+    Dynamic,
 }
 
 impl ReasoningEffortValue {
@@ -396,6 +398,8 @@ impl ReasoningEffortValue {
             ReasoningEffortValue::Medium => "medium",
             ReasoningEffortValue::High => "high",
             ReasoningEffortValue::Xhigh => "xhigh",
+            ReasoningEffortValue::Max => "max",
+            ReasoningEffortValue::Dynamic => "dynamic",
         }
     }
 }
@@ -1527,6 +1531,8 @@ pub struct PersistedDesktopState {
     pub feature_flags: HashMap<String, bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub product_analytics: Option<Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub composer_drafts: HashMap<String, ComposerDraft>,
 }
 
 /// Feature flag metadata matching `src/shared/featureFlags.ts`.
@@ -2160,16 +2166,89 @@ impl AppState {
             .get("sessionId")
             .or_else(|| evt.get("threadId"))
             .and_then(Value::as_str)
-            && let Some(t) = self.threads.iter_mut().find(|t| t.id == tid)
         {
-            if let Some(p) = cfg.get("provider").and_then(Value::as_str) {
-                t.provider = Some(p.to_string());
-            }
-            if let Some(m) = cfg.get("model").and_then(Value::as_str) {
-                t.model = Some(m.to_string());
-            }
+            let provider = cfg.get("provider").and_then(Value::as_str);
+            let model = cfg.get("model").and_then(Value::as_str);
+            self.apply_thread_model_update(tid, provider, model);
         }
         self.refresh_creation_preflight();
+    }
+
+    /// Updates a thread's provider/model and clears any stale reasoning preference on the
+    /// thread or its composer draft whenever the provider changes or the newly selected model
+    /// does not advertise that reasoning effort.
+    fn apply_thread_model_update(
+        &mut self,
+        thread_id: &str,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> bool {
+        let mut changed = false;
+        let mut model_changed = false;
+        let mut prev_provider: Option<String> = None;
+        let mut next_provider: Option<String> = None;
+        let mut next_model: Option<String> = None;
+
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+            prev_provider = t.provider.clone();
+            let prev_model = t.model.clone();
+            if let Some(p) = provider {
+                t.provider = Some(p.to_string());
+            }
+            if let Some(m) = model {
+                t.model = Some(m.to_string());
+            }
+            model_changed = t.provider != prev_provider || t.model != prev_model;
+            next_provider = t.provider.clone();
+            next_model = t.model.clone();
+            if model_changed {
+                let provider_changed = prev_provider.as_deref().is_some_and(|prev| {
+                    next_provider
+                        .as_deref()
+                        .is_none_or(|next| !prev.eq_ignore_ascii_case(next))
+                });
+                if let Some(ref eff) = t.reasoning_effort {
+                    let keep = !provider_changed
+                        && matches!(
+                            (next_provider.as_deref(), next_model.as_deref()),
+                            (Some(p), Some(m))
+                                if model_supports_reasoning_effort(&self.provider_catalog, p, m, eff)
+                        );
+                    if !keep {
+                        t.reasoning_effort = None;
+                    }
+                }
+            }
+            changed = !t.draft;
+        }
+
+        if model_changed {
+            let provider_changed = prev_provider.as_deref().is_some_and(|prev| {
+                next_provider
+                    .as_deref()
+                    .is_none_or(|next| !prev.eq_ignore_ascii_case(next))
+            });
+            if let Some(draft) = self.composer_drafts.get_mut(thread_id)
+                && let Some(eff) = draft.reasoning_effort
+            {
+                let keep = !provider_changed
+                    && matches!(
+                        (next_provider.as_deref(), next_model.as_deref()),
+                        (Some(p), Some(m))
+                            if model_supports_reasoning_effort(
+                                &self.provider_catalog,
+                                p,
+                                m,
+                                eff.as_str(),
+                            )
+                    );
+                if !keep {
+                    draft.reasoning_effort = None;
+                }
+            }
+        }
+
+        changed
     }
 
     fn resolve_provider_oauth_method(&self, provider: &str) -> String {
@@ -3922,6 +4001,12 @@ impl AppState {
             return;
         }
         let current_text = self.composer_edit.text.clone();
+        let prev_text = self
+            .composer_drafts
+            .get(old_key)
+            .map(|d| d.text.as_str())
+            .unwrap_or("");
+        let changed = current_text != prev_text;
         if !current_text.is_empty() || self.composer_drafts.contains_key(old_key) {
             self.composer_drafts
                 .entry(old_key.to_string())
@@ -3934,6 +4019,9 @@ impl AppState {
             .map(|d| d.text.as_str())
             .unwrap_or("");
         self.composer_edit = TextEdit::new(next_text);
+        if changed && !self.scene_mode && self.native_ready {
+            self.persist_state();
+        }
     }
 
     fn attach_bytes_to_composer(
@@ -4222,6 +4310,23 @@ impl AppState {
                         path,
                         yolo,
                     });
+                }
+                let valid_draft_threads: HashSet<String> = self
+                    .threads
+                    .iter()
+                    .filter(|t| !t.draft && !t.archived && t.source_task_id.is_none())
+                    .map(|t| t.id.clone())
+                    .collect();
+                self.composer_drafts = persisted
+                    .composer_drafts
+                    .into_iter()
+                    .filter(|(k, _)| k == "__new__" || valid_draft_threads.contains(k))
+                    .collect();
+                let active_composer_key = self.composer_key();
+                if let Some(draft) = self.composer_drafts.get(&active_composer_key)
+                    && !draft.text.is_empty()
+                {
+                    self.composer_edit = TextEdit::new(&draft.text);
                 }
                 self.sync_active_explorer_dir();
             }
@@ -5729,9 +5834,41 @@ impl AppState {
                 model,
             } => {
                 let is_landing_draft = key == "__new__";
+                let (prev_provider, prev_model) = {
+                    let existing_draft = self.composer_drafts.get(&key);
+                    let thread_fallback = (!is_landing_draft)
+                        .then(|| self.threads.iter().find(|t| t.id == key))
+                        .flatten();
+                    (
+                        existing_draft
+                            .and_then(|d| d.provider.clone())
+                            .or_else(|| thread_fallback.and_then(|t| t.provider.clone())),
+                        existing_draft
+                            .and_then(|d| d.model.clone())
+                            .or_else(|| thread_fallback.and_then(|t| t.model.clone())),
+                    )
+                };
+                let model_changed = prev_provider.as_deref() != Some(provider.as_str())
+                    || prev_model.as_deref() != Some(model.as_str());
+                let provider_changed = prev_provider
+                    .as_deref()
+                    .is_some_and(|prev| !prev.eq_ignore_ascii_case(&provider));
+                let catalog = &self.provider_catalog;
                 let draft = self.composer_drafts.entry(key).or_default();
-                draft.provider = Some(provider);
-                draft.model = Some(model);
+                draft.provider = Some(provider.clone());
+                draft.model = Some(model.clone());
+                if model_changed
+                    && let Some(eff) = draft.reasoning_effort
+                    && (provider_changed
+                        || !model_supports_reasoning_effort(
+                            catalog,
+                            &provider,
+                            &model,
+                            eff.as_str(),
+                        ))
+                {
+                    draft.reasoning_effort = None;
+                }
                 if is_landing_draft {
                     self.refresh_creation_preflight();
                 }
@@ -5957,12 +6094,8 @@ impl AppState {
                 provider,
                 model,
             } => {
-                let mut changed = false;
-                if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
-                    t.provider = Some(provider.clone());
-                    t.model = Some(model.clone());
-                    changed = !t.draft;
-                }
+                let changed =
+                    self.apply_thread_model_update(&thread_id, Some(&provider), Some(&model));
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let params = SessionModelSetParams {
                         thread_id,
@@ -6015,17 +6148,45 @@ impl AppState {
             }
             ChatAction::OpenAgentViewer { agent_id, title }
             | ChatAction::OpenAgentThread { agent_id, title } => {
+                let normalized_agent_id = agent_id.trim().to_string();
+                if normalized_agent_id.is_empty() {
+                    return;
+                }
                 let thread_id = self
                     .nav
                     .current()
                     .active_thread_id
                     .clone()
                     .unwrap_or_default();
+                let resolved_title = title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| normalized_agent_id.clone());
                 self.agent_viewer = Some(AgentViewerState {
-                    thread_id,
-                    agent_id: agent_id.clone(),
-                    title: title.unwrap_or(agent_id),
+                    thread_id: thread_id.clone(),
+                    agent_id: normalized_agent_id.clone(),
+                    title: resolved_title,
                 });
+                let ws_id = self
+                    .workspace_for_thread(&thread_id)
+                    .or_else(|| self.active_workspace_id.clone());
+                if let Some(ws_id) = ws_id {
+                    let (needs_hydrate, is_hydrating) = self
+                        .thread_runtime_by_id
+                        .get(&normalized_agent_id)
+                        .map(|rt| (!rt.hydrated || rt.transcript_only, rt.hydrating))
+                        .unwrap_or((true, false));
+                    if needs_hydrate && !is_hydrating {
+                        self.dispatch(Action::Chat(ChatAction::HydrateThread(normalized_agent_id)));
+                    } else if !needs_hydrate
+                        && self.is_workspace_ws_connected(&ws_id)
+                        && !self.is_thread_subscribed(&ws_id, &normalized_agent_id)
+                    {
+                        self.resume_thread_on_ws(&ws_id, &normalized_agent_id);
+                    }
+                }
             }
             ChatAction::CloseAgentViewer => {
                 self.agent_viewer = None;
@@ -8962,6 +9123,23 @@ impl AppState {
         for tid in in_flight_tids {
             self.resume_thread_on_ws(workspace_id, &tid);
         }
+        if let Some(viewer_agent_id) = self
+            .agent_viewer
+            .as_ref()
+            .map(|v| v.agent_id.clone())
+            .filter(|aid| self.workspace_for_thread(aid).as_deref() == Some(workspace_id))
+        {
+            let (needs_hydrate, is_hydrating) = self
+                .thread_runtime_by_id
+                .get(&viewer_agent_id)
+                .map(|rt| (!rt.hydrated || rt.transcript_only, rt.hydrating))
+                .unwrap_or((true, false));
+            if needs_hydrate && !is_hydrating {
+                self.dispatch(Action::Chat(ChatAction::HydrateThread(viewer_agent_id)));
+            } else if !needs_hydrate {
+                self.resume_thread_on_ws(workspace_id, &viewer_agent_id);
+            }
+        }
     }
 
     fn apply_ws_notification(&mut self, workspace_id: &str, method: &str, params: Value) {
@@ -9944,15 +10122,10 @@ impl AppState {
             }
             "session_info" | "session_settings" | "config_updated" => {
                 self.apply_session_config_event(workspace_id, evt);
-                if let Some(id) = tid
-                    && let Some(t) = self.threads.iter_mut().find(|t| t.id == id)
-                {
-                    if let Some(p) = evt.get("provider").and_then(Value::as_str) {
-                        t.provider = Some(p.to_string());
-                    }
-                    if let Some(m) = evt.get("model").and_then(Value::as_str) {
-                        t.model = Some(m.to_string());
-                    }
+                if let Some(id) = tid {
+                    let provider = evt.get("provider").and_then(Value::as_str);
+                    let model = evt.get("model").and_then(Value::as_str);
+                    self.apply_thread_model_update(&id, provider, model);
                 }
             }
             _ => {}
@@ -10987,6 +11160,16 @@ impl AppState {
                     .unwrap_or(0),
             );
 
+        let is_agent_session = snapshot.get("sessionKind").and_then(Value::as_str) == Some("agent")
+            || snapshot
+                .get("parentSessionId")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty())
+            || self
+                .agent_viewer
+                .as_ref()
+                .is_some_and(|v| v.agent_id == session_id);
+
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == session_id) {
             if let Some(title) = snapshot.get("title").and_then(Value::as_str) {
                 t.title = title.to_string();
@@ -10999,7 +11182,7 @@ impl AppState {
             }
             t.last_event_seq = t.last_event_seq.max(snap_seq);
             t.draft = false;
-        } else {
+        } else if !is_agent_session {
             self.threads.push(ThreadRecord {
                 id: session_id.clone(),
                 workspace_id: workspace_id.to_string(),
@@ -11021,7 +11204,7 @@ impl AppState {
             });
         }
 
-        if !self.scene_mode {
+        if !self.scene_mode && !is_agent_session {
             self.persist_state();
         }
 
@@ -11127,6 +11310,10 @@ impl AppState {
         if self.is_workspace_ws_connected(workspace_id)
             && !self.is_thread_subscribed(workspace_id, &session_id)
             && (self.nav.current().active_thread_id.as_deref() == Some(session_id.as_str())
+                || self
+                    .agent_viewer
+                    .as_ref()
+                    .is_some_and(|v| v.agent_id == session_id)
                 || self
                     .thread_runtime_by_id
                     .get(&session_id)
@@ -11900,6 +12087,31 @@ impl AppState {
                     .find(|t| t.id == thread_id)
                     .map(|t| t.workspace_id.clone())
             })
+            .or_else(|| {
+                self.agent_viewer
+                    .as_ref()
+                    .filter(|v| v.agent_id == thread_id && v.thread_id != thread_id)
+                    .and_then(|v| {
+                        self.threads
+                            .iter()
+                            .find(|t| t.id == v.thread_id)
+                            .map(|t| t.workspace_id.clone())
+                    })
+            })
+            .or_else(|| {
+                self.thread_runtime_by_id
+                    .iter()
+                    .find_map(|(parent_id, rt)| {
+                        if rt.agents.iter().any(|a| a.agent_id == thread_id) {
+                            self.threads
+                                .iter()
+                                .find(|t| t.id == *parent_id)
+                                .map(|t| t.workspace_id.clone())
+                        } else {
+                            None
+                        }
+                    })
+            })
             .or_else(|| self.active_workspace_id.clone())
     }
 
@@ -11908,6 +12120,37 @@ impl AppState {
             .iter()
             .find(|w| w.id == workspace_id)
             .map(|w| w.path.clone())
+    }
+
+    fn persistable_composer_drafts(&self) -> HashMap<String, ComposerDraft> {
+        let mut drafts = self.composer_drafts.clone();
+        let active_key = self.composer_key();
+        let live_text = self.composer_edit.text.clone();
+        if !live_text.is_empty() || drafts.contains_key(&active_key) {
+            drafts.entry(active_key).or_default().text = live_text;
+        }
+        let valid_threads: HashSet<&str> = self
+            .threads
+            .iter()
+            .filter(|t| !t.draft && !t.archived && t.source_task_id.is_none())
+            .map(|t| t.id.as_str())
+            .collect();
+        drafts
+            .into_iter()
+            .filter(|(k, d)| {
+                (k == "__new__" || valid_threads.contains(k.as_str()))
+                    && (!d.text.is_empty()
+                        || !d.attachments.is_empty()
+                        || !d.references.is_empty()
+                        || d.provider.is_some()
+                        || d.model.is_some()
+                        || d.reasoning_effort.is_some())
+            })
+            .collect()
+    }
+
+    pub(crate) fn persist_state_for_shutdown(&mut self) {
+        self.persist_state();
     }
 
     fn persist_state(&mut self) {
@@ -11937,6 +12180,7 @@ impl AppState {
             onboarding: self.onboarding.clone(),
             feature_flags: self.feature_flag_overrides.clone(),
             product_analytics: self.product_analytics.clone(),
+            composer_drafts: self.persistable_composer_drafts(),
         };
         self.send_native(NativeCommand::SavePersistedState(Box::new(snapshot)));
     }
@@ -12669,6 +12913,37 @@ fn apply_defaults_obj_to_workspace(ws: &mut WorkspaceRecord, obj: &Map<String, V
     if let Some(po) = obj.get("providerOptions") {
         ws.provider_options = Some(po.clone());
     }
+}
+
+/// Returns whether the catalog model `(provider, model)` advertises `effort`.
+fn model_supports_reasoning_effort(
+    catalog: &[ProviderSummary],
+    provider: &str,
+    model: &str,
+    effort: &str,
+) -> bool {
+    let Some(provider_entry) = catalog
+        .iter()
+        .find(|p| p.id.eq_ignore_ascii_case(provider.trim()))
+    else {
+        return false;
+    };
+    let Some(model_entry) = provider_entry.models.iter().find(|m| m.id == model.trim()) else {
+        return false;
+    };
+    if !model_entry.supports_reasoning && model_entry.reasoning_efforts.is_empty() {
+        return false;
+    }
+    if !model_entry.reasoning_efforts.is_empty() {
+        return model_entry
+            .reasoning_efforts
+            .iter()
+            .any(|supported| supported.eq_ignore_ascii_case(effort.trim()));
+    }
+    matches!(
+        effort.trim().to_ascii_lowercase().as_str(),
+        "low" | "medium" | "high"
+    )
 }
 
 fn build_reasoning_effort_config_patch(provider: &str, effort: &str) -> Map<String, Value> {
@@ -20016,6 +20291,438 @@ mod tests {
                 false,
             ),
             crate::native::window_lifecycle::WindowCloseResolutionAction::Ignore
+        );
+    }
+
+    #[test]
+    fn composer_drafts_roundtrip_through_persistence_and_native_ready() {
+        let legacy_doc = json!({
+            "version": 2,
+            "workspaces": [
+                {
+                    "id": "ws-1",
+                    "name": "Alpha",
+                    "path": "/tmp/alpha",
+                    "workspaceKind": "project",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "lastOpenedAt": "2026-01-01T00:00:00Z",
+                    "archived": false
+                }
+            ],
+            "threads": [
+                {
+                    "id": "th-1",
+                    "workspaceId": "ws-1",
+                    "title": "Existing chat",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "lastMessageAt": "2026-01-01T00:00:01Z",
+                    "archived": false
+                }
+            ],
+            "activeWorkspaceId": "ws-1",
+            "activeThreadId": "th-1",
+            "composerDrafts": {
+                "thread:th-1": {
+                    "text": "unsent reply from electron",
+                    "provider": "google",
+                    "model": "gemini-3-flash",
+                    "reasoningEffort": "dynamic",
+                    "attachments": [
+                        {
+                            "filename": "note.txt",
+                            "mimeType": "text/plain",
+                            "contentBase64": "aGVsbG8="
+                        }
+                    ],
+                    "references": []
+                },
+                "new:project:ws-1": {
+                    "text": "new chat draft",
+                    "provider": "codex-cli",
+                    "model": "gpt-5.6-sol",
+                    "reasoningEffort": "max",
+                    "attachments": [],
+                    "references": []
+                }
+            }
+        });
+
+        let loaded = crate::native::persistence::core_state_from_document(&legacy_doc);
+        assert_eq!(
+            loaded.composer_drafts.get("th-1").map(|d| d.text.as_str()),
+            Some("unsent reply from electron")
+        );
+        assert_eq!(
+            loaded
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            Some(ReasoningEffortValue::Dynamic)
+        );
+        assert_eq!(
+            loaded
+                .composer_drafts
+                .get("th-1")
+                .map(|d| d.attachments.len()),
+            Some(1)
+        );
+        assert_eq!(
+            loaded
+                .composer_drafts
+                .get("__new__")
+                .map(|d| (d.text.as_str(), d.reasoning_effort)),
+            Some(("new chat draft", Some(ReasoningEffortValue::Max)))
+        );
+
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::NativeReady {
+            persisted: Box::new(loaded),
+            is_packaged: false,
+            system_dark: None,
+        });
+        assert_eq!(state.composer_edit.text, "unsent reply from electron");
+
+        // Edit active composer text and save snapshot via shutdown flush.
+        state.composer_edit = TextEdit::new("updated unsent draft");
+        state.persist_state_for_shutdown();
+        let saved_snapshot = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                NativeCommand::SavePersistedState(snap) => Some(snap.as_ref().clone()),
+                _ => None,
+            })
+            .expect("expected SavePersistedState");
+        let saved_doc = crate::native::persistence::merge_core_snapshot_into_document(
+            legacy_doc,
+            &saved_snapshot,
+        );
+        let reloaded = crate::native::persistence::core_state_from_document(&saved_doc);
+        assert_eq!(
+            reloaded
+                .composer_drafts
+                .get("th-1")
+                .map(|d| d.text.as_str()),
+            Some("updated unsent draft")
+        );
+        assert_eq!(
+            reloaded
+                .composer_drafts
+                .get("__new__")
+                .map(|d| d.text.as_str()),
+            Some("new chat draft")
+        );
+    }
+
+    #[test]
+    fn open_agent_viewer_hydrates_subscribes_and_populates_child_feed_without_sidebar_entry() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
+        state.threads.push(ThreadRecord {
+            id: "th-parent".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Parent".to_string(),
+            ..ThreadRecord::default()
+        });
+        state.dispatch(Action::Navigate(NavAction::OpenThread(
+            "th-parent".to_string(),
+        )));
+        state.services.emitted_ws_commands.clear();
+
+        state.dispatch(Action::Chat(ChatAction::OpenAgentViewer {
+            agent_id: "agent-child-1".to_string(),
+            title: Some("Researcher".to_string()),
+        }));
+
+        let hydrate_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "thread/hydrate"
+                    && params.get("threadId").and_then(Value::as_str) == Some("agent-child-1") =>
+                {
+                    Some(*request_id)
+                }
+                _ => None,
+            })
+            .expect("expected thread/hydrate for inspected subagent");
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: hydrate_req_id,
+            method: "thread/hydrate".to_string(),
+            result: Ok(json!({
+                "thread": { "id": "agent-child-1", "lastEventSeq": 4 },
+                "coworkSnapshot": {
+                    "sessionId": "agent-child-1",
+                    "sessionKind": "agent",
+                    "parentSessionId": "th-parent",
+                    "title": "Researcher",
+                    "lastEventSeq": 4,
+                    "feed": [
+                        {
+                            "id": "m-child-1",
+                            "kind": "assistant",
+                            "content": "Investigated the subagent logs."
+                        }
+                    ]
+                }
+            })),
+        });
+
+        // Subagent must NOT pollute the main sidebar thread list.
+        assert!(state.threads.iter().all(|t| t.id != "agent-child-1"));
+        // Hydrating the inspected subagent must populate its runtime feed and subscribe via thread/resume.
+        let child_rt = state
+            .thread_runtime_by_id
+            .get("agent-child-1")
+            .expect("child runtime");
+        assert!(child_rt.hydrated);
+        assert_eq!(child_rt.feed.len(), 1);
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { method, params, .. }
+                        if method == "thread/resume"
+                            && params.get("threadId").and_then(Value::as_str)
+                                == Some("agent-child-1")
+                )),
+            "expected thread/resume subscription for inspected subagent"
+        );
+    }
+
+    #[test]
+    fn changing_model_reconciles_stale_draft_and_thread_reasoning_effort() {
+        let mut state = AppState::default();
+        let ws = WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1);
+        state.workspaces.push(ws);
+        state.provider_catalog = vec![
+            ProviderSummary {
+                id: "openai".to_string(),
+                name: "OpenAI".to_string(),
+                configured: true,
+                models: vec![
+                    ProviderModelSummary {
+                        id: "gpt-5".to_string(),
+                        name: "GPT-5".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_string(),
+                            "medium".to_string(),
+                            "high".to_string(),
+                            "xhigh".to_string(),
+                        ],
+                    },
+                    ProviderModelSummary {
+                        id: "o3".to_string(),
+                        name: "o3".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_string(),
+                            "medium".to_string(),
+                            "high".to_string(),
+                        ],
+                    },
+                    ProviderModelSummary {
+                        id: "gpt-4o".to_string(),
+                        name: "GPT-4o".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: false,
+                        reasoning_efforts: Vec::new(),
+                    },
+                ],
+                ..ProviderSummary::default()
+            },
+            ProviderSummary {
+                id: "anthropic".to_string(),
+                name: "Anthropic".to_string(),
+                configured: true,
+                models: vec![ProviderModelSummary {
+                    id: "claude-opus-4-6".to_string(),
+                    name: "Claude Opus 4.6".to_string(),
+                    enabled: true,
+                    custom: false,
+                    supports_reasoning: true,
+                    reasoning_efforts: vec![
+                        "low".to_string(),
+                        "medium".to_string(),
+                        "high".to_string(),
+                        "max".to_string(),
+                    ],
+                }],
+                ..ProviderSummary::default()
+            },
+        ];
+
+        let th = ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Reasoning test".to_string(),
+            provider: Some("openai".to_string()),
+            model: Some("gpt-5".to_string()),
+            ..ThreadRecord::default()
+        };
+        state.threads.push(th);
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-1".to_string())));
+
+        // Select High on gpt-5 (both composer draft and thread record).
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftEffort {
+            key: "th-1".to_string(),
+            effort: Some(ReasoningEffortValue::High),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadReasoningEffort {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            effort: ReasoningEffortValue::High,
+        }));
+
+        // Switching to another same-provider model that supports High preserves it.
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
+            key: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "o3".to_string(),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadModel {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "o3".to_string(),
+        }));
+        assert_eq!(state.threads[0].reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            state
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            Some(ReasoningEffortValue::High)
+        );
+
+        // Switching to a non-reasoning model clears both draft and thread reasoning effort,
+        // so switching back does not resurrect the stale High selection.
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
+            key: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadModel {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+        }));
+        assert_eq!(state.threads[0].reasoning_effort, None);
+        assert_eq!(
+            state
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            None
+        );
+
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
+            key: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadModel {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+        }));
+        assert_eq!(state.threads[0].reasoning_effort, None);
+        assert_eq!(
+            state
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            None
+        );
+
+        // Switching across providers clears provider-scoped effort even if both support High.
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftEffort {
+            key: "th-1".to_string(),
+            effort: Some(ReasoningEffortValue::High),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadReasoningEffort {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            effort: ReasoningEffortValue::High,
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
+            key: "th-1".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4-6".to_string(),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadModel {
+            thread_id: "th-1".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4-6".to_string(),
+        }));
+        assert_eq!(state.threads[0].reasoning_effort, None);
+        assert_eq!(
+            state
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            None
+        );
+
+        // Server-side `config_updated` switching to a non-reasoning model also clears stale effort.
+        state.dispatch(Action::Chat(ChatAction::SetThreadModel {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftEffort {
+            key: "th-1".to_string(),
+            effort: Some(ReasoningEffortValue::Xhigh),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadReasoningEffort {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            effort: ReasoningEffortValue::Xhigh,
+        }));
+        state.apply_session_config_event(
+            "ws-1",
+            &json!({
+                "type": "config_updated",
+                "sessionId": "th-1",
+                "config": {
+                    "provider": "openai",
+                    "model": "o3"
+                }
+            }),
+        );
+        // `o3` does not support `xhigh`, so both thread and draft effort must be cleared.
+        assert_eq!(state.threads[0].reasoning_effort, None);
+        assert_eq!(
+            state
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            None
         );
     }
 }

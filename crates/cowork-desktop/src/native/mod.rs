@@ -520,6 +520,9 @@ async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &Sh
 pub fn on_shutdown(state: &mut AppState) {
     #[cfg(target_os = "macos")]
     tray::destroy_macos_tray_on_main_thread();
+    if !state.scene_mode && state.window_mode == crate::state::WindowMode::Main {
+        state.persist_state_for_shutdown();
+    }
     state.send_native(NativeCommand::Shutdown);
     state.send_ws(crate::ws::WsCommand::Shutdown);
     let wait_timeout =
@@ -759,6 +762,7 @@ impl NativeWorkerContext {
                     ),
                     ..PersistedDesktopState::default()
                 };
+                core.settings.theme = self.appearance.load_theme_preference();
                 core.product_analytics = self.product_analytics_value();
                 self.sync_runtime_caches(&core);
                 apply_desktop_state(

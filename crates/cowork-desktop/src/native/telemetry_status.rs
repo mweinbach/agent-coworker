@@ -7,6 +7,8 @@ use serde_json::{Map, Value, json};
 
 use crate::state::{PersistedDesktopState, PrivacyTelemetrySettings};
 
+use super::cloud_sync::{CloudSyncRuntimeStatus, resolve_cloud_sync_config};
+
 const DEFAULT_LANGFUSE_BASE_URL: &str = "https://cloud.langfuse.com";
 
 pub(crate) fn normalize_env_value(value: Option<&String>) -> Option<String> {
@@ -26,7 +28,7 @@ pub(crate) fn build_time_http_url(value: Option<&'static str>) -> Option<String>
     normalize_http_url(Some(&owned))
 }
 
-fn parse_env_bool(value: Option<&String>) -> Option<bool> {
+pub(crate) fn parse_env_bool(value: Option<&String>) -> Option<bool> {
     let raw = value?.trim().to_ascii_lowercase();
     match raw.as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -170,6 +172,7 @@ fn status_label(status: &str) -> &'static str {
         "full_payload" => "Full payload",
         "local_only" => "Local only",
         "upload_configured" => "Upload configured",
+        "queued" => "Syncing",
         "connected" => "Connected",
         "error" => "Error",
         _ => "Disabled",
@@ -194,6 +197,19 @@ pub fn resolve_desktop_telemetry_status(
     raw_state_doc: Option<&Value>,
     env: &HashMap<String, String>,
     is_packaged: bool,
+) -> Value {
+    resolve_desktop_telemetry_status_with_runtime(snapshot, raw_state_doc, env, is_packaged, None)
+}
+
+/// Builds a sanitized `TelemetryStatusSnapshot` incorporating live cloud-sync uploader state so
+/// `"connected"` is only reported once the configured endpoint actually succeeds and transport
+/// errors surface accurately.
+pub fn resolve_desktop_telemetry_status_with_runtime(
+    snapshot: &PersistedDesktopState,
+    raw_state_doc: Option<&Value>,
+    env: &HashMap<String, String>,
+    is_packaged: bool,
+    cloud_sync_runtime: Option<&CloudSyncRuntimeStatus>,
 ) -> Value {
     let consent = resolve_telemetry_consent(&snapshot.settings.privacy_telemetry, env, is_packaged);
     let kill_switch = consent.network_telemetry_disabled;
@@ -261,39 +277,35 @@ pub fn resolve_desktop_telemetry_status(
         "local_only"
     };
 
-    let cloud_obj = raw_state_doc
-        .and_then(|d| d.get("cloudSync"))
-        .and_then(Value::as_object);
-    let cloud_endpoint = normalize_http_url(env.get("COWORK_CLOUD_SYNC_ENDPOINT")).or_else(|| {
-        cloud_obj
-            .and_then(|o| o.get("endpoint"))
-            .and_then(Value::as_str)
-            .and_then(|s| normalize_http_url(Some(&s.to_string())))
-    });
-    let cloud_sync_settings = cloud_obj
-        .and_then(|o| o.get("syncSettings"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let cloud_env_enabled = parse_env_bool(env.get("COWORK_CLOUD_SYNC_ENABLED"));
-    let cloud_persisted_enabled = cloud_obj
-        .and_then(|o| o.get("enabled"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let cloud_enabled = !kill_switch
-        && (cloud_env_enabled.unwrap_or(cloud_persisted_enabled) || consent.cloud_sync_enabled);
-    let cloud_provider_custom = cloud_endpoint.is_some()
-        || cloud_obj
-            .and_then(|o| o.get("provider"))
-            .and_then(Value::as_str)
-            == Some("custom");
+    let cloud_cfg = resolve_cloud_sync_config(
+        &snapshot.settings.privacy_telemetry,
+        raw_state_doc,
+        env,
+        is_packaged,
+    );
 
-    let cloud_entry = if kill_switch || !cloud_enabled || !cloud_sync_settings {
-        status_entry("disabled", false, false, None)
-    } else if !cloud_provider_custom || cloud_endpoint.is_none() {
-        status_entry("not_configured", false, cloud_enabled, None)
-    } else {
-        status_entry("connected", true, true, None)
-    };
+    let cloud_entry =
+        if cloud_cfg.network_telemetry_disabled || !cloud_cfg.enabled || !cloud_cfg.sync_settings {
+            status_entry("disabled", false, false, None)
+        } else if !cloud_cfg.provider_custom || cloud_cfg.endpoint.is_none() {
+            status_entry("not_configured", false, cloud_cfg.enabled, None)
+        } else if let Some(rt) = cloud_sync_runtime {
+            match rt.status {
+                "connected" => status_entry("connected", true, true, None),
+                "error" => status_entry("error", true, true, rt.message.as_deref()),
+                "queued" => status_entry("queued", true, true, rt.message.as_deref()),
+                "not_configured" => status_entry(
+                    "not_configured",
+                    false,
+                    cloud_cfg.enabled,
+                    rt.message.as_deref(),
+                ),
+                _ => status_entry("disabled", false, false, None),
+            }
+        } else {
+            // Never report "connected" without live confirmation from the cloud sync uploader.
+            status_entry("queued", true, true, None)
+        };
 
     json!({
         "globalKillSwitchActive": kill_switch,
@@ -368,5 +380,47 @@ mod tests {
         assert_eq!(snap["diagnosticsUpload"]["status"], "local_only");
         // Secrets must never appear in telemetry snapshot output.
         assert!(!snap.to_string().contains("sk-lf-secret"));
+    }
+
+    #[test]
+    fn cloud_sync_requires_runtime_confirmation_before_reporting_connected() {
+        let mut state = PersistedDesktopState::default();
+        state.settings.privacy_telemetry.cloud_sync_enabled = true;
+        let mut env = HashMap::new();
+        env.insert(
+            "COWORK_CLOUD_SYNC_ENDPOINT".into(),
+            "https://sync.example.com".into(),
+        );
+        env.insert("COWORK_CLOUD_SYNC_TOKEN".into(), "secret-sync-token".into());
+
+        // Without live uploader confirmation, never falsely advertise Connected.
+        let unconfirmed = resolve_desktop_telemetry_status(&state, None, &env, false);
+        assert_eq!(unconfirmed["cloudSync"]["status"], "queued");
+        assert_eq!(unconfirmed["cloudSync"]["label"], "Syncing");
+        assert!(!unconfirmed.to_string().contains("secret-sync-token"));
+
+        let err_rt = CloudSyncRuntimeStatus {
+            status: "error",
+            configured: true,
+            enabled: true,
+            queued: 0,
+            message: Some("HTTP 502".into()),
+        };
+        let failed =
+            resolve_desktop_telemetry_status_with_runtime(&state, None, &env, false, Some(&err_rt));
+        assert_eq!(failed["cloudSync"]["status"], "error");
+        assert_eq!(failed["cloudSync"]["message"], "HTTP 502");
+
+        let ok_rt = CloudSyncRuntimeStatus {
+            status: "connected",
+            configured: true,
+            enabled: true,
+            queued: 0,
+            message: None,
+        };
+        let connected =
+            resolve_desktop_telemetry_status_with_runtime(&state, None, &env, false, Some(&ok_rt));
+        assert_eq!(connected["cloudSync"]["status"], "connected");
+        assert_eq!(connected["cloudSync"]["label"], "Connected");
     }
 }

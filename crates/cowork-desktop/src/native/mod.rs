@@ -6,6 +6,7 @@
 
 pub mod appearance;
 pub mod apply_desktop_state;
+pub mod cloud_sync;
 pub mod crash_reporting;
 pub mod diagnostics;
 pub mod dialogs;
@@ -53,6 +54,7 @@ use crate::state::{
 };
 use appearance::{AppearancePreferences, detect_system_dark};
 use apply_desktop_state::apply_desktop_state;
+use cloud_sync::CloudSyncService;
 use crash_reporting::CrashReportingService;
 use diagnostics::{CreatedDiagnosticsBundle, DiagnosticsService, UploadedDiagnosticsBundle};
 use explorer::{list_workspace_directory, rename_workspace_entry};
@@ -79,7 +81,7 @@ use shell_ops::{
 };
 use shutdown::ShutdownCoordinator;
 use sidecar::resolve_dev_repo_root;
-use telemetry_status::resolve_desktop_telemetry_status;
+use telemetry_status::resolve_desktop_telemetry_status_with_runtime;
 use tray::QuickChatTrayController;
 use updater::{DesktopUpdaterService, UpdaterConfig};
 use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
@@ -503,6 +505,14 @@ async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &Sh
             .await;
             runtime_ctx.product_analytics.shutdown();
         },
+        async {
+            let _ = tokio::time::timeout(
+                SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT,
+                runtime_ctx.cloud_sync.flush(),
+            )
+            .await;
+            runtime_ctx.cloud_sync.shutdown();
+        },
         coordinator.shutdown(),
     );
     if let Err(err) = runtime_ctx.updater.execute_pending_install_on_shutdown() {
@@ -553,6 +563,7 @@ struct NativeWorkerContext {
     diagnostics: DiagnosticsService,
     crash_reporting: CrashReportingService,
     product_analytics: ProductAnalyticsService,
+    cloud_sync: CloudSyncService,
     tray: QuickChatTrayController,
     last_feature_flags: HashMap<String, bool>,
     last_privacy: Option<PrivacyTelemetrySettings>,
@@ -623,6 +634,31 @@ impl NativeWorkerContext {
             initial_analytics,
             Some(persistence.as_ref()),
             env,
+        );
+        let cloud_sync_persistence = Arc::clone(&persistence);
+        let cloud_sync_emit = Arc::clone(&emit);
+        let cloud_sync = CloudSyncService::new(
+            is_packaged,
+            &initial_privacy,
+            initial_doc.as_ref(),
+            env,
+            Some(Arc::new(move |cloud_status| {
+                let live_env = cowork_config::env_map_from_process();
+                let raw_doc = cloud_sync_persistence.load_state_value().ok();
+                let snapshot = raw_doc
+                    .as_ref()
+                    .map(persistence::core_state_from_document)
+                    .unwrap_or_default();
+                cloud_sync_emit(StoreEvent::TelemetryStatusChanged(
+                    resolve_desktop_telemetry_status_with_runtime(
+                        &snapshot,
+                        raw_doc.as_ref(),
+                        &live_env,
+                        is_packaged,
+                        Some(cloud_status),
+                    ),
+                ));
+            })),
         );
 
         let current_exe_dir = std::env::current_exe()
@@ -709,6 +745,7 @@ impl NativeWorkerContext {
             diagnostics,
             crash_reporting,
             product_analytics,
+            cloud_sync,
             tray,
             last_feature_flags: HashMap::new(),
             last_privacy: None,
@@ -812,6 +849,10 @@ impl NativeWorkerContext {
             &ws_targets,
         );
         self.sync_telemetry_services_with_env(&state.settings.privacy_telemetry, env);
+        let raw_doc = self.persistence.load_state_value().ok();
+        let _ = self
+            .cloud_sync
+            .sync_persisted_state(state, raw_doc.as_ref(), env);
     }
 
     fn product_analytics_value(&self) -> Option<Value> {
@@ -890,7 +931,18 @@ impl NativeWorkerContext {
             snapshot.settings.privacy_telemetry = privacy.clone();
         }
         let raw_doc = self.persistence.load_state_value().ok();
-        resolve_desktop_telemetry_status(&snapshot, raw_doc.as_ref(), env, self.is_packaged)
+        let cloud_status = self.cloud_sync.status_for_env(
+            &snapshot.settings.privacy_telemetry,
+            raw_doc.as_ref(),
+            env,
+        );
+        resolve_desktop_telemetry_status_with_runtime(
+            &snapshot,
+            raw_doc.as_ref(),
+            env,
+            self.is_packaged,
+            Some(&cloud_status),
+        )
     }
 
     fn authorize_explorer_workspace_root(

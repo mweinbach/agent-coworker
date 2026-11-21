@@ -619,8 +619,11 @@ fn plugins_tab_view(
         .text
         .trim()
         .to_ascii_lowercase();
-    let mut plugins: Vec<&PluginSummary> = s.plugins.iter().collect();
-    plugins.sort_by_key(|p| p.name.to_lowercase());
+    let workspace_plugins = s.plugins_for_workspace(ws_id);
+    let workspace_available_plugins = s.available_plugins_for_workspace(ws_id);
+    let workspace_plugin_warnings = s.plugin_catalog_warnings_for_workspace(ws_id);
+    let mut plugins: Vec<&PluginSummary> = workspace_plugins.iter().collect();
+    plugins.sort_by_key(|p| p.display_label().to_lowercase());
 
     let visible: Vec<&PluginSummary> = plugins
         .iter()
@@ -629,7 +632,8 @@ fn plugins_tab_view(
             if query.is_empty() {
                 true
             } else {
-                p.name.to_ascii_lowercase().contains(&query)
+                p.display_label().to_ascii_lowercase().contains(&query)
+                    || p.name.to_ascii_lowercase().contains(&query)
                     || p.description.to_ascii_lowercase().contains(&query)
                     || p.id.to_ascii_lowercase().contains(&query)
             }
@@ -654,10 +658,10 @@ fn plugins_tab_view(
         );
     }
 
-    if !s.plugin_catalog_warnings.is_empty() {
+    if !workspace_plugin_warnings.is_empty() {
         installed_section = installed_section.child(el().px(16.0).pt(12.0).child(callout_banner(
             StatusTone::Warning,
-            s.plugin_catalog_warnings.join("\n"),
+            workspace_plugin_warnings.join("\n"),
             k,
             t,
         )));
@@ -737,8 +741,7 @@ fn plugins_tab_view(
     append_plugin_detail_dialog(s, ws_id, k, t, overlays);
     append_plugin_delete_confirm(s, ws_id, k, overlays);
 
-    let available_entries: Vec<&Value> = s
-        .available_plugins
+    let available_entries: Vec<&Value> = workspace_available_plugins
         .iter()
         .filter(|item| item.get("installed").and_then(Value::as_bool) != Some(true))
         .filter(|item| {
@@ -879,10 +882,11 @@ fn render_plugin_row(
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
+    let display_label = plugin.display_label();
     let mut header = row()
         .items_center()
         .gap(8.0)
-        .child(text(&plugin.name).font(k.ty.ui_medium).color(t.text_base));
+        .child(text(display_label).font(k.ty.ui_medium).color(t.text_base));
     if plugin.update_available {
         header = header.child(status_pill("Update available", StatusTone::Warning, k, t));
     }
@@ -913,7 +917,7 @@ fn render_plugin_row(
         .radius(k.radius.md)
         .hover(t.hover)
         .role("button")
-        .label(format!("Inspect plugin {}", plugin.name))
+        .label(format!("Inspect plugin {display_label}"))
         .on_press(move |s: &mut AppState| {
             s.settings_ui.selected_plugin_id = Some(pid_open.clone());
             s.settings_ui.selected_plugin_scope = scope_open.clone();
@@ -957,7 +961,7 @@ fn render_plugin_row(
     actions = actions
         .child(mini_switch(
             plugin.enabled,
-            format!("Enable {}", plugin.name),
+            format!("Enable {display_label}"),
             false,
             move |s: &mut AppState| {
                 s.dispatch(Action::Settings(SettingsAction::SetPluginEnabledScoped {
@@ -1001,7 +1005,7 @@ fn render_plugin_row(
                 .child(entity_icon(
                     s,
                     plugin.icon.as_deref(),
-                    &plugin.name,
+                    display_label,
                     EntityIconSize::Md,
                     k,
                     t,
@@ -1122,11 +1126,11 @@ fn append_plugin_detail_dialog(
         return;
     };
     let selected_scope = s.settings_ui.selected_plugin_scope.clone();
-    let Some(plugin) = s
-        .plugins
+    let workspace_plugins = s.plugins_for_workspace(ws_id);
+    let Some(plugin) = workspace_plugins
         .iter()
         .find(|p| p.id == plugin_id && (selected_scope.is_none() || p.scope == selected_scope))
-        .or_else(|| s.plugins.iter().find(|p| p.id == plugin_id))
+        .or_else(|| workspace_plugins.iter().find(|p| p.id == plugin_id))
     else {
         return;
     };
@@ -1156,6 +1160,7 @@ fn append_plugin_detail_dialog(
             t,
         ));
 
+    let display_label = plugin.display_label();
     let mut content = col().w_full().min_w(0.0).px(16.0).pb(16.0).gap(12.0).child(
         row()
             .items_center()
@@ -1163,7 +1168,7 @@ fn append_plugin_detail_dialog(
             .child(entity_icon(
                 s,
                 plugin.icon.as_deref(),
-                &plugin.name,
+                display_label,
                 EntityIconSize::Lg,
                 k,
                 t,
@@ -1173,7 +1178,7 @@ fn append_plugin_detail_dialog(
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(2.0)
-                    .child(text(&plugin.name).font(k.ty.ui_medium).color(t.text_base))
+                    .child(text(display_label).font(k.ty.ui_medium).color(t.text_base))
                     .child(text(&plugin.id).font(k.ty.small).color(t.text_muted)),
             ),
     );
@@ -1285,10 +1290,15 @@ fn append_plugin_delete_confirm(s: &AppState, ws_id: &str, k: &Kit, overlays: &m
         return;
     };
     let display = s
-        .plugins
+        .plugins_for_workspace(ws_id)
         .iter()
-        .find(|p| p.id == *plugin_id)
-        .map(|p| p.name.as_str())
+        .find(|p| p.id == *plugin_id && (plugin_scope.is_none() || p.scope == *plugin_scope))
+        .or_else(|| {
+            s.plugins_for_workspace(ws_id)
+                .iter()
+                .find(|p| p.id == *plugin_id)
+        })
+        .map(PluginSummary::display_label)
         .unwrap_or(plugin_id.as_str());
     let ws_del = ws_id.to_string();
     let pid_del = plugin_id.clone();

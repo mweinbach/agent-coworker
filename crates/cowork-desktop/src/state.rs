@@ -322,6 +322,11 @@ pub struct WorkspaceRuntime {
     pub provider_statuses: Vec<ProviderStatusSummary>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub mcp_servers_loaded: bool,
+    pub plugins: Vec<PluginSummary>,
+    pub installed_plugin_entries: Vec<Value>,
+    pub available_plugins: Vec<Value>,
+    pub plugin_catalog_warnings: Vec<String>,
+    pub plugins_loaded: bool,
     pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub agent_profiles_loaded: bool,
     pub subagents: Vec<SubagentProfile>,
@@ -651,6 +656,7 @@ pub struct ComposerSubmissionState {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComposerSubmissionStatus {
     Sending(u64),
+    AcceptedSteer { steer_request_id: Option<String> },
     Failed(String),
 }
 
@@ -935,6 +941,8 @@ pub struct PluginSummary {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
     pub description: String,
     pub version: Option<String>,
     pub enabled: bool,
@@ -954,6 +962,16 @@ pub struct PluginSummary {
     pub mcp_count: usize,
     #[serde(default)]
     pub subagent_count: usize,
+}
+
+impl PluginSummary {
+    pub fn display_label(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.name)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -5439,6 +5457,7 @@ impl AppState {
         }
         if self.active_workspace_id != prev_ws {
             self.sync_active_workspace_mcp_servers();
+            self.sync_active_workspace_plugins();
             self.sync_active_workspace_agent_profiles();
             self.sync_active_workspace_backups();
             if let Some(ws_id) = self.active_workspace_id.clone() {
@@ -5447,7 +5466,7 @@ impl AppState {
                     let loaded = self
                         .workspace_runtime_by_id
                         .get(&ws_id)
-                        .is_some_and(|rt| rt.mcp_servers_loaded);
+                        .is_some_and(|rt| rt.mcp_servers_loaded && rt.plugins_loaded);
                     if !loaded
                         || (self.route().view == ViewId::Settings
                             && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
@@ -7528,7 +7547,7 @@ impl AppState {
     }
 
     fn finish_composer_steer(&mut self, request_id: u64, result: &Result<Value, WsRpcError>) {
-        let Some((thread_id, rt, mut submission)) =
+        let Some((_thread_id, rt, mut submission)) =
             self.thread_runtime_by_id.iter_mut().find_map(|(id, rt)| {
                 let submission = rt
                     .composer_submission
@@ -7550,9 +7569,16 @@ impl AppState {
             submission.status = ComposerSubmissionStatus::Failed(error.message.clone());
             rt.composer_submission = Some(submission);
         } else {
-            let thread_id = thread_id.clone();
-            let cid = submission.message.client_message_id.as_deref();
-            self.emit_client_transcript_user_message(&thread_id, &submission.message.text, cid);
+            let steer_request_id = result
+                .as_ref()
+                .ok()
+                .and_then(|v| v.get("steerRequestId"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            // Retain accepted steers until a projected `userMessage` confirms harness consumption
+            // or a correlated `error` item transitions them to a retryable failure.
+            submission.status = ComposerSubmissionStatus::AcceptedSteer { steer_request_id };
+            rt.composer_submission = Some(submission);
         }
     }
 
@@ -8679,7 +8705,7 @@ impl AppState {
                     "cowork/plugins/disable"
                 };
                 let matching_scopes: Vec<String> = self
-                    .plugins
+                    .plugins_for_workspace(&workspace_id)
                     .iter()
                     .filter(|p| p.id == id)
                     .filter_map(|p| p.scope.clone())
@@ -8718,7 +8744,7 @@ impl AppState {
             SettingsAction::DeletePlugin { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let matching_scopes: Vec<String> = self
-                    .plugins
+                    .plugins_for_workspace(&workspace_id)
                     .iter()
                     .filter(|p| p.id == id)
                     .filter_map(|p| p.scope.clone())
@@ -8761,7 +8787,7 @@ impl AppState {
             SettingsAction::UpdatePlugin { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let matching_scopes: Vec<String> = self
-                    .plugins
+                    .plugins_for_workspace(&workspace_id)
                     .iter()
                     .filter(|p| p.id == id)
                     .filter_map(|p| p.scope.clone())
@@ -9212,6 +9238,7 @@ impl AppState {
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
                 self.sync_active_workspace_mcp_servers();
+                self.sync_active_workspace_plugins();
                 self.sync_active_workspace_agent_profiles();
                 self.sync_active_workspace_backups();
                 self.sync_active_explorer_dir();
@@ -9250,6 +9277,7 @@ impl AppState {
                     self.settings_ui.subagent_editing_id = None;
                 }
                 self.sync_active_workspace_mcp_servers();
+                self.sync_active_workspace_plugins();
                 self.sync_active_workspace_agent_profiles();
                 self.sync_active_workspace_backups();
                 if self
@@ -9662,6 +9690,17 @@ impl AppState {
                     self.reduce_cowork_event(workspace_id, &normalized, now_ms);
                 }
             }
+            "cowork/session/steerAccepted" => {
+                if params.get("type").is_some() {
+                    self.reduce_cowork_event(workspace_id, &params, now_ms);
+                } else {
+                    let mut normalized = params;
+                    if let Some(obj) = normalized.as_object_mut() {
+                        obj.insert("type".to_string(), json!("steer_accepted"));
+                    }
+                    self.reduce_cowork_event(workspace_id, &normalized, now_ms);
+                }
+            }
             "cowork/session/agentSpawned"
             | "cowork/session/agentStatus"
             | "cowork/session/agentList"
@@ -9774,6 +9813,15 @@ impl AppState {
         rt.streaming = false;
         rt.pending_turn_count = 0;
         rt.pending_steer = None;
+        if let Some(sub) = rt.composer_submission.as_mut()
+            && matches!(sub.status, ComposerSubmissionStatus::AcceptedSteer { .. })
+        {
+            sub.status = ComposerSubmissionStatus::Failed(
+                err_msg
+                    .clone()
+                    .unwrap_or_else(|| "Steer was not applied before the turn ended.".to_string()),
+            );
+        }
         for item in &mut rt.feed {
             match item {
                 FeedItem::Message { streaming, .. } | FeedItem::Reasoning { streaming, .. } => {
@@ -9812,199 +9860,247 @@ impl AppState {
             return;
         };
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
-        let rt = self.thread_runtime_by_id.entry(tid).or_default();
+        let mut consumed_accepted_steer: Option<(String, Option<String>)> = None;
+        {
+            let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
 
-        match item_type {
-            "userMessage" => {
-                let text = extract_item_text(item);
-                let client_message_id = item
-                    .get("clientMessageId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if client_message_id.is_some()
-                    && rt
-                        .composer_submission
-                        .as_ref()
-                        .is_some_and(|sub| sub.message.client_message_id == client_message_id)
-                {
-                    // A user-message echo proves acceptance even if the RPC reply is lost.
-                    rt.composer_submission = None;
-                }
-                let matched_existing = if let Some(ref cid) = client_message_id {
-                    rt.feed.iter_mut().find(|f| {
-                        matches!(
-                            f,
-                            FeedItem::Message {
-                                client_message_id: Some(ec),
-                                ..
-                            } if ec == cid
-                        )
-                    })
-                } else {
-                    let trimmed_incoming = text.trim();
-                    rt.feed.iter_mut().find(|f| {
-                        matches!(
-                            f,
-                            FeedItem::Message {
-                                id,
-                                role: FeedMessageRole::User,
-                                content,
-                                client_message_id: Some(_),
-                                ..
-                            } if id.starts_with("optimistic-") && content.trim() == trimmed_incoming
-                        )
-                    })
-                };
-                if let Some(existing) = matched_existing {
-                    if let FeedItem::Message {
-                        id,
-                        content,
-                        client_message_id: existing_cid,
-                        streaming,
-                        ..
-                    } = existing
-                    {
-                        *id = item_id;
-                        if !text.is_empty() {
-                            *content = text;
-                        }
-                        if client_message_id.is_none()
-                            && let Some(submission) = &rt.composer_submission
-                            && submission.message.client_message_id.as_ref()
-                                == existing_cid.as_ref()
+            match item_type {
+                "userMessage" => {
+                    let text = extract_item_text(item);
+                    let client_message_id = item
+                        .get("clientMessageId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    if let Some(ref cid) = client_message_id {
+                        if rt
+                            .pending_steer
+                            .as_ref()
+                            .is_some_and(|s| s.client_message_id == *cid)
                         {
-                            rt.composer_submission = None;
+                            rt.pending_steer = None;
                         }
-                        *existing_cid = None;
-                        *streaming = false;
-                    }
-                    return;
-                }
-                if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                    rt.feed.push(FeedItem::Message {
-                        id: item_id,
-                        role: FeedMessageRole::User,
-                        content: text,
-                        client_message_id,
-                        attachments: Vec::new(),
-                        references: Vec::new(),
-                        citations: Vec::new(),
-                        streaming: false,
-                        timestamp_ms: now_ms,
-                    });
-                }
-            }
-            "agentMessage" => {
-                let text = extract_item_text(item);
-                if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                    rt.feed.push(FeedItem::Message {
-                        id: item_id,
-                        role: FeedMessageRole::Assistant,
-                        content: text,
-                        client_message_id: None,
-                        attachments: Vec::new(),
-                        references: Vec::new(),
-                        citations: parse_citations_from_item(item),
-                        streaming: true,
-                        timestamp_ms: now_ms,
-                    });
-                }
-            }
-            "reasoning" => {
-                let text = extract_item_text(item);
-                let mode = item
-                    .get("mode")
-                    .and_then(Value::as_str)
-                    .unwrap_or("reasoning")
-                    .to_string();
-                if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                    rt.feed.push(FeedItem::Reasoning {
-                        id: item_id,
-                        content: text,
-                        mode,
-                        streaming: true,
-                        timestamp_ms: now_ms,
-                    });
-                }
-            }
-            "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "toolCall" => {
-                let parsed_tool_name = item
-                    .get("tool")
-                    .or_else(|| item.get("toolName"))
-                    .or_else(|| item.get("name"))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty());
-                let title = item
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let call_id = item
-                    .get("callId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let next_input = extract_tool_input(item);
-                let parsed_status = parse_tool_status_from_item(item);
-                let completed_at = item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)));
-                let truncated = item
-                    .get("outputTruncated")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id) {
-                    if let FeedItem::Tool {
-                        tool_name,
-                        title: existing_title,
-                        call_id: existing_call_id,
-                        status,
-                        input,
-                        streaming,
-                        completed_at_ms,
-                        output_truncated,
-                        ..
-                    } = existing
-                    {
-                        if let Some(name) = parsed_tool_name {
-                            *tool_name = name.to_string();
-                        }
-                        if let Some(t) = title {
-                            *existing_title = Some(t);
-                        }
-                        if let Some(cid) = call_id {
-                            *existing_call_id = Some(cid);
-                        }
-                        if !status.is_terminal()
-                            && let Some(next_status) = parsed_status
+                        if let Some(sub) = rt
+                            .composer_submission
+                            .take_if(|sub| sub.message.client_message_id.as_deref() == Some(cid))
+                            && matches!(sub.status, ComposerSubmissionStatus::AcceptedSteer { .. })
                         {
-                            *status = next_status;
+                            consumed_accepted_steer =
+                                Some((sub.message.text, sub.message.client_message_id));
                         }
-                        merge_tool_input(input, next_input);
-                        if let Some(c) = completed_at {
-                            *completed_at_ms = Some(c);
+                    } else if !text.trim().is_empty()
+                        && rt
+                            .pending_steer
+                            .as_ref()
+                            .is_some_and(|s| s.text.trim() == text.trim())
+                    {
+                        rt.pending_steer = None;
+                        if let Some(sub) = rt.composer_submission.take_if(|sub| {
+                            matches!(sub.status, ComposerSubmissionStatus::AcceptedSteer { .. })
+                                && sub.message.text.trim() == text.trim()
+                        }) {
+                            consumed_accepted_steer =
+                                Some((sub.message.text, sub.message.client_message_id));
                         }
-                        if truncated {
-                            *output_truncated = true;
-                        }
-                        *streaming = !status.is_terminal();
                     }
-                } else {
-                    let status = parsed_status.unwrap_or(ToolRunStatus::Running);
-                    rt.feed.push(FeedItem::Tool {
-                        id: item_id,
-                        tool_name: parsed_tool_name.unwrap_or(item_type).to_string(),
-                        title,
-                        call_id,
-                        status,
-                        input: next_input.unwrap_or(Value::Null),
-                        output: None,
-                        error: None,
-                        diff: None,
-                        streaming: !status.is_terminal(),
-                        timestamp_ms: now_ms,
-                        completed_at_ms: completed_at,
-                        output_truncated: truncated,
-                    });
+                    let matched_existing = if let Some(ref cid) = client_message_id {
+                        rt.feed.iter_mut().find(|f| {
+                            matches!(
+                                f,
+                                FeedItem::Message {
+                                    client_message_id: Some(ec),
+                                    ..
+                                } if ec == cid
+                            )
+                        })
+                    } else {
+                        let trimmed_incoming = text.trim();
+                        rt.feed.iter_mut().find(|f| {
+                            matches!(
+                                f,
+                                FeedItem::Message {
+                                    id,
+                                    role: FeedMessageRole::User,
+                                    content,
+                                    client_message_id: Some(_),
+                                    ..
+                                } if id.starts_with("optimistic-") && content.trim() == trimmed_incoming
+                            )
+                        })
+                    };
+                    if let Some(existing) = matched_existing {
+                        if let FeedItem::Message {
+                            id,
+                            content,
+                            client_message_id: existing_cid,
+                            streaming,
+                            ..
+                        } = existing
+                        {
+                            *id = item_id;
+                            if !text.is_empty() {
+                                *content = text;
+                            }
+                            if client_message_id.is_none()
+                                && let Some(submission) = &rt.composer_submission
+                                && submission.message.client_message_id.as_ref()
+                                    == existing_cid.as_ref()
+                            {
+                                rt.composer_submission = None;
+                            }
+                            *existing_cid = None;
+                            *streaming = false;
+                        }
+                    } else if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
+                        rt.feed.push(FeedItem::Message {
+                            id: item_id,
+                            role: FeedMessageRole::User,
+                            content: text,
+                            client_message_id,
+                            attachments: Vec::new(),
+                            references: Vec::new(),
+                            citations: Vec::new(),
+                            streaming: false,
+                            timestamp_ms: now_ms,
+                        });
+                    }
                 }
+                "error" => {
+                    let message = item
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Unknown error")
+                        .to_string();
+                    let code = item.get("code").and_then(Value::as_str).map(str::to_string);
+                    let steer_request_id = item.get("steerRequestId").and_then(Value::as_str);
+                    let client_message_id = item.get("clientMessageId").and_then(Value::as_str);
+                    reconcile_steer_error(rt, &message, steer_request_id, client_message_id);
+                    rt.last_error = Some(message.clone());
+                    if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
+                        rt.feed.push(FeedItem::Error {
+                            id: item_id,
+                            message,
+                            code,
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                }
+                "agentMessage" => {
+                    let text = extract_item_text(item);
+                    if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
+                        rt.feed.push(FeedItem::Message {
+                            id: item_id,
+                            role: FeedMessageRole::Assistant,
+                            content: text,
+                            client_message_id: None,
+                            attachments: Vec::new(),
+                            references: Vec::new(),
+                            citations: parse_citations_from_item(item),
+                            streaming: true,
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                }
+                "reasoning" => {
+                    let text = extract_item_text(item);
+                    let mode = item
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("reasoning")
+                        .to_string();
+                    if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
+                        rt.feed.push(FeedItem::Reasoning {
+                            id: item_id,
+                            content: text,
+                            mode,
+                            streaming: true,
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                }
+                "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall"
+                | "toolCall" => {
+                    let parsed_tool_name = item
+                        .get("tool")
+                        .or_else(|| item.get("toolName"))
+                        .or_else(|| item.get("name"))
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty());
+                    let title = item
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let call_id = item
+                        .get("callId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let next_input = extract_tool_input(item);
+                    let parsed_status = parse_tool_status_from_item(item);
+                    let completed_at = item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)));
+                    let truncated = item
+                        .get("outputTruncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id)
+                    {
+                        if let FeedItem::Tool {
+                            tool_name,
+                            title: existing_title,
+                            call_id: existing_call_id,
+                            status,
+                            input,
+                            streaming,
+                            completed_at_ms,
+                            output_truncated,
+                            ..
+                        } = existing
+                        {
+                            if let Some(name) = parsed_tool_name {
+                                *tool_name = name.to_string();
+                            }
+                            if let Some(t) = title {
+                                *existing_title = Some(t);
+                            }
+                            if let Some(cid) = call_id {
+                                *existing_call_id = Some(cid);
+                            }
+                            if !status.is_terminal()
+                                && let Some(next_status) = parsed_status
+                            {
+                                *status = next_status;
+                            }
+                            merge_tool_input(input, next_input);
+                            if let Some(c) = completed_at {
+                                *completed_at_ms = Some(c);
+                            }
+                            if truncated {
+                                *output_truncated = true;
+                            }
+                            *streaming = !status.is_terminal();
+                        }
+                    } else {
+                        let status = parsed_status.unwrap_or(ToolRunStatus::Running);
+                        rt.feed.push(FeedItem::Tool {
+                            id: item_id,
+                            tool_name: parsed_tool_name.unwrap_or(item_type).to_string(),
+                            title,
+                            call_id,
+                            status,
+                            input: next_input.unwrap_or(Value::Null),
+                            output: None,
+                            error: None,
+                            diff: None,
+                            streaming: !status.is_terminal(),
+                            timestamp_ms: now_ms,
+                            completed_at_ms: completed_at,
+                            output_truncated: truncated,
+                        });
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+        }
+        if let Some((text, cid)) = consumed_accepted_steer {
+            self.emit_client_transcript_user_message(&tid, &text, cid.as_deref());
         }
     }
 
@@ -10107,239 +10203,315 @@ impl AppState {
             return;
         };
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
-        let rt = self.thread_runtime_by_id.entry(tid).or_default();
+        let mut consumed_accepted_steer: Option<(String, Option<String>)> = None;
+        {
+            let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
 
-        if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id) {
-            match existing {
-                FeedItem::Message {
-                    content,
-                    citations,
-                    streaming,
-                    ..
-                } => {
-                    let final_text = extract_item_text(item);
-                    if !final_text.is_empty() {
-                        *content = final_text;
-                    }
-                    let parsed_citations = parse_citations_from_item(item);
-                    if !parsed_citations.is_empty() {
-                        *citations = parsed_citations;
-                    }
-                    *streaming = false;
+            if item_type == "userMessage"
+                && let Some(cid) = item.get("clientMessageId").and_then(Value::as_str)
+            {
+                if rt
+                    .pending_steer
+                    .as_ref()
+                    .is_some_and(|s| s.client_message_id == cid)
+                {
+                    rt.pending_steer = None;
                 }
-                FeedItem::Reasoning {
-                    content,
-                    mode,
-                    streaming,
-                    ..
-                } => {
-                    let final_text = extract_item_text(item);
-                    if !final_text.is_empty() {
-                        *content = final_text;
-                    }
-                    if let Some(m) = item.get("mode").and_then(Value::as_str) {
-                        *mode = m.to_string();
-                    }
-                    *streaming = false;
+                if let Some(sub) = rt
+                    .composer_submission
+                    .take_if(|sub| sub.message.client_message_id.as_deref() == Some(cid))
+                    && matches!(sub.status, ComposerSubmissionStatus::AcceptedSteer { .. })
+                {
+                    consumed_accepted_steer =
+                        Some((sub.message.text, sub.message.client_message_id));
                 }
-                FeedItem::Tool {
-                    tool_name,
-                    title,
-                    call_id,
-                    status,
-                    input,
-                    output,
-                    error,
-                    diff,
-                    streaming,
-                    completed_at_ms,
-                    output_truncated,
-                    ..
-                } => {
-                    // Terminal status preserved across late completion events (`projectedItems.ts`).
-                    if !status.is_terminal() {
-                        *status =
-                            parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Completed);
+            } else if item_type == "error" {
+                let message = item
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Unknown error");
+                let steer_request_id = item.get("steerRequestId").and_then(Value::as_str);
+                let client_message_id = item.get("clientMessageId").and_then(Value::as_str);
+                reconcile_steer_error(rt, message, steer_request_id, client_message_id);
+                rt.last_error = Some(message.to_string());
+            }
+
+            if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id) {
+                match existing {
+                    FeedItem::Message {
+                        content,
+                        citations,
+                        streaming,
+                        ..
+                    } => {
+                        let final_text = extract_item_text(item);
+                        if !final_text.is_empty() {
+                            *content = final_text;
+                        }
+                        let parsed_citations = parse_citations_from_item(item);
+                        if !parsed_citations.is_empty() {
+                            *citations = parsed_citations;
+                        }
+                        *streaming = false;
                     }
-                    if let Some(name) = item
-                        .get("tool")
-                        .or_else(|| item.get("toolName"))
-                        .or_else(|| item.get("name"))
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                    {
-                        *tool_name = name.to_string();
+                    FeedItem::Reasoning {
+                        content,
+                        mode,
+                        streaming,
+                        ..
+                    } => {
+                        let final_text = extract_item_text(item);
+                        if !final_text.is_empty() {
+                            *content = final_text;
+                        }
+                        if let Some(m) = item.get("mode").and_then(Value::as_str) {
+                            *mode = m.to_string();
+                        }
+                        *streaming = false;
                     }
-                    if let Some(cid) = item.get("callId").and_then(Value::as_str) {
-                        *call_id = Some(cid.to_string());
+                    FeedItem::Error { message, code, .. } => {
+                        if let Some(m) = item.get("message").and_then(Value::as_str)
+                            && !m.is_empty()
+                        {
+                            *message = m.to_string();
+                        }
+                        if let Some(c) = item.get("code").and_then(Value::as_str) {
+                            *code = Some(c.to_string());
+                        }
                     }
-                    merge_tool_input(input, extract_tool_input(item));
-                    if let Some(out) = item.get("result").or_else(|| item.get("output")) {
-                        *output = Some(out.clone());
-                    }
-                    if let Some(t) = item
-                        .get("title")
-                        .or_else(|| output.as_ref().and_then(|out| out.get("title")))
-                        .and_then(Value::as_str)
-                    {
-                        *title = Some(t.to_string());
-                    }
-                    if let Some(err) = item
-                        .get("error")
-                        .and_then(|e| {
-                            e.as_str()
-                                .or_else(|| e.get("message").and_then(Value::as_str))
-                        })
-                        .map(str::to_string)
-                        .or_else(|| {
-                            (*status == ToolRunStatus::Failed)
-                                .then(|| {
-                                    output.as_ref().and_then(|out| {
-                                        out.as_str().map(str::to_string).or_else(|| {
-                                            out.get("error")
-                                                .and_then(Value::as_str)
-                                                .map(str::to_string)
+                    FeedItem::Tool {
+                        tool_name,
+                        title,
+                        call_id,
+                        status,
+                        input,
+                        output,
+                        error,
+                        diff,
+                        streaming,
+                        completed_at_ms,
+                        output_truncated,
+                        ..
+                    } => {
+                        // Terminal status preserved across late completion events (`projectedItems.ts`).
+                        if !status.is_terminal() {
+                            *status = parse_tool_status_from_item(item)
+                                .unwrap_or(ToolRunStatus::Completed);
+                        }
+                        if let Some(name) = item
+                            .get("tool")
+                            .or_else(|| item.get("toolName"))
+                            .or_else(|| item.get("name"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            *tool_name = name.to_string();
+                        }
+                        if let Some(cid) = item.get("callId").and_then(Value::as_str) {
+                            *call_id = Some(cid.to_string());
+                        }
+                        merge_tool_input(input, extract_tool_input(item));
+                        if let Some(out) = item.get("result").or_else(|| item.get("output")) {
+                            *output = Some(out.clone());
+                        }
+                        if let Some(t) = item
+                            .get("title")
+                            .or_else(|| output.as_ref().and_then(|out| out.get("title")))
+                            .and_then(Value::as_str)
+                        {
+                            *title = Some(t.to_string());
+                        }
+                        if let Some(err) = item
+                            .get("error")
+                            .and_then(|e| {
+                                e.as_str()
+                                    .or_else(|| e.get("message").and_then(Value::as_str))
+                            })
+                            .map(str::to_string)
+                            .or_else(|| {
+                                (*status == ToolRunStatus::Failed)
+                                    .then(|| {
+                                        output.as_ref().and_then(|out| {
+                                            out.as_str().map(str::to_string).or_else(|| {
+                                                out.get("error")
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_string)
+                                            })
                                         })
                                     })
-                                })
-                                .flatten()
-                        })
-                    {
-                        *error = Some(err);
-                    }
-                    if let Some(d) = item
-                        .get("diff")
-                        .or_else(|| output.as_ref().and_then(|out| out.get("diff")))
-                        .and_then(Value::as_str)
-                    {
-                        *diff = Some(d.to_string());
-                    }
-                    if status.is_terminal() {
-                        *completed_at_ms = Some(
-                            item.get("completedAt")
-                                .map(|v| parse_timestamp_ms(Some(v)))
-                                .unwrap_or(now_ms),
-                        );
-                        *streaming = false;
-                    } else {
-                        if let Some(c) = item.get("completedAt") {
-                            *completed_at_ms = Some(parse_timestamp_ms(Some(c)));
-                        }
-                        *streaming = matches!(*status, ToolRunStatus::Running);
-                    }
-                    if item
-                        .get("outputTruncated")
-                        .or_else(|| output.as_ref().and_then(|out| out.get("outputTruncated")))
-                        .and_then(Value::as_bool)
-                        == Some(true)
-                    {
-                        *output_truncated = true;
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        // Fallback creation if completion arrived without prior `item/started`.
-        match item_type {
-            "agentMessage" => {
-                rt.feed.push(FeedItem::Message {
-                    id: item_id.to_string(),
-                    role: FeedMessageRole::Assistant,
-                    content: extract_item_text(item),
-                    client_message_id: None,
-                    attachments: Vec::new(),
-                    references: Vec::new(),
-                    citations: parse_citations_from_item(item),
-                    streaming: false,
-                    timestamp_ms: now_ms,
-                });
-            }
-            "reasoning" => {
-                rt.feed.push(FeedItem::Reasoning {
-                    id: item_id.to_string(),
-                    content: extract_item_text(item),
-                    mode: item
-                        .get("mode")
-                        .and_then(Value::as_str)
-                        .unwrap_or("reasoning")
-                        .to_string(),
-                    streaming: false,
-                    timestamp_ms: now_ms,
-                });
-            }
-            "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "toolCall" => {
-                let status = parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Completed);
-                let output = item.get("result").or_else(|| item.get("output")).cloned();
-                let error = item
-                    .get("error")
-                    .and_then(|e| {
-                        e.as_str()
-                            .or_else(|| e.get("message").and_then(Value::as_str))
-                    })
-                    .map(str::to_string)
-                    .or_else(|| {
-                        (status == ToolRunStatus::Failed)
-                            .then(|| {
-                                output.as_ref().and_then(|out| {
-                                    out.as_str().map(str::to_string).or_else(|| {
-                                        out.get("error").and_then(Value::as_str).map(str::to_string)
-                                    })
-                                })
+                                    .flatten()
                             })
-                            .flatten()
-                    });
-                let title = item
-                    .get("title")
-                    .or_else(|| output.as_ref().and_then(|out| out.get("title")))
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let diff = item
-                    .get("diff")
-                    .or_else(|| output.as_ref().and_then(|out| out.get("diff")))
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let output_truncated = item
-                    .get("outputTruncated")
-                    .or_else(|| output.as_ref().and_then(|out| out.get("outputTruncated")))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let completed_at_ms = if status.is_terminal() {
-                    Some(
-                        item.get("completedAt")
-                            .map(|v| parse_timestamp_ms(Some(v)))
-                            .unwrap_or(now_ms),
-                    )
-                } else {
-                    item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)))
-                };
-                rt.feed.push(FeedItem::Tool {
-                    id: item_id.to_string(),
-                    tool_name: item
-                        .get("tool")
-                        .or_else(|| item.get("toolName"))
-                        .or_else(|| item.get("name"))
-                        .and_then(Value::as_str)
-                        .unwrap_or(item_type)
-                        .to_string(),
-                    title,
-                    call_id: item
-                        .get("callId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    status,
-                    input: extract_tool_input(item).unwrap_or(Value::Null),
-                    output,
-                    error,
-                    diff,
-                    streaming: matches!(status, ToolRunStatus::Running),
-                    timestamp_ms: now_ms,
-                    completed_at_ms,
-                    output_truncated,
-                });
+                        {
+                            *error = Some(err);
+                        }
+                        if let Some(d) = item
+                            .get("diff")
+                            .or_else(|| output.as_ref().and_then(|out| out.get("diff")))
+                            .and_then(Value::as_str)
+                        {
+                            *diff = Some(d.to_string());
+                        }
+                        if status.is_terminal() {
+                            *completed_at_ms = Some(
+                                item.get("completedAt")
+                                    .map(|v| parse_timestamp_ms(Some(v)))
+                                    .unwrap_or(now_ms),
+                            );
+                            *streaming = false;
+                        } else {
+                            if let Some(c) = item.get("completedAt") {
+                                *completed_at_ms = Some(parse_timestamp_ms(Some(c)));
+                            }
+                            *streaming = matches!(*status, ToolRunStatus::Running);
+                        }
+                        if item
+                            .get("outputTruncated")
+                            .or_else(|| output.as_ref().and_then(|out| out.get("outputTruncated")))
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                        {
+                            *output_truncated = true;
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                // Fallback creation if completion arrived without prior `item/started`.
+                match item_type {
+                    "userMessage" => {
+                        rt.feed.push(FeedItem::Message {
+                            id: item_id.to_string(),
+                            role: FeedMessageRole::User,
+                            content: extract_item_text(item),
+                            client_message_id: item
+                                .get("clientMessageId")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            attachments: Vec::new(),
+                            references: Vec::new(),
+                            citations: Vec::new(),
+                            streaming: false,
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                    "error" => {
+                        rt.feed.push(FeedItem::Error {
+                            id: item_id.to_string(),
+                            message: item
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Unknown error")
+                                .to_string(),
+                            code: item.get("code").and_then(Value::as_str).map(str::to_string),
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                    "agentMessage" => {
+                        rt.feed.push(FeedItem::Message {
+                            id: item_id.to_string(),
+                            role: FeedMessageRole::Assistant,
+                            content: extract_item_text(item),
+                            client_message_id: None,
+                            attachments: Vec::new(),
+                            references: Vec::new(),
+                            citations: parse_citations_from_item(item),
+                            streaming: false,
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                    "reasoning" => {
+                        rt.feed.push(FeedItem::Reasoning {
+                            id: item_id.to_string(),
+                            content: extract_item_text(item),
+                            mode: item
+                                .get("mode")
+                                .and_then(Value::as_str)
+                                .unwrap_or("reasoning")
+                                .to_string(),
+                            streaming: false,
+                            timestamp_ms: now_ms,
+                        });
+                    }
+                    "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall"
+                    | "toolCall" => {
+                        let status =
+                            parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Completed);
+                        let output = item.get("result").or_else(|| item.get("output")).cloned();
+                        let error = item
+                            .get("error")
+                            .and_then(|e| {
+                                e.as_str()
+                                    .or_else(|| e.get("message").and_then(Value::as_str))
+                            })
+                            .map(str::to_string)
+                            .or_else(|| {
+                                (status == ToolRunStatus::Failed)
+                                    .then(|| {
+                                        output.as_ref().and_then(|out| {
+                                            out.as_str().map(str::to_string).or_else(|| {
+                                                out.get("error")
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_string)
+                                            })
+                                        })
+                                    })
+                                    .flatten()
+                            });
+                        let title = item
+                            .get("title")
+                            .or_else(|| output.as_ref().and_then(|out| out.get("title")))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let diff = item
+                            .get("diff")
+                            .or_else(|| output.as_ref().and_then(|out| out.get("diff")))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let output_truncated = item
+                            .get("outputTruncated")
+                            .or_else(|| output.as_ref().and_then(|out| out.get("outputTruncated")))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let completed_at_ms = if status.is_terminal() {
+                            Some(
+                                item.get("completedAt")
+                                    .map(|v| parse_timestamp_ms(Some(v)))
+                                    .unwrap_or(now_ms),
+                            )
+                        } else {
+                            item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)))
+                        };
+                        rt.feed.push(FeedItem::Tool {
+                            id: item_id.to_string(),
+                            tool_name: item
+                                .get("tool")
+                                .or_else(|| item.get("toolName"))
+                                .or_else(|| item.get("name"))
+                                .and_then(Value::as_str)
+                                .unwrap_or(item_type)
+                                .to_string(),
+                            title,
+                            call_id: item
+                                .get("callId")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            status,
+                            input: extract_tool_input(item).unwrap_or(Value::Null),
+                            output,
+                            error,
+                            diff,
+                            streaming: matches!(status, ToolRunStatus::Running),
+                            timestamp_ms: now_ms,
+                            completed_at_ms,
+                            output_truncated,
+                        });
+                    }
+                    _ => {}
+                }
             }
-            _ => {}
+        }
+        if let Some((text, cid)) = consumed_accepted_steer {
+            self.emit_client_transcript_user_message(&tid, &text, cid.as_deref());
         }
     }
 
@@ -10456,8 +10628,11 @@ impl AppState {
                     .unwrap_or("Unknown error")
                     .to_string();
                 let code = evt.get("code").and_then(Value::as_str).map(str::to_string);
+                let steer_request_id = evt.get("steerRequestId").and_then(Value::as_str);
+                let client_message_id = evt.get("clientMessageId").and_then(Value::as_str);
                 if let Some(id) = tid {
                     let rt = self.thread_runtime_by_id.entry(id).or_default();
+                    reconcile_steer_error(rt, &message, steer_request_id, client_message_id);
                     rt.last_error = Some(message.clone());
                     rt.feed.push(FeedItem::Error {
                         id: format!("err-{now_ms}"),
@@ -10469,29 +10644,29 @@ impl AppState {
             }
             "steer_accepted" => {
                 if let Some(id) = tid {
-                    let accepted_submission = {
-                        let rt = self.thread_runtime_by_id.entry(id.clone()).or_default();
-                        let accepted_cid = evt.get("clientMessageId").and_then(Value::as_str);
-                        if accepted_cid.is_none()
-                            || rt
-                                .pending_steer
-                                .as_ref()
-                                .is_some_and(|s| Some(s.client_message_id.as_str()) == accepted_cid)
-                        {
-                            rt.pending_steer = None;
+                    let rt = self.thread_runtime_by_id.entry(id).or_default();
+                    let accepted_cid = evt.get("clientMessageId").and_then(Value::as_str);
+                    let steer_req_id = evt
+                        .get("steerRequestId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    if let Some(sub) = rt.composer_submission.as_mut()
+                        && (accepted_cid.is_none()
+                            || sub.message.client_message_id.as_deref() == accepted_cid)
+                    {
+                        match &mut sub.status {
+                            ComposerSubmissionStatus::Sending(_) => {
+                                sub.status = ComposerSubmissionStatus::AcceptedSteer {
+                                    steer_request_id: steer_req_id,
+                                };
+                            }
+                            ComposerSubmissionStatus::AcceptedSteer { steer_request_id } => {
+                                if steer_request_id.is_none() {
+                                    *steer_request_id = steer_req_id;
+                                }
+                            }
+                            ComposerSubmissionStatus::Failed(_) => {}
                         }
-                        rt.composer_submission.take_if(|sub| {
-                            matches!(sub.status, ComposerSubmissionStatus::Sending(_))
-                                && (accepted_cid.is_none()
-                                    || sub.message.client_message_id.as_deref() == accepted_cid)
-                        })
-                    };
-                    if let Some(sub) = accepted_submission {
-                        self.emit_client_transcript_user_message(
-                            &id,
-                            &sub.message.text,
-                            sub.message.client_message_id.as_deref(),
-                        );
                     }
                 }
             }
@@ -10618,7 +10793,7 @@ impl AppState {
                 self.apply_memory_list_event(evt);
             }
             "plugins_catalog" => {
-                self.apply_plugins_catalog_event(evt);
+                self.apply_plugins_catalog_event(workspace_id, evt);
             }
             "skills_catalog" => {
                 self.apply_skills_catalog_event(evt);
@@ -11077,7 +11252,7 @@ impl AppState {
                     }
                 } else {
                     let target = payload.get("event").unwrap_or(&payload);
-                    self.apply_plugins_catalog_event(target);
+                    self.apply_plugins_catalog_event(workspace_id, target);
                 }
             }
             "cowork/skills/list"
@@ -11979,47 +12154,79 @@ impl AppState {
             .collect();
     }
 
-    fn apply_plugins_catalog_event(&mut self, evt: &Value) {
+    fn apply_plugins_catalog_event(&mut self, workspace_id: &str, evt: &Value) {
         let catalog = evt.get("catalog");
-        if let Some(arr) = evt
-            .get("plugins")
-            .or_else(|| {
-                catalog.and_then(|c| c.get("plugins").or_else(|| c.get("installedPlugins")))
-            })
-            .and_then(Value::as_array)
-        {
-            self.installed_plugin_entries = arr.clone();
-            self.plugins = arr.iter().filter_map(parse_plugin_summary).collect();
-        }
-        let available_partial =
-            evt.get("availablePluginsPartial").and_then(Value::as_bool) == Some(true);
-        if let Some(avail) = catalog
-            .and_then(|c| c.get("availablePlugins"))
-            .or_else(|| evt.get("availablePlugins"))
-            .and_then(Value::as_array)
-        {
-            if available_partial && avail.is_empty() && !self.available_plugins.is_empty() {
-                let installed_ids: HashSet<&str> =
-                    self.plugins.iter().map(|p| p.id.as_str()).collect();
-                self.available_plugins.retain(|p| {
-                    p.get("id")
-                        .and_then(Value::as_str)
-                        .is_none_or(|id| !installed_ids.contains(id))
-                });
-            } else {
-                self.available_plugins = avail.clone();
+        let sync_active = self.is_active_or_sole_workspace(workspace_id);
+        let seed_available = (!self
+            .workspace_runtime_by_id
+            .get(workspace_id)
+            .is_some_and(|rt| rt.plugins_loaded)
+            && sync_active
+            && !self.available_plugins.is_empty())
+        .then(|| self.available_plugins.clone());
+        let (plugins, installed_entries, available_plugins, warnings) = {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            if rt.available_plugins.is_empty()
+                && let Some(seeded) = seed_available
+            {
+                rt.available_plugins = seeded;
             }
-        }
-        if let Some(warnings) = catalog
-            .and_then(|c| c.get("warnings"))
-            .or_else(|| evt.get("warnings"))
-            .and_then(Value::as_array)
-        {
-            self.plugin_catalog_warnings = warnings
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect();
+            rt.plugins_loaded = true;
+            if let Some(arr) = evt
+                .get("plugins")
+                .or_else(|| {
+                    catalog.and_then(|c| c.get("plugins").or_else(|| c.get("installedPlugins")))
+                })
+                .and_then(Value::as_array)
+            {
+                rt.installed_plugin_entries = arr.clone();
+                rt.plugins = arr.iter().filter_map(parse_plugin_summary).collect();
+            }
+            let available_partial =
+                evt.get("availablePluginsPartial").and_then(Value::as_bool) == Some(true);
+            if let Some(avail) = catalog
+                .and_then(|c| c.get("availablePlugins"))
+                .or_else(|| evt.get("availablePlugins"))
+                .and_then(Value::as_array)
+            {
+                if available_partial && avail.is_empty() && !rt.available_plugins.is_empty() {
+                    let installed_ids: HashSet<&str> =
+                        rt.plugins.iter().map(|p| p.id.as_str()).collect();
+                    rt.available_plugins.retain(|p| {
+                        p.get("id")
+                            .and_then(Value::as_str)
+                            .is_none_or(|id| !installed_ids.contains(id))
+                    });
+                } else {
+                    rt.available_plugins = avail.clone();
+                }
+            }
+            if let Some(warnings) = catalog
+                .and_then(|c| c.get("warnings"))
+                .or_else(|| evt.get("warnings"))
+                .and_then(Value::as_array)
+            {
+                rt.plugin_catalog_warnings = warnings
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect();
+            }
+            (
+                rt.plugins.clone(),
+                rt.installed_plugin_entries.clone(),
+                rt.available_plugins.clone(),
+                rt.plugin_catalog_warnings.clone(),
+            )
+        };
+        if sync_active {
+            self.plugins = plugins;
+            self.installed_plugin_entries = installed_entries;
+            self.available_plugins = available_plugins;
+            self.plugin_catalog_warnings = warnings;
         }
     }
 
@@ -12126,6 +12333,85 @@ impl AppState {
                 .unwrap_or_default();
         } else {
             self.mcp_servers.clear();
+        }
+    }
+
+    pub fn plugins_for_workspace(&self, workspace_id: &str) -> &[PluginSummary] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.plugins_loaded
+        {
+            return &rt.plugins;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.plugins_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.plugins;
+        }
+        &[]
+    }
+
+    pub fn available_plugins_for_workspace(&self, workspace_id: &str) -> &[Value] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.plugins_loaded
+        {
+            return &rt.available_plugins;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.plugins_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.available_plugins;
+        }
+        &[]
+    }
+
+    pub fn plugin_catalog_warnings_for_workspace(&self, workspace_id: &str) -> &[String] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.plugins_loaded
+        {
+            return &rt.plugin_catalog_warnings;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.plugins_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.plugin_catalog_warnings;
+        }
+        &[]
+    }
+
+    fn sync_active_workspace_plugins(&mut self) {
+        self.settings_ui.selected_plugin_id = None;
+        self.settings_ui.selected_plugin_scope = None;
+        self.settings_ui.plugin_delete_confirm_scoped = None;
+        if let Some(ws_id) = self.active_workspace_id.as_deref() {
+            if let Some(rt) = self
+                .workspace_runtime_by_id
+                .get(ws_id)
+                .filter(|rt| rt.plugins_loaded)
+            {
+                self.plugins = rt.plugins.clone();
+                self.installed_plugin_entries = rt.installed_plugin_entries.clone();
+                self.available_plugins = rt.available_plugins.clone();
+                self.plugin_catalog_warnings = rt.plugin_catalog_warnings.clone();
+            } else {
+                self.plugins.clear();
+                self.installed_plugin_entries.clear();
+                self.available_plugins.clear();
+                self.plugin_catalog_warnings.clear();
+            }
+        } else {
+            self.plugins.clear();
+            self.installed_plugin_entries.clear();
+            self.available_plugins.clear();
+            self.plugin_catalog_warnings.clear();
         }
     }
 
@@ -14058,12 +14344,63 @@ fn catalog_entry_to_subagent_profile(entry: &AgentProfileCatalogEntry) -> Subage
     }
 }
 
+fn reconcile_steer_error(
+    rt: &mut ThreadRuntime,
+    message: &str,
+    steer_request_id: Option<&str>,
+    client_message_id: Option<&str>,
+) -> bool {
+    let matches_sub = rt.composer_submission.as_ref().is_some_and(|sub| {
+        let is_pending_or_accepted = matches!(
+            sub.status,
+            ComposerSubmissionStatus::Sending(_) | ComposerSubmissionStatus::AcceptedSteer { .. }
+        );
+        if !is_pending_or_accepted {
+            return false;
+        }
+        let cid_match = client_message_id
+            .is_some_and(|cid| sub.message.client_message_id.as_deref() == Some(cid));
+        let sid_match = steer_request_id.is_some_and(|sid| {
+            matches!(
+                &sub.status,
+                ComposerSubmissionStatus::AcceptedSteer {
+                    steer_request_id: Some(existing)
+                } if existing == sid
+            )
+        });
+        cid_match || sid_match
+    });
+    if !matches_sub {
+        return false;
+    }
+    if client_message_id.is_none()
+        || rt
+            .pending_steer
+            .as_ref()
+            .is_some_and(|s| Some(s.client_message_id.as_str()) == client_message_id)
+    {
+        rt.pending_steer = None;
+    }
+    if let Some(sub) = rt.composer_submission.as_mut() {
+        sub.status = ComposerSubmissionStatus::Failed(message.to_string());
+    }
+    true
+}
+
 fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
     let id = v.get("id").and_then(Value::as_str)?.to_string();
-    let name = v
+    let display_name = v
         .get("displayName")
-        .or_else(|| v.get("name"))
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let name = v
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(display_name.as_deref())
         .unwrap_or(&id)
         .to_string();
     let description = v
@@ -14119,6 +14456,7 @@ fn parse_plugin_summary(v: &Value) -> Option<PluginSummary> {
     Some(PluginSummary {
         id,
         name,
+        display_name,
         description,
         version,
         enabled,
@@ -17305,7 +17643,8 @@ mod tests {
             })),
         });
         assert_eq!(state.plugins.len(), 1);
-        assert_eq!(state.plugins[0].name, "Plugin Alpha");
+        assert_eq!(state.plugins[0].name, "plug-a");
+        assert_eq!(state.plugins[0].display_label(), "Plugin Alpha");
         assert_eq!(state.plugins[0].scope.as_deref(), Some("user"));
         assert_eq!(state.plugins[0].skill_count, 1);
         assert_eq!(state.plugins[0].mcp_count, 1);
@@ -23649,5 +23988,298 @@ mod tests {
                 ..
             } if id == "tool-live-2" && tool_name == "read" && input["path"] == "src/main.rs"
         ));
+    }
+
+    #[test]
+    fn accepted_steer_is_retained_until_consumed_or_rejected_and_retryable() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Steer thread".to_string(),
+            ..ThreadRecord::default()
+        });
+        state
+            .thread_runtime_by_id
+            .entry("th-1".to_string())
+            .or_default()
+            .streaming = true;
+
+        let att = TurnAttachmentInputPart::UploadedFile {
+            filename: "brief.md".to_string(),
+            path: "/tmp/repo/uploads/brief.md".to_string(),
+            mime_type: "text/markdown".to_string(),
+        };
+        let reference = TurnReference {
+            kind: "plugin".to_string(),
+            name: "plug-a".to_string(),
+        };
+
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: Some("th-1".to_string()),
+            text: "Include summary table".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: vec![att.clone()],
+            references: vec![reference.clone()],
+        }));
+
+        let (steer_rpc_id, client_msg_id) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "turn/steer" => Some((
+                    *request_id,
+                    params["clientMessageId"].as_str().unwrap().to_string(),
+                )),
+                _ => None,
+            })
+            .expect("turn/steer rpc");
+
+        // 1. RPC acceptance + `cowork/session/steerAccepted` MUST retain submission until consumed.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: steer_rpc_id,
+            method: "turn/steer".to_string(),
+            result: Ok(json!({ "accepted": true, "steerRequestId": "steer-req-9" })),
+        });
+        state.apply_ws_notification(
+            "ws-1",
+            "cowork/session/steerAccepted",
+            json!({
+                "threadId": "th-1",
+                "steerRequestId": "steer-req-9",
+                "clientMessageId": client_msg_id,
+            }),
+        );
+        {
+            let rt = &state.thread_runtime_by_id["th-1"];
+            assert!(!rt.sending_composer_message());
+            assert!(rt.pending_steer.is_some());
+            assert_eq!(
+                rt.composer_submission.as_ref().map(|s| &s.status),
+                Some(&ComposerSubmissionStatus::AcceptedSteer {
+                    steer_request_id: Some("steer-req-9".to_string()),
+                })
+            );
+        }
+
+        // 2. Harness rejects unconsumed steer before `turn/completed`: transitions to retryable Failed.
+        state.apply_ws_notification(
+            "ws-1",
+            "item/completed",
+            json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "err-steer-9",
+                    "type": "error",
+                    "message": "Steer was not applied because the turn ended before another step ran.",
+                    "code": "validation_failed",
+                    "steerRequestId": "steer-req-9",
+                    "clientMessageId": client_msg_id,
+                }
+            }),
+        );
+        state.apply_ws_notification(
+            "ws-1",
+            "turn/completed",
+            json!({ "threadId": "th-1", "turnId": "turn-1", "status": "completed" }),
+        );
+        {
+            let rt = &state.thread_runtime_by_id["th-1"];
+            assert!(rt.pending_steer.is_none());
+            let sub = rt
+                .composer_submission
+                .as_ref()
+                .expect("unconsumed steer must remain retryable");
+            assert_eq!(sub.message.text, "Include summary table");
+            assert_eq!(sub.message.attachments, vec![att]);
+            assert_eq!(sub.message.references, vec![reference]);
+            assert_eq!(
+                sub.status,
+                ComposerSubmissionStatus::Failed(
+                    "Steer was not applied because the turn ended before another step ran."
+                        .to_string()
+                )
+            );
+        }
+
+        // 3. When a subsequent steer IS consumed (`userMessage` echo), submission clears cleanly.
+        state
+            .thread_runtime_by_id
+            .get_mut("th-1")
+            .unwrap()
+            .streaming = true;
+        state.services.emitted_ws_commands.clear();
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: Some("th-1".to_string()),
+            text: "Steer consumed".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: Vec::new(),
+            references: Vec::new(),
+        }));
+        let (steer_rpc_2, cid_2) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "turn/steer" => Some((
+                    *request_id,
+                    params["clientMessageId"].as_str().unwrap().to_string(),
+                )),
+                _ => None,
+            })
+            .expect("second turn/steer rpc");
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: steer_rpc_2,
+            method: "turn/steer".to_string(),
+            result: Ok(json!({ "accepted": true, "steerRequestId": "steer-req-10" })),
+        });
+        state.apply_ws_notification(
+            "ws-1",
+            "item/started",
+            json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "um-steer-10",
+                    "type": "userMessage",
+                    "text": "Steer consumed",
+                    "clientMessageId": cid_2,
+                }
+            }),
+        );
+        let rt = &state.thread_runtime_by_id["th-1"];
+        assert!(rt.pending_steer.is_none());
+        assert!(rt.composer_submission.is_none());
+    }
+
+    #[test]
+    fn installed_plugin_catalogs_are_scoped_per_workspace_and_preserve_canonical_names() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Alpha", "/tmp/alpha", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Beta", "/tmp/beta", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 1,
+            method: "cowork/plugins/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "plugins_catalog",
+                    "catalog": {
+                        "plugins": [{
+                            "id": "plug-alpha",
+                            "name": "plug-alpha",
+                            "displayName": "Alpha Plugin",
+                            "scope": "workspace",
+                            "enabled": true
+                        }],
+                        "availablePlugins": [{ "id": "avail-a", "name": "avail-a" }],
+                        "warnings": ["warn-a"]
+                    }
+                }
+            })),
+        });
+
+        // Background response from ws-b must NOT overwrite active ws-a's plugin catalog.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-b".to_string(),
+            request_id: 2,
+            method: "cowork/plugins/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "plugins_catalog",
+                    "catalog": {
+                        "plugins": [{
+                            "id": "plug-beta",
+                            "name": "plug-beta",
+                            "displayName": "Beta Plugin",
+                            "scope": "user",
+                            "enabled": true
+                        }],
+                        "availablePlugins": [{ "id": "avail-b", "name": "avail-b" }],
+                        "warnings": ["warn-b"]
+                    }
+                }
+            })),
+        });
+
+        assert_eq!(state.plugins.len(), 1);
+        assert_eq!(state.plugins[0].name, "plug-alpha");
+        assert_eq!(state.plugins[0].display_label(), "Alpha Plugin");
+        assert_eq!(state.plugins_for_workspace("ws-a")[0].id, "plug-alpha");
+        assert_eq!(state.plugins_for_workspace("ws-b")[0].id, "plug-beta");
+        assert_eq!(state.plugin_catalog_warnings, vec!["warn-a"]);
+
+        // Mention extraction resolves canonical `@plug-alpha` (matching harness MentionResolver).
+        let catalog = crate::views::chat::model::build_mention_catalog(&[], &state.plugins);
+        let refs = crate::views::chat::model::extract_references_from_text(
+            "Use @plug-alpha here",
+            &catalog,
+        );
+        assert_eq!(
+            refs,
+            vec![TurnReference {
+                kind: "plugin".to_string(),
+                name: "plug-alpha".to_string(),
+            }]
+        );
+
+        // Switching active workspace to ws-b swaps active plugins and clears stale modal selection.
+        state.settings_ui.selected_plugin_id = Some("plug-alpha".to_string());
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-b".to_string(),
+        )));
+        assert_eq!(state.plugins.len(), 1);
+        assert_eq!(state.plugins[0].name, "plug-beta");
+        assert_eq!(state.plugins[0].display_label(), "Beta Plugin");
+        assert_eq!(state.plugin_catalog_warnings, vec!["warn-b"]);
+        assert!(state.settings_ui.selected_plugin_id.is_none());
+
+        // Scoped plugin enable targeting ws-a resolves ws-a's plugin scope even while ws-b is active.
+        state.dispatch(Action::Settings(SettingsAction::SetPluginEnabled {
+            workspace_id: "ws-a".to_string(),
+            id: "plug-alpha".to_string(),
+            enabled: false,
+        }));
+        let ws_a_req = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    params,
+                    ..
+                } if workspace_id == "ws-a" && method == "cowork/plugins/disable" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("disable sent to ws-a");
+        assert_eq!(ws_a_req["pluginId"], "plug-alpha");
+        assert_eq!(ws_a_req["scope"], "workspace");
     }
 }

@@ -54,7 +54,7 @@ fn status_pill_from_snapshot(
             StatusTone::Success
         }
         Some("error") => StatusTone::Danger,
-        Some("not_configured" | "local_only") => StatusTone::Warning,
+        Some("not_configured" | "local_only" | "queued") => StatusTone::Warning,
         Some(_) => StatusTone::Neutral,
         None => fallback_tone,
     };

@@ -1066,7 +1066,7 @@ pub fn build_mention_catalog(skills: &[SkillSummary], plugins: &[PluginSummary])
         items.push(MentionItem {
             kind: MentionKind::Plugin,
             name: plugin.name.clone(),
-            label: plugin.name.clone(),
+            label: plugin.display_label().to_string(),
             description: plugin
                 .version
                 .as_ref()
@@ -1959,12 +1959,23 @@ mod tests {
             PluginSummary {
                 id: "p2".into(),
                 name: "github".into(),
+                display_name: Some("GitHub Enterprise".into()),
                 version: Some("1.0".into()),
                 enabled: true,
                 ..Default::default()
             },
         ];
         let catalog = build_mention_catalog(&skills, &plugins);
+        let github_item = catalog
+            .items
+            .iter()
+            .find(|item| item.kind == MentionKind::Plugin && item.name == "github")
+            .expect("canonical plugin mention item");
+        assert_eq!(github_item.label, "GitHub Enterprise");
+        assert!(
+            !filter_mention_items(&catalog, "enterprise", 10).is_empty(),
+            "display label remains searchable in mention autocomplete"
+        );
         let text = "Please @review-pr and email me@example.com then @github";
         let refs = extract_references_from_text(text, &catalog);
         assert_eq!(

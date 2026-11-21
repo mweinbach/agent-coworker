@@ -1,57 +1,55 @@
-# Desktop UI & Electron
+# Desktop UI (Native Rune)
 
-Load this file when working in `apps/desktop/`.
+Load this file when working in `crates/cowork-desktop/`.
 
 ## Key files
 
 | Concern | Location |
 |---|---|
-| shadcn registry config (source of truth) | `apps/desktop/components.json` |
-| Tailwind v4 tokens / theme | `apps/desktop/src/styles.css` |
-| shadcn component set | `apps/desktop/src/components/ui/` |
-| App state + WebSocket management | `apps/desktop/src/app/store.ts` |
-| Reconnecting WS client | `apps/desktop/src/lib/agentSocket.ts` |
-| IPC contract / channel names | `apps/desktop/src/lib/desktopApi.ts` |
-| Preload bridge (`window.cowork`) | `apps/desktop/electron/preload.ts` |
-| IPC handlers (main process) | `apps/desktop/electron/ipc.ts` |
-| Workspace/thread persistence | `apps/desktop/electron/services/persistence.ts` |
+| Entrypoint & scene registry | `crates/cowork-desktop/src/lib.rs`, `crates/cowork-desktop/src/main.rs` |
+| Theme tokens & platform chrome | `crates/cowork-desktop/src/theme.rs`, `crates/cowork-desktop/src/native/window_chrome.rs` |
+| App state & action dispatch | `crates/cowork-desktop/src/state.rs`, `crates/cowork-desktop/src/actions.rs` |
+| Navigation & settings router | `crates/cowork-desktop/src/router.rs` |
+| Reconnecting WS JSON-RPC client | `crates/cowork-desktop/src/ws.rs` |
+| Sidecar & server lifecycle | `crates/cowork-desktop/src/native/sidecar.rs`, `crates/cowork-desktop/src/native/server_manager.rs` |
+| Workspace/thread persistence & legacy import | `crates/cowork-desktop/src/native/persistence.rs` |
+| Native host security & path confinement | `crates/cowork-desktop/src/native/security.rs`, `crates/cowork-desktop/src/native/path_boundary.rs` |
+| Chat views & composer | `crates/cowork-desktop/src/views/chat/` |
+| Shell, sidebar, top bar, overlays | `crates/cowork-desktop/src/views/shell/` |
+| Settings pages & primitives | `crates/cowork-desktop/src/views/settings/` |
+| Packaging & release bridge | `crates/cowork-desktop/packaging/Packager.toml`, `scripts/desktop_rune_package.ts` |
 
-## shadcn/ui
+## Architecture & thin-client rule
 
-- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI.
-- Tailwind v4 CSS lives in `apps/desktop/src/styles.css`; imports use `@/components/ui/*`, utilities `@/lib/utils`, icons are lucide.
-- Before adding or changing a shadcn component, run `bunx --bun shadcn@latest info --json` from `apps/desktop` and use that output as the source of truth for aliases, base (`radix`), icon library, and installed components.
-- Use the CLI for registry work: `bunx --bun shadcn@latest add <component>` from `apps/desktop`. For existing components, preview first with `--dry-run` or `--diff` and do not overwrite local wrappers without checking their desktop-specific behavior and tests.
-- Compose existing shadcn primitives first: `Button`, `Card`, `Dialog`, `Sheet`, `Tabs`, `Select`, `Switch`, `Checkbox`, `Tooltip`, `DropdownMenu`, `Command`, `Field`, `InputGroup`, `Separator`, `Skeleton`, `Badge`, etc.
-- Follow shadcn composition rules: use variants before custom styling, semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`) instead of raw colors, `gap-*` instead of `space-*`, `size-*` for square icons/controls, and `cn()` for conditional classes.
-- Buttons with icons use lucide icons with `data-icon="inline-start"` or `data-icon="inline-end"`; let the `Button` component own icon sizing. For binary settings use the shared `Switch`; reserve `Checkbox` for checklist selection.
-- Keep desktop UI thin. Business logic belongs in the harness/server, exposed through JSON-RPC/WebSocket controls.
+- Keep `crates/cowork-desktop` thin. Product logic, session state, tools, approvals, and persistence of canonical session data belong in `crates/cowork-server` and `crates/cowork-harness`, exposed over typed JSON-RPC (`crates/cowork-protocol`).
+- Desktop-only host concerns (window chrome, menus, tray/quick-chat surfaces, OS dialogs, local state persistence, file explorer/watcher/preview, Minisign updater) live in `crates/cowork-desktop/src/native/`.
+- Preserve existing desktop data migration (`crates/cowork-desktop/src/native/persistence.rs`) so upgrades from legacy packaged installs keep workspaces, threads, onboarding completion, and local transcripts intact.
 
-## Electron tooling
+## Running & verifying Rune UI changes
 
-- Vite+ supplies the shared build core; electron-vite remains the desktop orchestrator. Use `bun run web:build` for the browser build and `bun run vp --version` for installed tool versions. Do not install a global runtime manager or run `vp migrate` on this worktree.
-- Root `vite.config.ts` limits Oxlint/Oxfmt to four build configs plus navigation, settings navigation, router, and loading modules. These new renderer modules enforce complexity, cycles, React/accessibility rules, and native/harness import restrictions. Biome retains all other renderer/Electron source, tests, JSON, and Tailwind CSS; root lint/check/format scripts run both disjoint scopes. Keep `bun run test` (Bun's isolated wrapper), not `vp test` (Vitest), and retain the root/desktop TypeScript checks.
-- Start dev mode from the repo root: `bun run start` (builds sidecar resources via `build:desktop-resources` first, then `electron-vite dev`). The app starts its own server process per workspace.
-- Unpackaged (dev) builds expose a loopback CDP port for external inspection or automation by default; set `COWORK_ELECTRON_REMOTE_DEBUG=0` to turn it off, and override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9322` (default) is taken. The default avoids `9222`, which Chrome's own remote-debugging endpoint conventionally binds. Packaged builds never enable it.
-- UI automation preference: Computer Use tools/skills first, then Chrome DevTools MCP; Playwright is the last option.
-- Verify affected UI behavior in the live running app. Use CDP (on by default in dev builds) or Playwright when needed for inspection; sufficient live Computer Use evidence does not require repeating the same manual check with another tool. Repository automated quality gates remain separate requirements. Report any behavior that could not be verified.
-- D-Bus and GPU errors in logs are cosmetic on headless Linux.
-- Quality gates: `bun run desktop:quality` (build + Playwright + screenshot check), `bun run desktop:quality:update` to refresh snapshots.
+- Launch directly with Cargo (no Bun/JS install required):
+  ```bash
+  cargo build -p cowork-server --bin cowork-server
+  cargo run -p cowork-desktop --bin cowork-desktop
+  ```
+- Or via root Bun shortcut: `bun run start` (alias: `bun run desktop:rune`).
+- Inspect headless scenes (`default`, `light`, `dark`, `settings`, `chat`, `chat-demo`, `quick-chat`, `utility`) using `--snap` and `--tree`:
+  ```bash
+  cargo run --quiet -p cowork-desktop --bin cowork-desktop -- --scene chat-demo --theme dark --chrome --snap /tmp/cowork-chat.png
+  cargo run --quiet -p cowork-desktop --bin cowork-desktop -- --scene settings --size 1280x820 --tree /tmp/cowork-settings.json
+  ```
+- Run crate unit tests, bridge profile continuity checks, and live sidecar roundtrip:
+  ```bash
+  cargo test -p cowork-desktop
+  cargo build -p cowork-server --bin cowork-server && cargo test -p cowork-desktop --test e2e_roundtrip -- --ignored
+  ```
+- Run UI frame-time microbenchmarks (`crates/cowork-desktop/benches/ui_perf.rs`) on a quiet machine when changing view/layout hot paths.
 
 ## Desktop UI patterns
 
-- For a truly solid desktop surface, use `app-surface-opaque`; `bg-background` maps to `--surface-window`, which can be intentionally translucent even without opacity or backdrop-blur classes.
-- When removing a composer's typing focus frame, remove and test every root `focus-within` treatment, including both shadow and border-color classes; checking only the shadow can leave the visible outline intact.
-- Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar. Never mount `SettingsShell` inside `ChatShell`.
-- For long first-run downloads, do not strand a small progress row in a large otherwise-interactive shell. Use an intentional setup state with clear hierarchy, phase context, and unavailable regions visually de-emphasized.
-- Before declaring a UI change done, satisfy the live verification requirements under Electron tooling above.
-- For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.
+- Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar.
+- When both a menu-bar/tray utility window and a quick chat window exist (`WindowMode::Utility` vs `WindowMode::QuickChat`), treat them as separate surfaces.
+- For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray assets (`tray/icon.{png,ico}`) under unsigned host packaging (`bun run desktop:rune:package -- --unsigned`); dev-only checks are not enough.
 - When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.
-- When a tray/menu-bar utility window and a quick chat window both exist, treat them as separate surfaces: tray clicks should open the explicitly requested utility popup instead of reusing quick chat.
-- For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-*` than the dialog body.
-- For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/*` aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
-- For Electron preloads, bundle deps like `zod` into `out/preload/preload.js`; do not externalize runtime deps.
-- For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.
-- For dense desktop settings panels, prefer compact controls and separators over nested rounded subcards.
-- Make sure all platform-specific desktop behavior is properly handled and tested for that platform. When making changes with native elements, do not rely on platform defaults or implicit behavior — always specify explicit styles and behaviors.
 - For sidebar project new-chat affordances, open the new-chat landing with the clicked project preselected; do not immediately create a project draft unless the user explicitly asks for instant draft creation.
+- Make sure all platform-specific desktop behavior is handled and tested explicitly across macOS, Windows, and Linux.

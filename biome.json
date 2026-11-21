@@ -8,17 +8,8 @@
   "files": {
     "includes": [
       "**",
-      "!!vite.config.ts",
-      "!!apps/desktop/electron.vite.config.ts",
-      "!!apps/desktop/vite.config.web.ts",
-      "!!apps/desktop/quality-gates/electron.vite.config.ts",
-      "!!apps/desktop/src/app/navigation.ts",
-      "!!apps/desktop/src/app/settingsNavigation.ts",
-      "!!apps/desktop/src/app/router.tsx",
-      "!!apps/desktop/src/ui/layout/ScreenLoading.tsx",
       "!!**/dist",
       "!!**/out",
-      "!!**/out-web",
       "!!**/release",
       "!!**/resources/binaries",
       "!!**/ios",
@@ -85,7 +76,7 @@
   },
   "overrides": [
     {
-      "includes": ["test/**", "apps/desktop/test/**", "apps/desktop/quality-gates/**"],
+      "includes": ["test/**"],
       "linter": {
         "rules": {
           "suspicious": {
@@ -96,7 +87,7 @@
       }
     },
     {
-      "includes": ["test/**", "apps/desktop/test/**", "scripts/**"],
+      "includes": ["test/**", "scripts/**"],
       "linter": {
         "rules": {
           "correctness": {
@@ -129,38 +120,6 @@
       }
     },
     {
-      "includes": ["apps/desktop/src/ui/FilePreviewModal.tsx"],
-      "linter": {
-        "rules": {
-          "security": {
-            "noDangerouslySetInnerHtml": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["apps/desktop/src/components/ui/**"],
-      "linter": {
-        "enabled": false
-      }
-    },
-    {
-      "includes": ["apps/desktop/src/ui/markdown/DesktopMarkdown.tsx"],
-      "linter": {
-        "rules": {
-          "a11y": {
-            "noStaticElementInteractions": "off",
-            "noSvgWithoutTitle": "off",
-            "useSemanticElements": "off"
-          },
-          "correctness": {
-            "noChildrenProp": "off",
-            "useExhaustiveDependencies": "off"
-          }
-        }
-      }
-    },
-    {
       "includes": [
         "apps/mobile/src/components/thread/**",
         "apps/mobile/src/app/(app)/(tabs)/(settings)/settings/providers.tsx"
@@ -174,49 +133,11 @@
       }
     },
     {
-      "includes": [
-        "apps/desktop/src/ui/file-explorer/WorkspaceFileExplorer.tsx",
-        "apps/desktop/src/ui/ChatView.tsx",
-        "apps/mobile/src/app/(pairing)/index.tsx"
-      ],
+      "includes": ["apps/mobile/src/app/(pairing)/index.tsx"],
       "linter": {
         "rules": {
           "correctness": {
             "useExhaustiveDependencies": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["apps/desktop/src/ui/settings/pages/BackupPage.tsx"],
-      "linter": {
-        "rules": {
-          "a11y": {
-            "noLabelWithoutControl": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["apps/desktop/src/ui/settings/pages/ProvidersPage.tsx"],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noExplicitAny": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": [
-        "apps/desktop/src/app/store.helpers/controlSocket.ts",
-        "apps/desktop/src/app/store.helpers/jsonRpcSocket.ts",
-        "apps/desktop/src/app/store.helpers.ts"
-      ],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noExplicitAny": "off"
           }
         }
       }
@@ -233,7 +154,6 @@
     },
     {
       "includes": [
-        "apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx",
         "apps/mobile/src/app/(app)/(tabs)/(chats)/thread/\\[id\\].tsx",
         "apps/mobile/src/features/cowork/providerStore.ts"
       ],
@@ -277,31 +197,6 @@
             "noUnusedImports": "error",
             "noUnusedVariables": "error",
             "noUnusedFunctionParameters": "error"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["src/shared/displayCitationMarkers.ts"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noNonNullAssertion": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["apps/desktop/src/ui/Canvas.tsx"],
-      "linter": {
-        "rules": {
-          "a11y": {
-            "useSemanticElements": "off",
-            "useFocusableInteractive": "off",
-            "noStaticElementInteractions": "off"
-          },
-          "suspicious": {
-            "noExplicitAny": "off"
           }
         }
       }

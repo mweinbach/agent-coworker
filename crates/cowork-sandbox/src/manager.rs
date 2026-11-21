@@ -6,14 +6,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::bwrap::{BwrapBuildOptions, build_bwrap_command};
 use crate::detect::{
-    WindowsProbeOptions, find_bwrap, find_windows_helper, has_seatbelt, is_bwrap_usable,
-    probe_windows_sandbox_bundle,
+    WindowsProbeOptions, find_bwrap, has_seatbelt, is_bwrap_usable, probe_windows_mxc_sandbox,
 };
 use crate::env_utils::{host_platform, sanitized_process_env};
 use crate::policy::{SandboxPolicy, policy_allows_network, requires_hard_floor_enforcement};
 use crate::protected_paths::{WorkspaceProtectedPathsCache, global_protected_paths_cache};
 use crate::seatbelt::build_seatbelt_command_with_read_denies;
-use crate::windows::build_windows_sandbox_command;
+use crate::windows::{WindowsMxcBuildOptions, build_windows_sandbox_command};
 use crate::{SandboxCommand, SandboxErrorCode, SandboxType, TransformedCommand};
 
 /// Per-dimension kernel enforcement capabilities of an OS sandbox backend.
@@ -46,10 +45,10 @@ impl SandboxEnforcement {
 pub struct SandboxCapabilities {
     pub backend: SandboxType,
     pub bwrap_path: Option<PathBuf>,
-    pub windows_helper_path: Option<PathBuf>,
     pub enforcement: SandboxEnforcement,
     pub warning: Option<String>,
-    pub setup_required: bool,
+    pub windows_supports_deny_paths: bool,
+    pub windows_supports_ingress_host_loopback_allow: bool,
 }
 
 impl SandboxCapabilities {
@@ -57,10 +56,10 @@ impl SandboxCapabilities {
         Self {
             backend: SandboxType::None,
             bwrap_path: None,
-            windows_helper_path: None,
             enforcement: SandboxEnforcement::NONE,
             warning: Some(warning.into()),
-            setup_required: false,
+            windows_supports_deny_paths: false,
+            windows_supports_ingress_host_loopback_allow: false,
         }
     }
 }
@@ -72,9 +71,12 @@ pub struct TransformOptions<'a> {
     pub capabilities: Option<&'a SandboxCapabilities>,
     pub sandbox_exec_path: Option<&'a Path>,
     pub env_source: Option<&'a HashMap<String, String>>,
+    /// Additional paths the wrapped command must be able to read on deny-by-default backends
+    /// (Windows MXC ProcessContainer), such as skill/plugin roots or LibreOffice input files.
+    pub read_allowed_roots: &'a [PathBuf],
     /// Credential paths the wrapped command must not read or write (see
-    /// `SandboxExecutionRequest::read_denied_roots`). Enforced by Seatbelt and bwrap for every
-    /// wrapped policy; not yet enforced by the Windows helper.
+    /// `SandboxExecutionRequest::read_denied_roots`). Enforced by Seatbelt, bwrap, and Windows
+    /// MXC ProcessContainer for every wrapped policy.
     pub read_denied_roots: &'a [PathBuf],
 }
 
@@ -126,6 +128,11 @@ impl SandboxManager {
         Self { cache }
     }
 
+    #[cfg(windows)]
+    pub(crate) fn protected_paths_cache(&self) -> &WorkspaceProtectedPathsCache {
+        &self.cache
+    }
+
     /// Detects OS sandbox capabilities on `platform_override` (defaulting to `host_platform()`).
     pub fn detect_capabilities(
         &self,
@@ -148,10 +155,10 @@ impl SandboxManager {
                     SandboxCapabilities {
                         backend: SandboxType::Seatbelt,
                         bwrap_path: None,
-                        windows_helper_path: None,
                         enforcement: SandboxEnforcement::FULL,
                         warning: None,
-                        setup_required: false,
+                        windows_supports_deny_paths: false,
+                        windows_supports_ingress_host_loopback_allow: false,
                     }
                 } else {
                     SandboxCapabilities::none(
@@ -173,39 +180,26 @@ impl SandboxManager {
                 SandboxCapabilities {
                     backend: SandboxType::Bwrap,
                     bwrap_path: Some(bwrap_path),
-                    windows_helper_path: None,
                     enforcement: SandboxEnforcement::FULL,
                     warning: None,
-                    setup_required: false,
+                    windows_supports_deny_paths: false,
+                    windows_supports_ingress_host_loopback_allow: false,
                 }
             }
             "win32" => {
-                let Some(helper_path) = find_windows_helper(env, &[]) else {
-                    return SandboxCapabilities::none(
-                        "Windows sandbox helper bundle not found — commands run unsandboxed.",
-                    );
-                };
-                let probe =
-                    probe_windows_sandbox_bundle(&helper_path, env, WindowsProbeOptions::default());
-                if !probe.integrity {
-                    return SandboxCapabilities {
-                        backend: SandboxType::None,
-                        bwrap_path: None,
-                        windows_helper_path: None,
-                        enforcement: SandboxEnforcement::NONE,
-                        warning: probe.warning.or_else(|| {
-                            Some(
-                                "Windows sandbox helper integrity verification failed — commands require unsandboxed approval."
-                                    .to_owned(),
-                            )
-                        }),
-                        setup_required: false,
-                    };
+                let probe = probe_windows_mxc_sandbox(WindowsProbeOptions {
+                    platform: Some("win32"),
+                    ..Default::default()
+                });
+                if !probe.ready || !probe.integrity {
+                    return SandboxCapabilities::none(probe.warning.unwrap_or_else(|| {
+                        "Windows ProcessContainer (MXC/PSEC) sandbox is unavailable — commands run unsandboxed."
+                            .to_owned()
+                    }));
                 }
                 SandboxCapabilities {
                     backend: SandboxType::Windows,
                     bwrap_path: None,
-                    windows_helper_path: Some(helper_path),
                     enforcement: SandboxEnforcement {
                         filesystem: probe.filesystem,
                         network: probe.network,
@@ -213,7 +207,9 @@ impl SandboxManager {
                         integrity: probe.integrity,
                     },
                     warning: probe.warning,
-                    setup_required: probe.setup_required,
+                    windows_supports_deny_paths: probe.supports_deny_paths,
+                    windows_supports_ingress_host_loopback_allow: probe
+                        .supports_ingress_host_loopback_allow,
                 }
             }
             other => SandboxCapabilities::none(format!(
@@ -266,7 +262,7 @@ impl SandboxManager {
             }
         };
 
-        if caps.backend == SandboxType::None || !caps.enforcement.integrity || caps.setup_required {
+        if caps.backend == SandboxType::None || !caps.enforcement.integrity {
             return (
                 TransformedCommand {
                     file: inner.file.clone(),
@@ -319,11 +315,20 @@ impl SandboxManager {
                         &owned_env
                     }
                 };
-                let helper_path = caps
-                    .windows_helper_path
-                    .as_deref()
-                    .unwrap_or_else(|| Path::new("cowork-win-sandbox.exe"));
-                let cmd = build_windows_sandbox_command(helper_path, inner, policy, cwd, env_src);
+                let cmd = build_windows_sandbox_command(
+                    inner,
+                    policy,
+                    cwd,
+                    env_src,
+                    WindowsMxcBuildOptions {
+                        sandbox_exec_path: opts.sandbox_exec_path,
+                        cache: Some(&self.cache),
+                        read_allowed_roots: opts.read_allowed_roots,
+                        read_denied_roots: opts.read_denied_roots,
+                        supports_deny_paths: caps.windows_supports_deny_paths,
+                        extra_tool_readonly_paths: &[],
+                    },
+                );
                 (cmd, caps.enforcement, caps.warning.clone())
             }
             SandboxType::None => unreachable!(),

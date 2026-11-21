@@ -4,14 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cleanTargets = [
-  "dist",
-  path.join("apps", "desktop", "out"),
-  path.join("apps", "desktop", "release"),
-  path.join("apps", "desktop", "resources", "binaries"),
-  ".tsbuildinfo",
-  path.join("apps", "desktop", ".tsbuildinfo-desktop"),
-] as const;
+const cleanTargets = ["dist", ".tsbuildinfo"] as const;
 
 const dryRun = process.argv.includes("--dry-run");
 

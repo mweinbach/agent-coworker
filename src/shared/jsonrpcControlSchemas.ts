@@ -2378,6 +2378,4 @@ const runtimeControlSchemas = pickJsonRpcControlSchemas([
 
 export const jsonRpcRuntimeResultSchemas = runtimeControlSchemas.results;
 
-export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
-export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;
 export type ProviderCapabilitiesCheckResult = z.infer<typeof providerCapabilitiesCheckResultSchema>;

@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import type { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 const originalPlatform = process.env.EXPO_OS;
 const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));

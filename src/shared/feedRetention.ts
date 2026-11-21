@@ -1,1 +1,0 @@
-export const SESSION_FEED_ITEM_LIMIT = 2_000;

@@ -25,8 +25,6 @@ describe("project test runner", () => {
           .COWORK_TEST_UI_BOOTSTRAP,
       ).toBe("0");
       for (const args of [
-        ["apps/desktop/test/chat-view.stability.test.tsx"],
-        ["test/desktop.controlSocket.configUpdated.test.ts"],
         ["test/mobile.session-bootstrap.test.ts"],
         ["test/example.test.tsx"],
         ["test/example.test.js"],
@@ -90,10 +88,7 @@ describe("project test runner", () => {
       args: [],
     });
 
-    expect(invocation.command.slice(-2)).toEqual([
-      path.join(repoRoot, "test"),
-      path.join(repoRoot, "apps", "desktop", "test"),
-    ]);
+    expect(invocation.command.slice(-1)).toEqual([path.join(repoRoot, "test")]);
   });
 
   test("runs each full-suite test file in a fresh Bun canary process on every platform", () => {

@@ -47,8 +47,8 @@ is considered product-complete:
 - Harness route, session, provider, persistence, and notification regressions
   belong under `test/`; integration tests should exercise real JSON-RPC
   connections when the failure crosses a client boundary.
-- Desktop component and store regressions belong under `apps/desktop/test/` and
-  should verify the visible copy, enabled/disabled controls, and terminal state.
+- Native Rune desktop UI, state, and host regressions belong under `crates/cowork-desktop/`
+  (unit tests, headless scene checks, and `crates/cowork-desktop/tests/e2e_roundtrip.rs`).
 - Mobile component and store regressions belong under `test/mobile*.test.ts` or
   `test/mobile*.test.tsx`; shared surfaces must be exercised for both iOS and
   Android when the interaction differs by platform.

@@ -26,8 +26,8 @@ describe("repository complexity report", () => {
         { path: "src/agent.ts", lines: 20 },
         { path: "src/shared/protocol.ts", lines: 10 },
         { path: "apps/mobile/src/main.tsx", lines: 12 },
-        { path: "apps/desktop/src/main.tsx", lines: 15 },
-        { path: "crates/cowork-win-sandbox/src/main.rs", lines: 14 },
+        { path: "crates/cowork-desktop/src/main.rs", lines: 15 },
+        { path: "crates/cowork-sandbox/src/windows.rs", lines: 14 },
         { path: "docs/image.png", lines: null },
         { path: ".agents/skills/example/SKILL.md", lines: 3 },
       ],
@@ -49,7 +49,7 @@ describe("repository complexity report", () => {
       biomeReport([
         hotspot("src/agent.ts", 16, 20),
         hotspot("test/agent.test.ts", 30, 4),
-        hotspot("apps/desktop/quality-gates/start.pw.ts", 19),
+        hotspot("apps/mobile/tests/start.spec.ts", 19),
         hotspot("src/client/jsonRpcSocket.ts", 30, 7),
         { category: "deserialize", severity: "info", message: "schema version warning" },
       ]),
@@ -58,7 +58,7 @@ describe("repository complexity report", () => {
     expect(report.hotspots).toEqual([
       { path: "src/client/jsonRpcSocket.ts", line: 7, column: 1, score: 30, test: false },
       { path: "test/agent.test.ts", line: 4, column: 1, score: 30, test: true },
-      { path: "apps/desktop/quality-gates/start.pw.ts", line: 1, column: 1, score: 19, test: true },
+      { path: "apps/mobile/tests/start.spec.ts", line: 1, column: 1, score: 19, test: true },
       { path: "src/agent.ts", line: 20, column: 1, score: 16, test: false },
     ]);
   });
@@ -66,35 +66,15 @@ describe("repository complexity report", () => {
   test("normalizes Windows diagnostic paths for stable reports", () => {
     const report = buildComplexityReport(
       [],
-      biomeReport([hotspot("apps\\desktop\\test\\render.test.tsx", 17)]),
+      biomeReport([hotspot("test\\mobile\\render.test.tsx", 17)]),
     );
     expect(report.hotspots[0]).toEqual({
-      path: "apps/desktop/test/render.test.tsx",
+      path: "test/mobile/render.test.tsx",
       line: 1,
       column: 1,
       score: 17,
       test: true,
     });
-  });
-
-  test.each([
-    "apps/desktop/electron/qualityGateMain.ts",
-    "apps\\desktop\\electron\\qualityGateMain.ts",
-  ])("classifies the Electron quality entrypoint as test code: %s", (filePath) => {
-    const report = buildComplexityReport(
-      [],
-      biomeReport([hotspot(filePath, 47), hotspot("apps/desktop/electron/main.ts", 16)]),
-    );
-    expect(report.hotspots).toEqual([
-      {
-        path: "apps/desktop/electron/qualityGateMain.ts",
-        line: 1,
-        column: 1,
-        score: 47,
-        test: true,
-      },
-      { path: "apps/desktop/electron/main.ts", line: 1, column: 1, score: 16, test: false },
-    ]);
   });
 
   test.each([

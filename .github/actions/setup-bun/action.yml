@@ -13,14 +13,13 @@ inputs:
       .bun-version
       bun.lock
       package.json
-      apps/desktop/package.json
       packages/*/package.json
   install-command:
     description: Command used to install dependencies. Leave empty to skip installation.
     required: false
     default: bun install --frozen-lockfile
   save-cache:
-    description: Save a new Bun/Electron cache on miss. Set to false for release jobs where post-job cache uploads can block publishing.
+    description: Save a new Bun cache on miss. Set to false for release jobs where post-job cache uploads can block publishing.
     required: false
     default: "true"
 
@@ -64,35 +63,21 @@ runs:
       with:
         bun-version-file: ".bun-version"
 
-    - name: Restore and save Bun and Electron caches
+    - name: Restore and save Bun cache
       if: ${{ inputs.save-cache == 'true' }}
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.bun/install/cache
-          ~/.cache/electron
-          ~/.cache/electron-builder
-          ~/Library/Caches/electron
-          ~/Library/Caches/electron-builder
-          ~\AppData\Local\electron\Cache
-          ~\AppData\Local\electron-builder\Cache
+        path: ~/.bun/install/cache
         key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-bun-${{ inputs.cache-scope }}-
           ${{ runner.os }}-${{ runner.arch }}-bun-root-
 
-    - name: Restore Bun and Electron caches
+    - name: Restore Bun cache
       if: ${{ inputs.save-cache != 'true' }}
       uses: actions/cache/restore@v4
       with:
-        path: |
-          ~/.bun/install/cache
-          ~/.cache/electron
-          ~/.cache/electron-builder
-          ~/Library/Caches/electron
-          ~/Library/Caches/electron-builder
-          ~\AppData\Local\electron\Cache
-          ~\AppData\Local\electron-builder\Cache
+        path: ~/.bun/install/cache
         key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-bun-${{ inputs.cache-scope }}-

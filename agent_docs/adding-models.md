@@ -15,7 +15,7 @@ Load this file when adding or updating model metadata in the registry, or when a
 
 ## Adding a provider
 
-`config/providers.json` is the single source of truth for static provider metadata: id, display name, wire `transport`, `userFacing`, `discovery` (`api` | `static` | `local`), `apiKeyEnvVars`, `inferenceBaseUrl` / `discoveryBaseUrl`, `defaultModel` / `titleModel`, and static `authMethods`. Array order is the canonical provider order everywhere. Rust loads it in `crates/cowork-config/src/provider_specs.rs`; TypeScript consumes the generated `src/generated/providerSpecs.ts` (`PROVIDER_NAMES`, `PROVIDER_SPECS`, `MODEL_REGISTRY_PROVIDER_NAMES`), which feeds `src/types.ts`, `src/providers/catalog.ts`, `src/shared/providerAuthMethods.ts`, `src/shared/customModels.ts`, `src/models/registry.ts`, and the desktop's `apps/desktop/src/lib/providerDisplayNames.ts`.
+`config/providers.json` is the single source of truth for static provider metadata: id, display name, wire `transport`, `userFacing`, `discovery` (`api` | `static` | `local`), `apiKeyEnvVars`, `inferenceBaseUrl` / `discoveryBaseUrl`, `defaultModel` / `titleModel`, and static `authMethods`. Array order is the canonical provider order everywhere. Rust loads it in `crates/cowork-config/src/provider_specs.rs` (including the native Rune desktop app in `crates/cowork-desktop/`); TypeScript consumes the generated `src/generated/providerSpecs.ts` (`PROVIDER_NAMES`, `PROVIDER_SPECS`, `MODEL_REGISTRY_PROVIDER_NAMES`), which feeds `src/types.ts`, `src/providers/catalog.ts`, `src/shared/customModels.ts`, and `src/models/registry.ts`.
 
 ### OpenAI-compatible (Chat Completions) provider
 

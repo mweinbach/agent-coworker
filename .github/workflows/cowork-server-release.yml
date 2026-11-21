@@ -39,9 +39,13 @@ jobs:
           df -h /
 
       # Rust sandbox tests and the black-box rust-server suites run real
-      # sandboxed shell tools, which need bubblewrap and unprivileged userns.
+      # sandboxed shell tools, which need bubblewrap and unprivileged userns;
+      # workspace and bridge tests also link and run cowork-desktop on Linux.
       - name: Setup Linux sandbox
         uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Setup Linux desktop dependencies
+        uses: ./.github/actions/setup-linux-desktop
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
@@ -51,7 +55,6 @@ jobs:
             .bun-version
             bun.lock
             package.json
-            apps/desktop/package.json
             packages/*/package.json
             apps/mobile/bun.lock
             apps/mobile/package.json
@@ -126,6 +129,7 @@ jobs:
         env:
           COWORK_BUILD_PLATFORM: ${{ matrix.target_platform }}
           COWORK_BUILD_ARCH: ${{ matrix.target_arch }}
+          MXC_TELEMETRY_COMPONENT_PATH: ""
         run: bun run build:server-binary -- --outfile ${{ matrix.launcher_path }}
 
       - name: Package macOS bundle
@@ -199,32 +203,18 @@ jobs:
             $reader.Dispose()
           }
 
-          $bundleDir = $launcher.Directory.FullName
-          $manifestPath = Join-Path $bundleDir "cowork-win-sandbox.sha256.json"
-          if (-not (Test-Path -LiteralPath $manifestPath)) {
-            throw "Standalone server bundle is missing its Windows sandbox hash manifest"
-          }
-          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-          if ($manifest.schemaVersion -ne 1 -or $manifest.rustTarget -ne "aarch64-pc-windows-msvc") {
-            throw "Standalone server bundle contains the wrong Windows sandbox target"
-          }
-          foreach ($name in @("cowork-win-sandbox.exe", "codex-windows-sandbox-setup.exe", "codex-command-runner.exe")) {
-            $helperPath = Join-Path $bundleDir $name
-            if (-not (Test-Path -LiteralPath $helperPath)) {
-              throw "Standalone server bundle is missing Windows sandbox helper: $name"
+          # Verify the built-in Windows MXC sandbox CLI entrypoint (`__sandbox-exec --print-command`).
+          $printOut = & $launcher.FullName __sandbox-exec --print-command --cwd $workspace --mode workspace-write --no-network -- cmd.exe /c "echo mxc-smoke" 2>&1
+          $printExit = $LASTEXITCODE
+          if ($printExit -eq 0) {
+            $launchJson = ($printOut | Out-String) | ConvertFrom-Json
+            if ($launchJson.sandbox -ne "windows-sandbox" -or $launchJson.unsandboxed -ne $false) {
+              throw "Unexpected __sandbox-exec --print-command payload: $($printOut | Out-String)"
             }
-            $expected = $manifest.files.PSObject.Properties[$name].Value
-            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $helperPath).Hash.ToLowerInvariant()
-            if (-not $expected -or $expected -ne $actual) {
-              throw "Standalone server bundle sandbox hash mismatch: $name"
-            }
-          }
-
-          $env:COWORK_WIN_SANDBOX_HOME = Join-Path $env:RUNNER_TEMP "cowork-server-arm64-sandbox"
-          $sandboxHelper = Join-Path $bundleDir "cowork-win-sandbox.exe"
-          & $sandboxHelper setup --sandbox-home $env:COWORK_WIN_SANDBOX_HOME --cwd $workspace --mode workspace-write --writable-root $workspace
-          if ($LASTEXITCODE -ne 0) {
-            throw "Standalone server bundle failed the native sandbox setup and enforcement probe"
+          } elseif ($printExit -eq 125 -and (($printOut | Out-String) -match "SANDBOX_REQUIRED")) {
+            Write-Host "Host runner lacks native Windows PSEC API; verified fail-closed SANDBOX_REQUIRED."
+          } else {
+            throw "Unexpected __sandbox-exec --print-command result (exit $printExit): $($printOut | Out-String)"
           }
 
           $process = Start-Process -FilePath $launcher.FullName `
@@ -324,6 +314,8 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           prerelease: true
+          # Never displace GitHub's `releases/latest`, which desktop auto-updaters query.
+          make_latest: "false"
           generate_release_notes: true
           files: ${{ steps.collect.outputs.files }}
           name: cowork-server ${{ github.ref_name }}

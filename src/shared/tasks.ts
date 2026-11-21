@@ -65,7 +65,7 @@ const TASK_ACTIVITY_KINDS = [
   "checkpoint_created",
 ] as const;
 
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+type TaskStatus = (typeof TASK_STATUSES)[number];
 type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
 type TaskRequirementKind = (typeof REQUIREMENT_KINDS)[number];
 type TaskCreationOrigin = (typeof TASK_CREATION_ORIGINS)[number];
@@ -108,7 +108,7 @@ const taskCreationDecisionInputSchema = z
   })
   .strict();
 
-export const taskCreationInputSchema = z
+const taskCreationInputSchema = z
   .object({
     idempotencyKey: nonEmptyStringSchema.max(200),
     title: nonEmptyStringSchema.max(160),
@@ -349,7 +349,7 @@ const taskArtifactVersionSchema = z
   })
   .strict();
 
-export const taskArtifactRevisionSchema = z
+const taskArtifactRevisionSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -367,7 +367,7 @@ export const taskArtifactRevisionSchema = z
   })
   .strict();
 
-export const taskArtifactDetailSchema = z
+const taskArtifactDetailSchema = z
   .object({
     artifact: taskArtifactSchema,
     versions: z.array(taskArtifactVersionSchema),
@@ -390,7 +390,7 @@ const taskBlockerSchema = z
   })
   .strict();
 
-export const taskActivitySchema = z
+const taskActivitySchema = z
   .object({
     id: nonEmptyStringSchema,
     seq: z.number().int().positive(),
@@ -404,7 +404,7 @@ export const taskActivitySchema = z
   })
   .strict();
 
-export const taskCheckpointSchema = z
+const taskCheckpointSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -428,7 +428,7 @@ export const taskCheckpointSchema = z
   })
   .strict();
 
-export const taskSummarySchema = z
+const taskSummarySchema = z
   .object({
     id: nonEmptyStringSchema,
     workspacePath: nonEmptyStringSchema,
@@ -452,7 +452,7 @@ export const taskSummarySchema = z
   })
   .strict();
 
-export const taskRecordSchema = taskSummarySchema
+const taskRecordSchema = taskSummarySchema
   .extend({
     requirements: z.array(taskRequirementSchema),
     threads: z.array(taskThreadSchema),
@@ -468,17 +468,17 @@ export const taskRecordSchema = taskSummarySchema
 
 type TaskRequirement = z.infer<typeof taskRequirementSchema>;
 type TaskThread = z.infer<typeof taskThreadSchema>;
-export type WorkItem = z.infer<typeof workItemSchema>;
+type WorkItem = z.infer<typeof workItemSchema>;
 type TaskDecision = z.infer<typeof taskDecisionSchema>;
-export type TaskQuestion = z.infer<typeof taskQuestionSchema>;
-export type TaskArtifact = z.infer<typeof taskArtifactSchema>;
-export type TaskArtifactVersion = z.infer<typeof taskArtifactVersionSchema>;
-export type TaskArtifactRevision = z.infer<typeof taskArtifactRevisionSchema>;
-export type TaskArtifactDetail = z.infer<typeof taskArtifactDetailSchema>;
+type TaskQuestion = z.infer<typeof taskQuestionSchema>;
+type TaskArtifact = z.infer<typeof taskArtifactSchema>;
+type TaskArtifactVersion = z.infer<typeof taskArtifactVersionSchema>;
+type TaskArtifactRevision = z.infer<typeof taskArtifactRevisionSchema>;
+type TaskArtifactDetail = z.infer<typeof taskArtifactDetailSchema>;
 type TaskBlocker = z.infer<typeof taskBlockerSchema>;
 export type TaskActivity = z.infer<typeof taskActivitySchema>;
 type TaskCheckpoint = z.infer<typeof taskCheckpointSchema>;
-export type TaskSummary = z.infer<typeof taskSummarySchema>;
+type TaskSummary = z.infer<typeof taskSummarySchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 
 const taskInputResumeFailureDetailSchema = z.object({
@@ -684,15 +684,15 @@ type TaskDirectiveResult = {
   continuation: "continue" | "pause_for_input";
 };
 
-export type TaskQuestionAnswerInput = {
+type TaskQuestionAnswerInput = {
   questionId: string;
   optionId?: string;
   text?: string;
 };
 
-export type TaskQuestionResumeStatus = "queued" | "steered" | "not_needed" | "failed";
+type TaskQuestionResumeStatus = "queued" | "steered" | "not_needed" | "failed";
 
-export type TaskCreationInput = z.input<typeof taskCreationInputSchema>;
+type TaskCreationInput = z.input<typeof taskCreationInputSchema>;
 
 type TaskCreationResult = {
   task: TaskRecord;

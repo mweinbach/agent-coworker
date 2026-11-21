@@ -1,12 +1,12 @@
 # Desktop design system (Cowork)
 
-Short reference for the Electron desktop UI. Source of truth lives in code under `apps/desktop/src/styles/` and shadcn primitives in `apps/desktop/src/components/ui/`. Prefer tokens and existing components over new one-offs.
+Short reference for the native Rune desktop UI. Source of truth lives in `crates/cowork-desktop/src/theme.rs` and `crates/cowork-desktop/src/views/`. Prefer shared tokens and primitives over new one-offs.
 
 ## Stack
 
-- **Components:** shadcn/ui (Radix base) — `Button`, `Dialog`, `Switch`, `DropdownMenu`, etc.
-- **Icons:** lucide-react; buttons use `data-icon="inline-start|inline-end"` for sizing
-- **Styling:** Tailwind v4 + CSS variables (`styles.css` → `tokens/` → `theme-bridge.css`)
+- **UI Framework:** Native Rust on Rune (`crates/cowork-desktop/`) + `rune-kit`
+- **Styling & Tokens:** Palette, surface, border, typography, radius, and contrast tokens in `crates/cowork-desktop/src/theme.rs`
+- **Platform Chrome:** Window materials, vibrancy/glass, and caption layout in `crates/cowork-desktop/src/native/window_chrome.rs`
 - **Fonts:** IBM Plex Sans (UI), IBM Plex Mono (code)
 
 ## Tokens overview
@@ -37,7 +37,7 @@ Use these instead of raw hex:
 - `--text-primary`, `--text-secondary`, `--text-muted`, `--text-subtle`, `--text-emphasis`, `--text-link`, `--text-inverse`
 - `--text-primary-on-accent` is the foreground for filled primary controls. It is deliberately independent from `--text-inverse`: white passes on the darker light-theme olive, while dark text passes on the brighter dark-theme olive.
 
-Approved foreground/background pairs are enforced in `apps/desktop/test/semantic-contrast.test.ts`:
+Approved foreground/background pairs (light, dark, and high-contrast variants in `crates/cowork-desktop/src/theme.rs`):
 
 | Role | Light | Dark | Minimum |
 |------|-------|------|---------|
@@ -138,7 +138,7 @@ Prefer `focus-visible` and, for hover-only row actions, **`group-focus-within:`*
 
 ## Acknowledged foreground operations
 
-Foreground mutations use the shared store contract in `apps/desktop/src/app/types.ts` and lifecycle helper in `apps/desktop/src/app/store.helpers/operations.ts`:
+Foreground mutations use the shared state contract in `crates/cowork-desktop/src/state.rs` and action handlers in `crates/cowork-desktop/src/actions.rs`:
 
 - Actions return `Promise<OperationResult<T>>`; callers close or clear editors only when `result.ok` is `true`.
 - `operationsByKey` exposes typed `pending`, `success`, and `error` states. Stable keys deduplicate matching in-flight requests.

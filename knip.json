@@ -11,7 +11,8 @@
   "workspaces": {
     ".": {
       "entry": ["scripts/*.ts", "test/**/*.{ts,tsx}"],
-      "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"]
+      "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"],
+      "ignore": ["src/generated/**"]
     },
     "packages/harness": {
       "entry": ["src/*.ts"],
@@ -20,23 +21,6 @@
     "apps/mobile": {
       "entry": ["index.js", "src/app/**/*.{ts,tsx}", "plugins/*.js"],
       "project": ["src/**/*.{ts,tsx}", "plugins/*.js"]
-    },
-    "apps/desktop": {
-      "entry": [
-        "electron/main.ts",
-        "electron/qualityGateMain.ts",
-        "electron/preload.ts",
-        "index.html",
-        "index.web.html",
-        "src/main.tsx",
-        "src/main.web.tsx",
-        "electron.vite.config.ts",
-        "vite.config.web.ts",
-        "scripts/*.ts",
-        "quality-gates/*.{ts,tsx}",
-        "test/**/*.{ts,tsx}"
-      ],
-      "project": ["src/**/*.{ts,tsx}", "electron/**/*.{ts,tsx}"]
     }
   }
 }

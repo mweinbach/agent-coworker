@@ -12,8 +12,8 @@ Each rule lists its key references — start there before editing.
   - References: `.bun-version`, `scripts/run_tests.ts`, `.github/workflows/ci.yml`
 - **Sidecar binaries**: `scripts/build_cowork_server_binary.ts` and `scripts/build_desktop_resources.ts` compile the Rust `cowork-server` binary via Cargo and stage `cowork-server-<targetTriple>[.exe]` alongside `cowork-server-manifest.json` and bundled `prompts/`/`config/`/`docs/`/`skills/`. Never read host `package.json` via fragile relative `__dirname` paths at runtime; honor `COWORK_BUILTIN_DIR`.
   - References: `scripts/build_cowork_server_binary.ts`, `scripts/build_desktop_resources.ts`, `crates/cowork-server/src/lib.rs`
-- **Windows sandbox setup state is shared between Cowork's two homes only**: the Codex Windows sandbox engine (vendored `cowork-win-sandbox` and the managed `codex-app-server` alike) stores per-home setup state (`<home>/.sandbox/setup_marker.json`, `<home>/.sandbox-secrets/sandbox_users.json`) but drives machine-global `CodexSandboxOffline/Online` accounts whose passwords every full setup resets. Multiple homes provisioning independently clobber each other's stored credentials. `sync_codex_windows_sandbox_setup_state()` keeps `~/.cowork` and the app-server's `~/.cowork/auth/codex-cli` converged (newest-wins) so neither Cowork-spawned engine ever triggers a password-resetting full re-setup over the other; the pooled app-server client runs it before spawn, and the managed install ships version-matched `codex-command-runner`/`codex-windows-sandbox-setup` siblings so the app-server never resolves foreign helpers via PATH. The native Codex home (`~/.codex`) is NEVER read or written by this machinery — foreign setup state must not leak into the Cowork-managed runtime (a version- or proxy-skewed marker would trigger the very full setup the sync prevents, and a broken-but-newer state would overwrite a working one). When a native Codex install re-provisions the shared accounts, Cowork's own one-time setup repair is the intended recovery, never importing `~/.codex` state.
-  - References: `crates/cowork-sandbox/src/windows.rs`, `crates/cowork-providers/src/codex_app_server/`, `crates/cowork-win-sandbox/`
+- **Windows sandbox uses in-process Microsoft Execution Containers (MXC)**: Cowork's Windows OS sandbox runs directly in-process via `mxc-sdk` (`ProcessContainer` / native Windows PSEC) gated under `[target.'cfg(windows)'.dependencies]` in `crates/cowork-sandbox/Cargo.toml` so macOS/Linux builds never pull `mxc-sdk` or OpenSSL (`native-tls`). Release builds set `MXC_TELEMETRY_COMPONENT_PATH=""` so Microsoft telemetry stays unrouted. Always keep `UiPolicy.disable = false` (locked clipboard/input) so Win32k-linked tools like headless LibreOffice work, always ensure `SystemRoot` and `LOCALAPPDATA` are present when `inherit_default_environment: Some(false)`, never put general read-only roots inside a `readwrite_paths` entry (longest-prefix match would downgrade them), and always strip `read_denied_roots` from both read-only and read-write grants. Cowork no longer bundles `cowork-win-sandbox` or syncs Codex v5 setup state; the managed `codex-app-server` stays isolated under `~/.cowork/auth/codex-cli` and never reads `~/.codex`.
+  - References: `crates/cowork-sandbox/src/windows.rs`, `crates/cowork-sandbox/src/detect.rs`, `crates/cowork-providers/src/codex_app_server/`
 
 ## Auth, config & persistence
 
@@ -21,8 +21,7 @@ Each rule lists its key references — start there before editing.
 - **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
 - **Canonical config roots**: `.cowork/` and `~/.cowork/` are the only runtime config/skills/memory/MCP namespaces; support legacy `.agent` only through an explicit one-time migration command, not permanent dual lookups.
   - References: `crates/cowork-config/src/lib.rs` (path resolution, `.agent` -> `.cowork` migration, and three-tier merge: built-in `config/defaults.json` → user `~/.cowork/config/config.json` → project `.cowork/config.json`, env vars override all)
-- **Workspace settings**: any new field must round-trip through `PersistenceService.sanitizeWorkspaces()` — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
-  - References: `apps/desktop/electron/services/persistence.ts`
+- **Workspace settings**: any new field must round-trip through desktop persistence sanitization (`crates/cowork-desktop/src/native/persistence.rs` and `crates/cowork-server/src/desktop_state_normalize.rs`) — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
 - **Workspace settings target**: settings controls must render and mutate the same workspace class; hidden `oneOffChat` records should not back project default controls.
 - **Chat target pickers**: settings and memory target pickers should collapse all non-project `oneOffChat` records into one `Chats` target, while project workspaces still appear individually.
 - **Chat target labels**: apply the same `Chats` grouping to every settings/metadata workspace picker or label that represents hidden one-off chat workspaces; do not fix only the currently visible page.
@@ -38,7 +37,7 @@ Each rule lists its key references — start there before editing.
 - **Optimistic chat sends**: preserve `clientMessageId` through `turn/start`/`turn/steer` and the projected `item/userMessage` notifications, or duplicate user bubbles render.
   - References: `crates/cowork-server/src/jsonrpc_turn.rs`, `crates/cowork-inference/src/projector.rs`
 - **Thread reasoning state**: reasoning-effort changes in an existing chat are thread-owned preferences. Persist them on the thread, preserve them across navigation/reconciliation/restart, and clear them only when the thread's model changes to a potentially incompatible reasoning contract.
-  - References: `src/shared/openaiCompatibleOptions.ts`, `src/shared/googleThinking.ts`, `apps/desktop/src/ui/chat/ComposerReasoningToggle.tsx`
+  - References: `src/shared/openaiCompatibleOptions.ts`, `src/shared/googleThinking.ts`, `crates/cowork-desktop/src/views/chat/`
 
 ## Tools, providers & models
 
@@ -75,8 +74,8 @@ Each rule lists its key references — start there before editing.
 
 ## Accessibility & theming
 
-- **Contrast consumer paths**: when adding accessible foreground/background tokens, trace them through each platform theme adapter into rendered controls and test that consumer path; token-pair contrast tests alone are insufficient. Use explicit arbitrary Tailwind values for nonstandard ring widths, and map high-contrast selected/focus states to the system `Highlight`/`HighlightText` pair.
-  - References: `apps/desktop/src/styles.css`
+- **Contrast consumer paths**: when adding accessible foreground/background tokens, trace them through each platform theme adapter into rendered controls and test that consumer path; token-pair contrast tests alone are insufficient.
+  - References: `crates/cowork-desktop/src/theme.rs`, `apps/mobile/src/theme/tokens.ts`
 
 ## Misc UI-adjacent
 

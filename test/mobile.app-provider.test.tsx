@@ -3,8 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
 import {
   clearLegacyOfflineCache,
@@ -25,6 +23,7 @@ import type {
   SecureTransportSnapshot,
 } from "../apps/mobile/src/features/relay/relayTypes";
 import { defaultSecureTransportClient } from "../apps/mobile/src/features/relay/secureTransportClient";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 const { MobileAppProvider } = await import("../apps/mobile/src/providers/MobileAppProvider");
 const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));

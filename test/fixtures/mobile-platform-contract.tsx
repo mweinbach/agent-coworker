@@ -4,9 +4,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { act, createElement, forwardRef, type ReactNode, useState } from "react";
 import { createRoot } from "react-dom/client";
-
-import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
 import { MOBILE_TABS } from "../../apps/mobile/src/features/navigation/mobile-navigation";
+import { setupJsdom } from "../helpers/jsdomHarness";
 
 type Platform = "ios" | "android";
 type AccessibilityState = {

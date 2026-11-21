@@ -9,7 +9,7 @@
 import { ASK_SKIP_TOKEN } from "./ask";
 import type { ToolFeedState } from "./toolFeedState";
 
-export type ToolCardDetailsRow = {
+type ToolCardDetailsRow = {
   label: string;
   value: string;
 };
@@ -47,7 +47,7 @@ export function getRecordValue(record: Record<string, unknown>, keys: string[]):
   return undefined;
 }
 
-export function recordStringArray(record: Record<string, unknown>, key: string): string[] {
+function recordStringArray(record: Record<string, unknown>, key: string): string[] {
   const value = record[key];
   if (!Array.isArray(value)) return [];
   return value.filter(
@@ -83,7 +83,7 @@ export function humanizeToolName(name: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
-export function nativeWebSearchAction(value: unknown): Record<string, unknown> | null {
+function nativeWebSearchAction(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
   if (isRecord(value.action)) return value.action;
   const actionType = getRecordValue(value, ["type"]);

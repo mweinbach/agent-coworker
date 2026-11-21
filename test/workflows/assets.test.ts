@@ -14,16 +14,14 @@ describe("bundled workflow assets", () => {
       "utf8",
     );
     const desktopPackaging = await fs.readFile(
-      path.join(root, "apps", "desktop", "electron-builder.yml"),
+      path.join(root, "scripts", "desktop_rune_package.ts"),
       "utf8",
     );
 
     expect(serverBuild).toContain('"workflows"');
     expect(desktopBuild).toContain("workflowsFingerprint");
     expect(desktopBuild).toContain('path.join(root, "workflows")');
-    expect(desktopPackaging).toMatch(
-      /- from: \.\.\/\.\.\/dist\/workflows\s*\n\s*to: dist\/workflows/,
-    );
+    expect(desktopPackaging).toContain('target: "dist/workflows"');
     expect(await fs.stat(path.join(root, "workflows", "deep-research.ts"))).toBeTruthy();
   });
 });

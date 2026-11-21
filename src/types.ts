@@ -27,7 +27,7 @@ type ModelMessage = {
  * soft awareness (a turn-scoped system block biases the model toward the
  * plugin's bundled skills).
  */
-export type TurnReference = {
+type TurnReference = {
   kind: "skill" | "plugin";
   name: string;
 };
@@ -433,7 +433,7 @@ interface PluginCatalogEntryBase {
   warnings: string[];
 }
 
-export interface InstalledPluginCatalogEntry extends PluginCatalogEntryBase {
+interface InstalledPluginCatalogEntry extends PluginCatalogEntryBase {
   installed: true;
   enabled: boolean;
   rootDir: string;
@@ -467,12 +467,6 @@ interface MarketplacePluginCatalogEntry extends PluginCatalogEntryBase {
 }
 
 export type PluginCatalogEntry = InstalledPluginCatalogEntry | MarketplacePluginCatalogEntry;
-
-export function isInstalledPluginCatalogEntry(
-  plugin: PluginCatalogEntry,
-): plugin is InstalledPluginCatalogEntry {
-  return plugin.installed === true;
-}
 
 export interface PluginCatalogSnapshot {
   plugins: InstalledPluginCatalogEntry[];
@@ -542,7 +536,7 @@ export interface SkillEntry {
 
 export type SkillScope = SkillEntry["source"];
 
-export type SkillMutationTargetScope = "project" | "global";
+type SkillMutationTargetScope = "project" | "global";
 
 type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
 
@@ -628,7 +622,7 @@ interface SkillMarketplaceMetadata {
  * MarketplacePluginCatalogEntry: `installed: false`, carries an `installSource`
  * (a GitHub tree URL) that the existing skill install route consumes.
  */
-export interface MarketplaceSkillCatalogEntry {
+interface MarketplaceSkillCatalogEntry {
   id: string;
   name: string;
   displayName: string;

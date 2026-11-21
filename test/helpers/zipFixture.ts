@@ -13,7 +13,7 @@ function escapeXml(value: string): string {
  * Builds an uncompressed (STORE method 0) standard PKZIP buffer from path -> content entries
  * using only `node:zlib.crc32` and `Buffer`, with zero external npm dependencies.
  */
-export function buildStoredZipBuffer(entries: Record<string, string | Uint8Array>): Buffer {
+function buildStoredZipBuffer(entries: Record<string, string | Uint8Array>): Buffer {
   const localChunks: Buffer[] = [];
   const centralChunks: Buffer[] = [];
   let offset = 0;

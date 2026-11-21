@@ -1472,7 +1472,7 @@ fn record_steer_message<F>(
             annotations: Vec::new(),
         },
     );
-    let mut msg = new_user_text_message(&entry.text);
+    let mut msg = new_user_text_message(entry.text);
     if !entry.content.is_empty() {
         msg.content = entry.content;
     }
@@ -1714,12 +1714,12 @@ impl PartialStepOutput {
     }
 }
 
-fn new_user_text_message(text: &str) -> CanonicalMessage {
+pub(crate) fn new_user_text_message(text: impl Into<String>) -> CanonicalMessage {
     CanonicalMessage {
         id: Uuid::new_v4().to_string(),
         role: MessageRole::User,
         content: vec![ContentBlock::Text {
-            text: text.to_owned(),
+            text: text.into(),
             phase: None,
             citations: Vec::new(),
             provider_meta: ProviderOpaqueMeta::default(),
@@ -3031,12 +3031,81 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         assert_eq!(steer_msgs.len(), 1, "steer recorded exactly once");
+        let steer_msg = &outcome.messages[steer_msgs[0]];
+        assert_eq!(steer_msg.role, MessageRole::User);
+        assert!(
+            Uuid::parse_str(&steer_msg.id).is_ok(),
+            "steer id must be a UUID"
+        );
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&steer_msg.created_at).is_ok(),
+            "steer created_at must be RFC 3339"
+        );
+        assert_eq!(steer_msg.phase, None);
+        assert_eq!(steer_msg.provider, None);
+        assert_eq!(steer_msg.api, None);
+        assert_eq!(steer_msg.model, None);
+        assert_eq!(steer_msg.stop_reason, None);
+        assert!(steer_msg.provider_meta.is_empty());
+        assert_eq!(steer_msg.content.len(), 1);
+        match &steer_msg.content[0] {
+            ContentBlock::Text {
+                text,
+                phase,
+                citations,
+                provider_meta,
+            } => {
+                assert_eq!(text, "NATIVE-STEER");
+                assert_eq!(*phase, None);
+                assert!(citations.is_empty());
+                assert!(provider_meta.is_empty());
+            }
+            other => panic!("expected text block for steer, got {other:?}"),
+        }
         // Recorded ahead of the step's assistant output.
         assert_eq!(
             outcome.messages[steer_msgs[0] + 1].role,
             MessageRole::Assistant
         );
         assert!(!steer.has_pending());
+    }
+
+    #[test]
+    fn new_user_text_message_moves_owned_string_without_reallocation_and_preserves_shape() {
+        let owned = format!("Parent briefing:\n{}", "context ".repeat(16));
+        let original_ptr = owned.as_ptr();
+        let original_len = owned.len();
+
+        let msg = new_user_text_message(owned);
+        let second = new_user_text_message("borrowed");
+
+        assert_eq!(msg.role, MessageRole::User);
+        assert!(Uuid::parse_str(&msg.id).is_ok());
+        assert!(Uuid::parse_str(&second.id).is_ok());
+        assert_ne!(msg.id, second.id);
+        assert!(chrono::DateTime::parse_from_rfc3339(&msg.created_at).is_ok());
+        assert_eq!(msg.phase, None);
+        assert_eq!(msg.provider, None);
+        assert_eq!(msg.api, None);
+        assert_eq!(msg.model, None);
+        assert_eq!(msg.stop_reason, None);
+        assert!(msg.provider_meta.is_empty());
+        assert_eq!(msg.content.len(), 1);
+        match &msg.content[0] {
+            ContentBlock::Text {
+                text,
+                phase,
+                citations,
+                provider_meta,
+            } => {
+                assert_eq!(text.as_ptr(), original_ptr);
+                assert_eq!(text.len(), original_len);
+                assert_eq!(*phase, None);
+                assert!(citations.is_empty());
+                assert!(provider_meta.is_empty());
+            }
+            other => panic!("expected text block, got {other:?}"),
+        }
     }
 
     /// Simulates the native Codex turn invoking deferred meta-tools through the dynamic bridge.

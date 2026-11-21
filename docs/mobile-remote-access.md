@@ -155,8 +155,8 @@ Expected native surface:
 Validate the mobile pairing and remote-access slices with:
 
 ```bash
-cargo test -p cowork-server
-bun run test -- test/rust-server.mobile-h3.integration.test.ts apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/mobile-relay-ipc.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/remote-access-page.test.ts
+cargo test -p cowork-server -p cowork-desktop
+bun run test -- test/rust-server.mobile-h3.integration.test.ts
 bun run test -- test/mobile.native-permissions.test.ts test/mobile.native-module-autolinking.test.ts
 bun run test -- test/mobile.secure-transport-client.test.ts test/mobile.jsonrpc-client.test.ts test/mobile.control-store.test.ts
 bun run test -- test/mobile.pairing-qrcode.test.ts test/mobile.pairing-scan-handler.test.ts

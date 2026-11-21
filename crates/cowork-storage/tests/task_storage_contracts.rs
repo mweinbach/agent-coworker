@@ -560,3 +560,324 @@ async fn cancelled_validated_task_write_rolls_back_open_transaction() {
     create_minimal_task(&db, "task-after-cancel", &ws).await;
     db.close();
 }
+
+#[tokio::test]
+async fn list_tasks_preserves_mixed_aliases_symlinks_counts_order_empty_and_unscoped() {
+    let env = IsolatedTaskStorageEnv::new("list-full-characterization");
+    let db = env.open_db().await;
+    let target_ws = env.workspace.to_string_lossy().into_owned();
+    let other_dir = env.root.join("other-workspace");
+    let empty_dir = env.root.join("empty-workspace");
+    fs::create_dir_all(&other_dir).unwrap();
+    fs::create_dir_all(&empty_dir).unwrap();
+    let other_ws = other_dir.to_string_lossy().into_owned();
+    let empty_ws = empty_dir.to_string_lossy().into_owned();
+
+    let trailing_alias = format!("{target_ws}{}", std::path::MAIN_SEPARATOR);
+    #[cfg(unix)]
+    let alt_alias = {
+        let link = env.root.join("workspace-symlink");
+        std::os::unix::fs::symlink(&env.workspace, &link).unwrap();
+        link.to_string_lossy().into_owned()
+    };
+    #[cfg(not(unix))]
+    let alt_alias = format!("{target_ws}{}.", std::path::MAIN_SEPARATOR);
+
+    // Seed 5 tasks across 2 active workspaces (3 stored spellings for target_ws) plus an
+    // unrelated workspace, with strictly unequal timestamps interleaved across workspaces.
+    create_minimal_task(&db, "task-target-canon", &target_ws).await;
+    create_minimal_task(&db, "task-other-newer", &other_ws).await;
+    create_minimal_task(&db, "task-target-alias", &target_ws).await;
+    create_minimal_task(&db, "task-target-symlink", &target_ws).await;
+    create_minimal_task(&db, "task-other-older", &other_ws).await;
+
+    let conn = rusqlite::Connection::open(db.db_path()).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+
+    // Update stored workspace spellings and distinct descending timestamps.
+    for (id, ws_spelling, updated_at) in [
+        (
+            "task-target-canon",
+            target_ws.as_str(),
+            "2026-04-18T12:05:00.000Z",
+        ),
+        (
+            "task-other-newer",
+            other_ws.as_str(),
+            "2026-04-18T12:04:00.000Z",
+        ),
+        (
+            "task-target-alias",
+            trailing_alias.as_str(),
+            "2026-04-18T12:03:00.000Z",
+        ),
+        (
+            "task-target-symlink",
+            alt_alias.as_str(),
+            "2026-04-18T12:02:00.000Z",
+        ),
+        (
+            "task-other-older",
+            other_ws.as_str(),
+            "2026-04-18T12:01:00.000Z",
+        ),
+    ] {
+        conn.execute(
+            "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 WHERE task_id = ?3",
+            rusqlite::params![ws_spelling, updated_at, id],
+        )
+        .unwrap();
+    }
+
+    // Extra threads: task-target-canon -> 2 total, task-target-alias -> 3 total.
+    for (tid, task_id, sid) in [
+        ("tt-extra-1", "task-target-canon", "sess-extra-1"),
+        ("tt-extra-2", "task-target-alias", "sess-extra-2"),
+        ("tt-extra-3", "task-target-alias", "sess-extra-3"),
+    ] {
+        conn.execute(
+            "INSERT INTO task_threads (thread_id, task_id, session_id, title, created_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'Extra', 'coordinator', '2026-04-18T12:00:00.000Z', '2026-04-18T12:00:00.000Z')",
+            rusqlite::params![tid, task_id, sid],
+        )
+        .unwrap();
+    }
+
+    // Work items across matching and unrelated tasks.
+    for (wid, task_id, status, pos) in [
+        ("wi-c-1", "task-target-canon", "done", 0),
+        ("wi-c-2", "task-target-canon", "done", 1),
+        ("wi-c-3", "task-target-canon", "in_progress", 2),
+        ("wi-c-4", "task-target-canon", "pending", 3),
+        ("wi-on-1", "task-other-newer", "done", 0),
+        ("wi-on-2", "task-other-newer", "done", 1),
+        ("wi-on-3", "task-other-newer", "done", 2),
+        ("wi-a-1", "task-target-alias", "done", 0),
+        ("wi-a-2", "task-target-alias", "pending", 1),
+        ("wi-s-1", "task-target-symlink", "pending", 0),
+    ] {
+        conn.execute(
+            "INSERT INTO task_work_items (
+                work_item_id, task_id, title, description, status, assigned_thread_id,
+                expected_outputs_json, completion_evidence, position, created_at, updated_at
+             ) VALUES (?1, ?2, 'Item', 'Desc', ?3, NULL, '[]', NULL, ?4, '2026-04-18T12:00:00.000Z', '2026-04-18T12:00:00.000Z')",
+            rusqlite::params![wid, task_id, status, pos],
+        )
+        .unwrap();
+    }
+
+    // Blockers: mix of active and resolved, plus tasks with zero blockers.
+    for (bid, task_id, status) in [
+        ("blk-c-1", "task-target-canon", "active"),
+        ("blk-c-2", "task-target-canon", "active"),
+        ("blk-c-3", "task-target-canon", "resolved"),
+        ("blk-on-1", "task-other-newer", "active"),
+        ("blk-s-1", "task-target-symlink", "active"),
+        ("blk-oo-1", "task-other-older", "resolved"),
+    ] {
+        conn.execute(
+            "INSERT INTO task_blockers (blocker_id, task_id, work_item_id, description, blocking, status, created_at, resolved_at)
+             VALUES (?1, ?2, NULL, 'Blocked', 1, ?3, '2026-04-18T12:00:00.000Z', NULL)",
+            rusqlite::params![bid, task_id, status],
+        )
+        .unwrap();
+    }
+
+    // Questions: mix of pending blocking, pending non-blocking, and answered.
+    for (qid, task_id, blocking, status) in [
+        ("q-c-1", "task-target-canon", 1, "pending"),
+        ("q-c-2", "task-target-canon", 0, "pending"),
+        ("q-c-3", "task-target-canon", 1, "answered"),
+        ("q-on-1", "task-other-newer", 1, "pending"),
+        ("q-a-1", "task-target-alias", 0, "pending"),
+    ] {
+        conn.execute(
+            "INSERT INTO task_questions (
+                question_id, task_id, thread_id, work_item_id, header, question, context,
+                blocking, urgency, default_action, options_json, recommended_option_id,
+                status, provisional_decision_id, answer, answer_option_id, resolution_source,
+                supersedes, created_at, resolved_at
+             ) VALUES (?1, ?2, NULL, NULL, 'Hdr', 'Q?', '', ?3, 'normal', NULL, '[]', NULL, ?4, NULL, NULL, NULL, NULL, NULL, '2026-04-18T12:00:00.000Z', NULL)",
+            rusqlite::params![qid, task_id, blocking, status],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("COMMIT;").unwrap();
+    drop(conn);
+
+    // 1. Scoped query with mixed canonical + trailing-slash alias + real symlink rows.
+    let by_canon = db.list_tasks(Some(&target_ws)).unwrap();
+    assert_eq!(
+        by_canon.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec![
+            "task-target-canon",
+            "task-target-alias",
+            "task-target-symlink"
+        ]
+    );
+    assert_eq!(by_canon[0].workspace_path, target_ws);
+    assert_eq!(by_canon[0].thread_count, 2);
+    assert_eq!(by_canon[0].completed_work_item_count, 2);
+    assert_eq!(by_canon[0].total_work_item_count, 4);
+    assert_eq!(by_canon[0].active_blocker_count, 2);
+    assert_eq!(by_canon[0].pending_question_count, 2);
+    assert_eq!(by_canon[0].blocking_question_count, 1);
+
+    assert_eq!(by_canon[1].workspace_path, trailing_alias);
+    assert_eq!(by_canon[1].thread_count, 3);
+    assert_eq!(by_canon[1].completed_work_item_count, 1);
+    assert_eq!(by_canon[1].total_work_item_count, 2);
+    assert_eq!(by_canon[1].active_blocker_count, 0);
+    assert_eq!(by_canon[1].pending_question_count, 1);
+    assert_eq!(by_canon[1].blocking_question_count, 0);
+
+    assert_eq!(by_canon[2].workspace_path, alt_alias);
+    assert_eq!(by_canon[2].thread_count, 1);
+    assert_eq!(by_canon[2].completed_work_item_count, 0);
+    assert_eq!(by_canon[2].total_work_item_count, 1);
+    assert_eq!(by_canon[2].active_blocker_count, 1);
+    assert_eq!(by_canon[2].pending_question_count, 0);
+    assert_eq!(by_canon[2].blocking_question_count, 0);
+
+    // Querying by trailing-slash alias or real symlink must yield identical summaries.
+    assert_eq!(db.list_tasks(Some(&trailing_alias)).unwrap(), by_canon);
+    assert_eq!(db.list_tasks(Some(&alt_alias)).unwrap(), by_canon);
+
+    // 2. Single-spelling exact workspace path (hits single-workspace fast path).
+    let by_other = db.list_tasks(Some(&other_ws)).unwrap();
+    assert_eq!(
+        by_other.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec!["task-other-newer", "task-other-older"]
+    );
+    assert_eq!(by_other[0].completed_work_item_count, 3);
+    assert_eq!(by_other[0].total_work_item_count, 3);
+    assert_eq!(by_other[0].active_blocker_count, 1);
+    assert_eq!(by_other[0].pending_question_count, 1);
+    assert_eq!(by_other[0].blocking_question_count, 1);
+    assert_eq!(by_other[1].total_work_item_count, 0);
+    assert_eq!(by_other[1].active_blocker_count, 0);
+
+    // 3. Empty workspace returns no rows.
+    assert!(db.list_tasks(Some(&empty_ws)).unwrap().is_empty());
+
+    // 4. Unscoped query returns all tasks in global descending updated_at order with identical
+    //    per-task summaries.
+    let unscoped = db.list_tasks(None).unwrap();
+    assert_eq!(
+        unscoped.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec![
+            "task-target-canon",
+            "task-other-newer",
+            "task-target-alias",
+            "task-target-symlink",
+            "task-other-older",
+        ]
+    );
+    assert_eq!(unscoped[0], by_canon[0]);
+    assert_eq!(unscoped[1], by_other[0]);
+    assert_eq!(unscoped[2], by_canon[1]);
+    assert_eq!(unscoped[3], by_canon[2]);
+    assert_eq!(unscoped[4], by_other[1]);
+
+    db.close();
+}
+
+#[tokio::test]
+async fn list_tasks_snapshot_is_consistent_inside_write_tx_and_under_concurrent_writes() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let env = IsolatedTaskStorageEnv::new("list-snapshot-consistency");
+    let db = Arc::new(env.open_db().await);
+    let ws = env.workspace.to_string_lossy().into_owned();
+    let other_dir = env.root.join("other-concurrent");
+    fs::create_dir_all(&other_dir).unwrap();
+    let other_ws = other_dir.to_string_lossy().into_owned();
+
+    let created = create_minimal_task(&db, "task-tx-check", &ws).await;
+    create_minimal_task(&db, "task-other-initial", &other_ws).await;
+
+    // Calling list_tasks inside an open write transaction (set_task_status_validated validator)
+    // must reuse the caller's active transaction without nested-BEGIN failure and see the
+    // uncommitted mutation, while a validator rejection still rolls everything back cleanly.
+    let db_in_tx = Arc::clone(&db);
+    let ws_in_tx = ws.clone();
+    let res = db
+        .set_task_status_validated(
+            SetTaskStatusInput {
+                task_id: "task-tx-check".to_string(),
+                expected_revision: created.revision,
+                status: TaskStatus::Completed,
+                summary: "Should roll back".to_string(),
+                detail: None,
+                updated_at: "2026-04-18T12:05:00.000Z".to_string(),
+                thread_id: None,
+            },
+            move |_task| {
+                let db_inner = Arc::clone(&db_in_tx);
+                let ws_inner = ws_in_tx.clone();
+                async move {
+                    let listed = db_inner.list_tasks(Some(&ws_inner))?;
+                    assert_eq!(listed.len(), 1);
+                    assert_eq!(listed[0].id, "task-tx-check");
+                    assert_eq!(listed[0].status, TaskStatus::Completed);
+                    Err(StorageError::Validation {
+                        field: "status".to_string(),
+                        message: "intentional rollback".to_string(),
+                    })
+                }
+            },
+            None,
+        )
+        .await;
+    assert!(res.is_err());
+
+    let after_rollback = db.list_tasks(Some(&ws)).unwrap();
+    assert_eq!(after_rollback.len(), 1);
+    assert_eq!(after_rollback[0].status, TaskStatus::Working);
+
+    // Concurrent scoped reads on ro_conn alongside concurrent writes on rw_conn must never fail
+    // or observe torn/partial rows.
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader_db = Arc::clone(&db);
+    let reader_ws = ws.clone();
+    let reader_stop = Arc::clone(&stop);
+    let reader = std::thread::spawn(move || {
+        let mut reads = 0usize;
+        while !reader_stop.load(Ordering::Acquire) {
+            let listed = reader_db.list_tasks(Some(&reader_ws)).unwrap();
+            assert!(!listed.is_empty());
+            for row in &listed {
+                assert!(row.id.starts_with("task-tx-check") || row.id.starts_with("task-conc-"));
+                assert_eq!(row.thread_count, 1);
+            }
+            reads += 1;
+        }
+        reads
+    });
+
+    let trailing_alias = format!("{ws}{}", std::path::MAIN_SEPARATOR);
+    for i in 0..16 {
+        let target_spelling = if i % 2 == 0 {
+            ws.as_str()
+        } else {
+            trailing_alias.as_str()
+        };
+        create_minimal_task(&db, &format!("task-conc-{i:02}"), target_spelling).await;
+        create_minimal_task(&db, &format!("task-other-conc-{i:02}"), &other_ws).await;
+    }
+
+    stop.store(true, Ordering::Release);
+    let read_count = reader.join().unwrap();
+    assert!(
+        read_count > 0,
+        "reader should execute at least one snapshot read"
+    );
+
+    let final_ws = db.list_tasks(Some(&ws)).unwrap();
+    assert_eq!(final_ws.len(), 17);
+    let final_all = db.list_tasks(None).unwrap();
+    assert_eq!(final_all.len(), 34);
+
+    db.close();
+}

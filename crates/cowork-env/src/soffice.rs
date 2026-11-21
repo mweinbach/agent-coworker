@@ -591,6 +591,7 @@ impl SofficeRunner {
         sreq.env_source = Some(req.env);
         sreq.child_env_source = Some(child_env.clone());
         sreq.extra_env = child_env;
+        sreq.read_allowed_roots = vec![canonical_input.clone()];
         sreq.read_denied_roots = soffice_read_denied_roots(&self.homedir, &req.cwd);
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
@@ -715,6 +716,7 @@ impl SofficeRunner {
         sreq.env_source = Some(req.env);
         sreq.child_env_source = Some(child_env.clone());
         sreq.extra_env = child_env;
+        sreq.read_allowed_roots = vec![canonical_pdf.clone()];
         sreq.read_denied_roots = soffice_read_denied_roots(&self.homedir, &req.cwd);
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);

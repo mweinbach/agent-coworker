@@ -81,20 +81,19 @@ describe("cowork-server release workflow", () => {
     expect(workflow).toContain("server_listening");
   });
 
-  test("checks sandbox hashes and native enforcement from the extracted standalone bundle", () => {
+  test("verifies built-in Windows MXC sandbox CLI from the extracted standalone bundle", () => {
     const smokeJob = workflow.match(/smoke-windows-arm64:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
-    expect(smokeJob).toContain("$bundleDir = $launcher.Directory.FullName");
-    expect(smokeJob).toContain('Join-Path $bundleDir "cowork-win-sandbox.sha256.json"');
-    expect(smokeJob).toContain("Get-FileHash -Algorithm SHA256 -LiteralPath $helperPath");
-    expect(smokeJob).toContain("$sandboxHelper setup --sandbox-home");
-    expect(smokeJob).toContain("failed the native sandbox setup and enforcement probe");
-    expect(smokeJob.indexOf("$sandboxHelper setup")).toBeLessThan(
+    expect(smokeJob).not.toContain("cowork-win-sandbox");
+    expect(smokeJob).toContain("__sandbox-exec --print-command");
+    expect(smokeJob).toContain("SANDBOX_REQUIRED");
+    expect(smokeJob.indexOf("__sandbox-exec --print-command")).toBeLessThan(
       smokeJob.indexOf("Start-Process -FilePath $launcher.FullName"),
     );
   });
 
-  test("blocks prerelease publishing on the ARM64 smoke job", () => {
+  test("blocks prerelease publishing on the ARM64 smoke job and never displaces Latest", () => {
     expect(workflow).toMatch(/publish:[\s\S]*?needs:[\s\S]*?- build[\s\S]*?- smoke-windows-arm64/);
     expect(workflow).toContain("files: ${{ steps.collect.outputs.files }}");
+    expect(workflow).toContain('make_latest: "false"');
   });
 });

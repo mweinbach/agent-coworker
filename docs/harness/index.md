@@ -29,4 +29,5 @@ See also:
 - `docs/sandbox.md` for the OS-level command sandbox (macOS/Linux/Windows) and escalate-on-failure.
 - `docs/websocket-protocol.md` for the wire-level protocol contract.
 - `docs/session-storage-architecture.md` for shared SQLite session and task persistence.
+- [`crates/cowork-desktop/README.md`](../../crates/cowork-desktop/README.md) for running the native Rune desktop app, headless scenes, and module ownership.
 - `packages/harness/src/run_raw_agent_loops.ts` for the harness runner implementation.

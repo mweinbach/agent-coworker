@@ -358,15 +358,15 @@ fn sandbox_required_gate_fails_closed_for_hard_floors_and_require_backend() {
     let partial_caps = SandboxCapabilities {
         backend: SandboxType::Windows,
         bwrap_path: None,
-        windows_helper_path: Some(PathBuf::from("cowork-win-sandbox.exe")),
         enforcement: SandboxEnforcement {
             filesystem: true,
             network: false,
             process: true,
             integrity: true,
         },
-        warning: Some("Firewall rule missing".to_owned()),
-        setup_required: false,
+        warning: Some("Network isolation unavailable".to_owned()),
+        windows_supports_deny_paths: true,
+        windows_supports_ingress_host_loopback_allow: false,
     };
     let yolo_no_net_decision = manager.evaluate_gate(
         &cmd,

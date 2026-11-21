@@ -107,18 +107,37 @@ exec "$@"
 
 #[cfg(windows)]
 #[tokio::test]
-#[ignore = "requires the provisioned Windows sandbox helper bundle"]
 async fn windows_bash_uses_host_sandbox() {
     let (_ws, mut ctx) = setup();
     ctx.env = std::env::vars().collect();
+    ctx.env
+        .insert("OPENAI_API_KEY".to_owned(), "sk-never-leak".to_owned());
     ctx.sandbox_config.require_backend = true;
+
+    let caps =
+        cowork_sandbox::SandboxManager::new().detect_capabilities(Some("win32"), Some(&ctx.env));
     let out = run_bash(
         &ctx,
-        "if (Get-ChildItem Env:COWORK_WIN_SANDBOX_*) { throw 'helper configuration leaked' }; Write-Output 'sandbox-ok'",
+        "if ($env:OPENAI_API_KEY) { throw 'secret leaked' }; Write-Output \"$($env:COWORK_SANDBOX):sandbox-ok\"",
     )
     .await;
-    assert_eq!(out["exitCode"], 0, "{out}");
-    assert_eq!(out["stdout"].as_str().unwrap().trim(), "sandbox-ok");
+
+    if caps.backend == cowork_sandbox::SandboxType::Windows {
+        assert_eq!(out["exitCode"], 0, "{out}");
+        assert_eq!(
+            out["stdout"].as_str().unwrap().trim(),
+            "windows-sandbox:sandbox-ok"
+        );
+    } else {
+        assert_eq!(out["exitCode"], 1, "{out}");
+        assert!(
+            out["stderr"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Refusing to run"),
+            "missing Windows MXC/PSEC backend must fail closed with require_backend=true: {out}"
+        );
+    }
 }
 
 #[tokio::test]

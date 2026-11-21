@@ -5953,27 +5953,64 @@ impl AppState {
                 let Some(workspace_id) = self.workspace_for_thread(&thread_id) else {
                     return;
                 };
-                let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) else {
-                    return;
+                let is_draft = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == thread_id)
+                    .is_some_and(|t| t.draft);
+                let submission = {
+                    let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) else {
+                        return;
+                    };
+                    if rt.streaming
+                        || rt.usage_hard_cap_reached
+                        || rt.source_task.is_some()
+                        || rt.read_only_notice.is_some()
+                    {
+                        return;
+                    }
+                    rt.composer_submission
+                        .take_if(|sub| matches!(sub.status, ComposerSubmissionStatus::Failed(_)))
                 };
-                if rt.streaming
-                    || rt.usage_hard_cap_reached
-                    || rt.source_task.is_some()
-                    || rt.read_only_notice.is_some()
-                {
-                    return;
-                }
-                if let Some(submission) = rt
-                    .composer_submission
-                    .take_if(|sub| matches!(sub.status, ComposerSubmissionStatus::Failed(_)))
-                {
-                    self.send_composer_turn(&workspace_id, &thread_id, submission.message);
+                if let Some(submission) = submission {
+                    if is_draft {
+                        let queue = self
+                            .pending_thread_messages
+                            .entry(thread_id.clone())
+                            .or_default();
+                        let already_queued = queue.front().is_some_and(|front| {
+                            front.client_message_id.is_some()
+                                && front.client_message_id == submission.message.client_message_id
+                        });
+                        if !already_queued {
+                            queue.push_front(submission.message);
+                        }
+                        self.start_draft_thread_creation(&workspace_id, &thread_id);
+                    } else {
+                        self.send_composer_turn(&workspace_id, &thread_id, submission.message);
+                    }
                 }
             }
             ChatAction::DismissComposerFailure(thread_id) => {
-                if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
+                let dismissed = if let Some(rt) = self.thread_runtime_by_id.get_mut(&thread_id) {
                     rt.composer_submission
-                        .take_if(|sub| matches!(sub.status, ComposerSubmissionStatus::Failed(_)));
+                        .take_if(|sub| matches!(sub.status, ComposerSubmissionStatus::Failed(_)))
+                        .is_some()
+                } else {
+                    false
+                };
+                if dismissed
+                    && self
+                        .threads
+                        .iter()
+                        .find(|t| t.id == thread_id)
+                        .is_some_and(|t| t.draft)
+                    && !self
+                        .pending_draft_threads_by_rpc_id
+                        .values()
+                        .any(|d| d == &thread_id)
+                {
+                    self.pending_thread_messages.remove(&thread_id);
                 }
             }
             ChatAction::DismissTranscriptDeliveryFailure { thread_id } => {
@@ -6223,19 +6260,27 @@ impl AppState {
                         },
                         false,
                     );
-                    let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
-                    rt.pending_turn_count += 1;
-                    rt.feed.push(FeedItem::Message {
-                        id: format!("optimistic-{client_message_id}"),
-                        role: FeedMessageRole::User,
-                        content: trimmed,
-                        client_message_id: Some(client_message_id),
-                        attachments,
-                        references,
-                        citations: Vec::new(),
-                        streaming: false,
-                        timestamp_ms,
-                    });
+                    let creation_in_flight = self
+                        .pending_draft_threads_by_rpc_id
+                        .values()
+                        .any(|d| d == &tid);
+                    if creation_in_flight {
+                        let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
+                        rt.pending_turn_count += 1;
+                        rt.feed.push(FeedItem::Message {
+                            id: format!("optimistic-{client_message_id}"),
+                            role: FeedMessageRole::User,
+                            content: trimmed,
+                            client_message_id: Some(client_message_id),
+                            attachments,
+                            references,
+                            citations: Vec::new(),
+                            streaming: false,
+                            timestamp_ms,
+                        });
+                    } else if let Some(ws_id) = self.workspace_for_thread(&tid) {
+                        self.start_draft_thread_creation(&ws_id, &tid);
+                    }
                     if let Some(draft) = self.composer_drafts.get_mut(&tid) {
                         draft.text.clear();
                         draft.attachments.clear();
@@ -6421,30 +6466,14 @@ impl AppState {
                 self.queue_pending_thread_message(
                     &draft_thread_id,
                     PendingThreadMessage {
-                        text: trimmed.clone(),
-                        attachments: attachments.clone(),
-                        references: references.clone(),
-                        client_message_id: Some(client_message_id.clone()),
+                        text: trimmed,
+                        attachments,
+                        references,
+                        client_message_id: Some(client_message_id),
                         draft_submission: None,
                     },
                     false,
                 );
-                let rt = self
-                    .thread_runtime_by_id
-                    .entry(draft_thread_id.clone())
-                    .or_default();
-                rt.pending_turn_count += 1;
-                rt.feed.push(FeedItem::Message {
-                    id: format!("optimistic-{client_message_id}"),
-                    role: FeedMessageRole::User,
-                    content: trimmed,
-                    client_message_id: Some(client_message_id),
-                    attachments,
-                    references,
-                    citations: Vec::new(),
-                    streaming: false,
-                    timestamp_ms,
-                });
                 if let Some(draft) = self.composer_drafts.get_mut("__new__") {
                     draft.text.clear();
                     draft.attachments.clear();
@@ -6458,17 +6487,7 @@ impl AppState {
                     active_thread_id: Some(Some(draft_thread_id.clone())),
                     ..Default::default()
                 });
-                let cwd = self.workspace_path(&ws_id);
-                let params = ThreadStartParams {
-                    cwd,
-                    client_thread_id: Some(draft_thread_id.clone()),
-                    provider: chosen_provider,
-                    model: chosen_model,
-                };
-                if let Some(rpc_id) = self.send_ws_typed(&ws_id, "thread/start", &params, false) {
-                    self.pending_draft_threads_by_rpc_id
-                        .insert(rpc_id, draft_thread_id);
-                }
+                self.start_draft_thread_creation(&ws_id, &draft_thread_id);
             }
         }
     }
@@ -6755,6 +6774,88 @@ impl AppState {
         if let Some(req_id) = self.send_ws_typed(workspace_id, "thread/resume", &params, false) {
             self.pending_resume_threads_by_rpc_id
                 .insert(req_id, thread_id.to_string());
+        }
+    }
+
+    fn start_draft_thread_creation(&mut self, workspace_id: &str, draft_id: &str) {
+        let (provider, model) = self
+            .threads
+            .iter()
+            .find(|t| t.id == draft_id)
+            .map(|t| (t.provider.clone(), t.model.clone()))
+            .unwrap_or((None, None));
+        let cwd = self.workspace_path(workspace_id);
+        let params = ThreadStartParams {
+            cwd,
+            client_thread_id: Some(draft_id.to_string()),
+            provider,
+            model,
+        };
+        let queued: Vec<PendingThreadMessage> = self
+            .pending_thread_messages
+            .get(draft_id)
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default();
+        let first_msg = queued.first().cloned();
+        let timestamp_ms = self.wall_clock_ms();
+
+        if let Some(rpc_id) = self.send_ws_typed(workspace_id, "thread/start", &params, false) {
+            self.pending_draft_threads_by_rpc_id
+                .insert(rpc_id, draft_id.to_string());
+            let rt = self
+                .thread_runtime_by_id
+                .entry(draft_id.to_string())
+                .or_default();
+            rt.last_error = None;
+            for msg in &queued {
+                if let Some(cid) = msg.client_message_id.as_deref() {
+                    let optimistic_id = format!("optimistic-{cid}");
+                    if !rt
+                        .feed
+                        .iter()
+                        .any(|item| feed_item_id(item) == optimistic_id)
+                    {
+                        rt.pending_turn_count += 1;
+                        rt.feed.push(FeedItem::Message {
+                            id: optimistic_id,
+                            role: FeedMessageRole::User,
+                            content: msg.text.clone(),
+                            client_message_id: Some(cid.to_string()),
+                            attachments: msg.attachments.clone(),
+                            references: msg.references.clone(),
+                            citations: Vec::new(),
+                            streaming: false,
+                            timestamp_ms,
+                        });
+                    }
+                }
+            }
+            if let Some(msg) = first_msg {
+                rt.composer_submission = Some(ComposerSubmissionState {
+                    message: msg,
+                    status: ComposerSubmissionStatus::Sending(rpc_id),
+                });
+            }
+        } else {
+            let reason = "Workspace server is disconnected.".to_string();
+            let rt = self
+                .thread_runtime_by_id
+                .entry(draft_id.to_string())
+                .or_default();
+            for msg in &queued {
+                if let Some(cid) = msg.client_message_id.as_deref() {
+                    let optimistic_id = format!("optimistic-{cid}");
+                    rt.feed.retain(|item| feed_item_id(item) != optimistic_id);
+                }
+            }
+            rt.pending_turn_count = 0;
+            rt.last_error = Some(reason.clone());
+            if let Some(msg) = first_msg {
+                rt.composer_submission = Some(ComposerSubmissionState {
+                    message: msg,
+                    status: ComposerSubmissionStatus::Failed(reason),
+                });
+            }
         }
     }
 
@@ -9082,7 +9183,7 @@ impl AppState {
                         client_message_id: None,
                         attachments: Vec::new(),
                         references: Vec::new(),
-                        citations: parse_citations(item.get("citations")),
+                        citations: parse_citations_from_item(item),
                         streaming: true,
                         timestamp_ms: now_ms,
                     });
@@ -9126,8 +9227,7 @@ impl AppState {
                     .or_else(|| item.get("input"))
                     .cloned()
                     .unwrap_or(Value::Null);
-                let status = parse_tool_status(item.get("status").and_then(Value::as_str))
-                    .unwrap_or(ToolRunStatus::Running);
+                let status = parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Running);
                 let completed_at_ms = item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)));
                 let output_truncated = item
                     .get("outputTruncated")
@@ -9268,7 +9368,7 @@ impl AppState {
                     if !final_text.is_empty() {
                         *content = final_text;
                     }
-                    let parsed_citations = parse_citations(item.get("citations"));
+                    let parsed_citations = parse_citations_from_item(item);
                     if !parsed_citations.is_empty() {
                         *citations = parsed_citations;
                     }
@@ -9302,8 +9402,8 @@ impl AppState {
                 } => {
                     // Terminal status preserved across late completion events (`projectedItems.ts`).
                     if !status.is_terminal() {
-                        *status = parse_tool_status(item.get("status").and_then(Value::as_str))
-                            .unwrap_or(ToolRunStatus::Completed);
+                        *status =
+                            parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Completed);
                     }
                     if let Some(t) = item.get("title").and_then(Value::as_str) {
                         *title = Some(t.to_string());
@@ -9311,11 +9411,28 @@ impl AppState {
                     if let Some(out) = item.get("result").or_else(|| item.get("output")) {
                         *output = Some(out.clone());
                     }
-                    if let Some(err) = item.get("error").and_then(|e| {
-                        e.as_str()
-                            .or_else(|| e.get("message").and_then(Value::as_str))
-                    }) {
-                        *error = Some(err.to_string());
+                    if let Some(err) = item
+                        .get("error")
+                        .and_then(|e| {
+                            e.as_str()
+                                .or_else(|| e.get("message").and_then(Value::as_str))
+                        })
+                        .map(str::to_string)
+                        .or_else(|| {
+                            (*status == ToolRunStatus::Failed)
+                                .then(|| {
+                                    output.as_ref().and_then(|out| {
+                                        out.as_str().map(str::to_string).or_else(|| {
+                                            out.get("error")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_string)
+                                        })
+                                    })
+                                })
+                                .flatten()
+                        })
+                    {
+                        *error = Some(err);
                     }
                     if let Some(d) = item.get("diff").and_then(Value::as_str) {
                         *diff = Some(d.to_string());
@@ -9345,7 +9462,7 @@ impl AppState {
                     client_message_id: None,
                     attachments: Vec::new(),
                     references: Vec::new(),
-                    citations: parse_citations(item.get("citations")),
+                    citations: parse_citations_from_item(item),
                     streaming: false,
                     timestamp_ms: now_ms,
                 });
@@ -9364,12 +9481,31 @@ impl AppState {
                 });
             }
             "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "toolCall" => {
-                let status = parse_tool_status(item.get("status").and_then(Value::as_str))
-                    .unwrap_or(ToolRunStatus::Completed);
+                let status = parse_tool_status_from_item(item).unwrap_or(ToolRunStatus::Completed);
+                let output = item.get("result").or_else(|| item.get("output")).cloned();
+                let error = item
+                    .get("error")
+                    .and_then(|e| {
+                        e.as_str()
+                            .or_else(|| e.get("message").and_then(Value::as_str))
+                    })
+                    .map(str::to_string)
+                    .or_else(|| {
+                        (status == ToolRunStatus::Failed)
+                            .then(|| {
+                                output.as_ref().and_then(|out| {
+                                    out.as_str().map(str::to_string).or_else(|| {
+                                        out.get("error").and_then(Value::as_str).map(str::to_string)
+                                    })
+                                })
+                            })
+                            .flatten()
+                    });
                 rt.feed.push(FeedItem::Tool {
                     id: item_id.to_string(),
                     tool_name: item
                         .get("tool")
+                        .or_else(|| item.get("toolName"))
                         .or_else(|| item.get("name"))
                         .and_then(Value::as_str)
                         .unwrap_or(item_type)
@@ -9388,14 +9524,8 @@ impl AppState {
                         .or_else(|| item.get("input"))
                         .cloned()
                         .unwrap_or(Value::Null),
-                    output: item.get("result").or_else(|| item.get("output")).cloned(),
-                    error: item
-                        .get("error")
-                        .and_then(|e| {
-                            e.as_str()
-                                .or_else(|| e.get("message").and_then(Value::as_str))
-                        })
-                        .map(str::to_string),
+                    output,
+                    error,
                     diff: item.get("diff").and_then(Value::as_str).map(str::to_string),
                     streaming: false,
                     timestamp_ms: now_ms,
@@ -10230,11 +10360,40 @@ impl AppState {
             self.apply_presentation_preview_error(request_id, &err);
             return;
         }
-        if let Some(draft_id) = self.pending_draft_threads_by_rpc_id.remove(&request_id)
-            && let Some(rt) = self.thread_runtime_by_id.get_mut(&draft_id)
-        {
+        if let Some(draft_id) = self.pending_draft_threads_by_rpc_id.remove(&request_id) {
+            let queued_cids: Vec<String> = self
+                .pending_thread_messages
+                .get(&draft_id)
+                .map(|q| {
+                    q.iter()
+                        .filter_map(|m| m.client_message_id.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let first_msg = self
+                .pending_thread_messages
+                .get(&draft_id)
+                .and_then(|q| q.front())
+                .cloned();
+            let rt = self.thread_runtime_by_id.entry(draft_id).or_default();
+            for cid in &queued_cids {
+                let optimistic_id = format!("optimistic-{cid}");
+                rt.feed.retain(|item| feed_item_id(item) != optimistic_id);
+            }
             rt.pending_turn_count = 0;
             rt.last_error = Some(err.message.clone());
+            if let Some(mut sub) = rt
+                .composer_submission
+                .take_if(|s| s.status == ComposerSubmissionStatus::Sending(request_id))
+            {
+                sub.status = ComposerSubmissionStatus::Failed(err.message.clone());
+                rt.composer_submission = Some(sub);
+            } else if let Some(msg) = first_msg {
+                rt.composer_submission = Some(ComposerSubmissionState {
+                    message: msg,
+                    status: ComposerSubmissionStatus::Failed(err.message.clone()),
+                });
+            }
         }
         if method == "cowork/session/config/set"
             && let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id)
@@ -10416,6 +10575,10 @@ impl AppState {
             .unwrap_or((None, None));
         if let Some(ref old_id) = draft_id {
             self.rekey_thread_runtime_maps(old_id, &server_id);
+            if let Some(rt) = self.thread_runtime_by_id.get_mut(&server_id) {
+                rt.composer_submission
+                    .take_if(|sub| sub.status == ComposerSubmissionStatus::Sending(request_id));
+            }
             self.threads.retain(|t| t.id != *old_id);
         }
 
@@ -11486,6 +11649,14 @@ fn parse_tool_status(raw: Option<&str>) -> Option<ToolRunStatus> {
         "declined" | "output-denied" => Some(ToolRunStatus::Declined),
         _ => None,
     }
+}
+
+fn parse_tool_status_from_item(item: &Value) -> Option<ToolRunStatus> {
+    parse_tool_status(
+        item.get("state")
+            .or_else(|| item.get("status"))
+            .and_then(Value::as_str),
+    )
 }
 
 fn parse_usage_summary(val: &Value) -> UsageSummary {
@@ -12793,7 +12964,7 @@ fn parse_snapshot_feed_item(v: &Value) -> Option<FeedItem> {
                     .map(str::to_string),
                 attachments: Vec::new(),
                 references: Vec::new(),
-                citations: parse_citations(v.get("citations")),
+                citations: parse_citations_from_item(v),
                 streaming: false,
                 timestamp_ms: ts,
             })
@@ -12815,12 +12986,7 @@ fn parse_snapshot_feed_item(v: &Value) -> Option<FeedItem> {
             timestamp_ms: ts,
         }),
         "tool" => {
-            let status = parse_tool_status(
-                v.get("status")
-                    .or_else(|| v.get("state"))
-                    .and_then(Value::as_str),
-            )
-            .unwrap_or(ToolRunStatus::Completed);
+            let status = parse_tool_status_from_item(v).unwrap_or(ToolRunStatus::Completed);
             let output = v.get("output").or_else(|| v.get("result")).cloned();
             let error = v
                 .get("error")
@@ -12907,26 +13073,82 @@ pub fn dismiss_toast(state: &mut AppState, key: String) {
     state.dispatch(Action::Shell(ShellAction::DismissToast(key)));
 }
 
-fn parse_citations(val: Option<&Value>) -> Vec<CitationSource> {
-    let Some(arr) = val.and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    arr.iter()
-        .filter_map(|v| {
-            let url = v.get("url").and_then(Value::as_str)?.to_string();
-            Some(CitationSource {
-                label: v.get("label").and_then(Value::as_str).map(str::to_string),
-                title: v.get("title").and_then(Value::as_str).map(str::to_string),
-                url,
-                domain: v.get("domain").and_then(Value::as_str).map(str::to_string),
-                snippet: v.get("snippet").and_then(Value::as_str).map(str::to_string),
-                reference_id: v
-                    .get("referenceId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            })
+fn parse_citation_entry(v: &Value, require_citation_annotation: bool) -> Option<CitationSource> {
+    let source = if let Some(nested) = v.get("url_citation").and_then(Value::as_object) {
+        Some(nested)
+    } else if !require_citation_annotation
+        || v.get("type").and_then(Value::as_str) == Some("url_citation")
+    {
+        v.as_object()
+    } else {
+        None
+    }?;
+    let url = source
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let pick_str = |keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|key| {
+            source
+                .get(*key)
+                .or_else(|| v.get(*key))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
         })
-        .collect()
+    };
+    Some(CitationSource {
+        label: pick_str(&["label"]),
+        title: pick_str(&["title"]),
+        url,
+        domain: pick_str(&["domain"]),
+        snippet: pick_str(&["snippet", "cited_text", "citedText"]),
+        reference_id: pick_str(&["referenceId", "reference_id"]),
+    })
+}
+
+fn push_dedup_citation(out: &mut Vec<CitationSource>, next: CitationSource) {
+    if let Some(existing) = out.iter_mut().find(|c| c.url == next.url) {
+        if existing.label.is_none() {
+            existing.label = next.label;
+        }
+        if existing.title.is_none() {
+            existing.title = next.title;
+        }
+        if existing.domain.is_none() {
+            existing.domain = next.domain;
+        }
+        if existing.snippet.is_none() {
+            existing.snippet = next.snippet;
+        }
+        if existing.reference_id.is_none() {
+            existing.reference_id = next.reference_id;
+        }
+    } else {
+        out.push(next);
+    }
+}
+
+fn parse_citations_from_item(item: &Value) -> Vec<CitationSource> {
+    let mut out = Vec::new();
+    if let Some(arr) = item.get("citations").and_then(Value::as_array) {
+        for v in arr {
+            if let Some(cit) = parse_citation_entry(v, false) {
+                push_dedup_citation(&mut out, cit);
+            }
+        }
+    }
+    if let Some(arr) = item.get("annotations").and_then(Value::as_array) {
+        for v in arr {
+            if let Some(cit) = parse_citation_entry(v, true) {
+                push_dedup_citation(&mut out, cit);
+            }
+        }
+    }
+    out
 }
 
 fn mime_type_for_path(path: &Path) -> &'static str {
@@ -18518,5 +18740,241 @@ mod tests {
             .expect("ReadLocalTranscript command");
         assert!(candidates.contains(&"srv-1".to_string()));
         assert!(candidates.contains(&"electron-old-99".to_string()));
+    }
+
+    #[test]
+    fn failed_draft_thread_start_retains_retry_path_with_same_client_thread_id() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.landing_workspace_id = Some("ws-1".to_string());
+
+        let attachment = TurnAttachmentInputPart::UploadedFile {
+            filename: "report.pdf".to_string(),
+            path: "/tmp/repo/uploads/User Uploads/report.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+        };
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: None,
+            text: "Analyze attached report".to_string(),
+            busy_policy: ThreadBusyPolicy::Queue,
+            attachments: vec![attachment.clone()],
+            references: Vec::new(),
+        }));
+
+        let (start_rpc_id, draft_id) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "thread/start" => Some((
+                    *request_id,
+                    params["clientThreadId"].as_str().unwrap().to_string(),
+                )),
+                _ => None,
+            })
+            .expect("initial thread/start rpc");
+
+        // Simulate disconnect/timeout error on `thread/start`.
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: start_rpc_id,
+            method: "thread/start".to_string(),
+            result: Err(WsRpcError {
+                code: -32000,
+                message: "WebSocket disconnected".to_string(),
+                data: None,
+            }),
+        });
+
+        let rt = state.thread_runtime_by_id.get(&draft_id).unwrap();
+        assert_eq!(rt.pending_turn_count, 0);
+        assert!(
+            rt.feed.is_empty(),
+            "failed draft must clear optimistic bubble"
+        );
+        let failed = rt
+            .composer_submission
+            .as_ref()
+            .expect("retryable submission retained on draft failure");
+        assert_eq!(failed.message.text, "Analyze attached report");
+        assert_eq!(failed.message.attachments, vec![attachment.clone()]);
+        assert!(matches!(
+            failed.status,
+            ComposerSubmissionStatus::Failed(ref msg) if msg == "WebSocket disconnected"
+        ));
+
+        // Clicking Retry must re-issue `thread/start` with the SAME `clientThreadId`.
+        state.dispatch(Action::Chat(ChatAction::RetryComposerSubmission(
+            draft_id.clone(),
+        )));
+        let (retry_rpc_id, retry_client_thread_id) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "thread/start" => Some((
+                    *request_id,
+                    params["clientThreadId"].as_str().unwrap().to_string(),
+                )),
+                _ => None,
+            })
+            .expect("retried thread/start rpc");
+        assert_eq!(retry_client_thread_id, draft_id);
+
+        // Once `thread/start` succeeds, the queued initial message (with attachment) flushes.
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: retry_rpc_id,
+            method: "thread/start".to_string(),
+            result: Ok(json!({ "thread": { "id": "srv-recovered" } })),
+        });
+        assert!(state.services.emitted_ws_commands.iter().any(|c| {
+            matches!(
+                c,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "turn/start" && params["threadId"] == json!("srv-recovered")
+            )
+        }));
+    }
+
+    #[test]
+    fn live_tool_completion_reads_canonical_state_field_for_error_and_denied() {
+        let mut state = AppState::default();
+        let start_error = json!({
+            "threadId": "th-1",
+            "item": {
+                "id": "tool-err-1",
+                "type": "toolCall",
+                "toolName": "bash",
+                "state": "input-available",
+                "input": { "command": "false" }
+            }
+        });
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/started".to_string(),
+            params: start_error,
+        });
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/completed".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "tool-err-1",
+                    "type": "toolCall",
+                    "toolName": "bash",
+                    "state": "output-error",
+                    "result": { "error": "Command exited with status 1" }
+                }
+            }),
+        });
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/completed".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "tool-denied-1",
+                    "type": "toolCall",
+                    "toolName": "write",
+                    "state": "output-denied"
+                }
+            }),
+        });
+
+        let feed = &state.thread_runtime_by_id.get("th-1").unwrap().feed;
+        assert!(matches!(
+            &feed[0],
+            FeedItem::Tool {
+                id,
+                status: ToolRunStatus::Failed,
+                error: Some(err),
+                ..
+            } if id == "tool-err-1" && err == "Command exited with status 1"
+        ));
+        assert!(matches!(
+            &feed[1],
+            FeedItem::Tool {
+                id,
+                tool_name,
+                status: ToolRunStatus::Declined,
+                ..
+            } if id == "tool-denied-1" && tool_name == "write"
+        ));
+    }
+
+    #[test]
+    fn assistant_message_reconciliation_preserves_url_citation_annotations() {
+        let mut state = AppState::default();
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/started".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "msg-1",
+                    "type": "agentMessage",
+                    "text": "See docs"
+                }
+            }),
+        });
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "item/completed".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "item": {
+                    "id": "msg-1",
+                    "type": "agentMessage",
+                    "text": "See [Rust Docs](https://doc.rust-lang.org) and [Example](https://example.com).",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "url": "https://doc.rust-lang.org",
+                            "title": "Rust Docs",
+                            "cited_text": "ownership rules"
+                        },
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "url": "https://example.com",
+                                "title": "Example"
+                            }
+                        },
+                        {
+                            "type": "cowork.internal",
+                            "url": "https://ignored.invalid"
+                        }
+                    ]
+                }
+            }),
+        });
+
+        let feed = &state.thread_runtime_by_id.get("th-1").unwrap().feed;
+        let FeedItem::Message { citations, .. } = &feed[0] else {
+            panic!("expected assistant message");
+        };
+        assert_eq!(citations.len(), 2);
+        assert_eq!(citations[0].url, "https://doc.rust-lang.org");
+        assert_eq!(citations[0].title.as_deref(), Some("Rust Docs"));
+        assert_eq!(citations[0].snippet.as_deref(), Some("ownership rules"));
+        assert_eq!(citations[1].url, "https://example.com");
+        assert_eq!(citations[1].title.as_deref(), Some("Example"));
     }
 }

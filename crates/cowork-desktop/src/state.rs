@@ -1773,6 +1773,7 @@ pub struct AppState {
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_delete_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_workspace_server_starts: HashSet<String>,
     pub(crate) pending_expired_archived_deletes: Vec<(String, String)>,
     pub(crate) subscribed_threads_by_workspace: HashMap<String, HashSet<String>>,
     pub(crate) pending_upload_stages_by_key: HashMap<String, usize>,
@@ -1912,6 +1913,7 @@ impl Default for AppState {
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
             pending_delete_threads_by_rpc_id: HashMap::new(),
+            pending_workspace_server_starts: HashSet::new(),
             pending_expired_archived_deletes: Vec::new(),
             subscribed_threads_by_workspace: HashMap::new(),
             pending_upload_stages_by_key: HashMap::new(),
@@ -4657,6 +4659,7 @@ impl AppState {
                 port,
                 browser_access_token,
             } => {
+                self.pending_workspace_server_starts.remove(&workspace_id);
                 let rt = self
                     .workspace_runtime_by_id
                     .entry(workspace_id.clone())
@@ -4676,6 +4679,7 @@ impl AppState {
                 code,
                 message,
             } => {
+                self.pending_workspace_server_starts.remove(&workspace_id);
                 let rt = self
                     .workspace_runtime_by_id
                     .entry(workspace_id.clone())
@@ -5071,6 +5075,42 @@ impl AppState {
         }
     }
 
+    fn ensure_workspace_server_started(&mut self, workspace_id: &str) {
+        if self.is_workspace_ws_connected(workspace_id)
+            || self.pending_workspace_server_starts.contains(workspace_id)
+        {
+            return;
+        }
+        let needs_start = self
+            .workspace_runtime_by_id
+            .get(workspace_id)
+            .is_none_or(|rt| {
+                matches!(
+                    rt.server_state,
+                    ServerLifecycleState::Stopped | ServerLifecycleState::Failed { .. }
+                )
+            });
+        if !needs_start {
+            return;
+        }
+        let Some(ws) = self
+            .workspaces
+            .iter()
+            .find(|ws| ws.id == workspace_id && !ws.archived)
+        else {
+            return;
+        };
+        let path = ws.path.clone();
+        let yolo = ws.yolo;
+        self.pending_workspace_server_starts
+            .insert(workspace_id.to_string());
+        self.send_native(NativeCommand::StartWorkspaceServer {
+            workspace_id: workspace_id.to_string(),
+            path,
+            yolo,
+        });
+    }
+
     fn reduce_nav(&mut self, action: NavAction) {
         let prev_tid = self.nav.current().active_thread_id.clone();
         let prev_task_id = self.nav.current().active_task_id.clone();
@@ -5087,23 +5127,19 @@ impl AppState {
         );
         let mut already_persisted = false;
 
-        if let NavAction::SelectWorkspace(id) = &action
-            && self.workspace_runtime_by_id.get(id).is_none_or(|rt| {
-                matches!(
-                    rt.server_state,
-                    ServerLifecycleState::Stopped | ServerLifecycleState::Failed { .. }
-                )
-            })
-            && let Some(ws) = self
-                .workspaces
+        let nav_target_ws = match &action {
+            NavAction::SelectWorkspace(id) => Some(id.clone()),
+            NavAction::OpenThread(thread_id) => self.workspace_for_thread(thread_id),
+            NavAction::OpenNewChat { workspace_id } => workspace_id.clone(),
+            NavAction::OpenTask(task_id) => self
+                .tasks
                 .iter()
-                .find(|ws| ws.id == *id && !ws.archived)
-        {
-            self.send_native(NativeCommand::StartWorkspaceServer {
-                workspace_id: id.clone(),
-                path: ws.path.clone(),
-                yolo: ws.yolo,
-            });
+                .find(|task| task.id == *task_id)
+                .map(|task| task.workspace_id.clone()),
+            _ => None,
+        };
+        if let Some(ws_id) = nav_target_ws {
+            self.ensure_workspace_server_started(&ws_id);
         }
 
         // Use the ordinary chat navigation paths so hydration and draft switching also
@@ -5377,18 +5413,19 @@ impl AppState {
         }
         if self.active_workspace_id != prev_ws {
             self.sync_active_workspace_mcp_servers();
-            if let Some(ws_id) = self.active_workspace_id.clone()
-                && self.is_workspace_ws_connected(&ws_id)
-            {
-                let loaded = self
-                    .workspace_runtime_by_id
-                    .get(&ws_id)
-                    .is_some_and(|rt| rt.mcp_servers_loaded);
-                if !loaded
-                    || (self.route().view == ViewId::Settings
-                        && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
-                {
-                    self.bootstrap_tool_access_catalogs(&ws_id);
+            if let Some(ws_id) = self.active_workspace_id.clone() {
+                self.ensure_workspace_server_started(&ws_id);
+                if self.is_workspace_ws_connected(&ws_id) {
+                    let loaded = self
+                        .workspace_runtime_by_id
+                        .get(&ws_id)
+                        .is_some_and(|rt| rt.mcp_servers_loaded);
+                    if !loaded
+                        || (self.route().view == ViewId::Settings
+                            && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
+                    {
+                        self.bootstrap_tool_access_catalogs(&ws_id);
+                    }
                 }
             }
         }
@@ -5522,6 +5559,11 @@ impl AppState {
             }
             ShellAction::SetLandingWorkspace(ws_id) => {
                 let old_key = self.composer_key();
+                if let Some(ref id) = ws_id
+                    && id != ONE_OFF_LANDING_SENTINEL
+                {
+                    self.ensure_workspace_server_started(id);
+                }
                 self.landing_workspace_id = ws_id;
                 let new_key = self.composer_key();
                 self.sync_composer_edit_across_switch(&old_key, &new_key);
@@ -5534,6 +5576,9 @@ impl AppState {
                     .iter()
                     .find(|w| w.one_off_chat && !w.archived)
                     .map(|w| w.id.clone());
+                if let Some(ref id) = existing {
+                    self.ensure_workspace_server_started(id);
+                }
                 self.landing_workspace_id =
                     Some(existing.unwrap_or_else(|| ONE_OFF_LANDING_SENTINEL.to_string()));
                 let new_key = self.composer_key();
@@ -6155,6 +6200,7 @@ impl AppState {
             }
             ChatAction::HydrateThread(thread_id) => {
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
+                    self.ensure_workspace_server_started(&ws_id);
                     let after_seq = {
                         let rt = self
                             .thread_runtime_by_id
@@ -6696,6 +6742,9 @@ impl AppState {
 
         match thread_id {
             Some(tid) => {
+                if let Some(ws_id) = self.workspace_for_thread(&tid) {
+                    self.ensure_workspace_server_started(&ws_id);
+                }
                 if self
                     .thread_runtime_by_id
                     .get(&tid)
@@ -9061,6 +9110,7 @@ impl AppState {
                     .retain(|t| t.workspace_id != workspace_id);
                 self.workspace_runtime_by_id.remove(&workspace_id);
                 self.workspace_socket_by_id.remove(&workspace_id);
+                self.pending_workspace_server_starts.remove(&workspace_id);
                 self.explorer_entries_by_workspace
                     .retain(|(ws_id, _), _| ws_id != &workspace_id);
                 let expanded_prefix = format!("{workspace_id}::");
@@ -9198,6 +9248,7 @@ impl AppState {
     }
 
     fn apply_ws_initialized(&mut self, workspace_id: &str, result: InitializeResult) {
+        self.pending_workspace_server_starts.remove(workspace_id);
         self.subscribed_threads_by_workspace.remove(workspace_id);
         let stale_resume_ids: Vec<u64> = self
             .pending_resume_threads_by_rpc_id
@@ -9207,6 +9258,18 @@ impl AppState {
             .collect();
         for id in stale_resume_ids {
             self.pending_resume_threads_by_rpc_id.remove(&id);
+        }
+        let stale_hydrate_entries: Vec<(u64, String)> = self
+            .pending_hydrate_threads_by_rpc_id
+            .iter()
+            .filter(|(_, tid)| self.workspace_for_thread(tid).as_deref() == Some(workspace_id))
+            .map(|(&id, tid)| (id, tid.clone()))
+            .collect();
+        for (id, tid) in stale_hydrate_entries {
+            self.pending_hydrate_threads_by_rpc_id.remove(&id);
+            if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
+                rt.hydrating = false;
+            }
         }
         let rt = self
             .workspace_runtime_by_id
@@ -22290,5 +22353,101 @@ mod tests {
         assert_eq!(state.mcp_servers[0].name, "only-in-b");
         assert_eq!(state.mcp_servers_for_workspace("ws-b")[0].name, "only-in-b");
         assert_eq!(state.mcp_servers_for_workspace("ws-a")[0].name, "only-in-a");
+    }
+
+    #[test]
+    fn opening_thread_in_unstarted_workspace_starts_server_and_hydrates_on_connect() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+        state.workspace_runtime_by_id.insert(
+            "ws-a".to_string(),
+            WorkspaceRuntime {
+                server_state: ServerLifecycleState::Running {
+                    ws_url: "ws://127.0.0.1:7337/ws".to_string(),
+                    port: 7337,
+                },
+                ..Default::default()
+            },
+        );
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), WsConnectionState::Connected);
+        state.threads.push(ThreadRecord {
+            id: "th-b-1".to_string(),
+            workspace_id: "ws-b".to_string(),
+            title: "Saved B chat".to_string(),
+            ..Default::default()
+        });
+
+        // Clicking a saved conversation under project B directly starts B's server.
+        state.dispatch(Action::Navigate(NavAction::OpenThread(
+            "th-b-1".to_string(),
+        )));
+
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-b"));
+        assert!(state.services.emitted_native_commands.iter().any(|cmd| {
+            matches!(
+                cmd,
+                NativeCommand::StartWorkspaceServer {
+                    workspace_id,
+                    path,
+                    ..
+                } if workspace_id == "ws-b" && path == "/tmp/b"
+            )
+        }));
+        assert!(state.services.emitted_native_commands.iter().any(|cmd| {
+            matches!(
+                cmd,
+                NativeCommand::ReadLocalTranscript { thread_id, .. } if thread_id == "th-b-1"
+            )
+        }));
+
+        // Once B finishes starting and initializes its WebSocket, stale pre-connect hydrate state
+        // is cleared and a fresh `thread/hydrate` is emitted over the connected socket.
+        let before_init = state.services.emitted_ws_commands.len();
+        state.apply_store_event(StoreEvent::ServerListening {
+            workspace_id: "ws-b".to_string(),
+            ws_url: "ws://127.0.0.1:7338/ws".to_string(),
+            port: 7338,
+            browser_access_token: None,
+        });
+        state
+            .workspace_socket_by_id
+            .insert("ws-b".to_string(), WsConnectionState::Connected);
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-b".to_string(),
+            result: Box::new(init_res),
+        });
+
+        assert!(
+            state.services.emitted_ws_commands[before_init..]
+                .iter()
+                .any(|cmd| {
+                    matches!(
+                        cmd,
+                        WsCommand::SendRequest {
+                            workspace_id,
+                            method,
+                            params,
+                            ..
+                        } if workspace_id == "ws-b"
+                            && method == "thread/hydrate"
+                            && params.get("threadId") == Some(&json!("th-b-1"))
+                    )
+                })
+        );
     }
 }

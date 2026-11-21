@@ -255,7 +255,9 @@ pub fn build_windows_sandbox_command(
 
 /// Ensures the explicit child environment passed to Windows MXC `ProcessContainer` (with
 /// `inherit_default_environment: Some(false)`) satisfies PSEC's mandatory `SYSTEMROOT` and
-/// `LOCALAPPDATA` presence checks while stripping `COWORK_DESKTOP_PARENT_MANAGED`.
+/// `LOCALAPPDATA` presence checks, preserves `PSModulePath` so Windows PowerShell built-in
+/// modules (`Microsoft.PowerShell.Management`, `Microsoft.PowerShell.Utility`) resolve inside
+/// the container, and strips `COWORK_DESKTOP_PARENT_MANAGED`.
 pub fn ensure_required_mxc_child_env(
     child_env: &HashMap<String, String>,
     host_env: &HashMap<String, String>,
@@ -263,17 +265,19 @@ pub fn ensure_required_mxc_child_env(
     let mut effective = child_env.clone();
     remove_env(&mut effective, PARENT_MANAGED_ENV_VAR, "win32");
 
+    let resolved_system_root = get_env(&effective, "SYSTEMROOT", "win32")
+        .or_else(|| get_env(host_env, "SYSTEMROOT", "win32"))
+        .or_else(|| get_env(host_env, "WINDIR", "win32"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(r"C:\Windows")
+        .to_owned();
+
     if get_env(&effective, "SYSTEMROOT", "win32")
         .map(str::trim)
         .is_none_or(str::is_empty)
     {
-        let sys_root = get_env(host_env, "SYSTEMROOT", "win32")
-            .or_else(|| get_env(host_env, "WINDIR", "win32"))
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(r"C:\Windows")
-            .to_owned();
-        effective.insert("SystemRoot".to_owned(), sys_root);
+        effective.insert("SystemRoot".to_owned(), resolved_system_root.clone());
     }
 
     if get_env(&effective, "LOCALAPPDATA", "win32")
@@ -302,6 +306,23 @@ pub fn ensure_required_mxc_child_env(
             })
             .unwrap_or_else(|| r"C:\Windows\Temp".to_owned());
         effective.insert("LOCALAPPDATA".to_owned(), local_app_data);
+    }
+
+    if get_env(&effective, "PSModulePath", "win32")
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        let ps_module_path = get_env(host_env, "PSModulePath", "win32")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                format!(
+                    r"{}\System32\WindowsPowerShell\v1.0\Modules",
+                    resolved_system_root.trim_end_matches(['\\', '/'])
+                )
+            });
+        effective.insert("PSModulePath".to_owned(), ps_module_path);
     }
 
     let mut pairs: Vec<(String, String)> = effective.into_iter().collect();
@@ -535,6 +556,19 @@ fn build_windows_mxc_spec_with(
         push_general_ro(&join_win_child(&sandbox_home, subdir));
     }
 
+    // Built-in Windows PowerShell standard module directory (`Microsoft.PowerShell.Management`,
+    // `Microsoft.PowerShell.Utility`, etc.) so PowerShell cmdlets resolve reliably under PSEC.
+    let system_root = get_env(child_env, "SYSTEMROOT", "win32")
+        .or_else(|| get_env(host_env, "SYSTEMROOT", "win32"))
+        .or_else(|| get_env(host_env, "WINDIR", "win32"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(r"C:\Windows");
+    push_general_ro(&join_win_child(
+        Path::new(system_root),
+        r"System32\WindowsPowerShell\v1.0\Modules",
+    ));
+
     // Managed Cowork runtime / built-in roots from host or child env.
     for env_map in [host_env, child_env] {
         for var in RUNTIME_READONLY_DIR_ENV_VARS {
@@ -728,12 +762,12 @@ mod native_mxc {
     use std::io::Read;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU8, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     use mxc_sdk::v1::configs::ProcessContainerConfig;
     use mxc_sdk::v1::policy::filesystem::{
-        ToolsPolicyContainerType, ToolsPolicyOptions, available_tools_policy, user_profile_policy,
+        ToolsPolicyOptions, available_tools_policy, user_profile_policy,
     };
     use mxc_sdk::v1::{
         ClipboardPolicy, ContainerRequest, Containment, ErrorCode, FilesystemPolicy, MxcProcess,
@@ -757,20 +791,72 @@ mod native_mxc {
     const STOP_CANCEL: u8 = 2;
     const STOP_OVERFLOW: u8 = 3;
 
+    const TOOL_DISCOVERY_CACHE_ENV_KEYS: &[&str] = &[
+        "PATH",
+        "LOCALAPPDATA",
+        "USERPROFILE",
+        "PSMODULEPATH",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "VCINSTALLDIR",
+        "VSINSTALLDIR",
+        "VCPKG_ROOT",
+        "GOPATH",
+        "GOROOT",
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "JAVA_HOME",
+        "NVM_HOME",
+        "NVM_SYMLINK",
+        "NODE_PATH",
+        "DOTNET_ROOT",
+        "CONDA_PREFIX",
+        "LD_LIBRARY_PATH",
+        "VIRTUAL_ENV",
+        "PYENV_ROOT",
+    ];
+
+    static HOST_TOOL_RO_CACHE: OnceLock<Mutex<HashMap<Vec<(String, String)>, Vec<PathBuf>>>> =
+        OnceLock::new();
+
     /// Discovers read-only tool and user-profile paths via MXC's built-in policy helpers.
+    ///
     /// Deliberately takes ONLY `.readonly_paths` (never `.readwrite_paths` such as PSReadLine
-    /// history) so Cowork's strict write scoping and `read-only` floors remain intact.
+    /// history) so Cowork's strict write scoping and `read-only` floors remain intact. Uses
+    /// `ToolsPolicyOptions::default()` (skipping per-directory `icacls.exe` subprocess probes
+    /// that add ~30s overhead on large Windows `PATH`s) and caches results by discovery env vars.
     pub(super) fn discover_mxc_host_readonly_paths(env_pairs: &[(String, String)]) -> Vec<PathBuf> {
+        let mut cache_key: Vec<(String, String)> = env_pairs
+            .iter()
+            .filter_map(|(k, v)| {
+                let upper = k.to_ascii_uppercase();
+                TOOL_DISCOVERY_CACHE_ENV_KEYS
+                    .contains(&upper.as_str())
+                    .then_some((upper, v.clone()))
+            })
+            .collect();
+        cache_key.sort();
+
+        let cache = HOST_TOOL_RO_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(hit) = cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&cache_key)
+        {
+            return hit.clone();
+        }
+
         let mut out = Vec::new();
-        let tools = available_tools_policy(
-            Some(env_pairs),
-            ToolsPolicyOptions {
-                container_type: Some(ToolsPolicyContainerType::ProcessContainer),
-            },
-        );
+        let tools = available_tools_policy(Some(env_pairs), ToolsPolicyOptions::default());
         out.extend(tools.readonly_paths.into_iter().map(PathBuf::from));
         let profile = user_profile_policy(Some(env_pairs));
         out.extend(profile.readonly_paths.into_iter().map(PathBuf::from));
+
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() >= 16 {
+            guard.clear();
+        }
+        guard.insert(cache_key, out.clone());
         out
     }
 
@@ -1581,6 +1667,16 @@ mod tests {
         assert!(spec.environment.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("LOCALAPPDATA") && v == r"C:\Users\Alice\AppData\Local"
         }));
+        assert!(spec.environment.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("PSModulePath")
+                && v == r"C:\Windows\System32\WindowsPowerShell\v1.0\Modules"
+        }));
+        assert!(
+            spec.readonly_paths
+                .contains(&r"C:\Windows\System32\WindowsPowerShell\v1.0\Modules".to_owned()),
+            "built-in Windows PowerShell modules dir must be granted read-only: {:?}",
+            spec.readonly_paths
+        );
         assert!(
             !spec
                 .environment

@@ -401,6 +401,139 @@ fn scene_chat_demo(state: &mut AppState) {
     state.dispatch(Action::Navigate(NavAction::OpenThread(
         "th-demo".to_string(),
     )));
+    if let Ok(popup) = std::env::var("COWORK_SCENE_POPUP") {
+        state
+            .workspace_socket_by_id
+            .insert("ws-demo".to_string(), ws::WsConnectionState::Connected);
+        state.provider_catalog = vec![
+            state::ProviderSummary {
+                id: "anthropic".to_string(),
+                name: "Anthropic".to_string(),
+                configured: true,
+                models: vec![
+                    state::ProviderModelSummary {
+                        id: "claude-opus-4-8".to_string(),
+                        name: "Claude Opus 4.8".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_string(),
+                            "medium".to_string(),
+                            "high".to_string(),
+                            "max".to_string(),
+                        ],
+                    },
+                    state::ProviderModelSummary {
+                        id: "claude-sonnet-4-5".to_string(),
+                        name: "Claude Sonnet 4.5".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_string(),
+                            "medium".to_string(),
+                            "high".to_string(),
+                            "max".to_string(),
+                        ],
+                    },
+                    state::ProviderModelSummary {
+                        id: "claude-haiku-4-5".to_string(),
+                        name: "Claude Haiku 4.5".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: false,
+                        reasoning_efforts: Vec::new(),
+                    },
+                ],
+                ..Default::default()
+            },
+            state::ProviderSummary {
+                id: "openai".to_string(),
+                name: "OpenAI".to_string(),
+                configured: true,
+                models: vec![
+                    state::ProviderModelSummary {
+                        id: "gpt-5.4".to_string(),
+                        name: "GPT-5.4".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: true,
+                        reasoning_efforts: vec![
+                            "low".to_string(),
+                            "medium".to_string(),
+                            "high".to_string(),
+                            "xhigh".to_string(),
+                        ],
+                    },
+                    state::ProviderModelSummary {
+                        id: "gpt-4.1".to_string(),
+                        name: "GPT-4.1".to_string(),
+                        enabled: true,
+                        custom: false,
+                        supports_reasoning: false,
+                        reasoning_efforts: Vec::new(),
+                    },
+                ],
+                ..Default::default()
+            },
+            state::ProviderSummary {
+                id: "google".to_string(),
+                name: "Google".to_string(),
+                configured: true,
+                models: vec![state::ProviderModelSummary {
+                    id: "gemini-2.5-pro".to_string(),
+                    name: "Gemini 2.5 Pro".to_string(),
+                    enabled: true,
+                    custom: false,
+                    supports_reasoning: true,
+                    reasoning_efforts: vec![
+                        "low".to_string(),
+                        "medium".to_string(),
+                        "high".to_string(),
+                        "dynamic".to_string(),
+                    ],
+                }],
+                ..Default::default()
+            },
+            state::ProviderSummary {
+                id: "bedrock".to_string(),
+                name: "Amazon Bedrock".to_string(),
+                configured: true,
+                models: vec![state::ProviderModelSummary {
+                    id: "claude-sonnet-4-6".to_string(),
+                    name: "Claude Sonnet 4.6".to_string(),
+                    enabled: true,
+                    custom: false,
+                    supports_reasoning: true,
+                    reasoning_efforts: vec![
+                        "low".to_string(),
+                        "medium".to_string(),
+                        "high".to_string(),
+                    ],
+                }],
+                ..Default::default()
+            },
+        ];
+        if let Some(tr) = state.threads.iter_mut().find(|t| t.id == "th-demo") {
+            tr.model = Some("claude-opus-4-8".to_string());
+            tr.reasoning_effort = Some("high".to_string());
+        }
+        match popup.trim().to_ascii_lowercase().as_str() {
+            "model" => {
+                let _ = state
+                    .chat_ui
+                    .model_combobox
+                    .step(rune_kit::ComboboxEvent::Toggle {
+                        current: Some("anthropic\x1fclaude-opus-4-8"),
+                    });
+            }
+            "effort" => {
+                state.chat_ui.reasoning_open = true;
+            }
+            _ => {}
+        }
+    }
 }
 
 fn scene_quick_chat(state: &mut AppState) {

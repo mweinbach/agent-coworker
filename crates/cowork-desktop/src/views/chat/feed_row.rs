@@ -137,11 +137,14 @@ fn build_user_message_row(
         .key(anchor_key.clone())
         .max_w(580.0)
         .gap(8.0)
-        .px(16.0)
-        .py(10.0)
+        .px(14.0)
+        .py(9.0)
         .radius(16.0)
-        .fill(t.elevated_bg)
-        .border(1.0, k.alpha(t.border, 0.55));
+        .fill(if t.dark {
+            k.c.layer_02
+        } else {
+            k.alpha(t.text_base, 0.05)
+        });
 
     if let Some(title) = visible.canvas_title {
         let spreadsheet = content.contains("<spreadsheet_canvas_request>");
@@ -211,6 +214,7 @@ fn build_user_message_row(
 
     let mut outer = col()
         .key(format!("row:{id}"))
+        .hover_group()
         .w_full()
         .max_w(768.0)
         .items_end()
@@ -218,14 +222,20 @@ fn build_user_message_row(
         .child(row().w_full().justify_end().child(bubble));
 
     if !visible.text.is_empty() {
-        outer = outer.child(row().w_full().justify_end().child(build_copy_chip_button(
-            k,
-            t,
-            copy_key,
-            visible.text,
-            copied,
-            "Copy message",
-        )));
+        outer = outer.child(
+            row()
+                .w_full()
+                .justify_end()
+                .group_opacity(if copied { 1.0 } else { 0.0 }, 1.0)
+                .child(build_copy_chip_button(
+                    k,
+                    t,
+                    copy_key,
+                    visible.text,
+                    copied,
+                    "Copy message",
+                )),
+        );
     }
 
     outer
@@ -300,6 +310,7 @@ fn build_assistant_message_row(
 
     let mut container = col()
         .key(format!("row:{id}"))
+        .hover_group()
         .w_full()
         .max_w(768.0)
         .gap(8.0)
@@ -321,14 +332,20 @@ fn build_assistant_message_row(
     }
 
     if !streaming && !body_text.trim().is_empty() {
-        container = container.child(row().w_full().items_center().child(build_copy_chip_button(
-            k,
-            t,
-            copy_key,
-            body_text.into_owned(),
-            copied,
-            "Copy response",
-        )));
+        container = container.child(
+            row()
+                .w_full()
+                .items_center()
+                .group_opacity(if copied { 1.0 } else { 0.0 }, 1.0)
+                .child(build_copy_chip_button(
+                    k,
+                    t,
+                    copy_key,
+                    body_text.into_owned(),
+                    copied,
+                    "Copy response",
+                )),
+        );
     }
 
     container

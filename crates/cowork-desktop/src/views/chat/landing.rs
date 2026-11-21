@@ -98,7 +98,7 @@ fn build_greeting_header(
         .gap(6.0)
         .child(
             text(heading)
-                .font(rune::TextStyle::new(26.0, 600.0).lh(32.0))
+                .font(rune::TextStyle::new(26.0, 600.0).lh(32.0).tracking(-0.55))
                 .color(t.text_base),
         )
         .child(text(subtitle).font(k.ty.ui).color(t.text_muted))
@@ -125,18 +125,16 @@ fn build_workspace_target_picker(
         .key("landing-target-trigger")
         .items_center()
         .gap(6.0)
-        .px(10.0)
+        .px(8.0)
         .py(5.0)
-        .radius(9999.0)
-        .fill(k.alpha(t.elevated_bg, 0.65))
-        .hover(t.elevated_bg)
-        .border(1.0, t.border)
+        .radius(8.0)
+        .hover(t.hover)
         .cursor(Cursor::Pointer)
         .help("Select workspace target")
         .on_press(|s: &mut AppState| {
             s.chat_ui.landing_target_open = !s.chat_ui.landing_target_open;
         })
-        .child(icon(leading_glyph, 13.0).color(t.accent))
+        .child(icon(leading_glyph, 13.0).color(t.text_muted))
         .child(
             text(display_label)
                 .font(k.ty.small_medium)
@@ -144,7 +142,7 @@ fn build_workspace_target_picker(
                 .max_w(220.0)
                 .truncate(),
         )
-        .child(icon(k.glyph.chevron_down, 12.0).color(t.text_muted));
+        .child(icon(k.glyph.chevron_down, 12.0).color(t.text_faint));
 
     if s.chat_ui.landing_target_open {
         let mut items: Vec<PopupItem> = Vec::new();
@@ -214,6 +212,7 @@ fn starter_icon(id: &str) -> &'static rune::Icon {
         "draft-plan" => &icons::CHECKLIST,
         "brainstorm" => &icons::LIGHTBULB,
         "polish-writing" => &icons::PENCIL,
+        "explain-concept" => &icons::BOOK_OPEN,
         _ => &icons::MESSAGE_SQUARE,
     }
 }
@@ -230,10 +229,9 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
             .min_w(260.0)
             .max_w(331.0)
             .gap(3.0)
-            .px(14.0)
-            .py(11.0)
-            .radius(12.0)
-            .fill(k.alpha(t.elevated_bg, 0.45))
+            .px(13.0)
+            .py(10.0)
+            .radius(10.0)
             .border(1.0, t.border_muted)
             .child(
                 row()

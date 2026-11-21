@@ -234,6 +234,16 @@ pub static LIST_ORDERED: Icon = stroke_icon!(
     r#"<line x1="10" x2="21" y1="6" y2="6"/><line x1="10" x2="21" y1="12" y2="12"/><line x1="10" x2="21" y1="18" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>"#
 );
 
+pub static SIGNAL_BARS: Icon = stroke_icon!(
+    "chat-signal-bars",
+    r#"<path d="M5 19v-4"/><path d="M12 19V10"/><path d="M19 19V5"/>"#
+);
+
+pub static GRID_2X2: Icon = stroke_icon!(
+    "chat-grid-2x2",
+    r#"<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>"#
+);
+
 /// Maps a tool category into its matching Lucide timeline icon.
 pub fn tool_icon(category: ToolIconCategory) -> &'static Icon {
     match category {

@@ -540,12 +540,12 @@ pub fn tokens_with_accent(dark: bool, accent_palette: AccentPalette) -> ThemeTok
         ThemeTokens {
             dark: true,
             app_bg: srgb(0x14, 0x14, 0x15),
-            sidebar_bg: srgb(0x1b, 0x1b, 0x1d),
-            panel_bg: srgb(0x23, 0x23, 0x25),
-            elevated_bg: srgb(0x2b, 0x2b, 0x2e),
-            card_bg: srgb(0x23, 0x23, 0x25),
-            popover_bg: srgb(0x26, 0x26, 0x29),
-            input_bg: srgb(0x1c, 0x1c, 0x1e),
+            sidebar_bg: srgb(0x1a, 0x1a, 0x1c),
+            panel_bg: srgb(0x20, 0x20, 0x23),
+            elevated_bg: srgb(0x27, 0x27, 0x2b),
+            card_bg: srgb(0x24, 0x24, 0x28),
+            popover_bg: srgb(0x2a, 0x2a, 0x2e),
+            input_bg: srgb(0x28, 0x28, 0x2c),
             glass_bg: srgba(0x1b, 0x1b, 0x1d, 0.88),
             glass_hover: srgba(0xff, 0xff, 0xff, 0.08),
             glass_active: srgba(0xff, 0xff, 0xff, 0.14),
@@ -680,7 +680,7 @@ pub fn resolve_tokens_with_accent(
             tok.elevated_bg = srgb(0x16, 0x16, 0x18);
             tok.card_bg = tok.panel_bg;
             tok.popover_bg = tok.elevated_bg;
-            tok.input_bg = srgb(0x0b, 0x0b, 0x0c);
+            tok.input_bg = srgb(0x18, 0x18, 0x1b);
             tok.glass_bg = srgba(0x0c, 0x0c, 0x0d, 0.94);
         }
         tok.border = if dark {
@@ -744,9 +744,12 @@ pub fn build_kit_with_accent(
     kit.c.icon_contrast = tok.cta_on;
     kit.c.contrast_hover = tok.accent_hover_overlay;
     kit.c.contrast_pressed = tok.accent_pressed_overlay;
+    kit.c.submit_highlight = Color::TRANSPARENT;
     kit.c.submit_hover = tok.accent_hover_overlay;
     kit.c.submit_fg = tok.send_on;
     kit.c.submit_icon = tok.send_on;
+    kit.c.depth_top = Color::TRANSPARENT;
+    kit.c.depth_bottom = Color::TRANSPARENT;
     kit.c.knob_on = tok.cta_on;
     kit.c.text_base = tok.text_base;
     kit.c.text_muted = tok.text_muted;
@@ -800,6 +803,37 @@ pub fn build_kit_with_accent(
     kit.radius.md = layout::RADIUS_MD;
     kit.radius.lg = layout::RADIUS_BASE;
     kit.radius.xl = layout::RADIUS_LG;
+
+    // Keep surfaces and buttons crisp and flat: reserve soft drop shadows for floating overlays.
+    let hairline_ring = rune::Shadow {
+        spread: 0.5,
+        color: tok.border,
+        ..rune::Shadow::default()
+    };
+    let overlay_shadow = Color::BLACK.alpha(if dark { 0.22 } else { 0.08 });
+    kit.elevation.raised = vec![hairline_ring];
+    kit.elevation.button_neutral = vec![hairline_ring];
+    kit.elevation.button_contrast = Vec::new();
+    kit.elevation.elements = Vec::new();
+    kit.elevation.md = Vec::new();
+    kit.elevation.floating = vec![
+        rune::Shadow {
+            y: 4.0,
+            blur: 12.0,
+            color: overlay_shadow,
+            ..rune::Shadow::default()
+        },
+        hairline_ring,
+    ];
+    kit.elevation.overlay = vec![
+        rune::Shadow {
+            y: 8.0,
+            blur: 20.0,
+            color: overlay_shadow,
+            ..rune::Shadow::default()
+        },
+        hairline_ring,
+    ];
 
     (kit, tok)
 }

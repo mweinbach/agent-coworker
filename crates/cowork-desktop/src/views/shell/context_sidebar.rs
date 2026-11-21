@@ -3,9 +3,9 @@
 //! Ported from `apps/desktop/src/ui/ContextSidebar.tsx`, `WorkflowRunsPanel.tsx`, and
 //! workspace file explorer integration.
 
-use rune::{El, Key, ScrollSpec, col, el, row, text, text_input};
+use rune::{El, Key, ScrollSpec, col, el, row, spacer, text, text_input};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Divider, IconButton,
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, IconButton,
     IconButtonVariant, Kit, Menu, MenuItem, Placement, glyphs,
 };
 
@@ -29,6 +29,45 @@ fn open_agent_run_from_context(s: &mut AppState, agent_id: String, title: String
         agent_id,
         title: Some(title),
     }));
+}
+
+/// Renders a flat inspector section without a left accent stripe or drop shadow.
+fn context_section(
+    key: &'static str,
+    title: impl Into<String>,
+    glyph: &'static rune::Icon,
+    trailing: Option<El>,
+    body: El,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    let mut header = row()
+        .w_full()
+        .items_center()
+        .gap(6.0)
+        .child(rune::icon(glyph, 13.0).color(t.text_muted))
+        .child(
+            text(title)
+                .font(k.ty.small_medium)
+                .color(k.c.text_base)
+                .truncate(),
+        )
+        .child(spacer());
+    if let Some(action) = trailing {
+        header = header.child(action);
+    }
+    col()
+        .key(key)
+        .role("group")
+        .w_full()
+        .gap(8.0)
+        .px(12.0)
+        .py(10.0)
+        .radius(10.0)
+        .fill(t.card_bg)
+        .border(1.0, t.border_muted)
+        .child(header)
+        .child(body)
 }
 
 /// Renders the right inspector sidebar panel for the active chat or task route.
@@ -62,23 +101,30 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
             sections.push(build_plan_card(rt, k, t));
         }
         if !rt.agents.is_empty() {
-            sections.push(build_subagents_card(rt, k));
+            sections.push(build_subagents_card(rt, k, t));
         }
     }
 
     if !s.workflow_runs.is_empty() {
-        sections.push(build_workflow_runs_card(s, k));
+        sections.push(build_workflow_runs_card(s, k, t));
     }
 
     sections.push(build_workspace_files_card(s, k, t, layer));
 
     if sections.is_empty() {
-        sections.push(
-            Card::new()
-                .title("No active context", Some(&icons::INFO))
-                .description("Select a workspace or start a thread to inspect plans, subagents, workflow runs, and workspace files.")
-                .build(k),
-        );
+        sections.push(context_section(
+            "context-empty",
+            "No active context",
+            &icons::INFO,
+            None,
+            text("Select a workspace or start a thread to inspect plans, subagents, workflow runs, and workspace files.")
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .wrap()
+                .w_full(),
+            k,
+            t,
+        ));
     }
 
     col()
@@ -105,40 +151,96 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
 
 fn build_usage_card(s: &AppState, rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> Option<El> {
     let usage = rt.usage.as_ref()?;
-    let metric = |label: &str, value: String| {
+    let stat_col = |label: &str, value: String| {
+        col()
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(2.0)
+            .child(
+                text(label.to_owned())
+                    .font(k.ty.text_xsmall)
+                    .color(t.text_faint),
+            )
+            .child(
+                text(value)
+                    .font(k.ty.small_medium)
+                    .color(k.c.text_base)
+                    .truncate(),
+            )
+    };
+
+    let cost_summary = if let Some(cap) = rt.usage_hard_cap {
+        format!(
+            "{} / {} cap",
+            format_cost_usd(usage.estimated_cost_usd),
+            format_cost_usd(cap)
+        )
+    } else {
+        format_cost_usd(usage.estimated_cost_usd)
+    };
+
+    let mut card_body = col().w_full().gap(8.0).child(
         row()
             .w_full()
             .justify_between()
             .items_center()
             .child(
-                text(label.to_owned())
+                text("Estimated cost")
                     .font(k.ty.small)
                     .color(k.c.text_muted),
             )
-            .child(text(value).font(k.ty.small_medium).color(k.c.text_base))
-    };
+            .child(text(cost_summary).font(k.ty.small_medium).color(
+                if rt.usage_hard_cap_reached {
+                    t.danger
+                } else {
+                    k.c.text_base
+                },
+            )),
+    );
 
-    let mut card_body = col()
-        .w_full()
-        .gap(6.0)
-        .child(metric(
-            "Estimated cost",
-            format_cost_usd(usage.estimated_cost_usd),
-        ))
-        .child(metric("Input tokens", format_tokens(usage.input_tokens)))
-        .child(metric("Output tokens", format_tokens(usage.output_tokens)))
-        .child(metric("Cached tokens", format_tokens(usage.cached_tokens)));
-
-    if let Some(cap) = rt.usage_hard_cap {
-        card_body = card_body.child(metric("Hard cap", format_cost_usd(cap)));
+    if let Some(cap) = rt.usage_hard_cap
+        && cap > 0.0
+    {
+        let ratio = (usage.estimated_cost_usd / cap).clamp(0.0, 1.0) as f32;
+        let fill_color = if rt.usage_hard_cap_reached || ratio >= 0.95 {
+            t.danger
+        } else if ratio >= 0.8 {
+            t.warning
+        } else {
+            t.accent
+        };
+        let mut track = row()
+            .w_full()
+            .h(5.0)
+            .radius(9999.0)
+            .fill(t.hover)
+            .clip_rounded(9999.0);
+        if ratio > 0.0 {
+            let filled = ratio.max(0.02);
+            track = track
+                .child(el().h(5.0).grow(filled).radius(9999.0).fill(fill_color))
+                .child(el().h(5.0).grow((1.0 - filled).max(0.0)));
+        }
+        card_body = card_body.child(track);
     }
+
+    card_body = card_body.child(
+        row()
+            .w_full()
+            .pt(2.0)
+            .gap(12.0)
+            .child(stat_col("Input", format_tokens(usage.input_tokens)))
+            .child(stat_col("Cached", format_tokens(usage.cached_tokens)))
+            .child(stat_col("Output", format_tokens(usage.output_tokens))),
+    );
+
     if rt.usage_hard_cap_reached
         && let Some(thread_id) = s.route().active_thread_id.clone()
     {
         card_body = card_body.child(
             row()
                 .w_full()
-                .pt(4.0)
+                .pt(2.0)
                 .justify_between()
                 .items_center()
                 .child(
@@ -160,13 +262,15 @@ fn build_usage_card(s: &AppState, rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) 
         );
     }
 
-    Some(
-        Card::new()
-            .title("Usage", Some(&icons::SPARKLES))
-            .child(card_body)
-            .build(k)
-            .key("context-usage-card"),
-    )
+    Some(context_section(
+        "context-usage-card",
+        "Usage",
+        &icons::SPARKLES,
+        None,
+        card_body,
+        k,
+        t,
+    ))
 }
 
 fn build_plan_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
@@ -223,14 +327,18 @@ fn build_plan_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
         );
     }
 
-    Card::new()
-        .title("Plan", Some(&icons::CHECK_SQUARE))
-        .child(list)
-        .build(k)
-        .key("context-plan-card")
+    context_section(
+        "context-plan-card",
+        "Plan",
+        &icons::CHECK_SQUARE,
+        None,
+        list,
+        k,
+        t,
+    )
 }
 
-fn build_subagents_card(rt: &ThreadRuntime, k: &Kit) -> El {
+fn build_subagents_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
     let mut list = col().w_full().gap(6.0);
     for agent in &rt.agents {
         let aid = agent.agent_id.clone();
@@ -271,17 +379,18 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit) -> El {
         );
     }
 
-    Card::new()
-        .title(
-            format!("Subagents ({})", rt.agents.len()),
-            Some(&icons::SPARKLES),
-        )
-        .child(list)
-        .build(k)
-        .key("context-subagents-card")
+    context_section(
+        "context-subagents-card",
+        format!("Subagents ({})", rt.agents.len()),
+        &icons::SPARKLES,
+        None,
+        list,
+        k,
+        t,
+    )
 }
 
-fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
+fn build_workflow_runs_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
     let mut runs = s.workflow_runs.clone();
     runs.sort_by_key(|b| std::cmp::Reverse(b.started_at));
 
@@ -324,11 +433,15 @@ fn build_workflow_runs_card(s: &AppState, k: &Kit) -> El {
         );
     }
 
-    Card::new()
-        .title("Workflow runs", Some(&icons::CLOCK))
-        .child(list)
-        .build(k)
-        .key("context-workflow-runs-card")
+    context_section(
+        "context-workflow-runs-card",
+        "Workflow runs",
+        &icons::CLOCK,
+        None,
+        list,
+        k,
+        t,
+    )
 }
 
 pub(crate) fn explorer_dir_state_key(workspace_id: &str, dir: &str) -> String {
@@ -880,11 +993,17 @@ fn push_explorer_tree(
 
 fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
     let Some(ws) = s.active_workspace() else {
-        return Card::new()
-            .title("Workspace files", Some(&icons::FOLDER))
-            .description("No workspace selected.")
-            .build(k)
-            .key("context-files-empty");
+        return context_section(
+            "context-files-empty",
+            "Workspace files",
+            &icons::FOLDER,
+            None,
+            text("No workspace selected.")
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+            k,
+            t,
+        );
     };
 
     let ws_id_refresh = ws.id.clone();
@@ -929,12 +1048,15 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mu
         }
     };
 
-    Card::new()
-        .title(format!("Files · {}", ws.name), Some(&icons::FOLDER))
-        .action(refresh_btn)
-        .child(body)
-        .build(k)
-        .key("context-files-card")
+    context_section(
+        "context-files-card",
+        format!("Files · {}", ws.name),
+        &icons::FOLDER,
+        Some(refresh_btn),
+        body,
+        k,
+        t,
+    )
 }
 
 #[cfg(test)]

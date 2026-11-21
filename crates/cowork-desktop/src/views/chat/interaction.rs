@@ -298,6 +298,70 @@ fn lookup_interaction_error<'a>(
         .map(String::as_str)
 }
 
+fn command_approval_title_and_badge(
+    sandbox: bool,
+    dangerous: bool,
+    risk_code: Option<&str>,
+) -> (String, String, StatusPillTone) {
+    if sandbox {
+        return (
+            "Re-run outside sandbox?".to_string(),
+            "Full access".to_string(),
+            StatusPillTone::Danger,
+        );
+    }
+    if dangerous {
+        return (
+            "Run potentially dangerous command?".to_string(),
+            "High risk".to_string(),
+            StatusPillTone::Danger,
+        );
+    }
+    if let Some(code) = risk_code.map(str::trim).filter(|c| !c.is_empty()) {
+        match code.to_ascii_lowercase().as_str() {
+            "low" => (
+                "Run command".to_string(),
+                "Low risk".to_string(),
+                StatusPillTone::Warning,
+            ),
+            "medium" => (
+                "Run command".to_string(),
+                "Medium risk".to_string(),
+                StatusPillTone::Warning,
+            ),
+            "high" | "critical" => (
+                "Run command".to_string(),
+                "High risk".to_string(),
+                StatusPillTone::Danger,
+            ),
+            _ => (
+                approval_risk_label(code),
+                "Approval needed".to_string(),
+                StatusPillTone::Warning,
+            ),
+        }
+    } else {
+        (
+            "Run command".to_string(),
+            "Approval needed".to_string(),
+            StatusPillTone::Warning,
+        )
+    }
+}
+
+fn build_elevated_interaction_card(key: String, t: &ThemeTokens, body: El) -> El {
+    col()
+        .key(key)
+        .w_full()
+        .min_w(0.0)
+        .max_w(768.0)
+        .radius(12.0)
+        .fill(if t.dark { t.card_bg } else { t.elevated_bg })
+        .border(1.0, t.border)
+        .clip_rounded(12.0)
+        .child(body)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_command_approval_card(
     k: &Kit,
@@ -319,98 +383,64 @@ fn build_command_approval_card(
         || reason.is_some_and(|r| r.to_ascii_lowercase().contains("sandbox"));
     let dangerous = risk_code.is_some_and(|r| r.contains("dangerous"));
 
-    let heading = if sandbox {
-        "Re-run with full access?".to_string()
-    } else if let Some(code) = risk_code.filter(|c| !c.trim().is_empty()) {
-        approval_risk_label(code)
-    } else if let Some(r) = reason.filter(|r| !r.trim().is_empty()) {
-        approval_risk_label(r)
-    } else {
-        "Needs your review".to_string()
-    };
+    let (heading, badge, tone) = command_approval_title_and_badge(sandbox, dangerous, risk_code);
+    let is_danger = matches!(tone, StatusPillTone::Danger);
+    let icon_color = if is_danger { t.danger } else { t.text_muted };
 
-    let border_col = if sandbox || dangerous {
-        k.alpha(t.danger, 0.35)
-    } else {
-        k.alpha(t.warning, 0.38)
-    };
-    let bg_col = if sandbox || dangerous {
-        k.alpha(t.danger, 0.06)
-    } else {
-        k.alpha(t.warning, 0.06)
-    };
+    let mut body = col().w_full().min_w(0.0).gap(10.0).px(16.0).py(13.0);
 
-    let mut card = col()
-        .key(card_key(&req_key, item_id))
+    let mut header = row()
         .w_full()
         .min_w(0.0)
-        .max_w(768.0)
-        .gap(10.0)
-        .px(16.0)
-        .py(14.0)
-        .radius(14.0)
-        .fill(bg_col)
-        .border(1.0, border_col);
+        .items_center()
+        .gap(7.0)
+        .child(icon(&icons::SHIELD_ALERT, 14.0).color(icon_color))
+        .child(
+            text(heading)
+                .font(k.ty.ui_medium)
+                .color(t.text_base)
+                .truncate(),
+        );
+    if is_danger {
+        header = header.child(status_pill(k, t, badge, StatusPillTone::Danger));
+    } else {
+        header = header
+            .child(text("·").font(k.ty.small).color(t.text_faint))
+            .child(text(badge).font(k.ty.small).color(t.text_muted));
+    }
+    header = header.child(spacer());
 
-    card = card.child(build_card_header(
-        k,
-        t,
-        if sandbox {
-            "Sandbox blocked"
-        } else {
-            "Approval needed"
-        },
-        if sandbox || dangerous {
-            StatusPillTone::Danger
-        } else {
-            StatusPillTone::Warning
-        },
-        &icons::SHIELD_ALERT,
-        position,
-        total,
-    ));
-
-    card = card.child(
-        text(heading)
-            .font(k.ty.body_medium)
-            .color(t.text_base)
-            .wrap()
-            .w_full(),
-    );
-
-    if let Some(r) = reason.filter(|v| !v.trim().is_empty()) {
-        card = card.child(
-            text(r.to_string())
-                .font(k.ty.ui)
-                .color(t.text_muted)
-                .wrap()
-                .w_full(),
+    if let Some(dir) = cwd.filter(|c| !c.trim().is_empty()) {
+        header = header.child(
+            text(dir.to_string())
+                .font(k.ty.mono)
+                .color(t.text_faint)
+                .max_w(240.0)
+                .truncate(),
         );
     }
+    if total > 1 {
+        header = header.child(
+            text(format!("{position} of {total}"))
+                .font(k.ty.text_xsmall)
+                .color(t.text_muted),
+        );
+    }
+    body = body.child(header);
 
     if let Some(cmd) = command.filter(|c| !c.trim().is_empty()) {
-        card = card.child(build_code_preview_box(
+        body = body.child(build_code_preview_box(
             t,
             format!("cmd-preview:{req_key}:{item_id}"),
             cmd,
             k.ty.mono,
-            10.0,
+            9.0,
+            true,
         ));
     }
 
-    if let Some(dir) = cwd.filter(|c| !c.trim().is_empty()) {
-        card = card.child(
-            text(format!("Working directory: {dir}"))
-                .font(k.ty.text_xsmall)
-                .color(t.text_faint)
-                .truncate()
-                .w_full()
-                .min_w(0.0),
-        );
-    }
-
     if let Some(err) = error_msg {
-        card = card.child(build_error_strip(k, t, err));
+        body = body.child(build_error_strip(k, t, err));
     }
 
     let id_deny = request_id.clone();
@@ -421,15 +451,28 @@ fn build_command_approval_card(
     let ws_allow = workspace_id;
     let tid_allow = thread_id;
 
-    card.child(
+    let mut footer = row().w_full().min_w(0.0).items_center().gap(10.0).pt(1.0);
+    if let Some(r) = reason.filter(|v| !v.trim().is_empty()) {
+        footer = footer.child(
+            text(r.to_string())
+                .font(k.ty.small)
+                .color(t.text_muted)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0),
+        );
+    } else {
+        footer = footer.child(spacer());
+    }
+
+    footer = footer.child(
         row()
-            .w_full()
-            .justify_end()
-            .gap(8.0)
-            .pt(2.0)
+            .items_center()
+            .gap(6.0)
+            .shrink()
             .child(
                 Button::new(if sandbox { "Keep blocked" } else { "Deny" })
-                    .variant(ButtonVariant::Outline)
+                    .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Small)
                     .on_press(move |s: &mut AppState| {
                         s.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
@@ -448,10 +491,10 @@ fn build_command_approval_card(
                 } else {
                     "Approve"
                 })
-                .variant(if dangerous {
+                .variant(if sandbox || dangerous {
                     ButtonVariant::Danger
                 } else {
-                    ButtonVariant::Contrast
+                    ButtonVariant::Submit
                 })
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut AppState| {
@@ -465,7 +508,10 @@ fn build_command_approval_card(
                 .build(k)
                 .key(format!("approve:{req_key}")),
             ),
-    )
+    );
+
+    body = body.child(footer);
+    build_elevated_interaction_card(card_key(&req_key, item_id), t, body)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -483,56 +529,54 @@ fn build_file_approval_card(
     error_msg: Option<&str>,
 ) -> El {
     let req_key = request_id_key(request_id);
-    let mut card = col()
-        .key(card_key(&req_key, item_id))
+    let mut header = row()
         .w_full()
         .min_w(0.0)
-        .max_w(768.0)
+        .items_center()
+        .gap(7.0)
+        .child(icon(&icons::SHIELD_ALERT, 14.0).color(t.text_muted))
+        .child(
+            text("Allow file access")
+                .font(k.ty.ui_medium)
+                .color(t.text_base)
+                .truncate(),
+        )
+        .child(text("·").font(k.ty.small).color(t.text_faint))
+        .child(
+            text("Outside workspace")
+                .font(k.ty.small)
+                .color(t.text_muted),
+        )
+        .child(spacer());
+    if total > 1 {
+        header = header.child(
+            text(format!("{position} of {total}"))
+                .font(k.ty.text_xsmall)
+                .color(t.text_muted),
+        );
+    }
+
+    let mut body = col()
+        .w_full()
+        .min_w(0.0)
         .gap(10.0)
         .px(16.0)
-        .py(14.0)
-        .radius(14.0)
-        .fill(k.alpha(t.warning, 0.06))
-        .border(1.0, k.alpha(t.warning, 0.35))
-        .child(build_card_header(
-            k,
-            t,
-            "File access approval",
-            StatusPillTone::Warning,
-            &icons::SHIELD_ALERT,
-            position,
-            total,
-        ))
-        .child(
-            text("Allow file access or edit outside default workspace rules?")
-                .font(k.ty.body_medium)
-                .color(t.text_base)
-                .wrap()
-                .w_full(),
-        );
+        .py(13.0)
+        .child(header);
 
     if let Some(p) = path.filter(|v| !v.trim().is_empty()) {
-        card = card.child(build_code_preview_box(
+        body = body.child(build_code_preview_box(
             t,
             format!("file-preview:{req_key}:{item_id}"),
             p,
             k.ty.mono,
             8.0,
+            false,
         ));
     }
 
-    if let Some(r) = reason.filter(|v| !v.trim().is_empty()) {
-        card = card.child(
-            text(approval_risk_label(r))
-                .font(k.ty.ui)
-                .color(t.text_muted)
-                .wrap()
-                .w_full(),
-        );
-    }
-
     if let Some(err) = error_msg {
-        card = card.child(build_error_strip(k, t, err));
+        body = body.child(build_error_strip(k, t, err));
     }
 
     let id_deny = request_id.clone();
@@ -543,15 +587,28 @@ fn build_file_approval_card(
     let ws_allow = workspace_id;
     let tid_allow = thread_id;
 
-    card.child(
+    let mut footer = row().w_full().min_w(0.0).items_center().gap(10.0).pt(1.0);
+    if let Some(r) = reason.filter(|v| !v.trim().is_empty()) {
+        footer = footer.child(
+            text(approval_risk_label(r))
+                .font(k.ty.small)
+                .color(t.text_muted)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0),
+        );
+    } else {
+        footer = footer.child(spacer());
+    }
+
+    footer = footer.child(
         row()
-            .w_full()
-            .justify_end()
-            .gap(8.0)
-            .pt(2.0)
+            .items_center()
+            .gap(6.0)
+            .shrink()
             .child(
                 Button::new("Deny")
-                    .variant(ButtonVariant::Outline)
+                    .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Small)
                     .on_press(move |s: &mut AppState| {
                         s.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
@@ -566,7 +623,7 @@ fn build_file_approval_card(
             )
             .child(
                 Button::new("Approve")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Small)
                     .on_press(move |s: &mut AppState| {
                         s.dispatch(Action::Chat(ChatAction::ResolveServerRequest {
@@ -579,7 +636,10 @@ fn build_file_approval_card(
                     .build(k)
                     .key(format!("file-allow:{req_key}")),
             ),
-    )
+    );
+
+    body = body.child(footer);
+    build_elevated_interaction_card(card_key(&req_key, item_id), t, body)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -616,10 +676,10 @@ fn build_user_input_card(
         .max_w(768.0)
         .gap(10.0)
         .px(16.0)
-        .py(14.0)
-        .radius(14.0)
-        .fill(k.alpha(t.accent, 0.05))
-        .border(1.0, k.alpha(t.accent, 0.28));
+        .py(13.0)
+        .radius(12.0)
+        .fill(if t.dark { t.card_bg } else { t.elevated_bg })
+        .border(1.0, t.border);
 
     let badge_text = if step_count > 1 {
         format!("Question {} of {step_count}", active_step + 1)
@@ -677,19 +737,19 @@ fn build_user_input_card(
                 .gap(8.0)
                 .px(12.0)
                 .py(8.0)
-                .radius(10.0)
+                .radius(8.0)
                 .fill(if is_selected {
-                    k.alpha(t.accent, 0.14)
+                    k.alpha(t.accent, 0.12)
                 } else {
-                    t.card_bg
+                    t.panel_bg
                 })
-                .hover(t.elevated_bg)
+                .hover(t.hover)
                 .border(
                     1.0,
                     if is_selected {
-                        t.accent
+                        k.alpha(t.accent, 0.55)
                     } else {
-                        t.border_muted
+                        rune::Color::TRANSPARENT
                     },
                 )
                 .cursor(Cursor::Pointer)
@@ -861,7 +921,7 @@ fn build_user_input_card(
         let req_next = req_key.clone();
         footer = footer.child(
             Button::new("Next")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .disabled(!can_submit_current)
                 .on_press(move |s: &mut AppState| {
@@ -880,7 +940,7 @@ fn build_user_input_card(
         let id_send = request_id.clone();
         footer = footer.child(
             Button::new("Send")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .disabled(!can_submit_current)
                 .on_press(move |s: &mut AppState| {
@@ -1037,14 +1097,12 @@ fn build_card_header(
     let mut hdr = row()
         .w_full()
         .items_center()
-        .gap(8.0)
+        .gap(7.0)
         .child(icon(badge_icon, 14.0).color(match tone {
             StatusPillTone::Danger => t.danger,
-            StatusPillTone::Warning => t.warning,
-            StatusPillTone::Accent => t.accent,
             _ => t.text_muted,
         }))
-        .child(status_pill(k, t, badge, tone))
+        .child(text(badge).font(k.ty.small_medium).color(t.text_muted))
         .child(spacer());
 
     if total > 1 {
@@ -1065,7 +1123,40 @@ fn build_code_preview_box(
     content: &str,
     font: TextStyle,
     py: f32,
+    command_prefix: bool,
 ) -> El {
+    let inner = if command_prefix {
+        row()
+            .w_full()
+            .min_w(0.0)
+            .px(14.0)
+            .py(py)
+            .gap(8.0)
+            .items_start()
+            .child(text("$").font(font).color(t.text_faint).shrink())
+            .child(
+                text(content.to_string())
+                    .key(format!("{key}:text"))
+                    .font(font)
+                    .color(t.text_base)
+                    .wrap_anywhere()
+                    .selectable(true)
+                    .grow(1.0)
+                    .min_w(0.0),
+            )
+    } else {
+        col().w_full().min_w(0.0).px(14.0).py(py).child(
+            text(content.to_string())
+                .key(format!("{key}:text"))
+                .font(font)
+                .color(t.text_base)
+                .wrap_anywhere()
+                .selectable(true)
+                .w_full()
+                .min_w(0.0),
+        )
+    };
+
     col()
         .key(key.clone())
         .dir(Direction::Ltr)
@@ -1073,8 +1164,6 @@ fn build_code_preview_box(
         .min_w(0.0)
         .radius(8.0)
         .fill(t.code_bg)
-        .border(1.0, t.border_muted)
-        .border_layout()
         .clip_rounded(8.0)
         .child(
             col()
@@ -1085,19 +1174,7 @@ fn build_code_preview_box(
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
-                .scroll_edge_fade(12.0)
-                .child(
-                    col().w_full().min_w(0.0).px(14.0).py(py).child(
-                        text(content.to_string())
-                            .key(format!("{key}:text"))
-                            .font(font)
-                            .color(t.text_base)
-                            .wrap_anywhere()
-                            .selectable(true)
-                            .w_full()
-                            .min_w(0.0),
-                    ),
-                ),
+                .child(inner),
         )
 }
 

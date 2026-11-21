@@ -958,7 +958,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     if !disconnected_all.is_empty() {
         header_actions.push(
             Button::new("New provider")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .icon(&icons::PLUS)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
@@ -1041,7 +1041,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         if query_empty && !disconnected_all.is_empty() {
             empty = empty.action(
                 Button::new("New provider")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .icon(&icons::PLUS)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {

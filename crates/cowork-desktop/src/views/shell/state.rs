@@ -463,6 +463,7 @@ fn has_blocking_overlay_or_focused_input(s: &AppState) -> bool {
         || s.chat_ui.reasoning_open
         || s.chat_ui.landing_target_open
         || s.chat_ui.model_combobox.is_open()
+        || s.chat_ui.model_picker_search.focused
         || s.chat_ui.active_citation_popover.is_some()
         || s.chat_ui.active_mention_popover.is_some()
         || s.composer_edit.focused

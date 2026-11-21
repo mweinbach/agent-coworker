@@ -64,7 +64,7 @@ const WORKSPACE_STARTER_PROMPTS: [StarterPrompt; 4] = [
     },
 ];
 
-const QUICK_STARTER_PROMPTS: [StarterPrompt; 3] = [
+const QUICK_STARTER_PROMPTS: [StarterPrompt; 4] = [
     StarterPrompt {
         id: "draft-plan",
         label: "Draft a plan",
@@ -82,6 +82,12 @@ const QUICK_STARTER_PROMPTS: [StarterPrompt; 3] = [
         label: "Polish writing",
         detail: "Make your message clear",
         prompt: "Help me make this writing clearer, tighter, and more persuasive.",
+    },
+    StarterPrompt {
+        id: "explain-concept",
+        label: "Break down a topic",
+        detail: "Get a clear summary and mental model",
+        prompt: "Break down this topic clearly with key trade-offs and concrete examples.",
     },
 ];
 

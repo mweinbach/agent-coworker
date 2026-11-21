@@ -179,21 +179,30 @@ pub fn build_toolbar(
 
     let mut heading = row()
         .key("topbar-thread-meta")
-        .gap(8.0)
+        .gap(6.0)
         .center_y()
         .shrink()
-        .min_w(0.0)
-        .child(
-            text(title)
-                .key("topbar-title")
-                .font(k.ty.ui_medium)
-                .color(k.c.text_base)
-                .truncate(),
-        );
+        .min_w(0.0);
 
     if !compact && let Some(ws_name) = workspace_label {
-        heading = heading.child(Badge::new(ws_name).variant(BadgeVariant::Subtle).build(k));
+        heading = heading
+            .child(
+                text(ws_name)
+                    .font(k.ty.ui)
+                    .color(t.text_muted)
+                    .max_w(180.0)
+                    .truncate(),
+            )
+            .child(text("/").font(k.ty.ui).color(t.text_faint));
     }
+
+    heading = heading.child(
+        text(title)
+            .key("topbar-title")
+            .font(k.ty.ui_medium)
+            .color(k.c.text_base)
+            .truncate(),
+    );
 
     if is_busy {
         heading = heading.child(

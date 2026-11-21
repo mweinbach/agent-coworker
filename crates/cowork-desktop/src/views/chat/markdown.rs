@@ -89,7 +89,7 @@ pub fn markdown_style(
         .link_hover(t.accent_hover)
         .inline_code_bg(t.code_bg)
         .inline_code_pad(1.5)
-        .code_block(t.code_bg, t.border)
+        .code_block(Color::TRANSPARENT, Color::TRANSPARENT)
         .code_block_padding(12.0, 10.0)
         .code_block_font(TextStyle {
             size: if compact { 12.0 } else { 12.5 },
@@ -640,12 +640,12 @@ fn desktop_markdown_chunk(
             let header = row()
                 .w_full()
                 .items_center()
-                .px(8.0)
-                .py(2.0)
+                .px(12.0)
+                .py(3.0)
                 .child(
                     text(lang_label)
-                        .font(kit_code.ty.small_medium)
-                        .color(tok_code.text_muted),
+                        .font(kit_code.ty.mono)
+                        .color(tok_code.text_faint),
                 )
                 .child(spacer())
                 .child(copy_btn);
@@ -653,8 +653,13 @@ fn desktop_markdown_chunk(
             col()
                 .key(block_key)
                 .w_full()
-                .gap(4.0)
+                .radius(10.0)
+                .fill(tok_code.code_bg)
+                .border(1.0, tok_code.border_muted)
+                .border_layout()
+                .clip_rounded(10.0)
                 .child(header)
+                .child(rune::el().w_full().h(1.0).fill(tok_code.border_muted))
                 .child(card)
         })
         .on_link_tx(move |s: &mut AppState, url, tx| {
@@ -693,12 +698,12 @@ fn desktop_markdown_chunk(
             let header = row()
                 .w_full()
                 .items_center()
-                .px(8.0)
-                .py(2.0)
+                .px(12.0)
+                .py(3.0)
                 .child(
                     text("Diagram")
                         .font(kit_diag.ty.small_medium)
-                        .color(tok_diag.text_muted),
+                        .color(tok_diag.text_faint),
                 )
                 .child(spacer())
                 .child(copy_btn);
@@ -706,8 +711,13 @@ fn desktop_markdown_chunk(
             col()
                 .key(block_key)
                 .w_full()
-                .gap(4.0)
+                .radius(10.0)
+                .fill(tok_diag.card_bg)
+                .border(1.0, tok_diag.border_muted)
+                .border_layout()
+                .clip_rounded(10.0)
                 .child(header)
+                .child(rune::el().w_full().h(1.0).fill(tok_diag.border_muted))
                 .child(card)
         });
 
@@ -795,7 +805,7 @@ pub fn citation_sources_carousel(
     };
 
     let trigger = Button::new(label)
-        .variant(ButtonVariant::Outline)
+        .variant(ButtonVariant::Ghost)
         .control_size(ControlSize::Small)
         .icon(&icons::GLOBE)
         .expanded(expanded)

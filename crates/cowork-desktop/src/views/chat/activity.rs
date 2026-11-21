@@ -219,34 +219,23 @@ fn build_completed_group_header(
         &icons::CHEVRON_RIGHT
     };
 
-    let trigger = row()
+    let mut trigger = row()
         .key(format!("group-hdr:{}", group.id))
         .items_center()
-        .gap(6.0)
-        .px(8.0)
-        .py(4.0)
-        .radius(8.0)
-        .hover(t.elevated_bg)
+        .gap(5.0)
+        .px(6.0)
+        .py(3.0)
+        .radius(6.0)
+        .hover(t.hover)
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
         .label(label.clone())
-        .on_press(move |s: &mut AppState| s.chat_ui.toggle_activity(&toggle_id, expanded))
-        .child(
-            icon(
-                if group.is_retryable {
-                    &icons::ALERT
-                } else {
-                    &icons::SPARKLES
-                },
-                12.0,
-            )
-            .color(if group.is_retryable {
-                t.danger
-            } else {
-                t.text_faint
-            }),
-        )
+        .on_press(move |s: &mut AppState| s.chat_ui.toggle_activity(&toggle_id, expanded));
+    if group.is_retryable {
+        trigger = trigger.child(icon(&icons::ALERT, 12.0).color(t.danger));
+    }
+    let trigger = trigger
         .child(
             text(label)
                 .font(k.ty.small_medium)
@@ -258,12 +247,7 @@ fn build_completed_group_header(
         )
         .child(icon(chevron, 12.0).color(t.text_faint));
 
-    let mut bar = row()
-        .w_full()
-        .items_center()
-        .gap(8.0)
-        .child(trigger)
-        .child(rune::el().h(1.0).grow(1.0).fill(k.alpha(t.border, 0.4)));
+    let mut bar = row().w_full().items_center().gap(8.0).child(trigger);
 
     if group.error_count > 0 && !group.is_retryable {
         bar = bar.child(status_pill(
@@ -635,13 +619,24 @@ fn build_tool_cluster_card(
 
     let mut trigger = col()
         .w_full()
-        .gap(4.0)
-        .px(10.0)
-        .py(8.0)
-        .radius(8.0)
-        .fill(k.alpha(t.elevated_bg, 0.45))
-        .hover(t.elevated_bg)
-        .border(1.0, t.border_muted)
+        .gap(3.0)
+        .px(8.0)
+        .py(5.0)
+        .radius(7.0)
+        .fill(if fail_count > 0 {
+            k.alpha(t.danger, 0.08)
+        } else {
+            rune::Color::TRANSPARENT
+        })
+        .hover(t.hover)
+        .border(
+            1.0,
+            if fail_count > 0 {
+                k.alpha(t.danger, 0.35)
+            } else {
+                rune::Color::TRANSPARENT
+            },
+        )
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
@@ -726,21 +721,26 @@ fn build_tool_card(
         &icons::CHEVRON_RIGHT
     };
 
+    let attention = awaiting_approval || matches!(status, ToolRunStatus::Failed);
     let mut hdr = row()
         .w_full()
         .items_center()
         .gap(8.0)
-        .px(10.0)
-        .py(8.0)
-        .radius(8.0)
-        .fill(k.alpha(t.elevated_bg, 0.45))
-        .hover(t.elevated_bg)
+        .px(8.0)
+        .py(5.0)
+        .radius(7.0)
+        .fill(if attention {
+            k.alpha(t.danger, 0.08)
+        } else {
+            rune::Color::TRANSPARENT
+        })
+        .hover(t.hover)
         .border(
             1.0,
-            if awaiting_approval || matches!(status, ToolRunStatus::Failed) {
+            if attention {
                 k.alpha(t.danger, 0.4)
             } else {
-                t.border_muted
+                rune::Color::TRANSPARENT
             },
         )
         .cursor(Cursor::Pointer)

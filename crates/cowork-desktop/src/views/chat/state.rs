@@ -219,8 +219,12 @@ pub struct ChatUiState {
     pub mention_dismissed_query: Option<String>,
     /// Active drag-over visual highlight on the composer drop zone.
     pub composer_drop_hover: bool,
-    /// Searchable model selector state.
+    /// Searchable model selector state (tracks open/closed & keyboard highlight).
     pub model_combobox: ComboboxState,
+    /// Live search input buffer inside the split provider/model picker.
+    pub model_picker_search: TextEdit,
+    /// Selected provider ID filter in the split model picker (`None` = all providers).
+    pub model_provider_filter: Option<String>,
     /// Reasoning effort selector open flag.
     pub reasoning_open: bool,
     /// Landing workspace/project target popover open flag.
@@ -277,6 +281,8 @@ impl Default for ChatUiState {
             mention_dismissed_query: None,
             composer_drop_hover: false,
             model_combobox: ComboboxState::default(),
+            model_picker_search: TextEdit::default(),
+            model_provider_filter: None,
             reasoning_open: false,
             landing_target_open: false,
             composer_height_override: None,

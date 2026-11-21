@@ -356,7 +356,7 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         if let Some(ts) = render_item_timestamp(node)
             && let Some(bucket) = day_bucket_key(ts)
         {
-            if prev_bucket != Some(bucket) {
+            if prev_bucket.is_some() && prev_bucket != Some(bucket) {
                 rows.push(RowSpec::Ready {
                     key: format!("day:{}:{}", bucket.0, bucket.1),
                     el: row().w_full().max_w(768.0).child(day_separator_row(

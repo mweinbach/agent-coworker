@@ -47,7 +47,8 @@ pub fn composer_mention_spans(
         .collect()
 }
 
-/// Renders sent user message text with interactive mention pills (`@skill`, `$plugin`, `/path`).
+/// Renders sent user message text with interactive mention pills (`@skill`, `$plugin`, `/path`)
+/// and neutral monospace chips for inline `` `code` `` spans.
 pub fn mention_rich_text(
     body_text: &str,
     catalog: &MentionCatalog,
@@ -60,44 +61,57 @@ pub fn mention_rich_text(
     let segments = parse_composer_segments(body_text, catalog);
     let chip_bg = k.alpha(t.accent, if t.dark { 0.18 } else { 0.13 });
     let hover_bg = k.alpha(t.accent, if t.dark { 0.28 } else { 0.20 });
+    let inline_code_bg = k.alpha(t.text_base, if t.dark { 0.08 } else { 0.07 });
+    let inline_code_size = (style.size - 1.5).max(11.0);
 
+    let mut display_text = String::with_capacity(body_text.len());
     let mut spans: Vec<Span> = Vec::new();
     let mut links: Vec<Link> = Vec::new();
     let mut items_for_click: Vec<MentionItem> = Vec::new();
 
     for seg in segments {
-        if let ComposerSegment::Mention {
-            kind,
-            name,
-            start,
-            end,
-            ..
-        } = seg
-            && start < end
-        {
-            spans.push(
-                Span::new(start, end)
-                    .bg(chip_bg, 4.0)
-                    .color(t.accent)
-                    .weight(550.0),
-            );
-            if let Some(found) = catalog
-                .items
-                .iter()
-                .find(|m| m.kind == kind && m.name == name)
-            {
-                let idx = items_for_click.len();
-                let help_text = if found.description.is_empty() {
-                    found.badge.clone()
-                } else {
-                    found.description.clone()
-                };
-                items_for_click.push(found.clone());
-                links.push(
-                    Link::new(start..end, format!("mention:{idx}"))
-                        .hover(LinkPaint::new().bg(hover_bg).ring(t.accent, 1.0))
-                        .help(help_text),
+        match seg {
+            ComposerSegment::Text { text: chunk, .. } => {
+                append_inline_code_text(
+                    chunk,
+                    &mut display_text,
+                    &mut spans,
+                    inline_code_bg,
+                    inline_code_size,
                 );
+            }
+            ComposerSegment::Mention {
+                kind, name, raw, ..
+            } => {
+                let start = display_text.len();
+                display_text.push_str(raw);
+                let end = display_text.len();
+                if start < end {
+                    spans.push(
+                        Span::new(start, end)
+                            .bg(chip_bg, 4.0)
+                            .color(t.accent)
+                            .weight(550.0),
+                    );
+                    if let Some(found) = catalog
+                        .items
+                        .iter()
+                        .find(|m| m.kind == kind && m.name == name)
+                    {
+                        let idx = items_for_click.len();
+                        let help_text = if found.description.is_empty() {
+                            found.badge.clone()
+                        } else {
+                            found.description.clone()
+                        };
+                        items_for_click.push(found.clone());
+                        links.push(
+                            Link::new(start..end, format!("mention:{idx}"))
+                                .hover(LinkPaint::new().bg(hover_bg).ring(t.accent, 1.0))
+                                .help(help_text),
+                        );
+                    }
+                }
             }
         }
     }
@@ -106,7 +120,7 @@ pub fn mention_rich_text(
         *out = items_for_click;
     }
 
-    let mut el_text = rich(body_text.to_owned(), spans)
+    let mut el_text = rich(display_text, spans)
         .font(style)
         .color(t.text_base)
         .wrap()
@@ -127,6 +141,39 @@ pub fn mention_rich_text(
     }
 
     el_text
+}
+
+fn append_inline_code_text(
+    chunk: &str,
+    out: &mut String,
+    spans: &mut Vec<Span>,
+    code_bg: rune::Color,
+    code_size: f32,
+) {
+    let mut rest = chunk;
+    while let Some(open) = rest.find('`') {
+        out.push_str(&rest[..open]);
+        let after_open = &rest[open + 1..];
+        if let Some(close) = after_open.find('`')
+            && close > 0
+            && !after_open[..close].contains('\n')
+        {
+            let start = out.len();
+            out.push_str(&after_open[..close]);
+            let end = out.len();
+            spans.push(
+                Span::new(start, end)
+                    .mono()
+                    .size(code_size)
+                    .bg(code_bg, 3.0),
+            );
+            rest = &after_open[close + 1..];
+        } else {
+            out.push('`');
+            rest = after_open;
+        }
+    }
+    out.push_str(rest);
 }
 
 /// Renders the canvas file tag pill shown at the top of structured canvas user prompts.
@@ -182,21 +229,14 @@ pub fn status_pill(k: &Kit, t: &ThemeTokens, label: impl Into<String>, tone: Sta
         .child(text(label).font(k.ty.small_medium).color(fg))
 }
 
-/// Renders a day boundary divider centered across the feed (`Today`, `Yesterday`, `Mar 4`).
+/// Renders a quiet centered day label when a conversation crosses calendar days.
 pub fn day_separator_row(k: &Kit, t: &ThemeTokens, label: impl Into<String>) -> El {
-    let hairline = || el().h(1.0).grow(1.0).fill(k.alpha(t.border, 0.45));
     row()
         .w_full()
+        .justify_center()
         .items_center()
-        .gap(12.0)
-        .py(4.0)
-        .child(hairline())
-        .child(
-            text(label)
-                .font(k.ty.small_medium)
-                .color(k.alpha(t.text_muted, 0.85)),
-        )
-        .child(hairline())
+        .py(8.0)
+        .child(text(label).font(k.ty.text_xsmall).color(t.text_faint))
 }
 
 /// Renders the initial pending/working row displayed before the first tool/reasoning/reply item lands.
@@ -239,28 +279,23 @@ pub fn working_placeholder_row(k: &Kit, t: &ThemeTokens) -> El {
     )
 }
 
-/// Renders a single vertical timeline rail node (`TimelineNode`: 20px icon dot + vertical connector).
-pub fn timeline_node(k: &Kit, t: &ThemeTokens, dot_icon: El, is_last: bool, content: El) -> El {
-    let mut rail = col().items_center().shrink().child(
-        el().mt(2.0)
-            .size(20.0, 20.0)
-            .radius(9999.0)
-            .fill(t.card_bg)
-            .border(1.0, t.border_muted)
-            .center()
-            .child(dot_icon),
-    );
+/// Renders a single vertical timeline rail node (`TimelineNode`: compact 16px icon + vertical rail).
+pub fn timeline_node(_k: &Kit, t: &ThemeTokens, dot_icon: El, is_last: bool, content: El) -> El {
+    let mut rail = col()
+        .items_center()
+        .shrink()
+        .child(el().mt(4.0).size(16.0, 16.0).center().child(dot_icon));
     if !is_last {
-        rail = rail.child(el().mt(4.0).w(1.0).grow(1.0).fill(k.alpha(t.border, 0.45)));
+        rail = rail.child(el().mt(3.0).w(1.0).grow(1.0).fill(t.border_muted));
     }
 
     row()
         .w_full()
         .min_w(0.0)
         .items_stretch()
-        .gap(10.0)
+        .gap(8.0)
         .child(rail)
-        .child(col().grow(1.0).min_w(0.0).pb(12.0).child(content))
+        .child(col().grow(1.0).min_w(0.0).pb(6.0).child(content))
 }
 
 /// Renders the tool status badge/dot on timeline rows (`Pending`, `Running`, `Failed`, `Declined`, approval).

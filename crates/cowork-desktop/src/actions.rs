@@ -872,6 +872,9 @@ pub enum NativeCommand {
         thread_id: String,
         candidate_ids: Vec<String>,
     },
+    DeleteLocalTranscripts {
+        thread_ids: Vec<String>,
+    },
     AppendTranscriptEvent(TranscriptLogEntry),
     TrackAnalyticsEvent {
         name: String,

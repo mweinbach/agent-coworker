@@ -231,7 +231,7 @@ pub fn format_args_line(args: &[String]) -> String {
             if arg.is_empty()
                 || arg
                     .chars()
-                    .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+                    .any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == '\\')
             {
                 let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
                 format!("\"{escaped}\"")

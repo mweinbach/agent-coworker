@@ -755,7 +755,8 @@ pub fn confirm_dialog(
                 .on_press(move |s: &mut AppState| {
                     confirm_cb(s);
                 })
-                .build(k),
+                .build(k)
+                .key(format!("{}-confirm", spec.key)),
         );
 
     Dialog::new(spec.key, spec.title)

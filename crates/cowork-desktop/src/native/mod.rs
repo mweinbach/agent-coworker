@@ -1765,6 +1765,26 @@ impl NativeWorkerContext {
                     });
                 });
             }
+            NativeCommand::DeleteLocalTranscripts { thread_ids } => {
+                self.transcript_buffer.discard_threads(&thread_ids);
+                let persistence = self.persistence.clone();
+                let logger = self.logger.clone();
+                tokio::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        for tid in thread_ids {
+                            if let Err(err) = persistence.delete_transcript(&tid) {
+                                let meta = json!({ "threadId": tid, "error": err.to_string() });
+                                logger.warn(
+                                    "persistence",
+                                    "failed to delete local transcript",
+                                    Some(&meta),
+                                );
+                            }
+                        }
+                    })
+                    .await;
+                });
+            }
             NativeCommand::AppendTranscriptEvent(entry) => {
                 match transcript_log_entry_to_event(entry) {
                     Ok(ev) => self.transcript_buffer.enqueue(ev),

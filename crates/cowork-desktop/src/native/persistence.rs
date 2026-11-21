@@ -227,6 +227,18 @@ impl TranscriptWriteBuffer {
             .len()
     }
 
+    /// Drops any queued (unflushed) transcript events belonging to `thread_ids` so a pending
+    /// debounced flush cannot recreate a transcript file after deletion.
+    pub fn discard_threads(&self, thread_ids: &[String]) {
+        if thread_ids.is_empty() {
+            return;
+        }
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .pending
+            .retain(|ev| !thread_ids.iter().any(|id| id == &ev.thread_id));
+    }
+
     /// Flushes all currently queued transcript events to `<userData>/transcripts/<threadId>.jsonl`.
     pub fn flush(&self) -> Result<usize, PersistenceError> {
         let batch = {

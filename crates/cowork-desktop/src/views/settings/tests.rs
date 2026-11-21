@@ -1946,3 +1946,186 @@ fn conversation_import_loads_new_destinations_after_leaving_settings() {
         cmd, NativeCommand::StartWorkspaceServer { workspace_id, path, .. } if workspace_id == "new-project" && path == "/registered"
     )));
 }
+
+#[test]
+fn mcp_args_formatter_escapes_backslash_only_arguments_for_lossless_roundtrip() {
+    use super::mcp_server_draft::{
+        McpServerDraftExtras, build_mcp_server_config_with_extras, format_args_line,
+    };
+
+    let original = vec![
+        r"C:\tools\server.js".to_string(),
+        "--flag".to_string(),
+        r"C:\Program Files\My App\run.exe".to_string(),
+        r"trailing\".to_string(),
+        "plain-arg".to_string(),
+    ];
+    let formatted = format_args_line(&original);
+    assert_eq!(parse_args_line(&formatted).unwrap(), original);
+
+    let summary = McpServerSummary {
+        name: "win-tool".to_string(),
+        transport: "stdio".to_string(),
+        enabled: true,
+        config: serde_json::json!({
+            "transport": {
+                "type": "stdio",
+                "command": "node",
+                "args": [r"C:\tools\server.js"],
+            }
+        }),
+        ..Default::default()
+    };
+    let mut draft = draft_from_summary(&summary);
+    // Edit an unrelated field and save; Windows path argument must stay intact.
+    draft.enabled = false;
+    let (_, config) =
+        build_mcp_server_config_with_extras(&draft, &McpServerDraftExtras::default(), None)
+            .expect("valid stdio config");
+    assert_eq!(
+        config["transport"]["args"],
+        serde_json::json!([r"C:\tools\server.js"])
+    );
+}
+
+#[test]
+fn backup_page_exposes_saved_checkpoints_and_dispatches_checkpoint_actions() {
+    use crate::state::{BackupCheckpointSummary, BackupSummary};
+    use crate::ws::WsCommand;
+    use rune::{El, Runtime};
+
+    fn render_backup(s: &AppState, cx: &mut rune::Cx<AppState>) -> El {
+        let (kit, tok) = crate::theme::build_kit_with_accent(
+            false,
+            false,
+            false,
+            s.desktop_settings.accent_palette,
+        );
+        let out = crate::views::settings::backup::view(s, &kit, &tok);
+        let _ = cx;
+        rune::el()
+            .w_full()
+            .h_full()
+            .child(rune_kit::root(out.body, out.overlays))
+    }
+
+    fn click(rt: &mut Runtime<AppState>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+    }
+
+    let mut s = AppState {
+        scene_mode: true,
+        workspaces: vec![WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1)],
+        active_workspace_id: Some("ws-1".into()),
+        backups: vec![BackupSummary {
+            id: "sess-1".into(),
+            target_session_id: "sess-1".into(),
+            label: "Refactor".into(),
+            title: Some("Refactor".into()),
+            created_at: 1_763_000_000_000,
+            size_bytes: 4096,
+            original_snapshot_bytes: Some(2048),
+            checkpoints: vec![
+                BackupCheckpointSummary {
+                    id: "cp-1".into(),
+                    index: 1,
+                    created_at: "2026-11-20T10:00:00Z".into(),
+                    trigger: "auto".into(),
+                    changed: true,
+                    patch_bytes: 512,
+                },
+                BackupCheckpointSummary {
+                    id: "cp-2".into(),
+                    index: 2,
+                    created_at: "2026-11-20T11:00:00Z".into(),
+                    trigger: "manual".into(),
+                    changed: true,
+                    patch_bytes: 1024,
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+        SettingsPageId::Backup,
+    ))));
+
+    let mut rt = Runtime::new(s, render_backup, (1100.0, 820.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+
+    // Both saved checkpoints and the original snapshot are exposed with distinct IDs.
+    assert!(rt.find("backup-item-sess-1::cp-2").is_some());
+    assert!(rt.find("backup-item-sess-1::cp-1").is_some());
+    assert!(rt.find("backup-item-sess-1").is_some());
+
+    // Select cp-1 and verify Inspect delta, Restore checkpoint, and Delete snapshot carry cp-1.
+    click(&mut rt, "backup-item-sess-1::cp-1");
+    assert_eq!(
+        rt.state.settings_ui.backup_selected_id.as_deref(),
+        Some("sess-1::cp-1")
+    );
+
+    click(&mut rt, "backup-inspect-btn");
+    assert!(
+        rt.state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .any(|cmd| matches!(
+                cmd,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/backups/workspace/delta/read"
+                        && params["targetSessionId"] == "sess-1"
+                        && params["checkpointId"] == "cp-1"
+            )),
+        "expected delta/read for selected checkpoint cp-1"
+    );
+
+    click(&mut rt, "backup-restore-btn");
+    assert!(rt.state.settings_ui.backup_restore_confirm_open);
+    click(&mut rt, "backup-restore-confirm-confirm");
+    assert!(
+        rt.state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .any(|cmd| matches!(
+                cmd,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/backups/workspace/restore"
+                        && params["targetSessionId"] == "sess-1"
+                        && params["checkpointId"] == "cp-1"
+            )),
+        "expected restore to pass checkpointId cp-1 instead of restoring original snapshot"
+    );
+
+    click(&mut rt, "backup-delete-btn");
+    assert_eq!(
+        rt.state.settings_ui.backup_delete_confirm_id.as_deref(),
+        Some("sess-1::cp-1")
+    );
+    click(&mut rt, "backup-delete-confirm-confirm");
+    assert!(
+        rt.state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .any(|cmd| matches!(
+                cmd,
+                WsCommand::SendRequest { method, params, .. }
+                    if method == "cowork/backups/workspace/deleteCheckpoint"
+                        && params["targetSessionId"] == "sess-1"
+                        && params["checkpointId"] == "cp-1"
+            )),
+        "expected deleteCheckpoint for selected checkpoint cp-1"
+    );
+}

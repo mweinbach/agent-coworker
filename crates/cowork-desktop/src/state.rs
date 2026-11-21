@@ -1758,6 +1758,7 @@ pub struct AppState {
     pub(crate) pending_presentation_rpcs: HashMap<u64, PendingPresentationRpc>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_delete_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) subscribed_threads_by_workspace: HashMap<String, HashSet<String>>,
     pub(crate) pending_upload_stages_by_key: HashMap<String, usize>,
     pub(crate) persisted_active_thread_id: Option<String>,
@@ -1894,6 +1895,7 @@ impl Default for AppState {
             pending_presentation_rpcs: HashMap::new(),
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
+            pending_delete_threads_by_rpc_id: HashMap::new(),
             subscribed_threads_by_workspace: HashMap::new(),
             pending_upload_stages_by_key: HashMap::new(),
             persisted_active_thread_id: None,
@@ -5846,13 +5848,27 @@ impl AppState {
                 }
             }
             ChatAction::DeleteThread(thread_id) => {
+                let is_draft = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == thread_id)
+                    .is_some_and(|t| t.draft);
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
-                    let cwd = self.workspace_path(&ws_id);
-                    let params = SessionDeleteParams {
-                        cwd,
-                        target_session_id: thread_id,
-                    };
-                    let _ = self.send_ws_typed(&ws_id, "cowork/session/delete", &params, false);
+                    if is_draft {
+                        self.reconcile_deleted_thread(&ws_id, &thread_id);
+                    } else {
+                        let cwd = self.workspace_path(&ws_id);
+                        let params = SessionDeleteParams {
+                            cwd,
+                            target_session_id: thread_id.clone(),
+                        };
+                        if let Some(req_id) =
+                            self.send_ws_typed(&ws_id, "cowork/session/delete", &params, false)
+                        {
+                            self.pending_delete_threads_by_rpc_id
+                                .insert(req_id, thread_id);
+                        }
+                    }
                 }
             }
             ChatAction::ForkThread { thread_id, .. } => {
@@ -9836,6 +9852,15 @@ impl AppState {
                     self.backups = arr.iter().filter_map(parse_backup_summary).collect();
                 }
             }
+            "session_deleted" => {
+                if let Some(target_id) = evt
+                    .get("targetSessionId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    self.reconcile_deleted_thread(workspace_id, target_id);
+                }
+            }
             "session_info" | "session_settings" | "config_updated" => {
                 self.apply_session_config_event(workspace_id, evt);
                 if let Some(id) = tid
@@ -9981,15 +10006,36 @@ impl AppState {
                 let pending_tid = self.pending_hydrate_threads_by_rpc_id.remove(&request_id);
                 if payload.get("coworkSnapshot").is_some() {
                     self.apply_thread_snapshot_response(workspace_id, &payload);
-                } else if let Some(tid) = pending_tid {
+                } else if let Some(tid) = payload
+                    .get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or(pending_tid)
+                {
+                    let thread_seq = payload
+                        .get("thread")
+                        .and_then(|t| t.get("lastEventSeq"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
                     let already_hydrated = self
                         .thread_runtime_by_id
                         .get(&tid)
                         .is_some_and(|rt| rt.hydrated && !rt.feed.is_empty());
+                    if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
+                        let stale = thread_seq > 0 && rt.last_event_seq > thread_seq;
+                        if !stale {
+                            reconcile_thread_running_status(rt, &payload);
+                        }
+                        if already_hydrated {
+                            rt.hydrating = false;
+                        }
+                    } else if extract_thread_running_status(&payload).is_some() {
+                        let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
+                        reconcile_thread_running_status(rt, &payload);
+                    }
                     if !already_hydrated {
                         self.request_local_transcript(&tid);
-                    } else if let Some(rt) = self.thread_runtime_by_id.get_mut(&tid) {
-                        rt.hydrating = false;
                     }
                 }
             }
@@ -10030,7 +10076,31 @@ impl AppState {
                         {
                             self.pending_hydrate_threads_by_rpc_id.insert(req_id, tid);
                         }
+                    } else if extract_thread_running_status(&payload).is_some() {
+                        let thread_seq = payload
+                            .get("thread")
+                            .and_then(|t| t.get("lastEventSeq"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        let rt = self.thread_runtime_by_id.entry(tid).or_default();
+                        let stale = thread_seq > 0 && rt.last_event_seq > thread_seq;
+                        if !stale {
+                            reconcile_thread_running_status(rt, &payload);
+                        }
                     }
+                }
+            }
+            "cowork/session/delete" => {
+                let pending_tid = self.pending_delete_threads_by_rpc_id.remove(&request_id);
+                let evt = payload.get("event").unwrap_or(&payload);
+                let target_id = evt
+                    .get("targetSessionId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or(pending_tid);
+                if let Some(tid) = target_id {
+                    self.reconcile_deleted_thread(workspace_id, &tid);
                 }
             }
             "cowork/creation/preflight" => {
@@ -10403,6 +10473,9 @@ impl AppState {
         if method == "thread/resume" {
             self.pending_resume_threads_by_rpc_id.remove(&request_id);
         }
+        if method == "cowork/session/delete" {
+            self.pending_delete_threads_by_rpc_id.remove(&request_id);
+        }
         if matches!(method, "thread/read" | "thread/hydrate" | "thread/resume")
             && let Some(tid) = self.pending_hydrate_threads_by_rpc_id.remove(&request_id)
         {
@@ -10771,7 +10844,14 @@ impl AppState {
         let snap_seq = snapshot
             .get("lastEventSeq")
             .and_then(Value::as_u64)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(
+                payload
+                    .get("thread")
+                    .and_then(|t| t.get("lastEventSeq"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            );
 
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == session_id) {
             if let Some(title) = snapshot.get("title").and_then(Value::as_str) {
@@ -10823,6 +10903,7 @@ impl AppState {
         let stale_snapshot = snap_seq > 0 && rt.last_event_seq > snap_seq;
         if !stale_snapshot {
             rt.last_event_seq = rt.last_event_seq.max(snap_seq);
+            reconcile_thread_running_status(rt, payload);
         }
 
         if !stale_snapshot && let Some(feed_arr) = snapshot.get("feed").and_then(Value::as_array) {
@@ -11439,11 +11520,118 @@ impl AppState {
         });
     }
 
+    fn reconcile_deleted_thread(&mut self, workspace_id: &str, thread_id: &str) {
+        let mut removed_ids: Vec<String> = vec![thread_id.to_string()];
+        let mut transcript_ids: Vec<String> = vec![thread_id.to_string()];
+        let push_unique = |list: &mut Vec<String>, id: &str| {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() && !list.iter().any(|existing| existing == trimmed) {
+                list.push(trimmed.to_string());
+            }
+        };
+
+        for t in &self.threads {
+            if t.id == thread_id || t.session_id.as_deref() == Some(thread_id) {
+                push_unique(&mut removed_ids, &t.id);
+                push_unique(&mut transcript_ids, &t.id);
+                if let Some(sid) = t.session_id.as_deref() {
+                    push_unique(&mut removed_ids, sid);
+                    push_unique(&mut transcript_ids, sid);
+                }
+                if let Some(legacy_id) = t.legacy_transcript_id.as_deref() {
+                    push_unique(&mut transcript_ids, legacy_id);
+                }
+            }
+        }
+
+        self.threads
+            .retain(|t| !removed_ids.iter().any(|id| id == &t.id));
+        self.archived_threads
+            .retain(|t| !removed_ids.iter().any(|id| id == &t.id));
+        for id in &removed_ids {
+            self.thread_runtime_by_id.remove(id);
+            self.composer_drafts.remove(id);
+            self.pending_thread_messages.remove(id);
+            if let Some(subs) = self.subscribed_threads_by_workspace.get_mut(workspace_id) {
+                subs.remove(id);
+            }
+        }
+        if self
+            .agent_viewer
+            .as_ref()
+            .is_some_and(|viewer| removed_ids.iter().any(|id| id == &viewer.thread_id))
+        {
+            self.agent_viewer = None;
+        }
+        if self
+            .chat_ui
+            .cancel_subagents_thread_id
+            .as_deref()
+            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+        {
+            self.chat_ui.cancel_subagents_thread_id = None;
+            self.chat_ui.cancel_subagents_open = false;
+        }
+        if self
+            .shell_ui
+            .pending_delete_thread_id
+            .as_deref()
+            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+        {
+            self.shell_ui.pending_delete_thread_id = None;
+        }
+        if self
+            .settings_ui
+            .chats_confirm_delete_id
+            .as_deref()
+            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+        {
+            self.settings_ui.chats_confirm_delete_id = None;
+        }
+
+        if self
+            .nav
+            .current()
+            .active_thread_id
+            .as_deref()
+            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+        {
+            let old_key = self.composer_key();
+            let mut cur = self.nav.current().clone();
+            cur.active_thread_id = None;
+            self.nav.replace_current(cur);
+            self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
+        }
+        if self
+            .persisted_active_thread_id
+            .as_deref()
+            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+        {
+            self.persisted_active_thread_id = None;
+        }
+
+        if !transcript_ids.is_empty() {
+            self.send_native(NativeCommand::DeleteLocalTranscripts {
+                thread_ids: transcript_ids,
+            });
+        }
+
+        if !self.scene_mode {
+            self.persist_state();
+        }
+    }
+
     fn workspace_for_thread(&self, thread_id: &str) -> Option<String> {
         self.threads
             .iter()
             .find(|t| t.id == thread_id)
             .map(|t| t.workspace_id.clone())
+            .or_else(|| {
+                self.archived_threads
+                    .iter()
+                    .find(|t| t.id == thread_id)
+                    .map(|t| t.workspace_id.clone())
+            })
             .or_else(|| self.active_workspace_id.clone())
     }
 
@@ -12928,6 +13116,50 @@ fn parse_timestamp_ms(val: Option<&Value>) -> i64 {
             .map(|dt| dt.timestamp_millis())
             .unwrap_or(0),
         _ => 0,
+    }
+}
+
+fn extract_thread_running_status(payload: &Value) -> Option<bool> {
+    let status_type = payload
+        .get("thread")
+        .and_then(|t| t.get("status"))
+        .and_then(|s| s.get("type").or(Some(s)))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .get("coworkSnapshot")
+                .and_then(|snap| snap.get("status"))
+                .and_then(|s| s.get("type").or(Some(s)))
+                .and_then(Value::as_str)
+        })?;
+    match status_type {
+        "running" => Some(true),
+        "loaded" | "notLoaded" | "idle" | "systemError" => Some(false),
+        _ => None,
+    }
+}
+
+fn reconcile_thread_running_status(rt: &mut ThreadRuntime, payload: &Value) {
+    let Some(is_running) = extract_thread_running_status(payload) else {
+        return;
+    };
+    rt.streaming = is_running;
+    if is_running {
+        if rt.active_turn_id.is_none() {
+            rt.active_turn_id = payload
+                .get("thread")
+                .and_then(|t| t.get("activeTurnId"))
+                .or_else(|| {
+                    payload
+                        .get("coworkSnapshot")
+                        .and_then(|s| s.get("activeTurnId"))
+                })
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+    } else {
+        rt.active_turn_id = None;
     }
 }
 
@@ -18976,5 +19208,247 @@ mod tests {
         assert_eq!(citations[0].snippet.as_deref(), Some("ownership rules"));
         assert_eq!(citations[1].url, "https://example.com");
         assert_eq!(citations[1].title.as_deref(), Some("Example"));
+    }
+
+    #[test]
+    fn hydrate_and_resume_reconcile_running_status_with_stale_response_guard() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
+        state.threads.push(ThreadRecord {
+            id: "th-run".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Running elsewhere".to_string(),
+            session_id: Some("th-run".to_string()),
+            ..ThreadRecord::default()
+        });
+        state.dispatch(Action::Navigate(NavAction::OpenThread(
+            "th-run".to_string(),
+        )));
+
+        // Opening an already-running thread hydrates `rt.streaming = true` from `thread.status.type`.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 101,
+            method: "thread/hydrate".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-run",
+                    "status": { "type": "running" },
+                    "lastEventSeq": 12
+                },
+                "coworkSnapshot": {
+                    "sessionId": "th-run",
+                    "lastEventSeq": 12,
+                    "feed": [
+                        { "id": "u-1", "kind": "user", "content": "Run long tool" }
+                    ]
+                }
+            })),
+        });
+        let rt = state.thread_runtime_by_id.get("th-run").unwrap();
+        assert!(rt.streaming);
+        assert_eq!(rt.last_event_seq, 12);
+
+        // Sending a follow-up while running steers instead of starting a new turn.
+        state.dispatch(Action::Chat(ChatAction::SendMessage {
+            thread_id: Some("th-run".to_string()),
+            text: "Use quick mode".to_string(),
+            busy_policy: ThreadBusyPolicy::Steer,
+            attachments: vec![],
+            references: vec![],
+        }));
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { method, params, .. }
+                        if method == "turn/steer" && params["threadId"] == "th-run"
+                ))
+        );
+
+        // Live turn/completed advances last_event_seq to 15 and clears streaming.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "turn/completed".to_string(),
+            params: json!({ "threadId": "th-run", "seq": 15 }),
+        });
+        assert!(!state.thread_runtime_by_id.get("th-run").unwrap().streaming);
+
+        // A stale out-of-order hydrate or resume response (seq 12 < 15) must NOT flip streaming back to true.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 102,
+            method: "thread/hydrate".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-run",
+                    "status": { "type": "running" },
+                    "lastEventSeq": 12
+                },
+                "coworkSnapshot": {
+                    "sessionId": "th-run",
+                    "lastEventSeq": 12,
+                    "feed": []
+                }
+            })),
+        });
+        assert!(!state.thread_runtime_by_id.get("th-run").unwrap().streaming);
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 103,
+            method: "thread/resume".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-run",
+                    "status": { "type": "running" },
+                    "lastEventSeq": 14
+                }
+            })),
+        });
+        assert!(!state.thread_runtime_by_id.get("th-run").unwrap().streaming);
+
+        // A fresh thread/resume response at seq 20 reconciles running status to true, then loaded clears it.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 104,
+            method: "thread/resume".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-run",
+                    "status": { "type": "running" },
+                    "lastEventSeq": 20
+                }
+            })),
+        });
+        assert!(state.thread_runtime_by_id.get("th-run").unwrap().streaming);
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 105,
+            method: "thread/resume".to_string(),
+            result: Ok(json!({
+                "thread": {
+                    "id": "th-run",
+                    "status": { "type": "loaded" },
+                    "lastEventSeq": 21
+                }
+            })),
+        });
+        assert!(!state.thread_runtime_by_id.get("th-run").unwrap().streaming);
+    }
+
+    #[test]
+    fn delete_thread_response_reconciles_state_navigation_and_deletes_local_transcripts() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
+        state.threads.push(ThreadRecord {
+            id: "th-del".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Delete me".to_string(),
+            session_id: Some("sess-del".to_string()),
+            legacy_transcript_id: Some("legacy-del".to_string()),
+            archived: true,
+            ..ThreadRecord::default()
+        });
+        state.archived_threads.push(ArchivedThreadSummary {
+            id: "th-del".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Delete me".to_string(),
+            archived_at: 10,
+        });
+        state.thread_runtime_by_id.insert(
+            "th-del".to_string(),
+            ThreadRuntime {
+                hydrated: true,
+                feed: vec![FeedItem::Message {
+                    id: "m1".to_string(),
+                    role: FeedMessageRole::User,
+                    content: "hi".to_string(),
+                    client_message_id: None,
+                    attachments: vec![],
+                    references: vec![],
+                    citations: vec![],
+                    streaming: false,
+                    timestamp_ms: 1,
+                }],
+                ..ThreadRuntime::default()
+            },
+        );
+        state.dispatch(Action::Navigate(NavAction::OpenThread(
+            "th-del".to_string(),
+        )));
+        state.persisted_active_thread_id = Some("th-del".to_string());
+
+        state.dispatch(Action::Chat(ChatAction::DeleteThread("th-del".to_string())));
+        let delete_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/session/delete" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected cowork/session/delete RPC");
+
+        state.services.emitted_native_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: delete_req_id,
+            method: "cowork/session/delete".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "session_deleted",
+                    "sessionId": "ws-state-1",
+                    "targetSessionId": "th-del"
+                }
+            })),
+        });
+
+        assert!(state.threads.iter().all(|t| t.id != "th-del"));
+        assert!(state.archived_threads.iter().all(|t| t.id != "th-del"));
+        assert!(!state.thread_runtime_by_id.contains_key("th-del"));
+        assert!(state.route().active_thread_id.is_none());
+        assert!(state.persisted_active_thread_id.is_none());
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    NativeCommand::DeleteLocalTranscripts { thread_ids }
+                        if thread_ids.iter().any(|id| id == "th-del")
+                            && thread_ids.iter().any(|id| id == "sess-del")
+                            && thread_ids.iter().any(|id| id == "legacy-del")
+                )),
+            "expected DeleteLocalTranscripts for all cached transcript IDs"
+        );
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|cmd| matches!(cmd, NativeCommand::SavePersistedState(_))),
+            "expected persisted state update after thread deletion"
+        );
     }
 }

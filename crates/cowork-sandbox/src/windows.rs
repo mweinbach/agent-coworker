@@ -756,6 +756,22 @@ fn win_root_key(path: &Path) -> String {
     }
 }
 
+/// Filters normalized MXC policy paths to entries that currently exist on the host filesystem.
+///
+/// Windows `CreateProcessSecurityEnvironment` resolves policy entries against the host filesystem
+/// and fails with `ERROR_PATH_NOT_FOUND` (`0x80070003`) when a path or intermediate parent
+/// (such as uninitialized `<ws>\output\.git` or `<home>\.cowork\auth`) does not exist on disk.
+/// Overlap stripping in [`build_windows_mxc_spec`] has already run against the full requested
+/// denied and protected sets before this filter is applied.
+#[cfg(any(windows, test))]
+fn filter_existing_mxc_paths(paths: &[String], exists: impl Fn(&Path) -> bool) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|p| exists(Path::new(p)))
+        .cloned()
+        .collect()
+}
+
 #[cfg(windows)]
 mod native_mxc {
     use std::collections::HashMap;
@@ -778,7 +794,7 @@ mod native_mxc {
 
     use super::{
         WindowsMxcBuildOptions, WindowsMxcRequestSpec, build_windows_mxc_spec,
-        ensure_required_mxc_child_env,
+        ensure_required_mxc_child_env, filter_existing_mxc_paths,
     };
     use crate::policy::SandboxPolicy;
     use crate::runner::{
@@ -889,12 +905,16 @@ mod native_mxc {
             }
         };
 
+        let readwrite_paths = filter_existing_mxc_paths(&spec.readwrite_paths, Path::exists);
+        let readonly_paths = filter_existing_mxc_paths(&spec.readonly_paths, Path::exists);
+        let denied_paths = filter_existing_mxc_paths(&spec.denied_paths, Path::exists);
+
         ContainerRequest {
             command: spec.command_line.clone(),
             filesystem: Some(FilesystemPolicy {
-                readwrite_paths: spec.readwrite_paths.clone(),
-                readonly_paths: spec.readonly_paths.clone(),
-                denied_paths: spec.denied_paths.clone(),
+                readwrite_paths,
+                readonly_paths,
+                denied_paths,
                 clear_policy_on_exit: Some(true),
             }),
             network: Some(network),
@@ -1716,5 +1736,13 @@ mod tests {
             scoped.denied_paths.is_empty(),
             "denied_paths must be omitted when host PSEC lacks deny-path support"
         );
+
+        // 3. Host existence filter keeps existing entries and drops nonexistent ones
+        //    (preventing Windows PSEC `CreateProcessSecurityEnvironment` `0x80070003` failures).
+        let filtered = filter_existing_mxc_paths(&spec.denied_paths, |p| {
+            p.to_string_lossy()
+                .eq_ignore_ascii_case(r"C:\Users\Alice\.ssh")
+        });
+        assert_eq!(filtered, vec![r"C:\Users\Alice\.ssh".to_owned()]);
     }
 }

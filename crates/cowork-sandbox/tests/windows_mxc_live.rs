@@ -225,4 +225,39 @@ async fn windows_mxc_enforces_sandbox_or_fails_closed_when_psec_absent() {
         "denied credential read must fail: {deny_res:?}"
     );
     assert!(!deny_res.stdout.contains("top-secret-token"));
+
+    // 6. Nonexistent writable subdirs, missing `.git`/`.cowork`, and missing credential roots
+    //    (including missing intermediate parents) must not cause `CreateProcessSecurityEnvironment`
+    //    to fail with `ERROR_PATH_NOT_FOUND` (`0x80070003`), while existing denied roots stay denied.
+    let empty_ws = root.join("empty_ws");
+    std::fs::create_dir_all(&empty_ws).unwrap();
+    let mut missing_paths_req = new_req(
+        "Set-Content -Path 'created.txt' -Value 'ok'; Write-Output 'missing-paths-ok'",
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                empty_ws.clone(),
+                empty_ws.join("output"),
+                empty_ws.join("uploads"),
+            ],
+            writable_root_kinds: HashMap::new(),
+            network: false,
+        },
+        &empty_ws,
+        &env,
+    );
+    missing_paths_req.read_denied_roots = vec![
+        root.join("missing-home").join(".cowork").join("auth"),
+        empty_ws.join(".cowork").join("auth"),
+        root.join("missing-ssh"),
+        creds.clone(),
+    ];
+    let missing_paths_res = run_req(missing_paths_req).await;
+    assert_eq!(missing_paths_res.exit_code, 0, "{missing_paths_res:?}");
+    assert_eq!(missing_paths_res.stdout.trim(), "missing-paths-ok");
+    assert_eq!(
+        std::fs::read_to_string(empty_ws.join("created.txt"))
+            .unwrap()
+            .trim(),
+        "ok"
+    );
 }

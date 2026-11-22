@@ -230,7 +230,7 @@ pub(crate) fn merge_loopback_no_proxy(existing: Option<&str>) -> String {
     entries.join(",")
 }
 
-fn ct_eq(left: &str, right: &str) -> bool {
+pub(crate) fn ct_eq(left: &str, right: &str) -> bool {
     let a = left.as_bytes();
     let b = right.as_bytes();
     if a.len() != b.len() {

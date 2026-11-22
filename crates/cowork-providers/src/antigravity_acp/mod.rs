@@ -26,7 +26,11 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::codex_app_server::DynamicToolHandler;
-use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth};
+use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth, merge_loopback_no_proxy};
+use crate::harness_mcp_bridge::{
+    BridgedToolLookup, HarnessMcpBridge, bridged_tools_fingerprint_values,
+    filter_bridged_harness_tools, render_harness_mcp_bridge_instructions,
+};
 use crate::managed_runtime::{kill_managed_process_tree, spawn_managed_stdio_process};
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
@@ -213,6 +217,69 @@ fn acp_kind_canonical_tools(kind: &str) -> &'static [&'static str] {
         "fetch" => &["webFetch", "webSearch"],
         _ => &[],
     }
+}
+
+fn acp_bridged_tool_if_authorized<'a>(
+    params: &Value,
+    tools_disabled: bool,
+    authorized_tool_names: Option<&[String]>,
+    lookup: Option<&'a BridgedToolLookup>,
+) -> Option<&'a str> {
+    if tools_disabled {
+        return None;
+    }
+    let tool_call = params.get("toolCall");
+    if let Some(raw_input) = tool_call
+        .and_then(|tc| {
+            tc.get("rawInput")
+                .or_else(|| tc.get("input"))
+                .or_else(|| tc.get("arguments"))
+        })
+        .or_else(|| {
+            params
+                .get("rawInput")
+                .or_else(|| params.get("input"))
+                .or_else(|| params.get("arguments"))
+        })
+        && !raw_input.is_null()
+        && !raw_input.is_object()
+    {
+        return None;
+    }
+    // Never treat a native ACP ToolKind (execute, edit, delete, move, read, search, fetch)
+    // as a Cowork-bridged harness MCP tool.
+    if let Some(kind) = tool_call
+        .and_then(|tc| tc.get("kind"))
+        .or_else(|| params.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        && !acp_kind_canonical_tools(kind).is_empty()
+    {
+        return None;
+    }
+    let raw_name = tool_call
+        .and_then(|tc| {
+            tc.get("toolName")
+                .or_else(|| tc.get("name"))
+                .or_else(|| tc.get("title"))
+        })
+        .or_else(|| {
+            params
+                .get("toolName")
+                .or_else(|| params.get("tool_name"))
+                .or_else(|| params.get("name"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let canonical = lookup?.resolve_acp_tool(raw_name)?;
+    if let Some(allowlist) = authorized_tool_names
+        && !allowlist_contains_tool(allowlist, canonical)
+    {
+        return None;
+    }
+    Some(canonical)
 }
 
 /// Fail-closed authorization check for ACP `session/request_permission` requests against
@@ -469,7 +536,11 @@ fn build_acp_prompt_blocks(
     blocks
 }
 
-fn antigravity_fingerprint(request: &ProviderStepRequest, prefix: &[CanonicalMessage]) -> String {
+fn antigravity_fingerprint(
+    request: &ProviderStepRequest,
+    wire_bridged_tools: &[Value],
+    prefix: &[CanonicalMessage],
+) -> String {
     let mut safe_opts = Map::new();
     if let Some(effort) = antigravity_effort(&request.provider_options) {
         safe_opts.insert("reasoningEffort".into(), Value::String(effort.to_owned()));
@@ -481,20 +552,23 @@ fn antigravity_fingerprint(request: &ProviderStepRequest, prefix: &[CanonicalMes
         provider: "antigravity-acp",
         model_id: &request.model_id,
         system_prompt: &request.system_prompt,
-        tools: &[],
+        tools: wire_bridged_tools,
         authorized_tool_names: request.authorized_tool_names.as_deref(),
         canonical_prefix: prefix,
         stream_options: &safe_opts,
     })
 }
 
-fn resolve_resume_acp_session(request: &ProviderStepRequest) -> Option<(&str, usize)> {
+fn resolve_resume_acp_session<'a>(
+    request: &'a ProviderStepRequest,
+    wire_bridged_tools: &[Value],
+) -> Option<(&'a str, usize)> {
     let cont = request.continuation.as_ref()?;
     let ProviderContinuationState::AntigravityAcp { session_id, .. } = cont else {
         return None;
     };
     for (prefix, delta) in candidate_continuation_splits(&request.messages) {
-        let fp = antigravity_fingerprint(request, prefix);
+        let fp = antigravity_fingerprint(request, wire_bridged_tools, prefix);
         if validate_continuation_state(Some(cont), "antigravity-acp", &request.model_id, &fp)
             .is_some()
             && !delta.is_empty()
@@ -749,6 +823,31 @@ impl ProviderTransport for AntigravityAcpTransport {
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+        let tools_disabled =
+            self.disable_tools || request_disables_all_tools(&request.provider_options);
+        let bridged_tools = if self.tool_handler.is_some() {
+            filter_bridged_harness_tools(
+                &request.tools,
+                request.authorized_tool_names.as_deref(),
+                tools_disabled,
+            )
+        } else {
+            Vec::new()
+        };
+        let wire_bridged_tools = bridged_tools_fingerprint_values(&bridged_tools);
+        let mcp_bridge = if !bridged_tools.is_empty()
+            && let Some(handler) = self.tool_handler.clone()
+        {
+            Some(
+                HarnessMcpBridge::start(bridged_tools.clone(), handler)
+                    .await
+                    .map_err(ProviderTransportError::protocol)?,
+            )
+        } else {
+            None
+        };
+        let mcp_lookup = mcp_bridge.as_ref().map(HarnessMcpBridge::lookup);
+
         let credential_proxy = if let Some(secret) = request
             .api_key
             .as_deref()
@@ -776,7 +875,16 @@ impl ProviderTransport for AntigravityAcpTransport {
             base_url: proxy.base_url().to_owned(),
             proxy_token: proxy.proxy_token().to_owned(),
         });
-        let spawn_env = build_antigravity_acp_spawn_env(&cw_home, &env, proxy_auth.as_ref());
+        let mut spawn_env = build_antigravity_acp_spawn_env(&cw_home, &env, proxy_auth.as_ref());
+        if mcp_bridge.is_some() && proxy_auth.is_none() {
+            let existing = spawn_env
+                .get("NO_PROXY")
+                .or_else(|| spawn_env.get("no_proxy"))
+                .map(String::as_str);
+            let merged = merge_loopback_no_proxy(existing);
+            spawn_env.insert("NO_PROXY".to_owned(), merged.clone());
+            spawn_env.insert("no_proxy".to_owned(), merged);
+        }
         let mut child =
             spawn_managed_stdio_process(&command, &args, &cwd, &spawn_env, "Antigravity ACP")
                 .map_err(ProviderTransportError::protocol)?;
@@ -812,13 +920,12 @@ impl ProviderTransport for AntigravityAcpTransport {
         let pending: Arc<Mutex<PendingAcpMap>> = Arc::new(Mutex::new(HashMap::new()));
         let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<(String, Value)>();
 
-        let tools_disabled =
-            self.disable_tools || request_disables_all_tools(&request.provider_options);
         let authorized_tools_for_reqs = Arc::new(request.authorized_tool_names.clone());
 
         let pending_reader = Arc::clone(&pending);
         let stdin_for_reqs = stdin_tx.clone();
         let handler_for_reqs = self.tool_handler.clone();
+        let mcp_lookup_for_reqs = mcp_lookup.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(child_stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -844,9 +951,20 @@ impl ProviderTransport for AntigravityAcpTransport {
                         let tx_reply = stdin_for_reqs.clone();
                         let handler = handler_for_reqs.clone();
                         let authorized_tools = Arc::clone(&authorized_tools_for_reqs);
+                        let mcp_lookup_req = mcp_lookup_for_reqs.clone();
                         tokio::spawn(async move {
                             let reply = if method == "session/request_permission" {
-                                let approved = if !acp_permission_is_authorized(
+                                let approved = if handler.is_some()
+                                    && acp_bridged_tool_if_authorized(
+                                        &params,
+                                        tools_disabled,
+                                        authorized_tools.as_deref(),
+                                        mcp_lookup_req.as_deref(),
+                                    )
+                                    .is_some()
+                                {
+                                    true
+                                } else if !acp_permission_is_authorized(
                                     &params,
                                     tools_disabled,
                                     authorized_tools.as_deref(),
@@ -915,7 +1033,12 @@ impl ProviderTransport for AntigravityAcpTransport {
 
         let cancel = budget.cancellation_token().clone();
         let turn_id = request.turn_id.clone();
-        let resume_plan = resolve_resume_acp_session(&request);
+        let resume_plan = resolve_resume_acp_session(&request, &wire_bridged_tools);
+        let mcp_servers_payload = mcp_bridge
+            .as_ref()
+            .map(HarnessMcpBridge::acp_mcp_servers_json)
+            .unwrap_or_else(|| json!([]));
+        let has_mcp_bridge = mcp_bridge.is_some();
 
         let setup_res = async {
             let init_res = client
@@ -932,6 +1055,17 @@ impl ProviderTransport for AntigravityAcpTransport {
                     Some(ACP_RPC_TIMEOUT),
                 )
                 .await?;
+
+            if has_mcp_bridge
+                && init_res
+                    .pointer("/agentCapabilities/mcpCapabilities/http")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+            {
+                return Err(ProviderTransportError::protocol(
+                    "Antigravity ACP runtime does not support HTTP MCP servers required to bridge Cowork harness tools.",
+                ));
+            }
 
             // Authenticate via Gemini API key if the agent advertises authMethods and we have a key.
             let advertises_gemini_key = init_res
@@ -966,7 +1100,7 @@ impl ProviderTransport for AntigravityAcpTransport {
                         json!({
                             "sessionId": stored_sid,
                             "cwd": cwd_str,
-                            "mcpServers": [],
+                            "mcpServers": mcp_servers_payload.clone(),
                         }),
                         Some(ACP_RPC_TIMEOUT),
                     )
@@ -980,7 +1114,7 @@ impl ProviderTransport for AntigravityAcpTransport {
                         let created = client
                             .request(
                                 "session/new",
-                                json!({ "cwd": cwd_str, "mcpServers": [] }),
+                                json!({ "cwd": cwd_str, "mcpServers": mcp_servers_payload.clone() }),
                                 Some(ACP_RPC_TIMEOUT),
                             )
                             .await?;
@@ -999,7 +1133,7 @@ impl ProviderTransport for AntigravityAcpTransport {
                 let created = client
                     .request(
                         "session/new",
-                        json!({ "cwd": cwd_str, "mcpServers": [] }),
+                        json!({ "cwd": cwd_str, "mcpServers": mcp_servers_payload.clone() }),
                         Some(ACP_RPC_TIMEOUT),
                     )
                     .await?;
@@ -1072,11 +1206,22 @@ impl ProviderTransport for AntigravityAcpTransport {
             }
         };
 
+        let effective_system_prompt = if mcp_bridge.is_some()
+            && let Some(note) = render_harness_mcp_bridge_instructions(&bridged_tools)
+        {
+            if request.system_prompt.trim().is_empty() {
+                note
+            } else {
+                format!("{}\n\n{note}", request.system_prompt)
+            }
+        } else {
+            request.system_prompt.clone()
+        };
         let prompt_blocks = match (resumed, resume_plan) {
             (true, Some((_, delta_start))) => {
                 build_acp_prompt_blocks("", &request.messages[delta_start..], false)
             }
-            _ => build_acp_prompt_blocks(&request.system_prompt, &request.messages, true),
+            _ => build_acp_prompt_blocks(&effective_system_prompt, &request.messages, true),
         };
         if prompt_blocks.is_empty() {
             drop(stdin_tx);
@@ -1255,7 +1400,12 @@ impl ProviderTransport for AntigravityAcpTransport {
                                 if snap.completed {
                                     return;
                                 }
-                                let incoming_name = extract_acp_tool_name(update);
+                                let incoming_name = extract_acp_tool_name(update).map(|raw| {
+                                    mcp_lookup
+                                        .as_deref()
+                                        .map(|l| l.normalize_stream_tool_name(&raw))
+                                        .unwrap_or(raw)
+                                });
                                 let mut name_changed = false;
                                 if let Some(next_name) = incoming_name {
                                     if snap.name != next_name {
@@ -1413,6 +1563,7 @@ impl ProviderTransport for AntigravityAcpTransport {
 
         drop(stdin_tx);
         kill_managed_process_tree(child).await;
+        drop(mcp_bridge);
         drop(credential_proxy);
 
         let prompt_result = prompt_outcome?;
@@ -1475,7 +1626,7 @@ impl ProviderTransport for AntigravityAcpTransport {
 
         let mut next_prefix = request.messages.clone();
         next_prefix.push(persisted_assistant.as_ref().unwrap_or(&assistant).clone());
-        let fp = antigravity_fingerprint(&request, &next_prefix);
+        let fp = antigravity_fingerprint(&request, &wire_bridged_tools, &next_prefix);
         let continuation = Some(ProviderContinuationState::AntigravityAcp {
             model: request.model_id,
             session_id,

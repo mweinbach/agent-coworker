@@ -23,6 +23,7 @@ pub mod connection;
 pub(crate) mod credential_proxy;
 pub mod endpoint_capabilities;
 pub mod google_interactions;
+pub(crate) mod harness_mcp_bridge;
 pub mod managed_runtime;
 pub mod oauth;
 pub mod openai_responses;

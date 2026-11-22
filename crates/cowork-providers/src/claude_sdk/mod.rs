@@ -23,7 +23,11 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::codex_app_server::DynamicToolHandler;
-use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth};
+use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth, merge_loopback_no_proxy};
+use crate::harness_mcp_bridge::{
+    BridgedToolLookup, HarnessMcpBridge, bridged_tools_fingerprint_values,
+    filter_bridged_harness_tools, render_harness_mcp_bridge_instructions,
+};
 use crate::managed_runtime::{kill_managed_process_tree, spawn_managed_stdio_process};
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
@@ -228,6 +232,37 @@ fn claude_disallowed_native_tools(authorized_tool_names: &[String]) -> Vec<&'sta
             !(canonical_allowed || direct_allowed)
         })
         .collect()
+}
+
+fn claude_bridged_tool_if_authorized<'a>(
+    req_body: &Value,
+    tools_disabled: bool,
+    authorized_tool_names: Option<&[String]>,
+    lookup: Option<&'a BridgedToolLookup>,
+) -> Option<&'a str> {
+    if tools_disabled {
+        return None;
+    }
+    if let Some(input) = req_body.get("input")
+        && !input.is_null()
+        && !input.is_object()
+    {
+        return None;
+    }
+    let tool_name = req_body
+        .get("tool_name")
+        .or_else(|| req_body.get("toolName"))
+        .or_else(|| req_body.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let canonical = lookup?.resolve_claude_tool(tool_name)?;
+    if let Some(allowlist) = authorized_tool_names
+        && !allowlist_contains_tool(allowlist, canonical)
+    {
+        return None;
+    }
+    Some(canonical)
 }
 
 fn claude_tool_is_authorized(
@@ -449,7 +484,11 @@ fn build_claude_user_content(messages: &[CanonicalMessage], include_history: boo
     blocks
 }
 
-fn claude_fingerprint(request: &ProviderStepRequest, prefix: &[CanonicalMessage]) -> String {
+fn claude_fingerprint(
+    request: &ProviderStepRequest,
+    wire_bridged_tools: &[Value],
+    prefix: &[CanonicalMessage],
+) -> String {
     let mut safe_opts = Map::new();
     if let Some(effort) = claude_sdk_effort(&request.provider_options) {
         safe_opts.insert("reasoningEffort".into(), Value::String(effort.to_owned()));
@@ -461,20 +500,23 @@ fn claude_fingerprint(request: &ProviderStepRequest, prefix: &[CanonicalMessage]
         provider: "claude-sdk",
         model_id: &request.model_id,
         system_prompt: &request.system_prompt,
-        tools: &[],
+        tools: wire_bridged_tools,
         authorized_tool_names: request.authorized_tool_names.as_deref(),
         canonical_prefix: prefix,
         stream_options: &safe_opts,
     })
 }
 
-fn resolve_resume_session(request: &ProviderStepRequest) -> Option<(&str, usize)> {
+fn resolve_resume_session<'a>(
+    request: &'a ProviderStepRequest,
+    wire_bridged_tools: &[Value],
+) -> Option<(&'a str, usize)> {
     let cont = request.continuation.as_ref()?;
     let ProviderContinuationState::ClaudeSdk { session_id, .. } = cont else {
         return None;
     };
     for (prefix, delta) in candidate_continuation_splits(&request.messages) {
-        let fp = claude_fingerprint(request, prefix);
+        let fp = claude_fingerprint(request, wire_bridged_tools, prefix);
         if validate_continuation_state(Some(cont), "claude-sdk", &request.model_id, &fp).is_some()
             && !delta.is_empty()
         {
@@ -532,6 +574,8 @@ fn build_claude_sdk_args(
     request: &ProviderStepRequest,
     resume_session_id: Option<&str>,
     tools_disabled: bool,
+    effective_system_prompt: &str,
+    mcp_config_path: Option<&Path>,
 ) -> Vec<String> {
     let mut args = base_args;
     args.push("--print".to_owned());
@@ -553,6 +597,12 @@ fn build_claude_sdk_args(
         "--settings".to_owned(),
         CLAUDE_SDK_ISOLATED_SETTINGS_JSON.to_owned(),
         "--strict-mcp-config".to_owned(),
+    ]);
+    if let Some(cfg_path) = mcp_config_path {
+        args.push("--mcp-config".to_owned());
+        args.push(cfg_path.to_string_lossy().into_owned());
+    }
+    args.extend([
         "--disable-slash-commands".to_owned(),
         "--input-format".to_owned(),
         "stream-json".to_owned(),
@@ -573,9 +623,9 @@ fn build_claude_sdk_args(
         args.push("--resume".to_owned());
         args.push(session_id.to_owned());
     }
-    if !request.system_prompt.trim().is_empty() {
+    if !effective_system_prompt.trim().is_empty() {
         args.push("--append-system-prompt".to_owned());
-        args.push(request.system_prompt.clone());
+        args.push(effective_system_prompt.to_owned());
     }
     if tools_disabled || request.authorized_tool_names.as_deref() == Some(&[]) {
         args.push("--tools".to_owned());
@@ -623,7 +673,20 @@ impl ProviderTransport for ClaudeSdkTransport {
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-        let resume_plan = resolve_resume_session(&request);
+        let tools_disabled =
+            self.disable_tools || request_disables_all_tools(&request.provider_options);
+        let bridged_tools = if self.tool_handler.is_some() {
+            filter_bridged_harness_tools(
+                &request.tools,
+                request.authorized_tool_names.as_deref(),
+                tools_disabled,
+            )
+        } else {
+            Vec::new()
+        };
+        let wire_bridged_tools = bridged_tools_fingerprint_values(&bridged_tools);
+
+        let resume_plan = resolve_resume_session(&request, &wire_bridged_tools);
         let user_blocks = match resume_plan {
             Some((_, delta_start)) => {
                 build_claude_user_content(&request.messages[delta_start..], false)
@@ -636,14 +699,45 @@ impl ProviderTransport for ClaudeSdkTransport {
             ));
         }
 
-        let tools_disabled =
-            self.disable_tools || request_disables_all_tools(&request.provider_options);
+        let mut mcp_bridge = if !bridged_tools.is_empty()
+            && let Some(handler) = self.tool_handler.clone()
+        {
+            Some(
+                HarnessMcpBridge::start(bridged_tools.clone(), handler)
+                    .await
+                    .map_err(ProviderTransportError::protocol)?,
+            )
+        } else {
+            None
+        };
+        let mcp_lookup = mcp_bridge.as_ref().map(HarnessMcpBridge::lookup);
+        let mcp_config_path = match mcp_bridge.as_mut() {
+            Some(bridge) => Some(
+                bridge
+                    .write_claude_mcp_config_file(&resolve_claude_sdk_home(&cw_home))
+                    .map_err(ProviderTransportError::protocol)?,
+            ),
+            None => None,
+        };
+        let effective_system_prompt = if mcp_bridge.is_some()
+            && let Some(note) = render_harness_mcp_bridge_instructions(&bridged_tools)
+        {
+            if request.system_prompt.trim().is_empty() {
+                note
+            } else {
+                format!("{}\n\n{note}", request.system_prompt)
+            }
+        } else {
+            request.system_prompt.clone()
+        };
 
         let args = build_claude_sdk_args(
             base_args,
             &request,
             resume_plan.map(|(session_id, _)| session_id),
             tools_disabled,
+            &effective_system_prompt,
+            mcp_config_path.as_deref(),
         );
 
         let credential_proxy = if let Some(secret) = request
@@ -676,7 +770,16 @@ impl ProviderTransport for ClaudeSdkTransport {
             proxy_token: proxy.proxy_token().to_owned(),
             uses_oauth: claude_sdk_uses_oauth_token(request.api_key.as_deref()),
         });
-        let spawn_env = build_claude_sdk_spawn_env(&cw_home, &env, proxy_auth.as_ref());
+        let mut spawn_env = build_claude_sdk_spawn_env(&cw_home, &env, proxy_auth.as_ref());
+        if mcp_bridge.is_some() && proxy_auth.is_none() {
+            let existing = spawn_env
+                .get("NO_PROXY")
+                .or_else(|| spawn_env.get("no_proxy"))
+                .map(String::as_str);
+            let merged = merge_loopback_no_proxy(existing);
+            spawn_env.insert("NO_PROXY".to_owned(), merged.clone());
+            spawn_env.insert("no_proxy".to_owned(), merged);
+        }
         let mut child =
             spawn_managed_stdio_process(&command, &args, &cwd, &spawn_env, "Claude SDK")
                 .map_err(ProviderTransportError::protocol)?;
@@ -807,25 +910,40 @@ impl ProviderTransport for ClaudeSdkTransport {
                                 .and_then(Value::as_str)
                                 .unwrap_or("");
                             if subtype == "can_use_tool" {
-                                let (approved, deny_message) = match claude_tool_is_authorized(
-                                    &req_body,
-                                    tools_disabled,
-                                    request.authorized_tool_names.as_deref(),
-                                ) {
-                                    Err(reason) => (false, reason),
-                                    Ok(()) => {
-                                        let ok = if let Some(handler) = &tool_handler {
-                                            handler
-                                                .request_approval("claude/can_use_tool", &req_body)
-                                                .await
-                                        } else {
-                                            false
-                                        };
-                                        (
-                                            ok,
-                                            "Tool execution denied by Cowork approval policy."
-                                                .to_owned(),
-                                        )
+                                let (approved, deny_message) = if tool_handler.is_some()
+                                    && claude_bridged_tool_if_authorized(
+                                        &req_body,
+                                        tools_disabled,
+                                        request.authorized_tool_names.as_deref(),
+                                        mcp_lookup.as_deref(),
+                                    )
+                                    .is_some()
+                                {
+                                    (true, String::new())
+                                } else {
+                                    match claude_tool_is_authorized(
+                                        &req_body,
+                                        tools_disabled,
+                                        request.authorized_tool_names.as_deref(),
+                                    ) {
+                                        Err(reason) => (false, reason),
+                                        Ok(()) => {
+                                            let ok = if let Some(handler) = &tool_handler {
+                                                handler
+                                                    .request_approval(
+                                                        "claude/can_use_tool",
+                                                        &req_body,
+                                                    )
+                                                    .await
+                                            } else {
+                                                false
+                                            };
+                                            (
+                                                ok,
+                                                "Tool execution denied by Cowork approval policy."
+                                                    .to_owned(),
+                                            )
+                                        }
                                     }
                                 };
                                 let reply = if approved {
@@ -918,11 +1036,14 @@ impl ProviderTransport for ClaudeSdkTransport {
                                                 .and_then(Value::as_str)
                                                 .unwrap_or("")
                                                 .to_owned();
-                                            st.tool_name = cb
+                                            let raw_name = cb
                                                 .get("name")
                                                 .and_then(Value::as_str)
-                                                .unwrap_or("tool")
-                                                .to_owned();
+                                                .unwrap_or("tool");
+                                            st.tool_name = mcp_lookup
+                                                .as_deref()
+                                                .map(|l| l.normalize_stream_tool_name(raw_name))
+                                                .unwrap_or_else(|| raw_name.to_owned());
                                             if !st.tool_id.is_empty()
                                                 && !announced_tools.contains_key(&st.tool_id)
                                             {
@@ -1077,15 +1198,18 @@ impl ProviderTransport for ClaudeSdkTransport {
                                                 .get("id")
                                                 .and_then(Value::as_str)
                                                 .unwrap_or("");
-                                            let name = block
+                                            let raw_name = block
                                                 .get("name")
                                                 .and_then(Value::as_str)
                                                 .unwrap_or("tool");
+                                            let name = mcp_lookup
+                                                .as_deref()
+                                                .map(|l| l.normalize_stream_tool_name(raw_name))
+                                                .unwrap_or_else(|| raw_name.to_owned());
                                             if !id.is_empty()
                                                 && !announced_tools.contains_key(id)
                                             {
-                                                announced_tools
-                                                    .insert(id.to_owned(), name.to_owned());
+                                                announced_tools.insert(id.to_owned(), name.clone());
                                                 let input = block
                                                     .get("input")
                                                     .and_then(Value::as_object)
@@ -1094,14 +1218,14 @@ impl ProviderTransport for ClaudeSdkTransport {
                                                 on_event(StreamEvent::ToolCallStart {
                                                     turn_id: turn_id.clone(),
                                                     key: id.to_owned(),
-                                                    name: name.to_owned(),
+                                                    name: name.clone(),
                                                     initial_args: (!input.is_empty())
                                                         .then(|| input.clone()),
                                                 });
                                                 on_event(StreamEvent::ToolCallEnd {
                                                     turn_id: turn_id.clone(),
                                                     key: id.to_owned(),
-                                                    name: name.to_owned(),
+                                                    name,
                                                     arguments: Some(input),
                                                     retry_of: None,
                                                     input_digest: None,
@@ -1214,6 +1338,7 @@ impl ProviderTransport for ClaudeSdkTransport {
 
         drop(stdin_tx);
         kill_managed_process_tree(child).await;
+        drop(mcp_bridge);
         drop(credential_proxy);
 
         stream_res?;
@@ -1265,7 +1390,7 @@ impl ProviderTransport for ClaudeSdkTransport {
 
         let mut next_prefix = request.messages.clone();
         next_prefix.push(persisted_assistant.as_ref().unwrap_or(&assistant).clone());
-        let fp = claude_fingerprint(&request, &next_prefix);
+        let fp = claude_fingerprint(&request, &wire_bridged_tools, &next_prefix);
         let continuation = session_id.map(|sid| ProviderContinuationState::ClaudeSdk {
             model: request.model_id,
             session_id: sid,

@@ -26,7 +26,9 @@ use cowork_providers::claude_sdk::{
     resolve_claude_sdk_status,
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
-use cowork_providers::{ManagedRuntimeTarget, ProviderStepRequest, ProviderTransport};
+use cowork_providers::{
+    ManagedRuntimeTarget, ProviderStepRequest, ProviderTransport, ToolDefinition,
+};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256, Sha512};
 use tempfile::TempDir;
@@ -1990,4 +1992,620 @@ for line in sys.stdin:
         })
         .expect("tc-inc-2 ToolResult with rawOutput");
     assert!(tc2_end_idx < tc2_res_idx);
+}
+
+struct RecordingHarnessToolHandler {
+    allow_native_approval: bool,
+    approval_calls: AtomicUsize,
+    tool_calls: parking_lot::Mutex<Vec<(String, Map<String, Value>)>>,
+}
+
+impl RecordingHarnessToolHandler {
+    fn new(allow_native_approval: bool) -> Self {
+        Self {
+            allow_native_approval,
+            approval_calls: AtomicUsize::new(0),
+            tool_calls: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl DynamicToolHandler for RecordingHarnessToolHandler {
+    async fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> DynamicToolCallOutput {
+        self.tool_calls
+            .lock()
+            .push((name.to_owned(), arguments.clone()));
+        DynamicToolCallOutput {
+            text: json!({ "handled": name, "arguments": arguments }).to_string(),
+            is_error: false,
+        }
+    }
+
+    async fn request_approval(&self, _method: &str, _params: &Value) -> bool {
+        self.approval_calls.fetch_add(1, Ordering::Relaxed);
+        self.allow_native_approval
+    }
+}
+
+fn sample_harness_tools() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "bash".to_owned(),
+            description: "Native shell".to_owned(),
+            parameters: json!({ "type": "object", "properties": { "command": { "type": "string" } } }),
+        },
+        ToolDefinition {
+            name: "read".to_owned(),
+            description: "Native read".to_owned(),
+            parameters: json!({ "type": "object", "properties": { "path": { "type": "string" } } }),
+        },
+        ToolDefinition {
+            name: "taskUpdate".to_owned(),
+            description: "Update durable task state".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "directive": { "type": "object" } },
+                "required": ["directive"]
+            }),
+        },
+        ToolDefinition {
+            name: "reviewTask".to_owned(),
+            description: "Run independent task review".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "round": { "type": "integer" } }
+            }),
+        },
+    ]
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_sdk_bridges_harness_tools_over_authenticated_loopback_mcp_and_enforces_allowlist() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-claude-mcp-bridge.py");
+    let script = r#"#!/usr/bin/env python3
+import json, os, stat, sys, urllib.error, urllib.request
+
+args = sys.argv[1:]
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def mcp_post(url, headers, payload):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json", **headers},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode("utf-8")
+            return resp.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8")
+        return e.code, raw
+
+def ask(req_id, tool_name, tool_input):
+    emit({
+        "type": "control_request",
+        "request_id": req_id,
+        "request": {"subtype": "can_use_tool", "tool_name": tool_name, "input": tool_input},
+    })
+    resp = json.loads(sys.stdin.readline().strip())
+    return resp["response"]["response"]["behavior"]
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("type") == "control_request" and msg.get("request", {}).get("subtype") == "initialize":
+        emit({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}
+        })
+    elif msg.get("type") == "user":
+        has_mcp_config = "--mcp-config" in args
+        if not has_mcp_config:
+            payload = json.dumps({"has_mcp_config": False})
+        else:
+            cfg_path = args[args.index("--mcp-config") + 1]
+            cfg_mode = stat.S_IMODE(os.stat(cfg_path).st_mode)
+            cfg = json.loads(open(cfg_path, "r", encoding="utf-8").read())
+            srv = cfg["mcpServers"]["cowork"]
+            url = srv["url"]
+            auth_headers = srv["headers"]
+
+            bad_auth_code, _ = mcp_post(url, {"Authorization": "Bearer wrong"}, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+            origin_code, _ = mcp_post(url, {**auth_headers, "Origin": "https://evil.example"}, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+
+            init_code, init_body = mcp_post(url, auth_headers, {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
+            notif_code, _ = mcp_post(url, auth_headers, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+            list_code, list_body = mcp_post(url, auth_headers, {"jsonrpc": "2.0", "id": 4, "method": "tools/list"})
+            listed_names = [t["name"] for t in list_body["result"]["tools"]]
+
+            perm_task = ask("p-task", "mcp__cowork__taskUpdate", {"directive": {"type": "add_note", "summary": "done"}})
+            perm_unknown = ask("p-unknown", "mcp__cowork__notRegistered", {})
+            perm_native_bash = ask("p-bash", "Bash", {"command": "echo nope"})
+
+            call_code, call_body = mcp_post(url, auth_headers, {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {"name": "taskUpdate", "arguments": {"directive": {"type": "add_note", "summary": "done"}}},
+            })
+            unauth_call_code, unauth_call_body = mcp_post(url, auth_headers, {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {"name": "bash", "arguments": {"command": "whoami"}},
+            })
+
+            emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "tu-mcp-1", "name": "mcp__cowork__taskUpdate"}}})
+            emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"directive\":{\"type\":\"add_note\"}}"}}})
+            emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}})
+            emit({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu-mcp-1", "content": call_body["result"]["content"][0]["text"], "is_error": False}]}})
+
+            payload = json.dumps({
+                "has_mcp_config": True,
+                "cfg_path": cfg_path,
+                "cfg_mode": cfg_mode,
+                "url": url,
+                "bad_auth_code": bad_auth_code,
+                "origin_code": origin_code,
+                "init_code": init_code,
+                "notif_code": notif_code,
+                "list_code": list_code,
+                "listed_names": listed_names,
+                "perm_task": perm_task,
+                "perm_unknown": perm_unknown,
+                "perm_native_bash": perm_native_bash,
+                "call_code": call_code,
+                "call_text": call_body["result"]["content"][0]["text"],
+                "unauth_call_code": unauth_call_code,
+                "unauth_call_err": unauth_call_body["error"]["code"],
+                "system_prompt_has_note": "--append-system-prompt" in args and "mcp__cowork__taskUpdate" in args[args.index("--append-system-prompt") + 1],
+            })
+
+        emit({"type": "system", "subtype": "init", "session_id": "claude-mcp-1"})
+        emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 1, "content_block": {"type": "text"}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": payload}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 1}})
+        emit({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": "claude-mcp-1",
+            "result": payload,
+            "usage": {"input_tokens": 10, "output_tokens": 10},
+        })
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+
+    let handler = Arc::new(RecordingHarnessToolHandler::new(false));
+    let mut transport =
+        ClaudeSdkTransport::with_env_and_handler(env.clone(), Some(handler.clone()));
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+
+    let mut events = Vec::new();
+    let res = transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "claude-opus-4-8".to_owned(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Execute the task.".to_owned(),
+                messages: vec![user_msg("Update task state")],
+                tools: sample_harness_tools(),
+                authorized_tool_names: Some(vec![
+                    "taskUpdate".to_owned(),
+                    "reviewTask".to_owned(),
+                    "read".to_owned(),
+                ]),
+                provider_options: provider_options.clone(),
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-claude-mcp".to_owned(),
+            },
+            &budget,
+            &mut |ev| events.push(ev),
+        )
+        .await
+        .expect("Claude SDK bridged harness tool turn succeeds");
+
+    let text = res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let payload: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(payload["has_mcp_config"], json!(true));
+    assert_eq!(payload["cfg_mode"], json!(0o600));
+    assert_eq!(payload["bad_auth_code"], json!(401));
+    assert_eq!(payload["origin_code"], json!(403));
+    assert_eq!(payload["init_code"], json!(200));
+    assert_eq!(payload["notif_code"], json!(202));
+    assert_eq!(payload["list_code"], json!(200));
+    assert_eq!(payload["listed_names"], json!(["taskUpdate", "reviewTask"]));
+    assert_eq!(payload["perm_task"], json!("allow"));
+    assert_eq!(payload["perm_unknown"], json!("deny"));
+    assert_eq!(payload["perm_native_bash"], json!("deny"));
+    assert_eq!(payload["call_code"], json!(200));
+    assert_eq!(payload["unauth_call_code"], json!(200));
+    assert_eq!(payload["unauth_call_err"], json!(-32602));
+    assert_eq!(payload["system_prompt_has_note"], json!(true));
+
+    // Only `taskUpdate` was executed through DynamicToolHandler::call_tool; native approval
+    // handler was never needed for the bridged tool and blocked disallowed tools before reaching it.
+    let recorded = handler.tool_calls.lock().clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, "taskUpdate");
+    assert_eq!(handler.approval_calls.load(Ordering::Relaxed), 0);
+
+    // Stream events normalize `mcp__cowork__taskUpdate` -> `taskUpdate`.
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::ToolCallEnd { key, name, .. } if key == "tu-mcp-1" && name == "taskUpdate"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::ToolResult { key, name, is_error: false, .. } if key == "tu-mcp-1" && name == "taskUpdate"
+    )));
+
+    // Ephemeral config file and loopback MCP bridge must both be torn down once the turn ends.
+    let cfg_path = payload["cfg_path"].as_str().unwrap();
+    assert!(
+        !std::path::Path::new(cfg_path).exists(),
+        "ephemeral Claude --mcp-config file must be deleted after turn ends"
+    );
+    let mcp_url = payload["url"].as_str().unwrap();
+    assert!(
+        reqwest::Client::new().post(mcp_url).send().await.is_err(),
+        "ephemeral loopback MCP bridge must close immediately after turn completes"
+    );
+
+    // When tools_disabled is set, no MCP bridge or `--mcp-config` is exposed.
+    let mut disabled_transport =
+        ClaudeSdkTransport::with_env_and_handler(env, Some(handler)).with_tools_disabled(true);
+    disabled_transport.command_override =
+        Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+    let disabled_res = disabled_transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "claude-opus-4-8".to_owned(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: String::new(),
+                messages: vec![user_msg("No tools")],
+                tools: sample_harness_tools(),
+                authorized_tool_names: Some(vec!["taskUpdate".to_owned()]),
+                provider_options,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-claude-mcp-disabled".to_owned(),
+            },
+            &budget,
+            &mut |_| {},
+        )
+        .await
+        .expect("disabled tools turn succeeds");
+    let disabled_text = disabled_res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let disabled_payload: Value = serde_json::from_str(disabled_text).unwrap();
+    assert_eq!(disabled_payload["has_mcp_config"], json!(false));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_acp_bridges_harness_tools_over_authenticated_loopback_mcp_and_enforces_allowlist()
+ {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-acp-mcp-bridge.py");
+    let script = r#"#!/usr/bin/env python3
+import json, os, sys, urllib.error, urllib.request
+
+forbid_http = os.environ.get("MOCK_ACP_FORBID_HTTP") == "1"
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def mcp_post(url, headers, payload):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json", **headers},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode("utf-8")
+            return resp.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8")
+        return e.code, raw
+
+def ask_perm(req_id, sid, tool_call):
+    send({
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": sid,
+            "toolCall": tool_call,
+            "options": [
+                {"optionId": "opt-allow", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "opt-deny", "name": "Reject", "kind": "reject_once"},
+            ],
+        },
+    })
+    resp = json.loads(sys.stdin.readline().strip())
+    return resp["result"]["outcome"].get("optionId")
+
+seen_mcp_servers = []
+resumed = False
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    params = msg.get("params", {})
+
+    if method == "initialize":
+        caps = {"mcpCapabilities": {"http": not forbid_http}}
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1, "agentCapabilities": caps}})
+    elif method == "session/new":
+        seen_mcp_servers = params.get("mcpServers", [])
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-mcp-1"}})
+    elif method == "session/resume":
+        resumed = True
+        seen_mcp_servers = params.get("mcpServers", [])
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": params.get("sessionId")}})
+    elif method in ("session/set_model", "session/set_config_option"):
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        sid = params["sessionId"]
+        srv = seen_mcp_servers[0]
+        url = srv["url"]
+        auth_headers = {h["name"]: h["value"] for h in srv["headers"]}
+
+        bad_auth_code, _ = mcp_post(url, {"Authorization": "Bearer wrong"}, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        origin_code, _ = mcp_post(url, {**auth_headers, "Origin": "https://evil.example"}, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        init_code, _ = mcp_post(url, auth_headers, {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
+        notif_code, _ = mcp_post(url, auth_headers, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        list_code, list_body = mcp_post(url, auth_headers, {"jsonrpc": "2.0", "id": 4, "method": "tools/list"})
+        listed_names = [t["name"] for t in list_body["result"]["tools"]]
+
+        perm_bridged = ask_perm(9201, sid, {"toolCallId": "tc-1", "toolName": "mcp__cowork__reviewTask", "kind": "other", "rawInput": {"round": 1}})
+        # Forged native `execute` kind with bridged name must NEVER bypass native approval.
+        perm_forged_exec = ask_perm(9202, sid, {"toolCallId": "tc-2", "toolName": "mcp__cowork__reviewTask", "kind": "execute", "rawInput": {"command": "id"}})
+        perm_unregistered = ask_perm(9203, sid, {"toolCallId": "tc-3", "toolName": "mcp__cowork__unknownTool", "kind": "other"})
+
+        call_code, call_body = mcp_post(url, auth_headers, {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "reviewTask", "arguments": {"round": 1}},
+        })
+
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "tc-mcp-1", "toolName": "mcp__cowork__reviewTask", "rawInput": {"round": 1}}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-mcp-1", "toolName": "mcp__cowork__reviewTask", "status": "completed", "rawOutput": call_body["result"]["content"][0]["text"]}}})
+
+        payload = json.dumps({
+            "server_name": srv["name"],
+            "server_type": srv["type"],
+            "url": url,
+            "resumed": resumed,
+            "bad_auth_code": bad_auth_code,
+            "origin_code": origin_code,
+            "init_code": init_code,
+            "notif_code": notif_code,
+            "list_code": list_code,
+            "listed_names": listed_names,
+            "perm_bridged": perm_bridged,
+            "perm_forged_exec": perm_forged_exec,
+            "perm_unregistered": perm_unregistered,
+            "call_code": call_code,
+            "call_text": call_body["result"]["content"][0]["text"],
+        })
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": payload}}}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+
+    let handler = Arc::new(RecordingHarnessToolHandler::new(false));
+    let mut transport =
+        AntigravityAcpTransport::with_env_and_handler(env.clone(), Some(handler.clone()));
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+
+    let mut events = Vec::new();
+    let res = transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gemini-4-neon".to_owned(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Review the task.".to_owned(),
+                messages: vec![user_msg("Run review")],
+                tools: sample_harness_tools(),
+                authorized_tool_names: Some(vec!["taskUpdate".to_owned(), "reviewTask".to_owned()]),
+                provider_options: provider_options.clone(),
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-acp-mcp-1".to_owned(),
+            },
+            &budget,
+            &mut |ev| events.push(ev),
+        )
+        .await
+        .expect("ACP bridged harness tool turn succeeds");
+
+    let text = res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let payload: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(payload["server_name"], json!("cowork"));
+    assert_eq!(payload["server_type"], json!("http"));
+    assert_eq!(payload["resumed"], json!(false));
+    assert_eq!(payload["bad_auth_code"], json!(401));
+    assert_eq!(payload["origin_code"], json!(403));
+    assert_eq!(payload["init_code"], json!(200));
+    assert_eq!(payload["notif_code"], json!(202));
+    assert_eq!(payload["list_code"], json!(200));
+    assert_eq!(payload["listed_names"], json!(["taskUpdate", "reviewTask"]));
+    assert_eq!(payload["perm_bridged"], json!("opt-allow"));
+    assert_eq!(payload["perm_forged_exec"], json!("opt-deny"));
+    assert_eq!(payload["perm_unregistered"], json!("opt-deny"));
+    assert_eq!(payload["call_code"], json!(200));
+
+    let recorded = handler.tool_calls.lock().clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, "reviewTask");
+    assert_eq!(recorded[0].1.get("round"), Some(&json!(1)));
+
+    // Stream events normalize `mcp__cowork__reviewTask` -> `reviewTask`.
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::ToolCallEnd { key, name, .. } if key == "tc-mcp-1" && name == "reviewTask"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::ToolResult { key, name, is_error: false, .. } if key == "tc-mcp-1" && name == "reviewTask"
+    )));
+
+    // Loopback MCP bridge shuts down immediately on turn completion.
+    let mcp_url = payload["url"].as_str().unwrap();
+    assert!(
+        reqwest::Client::new().post(mcp_url).send().await.is_err(),
+        "ephemeral ACP loopback MCP bridge must close immediately after turn completes"
+    );
+
+    // Turn 2 resumes with fresh bridge in `session/resume`.
+    let res2 = transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gemini-4-neon".to_owned(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: "Review the task.".to_owned(),
+                messages: vec![
+                    user_msg("Run review"),
+                    res.assistant.clone(),
+                    user_msg("Next round"),
+                ],
+                tools: sample_harness_tools(),
+                authorized_tool_names: Some(vec!["taskUpdate".to_owned(), "reviewTask".to_owned()]),
+                provider_options: provider_options.clone(),
+                continuation: res.continuation.clone(),
+                policy: RequestPolicy::default(),
+                turn_id: "turn-acp-mcp-2".to_owned(),
+            },
+            &budget,
+            &mut |_| {},
+        )
+        .await
+        .expect("ACP resumed bridged turn succeeds");
+    let text2 = res2
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let payload2: Value = serde_json::from_str(text2).unwrap();
+    assert_eq!(payload2["resumed"], json!(true));
+    assert_eq!(
+        payload2["listed_names"],
+        json!(["taskUpdate", "reviewTask"])
+    );
+
+    // If ACP explicitly declares `mcpCapabilities.http: false`, fail closed rather than silently
+    // dropping required Cowork harness tools.
+    let mut forbid_env = env;
+    forbid_env.insert("MOCK_ACP_FORBID_HTTP".into(), "1".into());
+    let mut forbid_transport =
+        AntigravityAcpTransport::with_env_and_handler(forbid_env, Some(handler));
+    forbid_transport.command_override =
+        Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+    let err = forbid_transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gemini-4-neon".to_owned(),
+                base_url: None,
+                api_key: None,
+                extra_headers: HashMap::new(),
+                system_prompt: String::new(),
+                messages: vec![user_msg("Needs bridge")],
+                tools: sample_harness_tools(),
+                authorized_tool_names: Some(vec!["taskUpdate".to_owned()]),
+                provider_options,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-acp-no-http".to_owned(),
+            },
+            &budget,
+            &mut |_| {},
+        )
+        .await
+        .expect_err(
+            "ACP without HTTP MCP capability must fail closed when harness tools are required",
+        );
+    assert!(
+        err.message.contains("HTTP MCP"),
+        "unexpected error: {err:?}"
+    );
 }

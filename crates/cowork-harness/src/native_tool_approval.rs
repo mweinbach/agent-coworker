@@ -1696,6 +1696,7 @@ fn is_mutating_shell_command(cmd_basename: &str) -> bool {
             | "dd"
             | "truncate"
             | "tee"
+            | "uniq"
             | "install"
             | "sed"
             | "perl"
@@ -2426,7 +2427,6 @@ fn is_safe_git_global_flag(arg: &str) -> bool {
             | "--icase-pathspecs"
             | "--version"
             | "-v"
-            | "--help"
             | "-h"
     )
 }
@@ -2434,7 +2434,7 @@ fn is_safe_git_global_flag(arg: &str) -> bool {
 fn is_allowed_unsandboxed_git_subcommand(sub: &str) -> bool {
     matches!(
         sub,
-        // Read-only inspection
+        // Read-only inspection (no `help` which can invoke `man`/browser)
         "status"
             | "diff"
             | "log"
@@ -2457,9 +2457,9 @@ fn is_allowed_unsandboxed_git_subcommand(sub: &str) -> bool {
             | "count-objects"
             | "show-ref"
             | "version"
-            | "help"
-            // Local workspace VCS operations (no remote helpers, no `--unsafe-paths` patchers,
-            // no `rebase -x`; dangerous forms like `git reset --hard` still require approval)
+            // Local workspace VCS operations (strict per-subcommand flag allowlist below;
+            // no remote helpers, pagers, editors, GPG helpers, or implicit patch writers;
+            // dangerous forms like `git reset --hard` still require interactive approval)
             | "add"
             | "commit"
             | "reset"
@@ -2474,6 +2474,617 @@ fn is_allowed_unsandboxed_git_subcommand(sub: &str) -> bool {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GitFlagDisposition {
+    Rejected,
+    AllowedNoValue,
+    AllowedTakesValue,
+}
+
+fn is_numeric_short_flag(arg: &str) -> bool {
+    arg.strip_prefix('-')
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn is_prefixed_digits(arg: &str, prefix: &str) -> bool {
+    arg.strip_prefix(prefix)
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn is_safe_git_color_flag(lower_arg: &str) -> bool {
+    matches!(
+        lower_arg,
+        "--color" | "--no-color" | "--color=never" | "--color=always" | "--color=auto"
+    )
+}
+
+/// Strict per-subcommand flag allowlist for unsandboxed `git`.
+/// Denies all executable pager, editor, GPG, external diff, textconv, filter, and indirect-file
+/// options by default (e.g. `git grep --open-files-in-pager`, `git grep -O`, `git diff --ext-diff`,
+/// `git diff --no-index`, `git add -p`/`-e`/`--pathspec-from-file`, `git commit -S`/`-e`,
+/// `git branch --edit-description`, `git log --show-signature`).
+fn classify_safe_git_subcommand_flag(sub: &str, arg: &str, lower_arg: &str) -> GitFlagDisposition {
+    if is_safe_git_color_flag(lower_arg) {
+        return GitFlagDisposition::AllowedNoValue;
+    }
+    match sub {
+        "status" => {
+            if matches!(
+                arg,
+                "-s" | "--short"
+                    | "-b"
+                    | "--branch"
+                    | "--porcelain"
+                    | "--long"
+                    | "-v"
+                    | "--verbose"
+                    | "-u"
+                    | "--untracked-files"
+                    | "--ignored"
+                    | "-z"
+                    | "--no-ahead-behind"
+                    | "--ahead-behind"
+                    | "--no-renames"
+                    | "--show-stash"
+            ) || lower_arg.starts_with("--porcelain=")
+                || lower_arg.starts_with("--untracked-files=")
+                || lower_arg.starts_with("--ignored=")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "diff" | "show" => {
+            if matches!(
+                arg,
+                "--cached"
+                    | "--staged"
+                    | "--stat"
+                    | "--shortstat"
+                    | "--numstat"
+                    | "--dirstat"
+                    | "--summary"
+                    | "--patch"
+                    | "-p"
+                    | "--no-patch"
+                    | "-s"
+                    | "--name-only"
+                    | "--name-status"
+                    | "--check"
+                    | "--raw"
+                    | "--compact-summary"
+                    | "--word-diff"
+                    | "--no-ext-diff"
+                    | "--no-textconv"
+                    | "--no-renames"
+                    | "--no-prefix"
+                    | "--full-index"
+                    | "--binary"
+                    | "--minimal"
+                    | "--patience"
+                    | "--histogram"
+                    | "-w"
+                    | "--ignore-all-space"
+                    | "-b"
+                    | "--ignore-space-change"
+                    | "--ignore-space-at-eol"
+                    | "--ignore-blank-lines"
+                    | "-M"
+                    | "-C"
+                    | "-R"
+                    | "-z"
+                    | "--quiet"
+                    | "-q"
+                    | "--exit-code"
+                    | "--oneline"
+                    | "--abbrev-commit"
+                    | "--no-notes"
+            ) || is_prefixed_digits(arg, "-U")
+                || lower_arg.starts_with("--unified=")
+                || lower_arg.starts_with("--diff-filter=")
+                || lower_arg.starts_with("--word-diff=")
+                || lower_arg.starts_with("--format=")
+                || lower_arg.starts_with("--pretty=")
+                || lower_arg.starts_with("--abbrev=")
+                || lower_arg.starts_with("--stat=")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(
+                arg,
+                "-U" | "--diff-filter" | "--format" | "--pretty" | "-S" | "-G"
+            ) {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "log" | "reflog" | "shortlog" => {
+            if matches!(
+                arg,
+                "--oneline"
+                    | "--graph"
+                    | "--decorate"
+                    | "--no-decorate"
+                    | "--all"
+                    | "--branches"
+                    | "--tags"
+                    | "--remotes"
+                    | "--stat"
+                    | "--shortstat"
+                    | "--numstat"
+                    | "--name-only"
+                    | "--name-status"
+                    | "--summary"
+                    | "-p"
+                    | "--patch"
+                    | "--no-patch"
+                    | "-s"
+                    | "--no-ext-diff"
+                    | "--no-textconv"
+                    | "--no-merges"
+                    | "--merges"
+                    | "--first-parent"
+                    | "--reverse"
+                    | "--follow"
+                    | "--abbrev-commit"
+                    | "--no-abbrev-commit"
+                    | "--full-history"
+                    | "--topo-order"
+                    | "--date-order"
+                    | "--author-date-order"
+                    | "--parents"
+                    | "--left-right"
+                    | "--cherry-pick"
+                    | "--cherry-mark"
+                    | "-z"
+                    | "--numbered"
+                    | "--numbered-summary"
+                    | "-e"
+                    | "--email"
+            ) || is_numeric_short_flag(arg)
+                || is_prefixed_digits(arg, "-n")
+                || is_prefixed_digits(arg, "-U")
+                || lower_arg.starts_with("--max-count=")
+                || lower_arg.starts_with("--skip=")
+                || lower_arg.starts_with("--since=")
+                || lower_arg.starts_with("--after=")
+                || lower_arg.starts_with("--until=")
+                || lower_arg.starts_with("--before=")
+                || lower_arg.starts_with("--author=")
+                || lower_arg.starts_with("--committer=")
+                || lower_arg.starts_with("--grep=")
+                || lower_arg.starts_with("--format=")
+                || lower_arg.starts_with("--pretty=")
+                || lower_arg.starts_with("--date=")
+                || lower_arg.starts_with("--diff-filter=")
+                || lower_arg.starts_with("--abbrev=")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(
+                arg,
+                "-n" | "--max-count"
+                    | "--skip"
+                    | "--since"
+                    | "--after"
+                    | "--until"
+                    | "--before"
+                    | "--author"
+                    | "--committer"
+                    | "--grep"
+                    | "--format"
+                    | "--pretty"
+                    | "--date"
+                    | "--diff-filter"
+                    | "-S"
+                    | "-G"
+                    | "-L"
+            ) {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "grep" => {
+            if matches!(
+                arg,
+                "-n" | "--line-number"
+                    | "--column"
+                    | "-i"
+                    | "--ignore-case"
+                    | "-I"
+                    | "-w"
+                    | "--word-regexp"
+                    | "-v"
+                    | "--invert-match"
+                    | "-h"
+                    | "-H"
+                    | "--full-name"
+                    | "-E"
+                    | "--extended-regexp"
+                    | "-G"
+                    | "--basic-regexp"
+                    | "-P"
+                    | "--perl-regexp"
+                    | "-F"
+                    | "--fixed-strings"
+                    | "-l"
+                    | "--files-with-matches"
+                    | "--name-only"
+                    | "-L"
+                    | "--files-without-match"
+                    | "-c"
+                    | "--count"
+                    | "-o"
+                    | "--only-matching"
+                    | "-q"
+                    | "--quiet"
+                    | "-z"
+                    | "--null"
+                    | "--cached"
+                    | "--untracked"
+                    | "--no-exclude-standard"
+                    | "--heading"
+                    | "--break"
+                    | "--all-match"
+                    | "--and"
+                    | "--or"
+                    | "--not"
+                    | "--no-textconv"
+                    | "--no-ext-diff"
+                    | "-p"
+                    | "--show-function"
+                    | "-W"
+                    | "--function-context"
+            ) || is_prefixed_digits(arg, "-A")
+                || is_prefixed_digits(arg, "-B")
+                || is_prefixed_digits(arg, "-C")
+                || is_prefixed_digits(arg, "-m")
+                || lower_arg.starts_with("--max-count=")
+                || lower_arg.starts_with("--max-depth=")
+                || lower_arg.starts_with("--after-context=")
+                || lower_arg.starts_with("--before-context=")
+                || lower_arg.starts_with("--context=")
+                || arg.starts_with("-e") && arg.len() > 2
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(
+                arg,
+                "-e" | "-A"
+                    | "--after-context"
+                    | "-B"
+                    | "--before-context"
+                    | "-C"
+                    | "--context"
+                    | "-m"
+                    | "--max-count"
+                    | "--max-depth"
+            ) {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "rev-parse" | "rev-list" | "merge-base" | "describe" | "name-rev" | "symbolic-ref"
+        | "show-ref" | "for-each-ref" | "count-objects" => {
+            if matches!(
+                arg,
+                "--short"
+                    | "--abbrev-ref"
+                    | "--show-toplevel"
+                    | "--show-prefix"
+                    | "--show-cdup"
+                    | "--is-inside-work-tree"
+                    | "--is-inside-git-dir"
+                    | "--is-bare-repository"
+                    | "--verify"
+                    | "-q"
+                    | "--quiet"
+                    | "--count"
+                    | "--left-right"
+                    | "--left-only"
+                    | "--right-only"
+                    | "--all"
+                    | "--branches"
+                    | "--tags"
+                    | "--heads"
+                    | "--remotes"
+                    | "--always"
+                    | "--long"
+                    | "--exact-match"
+                    | "--dirty"
+                    | "--is-ancestor"
+                    | "--fork-point"
+                    | "--octopus"
+                    | "--first-parent"
+                    | "--merges"
+                    | "--no-merges"
+                    | "--reverse"
+                    | "-v"
+                    | "--verbose"
+                    | "-H"
+                    | "--human-readable"
+                    | "--hash"
+                    | "-s"
+            ) || is_numeric_short_flag(arg)
+                || is_prefixed_digits(arg, "-n")
+                || lower_arg.starts_with("--short=")
+                || lower_arg.starts_with("--abbrev=")
+                || lower_arg.starts_with("--max-count=")
+                || lower_arg.starts_with("--format=")
+                || lower_arg.starts_with("--sort=")
+                || lower_arg.starts_with("--match=")
+                || lower_arg.starts_with("--exclude=")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(
+                arg,
+                "-n" | "--max-count" | "--format" | "--sort" | "--match" | "--exclude"
+            ) {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "ls-files" | "ls-tree" | "check-ignore" | "cat-file" | "blame" => {
+            if matches!(
+                arg,
+                "-c" | "--cached"
+                    | "-d"
+                    | "--deleted"
+                    | "-m"
+                    | "--modified"
+                    | "-o"
+                    | "--others"
+                    | "-i"
+                    | "--ignored"
+                    | "-s"
+                    | "--stage"
+                    | "-u"
+                    | "--unmerged"
+                    | "--exclude-standard"
+                    | "-z"
+                    | "-r"
+                    | "-t"
+                    | "-l"
+                    | "--long"
+                    | "--name-only"
+                    | "--name-status"
+                    | "--full-name"
+                    | "--full-tree"
+                    | "-v"
+                    | "--verbose"
+                    | "-n"
+                    | "--non-matching"
+                    | "-p"
+                    | "-e"
+                    | "--porcelain"
+                    | "--line-porcelain"
+                    | "-w"
+                    | "-b"
+                    | "-M"
+                    | "-C"
+                    | "--show-email"
+                    | "--show-name"
+                    | "--show-number"
+            ) || lower_arg.starts_with("--abbrev=")
+                || lower_arg.starts_with("-L")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(arg, "-L" | "--format") {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "add" => {
+            if matches!(
+                arg,
+                "-A" | "--all"
+                    | "-u"
+                    | "--update"
+                    | "-n"
+                    | "--dry-run"
+                    | "-v"
+                    | "--verbose"
+                    | "-f"
+                    | "--force"
+                    | "-N"
+                    | "--intent-to-add"
+                    | "--renormalize"
+                    | "--ignore-errors"
+            ) {
+                GitFlagDisposition::AllowedNoValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "commit" => {
+            if matches!(
+                arg,
+                "-a" | "--all"
+                    | "--amend"
+                    | "--no-edit"
+                    | "--allow-empty"
+                    | "--allow-empty-message"
+                    | "--no-gpg-sign"
+                    | "-q"
+                    | "--quiet"
+                    | "-v"
+                    | "--verbose"
+                    | "--dry-run"
+                    | "--short"
+                    | "--porcelain"
+            ) || lower_arg.starts_with("--message=")
+                || (arg.starts_with("-m") && arg.len() > 2)
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(arg, "-m" | "--message") {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "reset" => {
+            if matches!(
+                arg,
+                "--soft" | "--mixed" | "--hard" | "--merge" | "--keep" | "-q" | "--quiet"
+            ) {
+                GitFlagDisposition::AllowedNoValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "restore" => {
+            if matches!(
+                arg,
+                "--staged" | "-S" | "--worktree" | "-W" | "--ours" | "--theirs" | "-q" | "--quiet"
+            ) || lower_arg.starts_with("--source=")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(arg, "-s" | "--source") {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "switch" | "checkout" => {
+            if matches!(
+                arg,
+                "-b" | "-B"
+                    | "-c"
+                    | "-C"
+                    | "-d"
+                    | "--detach"
+                    | "-q"
+                    | "--quiet"
+                    | "-f"
+                    | "--force"
+                    | "--track"
+                    | "--no-track"
+                    | "--ours"
+                    | "--theirs"
+                    | "--orphan"
+            ) {
+                GitFlagDisposition::AllowedNoValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "branch" => {
+            if matches!(
+                arg,
+                "-a" | "--all"
+                    | "-r"
+                    | "--remotes"
+                    | "-l"
+                    | "--list"
+                    | "-v"
+                    | "-vv"
+                    | "--verbose"
+                    | "--show-current"
+                    | "--merged"
+                    | "--no-merged"
+                    | "--contains"
+                    | "--no-contains"
+                    | "-d"
+                    | "-D"
+                    | "--delete"
+                    | "-m"
+                    | "-M"
+                    | "--move"
+                    | "-c"
+                    | "-C"
+                    | "--copy"
+                    | "-f"
+                    | "--force"
+                    | "-q"
+                    | "--quiet"
+            ) || lower_arg.starts_with("--sort=")
+                || lower_arg.starts_with("--format=")
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(arg, "--sort" | "--format") {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "tag" => {
+            if matches!(
+                arg,
+                "-l" | "--list"
+                    | "-n"
+                    | "-d"
+                    | "--delete"
+                    | "-a"
+                    | "--annotate"
+                    | "-f"
+                    | "--force"
+                    | "--contains"
+                    | "--no-contains"
+                    | "--merged"
+                    | "--no-merged"
+            ) || is_prefixed_digits(arg, "-n")
+                || lower_arg.starts_with("--message=")
+                || lower_arg.starts_with("--sort=")
+                || (arg.starts_with("-m") && arg.len() > 2)
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(arg, "-m" | "--message" | "--sort") {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "stash" => {
+            if matches!(
+                arg,
+                "-u" | "--include-untracked"
+                    | "-a"
+                    | "--all"
+                    | "-k"
+                    | "--keep-index"
+                    | "--no-keep-index"
+                    | "-q"
+                    | "--quiet"
+                    | "--staged"
+                    | "--stat"
+                    | "--index"
+            ) || lower_arg.starts_with("--message=")
+                || (arg.starts_with("-m") && arg.len() > 2)
+            {
+                GitFlagDisposition::AllowedNoValue
+            } else if matches!(arg, "-m" | "--message") {
+                GitFlagDisposition::AllowedTakesValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "rm" | "mv" => {
+            if matches!(
+                arg,
+                "-f" | "--force"
+                    | "-n"
+                    | "--dry-run"
+                    | "-r"
+                    | "--cached"
+                    | "-q"
+                    | "--quiet"
+                    | "-v"
+                    | "--verbose"
+                    | "-k"
+            ) {
+                GitFlagDisposition::AllowedNoValue
+            } else {
+                GitFlagDisposition::Rejected
+            }
+        }
+        "version" => GitFlagDisposition::Rejected,
+        _ => GitFlagDisposition::Rejected,
+    }
+}
+
 fn short_flag_bundle_contains(arg: &str, needle: char) -> bool {
     arg.strip_prefix('-')
         .is_some_and(|short| !short.starts_with('-') && short.contains(needle))
@@ -2485,6 +3096,8 @@ fn reject_unsafe_unsandboxed_command_arg(
     lower_arg: &str,
 ) -> Result<(), String> {
     let blocked = match cmd {
+        "printf" => text == "-v" || text.starts_with("-v") || short_flag_bundle_contains(text, 'v'),
+        "tree" => text == "-o" || text.starts_with("-o") || short_flag_bundle_contains(text, 'o'),
         "find" => {
             matches!(
                 lower_arg,
@@ -2505,21 +3118,38 @@ fn reject_unsafe_unsandboxed_command_arg(
         "fd" => {
             matches!(
                 lower_arg,
-                "-x" | "--exec" | "-X" | "--exec-batch" | "--ignore-file"
+                "-x" | "--exec"
+                    | "-X"
+                    | "--exec-batch"
+                    | "--ignore-file"
+                    | "--list-details"
+                    | "--base-directory"
+                    | "--config"
             ) || lower_arg.starts_with("--exec=")
                 || lower_arg.starts_with("--exec-batch=")
                 || lower_arg.starts_with("--ignore-file=")
+                || lower_arg.starts_with("--base-directory=")
+                || lower_arg.starts_with("--config=")
                 || short_flag_bundle_contains(text, 'x')
                 || short_flag_bundle_contains(text, 'X')
         }
         "rg" => {
             matches!(
                 lower_arg,
-                "--pre" | "--pre-glob" | "-z" | "--search-zip" | "--ignore-file" | "--files-from"
+                "--pre"
+                    | "--pre-glob"
+                    | "-z"
+                    | "--search-zip"
+                    | "--ignore-file"
+                    | "--files-from"
+                    | "--hostname-bin"
+                    | "--hyperlink-format"
             ) || lower_arg.starts_with("--pre=")
                 || lower_arg.starts_with("--pre-glob=")
                 || lower_arg.starts_with("--ignore-file=")
                 || lower_arg.starts_with("--files-from=")
+                || lower_arg.starts_with("--hostname-bin=")
+                || lower_arg.starts_with("--hyperlink-format=")
                 || short_flag_bundle_contains(text, 'z')
         }
         "sort" => {
@@ -2540,14 +3170,19 @@ fn reject_unsafe_unsandboxed_command_arg(
                 || short_flag_bundle_contains(text, 'T')
         }
         "wc" | "du" => {
-            matches!(lower_arg, "--files0-from" | "--exclude-from")
+            matches!(lower_arg, "--files0-from" | "--exclude-from" | "-X")
                 || lower_arg.starts_with("--files0-from=")
                 || lower_arg.starts_with("--exclude-from=")
+                || short_flag_bundle_contains(text, 'X')
         }
         "diff" => {
-            matches!(lower_arg, "--from-file" | "--to-file")
-                || lower_arg.starts_with("--from-file=")
+            matches!(
+                lower_arg,
+                "--from-file" | "--to-file" | "--exclude-from" | "-X"
+            ) || lower_arg.starts_with("--from-file=")
                 || lower_arg.starts_with("--to-file=")
+                || lower_arg.starts_with("--exclude-from=")
+                || short_flag_bundle_contains(text, 'X')
         }
         "date" => {
             matches!(lower_arg, "-f" | "--file" | "-s" | "--set")
@@ -2577,6 +3212,11 @@ fn reject_unsafe_unsandboxed_command_arg(
 #[derive(Default)]
 struct SimpleCommandSearchState {
     git_subcommand: Option<String>,
+    git_saw_end_of_options: bool,
+    git_expect_flag_value: bool,
+    git_commit_non_interactive: bool,
+    git_tag_annotated: bool,
+    git_tag_has_message: bool,
     saw_end_of_options: bool,
     expect_flag_value: bool,
     saw_pattern_flag: bool,
@@ -2836,6 +3476,25 @@ fn validate_native_shell_command_text(
             return Err(format!(
                 "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
             ));
+        }
+        if current_cmd == "git" {
+            if search_state.git_subcommand.as_deref() == Some("commit")
+                && !search_state.git_commit_non_interactive
+            {
+                return Err(
+                    "'git commit' without '-m'/'--message', '--no-edit', or '--dry-run' is blocked in unsandboxed native shell execution because it can spawn an editor."
+                        .to_owned(),
+                );
+            }
+            if search_state.git_subcommand.as_deref() == Some("tag")
+                && search_state.git_tag_annotated
+                && !search_state.git_tag_has_message
+            {
+                return Err(
+                    "'git tag -a' without '-m'/'--message' is blocked in unsandboxed native shell execution because it can spawn an editor."
+                        .to_owned(),
+                );
+            }
         }
         if search_state.uses_implicit_cwd_root(current_cmd) {
             for dir in possible_dirs.iter() {
@@ -3186,48 +3845,6 @@ fn validate_native_shell_command_text(
                 let lower_arg = text.to_ascii_lowercase();
                 reject_unsafe_unsandboxed_command_arg(&current_cmd, text, &lower_arg)?;
                 if current_cmd == "git" {
-                    let dangerous_git_flag = matches!(
-                        lower_arg.as_str(),
-                        "-c" | "--config-env"
-                            | "--exec-path"
-                            | "--upload-pack"
-                            | "--receive-pack"
-                            | "--git-dir"
-                            | "--work-tree"
-                            | "--namespace"
-                            | "--super-prefix"
-                            | "--unsafe-paths"
-                            | "--ext-diff"
-                            | "--textconv"
-                            | "--filters"
-                            | "--output"
-                            | "--no-index"
-                            | "--pathspec-from-file"
-                            | "-x"
-                            | "--exec"
-                            | "--template"
-                            | "--separate-git-dir"
-                    ) || (search_state.git_subcommand.is_none()
-                        && (text == "-C" || text.starts_with("-C") || text.starts_with("-c")))
-                        || text.starts_with("-x")
-                        || lower_arg.starts_with("--config-env=")
-                        || lower_arg.starts_with("--exec-path=")
-                        || lower_arg.starts_with("--upload-pack=")
-                        || lower_arg.starts_with("--receive-pack=")
-                        || lower_arg.starts_with("--git-dir=")
-                        || lower_arg.starts_with("--work-tree=")
-                        || lower_arg.starts_with("--namespace=")
-                        || lower_arg.starts_with("--super-prefix=")
-                        || lower_arg.starts_with("--output=")
-                        || lower_arg.starts_with("--pathspec-from-file=")
-                        || lower_arg.starts_with("--exec=")
-                        || lower_arg.starts_with("--template=")
-                        || lower_arg.starts_with("--separate-git-dir=");
-                    if dangerous_git_flag {
-                        return Err(format!(
-                            "'git {text}' is blocked in unsandboxed native shell execution."
-                        ));
-                    }
                     if search_state.git_subcommand.is_none() {
                         if text.starts_with('-') {
                             if !is_safe_git_global_flag(text) {
@@ -3243,6 +3860,50 @@ fn validate_native_shell_command_text(
                             }
                             search_state.git_subcommand = Some(lower_arg.clone());
                             continue;
+                        }
+                    } else if let Some(sub) = search_state.git_subcommand.as_deref() {
+                        if search_state.git_expect_flag_value {
+                            search_state.git_expect_flag_value = false;
+                        } else if !search_state.git_saw_end_of_options {
+                            if text == "--" {
+                                search_state.git_saw_end_of_options = true;
+                            } else if text.starts_with('-') && text != "-" {
+                                match classify_safe_git_subcommand_flag(sub, text, &lower_arg) {
+                                    GitFlagDisposition::Rejected => {
+                                        return Err(format!(
+                                            "'git {sub} {text}' is blocked in unsandboxed native shell execution."
+                                        ));
+                                    }
+                                    GitFlagDisposition::AllowedTakesValue => {
+                                        search_state.git_expect_flag_value = true;
+                                    }
+                                    GitFlagDisposition::AllowedNoValue => {}
+                                }
+                                if sub == "commit"
+                                    && (matches!(
+                                        text.as_str(),
+                                        "-m" | "--message"
+                                            | "--no-edit"
+                                            | "--dry-run"
+                                            | "--short"
+                                            | "--porcelain"
+                                    ) || lower_arg.starts_with("--message=")
+                                        || text.starts_with("-m"))
+                                {
+                                    search_state.git_commit_non_interactive = true;
+                                }
+                                if sub == "tag" {
+                                    if matches!(text.as_str(), "-a" | "--annotate") {
+                                        search_state.git_tag_annotated = true;
+                                    }
+                                    if matches!(text.as_str(), "-m" | "--message")
+                                        || lower_arg.starts_with("--message=")
+                                        || text.starts_with("-m")
+                                    {
+                                        search_state.git_tag_has_message = true;
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -649,6 +649,69 @@ fn parse_acp_usage(value: &Value) -> Option<TurnUsage> {
     })
 }
 
+#[derive(Default)]
+struct AcpToolCallState {
+    name: String,
+    input: serde_json::Map<String, Value>,
+    output: Option<Value>,
+    started: bool,
+    args_published: bool,
+    completed: bool,
+}
+
+fn extract_acp_tool_name(update: &Value) -> Option<String> {
+    update
+        .get("toolName")
+        .or_else(|| update.get("name"))
+        .or_else(|| update.get("title"))
+        .or_else(|| update.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn merge_acp_tool_input(target: &mut serde_json::Map<String, Value>, update: &Value) -> bool {
+    let Some(raw) = update.get("rawInput") else {
+        return false;
+    };
+    if raw.is_null() {
+        return false;
+    }
+    let mut changed = false;
+    if let Some(obj) = raw.as_object() {
+        for (k, v) in obj {
+            if target.get(k) != Some(v) {
+                target.insert(k.clone(), v.clone());
+                changed = true;
+            }
+        }
+    } else if target.get("rawInput") != Some(raw) {
+        target.insert("rawInput".to_owned(), raw.clone());
+        changed = true;
+    }
+    changed
+}
+
+fn merge_acp_tool_output(target: &mut Option<Value>, update: &Value) {
+    let incoming = update
+        .get("rawOutput")
+        .filter(|v| !v.is_null())
+        .or_else(|| update.get("content").filter(|v| !v.is_null()));
+    if let Some(val) = incoming {
+        let incoming_empty = match val {
+            Value::String(s) => s.is_empty(),
+            Value::Array(a) => a.is_empty(),
+            Value::Object(m) => m.is_empty(),
+            _ => false,
+        };
+        if incoming_empty && target.is_some() {
+            return;
+        }
+        *target = Some(val.clone());
+    }
+}
+
 #[async_trait]
 impl ProviderTransport for AntigravityAcpTransport {
     async fn stream_step(
@@ -1050,7 +1113,7 @@ impl ProviderTransport for AntigravityAcpTransport {
         let mut text_block_index: usize = 0;
         let mut text_segment_text = String::new();
         let mut final_text = String::new();
-        let mut announced_tools: HashMap<String, String> = HashMap::new();
+        let mut announced_tools: HashMap<String, AcpToolCallState> = HashMap::new();
         let mut usage = TurnUsage::default();
 
         let prompt_outcome = budget
@@ -1090,7 +1153,7 @@ impl ProviderTransport for AntigravityAcpTransport {
                      text_block_index: &mut usize,
                      text_segment_text: &mut String,
                      final_text: &mut String,
-                     announced_tools: &mut HashMap<String, String>,
+                     announced_tools: &mut HashMap<String, AcpToolCallState>,
                      usage: &mut TurnUsage,
                      on_event: &mut StreamEventCallback<'_>| {
                         raw_events.push(json!({ "method": method, "params": params }));
@@ -1178,94 +1241,93 @@ impl ProviderTransport for AntigravityAcpTransport {
                                     });
                                 }
                             }
-                            "tool_call" => {
-                                close_text_segment(
-                                    text_started,
-                                    text_block_index,
-                                    text_segment_text,
-                                    on_event,
-                                );
-                                if *thinking_started && !*thinking_closed {
-                                    *thinking_closed = true;
-                                    on_event(StreamEvent::ThinkingEnd {
-                                        turn_id: turn_id.clone(),
-                                        stream_id: think_stream_id.clone(),
-                                        mode: ReasoningStreamMode::Summary,
-                                        text: std::mem::take(thinking_segment_text),
-                                        signature: None,
-                                        redacted: false,
-                                    });
-                                }
+                            "tool_call" | "tool_call_update" => {
                                 let id = update
                                     .get("toolCallId")
                                     .and_then(Value::as_str)
+                                    .map(str::trim)
                                     .unwrap_or("")
                                     .to_owned();
-                                let name = update
-                                    .get("title")
-                                    .or_else(|| update.get("name"))
-                                    .or_else(|| update.get("kind"))
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("tool")
-                                    .to_owned();
-                                let input = update
-                                    .get("rawInput")
-                                    .and_then(Value::as_object)
-                                    .cloned()
-                                    .unwrap_or_default();
-                                if !id.is_empty() && !announced_tools.contains_key(&id) {
-                                    announced_tools.insert(id.clone(), name.clone());
-                                    on_event(StreamEvent::ToolCallStart {
-                                        turn_id: turn_id.clone(),
-                                        key: id.clone(),
-                                        name: name.clone(),
-                                        initial_args: (!input.is_empty()).then(|| input.clone()),
-                                    });
-                                    on_event(StreamEvent::ToolCallEnd {
-                                        turn_id: turn_id.clone(),
-                                        key: id,
-                                        name,
-                                        arguments: Some(input),
-                                        retry_of: None,
-                                        input_digest: None,
-                                    });
+                                if id.is_empty() {
+                                    return;
                                 }
-                            }
-                            "tool_call_update" => {
-                                let id = update
-                                    .get("toolCallId")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .to_owned();
+                                let snap = announced_tools.entry(id.clone()).or_default();
+                                if snap.completed {
+                                    return;
+                                }
+                                let incoming_name = extract_acp_tool_name(update);
+                                let mut name_changed = false;
+                                if let Some(next_name) = incoming_name {
+                                    if snap.name != next_name {
+                                        snap.name = next_name;
+                                        name_changed = true;
+                                    }
+                                } else if snap.name.is_empty() {
+                                    snap.name = "tool".to_owned();
+                                }
+                                let input_changed = merge_acp_tool_input(&mut snap.input, update);
+                                merge_acp_tool_output(&mut snap.output, update);
+
                                 let status =
                                     update.get("status").and_then(Value::as_str).unwrap_or("");
-                                if !id.is_empty() && matches!(status, "completed" | "failed") {
+                                let is_terminal = matches!(status, "completed" | "failed");
+
+                                if !snap.started {
                                     close_text_segment(
                                         text_started,
                                         text_block_index,
                                         text_segment_text,
                                         on_event,
                                     );
-                                    let name = update
-                                        .get("title")
-                                        .or_else(|| update.get("name"))
-                                        .or_else(|| update.get("kind"))
-                                        .and_then(Value::as_str)
-                                        .map(str::trim)
-                                        .filter(|s| !s.is_empty())
-                                        .map(ToOwned::to_owned)
-                                        .or_else(|| announced_tools.get(&id).cloned())
-                                        .unwrap_or_else(|| "tool".to_owned());
-                                    let output = update
-                                        .get("rawOutput")
-                                        .or_else(|| update.get("content"))
-                                        .cloned()
-                                        .unwrap_or(Value::Null);
+                                    if *thinking_started && !*thinking_closed {
+                                        *thinking_closed = true;
+                                        on_event(StreamEvent::ThinkingEnd {
+                                            turn_id: turn_id.clone(),
+                                            stream_id: think_stream_id.clone(),
+                                            mode: ReasoningStreamMode::Summary,
+                                            text: std::mem::take(thinking_segment_text),
+                                            signature: None,
+                                            redacted: false,
+                                        });
+                                    }
+                                    snap.started = true;
+                                    on_event(StreamEvent::ToolCallStart {
+                                        turn_id: turn_id.clone(),
+                                        key: id.clone(),
+                                        name: snap.name.clone(),
+                                        initial_args: (!snap.input.is_empty())
+                                            .then(|| snap.input.clone()),
+                                    });
+                                }
+
+                                let should_publish_args = (!snap.input.is_empty()
+                                    && (!snap.args_published || input_changed || name_changed))
+                                    || (is_terminal && !snap.args_published);
+                                if should_publish_args {
+                                    snap.args_published = true;
+                                    on_event(StreamEvent::ToolCallEnd {
+                                        turn_id: turn_id.clone(),
+                                        key: id.clone(),
+                                        name: snap.name.clone(),
+                                        arguments: Some(snap.input.clone()),
+                                        retry_of: None,
+                                        input_digest: None,
+                                    });
+                                }
+
+                                if is_terminal {
+                                    close_text_segment(
+                                        text_started,
+                                        text_block_index,
+                                        text_segment_text,
+                                        on_event,
+                                    );
+                                    snap.completed = true;
                                     on_event(StreamEvent::ToolResult {
                                         turn_id: turn_id.clone(),
                                         key: id,
-                                        name,
-                                        result: output,
+                                        name: snap.name.clone(),
+                                        result: snap.output.clone().unwrap_or(Value::Null),
                                         is_error: status == "failed",
                                         denied: false,
                                     });

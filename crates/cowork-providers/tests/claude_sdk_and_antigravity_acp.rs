@@ -1838,3 +1838,156 @@ for line in sys.stdin:
 
     upstream_server.abort();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_acp_merges_incremental_tool_call_updates_before_completion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-agy-incremental.py");
+    let script = r#"#!/usr/bin/env python3
+import json, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    params = msg.get("params", {})
+
+    if method == "initialize":
+        send({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": 1,
+                "authMethods": [{"id": "gemini-api-key", "name": "Gemini API Key"}],
+                "agentInfo": {"name": "mock-agy", "version": "1.5.14"}
+            }
+        })
+    elif method == "authenticate":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-inc-1"}})
+    elif method == "session/set_model":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        sid = params.get("sessionId")
+        # 1. Pending tool_call announced with NO rawInput yet.
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "tc-inc-1", "title": "run_cmd", "status": "pending"}}})
+        # 2. Non-terminal in_progress update supplies rawInput AND intermediate rawOutput.
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-inc-1", "status": "in_progress", "rawInput": {"command": "git status"}, "rawOutput": "On branch main\n"}}})
+        # 3. Terminal completion update carries ONLY status (no rawInput, no rawOutput).
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-inc-1", "status": "completed"}}})
+        # 4. Second tool receives rawInput only on the terminal update.
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "tc-inc-2", "title": "read_file", "status": "pending"}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-inc-2", "status": "completed", "rawInput": {"path": "README.md"}, "rawOutput": "Hello world"}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done."}}}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+
+    let mut transport = AntigravityAcpTransport::with_env(env);
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let mut events = Vec::new();
+    transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gemini-4-neon".to_owned(),
+                base_url: None,
+                api_key: Some("gemini-secret".to_owned()),
+                extra_headers: HashMap::new(),
+                system_prompt: String::new(),
+                messages: vec![user_msg("inspect")],
+                tools: Vec::new(),
+                authorized_tool_names: None,
+                provider_options,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-acp-inc".to_owned(),
+            },
+            &budget,
+            &mut |ev| events.push(ev),
+        )
+        .await
+        .expect("incremental ACP turn succeeds");
+
+    // tc-inc-1: ToolCallEnd must carry {"command": "git status"} (never empty {}),
+    // and ToolResult must preserve the intermediate rawOutput ("On branch main\n").
+    let tc1_ends: Vec<_> = events
+        .iter()
+        .filter_map(|ev| match ev {
+            StreamEvent::ToolCallEnd {
+                key,
+                name,
+                arguments,
+                ..
+            } if key == "tc-inc-1" => Some((name.clone(), arguments.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tc1_ends.len(), 1);
+    assert_eq!(tc1_ends[0].0, "run_cmd");
+    assert_eq!(
+        tc1_ends[0].1.as_ref().and_then(|m| m.get("command")),
+        Some(&json!("git status"))
+    );
+
+    let tc1_res = events
+        .iter()
+        .find_map(|ev| match ev {
+            StreamEvent::ToolResult {
+                key,
+                name,
+                result,
+                is_error,
+                ..
+            } if key == "tc-inc-1" => Some((name.clone(), result.clone(), *is_error)),
+            _ => None,
+        })
+        .expect("tc-inc-1 result emitted");
+    assert_eq!(tc1_res.0, "run_cmd");
+    assert_eq!(tc1_res.1, json!("On branch main\n"));
+    assert!(!tc1_res.2);
+
+    // tc-inc-2: terminal update supplies rawInput; ToolCallEnd must precede ToolResult with path.
+    let tc2_end_idx = events
+        .iter()
+        .position(|ev| {
+            matches!(
+                ev,
+                StreamEvent::ToolCallEnd { key, arguments: Some(args), .. }
+                    if key == "tc-inc-2" && args.get("path") == Some(&json!("README.md"))
+            )
+        })
+        .expect("tc-inc-2 ToolCallEnd with terminal rawInput");
+    let tc2_res_idx = events
+        .iter()
+        .position(|ev| {
+            matches!(
+                ev,
+                StreamEvent::ToolResult { key, result, .. }
+                    if key == "tc-inc-2" && result == &json!("Hello world")
+            )
+        })
+        .expect("tc-inc-2 ToolResult with rawOutput");
+    assert!(tc2_end_idx < tc2_res_idx);
+}

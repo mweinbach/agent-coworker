@@ -15618,6 +15618,10 @@ fn apply_defaults_obj_to_workspace(
                 }
             }
         }
+        let is_authoritative_snapshot = from_session_config
+            && (obj.contains_key("toolOutputOverflowChars")
+                || obj.contains_key("advancedMemory")
+                || obj.contains_key("skillImprovementEnabled"));
         for spec in &CLEARABLE_DEFAULT_KEYS {
             if should_clear_default(obj, spec) {
                 dst.remove(spec.desktop_key);
@@ -15644,8 +15648,31 @@ fn apply_defaults_obj_to_workspace(
                 .get(spec.desktop_key)
                 .or_else(|| obj.get(spec.server_key))
             {
-                dst.insert(spec.desktop_key.to_string(), val.clone());
-                dst.insert(spec.server_key.to_string(), val.clone());
+                let empty_model_override = matches!(
+                    spec.server_key,
+                    "memoryGenerationModel" | "skillImprovementModel"
+                ) && (val.is_null()
+                    || val.as_str().is_some_and(|s| s.trim().is_empty()));
+                if empty_model_override {
+                    dst.remove(spec.desktop_key);
+                    dst.remove(spec.server_key);
+                } else {
+                    dst.insert(spec.desktop_key.to_string(), val.clone());
+                    dst.insert(spec.server_key.to_string(), val.clone());
+                }
+                dst.remove(spec.clear_desktop_key);
+                dst.remove(spec.clear_server_key);
+            } else if is_authoritative_snapshot
+                && matches!(
+                    spec.server_key,
+                    "memoryGenerationModel" | "skillImprovementModel"
+                )
+            {
+                // `build_session_config_event` omits optional model overrides when unset; clear
+                // obsolete local overrides on full authoritative snapshots while preserving no-op
+                // semantics for partial patches.
+                dst.remove(spec.desktop_key);
+                dst.remove(spec.server_key);
                 dst.remove(spec.clear_desktop_key);
                 dst.remove(spec.clear_server_key);
             }
@@ -27172,5 +27199,60 @@ mod tests {
                 .any(|cmd| matches!(cmd, WsCommand::SendRequest { method, .. } if method == "cowork/provider/auth/callback")),
             "manual code-based OAuth challenge must wait for pasted code"
         );
+    }
+
+    #[test]
+    fn authoritative_session_config_snapshot_clears_omitted_optional_model_overrides() {
+        let mut state = AppState::default();
+        let mut ws = WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1);
+        ws.defaults = json!({
+            "memoryGenerationModel": "openai:gpt-4.1-mini",
+            "defaultMemoryGenerationModel": "openai:gpt-4.1-mini",
+            "skillImprovementModel": "anthropic:claude-sonnet-4-5",
+            "defaultSkillImprovementModel": "anthropic:claude-sonnet-4-5"
+        });
+        state.workspaces.push(ws);
+
+        // Partial user defaults patch omitting those keys must keep them intact.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-1".to_string(),
+            defaults: json!({ "advancedMemory": true }),
+        }));
+        {
+            let ws = &state.workspaces[0];
+            assert_eq!(ws.defaults["memoryGenerationModel"], "openai:gpt-4.1-mini");
+            assert_eq!(
+                ws.defaults["skillImprovementModel"],
+                "anthropic:claude-sonnet-4-5"
+            );
+        }
+
+        // Authoritative full `session_config` snapshot omitting both overrides (as emitted by
+        // `build_session_config_event` when cleared externally) must remove both desktop & server keys.
+        state.apply_session_config_event(
+            "ws-1",
+            &json!({
+                "type": "session_config",
+                "config": {
+                    "yolo": false,
+                    "advancedMemory": true,
+                    "skillImprovementEnabled": false,
+                    "toolOutputOverflowChars": 50000
+                }
+            }),
+        );
+        let ws = &state.workspaces[0];
+        for key in [
+            "memoryGenerationModel",
+            "defaultMemoryGenerationModel",
+            "skillImprovementModel",
+            "defaultSkillImprovementModel",
+        ] {
+            assert!(
+                ws.defaults.get(key).is_none(),
+                "authoritative snapshot omitting optional override must clear {key}, got {:?}",
+                ws.defaults
+            );
+        }
     }
 }

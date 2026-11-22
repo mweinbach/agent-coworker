@@ -735,6 +735,12 @@ pub enum TaskAction {
         task_id: String,
         artifact_id: String,
     },
+    PreviewArtifactVersion {
+        workspace_id: String,
+        task_id: String,
+        artifact_id: String,
+        version_id: String,
+    },
     AcceptArtifactVersion {
         workspace_id: String,
         task_id: String,

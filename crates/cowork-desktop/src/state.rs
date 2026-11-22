@@ -249,6 +249,7 @@ pub(crate) struct PendingTaskArtifactRpc {
     pub workspace_id: String,
     pub task_id: String,
     pub artifact_id: String,
+    pub version_id: Option<String>,
 }
 
 /// Workspace record shown in the sidebar and connected to a local `cowork-server`.
@@ -1294,6 +1295,10 @@ pub struct TaskRecordView {
     pub active_artifact_detail: Option<Value>,
     #[serde(default)]
     pub artifact_details_by_id: HashMap<String, Value>,
+    #[serde(default)]
+    pub artifact_previews_by_version_id: HashMap<String, Value>,
+    #[serde(default)]
+    pub selected_artifact_version_id: Option<String>,
     #[serde(default)]
     pub blockers: Value,
     #[serde(default)]
@@ -6381,7 +6386,37 @@ impl AppState {
                             workspace_id,
                             task_id,
                             artifact_id,
+                            version_id: None,
                         },
+                    );
+                }
+            }
+            TaskAction::PreviewArtifactVersion {
+                workspace_id,
+                task_id,
+                artifact_id,
+                version_id,
+            } => {
+                let mut already_cached = false;
+                if let Some(active) = self.active_task.as_mut()
+                    && active.summary.workspace_id == workspace_id
+                    && active.summary.id == task_id
+                {
+                    active.selected_artifact_version_id = Some(version_id.clone());
+                    already_cached = active
+                        .artifact_previews_by_version_id
+                        .get(&version_id)
+                        .is_some_and(|p| p.get("kind").and_then(Value::as_str) != Some("error"));
+                    if !already_cached {
+                        active.artifact_previews_by_version_id.remove(&version_id);
+                    }
+                }
+                if !already_cached {
+                    self.request_artifact_version_preview(
+                        &workspace_id,
+                        &task_id,
+                        &artifact_id,
+                        &version_id,
                     );
                 }
             }
@@ -6410,6 +6445,7 @@ impl AppState {
                             workspace_id,
                             task_id,
                             artifact_id,
+                            version_id: None,
                         },
                     );
                 }
@@ -6441,6 +6477,7 @@ impl AppState {
                             workspace_id,
                             task_id,
                             artifact_id,
+                            version_id: None,
                         },
                     );
                 }
@@ -12080,6 +12117,26 @@ impl AppState {
                     .or_else(|| payload.get("task").and_then(|t| t.get("id")))
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                let preview_version_id = detail
+                    .get("latestVersionId")
+                    .or_else(|| detail.get("currentVersionId"))
+                    .or_else(|| {
+                        detail.get("artifact").and_then(|a| {
+                            a.get("latestVersionId")
+                                .or_else(|| a.get("currentVersionId"))
+                        })
+                    })
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        detail
+                            .get("versions")
+                            .and_then(Value::as_array)
+                            .and_then(|arr| arr.last())
+                            .and_then(|v| v.get("id"))
+                            .and_then(Value::as_str)
+                    })
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string);
                 if let Some(task_val) = payload.get("task") {
                     self.apply_task_record_update_inner(
                         workspace_id,
@@ -12087,6 +12144,7 @@ impl AppState {
                         artifact_id.as_deref(),
                     );
                 }
+                let mut preview_to_fetch: Option<(String, String, String)> = None;
                 if let Some(active) = self.active_task.as_mut() {
                     let nav_matches = self
                         .nav
@@ -12107,15 +12165,71 @@ impl AppState {
                             .as_ref()
                             .is_none_or(|p| active.summary.id == p.task_id);
                     if nav_matches && ws_matches && task_matches {
-                        if let Some(aid) = artifact_id {
+                        if let Some(aid) = artifact_id.as_ref() {
                             reconcile_artifact_detail_into_list(
                                 &mut active.artifacts,
-                                &aid,
+                                aid,
                                 &detail,
                             );
-                            active.artifact_details_by_id.insert(aid, detail.clone());
+                            active
+                                .artifact_details_by_id
+                                .insert(aid.clone(), detail.clone());
                         }
                         active.active_artifact_detail = Some(detail);
+                        active.selected_artifact_version_id = preview_version_id.clone();
+                        if let (Some(aid), Some(vid)) = (artifact_id, preview_version_id) {
+                            let has_valid_preview = active
+                                .artifact_previews_by_version_id
+                                .get(&vid)
+                                .is_some_and(|p| {
+                                    p.get("kind").and_then(Value::as_str) != Some("error")
+                                });
+                            if !has_valid_preview {
+                                active.artifact_previews_by_version_id.remove(&vid);
+                                preview_to_fetch = Some((active.summary.id.clone(), aid, vid));
+                            }
+                        }
+                    }
+                }
+                if let Some((tid, aid, vid)) = preview_to_fetch {
+                    self.request_artifact_version_preview(workspace_id, &tid, &aid, &vid);
+                }
+            }
+            "task/artifact/version/preview" => {
+                let Some(pending) = self.pending_task_artifact_rpcs.remove(&request_id) else {
+                    return;
+                };
+                let response_version_id = payload
+                    .get("versionId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+                    .or_else(|| pending.version_id.clone());
+                let Some(version_id) = response_version_id else {
+                    return;
+                };
+                if let Some(expected_vid) = pending.version_id.as_deref()
+                    && expected_vid != version_id
+                {
+                    return;
+                }
+                let Some(preview) = payload.get("preview").filter(|v| v.is_object()) else {
+                    return;
+                };
+                if let Some(active) = self.active_task.as_mut() {
+                    let nav_matches = self
+                        .nav
+                        .current()
+                        .active_task_id
+                        .as_deref()
+                        .is_none_or(|nav_tid| nav_tid == active.summary.id);
+                    let ws_matches = active.summary.workspace_id == workspace_id
+                        && pending.workspace_id == active.summary.workspace_id;
+                    let task_matches = active.summary.id == pending.task_id;
+                    if nav_matches && ws_matches && task_matches {
+                        active
+                            .artifact_previews_by_version_id
+                            .insert(version_id, preview.clone());
                     }
                 }
             }
@@ -12211,9 +12325,34 @@ impl AppState {
         }
         if matches!(
             method,
-            "task/artifact/read" | "task/artifact/version/accept" | "task/artifact/version/restore"
-        ) {
-            self.pending_task_artifact_rpcs.remove(&request_id);
+            "task/artifact/read"
+                | "task/artifact/version/preview"
+                | "task/artifact/version/accept"
+                | "task/artifact/version/restore"
+        ) && let Some(pending) = self.pending_task_artifact_rpcs.remove(&request_id)
+            && method == "task/artifact/version/preview"
+            && let Some(version_id) = pending.version_id
+            && let Some(active) = self.active_task.as_mut()
+        {
+            let nav_matches = self
+                .nav
+                .current()
+                .active_task_id
+                .as_deref()
+                .is_none_or(|nav_tid| nav_tid == active.summary.id);
+            if nav_matches
+                && active.summary.workspace_id == workspace_id
+                && pending.workspace_id == active.summary.workspace_id
+                && active.summary.id == pending.task_id
+            {
+                active.artifact_previews_by_version_id.insert(
+                    version_id,
+                    json!({
+                        "kind": "error",
+                        "error": err.message.clone(),
+                    }),
+                );
+            }
         }
         if method == "thread/resume" {
             self.pending_resume_threads_by_rpc_id.remove(&request_id);
@@ -14707,9 +14846,18 @@ impl AppState {
                 task.runs = existing.runs.clone();
             }
             let revision_changed = task.summary.revision != existing.summary.revision;
+            for (vid, preview) in &existing.artifact_previews_by_version_id {
+                task.artifact_previews_by_version_id
+                    .entry(vid.clone())
+                    .or_insert_with(|| preview.clone());
+            }
             if !revision_changed {
                 if task.active_artifact_detail.is_none() {
                     task.active_artifact_detail = existing.active_artifact_detail.clone();
+                }
+                if task.selected_artifact_version_id.is_none() {
+                    task.selected_artifact_version_id =
+                        existing.selected_artifact_version_id.clone();
                 }
                 for (k, v) in &existing.artifact_details_by_id {
                     task.artifact_details_by_id
@@ -14805,10 +14953,39 @@ impl AppState {
                             workspace_id: workspace_id.to_string(),
                             task_id: task_id_for_refresh.clone(),
                             artifact_id,
+                            version_id: None,
                         },
                     );
                 }
             }
+        }
+    }
+
+    fn request_artifact_version_preview(
+        &mut self,
+        workspace_id: &str,
+        task_id: &str,
+        artifact_id: &str,
+        version_id: &str,
+    ) {
+        if let Some(req_id) = self.send_task_ws(
+            workspace_id,
+            "task/artifact/version/preview",
+            json!({
+                "taskId": task_id,
+                "artifactId": artifact_id,
+                "versionId": version_id,
+            }),
+        ) {
+            self.pending_task_artifact_rpcs.insert(
+                req_id,
+                PendingTaskArtifactRpc {
+                    workspace_id: workspace_id.to_string(),
+                    task_id: task_id.to_string(),
+                    artifact_id: artifact_id.to_string(),
+                    version_id: Some(version_id.to_string()),
+                },
+            );
         }
     }
 }
@@ -15840,6 +16017,8 @@ fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRec
         runs,
         active_artifact_detail: val.get("activeArtifactDetail").cloned(),
         artifact_details_by_id: HashMap::new(),
+        artifact_previews_by_version_id: HashMap::new(),
+        selected_artifact_version_id: None,
         blockers: val.get("blockers").cloned().unwrap_or(Value::Null),
         work_items: val.get("workItems").cloned().unwrap_or(Value::Null),
         threads: val
@@ -28442,5 +28621,182 @@ mod tests {
             .active_thread()
             .expect("sending from landing after workspace removal should create a new thread");
         assert_eq!(active.workspace_id, "ws-b");
+    }
+
+    #[test]
+    fn task_artifact_read_fetches_version_preview_and_guards_stale_preview_responses() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.dispatch(Action::Navigate(NavAction::OpenTask("task-a".to_string())));
+        state.apply_task_record_update(
+            "ws-1",
+            &json!({
+                "id": "task-a",
+                "title": "Task A",
+                "status": "waiting_for_input",
+                "revision": 2,
+                "artifacts": [{
+                    "id": "art-1",
+                    "path": "reports/summary.md",
+                    "title": "Summary",
+                    "kind": "markdown"
+                }]
+            }),
+        );
+
+        // Inspect artifact: sends `task/artifact/read`.
+        state.dispatch(Action::Task(TaskAction::ReadArtifact {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-a".to_string(),
+            artifact_id: "art-1".to_string(),
+        }));
+        let read_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/artifact/read" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/artifact/read request");
+
+        // Canonical `TaskArtifactDetail` carries metadata & versions, not inline content.
+        state.apply_ws_response(
+            "ws-1",
+            read_req_id,
+            "task/artifact/read",
+            Ok(json!({
+                "artifact": {
+                    "id": "art-1",
+                    "taskId": "task-a",
+                    "path": "reports/summary.md",
+                    "title": "Summary",
+                    "kind": "markdown"
+                },
+                "versions": [
+                    { "id": "ver-1", "artifactId": "art-1", "version": 1, "changeSummary": "Draft" },
+                    { "id": "ver-2", "artifactId": "art-1", "version": 2, "changeSummary": "Final" }
+                ],
+                "latestVersionId": "ver-2",
+                "acceptedVersionId": null
+            })),
+        );
+
+        // Must automatically request `task/artifact/version/preview` for latestVersionId `ver-2`.
+        let (preview_req_id, preview_params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "task/artifact/version/preview" => {
+                    Some((*request_id, params.clone()))
+                }
+                _ => None,
+            })
+            .expect("expected automatic task/artifact/version/preview request");
+        assert_eq!(preview_params["taskId"], "task-a");
+        assert_eq!(preview_params["artifactId"], "art-1");
+        assert_eq!(preview_params["versionId"], "ver-2");
+
+        state.apply_ws_response(
+            "ws-1",
+            preview_req_id,
+            "task/artifact/version/preview",
+            Ok(json!({
+                "versionId": "ver-2",
+                "preview": {
+                    "kind": "text",
+                    "filename": "summary.md",
+                    "mimeType": "text/markdown",
+                    "sizeBytes": 18,
+                    "sha256": "abc123",
+                    "warnings": [],
+                    "text": "# Final Summary\nOk",
+                    "encoding": "utf-8"
+                }
+            })),
+        );
+        let active = state.active_task.as_ref().unwrap();
+        assert_eq!(
+            active.selected_artifact_version_id.as_deref(),
+            Some("ver-2")
+        );
+        assert_eq!(
+            active
+                .artifact_previews_by_version_id
+                .get("ver-2")
+                .and_then(|p| p.get("text"))
+                .and_then(Value::as_str),
+            Some("# Final Summary\nOk")
+        );
+
+        // Request preview of older version `ver-1`, then switch to `task-b` before reply arrives.
+        state.dispatch(Action::Task(TaskAction::PreviewArtifactVersion {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-a".to_string(),
+            artifact_id: "art-1".to_string(),
+            version_id: "ver-1".to_string(),
+        }));
+        let stale_preview_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "task/artifact/version/preview"
+                    && params["versionId"] == "ver-1" =>
+                {
+                    Some(*request_id)
+                }
+                _ => None,
+            })
+            .expect("expected task/artifact/version/preview for ver-1");
+
+        state.dispatch(Action::Navigate(NavAction::OpenTask("task-b".to_string())));
+        state.apply_task_record_update(
+            "ws-1",
+            &json!({
+                "id": "task-b",
+                "title": "Task B",
+                "status": "running",
+                "revision": 1,
+                "artifacts": []
+            }),
+        );
+        state.apply_ws_response(
+            "ws-1",
+            stale_preview_req_id,
+            "task/artifact/version/preview",
+            Ok(json!({
+                "versionId": "ver-1",
+                "preview": { "kind": "text", "text": "Stale draft from task-a" }
+            })),
+        );
+        assert!(
+            !state
+                .active_task
+                .as_ref()
+                .unwrap()
+                .artifact_previews_by_version_id
+                .contains_key("ver-1"),
+            "late preview response from task-a must not pollute task-b"
+        );
     }
 }

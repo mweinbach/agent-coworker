@@ -905,23 +905,21 @@ fn build_task_questions_card(
     let ws_id = task.summary.workspace_id.clone();
     let task_id = task.summary.id.clone();
     let rev = task.summary.revision;
-    let q_ids: Vec<(String, Option<String>)> = questions
-        .iter()
-        .map(|q| {
-            (
-                q.id.clone(),
-                q.recommended_option_id
-                    .clone()
-                    .or_else(|| q.options.first().map(|o| o.id.clone())),
-            )
-        })
-        .collect();
+    let q_ids: Vec<String> = questions.iter().map(|q| q.id.clone()).collect();
+    let can_submit = !resolve_task_question_answers(
+        &task_id,
+        &q_ids,
+        &s.shell_ui.task_question_answers,
+        &s.shell_ui.task_question_reply_edit.text,
+    )
+    .is_empty();
 
     card.child(reply_input).child(
         row().w_full().child(spacer()).child(
             Button::new("Submit answers")
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Small)
+                .disabled(!can_submit)
                 .on_press_tx(move |s: &mut AppState, _| {
                     let answers = resolve_task_question_answers(
                         &task_id,
@@ -949,16 +947,20 @@ fn task_question_answer_key(task_id: &str, question_id: &str) -> String {
     format!("{task_id}:{question_id}")
 }
 
-/// Builds `task/questions/resolve` payloads enforcing the server's 1..=3 limit and mutual exclusion (`optionId` XOR `text`).
+/// Builds `task/questions/resolve` payloads containing only questions the user explicitly answered
+/// (via option selection or written reply), enforcing the server's 1..=3 limit and `optionId` XOR `text`.
 fn resolve_task_question_answers(
     task_id: &str,
-    q_specs: &[(String, Option<String>)],
+    q_ids: &[String],
     selected: &std::collections::HashMap<String, String>,
     reply_text: &str,
 ) -> Vec<TaskQuestionAnswerParam> {
     let trimmed = reply_text.trim();
     let mut answers = Vec::new();
-    for (qid, default_opt) in q_specs.iter().take(3) {
+    for qid in q_ids {
+        if answers.len() >= 3 {
+            break;
+        }
         let key = task_question_answer_key(task_id, qid);
         if let Some(chosen) = selected.get(&key) {
             answers.push(TaskQuestionAnswerParam {
@@ -971,12 +973,6 @@ fn resolve_task_question_answers(
                 question_id: qid.clone(),
                 option_id: None,
                 text: Some(trimmed.to_owned()),
-            });
-        } else if let Some(def) = default_opt {
-            answers.push(TaskQuestionAnswerParam {
-                question_id: qid.clone(),
-                option_id: Some(def.clone()),
-                text: None,
             });
         }
     }
@@ -1012,7 +1008,7 @@ fn build_artifact_review_card(task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -
 
     if let Some(detail) = task.active_artifact_detail.as_ref() {
         card = card.child(build_active_artifact_detail(
-            detail, &ws_id, &task_id, rev, k, t,
+            task, detail, &ws_id, &task_id, rev, k, t,
         ));
     }
 
@@ -1193,7 +1189,240 @@ fn decode_artifact_detail(detail: &Value) -> DecodedArtifactDetail<'_> {
     }
 }
 
+/// Formats a canonical `task/artifact/version/preview` payload (`ArtifactPreviewService::preview`)
+/// into human-readable preview text for the artifact inspection card.
+fn format_artifact_preview_text(preview: &Value) -> Option<String> {
+    let kind = preview
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let warnings: Vec<&str> = preview
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let filename = preview
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("artifact");
+    let mime_type = preview
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    let size_bytes = preview.get("sizeBytes").and_then(Value::as_u64);
+
+    let body = match kind.as_str() {
+        "text" => preview
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|s| !s.is_empty()),
+        "docx" => preview
+            .get("document")
+            .and_then(|d| d.get("paragraphs"))
+            .and_then(Value::as_array)
+            .map(|paragraphs| {
+                paragraphs
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .take(40)
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            })
+            .filter(|s| !s.is_empty()),
+        "pptx" => preview
+            .get("presentation")
+            .and_then(|p| p.get("slides"))
+            .and_then(Value::as_array)
+            .map(|slides| {
+                slides
+                    .iter()
+                    .take(20)
+                    .enumerate()
+                    .filter_map(|(idx, slide)| {
+                        let slide_num = slide
+                            .get("index")
+                            .and_then(Value::as_u64)
+                            .map(|n| n + 1)
+                            .unwrap_or((idx + 1) as u64);
+                        let text = slide
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .unwrap_or("");
+                        let notes = slide
+                            .get("notes")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .unwrap_or("");
+                        if text.is_empty() && notes.is_empty() {
+                            return None;
+                        }
+                        if notes.is_empty() {
+                            Some(format!("Slide {slide_num}:\n{text}"))
+                        } else if text.is_empty() {
+                            Some(format!("Slide {slide_num} (notes):\n{notes}"))
+                        } else {
+                            Some(format!("Slide {slide_num}:\n{text}\nNotes: {notes}"))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            })
+            .filter(|s| !s.is_empty()),
+        "xlsx" => preview
+            .get("workbook")
+            .and_then(|w| w.get("sheets"))
+            .and_then(Value::as_array)
+            .map(|sheets| {
+                sheets
+                    .iter()
+                    .take(10)
+                    .map(|sheet| {
+                        let name = sheet.get("name").and_then(Value::as_str).unwrap_or("Sheet");
+                        let cell_count = sheet
+                            .get("cells")
+                            .and_then(Value::as_array)
+                            .map(Vec::len)
+                            .unwrap_or(0);
+                        let sample_cells: Vec<String> = sheet
+                            .get("cells")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .take(12)
+                            .filter_map(|cell| {
+                                let addr = cell
+                                    .get("cellRef")
+                                    .or_else(|| cell.get("ref"))
+                                    .and_then(Value::as_str)?;
+                                let val = cell
+                                    .get("displayValue")
+                                    .or_else(|| cell.get("value"))
+                                    .and_then(|v| {
+                                        v.as_str()
+                                            .map(str::to_owned)
+                                            .or_else(|| (!v.is_null()).then(|| v.to_string()))
+                                    })?;
+                                Some(format!("{addr}={val}"))
+                            })
+                            .collect();
+                        if sample_cells.is_empty() {
+                            format!("{name} ({cell_count} cells)")
+                        } else {
+                            format!("{name} ({cell_count} cells): {}", sample_cells.join(", "))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|s| !s.is_empty()),
+        "image" => {
+            let dims = match (
+                preview.get("width").and_then(Value::as_u64),
+                preview.get("height").and_then(Value::as_u64),
+            ) {
+                (Some(w), Some(h)) => format!(" · {w}×{h}"),
+                _ => String::new(),
+            };
+            let size = size_bytes
+                .map(|b| format!(" · {b} bytes"))
+                .unwrap_or_default();
+            Some(format!(
+                "Image preview: {filename} ({mime_type}{dims}{size})"
+            ))
+        }
+        "pdf" => {
+            let pages = preview
+                .get("pageCount")
+                .and_then(Value::as_u64)
+                .map(|n| format!(" · {n} page{}", if n == 1 { "" } else { "s" }))
+                .unwrap_or_default();
+            let size = size_bytes
+                .map(|b| format!(" · {b} bytes"))
+                .unwrap_or_default();
+            Some(format!("PDF preview: {filename}{pages}{size}"))
+        }
+        "binary" => {
+            let size = size_bytes
+                .map(|b| format!(" · {b} bytes"))
+                .unwrap_or_default();
+            let sha = preview
+                .get("sha256")
+                .and_then(Value::as_str)
+                .map(|s| format!(" · sha256 {}", &s[..s.len().min(12)]))
+                .unwrap_or_default();
+            Some(format!(
+                "Binary artifact: {filename} ({mime_type}{size}{sha})"
+            ))
+        }
+        "error" => preview
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|msg| format!("Preview unavailable: {msg}")),
+        _ => preview
+            .get("text")
+            .or_else(|| preview.get("content"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|s| !s.is_empty()),
+    };
+
+    match (body, warnings.is_empty()) {
+        (Some(text), true) => Some(text),
+        (Some(text), false) => Some(format!("{text}\n\nNote: {}", warnings.join(" "))),
+        (None, false) => Some(warnings.join("\n")),
+        (None, true) => None,
+    }
+}
+
+fn resolve_active_artifact_preview_content(
+    task: &TaskRecordView,
+    detail: &Value,
+    decoded: &DecodedArtifactDetail<'_>,
+) -> (Option<String>, Option<String>) {
+    let versions = detail.get("versions").and_then(Value::as_array);
+    let selected_vid = task
+        .selected_artifact_version_id
+        .as_deref()
+        .filter(|vid| {
+            decoded.current_version_id == Some(*vid)
+                || versions.is_some_and(|arr| {
+                    arr.iter()
+                        .any(|v| v.get("id").and_then(Value::as_str) == Some(*vid))
+                })
+        })
+        .or(decoded.current_version_id)
+        .or_else(|| {
+            versions
+                .and_then(|arr| arr.last())
+                .and_then(|v| v.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
+
+    let preview_text = selected_vid
+        .as_deref()
+        .and_then(|vid| task.artifact_previews_by_version_id.get(vid))
+        .and_then(format_artifact_preview_text)
+        .or_else(|| (!decoded.content.is_empty()).then(|| decoded.content.to_owned()));
+
+    (selected_vid, preview_text)
+}
+
 fn build_active_artifact_detail(
+    task: &TaskRecordView,
     detail: &Value,
     ws_id: &str,
     task_id: &str,
@@ -1202,10 +1431,10 @@ fn build_active_artifact_detail(
     t: &ThemeTokens,
 ) -> El {
     let decoded = decode_artifact_detail(detail);
-    let artifact_id = decoded.artifact_id;
+    let artifact_id = decoded.artifact_id.clone();
     let title = decoded.title;
-    let content = decoded.content;
     let current_vid = decoded.current_version_id;
+    let (selected_vid, content) = resolve_active_artifact_preview_content(task, detail, &decoded);
 
     let mut box_col = col()
         .key("task-artifact-detail-box")
@@ -1217,7 +1446,7 @@ fn build_active_artifact_detail(
         .gap(6.0)
         .child(text(title).font(t.label).color(t.text_base));
 
-    if !content.is_empty() {
+    if let Some(content) = content {
         box_col = box_col.child(
             col()
                 .w_full()
@@ -1227,6 +1456,8 @@ fn build_active_artifact_detail(
                 })
                 .child(text(content).font(t.code).color(t.text_base).wrap()),
         );
+    } else if selected_vid.is_some() {
+        box_col = box_col.child(text("Loading preview…").font(t.caption).color(t.text_muted));
     }
 
     if let Some(versions) = detail.get("versions").and_then(Value::as_array)
@@ -1234,16 +1465,21 @@ fn build_active_artifact_detail(
         && !artifact_id.is_empty()
     {
         let mut vers_col = col().w_full().gap(4.0);
-        for v in versions.iter().take(5) {
+        for v in versions.iter().rev().take(5) {
             let Some(vid) = v.get("id").and_then(Value::as_str) else {
                 continue;
             };
             let is_current = current_vid == Some(vid);
+            let is_selected = selected_vid.as_deref() == Some(vid);
             let label = v
                 .get("changeSummary")
                 .or_else(|| v.get("summary"))
                 .and_then(Value::as_str)
                 .unwrap_or(vid);
+            let ws_p = ws_id.to_owned();
+            let tid_p = task_id.to_owned();
+            let aid_p = artifact_id.clone();
+            let vid_p = vid.to_owned();
             let ws_r = ws_id.to_owned();
             let tid_r = task_id.to_owned();
             let aid_r = artifact_id.clone();
@@ -1256,10 +1492,28 @@ fn build_active_artifact_detail(
                     .child(
                         text(label)
                             .font(t.caption)
-                            .color(t.text_muted)
+                            .color(if is_selected {
+                                t.text_base
+                            } else {
+                                t.text_muted
+                            })
                             .truncate()
                             .grow(1.0),
                     )
+                    .children((!is_selected).then(|| {
+                        Button::new("Preview")
+                            .variant(ButtonVariant::Ghost)
+                            .control_size(ControlSize::Small)
+                            .on_press_tx(move |s: &mut AppState, _| {
+                                s.dispatch(Action::Task(TaskAction::PreviewArtifactVersion {
+                                    workspace_id: ws_p.clone(),
+                                    task_id: tid_p.clone(),
+                                    artifact_id: aid_p.clone(),
+                                    version_id: vid_p.clone(),
+                                }));
+                            })
+                            .build(k)
+                    }))
                     .children((!is_current).then(|| {
                         Button::new("Restore")
                             .variant(ButtonVariant::Ghost)
@@ -1601,7 +1855,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_task_question_answers_enforces_option_or_text_xor_and_task_scope() {
+    fn resolve_task_question_answers_enforces_option_or_text_xor_and_omits_unanswered() {
         let mut selected = std::collections::HashMap::new();
         selected.insert(task_question_answer_key("task-1", "q-1"), "v2".to_owned());
         selected.insert(
@@ -1609,18 +1863,41 @@ mod tests {
             "wrong-task".to_owned(),
         );
 
-        let specs = vec![
-            ("q-1".to_owned(), Some("v1".to_owned())),
-            ("q-2".to_owned(), None),
-            ("q-3".to_owned(), Some("def-3".to_owned())),
-            ("q-4".to_owned(), Some("def-4".to_owned())),
+        let q_ids = vec![
+            "q-1".to_owned(),
+            "q-2".to_owned(),
+            "q-3".to_owned(),
+            "q-4".to_owned(),
         ];
 
+        // With no written reply, ONLY q-1 (explicitly chosen by the user) is submitted;
+        // unanswered questions q-2..q-4 must be omitted rather than auto-filled with defaults.
+        let explicit_only = resolve_task_question_answers("task-1", &q_ids, &selected, "   ");
+        assert_eq!(explicit_only.len(), 1);
+        assert_eq!(explicit_only[0].question_id, "q-1");
+        assert_eq!(explicit_only[0].option_id.as_deref(), Some("v2"));
+        assert_eq!(explicit_only[0].text, None);
+
+        // With no selections and no reply text, nothing is submitted.
+        assert!(
+            resolve_task_question_answers("task-1", &q_ids, &std::collections::HashMap::new(), "")
+                .is_empty()
+        );
+
+        // Answering only q-4 (past index 2) must still submit q-4 rather than truncating before filtering.
+        let mut only_fourth = std::collections::HashMap::new();
+        only_fourth.insert(
+            task_question_answer_key("task-1", "q-4"),
+            "opt-4".to_owned(),
+        );
+        let fourth_answers = resolve_task_question_answers("task-1", &q_ids, &only_fourth, "");
+        assert_eq!(fourth_answers.len(), 1);
+        assert_eq!(fourth_answers[0].question_id, "q-4");
+        assert_eq!(fourth_answers[0].option_id.as_deref(), Some("opt-4"));
+
         // q-1 has an explicit choice alongside freeform text: must send optionId only (not both).
-        // q-2 has no choice and no default: receives trimmed freeform text only.
-        // q-3 has no choice: receives freeform text since typed reply is non-empty.
-        // q-4 is past the server's 3-entry limit.
-        let answers = resolve_task_question_answers("task-1", &specs, &selected, "  Use custom  ");
+        // q-2 and q-3 receive the typed reply; q-4 is past the server's 3-entry limit.
+        let answers = resolve_task_question_answers("task-1", &q_ids, &selected, "  Use custom  ");
         assert_eq!(answers.len(), 3);
         assert!(
             answers
@@ -1635,13 +1912,6 @@ mod tests {
         assert_eq!(answers[1].question_id, "q-2");
         assert_eq!(answers[1].option_id, None);
         assert_eq!(answers[1].text.as_deref(), Some("Use custom"));
-
-        // Without freeform text, falls back to default option when present.
-        let defaults_only = resolve_task_question_answers("task-1", &specs, &selected, "   ");
-        assert_eq!(defaults_only.len(), 2);
-        assert_eq!(defaults_only[1].question_id, "q-3");
-        assert_eq!(defaults_only[1].option_id.as_deref(), Some("def-3"));
-        assert_eq!(defaults_only[1].text, None);
     }
 
     #[test]
@@ -1781,5 +2051,46 @@ mod tests {
         assert_eq!(decoded.artifact_id, "art-42");
         assert_eq!(decoded.title, "Executive Summary");
         assert_eq!(decoded.current_version_id, Some("ver-2"));
+
+        // Canonical detail has no inline content; preview text comes from `artifact_previews_by_version_id`.
+        let mut task = TaskRecordView {
+            selected_artifact_version_id: Some("ver-2".to_owned()),
+            ..Default::default()
+        };
+        task.artifact_previews_by_version_id.insert(
+            "ver-2".to_owned(),
+            json!({
+                "kind": "text",
+                "filename": "summary.md",
+                "mimeType": "text/markdown",
+                "sizeBytes": 24,
+                "sha256": "deadbeef",
+                "warnings": [],
+                "text": "# Summary\nAll checks ok.",
+                "encoding": "utf-8"
+            }),
+        );
+        let (vid, content) = resolve_active_artifact_preview_content(&task, &canonical, &decoded);
+        assert_eq!(vid.as_deref(), Some("ver-2"));
+        assert_eq!(content.as_deref(), Some("# Summary\nAll checks ok."));
+
+        // Structured previews (docx/pdf/binary) render concise readable summaries.
+        let docx = format_artifact_preview_text(&json!({
+            "kind": "docx",
+            "filename": "brief.docx",
+            "document": { "paragraphs": [{ "index": 0, "text": "Intro paragraph" }] }
+        }));
+        assert_eq!(docx.as_deref(), Some("Intro paragraph"));
+
+        let pdf = format_artifact_preview_text(&json!({
+            "kind": "pdf",
+            "filename": "report.pdf",
+            "pageCount": 4,
+            "sizeBytes": 12000
+        }));
+        assert_eq!(
+            pdf.as_deref(),
+            Some("PDF preview: report.pdf · 4 pages · 12000 bytes")
+        );
     }
 }

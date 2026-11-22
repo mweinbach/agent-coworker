@@ -586,17 +586,19 @@ fn build_active_task_workspace(
                     })
                     .build(k),
             )
-            .child(
+            .child({
+                let ws_fb_toggle = task.summary.workspace_id.clone();
+                let tid_fb_toggle = task.summary.id.clone();
                 Button::new("Request changes")
                     .variant(ButtonVariant::Ghost)
                     .control_size(ControlSize::Small)
-                    .on_press_tx(|s: &mut AppState, _| {
+                    .on_press_tx(move |s: &mut AppState, _| {
                         s.shell_ui.task_conversation_open = false;
-                        s.shell_ui.task_feedback_open = !s.shell_ui.task_feedback_open;
-                        s.shell_ui.task_feedback_edit.focused = s.shell_ui.task_feedback_open;
+                        s.shell_ui
+                            .toggle_task_feedback(&ws_fb_toggle, &tid_fb_toggle);
                     })
-                    .build(k),
-            )
+                    .build(k)
+            })
             .child(
                 Button::new("Cancel")
                     .variant(ButtonVariant::Ghost)
@@ -704,10 +706,21 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
         .padding(20.0)
         .gap(16.0);
 
-    if s.shell_ui.task_feedback_open {
+    if s.shell_ui
+        .is_task_feedback_open(&task.summary.workspace_id, &task.summary.id)
+    {
         let rev = task.summary.revision;
         let ws_fb = task.summary.workspace_id.clone();
         let tid_fb = task.summary.id.clone();
+        let ws_edit = ws_fb.clone();
+        let tid_edit = tid_fb.clone();
+        let ws_cancel_fb = ws_fb.clone();
+        let tid_cancel_fb = tid_fb.clone();
+        let fb_edit = s
+            .shell_ui
+            .task_feedback_edit(&ws_fb, &tid_fb)
+            .unwrap_or(&EMPTY_TASK_QUESTION_REPLY_EDIT);
+        let fb_submitting = s.shell_ui.is_task_feedback_submitting(&ws_fb, &tid_fb);
         main_pane = main_pane.child(
             row()
                 .key("task-feedback-bar")
@@ -719,25 +732,31 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
                 .gap(8.0)
                 .center_y()
                 .child(
-                    el().grow(1.0).shrink().child(
-                        TextInput::new(&s.shell_ui.task_feedback_edit)
-                            .placeholder("Describe the changes needed...")
-                            .label("Task review feedback")
-                            .width(None)
-                            .on_edit(|s: &mut AppState| &mut s.shell_ui.task_feedback_edit)
-                            .build(k),
-                    ),
+                    el().key(format!("task-feedback-field-{ws_fb}-{tid_fb}"))
+                        .grow(1.0)
+                        .shrink()
+                        .child(
+                            TextInput::new(fb_edit)
+                                .placeholder("Describe the changes needed...")
+                                .label("Task review feedback")
+                                .width(None)
+                                .on_edit(move |s: &mut AppState| {
+                                    s.shell_ui.task_feedback_edit_mut(&ws_edit, &tid_edit)
+                                })
+                                .build(k),
+                        ),
                 )
                 .child(
                     Button::new("Send")
                         .variant(ButtonVariant::Contrast)
                         .control_size(ControlSize::Small)
-                        .disabled(
-                            s.shell_ui.task_feedback_edit.text.trim().is_empty()
-                                || s.shell_ui.task_feedback_submitting,
-                        )
+                        .disabled(fb_edit.text.trim().is_empty() || fb_submitting)
                         .on_press_tx(move |s: &mut AppState, _| {
-                            let fb = s.shell_ui.task_feedback_edit.text.trim().to_owned();
+                            let fb = s
+                                .shell_ui
+                                .task_feedback_edit(&ws_fb, &tid_fb)
+                                .map(|e| e.text.trim().to_owned())
+                                .unwrap_or_default();
                             if fb.is_empty() {
                                 return;
                             }
@@ -756,8 +775,9 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
                     Button::new("Cancel")
                         .variant(ButtonVariant::Ghost)
                         .control_size(ControlSize::Small)
-                        .on_press_tx(|s: &mut AppState, _| {
-                            s.shell_ui.task_feedback_open = false;
+                        .on_press_tx(move |s: &mut AppState, _| {
+                            s.shell_ui
+                                .close_task_feedback_for(&ws_cancel_fb, &tid_cancel_fb);
                         })
                         .build(k),
                 ),

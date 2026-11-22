@@ -64,9 +64,9 @@ pub struct ShellUiState {
     pub task_create_title_edit: TextEdit,
     pub task_create_objective_edit: TextEdit,
     pub task_create_idempotency_key: Option<(String, String)>,
-    pub task_feedback_open: bool,
-    pub task_feedback_submitting: bool,
-    pub task_feedback_edit: TextEdit,
+    pub task_feedback_open_task: Option<(String, String)>,
+    pub task_feedback_submitting_tasks: HashSet<(String, String)>,
+    pub task_feedback_edits: HashMap<(String, String), TextEdit>,
     pub task_question_dialog_open: bool,
     pub task_question_reply_edits: HashMap<(String, String), TextEdit>,
     pub task_question_answers: HashMap<(String, String), String>,
@@ -121,6 +121,83 @@ impl ShellUiState {
         self.task_create_objective_edit = TextEdit::new("");
         self.task_create_idempotency_key = None;
     }
+
+    pub fn is_task_feedback_open(&self, workspace_id: &str, task_id: &str) -> bool {
+        self.task_feedback_open_task
+            .as_ref()
+            .is_some_and(|(ws, tid)| ws == workspace_id && tid == task_id)
+    }
+
+    pub fn is_task_feedback_submitting(&self, workspace_id: &str, task_id: &str) -> bool {
+        self.task_feedback_submitting_tasks
+            .contains(&(workspace_id.to_owned(), task_id.to_owned()))
+    }
+
+    pub fn task_feedback_edit(&self, workspace_id: &str, task_id: &str) -> Option<&TextEdit> {
+        self.task_feedback_edits
+            .get(&(workspace_id.to_owned(), task_id.to_owned()))
+    }
+
+    pub fn task_feedback_edit_mut(&mut self, workspace_id: &str, task_id: &str) -> &mut TextEdit {
+        self.task_feedback_edits
+            .entry((workspace_id.to_owned(), task_id.to_owned()))
+            .or_insert_with(|| TextEdit::new(""))
+    }
+
+    pub fn open_task_feedback(&mut self, workspace_id: &str, task_id: &str) {
+        if let Some(prev) = self.task_feedback_open_task.as_ref()
+            && let Some(prev_edit) = self.task_feedback_edits.get_mut(prev)
+        {
+            prev_edit.focused = false;
+        }
+        let key = (workspace_id.to_owned(), task_id.to_owned());
+        self.task_feedback_open_task = Some(key.clone());
+        self.task_feedback_edits
+            .entry(key)
+            .or_insert_with(|| TextEdit::new(""))
+            .focused = true;
+    }
+
+    pub fn toggle_task_feedback(&mut self, workspace_id: &str, task_id: &str) {
+        if self.is_task_feedback_open(workspace_id, task_id) {
+            self.close_task_feedback_for(workspace_id, task_id);
+        } else {
+            self.open_task_feedback(workspace_id, task_id);
+        }
+    }
+
+    pub fn close_task_feedback_for(&mut self, workspace_id: &str, task_id: &str) {
+        if self.is_task_feedback_open(workspace_id, task_id) {
+            self.task_feedback_open_task = None;
+        }
+        if let Some(edit) = self
+            .task_feedback_edits
+            .get_mut(&(workspace_id.to_owned(), task_id.to_owned()))
+        {
+            edit.focused = false;
+        }
+    }
+
+    pub fn clear_task_feedback(&mut self, workspace_id: &str, task_id: &str) {
+        self.close_task_feedback_for(workspace_id, task_id);
+        let key = (workspace_id.to_owned(), task_id.to_owned());
+        self.task_feedback_submitting_tasks.remove(&key);
+        self.task_feedback_edits.remove(&key);
+    }
+
+    pub fn prune_task_feedback_for_workspace(&mut self, workspace_id: &str) {
+        if self
+            .task_feedback_open_task
+            .as_ref()
+            .is_some_and(|(ws, _)| ws == workspace_id)
+        {
+            self.task_feedback_open_task = None;
+        }
+        self.task_feedback_submitting_tasks
+            .retain(|(ws, _)| ws != workspace_id);
+        self.task_feedback_edits
+            .retain(|(ws, _), _| ws != workspace_id);
+    }
 }
 
 impl Default for ShellUiState {
@@ -158,9 +235,9 @@ impl Default for ShellUiState {
             task_create_title_edit: TextEdit::new(""),
             task_create_objective_edit: TextEdit::new(""),
             task_create_idempotency_key: None,
-            task_feedback_open: false,
-            task_feedback_submitting: false,
-            task_feedback_edit: TextEdit::new(""),
+            task_feedback_open_task: None,
+            task_feedback_submitting_tasks: HashSet::new(),
+            task_feedback_edits: HashMap::new(),
             task_question_dialog_open: false,
             task_question_reply_edits: HashMap::new(),
             task_question_answers: HashMap::new(),
@@ -238,6 +315,14 @@ impl std::fmt::Debug for ShellUiState {
     }
 }
 
+fn is_active_task_feedback_open(s: &AppState) -> bool {
+    s.route().view == ViewId::Task
+        && s.active_task.as_ref().is_some_and(|task| {
+            s.shell_ui
+                .is_task_feedback_open(&task.summary.workspace_id, &task.summary.id)
+        })
+}
+
 /// True when a blocking modal, dialog, onboarding step, or popup overlay (excluding the
 /// application menu bar) is currently active.
 pub(crate) fn any_non_menu_overlay_open(s: &AppState) -> bool {
@@ -254,7 +339,7 @@ pub(crate) fn any_non_menu_overlay_open(s: &AppState) -> bool {
         || s.shell_ui.file_context_menu.is_some()
         || s.shell_ui.usage_popover_open
         || s.shell_ui.task_question_dialog_open
-        || s.shell_ui.task_feedback_open
+        || is_active_task_feedback_open(s)
         || s.shell_ui.task_create_open
         || s.shell_ui.onboarding_confirm_discard
         || s.agent_viewer.is_some()
@@ -476,7 +561,7 @@ fn has_blocking_overlay_or_focused_input(s: &AppState) -> bool {
         || s.shell_ui.file_context_menu.is_some()
         || s.shell_ui.usage_popover_open
         || s.shell_ui.task_question_dialog_open
-        || s.shell_ui.task_feedback_open
+        || is_active_task_feedback_open(s)
         || s.shell_ui.task_create_open
         || s.shell_ui.renaming_thread_id.is_some()
         || s.shell_ui.renaming_file_key.is_some()
@@ -500,7 +585,11 @@ fn has_blocking_overlay_or_focused_input(s: &AppState) -> bool {
         || s.shell_ui.renaming_file_edit.focused
         || s.shell_ui.task_create_title_edit.focused
         || s.shell_ui.task_create_objective_edit.focused
-        || s.shell_ui.task_feedback_edit.focused
+        || s.active_task.as_ref().is_some_and(|task| {
+            s.shell_ui
+                .task_feedback_edit(&task.summary.workspace_id, &task.summary.id)
+                .is_some_and(|e| e.focused)
+        })
         || s.shell_ui
             .task_question_reply_edits
             .values()
@@ -599,8 +688,10 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         s.shell_ui.task_question_dialog_open = false;
         return true;
     }
-    if s.shell_ui.task_feedback_open {
-        s.shell_ui.task_feedback_open = false;
+    if is_active_task_feedback_open(s)
+        && let Some((ws_id, task_id)) = s.shell_ui.task_feedback_open_task.clone()
+    {
+        s.shell_ui.close_task_feedback_for(&ws_id, &task_id);
         return true;
     }
     if s.shell_ui.task_create_open {

@@ -1870,7 +1870,7 @@ pub struct AppState {
     pub(crate) workspace_list_refresh_queued: HashSet<String>,
     pub(crate) workspace_mutation_seq: u64,
     pub(crate) pending_removed_workspace_ids: HashSet<String>,
-    pub(crate) pending_task_feedback_rpc: Option<(u64, String, String)>,
+    pub(crate) pending_task_feedback_rpcs: HashMap<u64, (String, String)>,
     pub(crate) pending_task_create_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
@@ -2025,7 +2025,7 @@ impl Default for AppState {
             workspace_list_refresh_queued: HashSet::new(),
             workspace_mutation_seq: 0,
             pending_removed_workspace_ids: HashSet::new(),
-            pending_task_feedback_rpc: None,
+            pending_task_feedback_rpcs: HashMap::new(),
             pending_task_create_rpc: None,
             active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
@@ -5102,13 +5102,16 @@ impl AppState {
                     for id in stale_resume_ids {
                         self.pending_resume_threads_by_rpc_id.remove(&id);
                     }
-                    if self
-                        .pending_task_feedback_rpc
-                        .as_ref()
-                        .is_some_and(|(_, ws_id, _)| ws_id == &workspace_id)
-                    {
-                        self.pending_task_feedback_rpc = None;
-                        self.shell_ui.task_feedback_submitting = false;
+                    let cleared_feedback_tasks: Vec<(String, String)> = self
+                        .pending_task_feedback_rpcs
+                        .iter()
+                        .filter(|(_, (ws_id, _))| ws_id == &workspace_id)
+                        .map(|(_, key)| key.clone())
+                        .collect();
+                    self.pending_task_feedback_rpcs
+                        .retain(|_, (ws_id, _)| ws_id != &workspace_id);
+                    for key in cleared_feedback_tasks {
+                        self.shell_ui.task_feedback_submitting_tasks.remove(&key);
                     }
                     if self
                         .pending_task_create_rpc
@@ -6610,8 +6613,11 @@ impl AppState {
                         "feedback": feedback,
                     }),
                 ) {
-                    self.pending_task_feedback_rpc = Some((req_id, workspace_id, task_id));
-                    self.shell_ui.task_feedback_submitting = true;
+                    self.pending_task_feedback_rpcs
+                        .insert(req_id, (workspace_id.clone(), task_id.clone()));
+                    self.shell_ui
+                        .task_feedback_submitting_tasks
+                        .insert((workspace_id, task_id));
                 }
             }
             TaskAction::CancelTask {
@@ -9903,14 +9909,10 @@ impl AppState {
                 self.shell_ui
                     .task_question_reply_edits
                     .retain(|(tid, _), _| !removed_task_ids.iter().any(|id| id == tid));
-                if self
-                    .pending_task_feedback_rpc
-                    .as_ref()
-                    .is_some_and(|(_, ws_id, _)| ws_id == &workspace_id)
-                {
-                    self.pending_task_feedback_rpc = None;
-                    self.shell_ui.task_feedback_submitting = false;
-                }
+                self.pending_task_feedback_rpcs
+                    .retain(|_, (ws_id, _)| ws_id != &workspace_id);
+                self.shell_ui
+                    .prune_task_feedback_for_workspace(&workspace_id);
                 if self
                     .pending_task_create_rpc
                     .as_ref()
@@ -12246,16 +12248,14 @@ impl AppState {
                         self.shell_ui.task_question_reply_edits.remove(&key);
                     }
                 }
-                if method == "task/requestChanges"
-                    && self
-                        .pending_task_feedback_rpc
-                        .as_ref()
-                        .is_none_or(|(id, _, _)| *id == request_id)
-                {
-                    self.pending_task_feedback_rpc = None;
-                    self.shell_ui.task_feedback_submitting = false;
-                    self.shell_ui.task_feedback_open = false;
-                    self.shell_ui.task_feedback_edit = TextEdit::new("");
+                if method == "task/requestChanges" {
+                    if let Some((fb_ws_id, fb_task_id)) =
+                        self.pending_task_feedback_rpcs.remove(&request_id)
+                    {
+                        self.shell_ui.clear_task_feedback(&fb_ws_id, &fb_task_id);
+                    } else if let Some(tid) = task_val.get("id").and_then(Value::as_str) {
+                        self.shell_ui.clear_task_feedback(workspace_id, tid);
+                    }
                 }
                 self.apply_task_record_update(workspace_id, task_val);
                 if matches!(method, "task/read" | "task/create" | "task/thread/create")
@@ -12520,13 +12520,15 @@ impl AppState {
             self.pending_task_questions_rpcs.remove(&request_id);
         }
         if method == "task/requestChanges"
-            && self
-                .pending_task_feedback_rpc
-                .as_ref()
-                .is_some_and(|(id, _, _)| *id == request_id)
+            && let Some(key) = self.pending_task_feedback_rpcs.remove(&request_id)
         {
-            self.pending_task_feedback_rpc = None;
-            self.shell_ui.task_feedback_submitting = false;
+            let still_pending = self
+                .pending_task_feedback_rpcs
+                .values()
+                .any(|other| other == &key);
+            if !still_pending {
+                self.shell_ui.task_feedback_submitting_tasks.remove(&key);
+            }
         }
         if method == "task/create"
             && self
@@ -29157,14 +29159,21 @@ mod tests {
             .workspaces
             .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
         state.active_workspace_id = Some("ws-1".to_string());
-        state.shell_ui.task_feedback_open = true;
-        state.shell_ui.task_feedback_edit = TextEdit::new("Add error handling for timeouts");
+        state.shell_ui.open_task_feedback("ws-1", "task-1");
+        *state.shell_ui.task_feedback_edit_mut("ws-1", "task-1") =
+            TextEdit::new("Add error handling for timeouts");
 
+        let feedback_text = state
+            .shell_ui
+            .task_feedback_edit("ws-1", "task-1")
+            .unwrap()
+            .text
+            .clone();
         state.dispatch(Action::Task(TaskAction::RequestChanges {
             workspace_id: "ws-1".to_string(),
             task_id: "task-1".to_string(),
             expected_revision: 3,
-            feedback: state.shell_ui.task_feedback_edit.text.clone(),
+            feedback: feedback_text,
         }));
         let req_1 = state
             .services
@@ -29178,10 +29187,14 @@ mod tests {
                 _ => None,
             })
             .expect("expected task/requestChanges request");
-        assert!(state.shell_ui.task_feedback_open);
-        assert!(state.shell_ui.task_feedback_submitting);
+        assert!(state.shell_ui.is_task_feedback_open("ws-1", "task-1"));
+        assert!(state.shell_ui.is_task_feedback_submitting("ws-1", "task-1"));
         assert_eq!(
-            state.shell_ui.task_feedback_edit.text,
+            state
+                .shell_ui
+                .task_feedback_edit("ws-1", "task-1")
+                .unwrap()
+                .text,
             "Add error handling for timeouts"
         );
 
@@ -29196,19 +29209,29 @@ mod tests {
                 data: None,
             }),
         );
-        assert!(state.shell_ui.task_feedback_open);
-        assert!(!state.shell_ui.task_feedback_submitting);
+        assert!(state.shell_ui.is_task_feedback_open("ws-1", "task-1"));
+        assert!(!state.shell_ui.is_task_feedback_submitting("ws-1", "task-1"));
         assert_eq!(
-            state.shell_ui.task_feedback_edit.text,
+            state
+                .shell_ui
+                .task_feedback_edit("ws-1", "task-1")
+                .unwrap()
+                .text,
             "Add error handling for timeouts"
         );
 
         // Retry with updated revision succeeds -> closes and clears feedback editor.
+        let retry_text = state
+            .shell_ui
+            .task_feedback_edit("ws-1", "task-1")
+            .unwrap()
+            .text
+            .clone();
         state.dispatch(Action::Task(TaskAction::RequestChanges {
             workspace_id: "ws-1".to_string(),
             task_id: "task-1".to_string(),
             expected_revision: 4,
-            feedback: state.shell_ui.task_feedback_edit.text.clone(),
+            feedback: retry_text,
         }));
         let req_2 = state
             .services
@@ -29235,9 +29258,96 @@ mod tests {
                 }
             })),
         );
-        assert!(!state.shell_ui.task_feedback_open);
-        assert!(!state.shell_ui.task_feedback_submitting);
-        assert!(state.shell_ui.task_feedback_edit.text.is_empty());
+        assert!(!state.shell_ui.is_task_feedback_open("ws-1", "task-1"));
+        assert!(!state.shell_ui.is_task_feedback_submitting("ws-1", "task-1"));
+        assert!(
+            state
+                .shell_ui
+                .task_feedback_edit("ws-1", "task-1")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn task_request_changes_drafts_are_scoped_per_task_across_navigation() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        // User opens Request changes on task A and enters feedback.
+        state.shell_ui.open_task_feedback("ws-1", "task-a");
+        state.shell_ui.task_feedback_edit_mut("ws-1", "task-a").text =
+            "Fix regression in task A".to_string();
+
+        // Navigating to task B must NOT expose task A's open bar or draft text.
+        assert!(state.shell_ui.is_task_feedback_open("ws-1", "task-a"));
+        assert!(!state.shell_ui.is_task_feedback_open("ws-1", "task-b"));
+        assert!(
+            state
+                .shell_ui
+                .task_feedback_edit("ws-1", "task-b")
+                .is_none()
+        );
+
+        // Submitting task A while opening an independent draft on task B isolates both tasks.
+        state.dispatch(Action::Task(TaskAction::RequestChanges {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-a".to_string(),
+            expected_revision: 2,
+            feedback: "Fix regression in task A".to_string(),
+        }));
+        let req_a = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/requestChanges" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/requestChanges request for task-a");
+
+        state.shell_ui.open_task_feedback("ws-1", "task-b");
+        state.shell_ui.task_feedback_edit_mut("ws-1", "task-b").text =
+            "Refine summary in task B".to_string();
+        assert!(state.shell_ui.is_task_feedback_open("ws-1", "task-b"));
+        assert!(!state.shell_ui.is_task_feedback_open("ws-1", "task-a"));
+        assert!(state.shell_ui.is_task_feedback_submitting("ws-1", "task-a"));
+        assert!(!state.shell_ui.is_task_feedback_submitting("ws-1", "task-b"));
+
+        // Task A completing clears ONLY task A; task B's open draft stays untouched.
+        state.apply_ws_response(
+            "ws-1",
+            req_a,
+            "task/requestChanges",
+            Ok(json!({
+                "task": {
+                    "id": "task-a",
+                    "title": "Task A",
+                    "status": "in_progress",
+                    "revision": 3
+                }
+            })),
+        );
+        assert!(!state.shell_ui.is_task_feedback_submitting("ws-1", "task-a"));
+        assert!(
+            state
+                .shell_ui
+                .task_feedback_edit("ws-1", "task-a")
+                .is_none()
+        );
+        assert!(state.shell_ui.is_task_feedback_open("ws-1", "task-b"));
+        assert_eq!(
+            state
+                .shell_ui
+                .task_feedback_edit("ws-1", "task-b")
+                .map(|e| e.text.as_str()),
+            Some("Refine summary in task B")
+        );
     }
 
     #[test]

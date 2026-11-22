@@ -1618,8 +1618,15 @@ fn is_url_token(token: &str) -> bool {
 fn is_safe_stdio_device(path: &str) -> bool {
     matches!(
         path,
-        "/dev/null" | "/dev/stdin" | "/dev/stdout" | "/dev/stderr" | "/dev/tty"
-    ) || path.starts_with("/dev/fd/")
+        "/dev/null"
+            | "/dev/stdin"
+            | "/dev/stdout"
+            | "/dev/stderr"
+            | "/dev/tty"
+            | "/dev/fd/0"
+            | "/dev/fd/1"
+            | "/dev/fd/2"
+    )
 }
 
 fn is_safe_system_executable_path(path: &str) -> bool {

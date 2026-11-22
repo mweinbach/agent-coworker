@@ -2049,3 +2049,69 @@ async fn unsandboxed_native_shell_preserves_literal_at_sign_filename_prefixes() 
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_authorizes_non_stdio_dev_fd_paths() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/codex-cli/auth.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"token\":\"secret\"}\n").unwrap();
+        let cred_rel = cred_file
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .to_owned();
+        let traversal_to_cred = format!("cat /dev/fd/../../../../../../{cred_rel}");
+
+        let blocked = [
+            traversal_to_cred.as_str(),
+            "cat /dev/fd/../../../../etc/passwd",
+            "cat /dev/fd/0/../../../../etc/passwd",
+            "cat /dev/fd/3",
+            "cat /dev/fd/10",
+            "head -n 1 /dev/fd/../passwd",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: non-stdio /dev/fd path must be denied in Bash: {cmd:?}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: non-stdio /dev/fd path must be denied in ACP: {cmd:?}"
+            );
+        }
+
+        for ok_cmd in ["echo ok >/dev/fd/1", "echo ok 2>/dev/fd/2", "cat /dev/null"] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "exact stdio device must remain allowed under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "exact stdio device must remain approvable interactively: {ok_cmd}"
+                );
+            }
+        }
+    }
+}

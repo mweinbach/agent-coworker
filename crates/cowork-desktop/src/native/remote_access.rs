@@ -434,17 +434,20 @@ impl RemoteAccessBridge {
 
     fn resolve_target(&self) -> Option<(String, PathBuf, bool)> {
         let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let preferred = guard
+        if let Some(preferred) = guard
             .active_workspace_id
             .as_deref()
-            .or(guard.preferred_workspace_id.as_deref());
-        if let Some(target) = self.server_manager.preferred_workspace_target(preferred) {
-            return Some(target);
-        }
-        if let Some(id) = preferred
-            && let Some((path, yolo)) = guard.known_workspaces.get(id)
+            .or(guard.preferred_workspace_id.as_deref())
         {
-            return Some((id.to_string(), path.clone(), *yolo));
+            if let Some(target) = self.server_manager.running_workspace_target(preferred) {
+                return Some(target);
+            }
+            if let Some((path, yolo)) = guard.known_workspaces.get(preferred) {
+                return Some((preferred.to_string(), path.clone(), *yolo));
+            }
+        }
+        if let Some(target) = self.server_manager.preferred_workspace_target(None) {
+            return Some(target);
         }
         guard
             .known_workspaces
@@ -480,8 +483,7 @@ impl RemoteAccessBridge {
                 guard.active_workspace_id.take()
             };
             if let Some(ws_id) = active_ws
-                && let Some((_, path, yolo)) =
-                    self.server_manager.preferred_workspace_target(Some(&ws_id))
+                && let Some((_, path, yolo)) = self.server_manager.running_workspace_target(&ws_id)
             {
                 let _ = self
                     .server_manager
@@ -964,5 +966,40 @@ mod tests {
 
         bridge.stop_polling();
         server_task.abort();
+    }
+
+    #[test]
+    fn resolve_target_prefers_selected_known_workspace_over_unrelated_running_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = ServerManager::new(
+            crate::native::server_manager::ServerManagerRuntime {
+                user_data_dir: tmp.path().to_path_buf(),
+                resources_dir: None,
+                current_exe_dir: None,
+                repo_root: None,
+                is_packaged: false,
+            },
+            None,
+            None,
+        );
+        // Workspace A has a running server, while selected workspace B has not started yet.
+        manager.insert_test_mobile_h3_handle("ws-a", 17337, json!({}));
+
+        let bridge = RemoteAccessBridge::new(manager, None, Arc::new(|_| {}), true);
+        bridge.sync_catalog(
+            true,
+            Some("ws-b"),
+            &[
+                ("ws-a".to_string(), tmp.path().join("proj-a"), false),
+                ("ws-b".to_string(), tmp.path().join("proj-b"), true),
+            ],
+        );
+
+        let (target_id, target_path, target_yolo) = bridge
+            .resolve_target()
+            .expect("selected known workspace B must resolve");
+        assert_eq!(target_id, "ws-b");
+        assert_eq!(target_path, tmp.path().join("proj-b"));
+        assert!(target_yolo);
     }
 }

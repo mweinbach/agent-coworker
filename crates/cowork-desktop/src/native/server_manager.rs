@@ -1349,6 +1349,21 @@ impl ServerManager {
 
     /// Returns a currently running workspace target `(workspace_id, workspace_path, yolo)`,
     /// preferring `preferred_workspace_id` when live, or falling back to the newest running server.
+    /// Returns the running server target for an exact `workspace_id` without falling back to
+    /// other running workspaces.
+    pub fn running_workspace_target(&self, workspace_id: &str) -> Option<(String, PathBuf, bool)> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let handle = state.servers.get(workspace_id)?;
+        if handle.exited.load(Ordering::Acquire) {
+            return None;
+        }
+        Some((
+            workspace_id.to_string(),
+            handle.workspace_path.clone(),
+            handle.yolo,
+        ))
+    }
+
     pub fn preferred_workspace_target(
         &self,
         preferred_workspace_id: Option<&str>,

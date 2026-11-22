@@ -3837,6 +3837,7 @@ impl AppState {
         }
 
         let mut seen_user_keys: HashSet<String> = HashSet::new();
+        let mut legacy_replay = LegacyTranscriptStreamReplay::default();
         for (idx, entry) in entries.into_iter().enumerate() {
             let ts_ms = chrono::DateTime::parse_from_rfc3339(&entry.ts)
                 .map(|dt| dt.timestamp_millis())
@@ -3859,7 +3860,14 @@ impl AppState {
                 continue;
             };
             match evt_type {
+                "model_stream_raw"
+                | "reset_done"
+                | "interaction_resolved"
+                | "observability_status"
+                | "harness_context"
+                | "pong" => continue,
                 "user_message" => {
+                    legacy_replay.reset();
                     let content = entry
                         .payload
                         .get("text")
@@ -3897,6 +3905,13 @@ impl AppState {
                         timestamp_ms: ts_ms,
                     });
                 }
+                "model_stream_chunk" => {
+                    let rt = self
+                        .thread_runtime_by_id
+                        .entry(thread_id.to_string())
+                        .or_default();
+                    legacy_replay.apply_chunk(&mut rt.feed, &entry.payload, ts_ms, idx);
+                }
                 "assistant_message" => {
                     let content = entry
                         .payload
@@ -3905,7 +3920,9 @@ impl AppState {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    if content.trim().is_empty() {
+                    if content.trim().is_empty()
+                        || legacy_replay.assistant_message_already_streamed(&content)
+                    {
                         continue;
                     }
                     let rt = self
@@ -3924,7 +3941,7 @@ impl AppState {
                         timestamp_ms: ts_ms,
                     });
                 }
-                "reasoning" => {
+                "reasoning" | "assistant_reasoning" | "reasoning_summary" => {
                     let content = entry
                         .payload
                         .get("text")
@@ -3932,20 +3949,35 @@ impl AppState {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    if content.trim().is_empty() {
+                    if content.trim().is_empty()
+                        || legacy_replay.reasoning_already_streamed(&content)
+                    {
                         continue;
                     }
+                    let mode = if evt_type == "reasoning_summary"
+                        || entry.payload.get("kind").and_then(Value::as_str) == Some("summary")
+                    {
+                        "summary"
+                    } else if evt_type == "assistant_reasoning" {
+                        "reasoning"
+                    } else {
+                        "summary"
+                    };
                     let rt = self
                         .thread_runtime_by_id
                         .entry(thread_id.to_string())
                         .or_default();
-                    rt.feed.push(FeedItem::Reasoning {
-                        id: format!("transcript-reasoning-{idx}"),
-                        content,
-                        mode: "summary".to_string(),
-                        streaming: false,
-                        timestamp_ms: ts_ms,
-                    });
+                    let insert_at = legacy_replay.reasoning_insert_index(&rt.feed);
+                    rt.feed.insert(
+                        insert_at,
+                        FeedItem::Reasoning {
+                            id: format!("transcript-reasoning-{idx}"),
+                            content,
+                            mode: mode.to_string(),
+                            streaming: false,
+                            timestamp_ms: ts_ms,
+                        },
+                    );
                 }
                 _ => {
                     let mut evt = entry.payload.clone();
@@ -13757,6 +13789,512 @@ pub(crate) fn is_hidden_lmstudio_model_id(provider_id: &str, model_id: &str) -> 
 fn inject_cwd(params: &mut Value, cwd: Option<String>) {
     if let (Some(c), Some(obj)) = (cwd, params.as_object_mut()) {
         obj.entry("cwd".to_string()).or_insert(Value::String(c));
+    }
+}
+
+/// Per-turn state for rebuilding streamed output from legacy TypeScript harness
+/// `model_stream_chunk` transcript entries (mirrors retired `store.legacyTranscript.ts`).
+#[derive(Default)]
+struct LegacyTranscriptStreamReplay {
+    turn_id: Option<String>,
+    /// Ordered `(stream_id, item_id, accumulated_text)` for streamed assistant replies.
+    assistant_streams: Vec<(String, String, String)>,
+    /// Ordered `(stream_id, item_id, accumulated_text)` for streamed reasoning blocks.
+    reasoning_streams: Vec<(String, String, String)>,
+    tool_item_id_by_key: HashMap<String, String>,
+    tool_input_by_key: HashMap<String, String>,
+}
+
+impl LegacyTranscriptStreamReplay {
+    fn reset(&mut self) {
+        self.turn_id = None;
+        self.assistant_streams.clear();
+        self.reasoning_streams.clear();
+        self.tool_item_id_by_key.clear();
+        self.tool_input_by_key.clear();
+    }
+
+    fn normalize_whitespace(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn assistant_message_already_streamed(&self, text: &str) -> bool {
+        let normalized = Self::normalize_whitespace(text);
+        if normalized.is_empty() {
+            return true;
+        }
+        if self
+            .assistant_streams
+            .iter()
+            .any(|(_, _, s)| Self::normalize_whitespace(s) == normalized)
+        {
+            return true;
+        }
+        let aggregate = Self::normalize_whitespace(
+            &self
+                .assistant_streams
+                .iter()
+                .map(|(_, _, s)| s.as_str())
+                .collect::<String>(),
+        );
+        !aggregate.is_empty() && (aggregate == normalized || aggregate.starts_with(&normalized))
+    }
+
+    fn reasoning_already_streamed(&self, text: &str) -> bool {
+        let normalized = Self::normalize_whitespace(text);
+        if normalized.is_empty() {
+            return true;
+        }
+        if self
+            .reasoning_streams
+            .iter()
+            .any(|(_, _, s)| Self::normalize_whitespace(s) == normalized)
+        {
+            return true;
+        }
+        let aggregate = Self::normalize_whitespace(
+            &self
+                .reasoning_streams
+                .iter()
+                .map(|(_, _, s)| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        !aggregate.is_empty() && aggregate == normalized
+    }
+
+    fn reasoning_insert_index(&self, feed: &[FeedItem]) -> usize {
+        if let Some((_, item_id, _)) = self.assistant_streams.first()
+            && let Some(pos) = feed.iter().position(|item| feed_item_id(item) == item_id)
+        {
+            return pos;
+        }
+        feed.len()
+    }
+
+    fn value_id(v: Option<&Value>) -> Option<String> {
+        match v? {
+            Value::String(s) if !s.is_empty() => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    fn loose_text(v: Option<&Value>) -> Option<String> {
+        match v? {
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            _ => None,
+        }
+    }
+
+    fn normalize_tool_input(input_text: &str, existing: Option<&Value>) -> Value {
+        let mut base = existing
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        base.remove("input");
+        if let Ok(Value::Object(parsed)) = serde_json::from_str::<Value>(input_text.trim()) {
+            for (k, v) in parsed {
+                base.insert(k, v);
+            }
+            return Value::Object(base);
+        }
+        base.insert("input".to_string(), Value::String(input_text.to_string()));
+        Value::Object(base)
+    }
+
+    fn append_assistant_text(
+        &mut self,
+        feed: &mut Vec<FeedItem>,
+        stream_id: String,
+        delta: &str,
+        ts_ms: i64,
+        idx: usize,
+    ) {
+        if let Some((_, item_id, acc)) = self
+            .assistant_streams
+            .iter_mut()
+            .find(|(sid, _, _)| *sid == stream_id)
+        {
+            acc.push_str(delta);
+            if let Some(FeedItem::Message { content, .. }) =
+                feed.iter_mut().find(|item| feed_item_id(item) == *item_id)
+            {
+                *content = acc.clone();
+            }
+            return;
+        }
+        let item_id = format!("legacy-chunk-msg-{idx}");
+        self.assistant_streams
+            .push((stream_id, item_id.clone(), delta.to_string()));
+        feed.push(FeedItem::Message {
+            id: item_id,
+            role: FeedMessageRole::Assistant,
+            content: delta.to_string(),
+            client_message_id: None,
+            attachments: Vec::new(),
+            references: Vec::new(),
+            citations: Vec::new(),
+            streaming: false,
+            timestamp_ms: ts_ms,
+        });
+    }
+
+    fn append_reasoning_text(
+        &mut self,
+        feed: &mut Vec<FeedItem>,
+        stream_id: String,
+        mode: &str,
+        delta: &str,
+        ts_ms: i64,
+        idx: usize,
+    ) {
+        if let Some((_, item_id, acc)) = self
+            .reasoning_streams
+            .iter_mut()
+            .find(|(sid, _, _)| *sid == stream_id)
+        {
+            acc.push_str(delta);
+            if let Some(FeedItem::Reasoning { content, .. }) =
+                feed.iter_mut().find(|item| feed_item_id(item) == *item_id)
+            {
+                *content = acc.clone();
+            }
+            return;
+        }
+        let item_id = format!("legacy-chunk-reasoning-{idx}");
+        self.reasoning_streams
+            .push((stream_id, item_id.clone(), delta.to_string()));
+        feed.push(FeedItem::Reasoning {
+            id: item_id,
+            content: delta.to_string(),
+            mode: mode.to_string(),
+            streaming: false,
+            timestamp_ms: ts_ms,
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upsert_tool(
+        &mut self,
+        feed: &mut Vec<FeedItem>,
+        key: &str,
+        explicit_name: Option<&str>,
+        status: ToolRunStatus,
+        input: Option<Value>,
+        output: Option<Value>,
+        error: Option<String>,
+        completed_at_ms: Option<i64>,
+        ts_ms: i64,
+        idx: usize,
+    ) {
+        if let Some(item_id) = self.tool_item_id_by_key.get(key)
+            && let Some(FeedItem::Tool {
+                tool_name,
+                status: cur_status,
+                input: cur_input,
+                output: cur_output,
+                error: cur_error,
+                completed_at_ms: cur_completed,
+                streaming,
+                ..
+            }) = feed.iter_mut().find(|item| feed_item_id(item) == item_id)
+        {
+            if let Some(name) = explicit_name.filter(|n| !n.is_empty()) {
+                *tool_name = name.to_string();
+            }
+            if !cur_status.is_terminal() || status.is_terminal() {
+                *cur_status = status;
+            }
+            if let Some(next_input) = input {
+                *cur_input = next_input;
+            }
+            if output.is_some() {
+                *cur_output = output;
+            }
+            if error.is_some() {
+                *cur_error = error;
+            }
+            if completed_at_ms.is_some() {
+                *cur_completed = completed_at_ms;
+            }
+            *streaming = false;
+            return;
+        }
+        let item_id = format!("legacy-chunk-tool-{idx}");
+        self.tool_item_id_by_key
+            .insert(key.to_string(), item_id.clone());
+        feed.push(FeedItem::Tool {
+            id: item_id,
+            tool_name: explicit_name
+                .filter(|n| !n.is_empty())
+                .unwrap_or("tool")
+                .to_string(),
+            title: None,
+            call_id: Some(key.to_string()),
+            status,
+            input: input.unwrap_or_else(|| json!({})),
+            output,
+            error,
+            diff: None,
+            streaming: false,
+            timestamp_ms: ts_ms,
+            completed_at_ms,
+            output_truncated: false,
+        });
+    }
+
+    fn apply_chunk(&mut self, feed: &mut Vec<FeedItem>, payload: &Value, ts_ms: i64, idx: usize) {
+        let turn_id = payload
+            .get("turnId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if turn_id != self.turn_id {
+            self.reset();
+            self.turn_id = turn_id.clone();
+        }
+        let Some(part_type) = payload.get("partType").and_then(Value::as_str) else {
+            return;
+        };
+        let empty_map = serde_json::Map::new();
+        let part = payload
+            .get("part")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty_map);
+        let index = payload.get("index").and_then(Value::as_u64).unwrap_or(0);
+        let tool_key = Self::value_id(part.get("toolCallId"))
+            .or_else(|| Self::value_id(part.get("id")))
+            .unwrap_or_else(|| format!("tool:{}:{index}", turn_id.as_deref().unwrap_or("none")));
+        let explicit_name = part
+            .get("toolName")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+
+        match part_type {
+            "text_delta" => {
+                let Some(text) = part.get("text").and_then(Value::as_str) else {
+                    return;
+                };
+                if text.is_empty() {
+                    return;
+                }
+                let stream_id =
+                    Self::value_id(part.get("id")).unwrap_or_else(|| format!("text:{index}"));
+                if part.get("phase").and_then(Value::as_str) == Some("commentary") {
+                    self.append_reasoning_text(
+                        feed,
+                        format!("commentary:{stream_id}"),
+                        "summary",
+                        text,
+                        ts_ms,
+                        idx,
+                    );
+                } else {
+                    self.append_assistant_text(feed, stream_id, text, ts_ms, idx);
+                }
+            }
+            "text_end" => {
+                if part.get("phase").and_then(Value::as_str) == Some("commentary") {
+                    return;
+                }
+                let Some(annotations) = part.get("annotations").and_then(Value::as_array) else {
+                    return;
+                };
+                let parsed: Vec<CitationSource> = annotations
+                    .iter()
+                    .filter_map(|a| parse_citation_entry(a, false))
+                    .collect();
+                if parsed.is_empty() {
+                    return;
+                }
+                let target_item_id = if let Some(sid) = Self::value_id(part.get("id")) {
+                    self.assistant_streams
+                        .iter()
+                        .find(|(s, _, _)| *s == sid)
+                        .map(|(_, id, _)| id.clone())
+                } else {
+                    let fallback_sid = format!("text:{index}");
+                    self.assistant_streams
+                        .iter()
+                        .find(|(s, _, _)| *s == fallback_sid)
+                        .or_else(|| self.assistant_streams.last())
+                        .map(|(_, id, _)| id.clone())
+                };
+                if let Some(item_id) = target_item_id
+                    && let Some(FeedItem::Message { citations, .. }) =
+                        feed.iter_mut().find(|item| feed_item_id(item) == item_id)
+                {
+                    for c in parsed {
+                        push_dedup_citation(citations, c);
+                    }
+                }
+            }
+            "reasoning_delta" => {
+                let Some(text) = part.get("text").and_then(Value::as_str) else {
+                    return;
+                };
+                if text.is_empty() {
+                    return;
+                }
+                let mode = if part.get("mode").and_then(Value::as_str) == Some("summary") {
+                    "summary"
+                } else {
+                    "reasoning"
+                };
+                let stream_id =
+                    Self::value_id(part.get("id")).unwrap_or_else(|| format!("reasoning:{index}"));
+                self.append_reasoning_text(feed, stream_id, mode, text, ts_ms, idx);
+            }
+            "tool_input_start" => {
+                self.tool_input_by_key.remove(&tool_key);
+                let args = part.get("input").or_else(|| part.get("args")).cloned();
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Running,
+                    args,
+                    None,
+                    None,
+                    None,
+                    ts_ms,
+                    idx,
+                );
+            }
+            "tool_input_delta" => {
+                let Some(delta) = Self::loose_text(part.get("delta")) else {
+                    return;
+                };
+                let next_input = {
+                    let buf = self.tool_input_by_key.entry(tool_key.clone()).or_default();
+                    buf.push_str(&delta);
+                    buf.clone()
+                };
+                let existing_input = self
+                    .tool_item_id_by_key
+                    .get(&tool_key)
+                    .and_then(|id| feed.iter().find(|item| feed_item_id(item) == id))
+                    .and_then(|item| match item {
+                        FeedItem::Tool { input, .. } => Some(input.clone()),
+                        _ => None,
+                    });
+                let merged = Self::normalize_tool_input(&next_input, existing_input.as_ref());
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Running,
+                    Some(merged),
+                    None,
+                    None,
+                    None,
+                    ts_ms,
+                    idx,
+                );
+            }
+            "tool_input_end" => {
+                let next_input = self
+                    .tool_input_by_key
+                    .get(&tool_key)
+                    .cloned()
+                    .unwrap_or_default();
+                let exists = self.tool_item_id_by_key.contains_key(&tool_key);
+                if !exists && next_input.is_empty() {
+                    return;
+                }
+                let existing_input = self
+                    .tool_item_id_by_key
+                    .get(&tool_key)
+                    .and_then(|id| feed.iter().find(|item| feed_item_id(item) == id))
+                    .and_then(|item| match item {
+                        FeedItem::Tool { input, .. } => Some(input.clone()),
+                        _ => None,
+                    });
+                let merged = (!next_input.is_empty())
+                    .then(|| Self::normalize_tool_input(&next_input, existing_input.as_ref()));
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Running,
+                    merged,
+                    None,
+                    None,
+                    None,
+                    ts_ms,
+                    idx,
+                );
+            }
+            "tool_call" => {
+                let args = part.get("input").or_else(|| part.get("args")).cloned();
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Running,
+                    args,
+                    None,
+                    None,
+                    None,
+                    ts_ms,
+                    idx,
+                );
+            }
+            "tool_result" => {
+                let output = part.get("output").cloned();
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Completed,
+                    None,
+                    output,
+                    None,
+                    Some(ts_ms),
+                    ts_ms,
+                    idx,
+                );
+            }
+            "tool_error" => {
+                let err_val = part.get("error").cloned().unwrap_or(Value::Null);
+                let err_text = err_val
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| err_val.to_string());
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Failed,
+                    None,
+                    Some(json!({ "error": err_val })),
+                    Some(err_text),
+                    Some(ts_ms),
+                    ts_ms,
+                    idx,
+                );
+            }
+            "tool_output_denied" => {
+                let reason = part.get("reason").cloned();
+                let output = reason.as_ref().map(|r| json!({ "reason": r }));
+                let err_text = reason.and_then(|r| r.as_str().map(str::to_string));
+                self.upsert_tool(
+                    feed,
+                    &tool_key,
+                    explicit_name,
+                    ToolRunStatus::Declined,
+                    None,
+                    output,
+                    err_text,
+                    Some(ts_ms),
+                    ts_ms,
+                    idx,
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -25335,5 +25873,144 @@ mod tests {
             other => panic!("expected WsCommand::SendRequest, got {other:?}"),
         };
         assert_eq!(sent_plain, "turn/start");
+    }
+
+    #[test]
+    fn local_transcript_fallback_decodes_legacy_model_stream_chunks_and_deduplicates_summaries() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-legacy".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Legacy".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        let mk = |ts: &str, payload: Value| TranscriptLogEntry {
+            ts: ts.to_string(),
+            thread_id: "th-legacy".to_string(),
+            direction: "in".to_string(),
+            payload,
+        };
+        let entries = vec![
+            mk(
+                "2026-01-01T00:00:01Z",
+                json!({ "type": "user_message", "text": "Inspect README" }),
+            ),
+            mk(
+                "2026-01-01T00:00:02Z",
+                json!({
+                    "type": "model_stream_chunk",
+                    "turnId": "t1",
+                    "index": 0,
+                    "partType": "reasoning_delta",
+                    "part": { "id": "r1", "text": "Checking file", "mode": "summary" }
+                }),
+            ),
+            mk(
+                "2026-01-01T00:00:03Z",
+                json!({
+                    "type": "model_stream_chunk",
+                    "turnId": "t1",
+                    "index": 1,
+                    "partType": "tool_input_start",
+                    "part": { "toolCallId": "call-1", "toolName": "read" }
+                }),
+            ),
+            mk(
+                "2026-01-01T00:00:03Z",
+                json!({
+                    "type": "model_stream_chunk",
+                    "turnId": "t1",
+                    "index": 1,
+                    "partType": "tool_input_delta",
+                    "part": { "toolCallId": "call-1", "delta": "{\"filePath\":\"README.md\"}" }
+                }),
+            ),
+            mk(
+                "2026-01-01T00:00:04Z",
+                json!({
+                    "type": "model_stream_chunk",
+                    "turnId": "t1",
+                    "index": 1,
+                    "partType": "tool_result",
+                    "part": { "toolCallId": "call-1", "toolName": "read", "output": { "content": "# Hi" } }
+                }),
+            ),
+            mk(
+                "2026-01-01T00:00:05Z",
+                json!({
+                    "type": "model_stream_chunk",
+                    "turnId": "t1",
+                    "index": 2,
+                    "partType": "text_delta",
+                    "part": { "id": "txt-1", "text": "README says Hi." }
+                }),
+            ),
+            // Trailing summary duplicates already-streamed output and must be deduplicated.
+            mk(
+                "2026-01-01T00:00:06Z",
+                json!({ "type": "assistant_message", "text": "README says Hi." }),
+            ),
+            mk(
+                "2026-01-01T00:00:06Z",
+                json!({ "type": "reasoning", "text": "Checking file" }),
+            ),
+            // Second turn interrupted mid-stream without a final `assistant_message`.
+            mk(
+                "2026-01-01T00:01:00Z",
+                json!({ "type": "user_message", "text": "Continue" }),
+            ),
+            mk(
+                "2026-01-01T00:01:01Z",
+                json!({
+                    "type": "model_stream_chunk",
+                    "turnId": "t2",
+                    "index": 0,
+                    "partType": "text_delta",
+                    "part": { "id": "txt-2", "text": "Partial interrupted reply" }
+                }),
+            ),
+        ];
+
+        state.replay_local_transcript("th-legacy", entries);
+        let rt = state.thread_runtime_by_id.get("th-legacy").unwrap();
+        let mut assistant_texts = Vec::new();
+        let mut reasoning_texts = Vec::new();
+        let mut tools = Vec::new();
+        for item in &rt.feed {
+            match item {
+                FeedItem::Message {
+                    role: FeedMessageRole::Assistant,
+                    content,
+                    streaming,
+                    ..
+                } => {
+                    assert!(!streaming);
+                    assistant_texts.push(content.clone());
+                }
+                FeedItem::Reasoning { content, .. } => reasoning_texts.push(content.clone()),
+                FeedItem::Tool {
+                    tool_name,
+                    status,
+                    input,
+                    output,
+                    ..
+                } => tools.push((tool_name.clone(), *status, input.clone(), output.clone())),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            assistant_texts,
+            vec!["README says Hi.", "Partial interrupted reply"]
+        );
+        assert_eq!(reasoning_texts, vec!["Checking file"]);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].0, "read");
+        assert_eq!(tools[0].1, ToolRunStatus::Completed);
+        assert_eq!(tools[0].2, json!({ "filePath": "README.md" }));
+        assert_eq!(tools[0].3, Some(json!({ "content": "# Hi" })));
     }
 }

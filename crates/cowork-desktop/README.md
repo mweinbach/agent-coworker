@@ -61,18 +61,19 @@ cargo build -p cowork-server --bin cowork-server && cargo test -p cowork-desktop
 
 ### UI performance harness
 
-`benches/ui_perf.rs` drives the Main window's real `view` and `poll` in a headless Rune runtime over a long-thread fixture (60 threads, two with 400 feed items each, 40 skills). It reports per-step CPU frame time: the input or state change, `poll`, and the commit/layout/paint-instance build. It does not measure GPU upload or presentation. Scenarios: `open_thread`, `switch_thread`, `streaming`, `typing`, `scroll`, `settings`, `resize`, `idle`.
+`benches/ui_perf.rs` drives the Main window's real `view`, `poll`, and `on_key` in a headless Rune runtime over a realistic multi-workspace fixture (6 workspaces, 60 threads, two with 400 mixed markdown/code/table/KaTeX/diff items, 12 providers / 84 models, 40 skills, 100-entry explorer, Canvas, Spreadsheet, and Presentation previews). It reports per-step CPU frame time (and optional offscreen GPU render time with `--gpu`), p95/p99/max, frames exceeding 8.33 ms (120 Hz) and 16.67 ms (60 Hz), commits/step, layout nodes, and paint instances across 17 scenarios (`open_thread`, `switch_thread`, `streaming`, `typing`, `scroll`, `settings`, `resize`, `idle`, `streaming_burst`, `sidebar_toggle`, `inspector_toggle`, `resize_breakpoints`, `typing_while_streaming`, `scroll_full_history`, `overlays`, `canvas_and_previews`, `idle_with_bg_activity`).
 
 ```bash
 cargo bench -p cowork-desktop --bench ui_perf                         # optimized, all scenarios
+cargo bench -p cowork-desktop --bench ui_perf -- --gpu --check        # include GPU pass + 60/120Hz gates
 cargo bench -p cowork-desktop --bench ui_perf -- typing scroll        # a subset
 cargo bench -p cowork-desktop --bench ui_perf -- --items 600 --json /tmp/ui-perf.json
 cargo bench --profile dev -p cowork-desktop --bench ui_perf           # the `cargo run` profile
 ```
 
-`idle` should report zero commits. If it reports more, something in `poll` claims a change that no view reads. `settle` and `frames` are the median CPU time and frame count from the end of a navigation step until the runtime rests; a pane swap should rest within a frame or two. For a per-commit view/layout/text/apply breakdown, set `RUNE_COMMIT_BUDGET_MS=1`. Compare builds with paired, alternating runs on a quiet machine, using the median.
+`idle` and `idle_with_bg_activity` should report zero commits. If either reports more, something in `poll` claims a change that no view reads. `settle` and `frames` are the median CPU time and frame count from the end of a navigation step until the runtime rests; a pane swap should rest within a frame or two. For a per-commit view/layout/text/apply breakdown, set `RUNE_COMMIT_BUDGET_MS=1`. Compare builds with paired, alternating runs on a quiet machine, using the median.
 
-The dev profile (`cargo run`, `bun run desktop:rune`) builds dependencies at `opt-level = 3` (root `Cargo.toml`) because Rune's per-frame layout, text and paint are about 3x slower unoptimized; workspace crates stay unoptimized for fast rebuilds.
+The dev profile (`cargo run`, `bun run desktop:rune`) builds dependencies at `opt-level = 3` and `cowork-desktop` itself at `opt-level = 1` (root `Cargo.toml`) because generic `rune::Runtime<AppState>` frame/diff/layout code monomorphizes into `cowork-desktop`; all other workspace crates and `[profile.test]` remain at `opt-level = 0` for fast incremental rebuilds and testing.
 
 ## Module Ownership Layout
 

@@ -252,6 +252,114 @@ fn usage_formatting_and_aggregation_sum_threads_and_fallback_summary() {
 }
 
 #[test]
+fn aggregate_usage_attributes_providers_from_by_model_after_provider_switch() {
+    use crate::state::ModelUsageBreakdown;
+
+    let mut state = AppState::default();
+    // Conversation ran on OpenAI, then switched its active selection to Anthropic before
+    // running any Anthropic turn. Recorded `by_model` entries must keep the spending on OpenAI.
+    state.threads.push(ThreadRecord {
+        id: "t-switch".to_string(),
+        workspace_id: "ws1".to_string(),
+        title: "Switched chat".to_string(),
+        provider: Some("anthropic".to_string()),
+        model: Some("claude-sonnet-4-6".to_string()),
+        ..Default::default()
+    });
+    let mut by_model = std::collections::HashMap::new();
+    by_model.insert(
+        "openai:gpt-5.4".to_string(),
+        ModelUsageBreakdown {
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            turns: 2,
+            input_tokens: 3_000,
+            output_tokens: 1_000,
+            cached_tokens: 500,
+            estimated_cost_usd: 0.40,
+        },
+    );
+    by_model.insert(
+        "openai:gpt-5-mini".to_string(),
+        ModelUsageBreakdown {
+            provider: "openai".to_string(),
+            model: "gpt-5-mini".to_string(),
+            turns: 1,
+            input_tokens: 1_000,
+            output_tokens: 200,
+            cached_tokens: 0,
+            estimated_cost_usd: 0.05,
+        },
+    );
+    state.thread_runtime_by_id.insert(
+        "t-switch".to_string(),
+        ThreadRuntime {
+            usage: Some(UsageSummary {
+                input_tokens: 4_000,
+                output_tokens: 1_200,
+                cached_tokens: 500,
+                estimated_cost_usd: 0.45,
+                by_model: by_model.clone(),
+            }),
+            ..Default::default()
+        },
+    );
+
+    let agg = aggregate_usage(&state);
+    assert_eq!(agg.total_sessions, 1);
+    assert_eq!(agg.providers.len(), 1);
+    assert_eq!(agg.providers[0].provider, "openai");
+    assert_eq!(agg.providers[0].sessions, 1);
+    assert_eq!(agg.providers[0].input_tokens, 4_000);
+    assert_eq!(agg.providers[0].output_tokens, 1_200);
+    assert_eq!(agg.providers[0].cached_tokens, 500);
+    assert!((agg.providers[0].estimated_cost_usd - 0.45).abs() < 1e-9);
+    assert_eq!(
+        agg.providers[0].models,
+        vec!["gpt-5-mini".to_string(), "gpt-5.4".to_string()]
+    );
+
+    // After running an Anthropic turn in the same thread, both providers keep their exact shares.
+    by_model.insert(
+        "anthropic:claude-sonnet-4-6".to_string(),
+        ModelUsageBreakdown {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            turns: 1,
+            input_tokens: 2_000,
+            output_tokens: 800,
+            cached_tokens: 100,
+            estimated_cost_usd: 0.20,
+        },
+    );
+    state
+        .thread_runtime_by_id
+        .get_mut("t-switch")
+        .unwrap()
+        .usage = Some(UsageSummary {
+        input_tokens: 6_000,
+        output_tokens: 2_000,
+        cached_tokens: 600,
+        estimated_cost_usd: 0.65,
+        by_model,
+    });
+
+    let agg2 = aggregate_usage(&state);
+    assert_eq!(agg2.total_sessions, 1);
+    assert_eq!(agg2.providers.len(), 2);
+    assert_eq!(agg2.providers[0].provider, "openai");
+    assert_eq!(agg2.providers[0].sessions, 1);
+    assert_eq!(agg2.providers[0].total_tokens(), 5_200);
+    assert_eq!(agg2.providers[1].provider, "anthropic");
+    assert_eq!(agg2.providers[1].sessions, 1);
+    assert_eq!(agg2.providers[1].total_tokens(), 2_800);
+    assert_eq!(
+        agg2.providers[1].models,
+        vec!["claude-sonnet-4-6".to_string()]
+    );
+}
+
+#[test]
 fn packaged_builds_force_remote_access_off_and_ignore_flag_overrides() {
     let mut state = AppState {
         is_packaged: true,

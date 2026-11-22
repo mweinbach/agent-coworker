@@ -1,6 +1,6 @@
 //! Usage settings page (`apps/desktop/src/ui/settings/pages/UsagePage.tsx`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rune::{El, col, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit, SegmentedControl};
@@ -105,13 +105,12 @@ pub fn aggregate_usage(s: &AppState) -> AggregateUsage {
             continue;
         };
         let thread = s.threads.iter().find(|t| t.id == *thread_id);
-        let provider_name = thread
+        let fallback_provider = thread
             .and_then(|t| t.provider.as_deref())
             .map(str::trim)
             .filter(|p| !p.is_empty())
-            .unwrap_or("Unknown")
-            .to_string();
-        let model_name = thread
+            .unwrap_or("Unknown");
+        let fallback_model = thread
             .and_then(|t| t.model.as_deref())
             .map(str::trim)
             .filter(|m| !m.is_empty())
@@ -126,29 +125,73 @@ pub fn aggregate_usage(s: &AppState) -> AggregateUsage {
             total_cost += usage.estimated_cost_usd;
         }
 
-        let bucket =
-            by_provider
-                .entry(provider_name.clone())
-                .or_insert_with(|| ProviderUsageBucket {
-                    provider: provider_name,
-                    sessions: 0,
-                    models: Vec::new(),
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cached_tokens: 0,
-                    estimated_cost_usd: 0.0,
+        if !usage.by_model.is_empty() {
+            let mut seen_providers_in_thread: BTreeSet<String> = BTreeSet::new();
+            for entry in usage.by_model.values() {
+                let provider_name = {
+                    let trimmed = entry.provider.trim();
+                    if trimmed.is_empty() {
+                        fallback_provider.to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                };
+                let model_name = {
+                    let trimmed = entry.model.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                };
+                let bucket = by_provider.entry(provider_name.clone()).or_insert_with(|| {
+                    ProviderUsageBucket {
+                        provider: provider_name.clone(),
+                        sessions: 0,
+                        models: Vec::new(),
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cached_tokens: 0,
+                        estimated_cost_usd: 0.0,
+                    }
                 });
-        bucket.sessions += 1;
-        if let Some(model) = model_name
-            && !bucket.models.contains(&model)
-        {
-            bucket.models.push(model);
-        }
-        bucket.input_tokens = bucket.input_tokens.saturating_add(usage.input_tokens);
-        bucket.output_tokens = bucket.output_tokens.saturating_add(usage.output_tokens);
-        bucket.cached_tokens = bucket.cached_tokens.saturating_add(usage.cached_tokens);
-        if usage.estimated_cost_usd.is_finite() {
-            bucket.estimated_cost_usd += usage.estimated_cost_usd;
+                if seen_providers_in_thread.insert(provider_name) {
+                    bucket.sessions += 1;
+                }
+                if let Some(model) = model_name
+                    && !bucket.models.contains(&model)
+                {
+                    bucket.models.push(model);
+                }
+                bucket.input_tokens = bucket.input_tokens.saturating_add(entry.input_tokens);
+                bucket.output_tokens = bucket.output_tokens.saturating_add(entry.output_tokens);
+                bucket.cached_tokens = bucket.cached_tokens.saturating_add(entry.cached_tokens);
+                if entry.estimated_cost_usd.is_finite() {
+                    bucket.estimated_cost_usd += entry.estimated_cost_usd;
+                }
+            }
+        } else {
+            let provider_name = fallback_provider.to_string();
+            let bucket =
+                by_provider
+                    .entry(provider_name.clone())
+                    .or_insert_with(|| ProviderUsageBucket {
+                        provider: provider_name,
+                        sessions: 0,
+                        models: Vec::new(),
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cached_tokens: 0,
+                        estimated_cost_usd: 0.0,
+                    });
+            bucket.sessions += 1;
+            if let Some(model) = fallback_model
+                && !bucket.models.contains(&model)
+            {
+                bucket.models.push(model);
+            }
+            bucket.input_tokens = bucket.input_tokens.saturating_add(usage.input_tokens);
+            bucket.output_tokens = bucket.output_tokens.saturating_add(usage.output_tokens);
+            bucket.cached_tokens = bucket.cached_tokens.saturating_add(usage.cached_tokens);
+            if usage.estimated_cost_usd.is_finite() {
+                bucket.estimated_cost_usd += usage.estimated_cost_usd;
+            }
         }
     }
 
@@ -161,6 +204,48 @@ pub fn aggregate_usage(s: &AppState) -> AggregateUsage {
             || total_output > 0
             || total_cached > 0
             || summary.estimated_cost_usd > 0.0;
+        let mut summary_by_provider: BTreeMap<String, ProviderUsageBucket> = BTreeMap::new();
+        for entry in summary.by_model.values() {
+            let provider_name = {
+                let trimmed = entry.provider.trim();
+                if trimmed.is_empty() {
+                    "Unknown".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            };
+            let bucket = summary_by_provider
+                .entry(provider_name.clone())
+                .or_insert_with(|| ProviderUsageBucket {
+                    provider: provider_name,
+                    sessions: 1,
+                    models: Vec::new(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                    estimated_cost_usd: 0.0,
+                });
+            let model_trimmed = entry.model.trim();
+            if !model_trimmed.is_empty() && !bucket.models.iter().any(|m| m == model_trimmed) {
+                bucket.models.push(model_trimmed.to_string());
+            }
+            bucket.input_tokens = bucket.input_tokens.saturating_add(entry.input_tokens);
+            bucket.output_tokens = bucket.output_tokens.saturating_add(entry.output_tokens);
+            bucket.cached_tokens = bucket.cached_tokens.saturating_add(entry.cached_tokens);
+            if entry.estimated_cost_usd.is_finite() {
+                bucket.estimated_cost_usd += entry.estimated_cost_usd;
+            }
+        }
+        let mut summary_providers: Vec<ProviderUsageBucket> =
+            summary_by_provider.into_values().collect();
+        for bucket in &mut summary_providers {
+            bucket.models.sort();
+        }
+        summary_providers.sort_by(|a, b| {
+            b.estimated_cost_usd
+                .total_cmp(&a.estimated_cost_usd)
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
         return AggregateUsage {
             has_usage: has_summary_data,
             total_cost_usd: has_summary_data.then_some(total_cost),
@@ -168,11 +253,14 @@ pub fn aggregate_usage(s: &AppState) -> AggregateUsage {
             total_output_tokens: total_output,
             total_cached_tokens: total_cached,
             total_sessions: if has_summary_data { 1 } else { 0 },
-            providers: Vec::new(),
+            providers: summary_providers,
         };
     }
 
     let mut providers: Vec<ProviderUsageBucket> = by_provider.into_values().collect();
+    for bucket in &mut providers {
+        bucket.models.sort();
+    }
     providers.sort_by(|a, b| {
         b.estimated_cost_usd
             .total_cmp(&a.estimated_cost_usd)
@@ -468,11 +556,99 @@ fn build_overview_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &Theme
 
 fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTokens) -> El {
     let mut rows: Vec<(String, String, usize, u64, u64, u64, f64)> = Vec::new();
-    if let Some(summary) = &s.usage_summary
+    let mut upsert_model_row = |model: String,
+                                provider: String,
+                                turns: usize,
+                                input: u64,
+                                output: u64,
+                                cached: u64,
+                                cost: f64| {
+        if let Some(existing) = rows.iter_mut().find(|r| r.0 == model && r.1 == provider) {
+            existing.2 += turns;
+            existing.3 = existing.3.saturating_add(input);
+            existing.4 = existing.4.saturating_add(output);
+            existing.5 = existing.5.saturating_add(cached);
+            if cost.is_finite() {
+                existing.6 += cost;
+            }
+        } else {
+            rows.push((
+                model,
+                provider,
+                turns,
+                input,
+                output,
+                cached,
+                if cost.is_finite() { cost } else { 0.0 },
+            ));
+        }
+    };
+
+    let mut any_thread_models = false;
+    for (thread_id, runtime) in &s.thread_runtime_by_id {
+        let Some(usage) = &runtime.usage else {
+            continue;
+        };
+        any_thread_models = true;
+        let thread = s.threads.iter().find(|t| t.id == *thread_id);
+        let fallback_provider = thread
+            .and_then(|t| t.provider.as_deref())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .unwrap_or("unknown");
+        let fallback_model = thread
+            .and_then(|t| t.model.as_deref())
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .unwrap_or("default");
+        if !usage.by_model.is_empty() {
+            for entry in usage.by_model.values() {
+                let provider = {
+                    let p = entry.provider.trim();
+                    if p.is_empty() {
+                        fallback_provider.to_string()
+                    } else {
+                        p.to_string()
+                    }
+                };
+                let model = {
+                    let m = entry.model.trim();
+                    if m.is_empty() {
+                        fallback_model.to_string()
+                    } else {
+                        m.to_string()
+                    }
+                };
+                upsert_model_row(
+                    model,
+                    provider,
+                    entry.turns.max(1),
+                    entry.input_tokens,
+                    entry.output_tokens,
+                    entry.cached_tokens,
+                    entry.estimated_cost_usd,
+                );
+            }
+        } else {
+            upsert_model_row(
+                fallback_model.to_string(),
+                fallback_provider.to_string(),
+                1,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cached_tokens,
+                usage.estimated_cost_usd,
+            );
+        }
+    }
+
+    if !any_thread_models
+        && agg.has_usage
+        && let Some(summary) = &s.usage_summary
         && !summary.by_model.is_empty()
     {
         for entry in summary.by_model.values() {
-            rows.push((
+            upsert_model_row(
                 entry.model.clone(),
                 entry.provider.clone(),
                 entry.turns,
@@ -480,38 +656,7 @@ fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTo
                 entry.output_tokens,
                 entry.cached_tokens,
                 entry.estimated_cost_usd,
-            ));
-        }
-    } else if agg.has_usage {
-        for thread in &s.threads {
-            let Some(usage) = s
-                .thread_runtime_by_id
-                .get(&thread.id)
-                .and_then(|rt| rt.usage.as_ref())
-            else {
-                continue;
-            };
-            let provider = thread.provider.as_deref().unwrap_or("unknown").to_string();
-            let model = thread.model.as_deref().unwrap_or("default").to_string();
-            if let Some(existing) = rows.iter_mut().find(|r| r.0 == model && r.1 == provider) {
-                existing.2 += 1;
-                existing.3 = existing.3.saturating_add(usage.input_tokens);
-                existing.4 = existing.4.saturating_add(usage.output_tokens);
-                existing.5 = existing.5.saturating_add(usage.cached_tokens);
-                if usage.estimated_cost_usd.is_finite() {
-                    existing.6 += usage.estimated_cost_usd;
-                }
-            } else {
-                rows.push((
-                    model,
-                    provider,
-                    1,
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cached_tokens,
-                    usage.estimated_cost_usd,
-                ));
-            }
+            );
         }
     }
 

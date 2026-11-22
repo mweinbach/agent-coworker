@@ -2180,3 +2180,63 @@ async fn unsandboxed_native_shell_authorizes_url_shaped_filesystem_operands() {
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_preserves_unix_backslashes_during_glob_expansion() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/codex-cli/auth.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"token\":\"secret\"}\n").unwrap();
+
+        // Sibling ordinary directory `a/` plus root symlink `a\b-link` and directory `a\b/`
+        // containing another escaping symlink.
+        std::fs::create_dir_all(h.ws.join("a")).unwrap();
+        std::fs::create_dir_all(h.ws.join("a\\b")).unwrap();
+        std::fs::write(h.ws.join("a\\safe-note.txt"), "safe\n").unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("a\\b-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("a\\b/cred-link")).unwrap();
+
+        let blocked = ["cat 'a\\b'*", "head -n 5 'a\\b'*", "cat 'a\\b'/cred*"];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: Unix backslash glob escape must be denied in Bash: {cmd:?}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: Unix backslash glob escape must be denied in ACP: {cmd:?}"
+            );
+        }
+
+        let safe = claude_tool("Bash", json!({ "command": "cat 'a\\safe-'*" }));
+        if yolo {
+            assert!(
+                h.decide_silently(CLAUDE_TOOL, safe).await,
+                "benign workspace backslash-containing glob must stay allowed under YOLO"
+            );
+        } else {
+            assert!(
+                h.decide_interactively(CLAUDE_TOOL, safe, true).await,
+                "benign workspace backslash-containing glob must remain approvable interactively"
+            );
+        }
+    }
+}

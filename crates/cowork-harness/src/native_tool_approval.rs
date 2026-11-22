@@ -1970,7 +1970,14 @@ fn validate_shell_glob_operand(
     current_cmd: &str,
     require_write: bool,
 ) -> Result<(), String> {
-    let normalized = raw.replace('\\', "/");
+    // Only normalize `\` to `/` on Windows; on Unix `\` is a valid literal filename character
+    // and rewriting it would enumerate the wrong directory while Bash expands the original name.
+    #[cfg(windows)]
+    let normalized_owned = raw.replace('\\', "/");
+    #[cfg(windows)]
+    let normalized = normalized_owned.as_str();
+    #[cfg(not(windows))]
+    let normalized = raw;
     let (prefix_dir, rest_segments): (PathBuf, Vec<&str>) =
         if let Some(rest) = normalized.strip_prefix("~/") {
             (
@@ -1996,7 +2003,7 @@ fn validate_shell_glob_operand(
             (normalize_lexical_path(base_dir), rest.split('/').collect())
         } else if let Some(rest) = normalized.strip_prefix('/') {
             (PathBuf::from("/"), rest.split('/').collect())
-        } else if has_windows_drive_prefix(&normalized) {
+        } else if has_windows_drive_prefix(normalized) {
             let drive = format!("{}/", &normalized[..2]);
             let rest = normalized[2..].trim_start_matches('/');
             (PathBuf::from(drive), rest.split('/').collect())

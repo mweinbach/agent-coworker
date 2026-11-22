@@ -1571,7 +1571,15 @@ fn is_safe_system_executable_path(path: &str) -> bool {
         "/usr/sbin/",
     ]
     .iter()
-    .any(|prefix| path.starts_with(prefix))
+    .any(|prefix| {
+        path.strip_prefix(prefix).is_some_and(|rest| {
+            !rest.is_empty()
+                && !rest.contains('/')
+                && !rest.contains('\\')
+                && rest != "."
+                && rest != ".."
+        })
+    })
 }
 
 fn has_windows_drive_prefix(s: &str) -> bool {
@@ -1655,6 +1663,7 @@ fn is_directory_reading_shell_command(cmd_basename: &str) -> bool {
             | "cat"
             | "head"
             | "tail"
+            | "diff"
             | "less"
             | "more"
             | "awk"
@@ -2132,7 +2141,7 @@ fn validate_shell_operand_candidate(
         .as_ref()
         .is_some_and(|p| std::fs::symlink_metadata(p).is_ok());
 
-    if !explicit_path && !exists_on_disk {
+    if !explicit_path && !exists_on_disk && !(is_mut && !candidate.starts_with('-')) {
         return Ok(());
     }
 
@@ -2145,7 +2154,8 @@ fn validate_shell_operand_candidate(
         || normalized.starts_with(".cowork/")
         || normalized.contains("/.cowork/")
         || normalized.ends_with("/.cowork");
-    let require_write = force_write || (is_mut && (exists_on_disk || touches_protected_meta));
+    let require_write = force_write
+        || (is_mut && (exists_on_disk || touches_protected_meta || !candidate.starts_with('-')));
 
     if let Some(canonical) =
         validate_shell_path_token(candidate, base_dir, ctx, require_write, false)?
@@ -2239,200 +2249,105 @@ fn normalize_command_stem(cmd_basename: &str) -> &str {
 fn is_nested_posix_shell(cmd_basename: &str) -> bool {
     matches!(
         normalize_command_stem(cmd_basename),
-        "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh" | "mksh" | "csh" | "tcsh" | "fish"
+        "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh" | "mksh"
     )
 }
 
-/// Denies general-purpose interpreters, build/package runners that execute arbitrary repository
-/// code, dynamic shell evaluators, and indirect process launchers in the unsandboxed native
-/// shell, where runtime path construction cannot be statically verified against Cowork's read/
-/// write boundaries.
-fn is_unsandboxed_disallowed_command(cmd_basename: &str) -> bool {
+/// Strict command allowlist for unsandboxed native shell execution (Claude SDK `Bash` and
+/// Antigravity ACP `run_cmd` / `execute`), where Cowork's OS sandbox does not wrap the subprocess.
+///
+/// Only audited POSIX core utilities whose file/directory operands can be statically verified
+/// against Cowork's read/write boundaries — plus `cd`, recursively validated POSIX `sh -c`, and
+/// allowlisted local `git` subcommands — are permitted. Network tools (`curl`, `wget`, `ssh`),
+/// interpreters, archive extractors, patchers, build runners, config-file loaders, and arbitrary
+/// `$PATH` binaries are denied by default (they remain available in Cowork's OS-sandboxed `bash`
+/// tool).
+fn is_unsandboxed_allowed_command(cmd_basename: &str) -> bool {
+    if is_nested_posix_shell(cmd_basename) {
+        return true;
+    }
     let exact = cmd_basename
         .strip_suffix(".exe")
         .or_else(|| cmd_basename.strip_suffix(".cmd"))
         .or_else(|| cmd_basename.strip_suffix(".bat"))
         .or_else(|| cmd_basename.strip_suffix(".com"))
         .unwrap_or(cmd_basename);
-    let stem = normalize_command_stem(cmd_basename);
 
     matches!(
         exact,
-        // Shell compound control-flow keywords & directory-stack builtins (cannot safely track cwd/control-flow statically)
-        "pushd"
-            | "popd"
-            | "if"
-            | "then"
-            | "elif"
-            | "else"
-            | "fi"
-            | "for"
-            | "while"
-            | "until"
-            | "do"
-            | "done"
-            | "case"
-            | "esac"
-            | "select"
-            | "function"
-            | "coproc"
-            | "{"
-            | "}"
-            | "!"
-            | "[["
-            | "]]"
-            // Dynamic shell evaluation, indirect command launchers, privilege escalation, debuggers
-            | "eval"
-            | "source"
-            | "."
-            | "exec"
-            | "xargs"
-            | "parallel"
-            | "env"
-            | "printenv"
-            | "set"
-            | "export"
-            | "declare"
-            | "typeset"
-            | "command"
-            | "builtin"
-            | "nohup"
-            | "nice"
-            | "time"
-            | "timeout"
-            | "stdbuf"
-            | "setsid"
-            | "ionice"
-            | "chrt"
-            | "taskset"
-            | "sudo"
-            | "su"
-            | "doas"
-            | "pkexec"
-            | "runuser"
-            | "chroot"
-            | "nsenter"
-            | "unshare"
-            | "strace"
-            | "ltrace"
-            | "gdb"
-            | "lldb"
-            | "ssh"
-            | "scp"
-            | "sftp"
-            | "rsync"
-            // Windows shells & script hosts
-            | "pwsh"
-            | "powershell"
-            | "cmd"
-            | "cscript"
-            | "wscript"
-            | "mshta"
-            | "rundll32"
-            | "regsvr32"
-            // Stream/text interpreters capable of arbitrary file I/O or shell execution
-            | "awk"
-            | "gawk"
-            | "mawk"
-            | "nawk"
-            | "sed"
-            | "gsed"
-            // Implicit-target patchers and archive extractors (targets come from file contents,
-            // bypassing static CLI operand authorization and able to plant `.git/hooks/*` or symlinks)
-            | "patch"
-            | "unzip"
-            | "cpio"
-            | "7z"
-            | "7za"
-            | "7zz"
-            | "unrar"
-            | "pax"
-            | "bsdtar"
-            | "gtar"
-            // Build/package runners that execute arbitrary code from repo manifests/scripts
-            | "make"
-            | "gmake"
-            | "cmake"
-            | "ninja"
-            | "npm"
-            | "npx"
-            | "pnpm"
-            | "yarn"
-            | "poetry"
-            | "pytest"
-            | "cargo"
-            | "rustc"
-            | "go"
-            | "zig"
-            | "cc"
-            | "c++"
-            | "uv"
-            | "uvx"
-    ) || matches!(
-        stem,
-        // General-purpose programming language interpreters & runtimes (including versioned binaries like python3.12, php8.3, gcc-14)
-        "python"
-            | "py"
-            | "pypy"
-            | "ipython"
-            | "jython"
-            | "micropython"
-            | "pip"
-            | "node"
-            | "nodejs"
-            | "bun"
-            | "deno"
-            | "tsx"
-            | "ts-node"
-            | "qjs"
-            | "quickjs"
-            | "ruby"
-            | "irb"
-            | "jruby"
-            | "perl"
-            | "raku"
-            | "php"
-            | "hhvm"
-            | "lua"
-            | "luajit"
-            | "r"
-            | "rscript"
-            | "julia"
-            | "swift"
-            | "osascript"
-            | "tclsh"
-            | "wish"
-            | "expect"
-            | "groovy"
-            | "scala"
-            | "kotlin"
-            | "java"
-            | "javac"
-            | "jshell"
-            | "dotnet"
-            | "csi"
-            | "fsi"
-            | "erl"
-            | "escript"
-            | "elixir"
-            | "iex"
-            | "ghci"
-            | "runhaskell"
-            | "runghc"
-            | "ocaml"
-            | "guile"
-            | "racket"
-            | "sbcl"
-            | "clisp"
-            | "gcc"
-            | "g++"
-            | "clang"
-            | "clang++"
-    ) || exact.starts_with("gcc-")
-        || exact.starts_with("g++-")
-        || exact.starts_with("clang-")
-        || exact.starts_with("clang++-")
-        || exact.starts_with("python-")
+        // Navigation
+        "cd"
+            // Pure stdout / simple text filters
+            | "echo"
+            | "printf"
+            | "true"
+            | "false"
+            | "pwd"
+            | "basename"
+            | "dirname"
+            | "seq"
+            | "uname"
+            | "date"
+            | "whoami"
+            | "id"
+            | "wc"
+            | "uniq"
+            | "cut"
+            | "tr"
+            | "paste"
+            | "rev"
+            | "nl"
+            | "fold"
+            | "fmt"
+            | "column"
+            | "expand"
+            | "unexpand"
+            | "comm"
+            | "join"
+            | "test"
+            | "["
+            | "sleep"
+            | "sort"
+            | "tee"
+            // Explicit-operand file readers & comparison/checksum tools
+            | "cat"
+            | "head"
+            | "tail"
+            | "stat"
+            | "readlink"
+            | "realpath"
+            | "diff"
+            | "cmp"
+            | "md5"
+            | "md5sum"
+            | "shasum"
+            | "sha1sum"
+            | "sha256sum"
+            | "sha512sum"
+            | "cksum"
+            // Bounded search & directory listing (implicit cwd roots + dir args checked)
+            | "ls"
+            | "dir"
+            | "tree"
+            | "du"
+            | "find"
+            | "fd"
+            | "grep"
+            | "egrep"
+            | "fgrep"
+            | "rg"
+            // Explicit-operand workspace mutations (all operands write-validated; symlinks/hardlinks blocked)
+            | "mkdir"
+            | "touch"
+            | "cp"
+            | "mv"
+            | "rm"
+            | "rmdir"
+            | "chmod"
+            | "truncate"
+            // Allowlisted local VCS operations (subcommands + flags validated separately)
+            | "git"
+    )
 }
 
 const MAX_SHELL_POSSIBLE_DIRS: usize = 16;
@@ -2441,8 +2356,6 @@ fn is_safe_git_global_flag(arg: &str) -> bool {
     matches!(
         arg,
         "--no-pager"
-            | "--paginate"
-            | "-p"
             | "-P"
             | "--no-optional-locks"
             | "--literal-pathspecs"
@@ -2483,8 +2396,8 @@ fn is_allowed_unsandboxed_git_subcommand(sub: &str) -> bool {
             | "show-ref"
             | "version"
             | "help"
-            // Standard workspace VCS operations (cannot write `.git/hooks/*`, `.git/config`,
-            // or arbitrary implicit patch targets; dangerous forms still require user approval)
+            // Local workspace VCS operations (no remote helpers, no `--unsafe-paths` patchers,
+            // no `rebase -x`; dangerous forms like `git reset --hard` still require approval)
             | "add"
             | "commit"
             | "reset"
@@ -2496,32 +2409,107 @@ fn is_allowed_unsandboxed_git_subcommand(sub: &str) -> bool {
             | "stash"
             | "rm"
             | "mv"
-            | "fetch"
-            | "pull"
-            | "push"
-            | "merge"
-            | "rebase"
-            | "cherry-pick"
     )
 }
 
-fn is_tar_extract_arg(arg: &str, lower_arg: &str, is_first_arg: bool) -> bool {
-    if arg == "-x" || lower_arg == "--extract" || lower_arg == "--get" {
-        return true;
+fn short_flag_bundle_contains(arg: &str, needle: char) -> bool {
+    arg.strip_prefix('-')
+        .is_some_and(|short| !short.starts_with('-') && short.contains(needle))
+}
+
+fn reject_unsafe_unsandboxed_command_arg(
+    cmd: &str,
+    text: &str,
+    lower_arg: &str,
+) -> Result<(), String> {
+    let blocked = match cmd {
+        "find" => {
+            matches!(
+                lower_arg,
+                "-exec"
+                    | "-execdir"
+                    | "-ok"
+                    | "-okdir"
+                    | "-fprint"
+                    | "-fprint0"
+                    | "-fprintf"
+                    | "-fls"
+                    | "-files0-from"
+                    | "--files0-from"
+                    | "-delete"
+            ) || lower_arg.starts_with("-files0-from=")
+                || lower_arg.starts_with("--files0-from=")
+        }
+        "fd" => {
+            matches!(
+                lower_arg,
+                "-x" | "--exec" | "-X" | "--exec-batch" | "--ignore-file"
+            ) || lower_arg.starts_with("--exec=")
+                || lower_arg.starts_with("--exec-batch=")
+                || lower_arg.starts_with("--ignore-file=")
+                || short_flag_bundle_contains(text, 'x')
+                || short_flag_bundle_contains(text, 'X')
+        }
+        "rg" => {
+            matches!(
+                lower_arg,
+                "--pre" | "--pre-glob" | "-z" | "--search-zip" | "--ignore-file" | "--files-from"
+            ) || lower_arg.starts_with("--pre=")
+                || lower_arg.starts_with("--pre-glob=")
+                || lower_arg.starts_with("--ignore-file=")
+                || lower_arg.starts_with("--files-from=")
+                || short_flag_bundle_contains(text, 'z')
+        }
+        "sort" => {
+            matches!(
+                lower_arg,
+                "-o" | "--output"
+                    | "--files0-from"
+                    | "--compress-program"
+                    | "--random-source"
+                    | "-T"
+                    | "--temporary-directory"
+            ) || lower_arg.starts_with("--output=")
+                || lower_arg.starts_with("--files0-from=")
+                || lower_arg.starts_with("--compress-program=")
+                || lower_arg.starts_with("--random-source=")
+                || lower_arg.starts_with("--temporary-directory=")
+                || short_flag_bundle_contains(text, 'o')
+                || short_flag_bundle_contains(text, 'T')
+        }
+        "wc" | "du" => {
+            matches!(lower_arg, "--files0-from" | "--exclude-from")
+                || lower_arg.starts_with("--files0-from=")
+                || lower_arg.starts_with("--exclude-from=")
+        }
+        "diff" => {
+            matches!(lower_arg, "--from-file" | "--to-file")
+                || lower_arg.starts_with("--from-file=")
+                || lower_arg.starts_with("--to-file=")
+        }
+        "date" => {
+            matches!(lower_arg, "-f" | "--file" | "-s" | "--set")
+                || lower_arg.starts_with("--file=")
+                || lower_arg.starts_with("--set=")
+                || short_flag_bundle_contains(text, 'f')
+                || short_flag_bundle_contains(text, 's')
+        }
+        "cp" => {
+            matches!(lower_arg, "-s" | "--symbolic-link" | "-l" | "--link")
+                || short_flag_bundle_contains(text, 's')
+                || short_flag_bundle_contains(text, 'l')
+        }
+        "md5sum" | "shasum" | "sha1sum" | "sha256sum" | "sha512sum" => {
+            matches!(lower_arg, "-c" | "--check") || short_flag_bundle_contains(text, 'c')
+        }
+        _ => false,
+    };
+    if blocked {
+        return Err(format!(
+            "'{cmd} {text}' is blocked in unsandboxed native shell execution."
+        ));
     }
-    if let Some(short) = arg.strip_prefix('-')
-        && !short.starts_with('-')
-        && short.contains('x')
-    {
-        return true;
-    }
-    // Traditional BSD/GNU tar bundled option word without leading `-` (e.g. `tar xf archive.tar`).
-    is_first_arg
-        && !arg.starts_with('-')
-        && !arg.contains('/')
-        && !arg.contains('\\')
-        && arg.chars().all(|c| c.is_ascii_alphanumeric())
-        && arg.contains('x')
+    Ok(())
 }
 
 #[derive(Default)]
@@ -2532,7 +2520,6 @@ struct SimpleCommandSearchState {
     saw_pattern_flag: bool,
     is_recursive_grep: bool,
     positional_args: usize,
-    arg_index: usize,
     find_saw_expr: bool,
     find_saw_root: bool,
 }
@@ -2543,7 +2530,6 @@ impl SimpleCommandSearchState {
     }
 
     fn observe_arg(&mut self, cmd: &str, arg: &str, lower_arg: &str) {
-        self.arg_index += 1;
         if cmd == "find" {
             if !self.find_saw_expr {
                 if arg.starts_with('-') || matches!(arg, "!" | "(" | ")" | ",") {
@@ -2555,10 +2541,13 @@ impl SimpleCommandSearchState {
             return;
         }
 
-        let is_grep_like = matches!(cmd, "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack")
+        let is_grep_like = matches!(cmd, "grep" | "egrep" | "fgrep" | "rg")
             || (cmd == "git" && self.git_subcommand.as_deref() == Some("grep"));
         if is_grep_like {
             if self.expect_flag_value {
+                if matches!(cmd, "grep" | "egrep" | "fgrep") && lower_arg == "recurse" {
+                    self.is_recursive_grep = true;
+                }
                 self.expect_flag_value = false;
                 return;
             }
@@ -2568,7 +2557,10 @@ impl SimpleCommandSearchState {
                     return;
                 }
                 if arg.starts_with("--") {
-                    if matches!(lower_arg, "--recursive" | "--dereference-recursive") {
+                    if matches!(
+                        lower_arg,
+                        "--recursive" | "--dereference-recursive" | "--directories=recurse"
+                    ) {
                         self.is_recursive_grep = true;
                     }
                     if matches!(lower_arg, "--regexp" | "--file") {
@@ -2583,6 +2575,7 @@ impl SimpleCommandSearchState {
                             | "--after-context"
                             | "--before-context"
                             | "--context"
+                            | "--directories"
                             | "--include"
                             | "--exclude"
                             | "--exclude-dir"
@@ -2603,7 +2596,7 @@ impl SimpleCommandSearchState {
                     && !short.is_empty()
                 {
                     if matches!(cmd, "grep" | "egrep" | "fgrep")
-                        && (short.contains('r') || short.contains('R'))
+                        && (short.contains('r') || short.contains('R') || short == "drecurse")
                     {
                         self.is_recursive_grep = true;
                     }
@@ -2985,9 +2978,9 @@ fn validate_native_shell_command_text(
                         .and_then(|s| s.to_str())
                         .unwrap_or(text)
                         .to_ascii_lowercase();
-                    if is_unsandboxed_disallowed_command(&base) {
+                    if !is_unsandboxed_allowed_command(&base) {
                         return Err(format!(
-                            "Command '{base}' is blocked in unsandboxed native shell execution because it can compute or access arbitrary paths outside Cowork's OS sandbox."
+                            "Command '{base}' is not allowed in unsandboxed native shell execution; use Cowork's OS-sandboxed bash tool or an audited file/git command instead."
                         ));
                     }
                     current_cmd = base;
@@ -3000,9 +2993,7 @@ fn validate_native_shell_command_text(
                 }
 
                 if is_nested_posix_shell(&current_cmd) {
-                    if !nested_shell_got_script
-                        && matches!(text.to_ascii_lowercase().as_str(), "-c" | "-lc" | "-ic")
-                    {
+                    if !nested_shell_got_script && text == "-c" {
                         expect_subshell_script = true;
                         continue;
                     }
@@ -3052,16 +3043,10 @@ fn validate_native_shell_command_text(
                     continue;
                 }
 
-                // Block command-specific code-execution flags and implicit-target writers on
-                // otherwise allowed utilities.
+                // Block command-specific code-execution, config-indirection, link-creation,
+                // and implicit-target flags on allowlisted utilities.
                 let lower_arg = text.to_ascii_lowercase();
-                if current_cmd == "find"
-                    && matches!(lower_arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
-                {
-                    return Err(format!(
-                        "'find {text}' is blocked in unsandboxed native shell execution."
-                    ));
-                }
+                reject_unsafe_unsandboxed_command_arg(&current_cmd, text, &lower_arg)?;
                 if current_cmd == "git" {
                     let dangerous_git_flag = matches!(
                         lower_arg.as_str(),
@@ -3076,9 +3061,17 @@ fn validate_native_shell_command_text(
                             | "--unsafe-paths"
                             | "--ext-diff"
                             | "--textconv"
+                            | "--filters"
                             | "--output"
+                            | "--no-index"
+                            | "--pathspec-from-file"
+                            | "-x"
+                            | "--exec"
+                            | "--template"
+                            | "--separate-git-dir"
                     ) || (search_state.git_subcommand.is_none()
                         && (text == "-C" || text.starts_with("-C") || text.starts_with("-c")))
+                        || text.starts_with("-x")
                         || lower_arg.starts_with("--config-env=")
                         || lower_arg.starts_with("--exec-path=")
                         || lower_arg.starts_with("--upload-pack=")
@@ -3087,7 +3080,11 @@ fn validate_native_shell_command_text(
                         || lower_arg.starts_with("--work-tree=")
                         || lower_arg.starts_with("--namespace=")
                         || lower_arg.starts_with("--super-prefix=")
-                        || lower_arg.starts_with("--output=");
+                        || lower_arg.starts_with("--output=")
+                        || lower_arg.starts_with("--pathspec-from-file=")
+                        || lower_arg.starts_with("--exec=")
+                        || lower_arg.starts_with("--template=")
+                        || lower_arg.starts_with("--separate-git-dir=");
                     if dangerous_git_flag {
                         return Err(format!(
                             "'git {text}' is blocked in unsandboxed native shell execution."
@@ -3111,19 +3108,6 @@ fn validate_native_shell_command_text(
                         }
                     }
                 }
-                if current_cmd == "tar"
-                    && (matches!(
-                        lower_arg.as_str(),
-                        "-i" | "--checkpoint-action" | "--to-command" | "--use-compress-program"
-                    ) || lower_arg.starts_with("--checkpoint-action=")
-                        || lower_arg.starts_with("--to-command=")
-                        || lower_arg.starts_with("--use-compress-program=")
-                        || is_tar_extract_arg(text, &lower_arg, search_state.arg_index == 0))
-                {
-                    return Err(format!(
-                        "'tar {text}' is blocked in unsandboxed native shell execution."
-                    ));
-                }
                 search_state.observe_arg(&current_cmd, text, &lower_arg);
 
                 let is_mut = is_mutating_shell_command(&current_cmd);
@@ -3139,7 +3123,7 @@ fn validate_native_shell_command_text(
                     }
                     let force_write = matches!(
                         lhs.to_ascii_lowercase().as_str(),
-                        "--output" | "--out" | "-o" | "--dest"
+                        "--output" | "--out" | "-o" | "--dest" | "--target-directory"
                     );
                     for dir in &possible_dirs {
                         validate_shell_operand_candidate(
@@ -3156,8 +3140,48 @@ fn validate_native_shell_command_text(
                     continue;
                 }
 
-                // Inspect both explicit path tokens and relative file/symlink/glob operands
-                // (including curl/wget `@path` file-upload arguments).
+                // Inspect concatenated short-flag path operands (e.g. `grep -fcredential-link`,
+                // `grep -f/etc/passwd`, `cp -t.git/hooks evil`).
+                if let Some(short) = text.strip_prefix('-')
+                    && !short.starts_with('-')
+                    && short.len() > 1
+                {
+                    let mut chars = short.chars();
+                    let flag_char = chars.next().unwrap_or_default();
+                    let tail = chars.as_str();
+                    let tail_clean = tail.strip_prefix('@').unwrap_or(tail);
+                    let flag_takes_file = match flag_char {
+                        'f' => matches!(
+                            current_cmd.as_str(),
+                            "grep" | "egrep" | "fgrep" | "rg" | "date"
+                        ),
+                        'F' => current_cmd == "git",
+                        't' | 'T' => matches!(current_cmd.as_str(), "cp" | "mv"),
+                        'o' => current_cmd == "sort",
+                        _ => false,
+                    };
+                    if flag_takes_file
+                        || looks_like_filesystem_path(tail_clean)
+                        || tail_clean.contains('/')
+                        || tail_clean.contains('\\')
+                    {
+                        let force_write = matches!(flag_char, 'o' | 't' | 'T');
+                        for dir in &possible_dirs {
+                            validate_shell_operand_candidate(
+                                tail_clean,
+                                *has_unquoted_glob,
+                                *has_unquoted_brace,
+                                dir,
+                                ctx,
+                                &current_cmd,
+                                is_mut,
+                                force_write,
+                            )?;
+                        }
+                    }
+                }
+
+                // Inspect both explicit path tokens and relative file/symlink/glob operands.
                 let candidate = text.strip_prefix('@').unwrap_or(text);
                 for dir in &possible_dirs {
                     validate_shell_operand_candidate(

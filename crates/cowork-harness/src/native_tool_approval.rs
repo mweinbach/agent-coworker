@@ -1256,9 +1256,10 @@ enum ShellToken {
     Word {
         text: String,
         quoted: bool,
-        expandable: bool,
         has_unquoted_glob: bool,
         has_unquoted_brace: bool,
+        has_unquoted_dollar: bool,
+        has_unquoted_backtick: bool,
     },
 }
 
@@ -1277,7 +1278,7 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
             continue;
         }
 
-        // Multi-char operators: `&&`, `||`, `>>`, `>|`, `<>`, `&>`, `1>`, `2>`, `1>>`, `2>>`.
+        // Multi-char operators: `&&`, `||`, `>>`, `>|`, `<>`, `<<`, `<<<`, `<(`, `>(`, `&>`, `1>`, `2>`, `1>>`, `2>>`.
         if (ch == '1' || ch == '2')
             && i + 1 < chars.len()
             && chars[i + 1] == '>'
@@ -1304,11 +1305,15 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                 let next = chars[i];
                 if (ch == '|' && next == '|')
                     || (ch == '&' && matches!(next, '&' | '>'))
-                    || (ch == '>' && matches!(next, '>' | '|'))
-                    || (ch == '<' && next == '>')
+                    || (ch == '>' && matches!(next, '>' | '|' | '('))
+                    || (ch == '<' && matches!(next, '>' | '<' | '('))
                 {
                     op.push(next);
                     i += 1;
+                    if op == "<<" && i < chars.len() && chars[i] == '<' {
+                        op.push('<');
+                        i += 1;
+                    }
                 }
             }
             tokens.push(ShellToken::Operator(op));
@@ -1317,9 +1322,10 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
 
         let mut word = String::new();
         let mut quoted = false;
-        let mut expandable = false;
         let mut has_unquoted_glob = false;
         let mut has_unquoted_brace = false;
+        let mut has_unquoted_dollar = false;
+        let mut has_unquoted_backtick = false;
         while i < chars.len() {
             let c = chars[i];
             if c == '\'' {
@@ -1334,11 +1340,18 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                 }
             } else if c == '"' {
                 quoted = true;
-                expandable = true;
                 i += 1;
                 while i < chars.len() && chars[i] != '"' {
                     if chars[i] == '\\' && i + 1 < chars.len() {
                         i += 1;
+                        word.push(chars[i]);
+                        i += 1;
+                        continue;
+                    }
+                    if chars[i] == '$' {
+                        has_unquoted_dollar = true;
+                    } else if chars[i] == '`' {
+                        has_unquoted_backtick = true;
                     }
                     word.push(chars[i]);
                     i += 1;
@@ -1347,7 +1360,6 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                     i += 1;
                 }
             } else if c == '\\' && i + 1 < chars.len() {
-                expandable = true;
                 i += 1;
                 word.push(chars[i]);
                 i += 1;
@@ -1356,12 +1368,14 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
             {
                 break;
             } else {
-                expandable = true;
                 if matches!(c, '*' | '?' | '[') {
                     has_unquoted_glob = true;
                 }
                 if matches!(c, '{' | '}') {
                     has_unquoted_brace = true;
+                }
+                if c == '$' {
+                    has_unquoted_dollar = true;
                 }
                 word.push(c);
                 i += 1;
@@ -1371,59 +1385,14 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
             tokens.push(ShellToken::Word {
                 text: word,
                 quoted,
-                expandable,
                 has_unquoted_glob,
                 has_unquoted_brace,
+                has_unquoted_dollar,
+                has_unquoted_backtick,
             });
         }
     }
     tokens
-}
-
-fn extract_embedded_command_substitutions(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1] == '(' {
-            i += 2;
-            let start = i;
-            let mut depth = 1usize;
-            while i < chars.len() && depth > 0 {
-                match chars[i] {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-                if depth > 0 {
-                    i += 1;
-                }
-            }
-            let inner: String = chars[start..i].iter().collect();
-            if !inner.trim().is_empty() {
-                out.push(inner);
-            }
-            if i < chars.len() && chars[i] == ')' {
-                i += 1;
-            }
-        } else if chars[i] == '`' {
-            i += 1;
-            let start = i;
-            while i < chars.len() && chars[i] != '`' {
-                i += 1;
-            }
-            let inner: String = chars[start..i].iter().collect();
-            if !inner.trim().is_empty() {
-                out.push(inner);
-            }
-            if i < chars.len() && chars[i] == '`' {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    out
 }
 
 fn command_mentions_protected_credential_path(
@@ -2188,69 +2157,6 @@ fn validate_shell_operand_candidate(
     Ok(())
 }
 
-fn validate_inline_script_paths(
-    script: &str,
-    base_dir: &Path,
-    ctx: &ToolExecutionContext,
-) -> Result<(), String> {
-    // Scan single- and double-quoted string literals inside `-c` / `-e` interpreter payloads
-    // for sensitive OS, home-relative, or existing relative (e.g. symlinked) filesystem paths,
-    // preserving exact filename bytes (such as trailing spaces).
-    let chars: Vec<char> = script.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let q = chars[i];
-        if q == '\'' || q == '"' {
-            i += 1;
-            let mut literal = String::new();
-            while i < chars.len() && chars[i] != q {
-                if chars[i] == '\\' && i + 1 < chars.len() {
-                    i += 1;
-                }
-                literal.push(chars[i]);
-                i += 1;
-            }
-            if i < chars.len() {
-                i += 1;
-            }
-            let raw = literal.as_str();
-            let looks_sensitive_os_path = raw == "/"
-                || raw.starts_with("~/")
-                || raw.starts_with("~\\")
-                || raw.starts_with("$HOME/")
-                || raw.starts_with("${HOME}/")
-                || raw.starts_with("../")
-                || raw.starts_with("..\\")
-                || has_windows_drive_prefix(raw)
-                || raw.starts_with("\\\\")
-                || [
-                    "/etc/",
-                    "/var/",
-                    "/root/",
-                    "/home/",
-                    "/users/",
-                    "/private/",
-                    "/proc/",
-                    "/sys/",
-                    "/tmp/",
-                ]
-                .iter()
-                .any(|p| raw.to_ascii_lowercase().starts_with(p));
-            let exists_rel = !raw.is_empty()
-                && !is_url_token(raw)
-                && exact_lexical_path(raw, base_dir)
-                    .ok()
-                    .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
-            if looks_sensitive_os_path || exists_rel {
-                validate_shell_path_token(raw, base_dir, ctx, false, false)?;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    Ok(())
-}
-
 fn contains_identifier_token(haystack_upper: &str, needle_upper: &str) -> bool {
     let bytes = haystack_upper.as_bytes();
     let mut start = 0usize;
@@ -2318,6 +2224,182 @@ fn command_references_sensitive_provider_env(command: &str) -> Option<String> {
     None
 }
 
+fn normalize_command_stem(cmd_basename: &str) -> &str {
+    let stripped = cmd_basename
+        .strip_suffix(".exe")
+        .or_else(|| cmd_basename.strip_suffix(".cmd"))
+        .or_else(|| cmd_basename.strip_suffix(".bat"))
+        .or_else(|| cmd_basename.strip_suffix(".com"))
+        .or_else(|| cmd_basename.strip_suffix(".ps1"))
+        .or_else(|| cmd_basename.strip_suffix(".sh"))
+        .unwrap_or(cmd_basename);
+    stripped.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.')
+}
+
+fn is_nested_posix_shell(cmd_basename: &str) -> bool {
+    matches!(
+        normalize_command_stem(cmd_basename),
+        "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh" | "mksh" | "csh" | "tcsh" | "fish"
+    )
+}
+
+/// Denies general-purpose interpreters, build/package runners that execute arbitrary repository
+/// code, dynamic shell evaluators, and indirect process launchers in the unsandboxed native
+/// shell, where runtime path construction cannot be statically verified against Cowork's read/
+/// write boundaries.
+fn is_unsandboxed_disallowed_command(cmd_basename: &str) -> bool {
+    let exact = cmd_basename
+        .strip_suffix(".exe")
+        .or_else(|| cmd_basename.strip_suffix(".cmd"))
+        .or_else(|| cmd_basename.strip_suffix(".bat"))
+        .or_else(|| cmd_basename.strip_suffix(".com"))
+        .unwrap_or(cmd_basename);
+    let stem = normalize_command_stem(cmd_basename);
+
+    matches!(
+        exact,
+        // Dynamic shell evaluation, indirect command launchers, privilege escalation, debuggers
+        "eval"
+            | "source"
+            | "."
+            | "exec"
+            | "xargs"
+            | "parallel"
+            | "env"
+            | "printenv"
+            | "set"
+            | "export"
+            | "declare"
+            | "typeset"
+            | "command"
+            | "builtin"
+            | "nohup"
+            | "nice"
+            | "time"
+            | "timeout"
+            | "stdbuf"
+            | "setsid"
+            | "ionice"
+            | "chrt"
+            | "taskset"
+            | "sudo"
+            | "su"
+            | "doas"
+            | "pkexec"
+            | "runuser"
+            | "chroot"
+            | "nsenter"
+            | "unshare"
+            | "strace"
+            | "ltrace"
+            | "gdb"
+            | "lldb"
+            | "ssh"
+            | "scp"
+            | "sftp"
+            | "rsync"
+            // Windows shells & script hosts
+            | "pwsh"
+            | "powershell"
+            | "cmd"
+            | "cscript"
+            | "wscript"
+            | "mshta"
+            | "rundll32"
+            | "regsvr32"
+            // Stream/text interpreters capable of arbitrary file I/O or shell execution
+            | "awk"
+            | "gawk"
+            | "mawk"
+            | "nawk"
+            | "sed"
+            | "gsed"
+            // Build/package runners that execute arbitrary code from repo manifests/scripts
+            | "make"
+            | "gmake"
+            | "cmake"
+            | "ninja"
+            | "npm"
+            | "npx"
+            | "pnpm"
+            | "yarn"
+            | "poetry"
+            | "pytest"
+            | "cargo"
+            | "rustc"
+            | "go"
+            | "zig"
+            | "cc"
+            | "c++"
+            | "uv"
+            | "uvx"
+    ) || matches!(
+        stem,
+        // General-purpose programming language interpreters & runtimes (including versioned binaries like python3.12, php8.3, gcc-14)
+        "python"
+            | "py"
+            | "pypy"
+            | "ipython"
+            | "jython"
+            | "micropython"
+            | "pip"
+            | "node"
+            | "nodejs"
+            | "bun"
+            | "deno"
+            | "tsx"
+            | "ts-node"
+            | "qjs"
+            | "quickjs"
+            | "ruby"
+            | "irb"
+            | "jruby"
+            | "perl"
+            | "raku"
+            | "php"
+            | "hhvm"
+            | "lua"
+            | "luajit"
+            | "r"
+            | "rscript"
+            | "julia"
+            | "swift"
+            | "osascript"
+            | "tclsh"
+            | "wish"
+            | "expect"
+            | "groovy"
+            | "scala"
+            | "kotlin"
+            | "java"
+            | "javac"
+            | "jshell"
+            | "dotnet"
+            | "csi"
+            | "fsi"
+            | "erl"
+            | "escript"
+            | "elixir"
+            | "iex"
+            | "ghci"
+            | "runhaskell"
+            | "runghc"
+            | "ocaml"
+            | "guile"
+            | "racket"
+            | "sbcl"
+            | "clisp"
+            | "gcc"
+            | "g++"
+            | "clang"
+            | "clang++"
+    ) || exact.starts_with("gcc-")
+        || exact.starts_with("g++-")
+        || exact.starts_with("clang-")
+        || exact.starts_with("clang++-")
+        || exact.starts_with("python-")
+}
+
 fn validate_native_shell_command_text(
     command: &str,
     base_dir: &Path,
@@ -2347,12 +2429,17 @@ fn validate_native_shell_command_text(
     let mut expect_write_target = false;
     let mut expect_read_target = false;
     let mut expect_subshell_script = false;
-    let mut expect_interpreter_script = false;
+    let mut nested_shell_got_script = false;
     let mut saw_cd_arg = false;
 
     for token in &tokens {
         match token {
             ShellToken::Operator(op) => {
+                if matches!(op.as_str(), "`" | "<<" | "<<<" | "<(" | ">(") {
+                    return Err(format!(
+                        "Dynamic shell operator '{op}' is blocked in unsandboxed native shell execution."
+                    ));
+                }
                 if matches!(
                     op.as_str(),
                     ">" | ">>" | "1>" | "2>" | "1>>" | "2>>" | "&>" | ">|" | "<>"
@@ -2360,6 +2447,11 @@ fn validate_native_shell_command_text(
                     expect_write_target = true;
                     expect_read_target = false;
                 } else if op == "<" {
+                    if is_nested_posix_shell(&current_cmd) {
+                        return Err(format!(
+                            "Feeding stdin into shell '{current_cmd}' is blocked in unsandboxed native shell execution."
+                        ));
+                    }
                     expect_read_target = true;
                     expect_write_target = false;
                 } else {
@@ -2367,26 +2459,33 @@ fn validate_native_shell_command_text(
                         // Bare `cd` jumps to `$HOME`.
                         assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
                     }
+                    if is_nested_posix_shell(&current_cmd) && !nested_shell_got_script {
+                        return Err(format!(
+                            "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
+                        ));
+                    }
                     at_command_pos = true;
                     current_cmd.clear();
                     expect_write_target = false;
                     expect_read_target = false;
                     expect_subshell_script = false;
-                    expect_interpreter_script = false;
+                    nested_shell_got_script = false;
                     saw_cd_arg = false;
                 }
             }
             ShellToken::Word {
                 text,
                 quoted,
-                expandable,
                 has_unquoted_glob,
                 has_unquoted_brace,
+                has_unquoted_dollar,
+                has_unquoted_backtick,
             } => {
-                if *expandable {
-                    for nested in extract_embedded_command_substitutions(text) {
-                        validate_native_shell_command_text(&nested, &current_dir, ctx, depth + 1)?;
-                    }
+                if *has_unquoted_dollar || *has_unquoted_backtick {
+                    return Err(
+                        "Dynamic shell variable, command, or ANSI-C expansion is blocked in unsandboxed native shell execution."
+                            .to_owned(),
+                    );
                 }
                 if expect_write_target {
                     expect_write_target = false;
@@ -2410,53 +2509,62 @@ fn validate_native_shell_command_text(
                 }
                 if expect_subshell_script {
                     expect_subshell_script = false;
+                    nested_shell_got_script = true;
                     validate_native_shell_command_text(text, &current_dir, ctx, depth + 1)?;
-                    continue;
-                }
-                if expect_interpreter_script {
-                    expect_interpreter_script = false;
-                    validate_inline_script_paths(text, &current_dir, ctx)?;
                     continue;
                 }
 
                 if at_command_pos {
-                    // Skip leading `ENV=VAL` assignments while validating path-like or existing values.
+                    // Deny inline `ENV=VAL` assignments (`LD_PRELOAD=...`, `BASH_ENV=...`,
+                    // `PATH=...`, or shell variables assembled to compute paths dynamically).
                     if !quoted
-                        && let Some((lhs, rhs)) = text.split_once('=')
+                        && let Some((lhs, _)) = text.split_once('=')
                         && !lhs.is_empty()
                         && lhs.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                     {
-                        validate_shell_operand_candidate(
-                            rhs,
-                            *has_unquoted_glob,
-                            *has_unquoted_brace,
-                            &current_dir,
-                            ctx,
-                            "",
-                            false,
-                            false,
-                        )?;
-                        continue;
+                        return Err(format!(
+                            "Shell environment/variable assignment '{lhs}=...' is blocked in unsandboxed native shell execution."
+                        ));
                     }
-                    let cmd_exists_locally = !is_url_token(text)
-                        && !is_safe_system_executable_path(text)
-                        && exact_lexical_path(text, &current_dir)
-                            .ok()
-                            .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
                     if *has_unquoted_glob && segment_has_glob_meta(text) {
-                        validate_shell_glob_operand(text, &current_dir, ctx, "", false)?;
-                    } else if looks_like_filesystem_path(text) || cmd_exists_locally {
-                        validate_shell_path_token(text, &current_dir, ctx, false, true)?;
+                        return Err(format!(
+                            "Globbed executable path '{text}' is blocked in unsandboxed native shell execution."
+                        ));
+                    }
+                    if (text.contains('/') || text.contains('\\'))
+                        && !is_safe_system_executable_path(text)
+                    {
+                        return Err(format!(
+                            "Executing opaque local or custom executable '{text}' is blocked in unsandboxed native shell execution."
+                        ));
                     }
                     let base = Path::new(text)
                         .file_name()
                         .and_then(|s| s.to_str())
                         .unwrap_or(text)
                         .to_ascii_lowercase();
+                    if is_unsandboxed_disallowed_command(&base) {
+                        return Err(format!(
+                            "Command '{base}' is blocked in unsandboxed native shell execution because it can compute or access arbitrary paths outside Cowork's OS sandbox."
+                        ));
+                    }
                     current_cmd = base;
                     at_command_pos = false;
+                    nested_shell_got_script = false;
                     saw_cd_arg = false;
                     continue;
+                }
+
+                if is_nested_posix_shell(&current_cmd) {
+                    if !nested_shell_got_script
+                        && matches!(text.to_ascii_lowercase().as_str(), "-c" | "-lc" | "-ic")
+                    {
+                        expect_subshell_script = true;
+                        continue;
+                    }
+                    return Err(format!(
+                        "Shell '{current_cmd}' only permits a single validated '-c' inline command in unsandboxed native shell execution."
+                    ));
                 }
 
                 if current_cmd == "cd" {
@@ -2477,31 +2585,39 @@ fn validate_native_shell_command_text(
                     continue;
                 }
 
-                if matches!(
-                    current_cmd.as_str(),
-                    "sh" | "bash"
-                        | "zsh"
-                        | "dash"
-                        | "ksh"
-                        | "fish"
-                        | "pwsh"
-                        | "powershell"
-                        | "powershell.exe"
-                ) && matches!(
-                    text.to_ascii_lowercase().as_str(),
-                    "-c" | "-lc" | "-ic" | "-command"
-                ) {
-                    expect_subshell_script = true;
-                    continue;
-                }
-
-                if matches!(
-                    current_cmd.as_str(),
-                    "python" | "python3" | "node" | "bun" | "deno" | "ruby" | "perl" | "php"
-                ) && matches!(text.as_str(), "-c" | "-e" | "--eval")
+                // Block command-specific code-execution flags on otherwise allowed utilities.
+                let lower_arg = text.to_ascii_lowercase();
+                if current_cmd == "find"
+                    && matches!(lower_arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
                 {
-                    expect_interpreter_script = true;
-                    continue;
+                    return Err(format!(
+                        "'find {text}' is blocked in unsandboxed native shell execution."
+                    ));
+                }
+                if current_cmd == "git"
+                    && (matches!(
+                        lower_arg.as_str(),
+                        "-c" | "--config-env" | "--exec-path" | "--upload-pack" | "--receive-pack"
+                    ) || lower_arg.starts_with("--config-env=")
+                        || lower_arg.starts_with("--exec-path=")
+                        || lower_arg.starts_with("--upload-pack=")
+                        || lower_arg.starts_with("--receive-pack="))
+                {
+                    return Err(format!(
+                        "'git {text}' is blocked in unsandboxed native shell execution."
+                    ));
+                }
+                if current_cmd == "tar"
+                    && (matches!(
+                        lower_arg.as_str(),
+                        "-i" | "--checkpoint-action" | "--to-command" | "--use-compress-program"
+                    ) || lower_arg.starts_with("--checkpoint-action=")
+                        || lower_arg.starts_with("--to-command=")
+                        || lower_arg.starts_with("--use-compress-program="))
+                {
+                    return Err(format!(
+                        "'tar {text}' is blocked in unsandboxed native shell execution."
+                    ));
                 }
 
                 let is_mut = is_mutating_shell_command(&current_cmd);
@@ -2549,6 +2665,11 @@ fn validate_native_shell_command_text(
 
     if current_cmd == "cd" && !saw_cd_arg {
         assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
+    }
+    if is_nested_posix_shell(&current_cmd) && !nested_shell_got_script {
+        return Err(format!(
+            "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
+        ));
     }
 
     Ok(())

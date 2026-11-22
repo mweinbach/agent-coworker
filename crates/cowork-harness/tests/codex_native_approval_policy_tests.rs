@@ -1376,3 +1376,95 @@ async fn acp_locations_and_patch_paths_preserve_exact_bytes_including_trailing_s
         }
     }
 }
+
+#[tokio::test]
+async fn unsandboxed_native_shell_denies_general_purpose_interpreters_and_dynamic_path_computation()
+{
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        std::fs::write(h.ws.join("evil.py"), "print('x')\n").unwrap();
+        std::fs::write(h.ws.join("evil.sh"), "echo x\n").unwrap();
+
+        let blocked = [
+            // Computed path construction in Python/Node/Bun/Ruby/Perl/Awk/PowerShell
+            r#"python3 -c "from pathlib import Path; print((Path.home() / '.co' 'work' / 'au' 'th' / 'connections.json').read_text())""#,
+            r#"/usr/bin/python3.12 -c "import pathlib; print(pathlib.Path.home())""#,
+            r#"python3 evil.py"#,
+            r#"node -e "console.log(require('fs').readFileSync(process.env.HOME + '/.co'+'work/auth/connections.json','utf8'))""#,
+            r#"bun -e "console.log(1)""#,
+            r#"deno eval "console.log(1)""#,
+            r#"ruby -e "puts File.read(File.join(Dir.home, '.co' + 'work'))""#,
+            r#"perl -e "print 1""#,
+            r#"php -r "echo 1;""#,
+            r#"awk 'BEGIN { print 1 }' README.md"#,
+            r#"sed -n '1e id' README.md"#,
+            r#"osascript -e 'do shell script "id"'"#,
+            r#"pwsh -Command "Get-Content ~/.ssh/id_rsa""#,
+            // Dynamic shell variable / command / ANSI-C / heredoc / process substitution
+            r#"p=.cowork; cat "$p/auth/connections.json""#,
+            r#"cat $'\x2fetc\x2fpasswd'"#,
+            r#"cat $(printf '/etc/passwd')"#,
+            r#"cat <(cat README.md)"#,
+            r#"sh <<EOF
+cat README.md
+EOF"#,
+            // Opaque script execution, indirect launchers, and code-exec flags
+            r#"sh evil.sh"#,
+            r#"bash < evil.sh"#,
+            r#"./evil.sh"#,
+            r#"eval "cat README.md""#,
+            r#"source evil.sh"#,
+            r#"env python3 -c "print(1)""#,
+            r#"LD_PRELOAD=./evil.so cat README.md"#,
+            r#"timeout 5 python3 -c "print(1)""#,
+            r#"find . -exec cat {} +"#,
+            r#"git -c core.pager='cat' log"#,
+            r#"tar --to-command=cat -xf archive.tar"#,
+            r#"cargo test"#,
+            r#"npm test"#,
+            r#"make all"#,
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: unsandboxed native Bash must deny interpreter/dynamic command: {cmd}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: unsandboxed ACP run_cmd must deny interpreter/dynamic command: {cmd}"
+            );
+        }
+
+        // Benign static commands (including validated `sh -c` with a safe command) remain allowed.
+        for ok_cmd in ["echo hi", "git status", "sh -c 'echo hi'"] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "benign static command must pass under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "benign static command must remain approvable interactively: {ok_cmd}"
+                );
+            }
+        }
+    }
+}

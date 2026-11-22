@@ -723,6 +723,8 @@ pub struct ThreadRuntime {
     pub agents: Vec<ThreadAgentSummary>,
     pub agent_run_feeds: HashMap<String, Vec<FeedItem>>,
     pub todos: Vec<TodoItemView>,
+    #[serde(default)]
+    pub workflow_runs: Vec<WorkflowRunView>,
     pub unread: bool,
     pub usage: Option<UsageSummary>,
     #[serde(default)]
@@ -1313,6 +1315,10 @@ pub struct WorkflowRunView {
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2273,6 +2279,18 @@ impl AppState {
             let provider = cfg.get("provider").and_then(Value::as_str);
             let model = cfg.get("model").and_then(Value::as_str);
             self.apply_thread_model_update(tid, provider, model);
+            let effective_provider = provider.map(str::to_string).or_else(|| {
+                self.threads
+                    .iter()
+                    .find(|t| t.id == tid)
+                    .and_then(|t| t.provider.clone())
+            });
+            if let Some(effort) =
+                extract_reasoning_effort_from_config(cfg, effective_provider.as_deref())
+                && let Some(t) = self.threads.iter_mut().find(|t| t.id == tid)
+            {
+                t.reasoning_effort = Some(effort);
+            }
         }
         self.refresh_creation_preflight();
     }
@@ -2565,6 +2583,73 @@ impl AppState {
         self.workspace_socket_by_id
             .get(workspace_id)
             .is_some_and(WsConnectionState::is_connected)
+    }
+
+    pub fn workflow_runs_for_thread(&self, thread_id: &str) -> Vec<WorkflowRunView> {
+        let mut out: Vec<WorkflowRunView> = self
+            .thread_runtime_by_id
+            .get(thread_id)
+            .map(|rt| rt.workflow_runs.clone())
+            .unwrap_or_default();
+        for run in &self.workflow_runs {
+            if run.session_id.as_deref() == Some(thread_id)
+                && !out.iter().any(|existing| existing.id == run.id)
+            {
+                out.push(run.clone());
+            }
+        }
+        out
+    }
+
+    pub fn workflow_runs_for_task(&self, task: &TaskRecordView) -> Vec<WorkflowRunView> {
+        let mut out: Vec<WorkflowRunView> = task.runs.clone();
+        let linked_sessions: HashSet<&str> =
+            task.threads.iter().map(|t| t.session_id.as_str()).collect();
+        for sid in &linked_sessions {
+            for run in self.workflow_runs_for_thread(sid) {
+                let ws_ok = run
+                    .workspace_id
+                    .as_deref()
+                    .is_none_or(|ws| ws == task.summary.workspace_id);
+                if ws_ok && !out.iter().any(|existing| existing.id == run.id) {
+                    out.push(run);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn workflow_runs_for_workspace(&self, workspace_id: &str) -> Vec<WorkflowRunView> {
+        let mut out: Vec<WorkflowRunView> = self
+            .workflow_runs
+            .iter()
+            .filter(|r| r.workspace_id.as_deref() == Some(workspace_id))
+            .cloned()
+            .collect();
+        for (tid, rt) in &self.thread_runtime_by_id {
+            if self.workspace_for_thread(tid).as_deref() == Some(workspace_id) {
+                for run in &rt.workflow_runs {
+                    if !out.iter().any(|existing| existing.id == run.id) {
+                        out.push(run.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub fn workflow_runs_for_active_context(&self) -> Vec<WorkflowRunView> {
+        if self.route().view == ViewId::Task {
+            return self
+                .active_task
+                .as_ref()
+                .map(|task| self.workflow_runs_for_task(task))
+                .unwrap_or_default();
+        }
+        if let Some(tid) = self.nav.current().active_thread_id.as_deref() {
+            return self.workflow_runs_for_thread(tid);
+        }
+        Vec::new()
     }
 
     /// Window-scoped dirty/busy work check for close guards.
@@ -11182,7 +11267,31 @@ impl AppState {
                 }
             }
             "workflow_progress" => {
-                upsert_workflow_run_progress(&mut self.workflow_runs, evt, now_ms);
+                let resolved_sid = tid.or_else(|| {
+                    evt.get("progress")
+                        .and_then(|p| p.get("sessionId").or_else(|| p.get("threadId")))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                });
+                if let Some(ref sid) = resolved_sid {
+                    let rt = self.thread_runtime_by_id.entry(sid.clone()).or_default();
+                    upsert_workflow_run_progress(
+                        &mut rt.workflow_runs,
+                        evt,
+                        now_ms,
+                        Some(workspace_id),
+                        Some(sid.as_str()),
+                    );
+                }
+                upsert_workflow_run_progress(
+                    &mut self.workflow_runs,
+                    evt,
+                    now_ms,
+                    Some(workspace_id),
+                    resolved_sid.as_deref(),
+                );
             }
             "agent_profiles_catalog" => {
                 self.apply_agent_profiles_catalog_event(workspace_id, evt);
@@ -12044,6 +12153,7 @@ impl AppState {
         };
         let mut prev_legacy_ids: HashMap<String, String> = HashMap::new();
         let mut prev_archived_at: HashMap<String, i64> = HashMap::new();
+        let mut prev_reasoning_effort: HashMap<String, String> = HashMap::new();
         for t in self
             .threads
             .iter()
@@ -12053,6 +12163,14 @@ impl AppState {
                 prev_legacy_ids.insert(t.id.clone(), legacy.clone());
                 if let Some(ref sid) = t.session_id {
                     prev_legacy_ids.insert(sid.clone(), legacy.clone());
+                }
+            }
+            if let Some(ref effort) = t.reasoning_effort
+                && !effort.trim().is_empty()
+            {
+                prev_reasoning_effort.insert(t.id.clone(), effort.clone());
+                if let Some(ref sid) = t.session_id {
+                    prev_reasoning_effort.insert(sid.clone(), effort.clone());
                 }
             }
             if t.archived {
@@ -12142,7 +12260,10 @@ impl AppState {
                 reasoning_effort: v
                     .get("reasoningEffort")
                     .and_then(Value::as_str)
-                    .map(str::to_string),
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| prev_reasoning_effort.get(id).cloned()),
                 preview: v
                     .get("lastMessagePreview")
                     .or_else(|| v.get("preview"))
@@ -12451,15 +12572,23 @@ impl AppState {
                 .as_ref()
                 .is_some_and(|v| v.agent_id == session_id);
 
+        let snapshot_provider = snapshot.get("provider").and_then(Value::as_str);
+        let snapshot_reasoning_effort = snapshot
+            .get("config")
+            .and_then(|c| extract_reasoning_effort_from_config(c, snapshot_provider))
+            .or_else(|| extract_reasoning_effort_from_config(snapshot, snapshot_provider));
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == session_id) {
             if let Some(title) = snapshot.get("title").and_then(Value::as_str) {
                 t.title = title.to_string();
             }
-            if let Some(p) = snapshot.get("provider").and_then(Value::as_str) {
+            if let Some(p) = snapshot_provider {
                 t.provider = Some(p.to_string());
             }
             if let Some(m) = snapshot.get("model").and_then(Value::as_str) {
                 t.model = Some(m.to_string());
+            }
+            if let Some(eff) = snapshot_reasoning_effort.clone() {
+                t.reasoning_effort = Some(eff);
             }
             t.last_event_seq = t.last_event_seq.max(snap_seq);
             t.draft = false;
@@ -12472,14 +12601,12 @@ impl AppState {
                     .and_then(Value::as_str)
                     .unwrap_or("Chat")
                     .to_string(),
-                provider: snapshot
-                    .get("provider")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                provider: snapshot_provider.map(str::to_string),
                 model: snapshot
                     .get("model")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                reasoning_effort: snapshot_reasoning_effort,
                 last_event_seq: snap_seq,
                 ..ThreadRecord::default()
             });
@@ -12592,8 +12719,25 @@ impl AppState {
             .cloned();
         if let Some(runs_arr) = snapshot_workflow_runs {
             let now_ms = self.wall_clock_ms();
+            let rt = self
+                .thread_runtime_by_id
+                .entry(session_id.clone())
+                .or_default();
             for run_val in &runs_arr {
-                upsert_workflow_run_progress(&mut self.workflow_runs, run_val, now_ms);
+                upsert_workflow_run_progress(
+                    &mut rt.workflow_runs,
+                    run_val,
+                    now_ms,
+                    Some(workspace_id),
+                    Some(session_id.as_str()),
+                );
+                upsert_workflow_run_progress(
+                    &mut self.workflow_runs,
+                    run_val,
+                    now_ms,
+                    Some(workspace_id),
+                    Some(session_id.as_str()),
+                );
             }
         }
         if self.is_workspace_ws_connected(workspace_id)
@@ -14012,6 +14156,11 @@ impl AppState {
 
         self.threads
             .retain(|t| !removed_ids.iter().any(|id| id == &t.id));
+        self.workflow_runs.retain(|run| {
+            run.session_id
+                .as_deref()
+                .is_none_or(|sid| !removed_ids.iter().any(|id| id == sid))
+        });
         self.archived_threads
             .retain(|t| !removed_ids.iter().any(|id| id == &t.id));
         for id in &removed_ids {
@@ -15581,7 +15730,13 @@ fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRec
     })
 }
 
-fn upsert_workflow_run_progress(runs: &mut Vec<WorkflowRunView>, evt: &Value, now_ms: i64) {
+fn upsert_workflow_run_progress(
+    runs: &mut Vec<WorkflowRunView>,
+    evt: &Value,
+    now_ms: i64,
+    workspace_id: Option<&str>,
+    session_id: Option<&str>,
+) {
     let progress = evt.get("progress").filter(|v| v.is_object()).unwrap_or(evt);
     let Some(run_id) = progress
         .get("runId")
@@ -15667,7 +15822,22 @@ fn upsert_workflow_run_progress(runs: &mut Vec<WorkflowRunView>, evt: &Value, no
             }
         });
 
-    if let Some(existing) = runs.iter_mut().find(|w| w.id == run_id) {
+    let effective_sid = session_id.or_else(|| {
+        evt.get("sessionId")
+            .or_else(|| evt.get("threadId"))
+            .or_else(|| progress.get("sessionId"))
+            .or_else(|| progress.get("threadId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    });
+
+    if let Some(existing) = runs.iter_mut().find(|w| {
+        w.id == run_id
+            && (effective_sid.is_none()
+                || w.session_id.is_none()
+                || w.session_id.as_deref() == effective_sid)
+    }) {
         if let Some(name) = wf_name
             && (existing.workflow_name.is_empty() || existing.workflow_name == "workflow")
         {
@@ -15680,6 +15850,12 @@ fn upsert_workflow_run_progress(runs: &mut Vec<WorkflowRunView>, evt: &Value, no
         if summary.is_some() {
             existing.summary = summary;
         }
+        if existing.workspace_id.is_none() {
+            existing.workspace_id = workspace_id.map(str::to_string);
+        }
+        if existing.session_id.is_none() {
+            existing.session_id = effective_sid.map(str::to_string);
+        }
     } else {
         runs.push(WorkflowRunView {
             id: run_id.to_string(),
@@ -15688,6 +15864,8 @@ fn upsert_workflow_run_progress(runs: &mut Vec<WorkflowRunView>, evt: &Value, no
             started_at: now_ms,
             finished_at: is_terminal.then_some(now_ms),
             summary,
+            workspace_id: workspace_id.map(str::to_string),
+            session_id: effective_sid.map(str::to_string),
         });
     }
 }
@@ -16091,6 +16269,45 @@ fn model_supports_reasoning_effort(
         effort.trim().to_ascii_lowercase().as_str(),
         "low" | "medium" | "high"
     )
+}
+
+fn extract_reasoning_effort_from_config(cfg: &Value, provider: Option<&str>) -> Option<String> {
+    let provider_key = provider
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            cfg.get("provider")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        });
+    if let Some(po) = cfg.get("providerOptions").and_then(Value::as_object)
+        && let Some(pid) = provider_key
+        && let Some(sec) = po.get(pid).and_then(Value::as_object)
+    {
+        let from_provider = if pid == "google" {
+            sec.get("thinkingConfig")
+                .and_then(|tc| tc.get("thinkingLevel"))
+                .and_then(Value::as_str)
+                .or_else(|| sec.get("reasoningEffort").and_then(Value::as_str))
+        } else if pid == "anthropic" {
+            sec.get("effort")
+                .and_then(Value::as_str)
+                .or_else(|| sec.get("reasoningEffort").and_then(Value::as_str))
+        } else {
+            sec.get("reasoningEffort")
+                .and_then(Value::as_str)
+                .or_else(|| sec.get("effort").and_then(Value::as_str))
+        };
+        if let Some(val) = from_provider.map(str::trim).filter(|s| !s.is_empty()) {
+            return Some(val.to_string());
+        }
+    }
+    cfg.get("reasoningEffort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn build_reasoning_effort_config_patch(provider: &str, effort: &str) -> Map<String, Value> {
@@ -27869,5 +28086,162 @@ mod tests {
             Some("art-b")
         );
         assert!(active_b.artifact_details_by_id.contains_key("art-b"));
+    }
+
+    #[test]
+    fn thread_list_refresh_preserves_saved_reasoning_effort_and_reconciles_from_session_config() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Migrated chat".to_string(),
+            session_id: Some("th-1".to_string()),
+            provider: Some("openai".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            ..ThreadRecord::default()
+        });
+
+        // Canonical `thread/list` omits `reasoningEffort`; refresh must preserve saved value.
+        state.apply_thread_list_response(
+            "ws-1",
+            &json!({
+                "threads": [{
+                    "id": "th-1",
+                    "title": "Migrated chat",
+                    "modelProvider": "openai",
+                    "model": "gpt-5.4",
+                    "updatedAt": 100
+                }]
+            }),
+        );
+        let th = state.threads.iter().find(|t| t.id == "th-1").unwrap();
+        assert_eq!(
+            th.reasoning_effort.as_deref(),
+            Some("high"),
+            "thread/list refresh without reasoningEffort must preserve saved preference"
+        );
+
+        // Authoritative session_config with providerOptions reconciles the thread effort.
+        state.apply_session_config_event(
+            "ws-1",
+            &json!({
+                "type": "session_config",
+                "sessionId": "th-1",
+                "config": {
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "providerOptions": {
+                        "openai": { "reasoningEffort": "xhigh" }
+                    }
+                }
+            }),
+        );
+        let th = state.threads.iter().find(|t| t.id == "th-1").unwrap();
+        assert_eq!(th.reasoning_effort.as_deref(), Some("xhigh"));
+
+        // Authoritative coworkSnapshot reconciles Google thinkingLevel too.
+        state.apply_thread_snapshot_response(
+            "ws-1",
+            &json!({
+                "coworkSnapshot": {
+                    "sessionId": "th-1",
+                    "provider": "google",
+                    "model": "gemini-3.1-pro",
+                    "config": {
+                        "provider": "google",
+                        "providerOptions": {
+                            "google": { "thinkingConfig": { "thinkingLevel": "medium" } }
+                        }
+                    }
+                }
+            }),
+        );
+        let th = state.threads.iter().find(|t| t.id == "th-1").unwrap();
+        assert_eq!(th.reasoning_effort.as_deref(), Some("medium"));
+    }
+
+    #[test]
+    fn workflow_progress_stays_scoped_to_originating_session_and_task() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Alpha", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Beta", "/tmp/b", 2));
+        state.threads.push(ThreadRecord {
+            id: "th-a".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Chat A".to_string(),
+            session_id: Some("th-a".to_string()),
+            ..ThreadRecord::default()
+        });
+        state.threads.push(ThreadRecord {
+            id: "th-b".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Chat B".to_string(),
+            session_id: Some("th-b".to_string()),
+            ..ThreadRecord::default()
+        });
+        state.active_workspace_id = Some("ws-a".to_string());
+
+        // Workflow runs in conversation A.
+        state.apply_ws_notification(
+            "ws-a",
+            "cowork/session/workflowProgress",
+            json!({
+                "type": "workflow_progress",
+                "sessionId": "th-a",
+                "progress": {
+                    "runId": "wf-a",
+                    "name": "audit-a",
+                    "currentPhase": "scan",
+                    "outcome": null
+                }
+            }),
+        );
+
+        // Opening conversation A shows wf-a in context sidebar.
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-a".to_string())));
+        let runs_a = state.workflow_runs_for_active_context();
+        assert_eq!(runs_a.len(), 1);
+        assert_eq!(runs_a[0].id, "wf-a");
+
+        // Opening unrelated conversation B must NOT show A's workflow run.
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-b".to_string())));
+        assert!(
+            state.workflow_runs_for_active_context().is_empty(),
+            "unrelated conversation B must not display conversation A's workflow runs"
+        );
+
+        // Opening an unrelated task with empty task.runs must NOT fall back to A's workflow run.
+        state.dispatch(Action::Navigate(NavAction::OpenTask(
+            "task-unrelated".to_string(),
+        )));
+        state.apply_task_record_update(
+            "ws-a",
+            &json!({
+                "id": "task-unrelated",
+                "title": "Unrelated Task",
+                "status": "in_progress",
+                "revision": 1,
+                "threads": [{ "sessionId": "th-b", "title": "Chat B" }],
+                "runs": []
+            }),
+        );
+        let unrelated_task = state.active_task.as_ref().unwrap();
+        assert!(
+            state.workflow_runs_for_task(unrelated_task).is_empty(),
+            "task details must not leak runs from unrelated conversations"
+        );
+        assert!(state.workflow_runs_for_active_context().is_empty());
+
+        // Workspace B's tasks landing panel must not show Workspace A's workflow runs.
+        assert_eq!(state.workflow_runs_for_workspace("ws-a").len(), 1);
+        assert!(state.workflow_runs_for_workspace("ws-b").is_empty());
     }
 }

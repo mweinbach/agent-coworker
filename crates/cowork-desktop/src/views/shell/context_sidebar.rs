@@ -105,8 +105,9 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
         }
     }
 
-    if !s.workflow_runs.is_empty() {
-        sections.push(build_workflow_runs_card(s, k, t));
+    let context_runs = s.workflow_runs_for_active_context();
+    if !context_runs.is_empty() {
+        sections.push(build_workflow_runs_card(context_runs, k, t));
     }
 
     sections.push(build_workspace_files_card(s, k, t, layer));
@@ -390,8 +391,11 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
     )
 }
 
-fn build_workflow_runs_card(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
-    let mut runs = s.workflow_runs.clone();
+fn build_workflow_runs_card(
+    mut runs: Vec<crate::state::WorkflowRunView>,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
     runs.sort_by_key(|b| std::cmp::Reverse(b.started_at));
 
     let mut list = col().w_full().gap(6.0);

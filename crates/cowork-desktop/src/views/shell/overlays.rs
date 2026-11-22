@@ -866,11 +866,16 @@ fn push_trash_entry_confirm_dialog(s: &AppState, k: &Kit, t: &ThemeTokens, layer
 }
 
 fn find_workflow_run<'a>(s: &'a AppState, run_id: &str) -> Option<&'a WorkflowRunView> {
-    s.workflow_runs.iter().find(|r| r.id == run_id).or_else(|| {
-        s.active_task
-            .as_ref()
-            .and_then(|task| task.runs.iter().find(|r| r.id == run_id))
-    })
+    s.active_task
+        .as_ref()
+        .and_then(|task| task.runs.iter().find(|r| r.id == run_id))
+        .or_else(|| {
+            s.thread_runtime_by_id
+                .values()
+                .flat_map(|rt| rt.workflow_runs.iter())
+                .find(|r| r.id == run_id)
+        })
+        .or_else(|| s.workflow_runs.iter().find(|r| r.id == run_id))
 }
 
 fn format_run_duration(started_at_ms: i64, finished_at_ms: Option<i64>) -> Option<String> {

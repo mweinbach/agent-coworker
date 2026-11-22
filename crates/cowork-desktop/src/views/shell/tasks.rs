@@ -674,11 +674,7 @@ fn build_active_task_workspace(
 }
 
 fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -> El {
-    let runs_to_show = if task.runs.is_empty() {
-        &s.workflow_runs
-    } else {
-        &task.runs
-    };
+    let runs_to_show = s.workflow_runs_for_task(task);
 
     let mut main_pane = col()
         .key("task-main-scroll")
@@ -782,7 +778,7 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
         main_pane = main_pane.child(work_graph);
     }
 
-    main_pane = main_pane.child(render_runs_list(s, runs_to_show, k, t));
+    main_pane = main_pane.child(render_runs_list(s, &runs_to_show, k, t));
     row()
         .grow(1.0)
         .shrink()
@@ -1436,7 +1432,12 @@ fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTo
 }
 
 fn build_workflow_runs_panel(s: &AppState, k: &Kit, t: &ThemeTokens) -> El {
-    render_runs_list(s, &s.workflow_runs, k, t)
+    let runs = s
+        .active_workspace_id
+        .as_deref()
+        .map(|ws_id| s.workflow_runs_for_workspace(ws_id))
+        .unwrap_or_default();
+    render_runs_list(s, &runs, k, t)
 }
 
 fn render_runs_list(s: &AppState, runs: &[WorkflowRunView], k: &Kit, t: &ThemeTokens) -> El {

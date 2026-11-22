@@ -1226,6 +1226,8 @@ enum ShellToken {
         text: String,
         quoted: bool,
         expandable: bool,
+        has_unquoted_glob: bool,
+        has_unquoted_brace: bool,
     },
 }
 
@@ -1285,6 +1287,8 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
         let mut word = String::new();
         let mut quoted = false;
         let mut expandable = false;
+        let mut has_unquoted_glob = false;
+        let mut has_unquoted_brace = false;
         while i < chars.len() {
             let c = chars[i];
             if c == '\'' {
@@ -1322,6 +1326,12 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                 break;
             } else {
                 expandable = true;
+                if matches!(c, '*' | '?' | '[') {
+                    has_unquoted_glob = true;
+                }
+                if matches!(c, '{' | '}') {
+                    has_unquoted_brace = true;
+                }
                 word.push(c);
                 i += 1;
             }
@@ -1331,6 +1341,8 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                 text: word,
                 quoted,
                 expandable,
+                has_unquoted_glob,
+                has_unquoted_brace,
             });
         }
     }
@@ -1734,57 +1746,347 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
     pi == p.len()
 }
 
-fn validate_shell_glob_operand(
-    raw: &str,
-    base_dir: &Path,
-    ctx: &ToolExecutionContext,
-    require_write: bool,
-) -> Result<(), String> {
-    let normalized = raw.replace('\\', "/");
-    let (dir_part, leaf_pat) = match normalized.rsplit_once('/') {
-        Some((d, l)) => (d, l),
-        None => ("", normalized.as_str()),
-    };
-    let search_dir = if dir_part.is_empty()
-        || dir_part.contains('*')
-        || dir_part.contains('?')
-        || dir_part.contains('[')
-    {
-        base_dir.to_path_buf()
-    } else if let Some(expanded) = expand_shell_known_prefix(dir_part, base_dir, &ctx.homedir) {
-        expanded
-    } else {
-        exact_lexical_path(dir_part, base_dir)?
-    };
+const MAX_GLOB_EXPANSIONS: usize = 4096;
+const MAX_BRACE_EXPANSIONS: usize = 64;
 
-    let Ok(canonical_dir) = assert_read_path_allowed(&search_dir, ctx) else {
-        return Err(format!(
-            "Native shell glob '{raw}' targets disallowed directory '{}'.",
-            search_dir.display()
-        ));
-    };
-    let Ok(entries) = std::fs::read_dir(&canonical_dir) else {
+fn segment_has_glob_meta(seg: &str) -> bool {
+    seg.contains('*') || seg.contains('?') || seg.contains('[')
+}
+
+fn expand_shell_braces_inner(raw: &str, out: &mut Vec<String>) -> Result<(), String> {
+    if out.len() >= MAX_BRACE_EXPANSIONS {
+        return Err("Native shell brace expansion exceeded safety limit.".to_owned());
+    }
+    let bytes = raw.as_bytes();
+    let mut open_idx = None;
+    let mut close_idx = None;
+    let mut depth = 0usize;
+    let mut comma_positions = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => {
+                if depth == 0 {
+                    open_idx = Some(i);
+                    comma_positions.clear();
+                }
+                depth += 1;
+            }
+            b',' if depth == 1 => {
+                comma_positions.push(i);
+            }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = open_idx {
+                        let inner = &raw[start + 1..i];
+                        if !comma_positions.is_empty() || inner.contains("..") {
+                            close_idx = Some(i);
+                            break;
+                        }
+                    }
+                    open_idx = None;
+                    comma_positions.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (Some(start), Some(end)) = (open_idx, close_idx) else {
+        out.push(raw.to_owned());
         return Ok(());
     };
-    let check_all = dir_part.contains('*') || dir_part.contains('?') || dir_part.contains('[');
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let name_str = file_name.to_string_lossy();
-        if check_all || glob_name_matches(leaf_pat, &name_str) {
+
+    let prefix = &raw[..start];
+    let suffix = &raw[end + 1..];
+    if comma_positions.is_empty() {
+        // Range brace expansion like `{a..z}` or `{1..10}` — conservatively treat the
+        // brace expression as a wildcard `*` so every on-disk entry in that position is checked.
+        let wildcarded = format!("{prefix}*{suffix}");
+        return expand_shell_braces_inner(&wildcarded, out);
+    }
+
+    let mut parts = Vec::with_capacity(comma_positions.len() + 1);
+    let mut seg_start = start + 1;
+    for pos in comma_positions {
+        parts.push(&raw[seg_start..pos]);
+        seg_start = pos + 1;
+    }
+    parts.push(&raw[seg_start..end]);
+
+    for part in parts {
+        let candidate = format!("{prefix}{part}{suffix}");
+        expand_shell_braces_inner(&candidate, out)?;
+        if out.len() > MAX_BRACE_EXPANSIONS {
+            return Err("Native shell brace expansion exceeded safety limit.".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn authorize_glob_target(
+    path: &Path,
+    ctx: &ToolExecutionContext,
+    current_cmd: &str,
+    require_write: bool,
+) -> Result<PathBuf, String> {
+    let canonical = if require_write {
+        assert_write_path_allowed(path, ctx).map_err(|e| e.to_string())?
+    } else {
+        assert_read_path_allowed(path, ctx).map_err(|e| e.to_string())?
+    };
+    if is_directory_reading_shell_command(current_cmd)
+        && std::fs::metadata(&canonical).is_ok_and(|m| m.is_dir())
+    {
+        assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
+    }
+    Ok(canonical)
+}
+
+fn collect_globstar_dirs(
+    root: &Path,
+    ctx: &ToolExecutionContext,
+    current_cmd: &str,
+    require_write: bool,
+    is_last: bool,
+    visited: &mut usize,
+    out_dirs: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let mut seen_dirs = std::collections::HashSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let canonical = authorize_glob_target(&dir, ctx, current_cmd, false)?;
+        if !seen_dirs.insert(canonical.clone()) {
+            continue;
+        }
+        out_dirs.push(canonical.clone());
+        let entries = std::fs::read_dir(&canonical).map_err(|err| {
+            format!(
+                "Native shell recursive glob could not inspect directory '{}': {err}",
+                canonical.display()
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                format!(
+                    "Native shell recursive glob failed reading '{}': {err}",
+                    canonical.display()
+                )
+            })?;
+            *visited += 1;
+            if *visited > MAX_GLOB_EXPANSIONS {
+                return Err(
+                    "Native shell glob expansion exceeded safety limit; narrow the pattern."
+                        .to_owned(),
+                );
+            }
             let entry_path = entry.path();
-            if require_write {
-                assert_write_path_allowed(&entry_path, ctx).map_err(|e| e.to_string())?;
+            let canonical_entry = if is_last {
+                authorize_glob_target(&entry_path, ctx, current_cmd, require_write)?
             } else {
-                assert_read_path_allowed(&entry_path, ctx).map_err(|e| e.to_string())?;
+                // Authorize every directory/symlink encountered before descending.
+                assert_read_path_allowed(&entry_path, ctx).map_err(|e| e.to_string())?
+            };
+            if std::fs::metadata(&canonical_entry).is_ok_and(|m| m.is_dir()) {
+                stack.push(canonical_entry);
             }
         }
     }
     Ok(())
 }
 
+fn validate_shell_glob_operand(
+    raw: &str,
+    base_dir: &Path,
+    ctx: &ToolExecutionContext,
+    current_cmd: &str,
+    require_write: bool,
+) -> Result<(), String> {
+    let normalized = raw.replace('\\', "/");
+    let (prefix_dir, rest_segments): (PathBuf, Vec<&str>) =
+        if let Some(rest) = normalized.strip_prefix("~/") {
+            (
+                normalize_lexical_path(&ctx.homedir),
+                rest.split('/').collect(),
+            )
+        } else if normalized.starts_with('~') {
+            return Err(format!(
+                "Native shell glob uses blocked tilde user path '{raw}'."
+            ));
+        } else if let Some(rest) = normalized
+            .strip_prefix("$HOME/")
+            .or_else(|| normalized.strip_prefix("${HOME}/"))
+        {
+            (
+                normalize_lexical_path(&ctx.homedir),
+                rest.split('/').collect(),
+            )
+        } else if let Some(rest) = normalized
+            .strip_prefix("$PWD/")
+            .or_else(|| normalized.strip_prefix("${PWD}/"))
+        {
+            (normalize_lexical_path(base_dir), rest.split('/').collect())
+        } else if let Some(rest) = normalized.strip_prefix('/') {
+            (PathBuf::from("/"), rest.split('/').collect())
+        } else if has_windows_drive_prefix(&normalized) {
+            let drive = format!("{}/", &normalized[..2]);
+            let rest = normalized[2..].trim_start_matches('/');
+            (PathBuf::from(drive), rest.split('/').collect())
+        } else {
+            (base_dir.to_path_buf(), normalized.split('/').collect())
+        };
+
+    let segments: Vec<&str> = rest_segments
+        .into_iter()
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect();
+    if segments.is_empty() {
+        authorize_glob_target(&prefix_dir, ctx, current_cmd, require_write)?;
+        return Ok(());
+    }
+
+    // Fold all leading literal path components onto `prefix_dir` before checking directory
+    // authorization so absolute workspace globs like `/ws/src/*.rs` authorize `/ws/src`
+    // directly while out-of-workspace globs like `/etc/pass*` fail closed on `/etc`.
+    let first_glob_idx = segments
+        .iter()
+        .position(|seg| segment_has_glob_meta(seg))
+        .unwrap_or(segments.len());
+    let mut start_dir = prefix_dir;
+    for literal in &segments[..first_glob_idx] {
+        start_dir = normalize_lexical_path(&start_dir.join(literal));
+    }
+    let remaining = &segments[first_glob_idx..];
+    if remaining.is_empty() {
+        authorize_glob_target(&start_dir, ctx, current_cmd, require_write)?;
+        return Ok(());
+    }
+
+    let Ok(canonical_start) = assert_read_path_allowed(&start_dir, ctx) else {
+        return Err(format!(
+            "Native shell glob '{raw}' targets disallowed directory '{}'.",
+            start_dir.display()
+        ));
+    };
+
+    let mut current_dirs = vec![canonical_start];
+    let mut visited = 0usize;
+
+    for (idx, &seg) in remaining.iter().enumerate() {
+        let is_last = idx + 1 == remaining.len();
+        let mut next_dirs = Vec::new();
+
+        if seg == "**" {
+            for dir in &current_dirs {
+                collect_globstar_dirs(
+                    dir,
+                    ctx,
+                    current_cmd,
+                    require_write,
+                    is_last,
+                    &mut visited,
+                    &mut next_dirs,
+                )?;
+            }
+            current_dirs = next_dirs;
+            continue;
+        }
+
+        if segment_has_glob_meta(seg) {
+            for dir in &current_dirs {
+                let canonical_dir =
+                    assert_read_path_allowed(dir, ctx).map_err(|e| e.to_string())?;
+                let Ok(entries) = std::fs::read_dir(&canonical_dir) else {
+                    if std::fs::symlink_metadata(&canonical_dir).is_ok() {
+                        return Err(format!(
+                            "Native shell glob '{raw}' could not enumerate directory '{}'.",
+                            canonical_dir.display()
+                        ));
+                    }
+                    continue;
+                };
+                for entry in entries {
+                    let entry = entry.map_err(|err| {
+                        format!(
+                            "Native shell glob '{raw}' failed reading '{}': {err}",
+                            canonical_dir.display()
+                        )
+                    })?;
+                    let file_name = entry.file_name();
+                    let name_str = file_name.to_string_lossy();
+                    if !glob_name_matches(seg, &name_str) {
+                        continue;
+                    }
+                    visited += 1;
+                    if visited > MAX_GLOB_EXPANSIONS {
+                        return Err(format!(
+                            "Native shell glob '{raw}' exceeded expansion safety limit; narrow the pattern."
+                        ));
+                    }
+                    let entry_path = entry.path();
+                    if is_last {
+                        authorize_glob_target(&entry_path, ctx, current_cmd, require_write)?;
+                    } else {
+                        let canonical_entry = assert_read_path_allowed(&entry_path, ctx)
+                            .map_err(|e| e.to_string())?;
+                        if std::fs::metadata(&canonical_entry).is_ok_and(|m| m.is_dir()) {
+                            next_dirs.push(canonical_entry);
+                        }
+                    }
+                }
+            }
+            current_dirs = next_dirs;
+            continue;
+        }
+
+        // Literal path component following an earlier wildcard segment (e.g. `d*/credential-link`).
+        for dir in &current_dirs {
+            let child = if seg == ".." {
+                normalize_lexical_path(&dir.join(".."))
+            } else {
+                dir.join(seg)
+            };
+            visited += 1;
+            if visited > MAX_GLOB_EXPANSIONS {
+                return Err(format!(
+                    "Native shell glob '{raw}' exceeded expansion safety limit; narrow the pattern."
+                ));
+            }
+            if seg == ".." {
+                let canonical_parent = if is_last {
+                    authorize_glob_target(&child, ctx, current_cmd, require_write)?
+                } else {
+                    assert_read_path_allowed(&child, ctx).map_err(|e| e.to_string())?
+                };
+                if !is_last {
+                    next_dirs.push(canonical_parent);
+                }
+                continue;
+            }
+            let exists = std::fs::symlink_metadata(&child).is_ok();
+            if is_last {
+                if exists || require_write || looks_like_filesystem_path(seg) {
+                    authorize_glob_target(&child, ctx, current_cmd, require_write)?;
+                }
+            } else if exists {
+                let canonical_child =
+                    assert_read_path_allowed(&child, ctx).map_err(|e| e.to_string())?;
+                if std::fs::metadata(&canonical_child).is_ok_and(|m| m.is_dir()) {
+                    next_dirs.push(canonical_child);
+                }
+            }
+        }
+        current_dirs = next_dirs;
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn validate_shell_operand_candidate(
     candidate: &str,
-    quoted: bool,
+    has_unquoted_glob: bool,
+    has_unquoted_brace: bool,
     base_dir: &Path,
     ctx: &ToolExecutionContext,
     current_cmd: &str,
@@ -1795,8 +2097,29 @@ fn validate_shell_operand_candidate(
         return Ok(());
     }
 
-    if !quoted && (candidate.contains('*') || candidate.contains('?') || candidate.contains('[')) {
-        validate_shell_glob_operand(candidate, base_dir, ctx, force_write || is_mut)?;
+    if has_unquoted_brace && candidate.contains('{') && candidate.contains('}') {
+        let mut expanded = Vec::new();
+        expand_shell_braces_inner(candidate, &mut expanded)?;
+        if expanded.len() > 1 || expanded.first().map(String::as_str) != Some(candidate) {
+            for variant in expanded {
+                let variant_has_glob = has_unquoted_glob || segment_has_glob_meta(&variant);
+                validate_shell_operand_candidate(
+                    &variant,
+                    variant_has_glob,
+                    false,
+                    base_dir,
+                    ctx,
+                    current_cmd,
+                    is_mut,
+                    force_write,
+                )?;
+            }
+            return Ok(());
+        }
+    }
+
+    if has_unquoted_glob && segment_has_glob_meta(candidate) {
+        validate_shell_glob_operand(candidate, base_dir, ctx, current_cmd, force_write || is_mut)?;
     }
 
     let explicit_path = looks_like_filesystem_path(candidate);
@@ -2026,6 +2349,8 @@ fn validate_native_shell_command_text(
                 text,
                 quoted,
                 expandable,
+                has_unquoted_glob,
+                has_unquoted_brace,
             } => {
                 if *expandable {
                     for nested in extract_embedded_command_substitutions(text) {
@@ -2035,13 +2360,21 @@ fn validate_native_shell_command_text(
                 if expect_write_target {
                     expect_write_target = false;
                     if !text.starts_with('&') {
-                        validate_shell_path_token(text, &current_dir, ctx, true, false)?;
+                        if *has_unquoted_glob && segment_has_glob_meta(text) {
+                            validate_shell_glob_operand(text, &current_dir, ctx, "", true)?;
+                        } else {
+                            validate_shell_path_token(text, &current_dir, ctx, true, false)?;
+                        }
                     }
                     continue;
                 }
                 if expect_read_target {
                     expect_read_target = false;
-                    validate_shell_path_token(text, &current_dir, ctx, false, false)?;
+                    if *has_unquoted_glob && segment_has_glob_meta(text) {
+                        validate_shell_glob_operand(text, &current_dir, ctx, "", false)?;
+                    } else {
+                        validate_shell_path_token(text, &current_dir, ctx, false, false)?;
+                    }
                     continue;
                 }
                 if expect_subshell_script {
@@ -2064,7 +2397,8 @@ fn validate_native_shell_command_text(
                     {
                         validate_shell_operand_candidate(
                             rhs,
-                            false,
+                            *has_unquoted_glob,
+                            *has_unquoted_brace,
                             &current_dir,
                             ctx,
                             "",
@@ -2078,7 +2412,9 @@ fn validate_native_shell_command_text(
                         && exact_lexical_path(text, &current_dir)
                             .ok()
                             .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
-                    if looks_like_filesystem_path(text) || cmd_exists_locally {
+                    if *has_unquoted_glob && segment_has_glob_meta(text) {
+                        validate_shell_glob_operand(text, &current_dir, ctx, "", false)?;
+                    } else if looks_like_filesystem_path(text) || cmd_exists_locally {
                         validate_shell_path_token(text, &current_dir, ctx, false, true)?;
                     }
                     let base = Path::new(text)
@@ -2096,6 +2432,10 @@ fn validate_native_shell_command_text(
                     saw_cd_arg = true;
                     if text == "-" {
                         assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
+                        continue;
+                    }
+                    if *has_unquoted_glob && segment_has_glob_meta(text) {
+                        validate_shell_glob_operand(text, &current_dir, ctx, "cd", false)?;
                         continue;
                     }
                     if let Some(next_dir) =
@@ -2148,7 +2488,8 @@ fn validate_native_shell_command_text(
                     );
                     validate_shell_operand_candidate(
                         rhs_clean,
-                        *quoted,
+                        *has_unquoted_glob,
+                        *has_unquoted_brace,
                         &current_dir,
                         ctx,
                         &current_cmd,
@@ -2163,7 +2504,8 @@ fn validate_native_shell_command_text(
                 let candidate = text.strip_prefix('@').unwrap_or(text);
                 validate_shell_operand_candidate(
                     candidate,
-                    *quoted,
+                    *has_unquoted_glob,
+                    *has_unquoted_brace,
                     &current_dir,
                     ctx,
                     &current_cmd,

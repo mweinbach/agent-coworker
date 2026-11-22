@@ -2258,8 +2258,31 @@ fn is_unsandboxed_disallowed_command(cmd_basename: &str) -> bool {
 
     matches!(
         exact,
-        // Dynamic shell evaluation, indirect command launchers, privilege escalation, debuggers
-        "eval"
+        // Shell compound control-flow keywords & directory-stack builtins (cannot safely track cwd/control-flow statically)
+        "pushd"
+            | "popd"
+            | "if"
+            | "then"
+            | "elif"
+            | "else"
+            | "fi"
+            | "for"
+            | "while"
+            | "until"
+            | "do"
+            | "done"
+            | "case"
+            | "esac"
+            | "select"
+            | "function"
+            | "coproc"
+            | "{"
+            | "}"
+            | "!"
+            | "[["
+            | "]]"
+            // Dynamic shell evaluation, indirect command launchers, privilege escalation, debuggers
+            | "eval"
             | "source"
             | "."
             | "exec"
@@ -2314,6 +2337,18 @@ fn is_unsandboxed_disallowed_command(cmd_basename: &str) -> bool {
             | "nawk"
             | "sed"
             | "gsed"
+            // Implicit-target patchers and archive extractors (targets come from file contents,
+            // bypassing static CLI operand authorization and able to plant `.git/hooks/*` or symlinks)
+            | "patch"
+            | "unzip"
+            | "cpio"
+            | "7z"
+            | "7za"
+            | "7zz"
+            | "unrar"
+            | "pax"
+            | "bsdtar"
+            | "gtar"
             // Build/package runners that execute arbitrary code from repo manifests/scripts
             | "make"
             | "gmake"
@@ -2400,6 +2435,267 @@ fn is_unsandboxed_disallowed_command(cmd_basename: &str) -> bool {
         || exact.starts_with("python-")
 }
 
+const MAX_SHELL_POSSIBLE_DIRS: usize = 16;
+
+fn is_safe_git_global_flag(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--no-pager"
+            | "--paginate"
+            | "-p"
+            | "-P"
+            | "--no-optional-locks"
+            | "--literal-pathspecs"
+            | "--glob-pathspecs"
+            | "--noglob-pathspecs"
+            | "--icase-pathspecs"
+            | "--version"
+            | "-v"
+            | "--help"
+            | "-h"
+    )
+}
+
+fn is_allowed_unsandboxed_git_subcommand(sub: &str) -> bool {
+    matches!(
+        sub,
+        // Read-only inspection
+        "status"
+            | "diff"
+            | "log"
+            | "show"
+            | "rev-parse"
+            | "rev-list"
+            | "ls-files"
+            | "ls-tree"
+            | "blame"
+            | "shortlog"
+            | "describe"
+            | "merge-base"
+            | "grep"
+            | "reflog"
+            | "cat-file"
+            | "symbolic-ref"
+            | "check-ignore"
+            | "name-rev"
+            | "for-each-ref"
+            | "count-objects"
+            | "show-ref"
+            | "version"
+            | "help"
+            // Standard workspace VCS operations (cannot write `.git/hooks/*`, `.git/config`,
+            // or arbitrary implicit patch targets; dangerous forms still require user approval)
+            | "add"
+            | "commit"
+            | "reset"
+            | "restore"
+            | "switch"
+            | "checkout"
+            | "branch"
+            | "tag"
+            | "stash"
+            | "rm"
+            | "mv"
+            | "fetch"
+            | "pull"
+            | "push"
+            | "merge"
+            | "rebase"
+            | "cherry-pick"
+    )
+}
+
+fn is_tar_extract_arg(arg: &str, lower_arg: &str, is_first_arg: bool) -> bool {
+    if arg == "-x" || lower_arg == "--extract" || lower_arg == "--get" {
+        return true;
+    }
+    if let Some(short) = arg.strip_prefix('-')
+        && !short.starts_with('-')
+        && short.contains('x')
+    {
+        return true;
+    }
+    // Traditional BSD/GNU tar bundled option word without leading `-` (e.g. `tar xf archive.tar`).
+    is_first_arg
+        && !arg.starts_with('-')
+        && !arg.contains('/')
+        && !arg.contains('\\')
+        && arg.chars().all(|c| c.is_ascii_alphanumeric())
+        && arg.contains('x')
+}
+
+#[derive(Default)]
+struct SimpleCommandSearchState {
+    git_subcommand: Option<String>,
+    saw_end_of_options: bool,
+    expect_flag_value: bool,
+    saw_pattern_flag: bool,
+    is_recursive_grep: bool,
+    positional_args: usize,
+    arg_index: usize,
+    find_saw_expr: bool,
+    find_saw_root: bool,
+}
+
+impl SimpleCommandSearchState {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn observe_arg(&mut self, cmd: &str, arg: &str, lower_arg: &str) {
+        self.arg_index += 1;
+        if cmd == "find" {
+            if !self.find_saw_expr {
+                if arg.starts_with('-') || matches!(arg, "!" | "(" | ")" | ",") {
+                    self.find_saw_expr = true;
+                } else {
+                    self.find_saw_root = true;
+                }
+            }
+            return;
+        }
+
+        let is_grep_like = matches!(cmd, "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack")
+            || (cmd == "git" && self.git_subcommand.as_deref() == Some("grep"));
+        if is_grep_like {
+            if self.expect_flag_value {
+                self.expect_flag_value = false;
+                return;
+            }
+            if !self.saw_end_of_options {
+                if arg == "--" {
+                    self.saw_end_of_options = true;
+                    return;
+                }
+                if arg.starts_with("--") {
+                    if matches!(lower_arg, "--recursive" | "--dereference-recursive") {
+                        self.is_recursive_grep = true;
+                    }
+                    if matches!(lower_arg, "--regexp" | "--file") {
+                        self.saw_pattern_flag = true;
+                        self.expect_flag_value = true;
+                    } else if lower_arg.starts_with("--regexp=") || lower_arg.starts_with("--file=")
+                    {
+                        self.saw_pattern_flag = true;
+                    } else if matches!(
+                        lower_arg,
+                        "--max-count"
+                            | "--after-context"
+                            | "--before-context"
+                            | "--context"
+                            | "--include"
+                            | "--exclude"
+                            | "--exclude-dir"
+                            | "--exclude-from"
+                            | "--label"
+                            | "--glob"
+                            | "--iglob"
+                            | "--type"
+                            | "--type-not"
+                            | "--max-depth"
+                            | "--threads"
+                    ) {
+                        self.expect_flag_value = true;
+                    }
+                    return;
+                }
+                if let Some(short) = arg.strip_prefix('-')
+                    && !short.is_empty()
+                {
+                    if matches!(cmd, "grep" | "egrep" | "fgrep")
+                        && (short.contains('r') || short.contains('R'))
+                    {
+                        self.is_recursive_grep = true;
+                    }
+                    if short == "e" || short == "f" {
+                        self.saw_pattern_flag = true;
+                        self.expect_flag_value = true;
+                    } else if short.starts_with('e') || short.starts_with('f') {
+                        self.saw_pattern_flag = true;
+                    } else if matches!(
+                        short,
+                        "m" | "A" | "B" | "C" | "g" | "t" | "T" | "d" | "j" | "M"
+                    ) {
+                        self.expect_flag_value = true;
+                    }
+                    return;
+                }
+            }
+            self.positional_args += 1;
+            return;
+        }
+
+        if matches!(cmd, "fd" | "ls" | "dir" | "tree" | "du") {
+            if self.expect_flag_value {
+                self.expect_flag_value = false;
+                return;
+            }
+            if !self.saw_end_of_options {
+                if arg == "--" {
+                    self.saw_end_of_options = true;
+                    return;
+                }
+                if arg.starts_with('-') && arg != "-" {
+                    if matches!(
+                        lower_arg,
+                        "-d" | "--max-depth"
+                            | "-t"
+                            | "--type"
+                            | "-e"
+                            | "--extension"
+                            | "-E"
+                            | "--exclude"
+                            | "-L"
+                            | "-P"
+                            | "-I"
+                            | "--maxdepth"
+                    ) {
+                        self.expect_flag_value = true;
+                    }
+                    return;
+                }
+            }
+            self.positional_args += 1;
+        }
+    }
+
+    fn uses_implicit_cwd_root(&self, cmd: &str) -> bool {
+        match cmd {
+            "grep" | "egrep" | "fgrep" => {
+                self.is_recursive_grep
+                    && ((self.saw_pattern_flag && self.positional_args == 0)
+                        || (!self.saw_pattern_flag && self.positional_args < 2))
+            }
+            "rg" | "ag" | "ack" => {
+                (self.saw_pattern_flag && self.positional_args == 0)
+                    || (!self.saw_pattern_flag && self.positional_args < 2)
+            }
+            "git" if self.git_subcommand.as_deref() == Some("grep") => {
+                (self.saw_pattern_flag && self.positional_args == 0)
+                    || (!self.saw_pattern_flag && self.positional_args < 2)
+            }
+            "fd" => self.positional_args < 2,
+            "find" => !self.find_saw_root,
+            "ls" | "dir" | "tree" | "du" => self.positional_args == 0,
+            _ => false,
+        }
+    }
+}
+
+fn merge_possible_dirs(dst: &mut Vec<PathBuf>, src: &[PathBuf]) -> Result<(), String> {
+    for dir in src {
+        if !dst.iter().any(|existing| existing == dir) {
+            dst.push(dir.clone());
+            if dst.len() > MAX_SHELL_POSSIBLE_DIRS {
+                return Err(
+                    "Native shell command exceeded directory-tracking complexity limit.".to_owned(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_native_shell_command_text(
     command: &str,
     base_dir: &Path,
@@ -2423,7 +2719,15 @@ fn validate_native_shell_command_text(
     }
 
     let tokens = tokenize_shell_command(command);
-    let mut current_dir = base_dir.to_path_buf();
+    // Track the set of all working directories that could be active at this point in the command
+    // (restored on `)` subshell exit, preserved across pipelines/background jobs, and unioned
+    // across conditional or potentially failing `cd` branches).
+    let mut possible_dirs: Vec<PathBuf> = vec![base_dir.to_path_buf()];
+    let mut segment_start_dirs: Vec<PathBuf> = possible_dirs.clone();
+    let mut pipeline_entry_dirs: Option<Vec<PathBuf>> = None;
+    let mut subshell_stack: Vec<(Vec<PathBuf>, Option<Vec<PathBuf>>, bool)> = Vec::new();
+    let mut in_conditional_chain = false;
+
     let mut at_command_pos = true;
     let mut current_cmd = String::new();
     let mut expect_write_target = false;
@@ -2431,6 +2735,41 @@ fn validate_native_shell_command_text(
     let mut expect_subshell_script = false;
     let mut nested_shell_got_script = false;
     let mut saw_cd_arg = false;
+    let mut cd_updated_this_cmd = false;
+    let mut search_state = SimpleCommandSearchState::default();
+
+    let finish_simple_command = |current_cmd: &str,
+                                 saw_cd_arg: bool,
+                                 nested_shell_got_script: bool,
+                                 in_conditional_chain: bool,
+                                 search_state: &SimpleCommandSearchState,
+                                 possible_dirs: &mut Vec<PathBuf>,
+                                 cd_updated_this_cmd: &mut bool|
+     -> Result<(), String> {
+        if current_cmd == "cd" && !saw_cd_arg {
+            // Bare `cd` jumps to `$HOME`.
+            let home_canon =
+                assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
+            *cd_updated_this_cmd = true;
+            if in_conditional_chain || !std::fs::metadata(&home_canon).is_ok_and(|m| m.is_dir()) {
+                merge_possible_dirs(possible_dirs, &[home_canon])?;
+            } else {
+                *possible_dirs = vec![home_canon];
+            }
+        }
+        if is_nested_posix_shell(current_cmd) && !nested_shell_got_script {
+            return Err(format!(
+                "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
+            ));
+        }
+        if search_state.uses_implicit_cwd_root(current_cmd) {
+            for dir in possible_dirs.iter() {
+                let canonical = assert_read_path_allowed(dir, ctx).map_err(|e| e.to_string())?;
+                assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
+            }
+        }
+        Ok(())
+    };
 
     for token in &tokens {
         match token {
@@ -2454,16 +2793,21 @@ fn validate_native_shell_command_text(
                     }
                     expect_read_target = true;
                     expect_write_target = false;
-                } else {
-                    if current_cmd == "cd" && !saw_cd_arg {
-                        // Bare `cd` jumps to `$HOME`.
-                        assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
+                } else if op == "(" {
+                    if !at_command_pos {
+                        return Err(
+                            "Unexpected '(' subshell or function definition syntax is blocked in unsandboxed native shell execution."
+                                .to_owned(),
+                        );
                     }
-                    if is_nested_posix_shell(&current_cmd) && !nested_shell_got_script {
-                        return Err(format!(
-                            "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
-                        ));
-                    }
+                    subshell_stack.push((
+                        possible_dirs.clone(),
+                        pipeline_entry_dirs.clone(),
+                        in_conditional_chain,
+                    ));
+                    pipeline_entry_dirs = None;
+                    in_conditional_chain = false;
+                    segment_start_dirs = possible_dirs.clone();
                     at_command_pos = true;
                     current_cmd.clear();
                     expect_write_target = false;
@@ -2471,6 +2815,98 @@ fn validate_native_shell_command_text(
                     expect_subshell_script = false;
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
+                    cd_updated_this_cmd = false;
+                    search_state.reset();
+                } else if op == ")" {
+                    finish_simple_command(
+                        &current_cmd,
+                        saw_cd_arg,
+                        nested_shell_got_script,
+                        in_conditional_chain,
+                        &search_state,
+                        &mut possible_dirs,
+                        &mut cd_updated_this_cmd,
+                    )?;
+                    let Some((saved_dirs, saved_pipeline_entry, saved_in_cond)) =
+                        subshell_stack.pop()
+                    else {
+                        return Err("Unmatched ')' in native shell command.".to_owned());
+                    };
+                    // Exiting a subshell restores the parent shell's working directory set.
+                    possible_dirs = saved_dirs;
+                    pipeline_entry_dirs = saved_pipeline_entry;
+                    in_conditional_chain = saved_in_cond;
+                    segment_start_dirs = possible_dirs.clone();
+                    at_command_pos = true;
+                    current_cmd.clear();
+                    expect_write_target = false;
+                    expect_read_target = false;
+                    expect_subshell_script = false;
+                    nested_shell_got_script = false;
+                    saw_cd_arg = false;
+                    cd_updated_this_cmd = false;
+                    search_state.reset();
+                } else {
+                    finish_simple_command(
+                        &current_cmd,
+                        saw_cd_arg,
+                        nested_shell_got_script,
+                        in_conditional_chain,
+                        &search_state,
+                        &mut possible_dirs,
+                        &mut cd_updated_this_cmd,
+                    )?;
+                    match op.as_str() {
+                        "|" => {
+                            let entry = pipeline_entry_dirs
+                                .get_or_insert_with(|| segment_start_dirs.clone())
+                                .clone();
+                            // Pipeline stages execute in subshells in POSIX/Bash, so a `cd` in an
+                            // upstream stage does not move downstream stages' working directory.
+                            merge_possible_dirs(&mut possible_dirs, &entry)?;
+                        }
+                        "&&" => {
+                            if let Some(entry) = pipeline_entry_dirs.take() {
+                                merge_possible_dirs(&mut possible_dirs, &entry)?;
+                            }
+                            in_conditional_chain = true;
+                        }
+                        "||" => {
+                            if cd_updated_this_cmd {
+                                // If `cd` failed, the RHS of `||` executes in the pre-`cd` directory.
+                                merge_possible_dirs(&mut possible_dirs, &segment_start_dirs)?;
+                            }
+                            if let Some(entry) = pipeline_entry_dirs.take() {
+                                merge_possible_dirs(&mut possible_dirs, &entry)?;
+                            }
+                            in_conditional_chain = true;
+                        }
+                        "&" => {
+                            // Background lists run in a subshell and do not alter the parent's cwd.
+                            if let Some(entry) = pipeline_entry_dirs.take() {
+                                possible_dirs = entry;
+                            } else {
+                                possible_dirs = segment_start_dirs.clone();
+                            }
+                            in_conditional_chain = false;
+                        }
+                        _ => {
+                            if let Some(entry) = pipeline_entry_dirs.take() {
+                                merge_possible_dirs(&mut possible_dirs, &entry)?;
+                            }
+                            in_conditional_chain = false;
+                        }
+                    }
+                    segment_start_dirs = possible_dirs.clone();
+                    at_command_pos = true;
+                    current_cmd.clear();
+                    expect_write_target = false;
+                    expect_read_target = false;
+                    expect_subshell_script = false;
+                    nested_shell_got_script = false;
+                    saw_cd_arg = false;
+                    cd_updated_this_cmd = false;
+                    search_state.reset();
                 }
             }
             ShellToken::Word {
@@ -2490,27 +2926,33 @@ fn validate_native_shell_command_text(
                 if expect_write_target {
                     expect_write_target = false;
                     if !text.starts_with('&') {
-                        if *has_unquoted_glob && segment_has_glob_meta(text) {
-                            validate_shell_glob_operand(text, &current_dir, ctx, "", true)?;
-                        } else {
-                            validate_shell_path_token(text, &current_dir, ctx, true, false)?;
+                        for dir in &possible_dirs {
+                            if *has_unquoted_glob && segment_has_glob_meta(text) {
+                                validate_shell_glob_operand(text, dir, ctx, "", true)?;
+                            } else {
+                                validate_shell_path_token(text, dir, ctx, true, false)?;
+                            }
                         }
                     }
                     continue;
                 }
                 if expect_read_target {
                     expect_read_target = false;
-                    if *has_unquoted_glob && segment_has_glob_meta(text) {
-                        validate_shell_glob_operand(text, &current_dir, ctx, "", false)?;
-                    } else {
-                        validate_shell_path_token(text, &current_dir, ctx, false, false)?;
+                    for dir in &possible_dirs {
+                        if *has_unquoted_glob && segment_has_glob_meta(text) {
+                            validate_shell_glob_operand(text, dir, ctx, "", false)?;
+                        } else {
+                            validate_shell_path_token(text, dir, ctx, false, false)?;
+                        }
                     }
                     continue;
                 }
                 if expect_subshell_script {
                     expect_subshell_script = false;
                     nested_shell_got_script = true;
-                    validate_native_shell_command_text(text, &current_dir, ctx, depth + 1)?;
+                    for dir in &possible_dirs {
+                        validate_native_shell_command_text(text, dir, ctx, depth + 1)?;
+                    }
                     continue;
                 }
 
@@ -2552,6 +2994,8 @@ fn validate_native_shell_command_text(
                     at_command_pos = false;
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
+                    cd_updated_this_cmd = false;
+                    search_state.reset();
                     continue;
                 }
 
@@ -2568,24 +3012,48 @@ fn validate_native_shell_command_text(
                 }
 
                 if current_cmd == "cd" {
+                    if !saw_cd_arg && matches!(text.as_str(), "--" | "-L" | "-P") {
+                        continue;
+                    }
                     saw_cd_arg = true;
                     if text == "-" {
-                        assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
-                        continue;
+                        return Err(
+                            "Dynamic 'cd -' is blocked in unsandboxed native shell execution."
+                                .to_owned(),
+                        );
                     }
-                    if *has_unquoted_glob && segment_has_glob_meta(text) {
-                        validate_shell_glob_operand(text, &current_dir, ctx, "cd", false)?;
-                        continue;
-                    }
-                    if let Some(next_dir) =
-                        validate_shell_path_token(text, &current_dir, ctx, false, false)?
+                    if (*has_unquoted_glob && segment_has_glob_meta(text))
+                        || (*has_unquoted_brace && text.contains('{') && text.contains('}'))
                     {
-                        current_dir = next_dir;
+                        return Err(format!(
+                            "Dynamic glob/brace 'cd' target '{text}' is blocked in unsandboxed native shell execution."
+                        ));
                     }
+                    let mut next_dirs = Vec::new();
+                    if in_conditional_chain {
+                        merge_possible_dirs(&mut next_dirs, &possible_dirs)?;
+                    }
+                    for dir in &possible_dirs {
+                        if let Some(resolved) =
+                            validate_shell_path_token(text, dir, ctx, false, false)?
+                        {
+                            merge_possible_dirs(&mut next_dirs, std::slice::from_ref(&resolved))?;
+                            // If the target directory does not exist (or isn't a searchable dir),
+                            // `cd` fails at runtime and leaves the shell in `dir`.
+                            if !std::fs::metadata(&resolved).is_ok_and(|m| m.is_dir()) {
+                                merge_possible_dirs(&mut next_dirs, std::slice::from_ref(dir))?;
+                            }
+                        } else {
+                            merge_possible_dirs(&mut next_dirs, std::slice::from_ref(dir))?;
+                        }
+                    }
+                    possible_dirs = next_dirs;
+                    cd_updated_this_cmd = true;
                     continue;
                 }
 
-                // Block command-specific code-execution flags on otherwise allowed utilities.
+                // Block command-specific code-execution flags and implicit-target writers on
+                // otherwise allowed utilities.
                 let lower_arg = text.to_ascii_lowercase();
                 if current_cmd == "find"
                     && matches!(lower_arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
@@ -2594,18 +3062,54 @@ fn validate_native_shell_command_text(
                         "'find {text}' is blocked in unsandboxed native shell execution."
                     ));
                 }
-                if current_cmd == "git"
-                    && (matches!(
+                if current_cmd == "git" {
+                    let dangerous_git_flag = matches!(
                         lower_arg.as_str(),
-                        "-c" | "--config-env" | "--exec-path" | "--upload-pack" | "--receive-pack"
-                    ) || lower_arg.starts_with("--config-env=")
+                        "-c" | "--config-env"
+                            | "--exec-path"
+                            | "--upload-pack"
+                            | "--receive-pack"
+                            | "--git-dir"
+                            | "--work-tree"
+                            | "--namespace"
+                            | "--super-prefix"
+                            | "--unsafe-paths"
+                            | "--ext-diff"
+                            | "--textconv"
+                            | "--output"
+                    ) || (search_state.git_subcommand.is_none()
+                        && (text == "-C" || text.starts_with("-C") || text.starts_with("-c")))
+                        || lower_arg.starts_with("--config-env=")
                         || lower_arg.starts_with("--exec-path=")
                         || lower_arg.starts_with("--upload-pack=")
-                        || lower_arg.starts_with("--receive-pack="))
-                {
-                    return Err(format!(
-                        "'git {text}' is blocked in unsandboxed native shell execution."
-                    ));
+                        || lower_arg.starts_with("--receive-pack=")
+                        || lower_arg.starts_with("--git-dir=")
+                        || lower_arg.starts_with("--work-tree=")
+                        || lower_arg.starts_with("--namespace=")
+                        || lower_arg.starts_with("--super-prefix=")
+                        || lower_arg.starts_with("--output=");
+                    if dangerous_git_flag {
+                        return Err(format!(
+                            "'git {text}' is blocked in unsandboxed native shell execution."
+                        ));
+                    }
+                    if search_state.git_subcommand.is_none() {
+                        if text.starts_with('-') {
+                            if !is_safe_git_global_flag(text) {
+                                return Err(format!(
+                                    "Git global option '{text}' is blocked in unsandboxed native shell execution."
+                                ));
+                            }
+                        } else {
+                            if !is_allowed_unsandboxed_git_subcommand(&lower_arg) {
+                                return Err(format!(
+                                    "Git subcommand '{text}' is blocked in unsandboxed native shell execution because it can write implicit protected paths or run arbitrary repository/config hooks."
+                                ));
+                            }
+                            search_state.git_subcommand = Some(lower_arg.clone());
+                            continue;
+                        }
+                    }
                 }
                 if current_cmd == "tar"
                     && (matches!(
@@ -2613,12 +3117,14 @@ fn validate_native_shell_command_text(
                         "-i" | "--checkpoint-action" | "--to-command" | "--use-compress-program"
                     ) || lower_arg.starts_with("--checkpoint-action=")
                         || lower_arg.starts_with("--to-command=")
-                        || lower_arg.starts_with("--use-compress-program="))
+                        || lower_arg.starts_with("--use-compress-program=")
+                        || is_tar_extract_arg(text, &lower_arg, search_state.arg_index == 0))
                 {
                     return Err(format!(
                         "'tar {text}' is blocked in unsandboxed native shell execution."
                     ));
                 }
+                search_state.observe_arg(&current_cmd, text, &lower_arg);
 
                 let is_mut = is_mutating_shell_command(&current_cmd);
 
@@ -2626,50 +3132,60 @@ fn validate_native_shell_command_text(
                 if let Some((lhs, rhs)) = text.split_once('=') {
                     let rhs_clean = rhs.strip_prefix('@').unwrap_or(rhs);
                     if lhs.eq_ignore_ascii_case("of") {
-                        validate_shell_path_token(rhs_clean, &current_dir, ctx, true, false)?;
+                        for dir in &possible_dirs {
+                            validate_shell_path_token(rhs_clean, dir, ctx, true, false)?;
+                        }
                         continue;
                     }
                     let force_write = matches!(
                         lhs.to_ascii_lowercase().as_str(),
                         "--output" | "--out" | "-o" | "--dest"
                     );
-                    validate_shell_operand_candidate(
-                        rhs_clean,
-                        *has_unquoted_glob,
-                        *has_unquoted_brace,
-                        &current_dir,
-                        ctx,
-                        &current_cmd,
-                        is_mut,
-                        force_write,
-                    )?;
+                    for dir in &possible_dirs {
+                        validate_shell_operand_candidate(
+                            rhs_clean,
+                            *has_unquoted_glob,
+                            *has_unquoted_brace,
+                            dir,
+                            ctx,
+                            &current_cmd,
+                            is_mut,
+                            force_write,
+                        )?;
+                    }
                     continue;
                 }
 
                 // Inspect both explicit path tokens and relative file/symlink/glob operands
                 // (including curl/wget `@path` file-upload arguments).
                 let candidate = text.strip_prefix('@').unwrap_or(text);
-                validate_shell_operand_candidate(
-                    candidate,
-                    *has_unquoted_glob,
-                    *has_unquoted_brace,
-                    &current_dir,
-                    ctx,
-                    &current_cmd,
-                    is_mut,
-                    false,
-                )?;
+                for dir in &possible_dirs {
+                    validate_shell_operand_candidate(
+                        candidate,
+                        *has_unquoted_glob,
+                        *has_unquoted_brace,
+                        dir,
+                        ctx,
+                        &current_cmd,
+                        is_mut,
+                        false,
+                    )?;
+                }
             }
         }
     }
 
-    if current_cmd == "cd" && !saw_cd_arg {
-        assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
-    }
-    if is_nested_posix_shell(&current_cmd) && !nested_shell_got_script {
-        return Err(format!(
-            "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
-        ));
+    finish_simple_command(
+        &current_cmd,
+        saw_cd_arg,
+        nested_shell_got_script,
+        in_conditional_chain,
+        &search_state,
+        &mut possible_dirs,
+        &mut cd_updated_this_cmd,
+    )?;
+    if !subshell_stack.is_empty() {
+        return Err("Unclosed '(' subshell in native shell command.".to_owned());
     }
 
     Ok(())

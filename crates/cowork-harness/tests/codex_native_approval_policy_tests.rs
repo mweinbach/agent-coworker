@@ -1468,3 +1468,234 @@ EOF"#,
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_restores_parent_cwd_after_subshell_and_control_flow() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/connections.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"openai\":\"secret\"}\n").unwrap();
+        std::fs::create_dir_all(h.ws.join("safe")).unwrap();
+        std::fs::write(h.ws.join("safe/ok.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(h.ws.join("README.md"), "# demo\n").unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
+
+        let blocked = [
+            "(cd safe); cat credential-link",
+            "((cd safe)); cat credential-link",
+            "(cd safe && cat ok.rs); cat credential-link",
+            "(cd safe) && cat credential-link",
+            "cd safe | cat credential-link",
+            "false && cd safe || cat credential-link",
+            "false && cd safe; cat credential-link",
+            "cd safe || cat credential-link",
+            "cd missing; cat credential-link",
+            "cd missing || cat credential-link",
+            "cd safe & cat credential-link",
+            "pushd safe; popd; cat credential-link",
+            "{ cd safe; }; cat credential-link",
+            "if false; then cd safe; fi; cat credential-link",
+            "cd s*; cat credential-link",
+            "cd -; cat credential-link",
+            "sh -c '(cd safe); cat credential-link'",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: subshell/control-flow cwd bypass must be denied in Bash: {cmd}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: subshell/control-flow cwd bypass must be denied in ACP: {cmd}"
+            );
+        }
+
+        // Benign subshell and unconditional `cd` commands stay allowed.
+        for ok_cmd in [
+            "(cd safe && cat ok.rs); cat README.md",
+            "cd safe && cat ok.rs",
+        ] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "benign subshell/cd command must pass under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "benign subshell/cd command must remain approvable interactively: {ok_cmd}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn unsandboxed_native_shell_denies_implicit_patch_git_and_archive_writes() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        std::fs::write(h.ws.join("evil.patch"), "diff --git a/x b/x\n").unwrap();
+        std::fs::write(h.ws.join("archive.tar"), "fake").unwrap();
+        std::fs::write(h.ws.join("archive.zip"), "fake").unwrap();
+
+        let blocked = [
+            "git apply --unsafe-paths evil.patch && git commit --allow-empty -m update",
+            "git apply evil.patch",
+            "git am evil.patch",
+            "git config core.hooksPath /tmp",
+            "git -C .. status",
+            "git --git-dir=.git status",
+            "git --work-tree=. status",
+            "git diff --ext-diff",
+            "git diff --output=out.txt",
+            "git clone https://example.com/repo.git",
+            "git submodule update --init",
+            "git custom-alias",
+            "patch -p1 < evil.patch",
+            "tar -xf archive.tar",
+            "tar xf archive.tar",
+            "tar --extract -f archive.tar",
+            "unzip archive.zip",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: unsafe git/patch/archive command must be denied in Bash: {cmd}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: unsafe git/patch/archive command must be denied in ACP: {cmd}"
+            );
+        }
+
+        for ok_cmd in ["git status", "git diff", "git log -n 5"] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "benign git command must pass under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "benign git command must remain approvable interactively: {ok_cmd}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn unsandboxed_native_shell_validates_implicit_recursive_search_roots() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        std::fs::create_dir_all(h.ws.join(".cowork/auth")).unwrap();
+        std::fs::write(
+            h.ws.join(".cowork/auth/mcp-credentials.json"),
+            "{\"token\":\"super-secret\"}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(h.ws.join("safe")).unwrap();
+        std::fs::write(h.ws.join("safe/ok.rs"), "const HELLO: &str = \"world\";\n").unwrap();
+        std::fs::write(h.ws.join("README.md"), "hello\n").unwrap();
+
+        let blocked = [
+            "grep -r token",
+            "grep -rn token",
+            "grep --recursive token",
+            "grep -r README.md",
+            "grep -r -e token",
+            "rg token",
+            "rg -e token",
+            "find",
+            "find -name '*.json'",
+            "fd token",
+            "tree",
+            "ls -R",
+            "du",
+            "git grep token",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: implicit cwd search must be denied when .cowork/auth exists: {cmd}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: implicit cwd search must be denied in ACP when .cowork/auth exists: {cmd}"
+            );
+        }
+
+        // Explicitly scoping search to a clean subdirectory remains allowed.
+        for ok_cmd in [
+            "grep -r world safe",
+            "grep -r -e world safe",
+            "rg world safe",
+            "find safe -name '*.rs'",
+        ] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "explicitly scoped search in clean dir must pass under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "explicitly scoped search in clean dir must remain approvable: {ok_cmd}"
+                );
+            }
+        }
+    }
+}

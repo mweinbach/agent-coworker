@@ -1620,6 +1620,13 @@ pub struct PersistedDesktopState {
     pub product_analytics: Option<Value>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub composer_drafts: HashMap<String, ComposerDraft>,
+    /// When true, `merge_core_snapshot_into_document` preserves server-added on-disk workspaces
+    /// not yet reconciled into the UI snapshot unless explicitly listed in `removed_workspace_ids`.
+    #[serde(skip)]
+    pub preserve_unlisted_workspaces: bool,
+    /// Workspace IDs explicitly removed by the user in this save delta.
+    #[serde(skip)]
+    pub removed_workspace_ids: Vec<String>,
 }
 
 /// Feature flag metadata matching `src/shared/featureFlags.ts`.
@@ -1859,6 +1866,10 @@ pub struct AppState {
     pub(crate) in_flight_defaults_apply_by_rpc_id: HashMap<u64, (String, u64)>,
     pub(crate) pending_task_artifact_rpcs: HashMap<u64, PendingTaskArtifactRpc>,
     pub(crate) pending_task_questions_rpcs: HashMap<u64, PendingTaskQuestionsRpc>,
+    pub(crate) pending_workspace_list_rpcs: HashMap<u64, (String, u64)>,
+    pub(crate) workspace_list_refresh_queued: HashSet<String>,
+    pub(crate) workspace_mutation_seq: u64,
+    pub(crate) pending_removed_workspace_ids: HashSet<String>,
     pub(crate) pending_task_feedback_rpc: Option<(u64, String, String)>,
     pub(crate) pending_task_create_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
@@ -2010,6 +2021,10 @@ impl Default for AppState {
             in_flight_defaults_apply_by_rpc_id: HashMap::new(),
             pending_task_artifact_rpcs: HashMap::new(),
             pending_task_questions_rpcs: HashMap::new(),
+            pending_workspace_list_rpcs: HashMap::new(),
+            workspace_list_refresh_queued: HashSet::new(),
+            workspace_mutation_seq: 0,
+            pending_removed_workspace_ids: HashSet::new(),
             pending_task_feedback_rpc: None,
             pending_task_create_rpc: None,
             active_file_preview_request_id: None,
@@ -5105,6 +5120,9 @@ impl AppState {
                     }
                     self.pending_task_questions_rpcs
                         .retain(|_, pending| pending.workspace_id != workspace_id);
+                    self.pending_workspace_list_rpcs
+                        .retain(|_, (ws_id, _)| ws_id != &workspace_id);
+                    self.workspace_list_refresh_queued.remove(&workspace_id);
                 }
                 let reconnecting = matches!(state, WsConnectionState::Reconnecting { .. });
                 let attempt = match &state {
@@ -9784,6 +9802,8 @@ impl AppState {
                     false,
                 );
                 let yolo = ws.yolo;
+                self.pending_removed_workspace_ids.remove(&id);
+                self.workspace_mutation_seq = self.workspace_mutation_seq.wrapping_add(1);
                 self.workspaces.push(ws);
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
@@ -9838,6 +9858,12 @@ impl AppState {
                 let before_len = self.workspaces.len();
                 self.workspaces.retain(|w| w.id != workspace_id);
                 let removed = self.workspaces.len() < before_len;
+                self.workspace_mutation_seq = self.workspace_mutation_seq.wrapping_add(1);
+                self.pending_removed_workspace_ids
+                    .insert(workspace_id.clone());
+                self.pending_workspace_list_rpcs
+                    .retain(|_, (ws_id, _)| ws_id != &workspace_id);
+                self.workspace_list_refresh_queued.remove(&workspace_id);
                 self.workspace_order.retain(|id| id != &workspace_id);
                 self.collapsed_workspace_ids.remove(&workspace_id);
                 self.threads.retain(|t| t.workspace_id != workspace_id);
@@ -10142,6 +10168,9 @@ impl AppState {
             .retain(|_, (ws_id, _)| ws_id != workspace_id);
         self.pending_task_artifact_rpcs
             .retain(|_, pending| pending.workspace_id != workspace_id);
+        self.pending_workspace_list_rpcs
+            .retain(|_, (ws_id, _)| ws_id != workspace_id);
+        self.workspace_list_refresh_queued.remove(workspace_id);
         let rt = self
             .workspace_runtime_by_id
             .entry(workspace_id.to_string())
@@ -10160,6 +10189,7 @@ impl AppState {
             offset: None,
         };
         let _ = self.send_ws_typed(workspace_id, "thread/list", &list_params, true);
+        self.request_workspace_list_refresh(workspace_id);
 
         if self.route().view == ViewId::Task
             && self.active_workspace_id.as_deref() == Some(workspace_id)
@@ -10525,6 +10555,15 @@ impl AppState {
             }
             "cowork/workspace/fileChanged" => {
                 self.apply_workspace_file_changed(workspace_id, &params);
+            }
+            "workspace/listChanged" => {
+                self.request_workspace_list_refresh(workspace_id);
+                let list_params = ThreadListParams {
+                    cwd: self.workspace_path(workspace_id),
+                    limit: None,
+                    offset: None,
+                };
+                let _ = self.send_ws_typed(workspace_id, "thread/list", &list_params, true);
             }
             _ => {
                 if method.starts_with("cowork/") {
@@ -12131,6 +12170,19 @@ impl AppState {
                     self.apply_workspace_backup_delta(workspace_id, delta);
                 }
             }
+            "workspace/list" => {
+                let pending = self.pending_workspace_list_rpcs.remove(&request_id);
+                let stale = pending
+                    .as_ref()
+                    .is_some_and(|(_, seq)| *seq != self.workspace_mutation_seq);
+                if !stale && let Some(arr) = payload.get("workspaces").and_then(Value::as_array) {
+                    self.reconcile_workspace_list_response(arr);
+                }
+                let queued = self.workspace_list_refresh_queued.remove(workspace_id);
+                if (stale || queued) && self.workspaces.iter().any(|w| w.id == workspace_id) {
+                    self.request_workspace_list_refresh(workspace_id);
+                }
+            }
             "task/list" => {
                 if let Some(arr) = payload.get("tasks").and_then(Value::as_array) {
                     self.tasks.retain(|task| task.workspace_id != workspace_id);
@@ -12445,6 +12497,10 @@ impl AppState {
             } else {
                 self.pending_defaults_apply_by_workspace.remove(&ws_id);
             }
+        }
+        if method == "workspace/list" {
+            self.pending_workspace_list_rpcs.remove(&request_id);
+            self.workspace_list_refresh_queued.remove(workspace_id);
         }
         if method == "task/questions/resolve" {
             self.pending_task_questions_rpcs.remove(&request_id);
@@ -14955,8 +15011,68 @@ impl AppState {
             feature_flags: self.feature_flag_overrides.clone(),
             product_analytics: self.product_analytics.clone(),
             composer_drafts: self.persistable_composer_drafts(),
+            preserve_unlisted_workspaces: true,
+            removed_workspace_ids: self.pending_removed_workspace_ids.drain().collect(),
         };
         self.send_native(NativeCommand::SavePersistedState(Box::new(snapshot)));
+    }
+
+    fn request_workspace_list_refresh(&mut self, workspace_id: &str) {
+        if self
+            .pending_workspace_list_rpcs
+            .values()
+            .any(|(ws_id, _)| ws_id == workspace_id)
+        {
+            self.workspace_list_refresh_queued
+                .insert(workspace_id.to_owned());
+            return;
+        }
+        let req_id = self.send_ws_request(workspace_id, "workspace/list", json!({}), true);
+        self.pending_workspace_list_rpcs.insert(
+            req_id,
+            (workspace_id.to_owned(), self.workspace_mutation_seq),
+        );
+    }
+
+    fn reconcile_workspace_list_response(&mut self, entries: &[Value]) {
+        let mut existing_ids: HashSet<String> =
+            self.workspaces.iter().map(|w| w.id.clone()).collect();
+        let mut existing_paths: HashSet<String> = self
+            .workspaces
+            .iter()
+            .map(|w| crate::native::persistence::normalize_workspace_path_key(&w.path))
+            .collect();
+        let mut added_ids: Vec<String> = Vec::new();
+
+        for entry in entries {
+            let Some(ws) = crate::native::persistence::core_workspace_from_value(entry) else {
+                continue;
+            };
+            if ws.id.trim().is_empty() || ws.path.trim().is_empty() {
+                continue;
+            }
+            let path_key = crate::native::persistence::normalize_workspace_path_key(&ws.path);
+            if existing_ids.contains(&ws.id) || existing_paths.contains(&path_key) {
+                continue;
+            }
+            existing_ids.insert(ws.id.clone());
+            existing_paths.insert(path_key);
+            if !self.workspace_order.iter().any(|id| id == &ws.id) {
+                self.workspace_order.push(ws.id.clone());
+            }
+            added_ids.push(ws.id.clone());
+            self.workspaces.push(ws);
+        }
+
+        if !added_ids.is_empty() {
+            if self.active_workspace_id.is_none() {
+                self.active_workspace_id = added_ids.first().cloned();
+            }
+            self.persist_state();
+            for ws_id in added_ids {
+                self.ensure_workspace_server_started(&ws_id);
+            }
+        }
     }
 
     fn upsert_task_summary(&mut self, summary: TaskSummaryView) {
@@ -29411,5 +29527,222 @@ mod tests {
             key_5, key_4,
             "draft after explicit cancel must get a fresh idempotencyKey"
         );
+    }
+
+    #[test]
+    fn workspace_list_changed_reconciles_server_added_worktree_and_preserves_across_save() {
+        let mut state = AppState::default();
+        let ws_1 = WorkspaceRecord::new("ws-1", "Main Repo", "/tmp/main-repo", 1_700_000_000_000);
+        state.workspaces.push(ws_1.clone());
+        state.workspace_order.push("ws-1".to_string());
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-1".to_string(),
+            state: WsConnectionState::Connected,
+        });
+        state.services.emitted_ws_commands.clear();
+        state.services.emitted_native_commands.clear();
+
+        // Simulate the server registering a managed worktree project in `state.json` before
+        // the desktop reconciles `workspace/listChanged`.
+        let on_disk_doc = json!({
+            "version": 2,
+            "workspaces": [
+                {
+                    "id": "ws-1",
+                    "name": "Main Repo",
+                    "path": "/tmp/main-repo",
+                    "workspaceKind": "project",
+                    "createdAt": "2023-11-14T22:13:20.000Z",
+                    "lastOpenedAt": "2023-11-14T22:13:20.000Z",
+                    "defaultEnableMcp": true,
+                    "yolo": false
+                },
+                {
+                    "id": "project-wt1",
+                    "name": "Feature Worktree",
+                    "path": "/tmp/main-repo-wt1",
+                    "workspaceKind": "project",
+                    "createdAt": "2023-11-14T22:14:00.000Z",
+                    "lastOpenedAt": "2023-11-14T22:14:00.000Z",
+                    "defaultEnableMcp": true,
+                    "yolo": false
+                }
+            ],
+            "threads": [
+                {
+                    "id": "th-wt1",
+                    "workspaceId": "project-wt1",
+                    "title": "Worktree thread",
+                    "status": "active",
+                    "sessionId": "th-wt1",
+                    "createdAt": "2023-11-14T22:14:00.000Z",
+                    "lastMessageAt": "2023-11-14T22:14:00.000Z"
+                }
+            ]
+        });
+
+        // A desktop save before `workspace/list` returns must preserve the server-added project and its thread.
+        state.persist_state_for_shutdown();
+        let pre_sync_snapshot = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                NativeCommand::SavePersistedState(snap) => Some(snap.as_ref().clone()),
+                _ => None,
+            })
+            .expect("expected SavePersistedState");
+        let saved_before_sync = crate::native::persistence::merge_core_snapshot_into_document(
+            on_disk_doc.clone(),
+            &pre_sync_snapshot,
+        );
+        let ws_ids_before_sync: Vec<&str> = saved_before_sync["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|w| w["id"].as_str())
+            .collect();
+        assert!(
+            ws_ids_before_sync.contains(&"project-wt1"),
+            "desktop save must preserve server-added worktree workspace before reconciliation: {ws_ids_before_sync:?}"
+        );
+        assert!(
+            saved_before_sync["threads"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["id"] == "th-wt1"),
+            "desktop save must preserve threads anchored to server-added worktree workspace"
+        );
+
+        // Consuming `workspace/listChanged` fetches `workspace/list` and reconciles `project-wt1`.
+        state.services.emitted_ws_commands.clear();
+        state.services.emitted_native_commands.clear();
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "workspace/listChanged".to_string(),
+            params: json!({}),
+        });
+        let list_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "workspace/list" => Some(*request_id),
+                _ => None,
+            })
+            .expect("workspace/listChanged must request workspace/list");
+
+        state.apply_ws_response(
+            "ws-1",
+            list_req_id,
+            "workspace/list",
+            Ok(json!({
+                "workspaces": on_disk_doc["workspaces"],
+                "activeWorkspaceId": "ws-1"
+            })),
+        );
+        assert!(
+            state.workspaces.iter().any(|w| w.id == "project-wt1"),
+            "reconciled workspace/list must add project-wt1 to sidebar workspaces"
+        );
+        assert!(state.workspace_order.iter().any(|id| id == "project-wt1"));
+        assert!(state.services.emitted_native_commands.iter().any(|cmd| {
+            matches!(
+                cmd,
+                NativeCommand::StartWorkspaceServer { workspace_id, path, .. }
+                    if workspace_id == "project-wt1" && path == "/tmp/main-repo-wt1"
+            )
+        }));
+
+        // Echoed `workspace/listChanged` with identical workspace list must not persist again (no loop).
+        state.services.emitted_ws_commands.clear();
+        state.services.emitted_native_commands.clear();
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-1".to_string(),
+            method: "workspace/listChanged".to_string(),
+            params: json!({}),
+        });
+        let echo_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "workspace/list" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected echo workspace/list");
+        state.apply_ws_response(
+            "ws-1",
+            echo_req_id,
+            "workspace/list",
+            Ok(json!({
+                "workspaces": on_disk_doc["workspaces"],
+                "activeWorkspaceId": "ws-1"
+            })),
+        );
+        assert_eq!(state.workspaces.len(), 2);
+        assert!(
+            !state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|cmd| matches!(cmd, NativeCommand::SavePersistedState(_))),
+            "identical workspace/list echo must not re-save state.json"
+        );
+
+        // Explicit `RemoveWorkspace` still removes the workspace while preserving unrelated server-added workspaces.
+        state.services.emitted_native_commands.clear();
+        state.dispatch(Action::Native(NativeAction::RemoveWorkspace(
+            "project-wt1".to_string(),
+        )));
+        let removal_snapshot = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                NativeCommand::SavePersistedState(snap) => Some(snap.as_ref().clone()),
+                _ => None,
+            })
+            .expect("expected SavePersistedState after RemoveWorkspace");
+        assert!(
+            removal_snapshot
+                .removed_workspace_ids
+                .iter()
+                .any(|id| id == "project-wt1")
+        );
+        let mut disk_with_wt2 = on_disk_doc.clone();
+        disk_with_wt2["workspaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": "project-wt2",
+                "name": "Second Worktree",
+                "path": "/tmp/main-repo-wt2",
+                "workspaceKind": "project",
+                "createdAt": "2023-11-14T22:15:00.000Z",
+                "lastOpenedAt": "2023-11-14T22:15:00.000Z",
+                "defaultEnableMcp": true,
+                "yolo": false
+            }));
+        let after_remove_doc = crate::native::persistence::merge_core_snapshot_into_document(
+            disk_with_wt2,
+            &removal_snapshot,
+        );
+        let ws_ids_after_remove: Vec<&str> = after_remove_doc["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|w| w["id"].as_str())
+            .collect();
+        assert!(!ws_ids_after_remove.contains(&"project-wt1"));
+        assert!(ws_ids_after_remove.contains(&"project-wt2"));
     }
 }

@@ -895,21 +895,28 @@ impl NativeWorkerContext {
         if let Some(current_analytics) = self.product_analytics_value() {
             snapshot_to_save.product_analytics = Some(current_analytics);
         }
-        if let Err(err) = self
+        let mut runtime_snapshot = snapshot.clone();
+        match self
             .persistence
             .merge_and_save_core_snapshot(&snapshot_to_save)
         {
-            let meta = json!({ "error": err.to_string() });
-            self.logger.write(
-                LocalLogFileName::Server,
-                LocalLogLevel::Error,
-                "persistence",
-                "failed to persist desktop snapshot",
-                Some(&meta),
-            );
+            Ok(saved_doc) => {
+                let saved_core = persistence::core_state_from_document(&saved_doc);
+                runtime_snapshot.workspaces = saved_core.workspaces;
+                runtime_snapshot.workspace_order = saved_core.workspace_order;
+            }
+            Err(err) => {
+                let meta = json!({ "error": err.to_string() });
+                self.logger.write(
+                    LocalLogFileName::Server,
+                    LocalLogLevel::Error,
+                    "persistence",
+                    "failed to persist desktop snapshot",
+                    Some(&meta),
+                );
+            }
         }
 
-        let mut runtime_snapshot = snapshot.clone();
         runtime_snapshot.feature_flags =
             resolve_effective_feature_flags(&snapshot.feature_flags, env, self.is_packaged);
         self.sync_runtime_caches_with_env(&runtime_snapshot, env);

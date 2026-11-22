@@ -929,6 +929,25 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
     out
 }
 
+/// Normalizes a workspace path into a comparison key so duplicate entries across trailing
+/// slashes or symlinked temp roots (e.g. `/tmp` vs `/private/tmp`) are recognized cleanly.
+pub(crate) fn normalize_workspace_path_key(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let candidate = std::fs::canonicalize(trimmed)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| trimmed.to_owned());
+    let mut normalized = candidate.replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if cfg!(windows) {
+        normalized.to_ascii_lowercase()
+    } else {
+        normalized
+    }
+}
+
 /// Merges a core `PersistedDesktopState` snapshot into an existing `state.json` document.
 pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDesktopState) -> Value {
     let mut doc = match base {
@@ -939,11 +958,13 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         },
     };
 
-    let existing_by_id: HashMap<String, Map<String, Value>> = doc
+    let existing_workspaces_array = doc
         .get("workspaces")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+        .cloned()
+        .unwrap_or_default();
+    let existing_by_id: HashMap<String, Map<String, Value>> = existing_workspaces_array
+        .iter()
         .filter_map(|item| {
             let map = item.as_object()?;
             let id = map.get("id").and_then(Value::as_str)?.to_string();
@@ -951,7 +972,7 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         })
         .collect();
 
-    let merged_workspaces: Vec<Value> = snapshot
+    let mut merged_workspaces: Vec<Value> = snapshot
         .workspaces
         .iter()
         .map(|ws| {
@@ -1027,6 +1048,47 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
             Value::Object(map)
         })
         .collect();
+
+    let mut merged_workspace_ids: HashSet<String> =
+        snapshot.workspaces.iter().map(|ws| ws.id.clone()).collect();
+    let mut merged_workspace_paths: HashSet<String> = snapshot
+        .workspaces
+        .iter()
+        .map(|ws| normalize_workspace_path_key(&ws.path))
+        .collect();
+    let mut preserved_workspace_ids: HashSet<String> = HashSet::new();
+    let mut preserved_workspace_order: Vec<String> = Vec::new();
+
+    if snapshot.preserve_unlisted_workspaces {
+        let removed_ids: HashSet<&str> = snapshot
+            .removed_workspace_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for existing in existing_workspaces_array {
+            let Some(map) = existing.as_object() else {
+                continue;
+            };
+            let Some(id) = safe_id_from_value(map.get("id")) else {
+                continue;
+            };
+            let Some(path) = map.get("path").and_then(Value::as_str).map(str::trim) else {
+                continue;
+            };
+            if path.is_empty() || removed_ids.contains(id.as_str()) {
+                continue;
+            }
+            let path_key = normalize_workspace_path_key(path);
+            if merged_workspace_ids.contains(&id) || merged_workspace_paths.contains(&path_key) {
+                continue;
+            }
+            merged_workspace_ids.insert(id.clone());
+            merged_workspace_paths.insert(path_key);
+            preserved_workspace_ids.insert(id.clone());
+            preserved_workspace_order.push(id);
+            merged_workspaces.push(Value::Object(map.clone()));
+        }
+    }
 
     doc.insert("workspaces".to_string(), Value::Array(merged_workspaces));
 
@@ -1132,7 +1194,8 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         })
         .collect();
 
-    // Preserve Electron/server-owned task threads still anchored to an existing workspace.
+    // Preserve Electron/server-owned task threads still anchored to an existing workspace,
+    // as well as threads belonging to server-added workspaces preserved above.
     for existing in existing_threads_array {
         let Some(map) = existing.as_object() else {
             continue;
@@ -1145,24 +1208,31 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
         };
         let is_task_thread =
             safe_id_from_value(map.get("taskId").or_else(|| map.get("sourceTaskId"))).is_some();
-        if is_task_thread
-            && snapshot_workspace_ids.contains(ws_id.as_str())
+        let preserve_for_unlisted_workspace = preserved_workspace_ids.contains(&ws_id)
+            && map.get("draft") != Some(&Value::Bool(true));
+        if ((is_task_thread && merged_workspace_ids.contains(&ws_id))
+            || preserve_for_unlisted_workspace)
             && seen_thread_ids.insert(id)
         {
             merged_threads.push(Value::Object(map.clone()));
         }
     }
     doc.insert("threads".to_string(), Value::Array(merged_threads));
-    doc.insert(
-        "workspaceOrder".to_string(),
-        Value::Array(
-            snapshot
-                .workspace_order
-                .iter()
-                .map(|id| Value::String(id.clone()))
-                .collect(),
-        ),
-    );
+    let mut merged_order: Vec<Value> = snapshot
+        .workspace_order
+        .iter()
+        .map(|id| Value::String(id.clone()))
+        .collect();
+    for id in preserved_workspace_order {
+        if !snapshot
+            .workspace_order
+            .iter()
+            .any(|existing| existing == &id)
+        {
+            merged_order.push(Value::String(id));
+        }
+    }
+    doc.insert("workspaceOrder".to_string(), Value::Array(merged_order));
     doc.insert(
         "collapsedWorkspaceIds".to_string(),
         Value::Array(
@@ -2363,7 +2433,7 @@ fn sync_workspace_defaults_to_doc(map: &mut Map<String, Value>, defaults: &Value
     }
 }
 
-fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
+pub(crate) fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord> {
     let map = value.as_object()?;
     let id = map.get("id").and_then(Value::as_str)?.to_string();
     let name = map.get("name").and_then(Value::as_str)?.to_string();

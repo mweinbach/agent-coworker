@@ -1,7 +1,10 @@
 //! Tasks & Workflow Runs views (`TaskView`, `NewTaskLanding`, `TaskQuestionsCard`,
 //! `ArtifactReviewCard`, `TaskContextSidebar`, `WorkflowRunsPanel`).
 
-use rune::{Cx, El, ScrollSpec, col, el, icon, row, spacer, text};
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use rune::{Cx, El, ScrollSpec, TextEdit, col, el, icon, row, spacer, text};
 use rune_kit::shell::{TabItem, TabOrientation, TabStrip};
 use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Kit, TextInput};
 use serde_json::Value;
@@ -12,6 +15,8 @@ use crate::state::{AppState, TaskArtifactView, TaskRecordView, TaskSummaryView, 
 use crate::theme::ThemeTokens;
 
 use super::{helpers, icons};
+
+static EMPTY_TASK_QUESTION_REPLY_EDIT: LazyLock<TextEdit> = LazyLock::new(TextEdit::default);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskQuestionOption {
@@ -820,8 +825,9 @@ fn build_task_questions_card(
         );
     }
 
+    let task_id_ref = task.summary.id.as_str();
     let mut card = col()
-        .key("task-questions-card")
+        .key(format!("task-questions-card-{task_id_ref}"))
         .w_full()
         .padding(14.0)
         .radius(10.0)
@@ -830,7 +836,6 @@ fn build_task_questions_card(
         .gap(12.0)
         .child(header);
 
-    let task_id_ref = task.summary.id.as_str();
     for q in questions {
         let q_answer_key = task_question_answer_key(task_id_ref, &q.id);
         let selected_opt = s
@@ -839,7 +844,7 @@ fn build_task_questions_card(
             .get(&q_answer_key)
             .map(String::as_str);
         let mut q_col = col()
-            .key(format!("task-q-{}", q.id))
+            .key(format!("task-q-{task_id_ref}-{}", q.id))
             .w_full()
             .padding(10.0)
             .radius(8.0)
@@ -895,70 +900,114 @@ fn build_task_questions_card(
             }
             q_col = q_col.child(opts_row);
         }
+
+        let reply_edit = s
+            .shell_ui
+            .task_question_reply_edits
+            .get(&q_answer_key)
+            .unwrap_or(&EMPTY_TASK_QUESTION_REPLY_EDIT);
+        let reply_key = q_answer_key.clone();
+        let placeholder = if q.options.is_empty() {
+            "Write your reply..."
+        } else if selected_opt.is_some() {
+            "Optional written reply (deselect option above to send written reply)..."
+        } else {
+            "Or write a custom reply..."
+        };
+        let reply_label = if q.header.trim().is_empty() {
+            "Task question reply".to_owned()
+        } else {
+            format!("Reply for {}", q.header)
+        };
+        q_col = q_col.child(
+            el().key(format!("task-q-reply-{task_id_ref}-{}", q.id))
+                .w_full()
+                .child(
+                    TextInput::new(reply_edit)
+                        .placeholder(placeholder)
+                        .label(reply_label)
+                        .width(None)
+                        .on_edit(move |s: &mut AppState| {
+                            s.shell_ui
+                                .task_question_reply_edits
+                                .entry(reply_key.clone())
+                                .or_insert_with(|| TextEdit::new(""))
+                        })
+                        .build(k),
+                ),
+        );
         card = card.child(q_col);
     }
-
-    let reply_input = TextInput::new(&s.shell_ui.task_question_reply_edit)
-        .placeholder("Optional written reply (used when no option is selected)...")
-        .label("Task question reply")
-        .width(None)
-        .on_edit(|s: &mut AppState| &mut s.shell_ui.task_question_reply_edit)
-        .build(k);
 
     let ws_id = task.summary.workspace_id.clone();
     let task_id = task.summary.id.clone();
     let rev = task.summary.revision;
     let q_ids: Vec<String> = questions.iter().map(|q| q.id.clone()).collect();
-    let can_submit = !resolve_task_question_answers(
-        &task_id,
-        &q_ids,
-        &s.shell_ui.task_question_answers,
-        &s.shell_ui.task_question_reply_edit.text,
-    )
-    .is_empty();
+    let submitting = s
+        .pending_task_questions_rpcs
+        .values()
+        .any(|pending| pending.workspace_id == ws_id && pending.task_id == task_id);
+    let can_submit = !submitting
+        && !resolve_task_question_answers(
+            &task_id,
+            &q_ids,
+            &s.shell_ui.task_question_answers,
+            &s.shell_ui.task_question_reply_edits,
+        )
+        .is_empty();
 
-    card.child(reply_input).child(
+    card.child(
         row().w_full().child(spacer()).child(
-            Button::new("Submit answers")
-                .variant(ButtonVariant::Contrast)
-                .control_size(ControlSize::Small)
-                .disabled(!can_submit)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    let answers = resolve_task_question_answers(
-                        &task_id,
-                        &q_ids,
-                        &s.shell_ui.task_question_answers,
-                        &s.shell_ui.task_question_reply_edit.text,
-                    );
-                    if answers.is_empty() {
-                        return;
-                    }
-                    // Keep selections and draft reply until server updates `active_task` so transient failures preserve input.
-                    s.dispatch(Action::Task(TaskAction::ResolveQuestions {
-                        workspace_id: ws_id.clone(),
-                        task_id: task_id.clone(),
-                        expected_revision: rev,
-                        answers,
-                    }));
-                })
-                .build(k),
+            Button::new(if submitting {
+                "Submitting..."
+            } else {
+                "Submit answers"
+            })
+            .variant(ButtonVariant::Contrast)
+            .control_size(ControlSize::Small)
+            .disabled(!can_submit)
+            .on_press_tx(move |s: &mut AppState, _| {
+                if s.pending_task_questions_rpcs
+                    .values()
+                    .any(|pending| pending.workspace_id == ws_id && pending.task_id == task_id)
+                {
+                    return;
+                }
+                let answers = resolve_task_question_answers(
+                    &task_id,
+                    &q_ids,
+                    &s.shell_ui.task_question_answers,
+                    &s.shell_ui.task_question_reply_edits,
+                );
+                if answers.is_empty() {
+                    return;
+                }
+                // Keep selections and draft replies until the server acknowledges the RPC so transient failures preserve input.
+                s.dispatch(Action::Task(TaskAction::ResolveQuestions {
+                    workspace_id: ws_id.clone(),
+                    task_id: task_id.clone(),
+                    expected_revision: rev,
+                    answers,
+                }));
+            })
+            .build(k),
         ),
     )
 }
 
-fn task_question_answer_key(task_id: &str, question_id: &str) -> String {
-    format!("{task_id}:{question_id}")
+pub(crate) fn task_question_answer_key(task_id: &str, question_id: &str) -> (String, String) {
+    (task_id.to_owned(), question_id.to_owned())
 }
 
 /// Builds `task/questions/resolve` payloads containing only questions the user explicitly answered
-/// (via option selection or written reply), enforcing the server's 1..=3 limit and `optionId` XOR `text`.
+/// (via per-question option selection or per-question written reply), enforcing the server's 1..=3
+/// limit and `optionId` XOR `text`.
 fn resolve_task_question_answers(
     task_id: &str,
     q_ids: &[String],
-    selected: &std::collections::HashMap<String, String>,
-    reply_text: &str,
+    selected: &HashMap<(String, String), String>,
+    reply_edits: &HashMap<(String, String), TextEdit>,
 ) -> Vec<TaskQuestionAnswerParam> {
-    let trimmed = reply_text.trim();
     let mut answers = Vec::new();
     for qid in q_ids {
         if answers.len() >= 3 {
@@ -971,7 +1020,11 @@ fn resolve_task_question_answers(
                 option_id: Some(chosen.clone()),
                 text: None,
             });
-        } else if !trimmed.is_empty() {
+        } else if let Some(trimmed) = reply_edits
+            .get(&key)
+            .map(|edit| edit.text.trim())
+            .filter(|text| !text.is_empty())
+        {
             answers.push(TaskQuestionAnswerParam {
                 question_id: qid.clone(),
                 option_id: None,
@@ -1861,11 +1914,20 @@ mod tests {
 
     #[test]
     fn resolve_task_question_answers_enforces_option_or_text_xor_and_omits_unanswered() {
-        let mut selected = std::collections::HashMap::new();
+        let mut selected = HashMap::new();
         selected.insert(task_question_answer_key("task-1", "q-1"), "v2".to_owned());
         selected.insert(
             task_question_answer_key("other-task", "q-2"),
             "wrong-task".to_owned(),
+        );
+        let mut replies = HashMap::new();
+        replies.insert(
+            task_question_answer_key("task-1", "q-1"),
+            TextEdit::new("   "),
+        );
+        replies.insert(
+            task_question_answer_key("other-task", "q-2"),
+            TextEdit::new("Previous task reply"),
         );
 
         let q_ids = vec![
@@ -1875,35 +1937,43 @@ mod tests {
             "q-4".to_owned(),
         ];
 
-        // With no written reply, ONLY q-1 (explicitly chosen by the user) is submitted;
-        // unanswered questions q-2..q-4 must be omitted rather than auto-filled with defaults.
-        let explicit_only = resolve_task_question_answers("task-1", &q_ids, &selected, "   ");
+        // With no written reply on task-1, ONLY q-1 (explicitly chosen by the user) is submitted;
+        // other-task's reply must never bleed into task-1, and q-2..q-4 must be omitted.
+        let explicit_only = resolve_task_question_answers("task-1", &q_ids, &selected, &replies);
         assert_eq!(explicit_only.len(), 1);
         assert_eq!(explicit_only[0].question_id, "q-1");
         assert_eq!(explicit_only[0].option_id.as_deref(), Some("v2"));
         assert_eq!(explicit_only[0].text, None);
 
-        // With no selections and no reply text, nothing is submitted.
+        // With no selections and no reply text for task-1, nothing is submitted even if another task has drafts.
         assert!(
-            resolve_task_question_answers("task-1", &q_ids, &std::collections::HashMap::new(), "")
-                .is_empty()
+            resolve_task_question_answers("task-1", &q_ids, &HashMap::new(), &replies).is_empty()
         );
 
         // Answering only q-4 (past index 2) must still submit q-4 rather than truncating before filtering.
-        let mut only_fourth = std::collections::HashMap::new();
+        let mut only_fourth = HashMap::new();
         only_fourth.insert(
             task_question_answer_key("task-1", "q-4"),
             "opt-4".to_owned(),
         );
-        let fourth_answers = resolve_task_question_answers("task-1", &q_ids, &only_fourth, "");
+        let fourth_answers =
+            resolve_task_question_answers("task-1", &q_ids, &only_fourth, &HashMap::new());
         assert_eq!(fourth_answers.len(), 1);
         assert_eq!(fourth_answers[0].question_id, "q-4");
         assert_eq!(fourth_answers[0].option_id.as_deref(), Some("opt-4"));
 
-        // q-1 has an explicit choice alongside freeform text: must send optionId only (not both).
-        // q-2 and q-3 receive the typed reply; q-4 is past the server's 3-entry limit.
-        let answers = resolve_task_question_answers("task-1", &q_ids, &selected, "  Use custom  ");
-        assert_eq!(answers.len(), 3);
+        // q-1 has both an option choice and freeform text -> sends optionId only (XOR).
+        // q-2 has its own written reply -> sends text for q-2 ONLY; unselected q-3 stays omitted.
+        replies.insert(
+            task_question_answer_key("task-1", "q-1"),
+            TextEdit::new("Ignored because option selected"),
+        );
+        replies.insert(
+            task_question_answer_key("task-1", "q-2"),
+            TextEdit::new("  Use custom  "),
+        );
+        let answers = resolve_task_question_answers("task-1", &q_ids, &selected, &replies);
+        assert_eq!(answers.len(), 2);
         assert!(
             answers
                 .iter()
@@ -1917,6 +1987,20 @@ mod tests {
         assert_eq!(answers[1].question_id, "q-2");
         assert_eq!(answers[1].option_id, None);
         assert_eq!(answers[1].text.as_deref(), Some("Use custom"));
+
+        // Adding written replies for q-3 and q-4 hits the server's 3-entry cap cleanly.
+        replies.insert(
+            task_question_answer_key("task-1", "q-3"),
+            TextEdit::new("Third answer"),
+        );
+        replies.insert(
+            task_question_answer_key("task-1", "q-4"),
+            TextEdit::new("Fourth answer"),
+        );
+        let capped = resolve_task_question_answers("task-1", &q_ids, &selected, &replies);
+        assert_eq!(capped.len(), 3);
+        assert_eq!(capped[2].question_id, "q-3");
+        assert_eq!(capped[2].text.as_deref(), Some("Third answer"));
     }
 
     #[test]

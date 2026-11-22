@@ -252,6 +252,13 @@ pub(crate) struct PendingTaskArtifactRpc {
     pub version_id: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingTaskQuestionsRpc {
+    pub workspace_id: String,
+    pub task_id: String,
+    pub question_ids: Vec<String>,
+}
+
 /// Workspace record shown in the sidebar and connected to a local `cowork-server`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1851,6 +1858,7 @@ pub struct AppState {
     pub(crate) pending_defaults_apply_by_workspace: HashMap<String, PendingWorkspaceDefaultsApply>,
     pub(crate) in_flight_defaults_apply_by_rpc_id: HashMap<u64, (String, u64)>,
     pub(crate) pending_task_artifact_rpcs: HashMap<u64, PendingTaskArtifactRpc>,
+    pub(crate) pending_task_questions_rpcs: HashMap<u64, PendingTaskQuestionsRpc>,
     pub(crate) pending_task_feedback_rpc: Option<(u64, String, String)>,
     pub(crate) pending_task_create_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
@@ -2001,6 +2009,7 @@ impl Default for AppState {
             pending_defaults_apply_by_workspace: HashMap::new(),
             in_flight_defaults_apply_by_rpc_id: HashMap::new(),
             pending_task_artifact_rpcs: HashMap::new(),
+            pending_task_questions_rpcs: HashMap::new(),
             pending_task_feedback_rpc: None,
             pending_task_create_rpc: None,
             active_file_preview_request_id: None,
@@ -5094,6 +5103,8 @@ impl AppState {
                         self.pending_task_create_rpc = None;
                         self.shell_ui.task_create_submitting = false;
                     }
+                    self.pending_task_questions_rpcs
+                        .retain(|_, pending| pending.workspace_id != workspace_id);
                 }
                 let reconnecting = matches!(state, WsConnectionState::Reconnecting { .. });
                 let attempt = match &state {
@@ -6388,12 +6399,25 @@ impl AppState {
                 expected_revision,
                 answers,
             } => {
+                let question_ids: Vec<String> =
+                    answers.iter().map(|a| a.question_id.clone()).collect();
                 let params = json!({
                     "taskId": task_id,
                     "expectedRevision": expected_revision,
                     "answers": answers,
                 });
-                self.send_task_ws(&workspace_id, "task/questions/resolve", params);
+                if let Some(req_id) =
+                    self.send_task_ws(&workspace_id, "task/questions/resolve", params)
+                {
+                    self.pending_task_questions_rpcs.insert(
+                        req_id,
+                        PendingTaskQuestionsRpc {
+                            workspace_id,
+                            task_id,
+                            question_ids,
+                        },
+                    );
+                }
             }
             TaskAction::ReadArtifact {
                 workspace_id,
@@ -9834,6 +9858,14 @@ impl AppState {
                     .retain(|_, (ws_id, _)| ws_id != &workspace_id);
                 self.pending_task_artifact_rpcs
                     .retain(|_, pending| pending.workspace_id != workspace_id);
+                self.pending_task_questions_rpcs
+                    .retain(|_, pending| pending.workspace_id != workspace_id);
+                self.shell_ui
+                    .task_question_answers
+                    .retain(|(tid, _), _| !removed_task_ids.iter().any(|id| id == tid));
+                self.shell_ui
+                    .task_question_reply_edits
+                    .retain(|(tid, _), _| !removed_task_ids.iter().any(|id| id == tid));
                 if self
                     .pending_task_feedback_rpc
                     .as_ref()
@@ -12123,6 +12155,15 @@ impl AppState {
                         self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
                     }
                 }
+                if method == "task/questions/resolve"
+                    && let Some(pending) = self.pending_task_questions_rpcs.remove(&request_id)
+                {
+                    for qid in &pending.question_ids {
+                        let key = (pending.task_id.clone(), qid.clone());
+                        self.shell_ui.task_question_answers.remove(&key);
+                        self.shell_ui.task_question_reply_edits.remove(&key);
+                    }
+                }
                 if method == "task/requestChanges"
                     && self
                         .pending_task_feedback_rpc
@@ -12388,6 +12429,9 @@ impl AppState {
             } else {
                 self.pending_defaults_apply_by_workspace.remove(&ws_id);
             }
+        }
+        if method == "task/questions/resolve" {
+            self.pending_task_questions_rpcs.remove(&request_id);
         }
         if method == "task/requestChanges"
             && self
@@ -14920,6 +14964,25 @@ impl AppState {
         let Some(mut task) = parse_task_record(val, workspace_id) else {
             return;
         };
+        if val
+            .get("questions")
+            .is_some_and(|q| q.is_array() || q.is_object())
+            && !self.pending_task_questions_rpcs.values().any(|pending| {
+                pending.workspace_id == workspace_id && pending.task_id == task.summary.id
+            })
+        {
+            let open_qids: HashSet<String> =
+                crate::views::shell::tasks::extract_task_questions(&task.questions)
+                    .into_iter()
+                    .map(|q| q.id)
+                    .collect();
+            self.shell_ui
+                .task_question_answers
+                .retain(|(tid, qid), _| tid != &task.summary.id || open_qids.contains(qid));
+            self.shell_ui
+                .task_question_reply_edits
+                .retain(|(tid, qid), _| tid != &task.summary.id || open_qids.contains(qid));
+        }
         let mut stale_artifact_ids_to_refresh: Vec<String> = Vec::new();
         if let Some(existing) = self
             .active_task
@@ -29027,5 +29090,181 @@ mod tests {
         assert!(!state.shell_ui.task_feedback_open);
         assert!(!state.shell_ui.task_feedback_submitting);
         assert!(state.shell_ui.task_feedback_edit.text.is_empty());
+    }
+
+    #[test]
+    fn task_resolve_questions_retains_drafts_on_failure_and_clears_acknowledged_on_success() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        let q1_key = ("task-1".to_string(), "q-1".to_string());
+        let q2_key = ("task-1".to_string(), "q-2".to_string());
+        let q3_key = ("task-1".to_string(), "q-3".to_string());
+        let other_task_key = ("task-2".to_string(), "q-1".to_string());
+
+        state
+            .shell_ui
+            .task_question_answers
+            .insert(q1_key.clone(), "opt-a".to_string());
+        state
+            .shell_ui
+            .task_question_reply_edits
+            .insert(q2_key.clone(), TextEdit::new("Use staging endpoint"));
+        state
+            .shell_ui
+            .task_question_reply_edits
+            .insert(q3_key.clone(), TextEdit::new("Unsent draft for q3"));
+        state
+            .shell_ui
+            .task_question_reply_edits
+            .insert(other_task_key.clone(), TextEdit::new("Other task draft"));
+
+        let answers = vec![
+            crate::actions::TaskQuestionAnswerParam {
+                question_id: "q-1".to_string(),
+                option_id: Some("opt-a".to_string()),
+                text: None,
+            },
+            crate::actions::TaskQuestionAnswerParam {
+                question_id: "q-2".to_string(),
+                option_id: None,
+                text: Some("Use staging endpoint".to_string()),
+            },
+        ];
+
+        state.dispatch(Action::Task(TaskAction::ResolveQuestions {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_revision: 2,
+            answers: answers.clone(),
+        }));
+        let req_1 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/questions/resolve" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/questions/resolve request");
+        assert!(state.pending_task_questions_rpcs.contains_key(&req_1));
+
+        // RPC failure must unlock submission while retaining all drafts for retry.
+        state.apply_ws_response(
+            "ws-1",
+            req_1,
+            "task/questions/resolve",
+            Err(WsRpcError {
+                code: -32000,
+                message: "Revision conflict".to_string(),
+                data: None,
+            }),
+        );
+        assert!(!state.pending_task_questions_rpcs.contains_key(&req_1));
+        assert_eq!(
+            state
+                .shell_ui
+                .task_question_answers
+                .get(&q1_key)
+                .map(String::as_str),
+            Some("opt-a")
+        );
+        assert_eq!(
+            state
+                .shell_ui
+                .task_question_reply_edits
+                .get(&q2_key)
+                .map(|e| e.text.as_str()),
+            Some("Use staging endpoint")
+        );
+
+        // Disconnecting mid-flight must also unlock submission while preserving drafts.
+        state.dispatch(Action::Task(TaskAction::ResolveQuestions {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_revision: 3,
+            answers: answers.clone(),
+        }));
+        assert_eq!(state.pending_task_questions_rpcs.len(), 1);
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-1".to_string(),
+            state: WsConnectionState::Reconnecting {
+                attempt: 1,
+                max_attempts: 5,
+                delay_ms: 1000,
+                reason: "dropped".to_string(),
+            },
+        });
+        assert!(state.pending_task_questions_rpcs.is_empty());
+        assert!(
+            state
+                .shell_ui
+                .task_question_reply_edits
+                .contains_key(&q2_key)
+        );
+
+        // Successful retry clears ONLY the acknowledged answers/replies while keeping open q-3 and task-2 drafts.
+        state.dispatch(Action::Task(TaskAction::ResolveQuestions {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_revision: 3,
+            answers,
+        }));
+        let req_3 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/questions/resolve" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected retry task/questions/resolve request");
+        state.apply_ws_response(
+            "ws-1",
+            req_3,
+            "task/questions/resolve",
+            Ok(json!({
+                "task": {
+                    "id": "task-1",
+                    "title": "Task 1",
+                    "status": "needs_input",
+                    "revision": 4,
+                    "questions": [{ "id": "q-3", "prompt": "Still open?" }]
+                }
+            })),
+        );
+        assert!(state.pending_task_questions_rpcs.is_empty());
+        assert!(!state.shell_ui.task_question_answers.contains_key(&q1_key));
+        assert!(
+            !state
+                .shell_ui
+                .task_question_reply_edits
+                .contains_key(&q2_key)
+        );
+        assert_eq!(
+            state
+                .shell_ui
+                .task_question_reply_edits
+                .get(&q3_key)
+                .map(|e| e.text.as_str()),
+            Some("Unsent draft for q3")
+        );
+        assert_eq!(
+            state
+                .shell_ui
+                .task_question_reply_edits
+                .get(&other_task_key)
+                .map(|e| e.text.as_str()),
+            Some("Other task draft")
+        );
     }
 }

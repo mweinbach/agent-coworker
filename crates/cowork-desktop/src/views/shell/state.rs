@@ -67,8 +67,8 @@ pub struct ShellUiState {
     pub task_feedback_submitting: bool,
     pub task_feedback_edit: TextEdit,
     pub task_question_dialog_open: bool,
-    pub task_question_reply_edit: TextEdit,
-    pub task_question_answers: HashMap<String, String>,
+    pub task_question_reply_edits: HashMap<(String, String), TextEdit>,
+    pub task_question_answers: HashMap<(String, String), String>,
     pub task_work_graph_collapsed: bool,
     pub task_conversation_open: bool,
     pub preview_maximized: bool,
@@ -140,7 +140,7 @@ impl Default for ShellUiState {
             task_feedback_submitting: false,
             task_feedback_edit: TextEdit::new(""),
             task_question_dialog_open: false,
-            task_question_reply_edit: TextEdit::new(""),
+            task_question_reply_edits: HashMap::new(),
             task_question_answers: HashMap::new(),
             task_work_graph_collapsed: false,
             task_conversation_open: false,
@@ -479,7 +479,10 @@ fn has_blocking_overlay_or_focused_input(s: &AppState) -> bool {
         || s.shell_ui.task_create_title_edit.focused
         || s.shell_ui.task_create_objective_edit.focused
         || s.shell_ui.task_feedback_edit.focused
-        || s.shell_ui.task_question_reply_edit.focused
+        || s.shell_ui
+            .task_question_reply_edits
+            .values()
+            .any(|e| e.focused)
         || s.chat_ui.canvas.source_edit.focused
         || s.chat_ui.canvas.prompt_edit.focused
         || s.chat_ui.ask_text_edits.values().any(|e| e.focused)

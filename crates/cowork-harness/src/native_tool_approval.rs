@@ -2695,9 +2695,9 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "stat" => AuditedCommandOptions {
-            short_bool: "Lftxrs",
+            short_bool: "ftxrs",
             short_val: "c",
-            long_bool: &["--dereference", "--file-system", "--terse"],
+            long_bool: &["--file-system", "--terse"],
             long_val: &["--format", "--printf"],
             ..NO_OPTIONS
         },
@@ -2730,12 +2730,11 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "diff" => AuditedCommandOptions {
-            short_bool: "ucqsrNabwBEZiptTydnef",
+            short_bool: "ucqsNabwBEZiptTydnef",
             short_val: "UCWx",
             long_bool: &[
                 "--brief",
                 "--report-identical-files",
-                "--recursive",
                 "--new-file",
                 "--text",
                 "--ignore-space-change",
@@ -2781,7 +2780,7 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "ls" | "dir" => AuditedCommandOptions {
-            short_bool: "aAl1hrRtSdFpCmxinogGLHsucUvXQbBfqk",
+            short_bool: "aAl1hrRtSdFpCmxinogGsucUvXQbBfqk",
             short_val: "wTI",
             long_bool: &[
                 "--all",
@@ -2791,7 +2790,6 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
                 "--recursive",
                 "--directory",
                 "--group-directories-first",
-                "--dereference",
                 "--no-group",
                 "--numeric-uid-gid",
                 "--size",
@@ -2814,7 +2812,7 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "tree" => AuditedCommandOptions {
-            short_bool: "adfilpshugDFqNrtvCnQcx",
+            short_bool: "adfipshugDFqNrtvCnQcx",
             short_val: "LPI",
             long_bool: &[
                 "--dirsfirst",
@@ -2828,7 +2826,7 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "du" => AuditedCommandOptions {
-            short_bool: "abchHkLmPsSx0",
+            short_bool: "abchkmPsSx0",
             short_val: "dB",
             long_bool: &[
                 "--all",
@@ -2836,7 +2834,6 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
                 "--bytes",
                 "--total",
                 "--human-readable",
-                "--dereference",
                 "--one-file-system",
                 "--summarize",
                 "--separate-dirs",
@@ -2846,7 +2843,7 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "grep" | "egrep" | "fgrep" => AuditedCommandOptions {
-            short_bool: "EFGPivwxycLloqsbHhnTuZaIrRU",
+            short_bool: "EFGPivwxycLloqsbHhnTuZaIrU",
             short_val: "emABCd",
             long_bool: &[
                 "--extended-regexp",
@@ -2872,7 +2869,6 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
                 "--null",
                 "--text",
                 "--recursive",
-                "--dereference-recursive",
                 "--no-ignore-case",
                 "--line-buffered",
             ],
@@ -2893,7 +2889,7 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "rg" => AuditedCommandOptions {
-            short_bool: "FiSsvwxclnNHIoquLap0UPbh",
+            short_bool: "FiSsvwxclnNHIoquap0UPbh",
             short_val: "eABCmgtTjMdr",
             long_bool: &[
                 "--fixed-strings",
@@ -2914,7 +2910,6 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
                 "--no-filename",
                 "--only-matching",
                 "--quiet",
-                "--follow",
                 "--hidden",
                 "--no-ignore",
                 "--no-ignore-vcs",
@@ -2962,7 +2957,7 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "fd" => AuditedCommandOptions {
-            short_bool: "HIsigFaLp01qu",
+            short_bool: "HIsigFap01qu",
             short_val: "dteEcjS",
             long_bool: &[
                 "--hidden",
@@ -2974,7 +2969,6 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
                 "--glob",
                 "--fixed-strings",
                 "--absolute-path",
-                "--follow",
                 "--full-path",
                 "--print0",
                 "--quiet",
@@ -3015,18 +3009,15 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "cp" => AuditedCommandOptions {
-            short_bool: "afinPprRuvLHT",
+            short_bool: "finPpuvT",
             short_write_val: "t",
             long_bool: &[
-                "--archive",
                 "--force",
                 "--interactive",
                 "--no-clobber",
                 "--no-dereference",
-                "--recursive",
                 "--update",
                 "--verbose",
-                "--dereference",
                 "--no-target-directory",
             ],
             long_write_val: &["--target-directory"],
@@ -3059,8 +3050,8 @@ fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
             ..NO_OPTIONS
         },
         "chmod" => AuditedCommandOptions {
-            short_bool: "RfvrwxXst",
-            long_bool: &["--recursive", "--silent", "--quiet", "--verbose"],
+            short_bool: "fvrwxXst",
+            long_bool: &["--silent", "--quiet", "--verbose"],
             ..NO_OPTIONS
         },
         "truncate" => AuditedCommandOptions {
@@ -3150,7 +3141,7 @@ impl SimpleCommandOptionState {
         // `find` uses single-dash multi-letter predicates rather than getopt_long.
         if cmd == "find" {
             if !self.find_saw_expr {
-                if matches!(arg, "-H" | "-L" | "-P" | "--") {
+                if matches!(arg, "-P" | "--") {
                     return Ok(ArgValidationOutcome::default());
                 }
                 if arg.starts_with('-') || matches!(arg, "!" | "(" | ")" | ",") {
@@ -3183,7 +3174,6 @@ impl SimpleCommandOptionState {
                         | "-false"
                         | "-xdev"
                         | "-mount"
-                        | "-follow"
                         | "-ignore_readdir_race"
                         | "-noignore_readdir_race"
                         | "-daystart"
@@ -3201,7 +3191,6 @@ impl SimpleCommandOptionState {
                         | "-iregex"
                         | "-regextype"
                         | "-type"
-                        | "-xtype"
                         | "-maxdepth"
                         | "-mindepth"
                         | "-size"
@@ -3316,9 +3305,7 @@ impl SimpleCommandOptionState {
                 }
 
                 if spec.long_bool.contains(&flag_name) || spec.long_opt_val.contains(&flag_name) {
-                    if matches!(cmd, "grep" | "egrep" | "fgrep")
-                        && matches!(flag_name, "--recursive" | "--dereference-recursive")
-                    {
+                    if matches!(cmd, "grep" | "egrep" | "fgrep") && flag_name == "--recursive" {
                         self.is_recursive_grep = true;
                     }
                     if cmd == "rg" && flag_name == "--files" {
@@ -3361,7 +3348,7 @@ impl SimpleCommandOptionState {
                 let mut chars = short.chars();
                 while let Some(ch) = chars.next() {
                     if spec.short_bool.contains(ch) {
-                        if matches!(cmd, "grep" | "egrep" | "fgrep") && matches!(ch, 'r' | 'R') {
+                        if matches!(cmd, "grep" | "egrep" | "fgrep") && ch == 'r' {
                             self.is_recursive_grep = true;
                         }
                         continue;

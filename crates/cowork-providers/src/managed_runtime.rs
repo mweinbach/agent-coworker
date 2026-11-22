@@ -835,18 +835,57 @@ pub async fn kill_managed_process_tree(mut child: Child) {
     #[cfg(unix)]
     if let Some(pid) = child.id() {
         let pgid = format!("-{pid}");
+        // Separate the negative process-group ID with `--` so procps-ng `kill` on Linux
+        // does not misparse `-<pid>` as a signal option.
         let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pgid])
+            .args(["-s", "TERM", "--", &pgid])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
         let _ = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
         let _ = std::process::Command::new("kill")
-            .args(["-KILL", &pgid])
+            .args(["-s", "KILL", "--", &pgid])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
     }
     let _ = child.kill().await;
     let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+}
+
+#[cfg(all(test, unix))]
+mod kill_tree_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn kill_managed_process_tree_terminates_process_group_descendants() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 60 & echo $!; wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = cmd.spawn().expect("spawn sh process group");
+        let stdout = child.stdout.take().expect("stdout");
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut line = String::new();
+        tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line)
+            .await
+            .expect("read grandchild pid");
+        let grandchild_pid: i32 = line.trim().parse().expect("parse grandchild pid");
+
+        kill_managed_process_tree(child).await;
+
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &grandchild_pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(
+            !alive,
+            "grandchild pid {grandchild_pid} must be terminated with its process group"
+        );
+    }
 }

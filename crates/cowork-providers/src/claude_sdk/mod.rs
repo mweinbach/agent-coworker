@@ -3,7 +3,7 @@
 
 pub mod installer;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -661,7 +661,7 @@ impl ProviderTransport for ClaudeSdkTransport {
         let mut active_blocks: HashMap<usize, StreamBlockState> = HashMap::new();
         let mut next_text_block_index: usize = 0;
         let mut think_segment: usize = 0;
-        let mut announced_tools: HashSet<String> = HashSet::new();
+        let mut announced_tools: HashMap<String, String> = HashMap::new();
         let mut final_text = String::new();
         let mut final_thinking = String::new();
         let mut usage = TurnUsage::default();
@@ -841,8 +841,12 @@ impl ProviderTransport for ClaudeSdkTransport {
                                                 .unwrap_or("tool")
                                                 .to_owned();
                                             if !st.tool_id.is_empty()
-                                                && announced_tools.insert(st.tool_id.clone())
+                                                && !announced_tools.contains_key(&st.tool_id)
                                             {
+                                                announced_tools.insert(
+                                                    st.tool_id.clone(),
+                                                    st.tool_name.clone(),
+                                                );
                                                 on_event(StreamEvent::ToolCallStart {
                                                     turn_id: turn_id.clone(),
                                                     key: st.tool_id.clone(),
@@ -995,8 +999,10 @@ impl ProviderTransport for ClaudeSdkTransport {
                                                 .and_then(Value::as_str)
                                                 .unwrap_or("tool");
                                             if !id.is_empty()
-                                                && announced_tools.insert(id.to_owned())
+                                                && !announced_tools.contains_key(id)
                                             {
+                                                announced_tools
+                                                    .insert(id.to_owned(), name.to_owned());
                                                 let input = block
                                                     .get("input")
                                                     .and_then(Value::as_object)
@@ -1046,10 +1052,14 @@ impl ProviderTransport for ClaudeSdkTransport {
                                             .cloned()
                                             .unwrap_or(Value::Null);
                                         if !id.is_empty() {
+                                            let name = announced_tools
+                                                .get(&id)
+                                                .cloned()
+                                                .unwrap_or_else(|| "tool".to_owned());
                                             on_event(StreamEvent::ToolResult {
                                                 turn_id: turn_id.clone(),
                                                 key: id,
-                                                name: "tool".to_owned(),
+                                                name,
                                                 result: content,
                                                 is_error,
                                                 denied: false,

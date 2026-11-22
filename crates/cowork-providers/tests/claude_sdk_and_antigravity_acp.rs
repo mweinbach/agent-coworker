@@ -431,7 +431,7 @@ for line in sys.stdin:
             .any(|e| matches!(e, StreamEvent::ToolCallEnd { key, .. } if key == "tu-1"))
     );
     assert!(events.iter().any(
-        |e| matches!(e, StreamEvent::ToolResult { key, is_error: false, .. } if key == "tu-1")
+        |e| matches!(e, StreamEvent::ToolResult { key, name, is_error: false, .. } if key == "tu-1" && name == "Bash")
     ));
     assert_eq!(res1.usage.completion_tokens, 35);
     assert_eq!(res1.usage.cached_prompt_tokens, Some(10));

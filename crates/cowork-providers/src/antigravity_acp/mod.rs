@@ -3,7 +3,7 @@
 
 pub mod installer;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -996,7 +996,7 @@ impl ProviderTransport for AntigravityAcpTransport {
         let mut text_block_index: usize = 0;
         let mut text_segment_text = String::new();
         let mut final_text = String::new();
-        let mut announced_tools: HashSet<String> = HashSet::new();
+        let mut announced_tools: HashMap<String, String> = HashMap::new();
         let mut usage = TurnUsage::default();
 
         let prompt_outcome = budget
@@ -1036,7 +1036,7 @@ impl ProviderTransport for AntigravityAcpTransport {
                      text_block_index: &mut usize,
                      text_segment_text: &mut String,
                      final_text: &mut String,
-                     announced_tools: &mut HashSet<String>,
+                     announced_tools: &mut HashMap<String, String>,
                      usage: &mut TurnUsage,
                      on_event: &mut StreamEventCallback<'_>| {
                         raw_events.push(json!({ "method": method, "params": params }));
@@ -1159,7 +1159,8 @@ impl ProviderTransport for AntigravityAcpTransport {
                                     .and_then(Value::as_object)
                                     .cloned()
                                     .unwrap_or_default();
-                                if !id.is_empty() && announced_tools.insert(id.clone()) {
+                                if !id.is_empty() && !announced_tools.contains_key(&id) {
+                                    announced_tools.insert(id.clone(), name.clone());
                                     on_event(StreamEvent::ToolCallStart {
                                         turn_id: turn_id.clone(),
                                         key: id.clone(),
@@ -1193,10 +1194,14 @@ impl ProviderTransport for AntigravityAcpTransport {
                                     );
                                     let name = update
                                         .get("title")
+                                        .or_else(|| update.get("name"))
                                         .or_else(|| update.get("kind"))
                                         .and_then(Value::as_str)
-                                        .unwrap_or("tool")
-                                        .to_owned();
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(ToOwned::to_owned)
+                                        .or_else(|| announced_tools.get(&id).cloned())
+                                        .unwrap_or_else(|| "tool".to_owned());
                                     let output = update
                                         .get("rawOutput")
                                         .or_else(|| update.get("content"))

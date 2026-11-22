@@ -676,6 +676,12 @@ pub enum NativeAction {
     OpenExternalUrl(String),
     RevealInOs(String),
     OpenInDefaultApp(String),
+    OpenArtifactPreview {
+        version_id: String,
+        filename: String,
+        mime_type: String,
+        data_url: String,
+    },
     TrashPath(String),
     RenameWorkspaceEntry {
         workspace_id: String,
@@ -857,6 +863,12 @@ pub enum NativeCommand {
     OpenInDefaultApp {
         path: String,
         confirmed: bool,
+    },
+    OpenArtifactPreview {
+        version_id: String,
+        filename: String,
+        mime_type: String,
+        data_url: String,
     },
     TrashPath(String),
     CopyText(String),

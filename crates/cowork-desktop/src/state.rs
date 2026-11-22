@@ -10116,6 +10116,20 @@ impl AppState {
                     confirmed: false,
                 });
             }
+            NativeAction::OpenArtifactPreview {
+                version_id,
+                filename,
+                mime_type,
+                data_url,
+            } => {
+                self.last_launchable_window = self.window_mode;
+                self.send_native(NativeCommand::OpenArtifactPreview {
+                    version_id,
+                    filename,
+                    mime_type,
+                    data_url,
+                });
+            }
             NativeAction::TrashPath(path) => {
                 let resolved = self.resolve_active_workspace_fs_path(&path);
                 self.send_native(NativeCommand::TrashPath(resolved));

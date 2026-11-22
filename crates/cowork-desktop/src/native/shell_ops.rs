@@ -249,6 +249,148 @@ pub fn open_external_url_os(raw_url: &str) -> Result<()> {
     open_target_in_os(parsed.as_str())
 }
 
+const MAX_ARTIFACT_PREVIEW_OPEN_BYTES: usize = 16 * 1024 * 1024;
+
+fn allowed_artifact_preview_extension(mime: &str) -> Option<&'static str> {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "application/pdf" => Some("pdf"),
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/bmp" => Some("bmp"),
+        "image/tiff" => Some("tiff"),
+        "image/avif" => Some("avif"),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
+        _ => None,
+    }
+}
+
+fn sanitize_artifact_preview_stem(raw_filename: &str) -> String {
+    let base = raw_filename
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(raw_filename)
+        .trim();
+    let stem = base
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(base);
+    let cleaned: String = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect();
+    let trimmed = cleaned.trim_matches(['-', '_']);
+    if trimmed.is_empty() {
+        "artifact".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn fnv1a_64_hex(version_id: &str, bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in version_id.as_bytes().iter().chain(&[0u8]).chain(bytes) {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Validates and decodes an allowlisted base64 artifact preview `data:` URL (PDF or raster image)
+/// and writes it atomically with private permissions under `<user_data_dir>/artifact-previews/`.
+pub fn materialize_artifact_preview_file(
+    user_data_dir: &Path,
+    version_id: &str,
+    filename: &str,
+    mime_type: &str,
+    data_url: &str,
+) -> Result<PathBuf> {
+    use base64::Engine as _;
+
+    let trimmed = data_url.trim();
+    let Some(rest) = trimmed.strip_prefix("data:") else {
+        bail!("Artifact preview must be a data: URL.");
+    };
+    let Some((meta, payload)) = rest.split_once(',') else {
+        bail!("Malformed artifact preview data: URL.");
+    };
+    let declared_mime = meta.split(';').next().unwrap_or("").trim();
+    let Some(ext) = allowed_artifact_preview_extension(declared_mime) else {
+        bail!("Unsupported artifact preview MIME type: {declared_mime}");
+    };
+    if !mime_type.trim().is_empty() && allowed_artifact_preview_extension(mime_type).is_none() {
+        bail!("Unsupported artifact MIME type: {}", mime_type.trim());
+    }
+    let is_base64 = meta
+        .split(';')
+        .skip(1)
+        .any(|p| p.trim().eq_ignore_ascii_case("base64"));
+    if !is_base64 {
+        bail!("Artifact preview data: URL must use base64 encoding.");
+    }
+    let cleaned_b64: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+    if cleaned_b64.len() > MAX_ARTIFACT_PREVIEW_OPEN_BYTES.saturating_mul(2) {
+        bail!("Artifact preview exceeds maximum allowed size.");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&cleaned_b64)
+        .context("Failed to decode artifact preview base64 payload")?;
+    if bytes.is_empty() || bytes.len() > MAX_ARTIFACT_PREVIEW_OPEN_BYTES {
+        bail!("Artifact preview payload size is out of bounds.");
+    }
+
+    let preview_dir = user_data_dir.join("artifact-previews");
+    cowork_config::ensure_private_dir_sync(&preview_dir)
+        .map_err(|err| anyhow::anyhow!("Failed to create artifact preview directory: {err}"))?;
+
+    let stem = sanitize_artifact_preview_stem(filename);
+    let digest = fnv1a_64_hex(version_id, &bytes);
+    let target = preview_dir.join(format!("{stem}-{digest}.{ext}"));
+    let tmp_path = preview_dir.join(format!(".tmp-{}.{ext}", uuid::Uuid::new_v4()));
+
+    std::fs::write(&tmp_path, &bytes)
+        .with_context(|| format!("Failed to write artifact preview {}", tmp_path.display()))?;
+    cowork_config::harden_private_file_sync(&tmp_path);
+    if let Err(err) = std::fs::rename(&tmp_path, &target) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err)
+            .with_context(|| format!("Failed to finalize artifact preview {}", target.display()));
+    }
+    cowork_config::harden_private_file_sync(&target);
+
+    let safe_path = assert_path_within_roots(&[preview_dir], &target, "path")?;
+    Ok(safe_path)
+}
+
+/// Materializes an allowlisted artifact version preview (PDF or raster image) under
+/// `<user_data_dir>/artifact-previews/` and opens it in the OS default viewer.
+pub fn open_artifact_preview_in_default_app(
+    user_data_dir: &Path,
+    version_id: &str,
+    filename: &str,
+    mime_type: &str,
+    data_url: &str,
+) -> Result<OpenInDefaultAppOutcome> {
+    let preview_dir = user_data_dir.join("artifact-previews");
+    let safe_path = materialize_artifact_preview_file(
+        user_data_dir,
+        version_id,
+        filename,
+        mime_type,
+        data_url,
+    )?;
+    open_in_default_app(&[preview_dir], &safe_path, false)
+}
+
 fn decode_base64_bytes(input: &str) -> Result<Vec<u8>> {
     fn val(b: u8) -> Option<u8> {
         match b {
@@ -657,5 +799,47 @@ mod tests {
             "https://example.com/view?a=1&b=2"
         );
         assert!(normalize_windows_shell_target("C:\\repo\\bad\0file.pdf").is_err());
+    }
+
+    #[test]
+    fn materialize_artifact_preview_sanitizes_paths_and_rejects_disallowed_mimes() {
+        let dir = tempdir().unwrap();
+        let pdf_path = materialize_artifact_preview_file(
+            dir.path(),
+            "ver-1",
+            "../../evil.sh",
+            "application/pdf",
+            "data:application/pdf;base64,JVBERi0xLjQK",
+        )
+        .unwrap();
+        assert!(pdf_path.starts_with(canonicalize_sync(&dir.path().join("artifact-previews"))));
+        assert_eq!(pdf_path.extension().and_then(|e| e.to_str()), Some("pdf"));
+        assert_eq!(std::fs::read(&pdf_path).unwrap(), b"%PDF-1.4\n");
+
+        let png_path = materialize_artifact_preview_file(
+            dir.path(),
+            "ver-2",
+            "diagram.png",
+            "image/png",
+            "data:image/png;base64,iVBORw0KGgo=",
+        )
+        .unwrap();
+        assert_eq!(png_path.extension().and_then(|e| e.to_str()), Some("png"));
+
+        for bad in [
+            ("text/html", "data:text/html;base64,PGh0bWw+"),
+            (
+                "image/svg+xml",
+                "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+            ),
+            ("application/pdf", "https://example.com/report.pdf"),
+            ("application/pdf", "data:application/pdf,raw-not-base64"),
+        ] {
+            assert!(
+                materialize_artifact_preview_file(dir.path(), "v", "file", bad.0, bad.1).is_err(),
+                "expected {:?} to be rejected",
+                bad
+            );
+        }
     }
 }

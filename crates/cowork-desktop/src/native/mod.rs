@@ -77,7 +77,8 @@ use server_manager::{
 };
 use shell_ops::{
     DEFAULT_IMAGE_FETCH_MAX_BYTES, OpenInDefaultAppOutcome, fetch_image_bytes,
-    open_external_url_os, open_in_default_app, reveal_in_os, trash_workspace_entry,
+    open_artifact_preview_in_default_app, open_external_url_os, open_in_default_app, reveal_in_os,
+    trash_workspace_entry,
 };
 use shutdown::ShutdownCoordinator;
 use sidecar::resolve_dev_repo_root;
@@ -1503,6 +1504,24 @@ impl NativeWorkerContext {
                 let roots = self.approved_roots_snapshot();
                 handle_open_in_default_app_result(
                     open_in_default_app(&roots, Path::new(&path), confirmed),
+                    &self.logger,
+                    self.emit.as_ref(),
+                );
+            }
+            NativeCommand::OpenArtifactPreview {
+                version_id,
+                filename,
+                mime_type,
+                data_url,
+            } => {
+                handle_open_in_default_app_result(
+                    open_artifact_preview_in_default_app(
+                        self.persistence.user_data_dir(),
+                        &version_id,
+                        &filename,
+                        &mime_type,
+                        &data_url,
+                    ),
                     &self.logger,
                     self.emit.as_ref(),
                 );

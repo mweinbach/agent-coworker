@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use rune::{Cx, El, ScrollSpec, TextEdit, col, el, icon, row, spacer, text};
+use rune::{Cx, El, ScrollSpec, SurfaceFit, TextEdit, col, el, icon, row, spacer, text};
 use rune_kit::shell::{TabItem, TabOrientation, TabStrip};
 use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Kit, TextInput};
 use serde_json::Value;
 
-use crate::actions::{Action, NavAction, TaskAction, TaskQuestionAnswerParam};
+use crate::actions::{Action, NativeAction, NavAction, TaskAction, TaskQuestionAnswerParam};
 use crate::router::ViewId;
 use crate::state::{AppState, TaskArtifactView, TaskRecordView, TaskSummaryView, WorkflowRunView};
 use crate::theme::ThemeTokens;
@@ -1197,6 +1197,7 @@ fn artifact_row(
 struct DecodedArtifactDetail<'a> {
     artifact_id: String,
     title: &'a str,
+    path: Option<&'a str>,
     content: &'a str,
     current_version_id: Option<&'a str>,
 }
@@ -1225,6 +1226,12 @@ fn decode_artifact_detail(detail: &Value) -> DecodedArtifactDetail<'_> {
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("Artifact detail");
+    let path = nested
+        .and_then(|a| a.get("path"))
+        .or_else(|| detail.get("path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let content = detail
         .get("content")
         .or_else(|| detail.get("summary"))
@@ -1252,6 +1259,7 @@ fn decode_artifact_detail(detail: &Value) -> DecodedArtifactDetail<'_> {
     DecodedArtifactDetail {
         artifact_id,
         title,
+        path,
         content,
         current_version_id,
     }
@@ -1457,11 +1465,29 @@ fn format_artifact_preview_text(preview: &Value) -> Option<String> {
     }
 }
 
-fn resolve_active_artifact_preview_content(
-    task: &TaskRecordView,
-    detail: &Value,
-    decoded: &DecodedArtifactDetail<'_>,
-) -> (Option<String>, Option<String>) {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpenableArtifactData<'a> {
+    filename: &'a str,
+    mime_type: &'a str,
+    data_url: &'a str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedArtifactPreview<'a> {
+    selected_version_id: Option<String>,
+    text_content: Option<String>,
+    inline_image_data_url: Option<&'a str>,
+    inline_image_dims: Option<(u64, u64)>,
+    is_pdf: bool,
+    openable_data: Option<OpenableArtifactData<'a>>,
+    can_open_workspace_path: bool,
+}
+
+fn resolve_active_artifact_preview<'a>(
+    task: &'a TaskRecordView,
+    detail: &'a Value,
+    decoded: &DecodedArtifactDetail<'a>,
+) -> ResolvedArtifactPreview<'a> {
     let versions = detail.get("versions").and_then(Value::as_array);
     let selected_vid = task
         .selected_artifact_version_id
@@ -1482,13 +1508,95 @@ fn resolve_active_artifact_preview_content(
         })
         .map(str::to_owned);
 
-    let preview_text = selected_vid
+    let preview_val = selected_vid
         .as_deref()
-        .and_then(|vid| task.artifact_previews_by_version_id.get(vid))
+        .and_then(|vid| task.artifact_previews_by_version_id.get(vid));
+    let kind = preview_val
+        .and_then(|p| p.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let data_url = preview_val
+        .and_then(|p| p.get("dataUrl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| s.starts_with("data:"));
+    let filename = preview_val
+        .and_then(|p| p.get("filename"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(decoded.title);
+    let mime_type = preview_val
+        .and_then(|p| p.get("mimeType"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if kind == "pdf" {
+            "application/pdf"
+        } else {
+            "application/octet-stream"
+        });
+
+    let inline_image_data_url = (kind == "image")
+        .then_some(data_url)
+        .flatten()
+        .filter(|url| url.to_ascii_lowercase().starts_with("data:image/"));
+    let inline_image_dims = preview_val.and_then(|p| {
+        Some((
+            p.get("width").and_then(Value::as_u64)?,
+            p.get("height").and_then(Value::as_u64)?,
+        ))
+    });
+    let is_pdf = kind == "pdf";
+    let openable_data = match (kind.as_str(), data_url) {
+        ("pdf", Some(url)) if url.to_ascii_lowercase().starts_with("data:application/pdf") => {
+            Some(OpenableArtifactData {
+                filename,
+                mime_type,
+                data_url: url,
+            })
+        }
+        ("image", Some(url))
+            if url.to_ascii_lowercase().starts_with("data:image/")
+                && !url.to_ascii_lowercase().starts_with("data:image/svg+xml") =>
+        {
+            Some(OpenableArtifactData {
+                filename,
+                mime_type,
+                data_url: url,
+            })
+        }
+        _ => None,
+    };
+
+    let text_content = preview_val
         .and_then(format_artifact_preview_text)
         .or_else(|| (!decoded.content.is_empty()).then(|| decoded.content.to_owned()));
+    let is_selected_current = selected_vid.is_none()
+        || decoded.current_version_id.is_none()
+        || selected_vid.as_deref() == decoded.current_version_id;
+    let can_open_workspace_path = is_selected_current && decoded.path.is_some();
 
-    (selected_vid, preview_text)
+    ResolvedArtifactPreview {
+        selected_version_id: selected_vid,
+        text_content,
+        inline_image_data_url,
+        inline_image_dims,
+        is_pdf,
+        openable_data,
+        can_open_workspace_path,
+    }
+}
+
+#[cfg(test)]
+fn resolve_active_artifact_preview_content(
+    task: &TaskRecordView,
+    detail: &Value,
+    decoded: &DecodedArtifactDetail<'_>,
+) -> (Option<String>, Option<String>) {
+    let resolved = resolve_active_artifact_preview(task, detail, decoded);
+    (resolved.selected_version_id, resolved.text_content)
 }
 
 fn build_active_artifact_detail(
@@ -1504,7 +1612,64 @@ fn build_active_artifact_detail(
     let artifact_id = decoded.artifact_id.clone();
     let title = decoded.title;
     let current_vid = decoded.current_version_id;
-    let (selected_vid, content) = resolve_active_artifact_preview_content(task, detail, &decoded);
+    let resolved = resolve_active_artifact_preview(task, detail, &decoded);
+    let selected_vid = resolved.selected_version_id.clone();
+
+    let open_button: Option<El> = if let Some(ref openable) = resolved.openable_data {
+        let vid_for_open = selected_vid.clone().unwrap_or_else(|| artifact_id.clone());
+        let filename_for_open = openable.filename.to_owned();
+        let mime_for_open = openable.mime_type.to_owned();
+        let url_for_open = openable.data_url.to_owned();
+        let btn_label = if resolved.is_pdf {
+            "Open PDF"
+        } else {
+            "Open image"
+        };
+        Some(
+            Button::new(btn_label)
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .icon(&icons::EXTERNAL_LINK)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.dispatch(Action::Native(NativeAction::OpenArtifactPreview {
+                        version_id: vid_for_open.clone(),
+                        filename: filename_for_open.clone(),
+                        mime_type: mime_for_open.clone(),
+                        data_url: url_for_open.clone(),
+                    }));
+                })
+                .build(k),
+        )
+    } else if resolved.can_open_workspace_path
+        && let Some(path) = decoded.path
+    {
+        let path_owned = path.to_owned();
+        Some(
+            Button::new("Open file")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .icon(&icons::EXTERNAL_LINK)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    s.dispatch(Action::Native(NativeAction::OpenInDefaultApp(
+                        path_owned.clone(),
+                    )));
+                })
+                .build(k),
+        )
+    } else {
+        None
+    };
+
+    let mut header_row = row().w_full().gap(8.0).center_y().child(
+        text(title)
+            .font(t.label)
+            .color(t.text_base)
+            .truncate()
+            .grow(1.0),
+    );
+    if let Some(btn) = open_button {
+        header_row = header_row.child(btn);
+    }
 
     let mut box_col = col()
         .key("task-artifact-detail-box")
@@ -1514,9 +1679,81 @@ fn build_active_artifact_detail(
         .fill(t.panel_bg)
         .border(1.0, t.border_muted)
         .gap(6.0)
-        .child(text(title).font(t.label).color(t.text_base));
+        .child(header_row);
 
-    if let Some(content) = content {
+    let decoded_inline_image = resolved
+        .inline_image_data_url
+        .and_then(|url| crate::views::chat::attachments::decode_image_from_uri(url, None, None));
+
+    if let Some(img) = decoded_inline_image {
+        let preview_height = match resolved.inline_image_dims {
+            Some((w, h)) if w > 0 && h > 0 => ((h as f32 / w as f32) * 320.0).clamp(96.0, 240.0),
+            _ => 180.0,
+        };
+        box_col = box_col.child(
+            el().key("task-artifact-image-preview")
+                .w_full()
+                .h(preview_height)
+                .radius(6.0)
+                .clip_rounded(6.0)
+                .fill(t.card_bg)
+                .border(1.0, t.border_muted)
+                .pixels_fit(img.pixels(), SurfaceFit::Fit),
+        );
+        if let Some(caption) = resolved.text_content {
+            box_col = box_col.child(text(caption).font(t.caption).color(t.text_muted).wrap());
+        }
+    } else if resolved.is_pdf
+        && let Some(ref openable) = resolved.openable_data
+    {
+        let vid_for_pdf = selected_vid.clone().unwrap_or_else(|| artifact_id.clone());
+        let filename_for_pdf = openable.filename.to_owned();
+        let mime_for_pdf = openable.mime_type.to_owned();
+        let url_for_pdf = openable.data_url.to_owned();
+        let summary = resolved
+            .text_content
+            .unwrap_or_else(|| format!("PDF preview: {}", openable.filename));
+        box_col = box_col.child(
+            row()
+                .key("task-artifact-pdf-preview")
+                .w_full()
+                .padding(10.0)
+                .radius(6.0)
+                .fill(t.card_bg)
+                .border(1.0, t.border_muted)
+                .gap(10.0)
+                .center_y()
+                .child(icon(&icons::FILE_TEXT, 18.0).color(t.text_muted))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .shrink()
+                        .gap(2.0)
+                        .child(text(summary).font(t.caption).color(t.text_base).wrap())
+                        .child(
+                            text("Open this PDF version in your system viewer to inspect all pages before accepting.")
+                                .font(t.caption)
+                                .color(t.text_muted)
+                                .wrap(),
+                        ),
+                )
+                .child(
+                    Button::new("Open PDF")
+                        .variant(ButtonVariant::Contrast)
+                        .control_size(ControlSize::Small)
+                        .icon(&icons::EXTERNAL_LINK)
+                        .on_press_tx(move |s: &mut AppState, _| {
+                            s.dispatch(Action::Native(NativeAction::OpenArtifactPreview {
+                                version_id: vid_for_pdf.clone(),
+                                filename: filename_for_pdf.clone(),
+                                mime_type: mime_for_pdf.clone(),
+                                data_url: url_for_pdf.clone(),
+                            }));
+                        })
+                        .build(k),
+                ),
+        );
+    } else if let Some(content) = resolved.text_content {
         box_col = box_col.child(
             col()
                 .w_full()
@@ -2214,5 +2451,108 @@ mod tests {
             }
         }));
         assert_eq!(xlsx.as_deref(), Some("Q4 (2 cells): A1=Revenue, B1=42"));
+    }
+
+    #[test]
+    fn resolve_active_artifact_preview_preserves_image_and_pdf_data_urls_and_scopes_open_fallback()
+    {
+        // Minimal valid 1x1 transparent PNG.
+        let png_data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let pdf_data_url = "data:application/pdf;base64,JVBERi0xLjQK";
+
+        let detail = json!({
+            "artifact": {
+                "id": "art-media",
+                "taskId": "task-1",
+                "path": "reports/output.pdf",
+                "kind": "pdf",
+                "title": "Final Report"
+            },
+            "versions": [
+                { "id": "ver-1", "artifactId": "art-media", "version": 1 },
+                { "id": "ver-2", "artifactId": "art-media", "version": 2 }
+            ],
+            "latestVersionId": "ver-2"
+        });
+        let decoded = decode_artifact_detail(&detail);
+        assert_eq!(decoded.path, Some("reports/output.pdf"));
+
+        // 1. Historical image version exposes inline decodable dataUrl + OpenArtifactPreview data.
+        let mut task = TaskRecordView {
+            selected_artifact_version_id: Some("ver-1".to_owned()),
+            ..Default::default()
+        };
+        task.artifact_previews_by_version_id.insert(
+            "ver-1".to_owned(),
+            json!({
+                "kind": "image",
+                "filename": "chart.png",
+                "mimeType": "image/png",
+                "sizeBytes": 68,
+                "width": 1,
+                "height": 1,
+                "dataUrl": png_data_url,
+                "warnings": []
+            }),
+        );
+        let img_resolved = resolve_active_artifact_preview(&task, &detail, &decoded);
+        assert_eq!(img_resolved.inline_image_data_url, Some(png_data_url));
+        assert_eq!(img_resolved.inline_image_dims, Some((1, 1)));
+        assert!(
+            crate::views::chat::attachments::decode_image_from_uri(png_data_url, None, None)
+                .is_some(),
+            "inline artifact PNG dataUrl must decode to a renderable Rune image"
+        );
+        assert_eq!(
+            img_resolved.openable_data,
+            Some(OpenableArtifactData {
+                filename: "chart.png",
+                mime_type: "image/png",
+                data_url: png_data_url,
+            })
+        );
+        assert!(!img_resolved.can_open_workspace_path);
+
+        // 2. PDF version exposes canonical dataUrl so the selected PDF version can be opened.
+        task.selected_artifact_version_id = Some("ver-2".to_owned());
+        task.artifact_previews_by_version_id.insert(
+            "ver-2".to_owned(),
+            json!({
+                "kind": "pdf",
+                "filename": "output.pdf",
+                "mimeType": "application/pdf",
+                "sizeBytes": 12000,
+                "pageCount": 4,
+                "dataUrl": pdf_data_url,
+                "warnings": []
+            }),
+        );
+        let pdf_resolved = resolve_active_artifact_preview(&task, &detail, &decoded);
+        assert!(pdf_resolved.is_pdf);
+        assert_eq!(
+            pdf_resolved.openable_data,
+            Some(OpenableArtifactData {
+                filename: "output.pdf",
+                mime_type: "application/pdf",
+                data_url: pdf_data_url,
+            })
+        );
+        assert!(pdf_resolved.can_open_workspace_path);
+
+        // 3. Oversized historical version without dataUrl must NOT offer opening latest workspace path.
+        task.selected_artifact_version_id = Some("ver-1".to_owned());
+        task.artifact_previews_by_version_id.insert(
+            "ver-1".to_owned(),
+            json!({
+                "kind": "binary",
+                "filename": "huge.pdf",
+                "mimeType": "application/pdf",
+                "sizeBytes": 50_000_000,
+                "warnings": ["Too large to inline"]
+            }),
+        );
+        let hist_bin = resolve_active_artifact_preview(&task, &detail, &decoded);
+        assert!(hist_bin.openable_data.is_none());
+        assert!(!hist_bin.can_open_workspace_path);
     }
 }

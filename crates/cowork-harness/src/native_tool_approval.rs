@@ -18,8 +18,8 @@ use cowork_sandbox::{
 use cowork_tools::{
     ApprovalDecisionRequest, ToolExecutionContext, assert_read_path_allowed,
     assert_write_path_allowed, canonicalize_with_missing_tail, cowork_home_read_roots,
-    lexical_tool_path, matches_ts_approval_patterns, normalize_lexical_path,
-    protected_credential_roots, resolve_and_validate_url_target,
+    matches_ts_approval_patterns, normalize_lexical_path, protected_credential_roots,
+    resolve_and_validate_url_target,
 };
 use serde_json::{Map, Value};
 use url::Url;
@@ -210,7 +210,7 @@ fn parse_claude_request<'a>(
     for key in ["blocked_path", "blockedPath"] {
         match params.get(key) {
             None | Some(Value::Null) => {}
-            Some(Value::String(s)) if !s.trim().is_empty() => extra_paths.push(s.trim().to_owned()),
+            Some(Value::String(s)) if !s.is_empty() => extra_paths.push(s.clone()),
             Some(_) => {
                 return Err(format!(
                     "Claude native tool '{tool_name}' has invalid {key}."
@@ -417,30 +417,44 @@ fn classify_native_tool_kind(
     }
 }
 
-/// Resolves a path from a native tool against `base_dir`, expanding leading `~` against
-/// `homedir` (because native runtimes such as Claude Code expand tilde) and rejecting NUL
-/// bytes or `~otheruser` spellings.
-fn resolve_native_tool_path(raw: &str, base_dir: &Path, homedir: &Path) -> Result<PathBuf, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+/// Joins `raw` onto `base_dir` and normalizes `.`/`..` lexically WITHOUT trimming leading or
+/// trailing whitespace so exact Unix filenames such as `"credential-link "` are preserved.
+fn exact_lexical_path(raw: &str, base_dir: &Path) -> Result<PathBuf, String> {
+    if raw.is_empty() {
         return Err("Native tool path must not be empty.".to_owned());
     }
-    if trimmed.contains('\0') {
+    if raw.contains('\0') {
         return Err("Native tool path contains a NUL byte.".to_owned());
     }
-    if trimmed == "~" {
+    let candidate = Path::new(raw);
+    let joined = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        base_dir.join(candidate)
+    };
+    Ok(normalize_lexical_path(&joined))
+}
+
+/// Resolves a path from a native tool against `base_dir`, expanding leading `~` against
+/// `homedir` (because native runtimes such as Claude Code expand tilde) and rejecting NUL
+/// bytes or `~otheruser` spellings while preserving exact filename bytes.
+fn resolve_native_tool_path(raw: &str, base_dir: &Path, homedir: &Path) -> Result<PathBuf, String> {
+    if raw.is_empty() {
+        return Err("Native tool path must not be empty.".to_owned());
+    }
+    if raw.contains('\0') {
+        return Err("Native tool path contains a NUL byte.".to_owned());
+    }
+    if raw == "~" {
         return Ok(normalize_lexical_path(homedir));
     }
-    if let Some(rest) = trimmed
-        .strip_prefix("~/")
-        .or_else(|| trimmed.strip_prefix("~\\"))
-    {
+    if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
         return Ok(normalize_lexical_path(&homedir.join(rest)));
     }
-    if trimmed.starts_with('~') {
-        return Err(format!("Ambiguous tilde user path is blocked: {trimmed}"));
+    if raw.starts_with('~') {
+        return Err(format!("Ambiguous tilde user path is blocked: {raw}"));
     }
-    lexical_tool_path(trimmed, base_dir).map_err(|e| e.to_string())
+    exact_lexical_path(raw, base_dir)
 }
 
 fn resolve_optional_input_cwd(
@@ -482,7 +496,7 @@ fn collect_scalar_and_array_paths(
     for &key in scalar_keys {
         match input.get(key) {
             None | Some(Value::Null) => {}
-            Some(Value::String(s)) if !s.trim().is_empty() => out.push(s.trim().to_owned()),
+            Some(Value::String(s)) if !s.is_empty() => out.push(s.clone()),
             Some(_) => return Err(format!("Invalid native tool path field '{key}'.")),
         }
     }
@@ -491,7 +505,7 @@ fn collect_scalar_and_array_paths(
             None | Some(Value::Null) => {}
             Some(Value::Array(items)) => {
                 for item in items {
-                    let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+                    let Some(s) = item.as_str().filter(|s| !s.is_empty()) else {
                         return Err(format!("Invalid native tool path entry in '{key}'."));
                     };
                     out.push(s.to_owned());
@@ -1480,29 +1494,28 @@ fn command_mentions_protected_credential_path(
 }
 
 fn expand_shell_known_prefix(raw: &str, base_dir: &Path, homedir: &Path) -> Option<PathBuf> {
-    let trimmed = raw.trim();
-    if trimmed == "~"
-        || trimmed == "$HOME"
-        || trimmed == "${HOME}"
-        || trimmed.eq_ignore_ascii_case("%USERPROFILE%")
-        || trimmed.eq_ignore_ascii_case("$ENV:USERPROFILE")
+    if raw == "~"
+        || raw == "$HOME"
+        || raw == "${HOME}"
+        || raw.eq_ignore_ascii_case("%USERPROFILE%")
+        || raw.eq_ignore_ascii_case("$ENV:USERPROFILE")
     {
         return Some(normalize_lexical_path(homedir));
     }
-    if trimmed == "$PWD" || trimmed == "${PWD}" {
+    if raw == "$PWD" || raw == "${PWD}" {
         return Some(normalize_lexical_path(base_dir));
     }
     for prefix in ["~/", "~\\", "$HOME/", "$HOME\\", "${HOME}/", "${HOME}\\"] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
+        if let Some(rest) = raw.strip_prefix(prefix) {
             return Some(normalize_lexical_path(&homedir.join(rest)));
         }
     }
     for prefix in ["$PWD/", "$PWD\\", "${PWD}/", "${PWD}\\"] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
+        if let Some(rest) = raw.strip_prefix(prefix) {
             return Some(normalize_lexical_path(&base_dir.join(rest)));
         }
     }
-    let lower = trimmed.to_ascii_lowercase();
+    let lower = raw.to_ascii_lowercase();
     for prefix in [
         "%userprofile%\\",
         "%userprofile%/",
@@ -1510,7 +1523,7 @@ fn expand_shell_known_prefix(raw: &str, base_dir: &Path, homedir: &Path) -> Opti
         "$env:userprofile/",
     ] {
         if let Some(rest) = lower.strip_prefix(prefix) {
-            let tail = &trimmed[trimmed.len() - rest.len()..];
+            let tail = &raw[raw.len() - rest.len()..];
             return Some(normalize_lexical_path(&homedir.join(tail)));
         }
     }
@@ -1647,36 +1660,34 @@ fn validate_shell_path_token(
     require_write: bool,
     at_command_pos: bool,
 ) -> Result<Option<PathBuf>, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || is_url_token(trimmed) {
+    if raw.is_empty() || is_url_token(raw) {
         return Ok(None);
     }
-    if is_safe_stdio_device(trimmed) {
+    if is_safe_stdio_device(raw) {
         return Ok(None);
     }
-    if at_command_pos && !require_write && is_safe_system_executable_path(trimmed) {
+    if at_command_pos && !require_write && is_safe_system_executable_path(raw) {
         return Ok(None);
     }
-    let resolved =
-        if let Some(expanded) = expand_shell_known_prefix(trimmed, base_dir, &ctx.homedir) {
-            expanded
-        } else if trimmed.starts_with('~') {
-            return Err(format!(
-                "Native shell command uses blocked tilde user path '{trimmed}'."
-            ));
-        } else if trimmed.starts_with('$')
-            && (require_write
-                || trimmed.contains("/../")
-                || trimmed.contains("\\..\\")
-                || trimmed.ends_with("/..")
-                || trimmed.ends_with("\\.."))
-        {
-            return Err(format!(
-                "Native shell command uses ambiguous variable path '{trimmed}'."
-            ));
-        } else {
-            lexical_tool_path(trimmed, base_dir).map_err(|e| e.to_string())?
-        };
+    let resolved = if let Some(expanded) = expand_shell_known_prefix(raw, base_dir, &ctx.homedir) {
+        expanded
+    } else if raw.starts_with('~') {
+        return Err(format!(
+            "Native shell command uses blocked tilde user path '{raw}'."
+        ));
+    } else if raw.starts_with('$')
+        && (require_write
+            || raw.contains("/../")
+            || raw.contains("\\..\\")
+            || raw.ends_with("/..")
+            || raw.ends_with("\\.."))
+    {
+        return Err(format!(
+            "Native shell command uses ambiguous variable path '{raw}'."
+        ));
+    } else {
+        exact_lexical_path(raw, base_dir)?
+    };
 
     let canonical = if require_write {
         assert_write_path_allowed(&resolved, ctx).map_err(|e| e.to_string())?
@@ -1743,7 +1754,7 @@ fn validate_shell_glob_operand(
     } else if let Some(expanded) = expand_shell_known_prefix(dir_part, base_dir, &ctx.homedir) {
         expanded
     } else {
-        lexical_tool_path(dir_part, base_dir).map_err(|e| e.to_string())?
+        exact_lexical_path(dir_part, base_dir)?
     };
 
     let Ok(canonical_dir) = assert_read_path_allowed(&search_dir, ctx) else {
@@ -1780,20 +1791,19 @@ fn validate_shell_operand_candidate(
     is_mut: bool,
     force_write: bool,
 ) -> Result<(), String> {
-    let trimmed = candidate.trim();
-    if trimmed.is_empty() || is_url_token(trimmed) || trimmed.starts_with('-') {
+    if candidate.is_empty() || is_url_token(candidate) {
         return Ok(());
     }
 
-    if !quoted && (trimmed.contains('*') || trimmed.contains('?') || trimmed.contains('[')) {
-        validate_shell_glob_operand(trimmed, base_dir, ctx, force_write || is_mut)?;
+    if !quoted && (candidate.contains('*') || candidate.contains('?') || candidate.contains('[')) {
+        validate_shell_glob_operand(candidate, base_dir, ctx, force_write || is_mut)?;
     }
 
-    let explicit_path = looks_like_filesystem_path(trimmed);
+    let explicit_path = looks_like_filesystem_path(candidate);
     let lexical_candidate = if explicit_path {
         None
     } else {
-        lexical_tool_path(trimmed, base_dir).ok()
+        exact_lexical_path(candidate, base_dir).ok()
     };
     let exists_on_disk = lexical_candidate
         .as_ref()
@@ -1803,7 +1813,7 @@ fn validate_shell_operand_candidate(
         return Ok(());
     }
 
-    let normalized = trimmed.replace('\\', "/").to_ascii_lowercase();
+    let normalized = candidate.replace('\\', "/").to_ascii_lowercase();
     let touches_protected_meta = normalized == ".git"
         || normalized.starts_with(".git/")
         || normalized.contains("/.git/")
@@ -1815,7 +1825,7 @@ fn validate_shell_operand_candidate(
     let require_write = force_write || (is_mut && (exists_on_disk || touches_protected_meta));
 
     if let Some(canonical) =
-        validate_shell_path_token(trimmed, base_dir, ctx, require_write, false)?
+        validate_shell_path_token(candidate, base_dir, ctx, require_write, false)?
         && is_directory_reading_shell_command(current_cmd)
         && std::fs::metadata(&canonical).is_ok_and(|m| m.is_dir())
     {
@@ -1830,7 +1840,8 @@ fn validate_inline_script_paths(
     ctx: &ToolExecutionContext,
 ) -> Result<(), String> {
     // Scan single- and double-quoted string literals inside `-c` / `-e` interpreter payloads
-    // for sensitive OS, home-relative, or existing relative (e.g. symlinked) filesystem paths.
+    // for sensitive OS, home-relative, or existing relative (e.g. symlinked) filesystem paths,
+    // preserving exact filename bytes (such as trailing spaces).
     let chars: Vec<char> = script.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -1848,16 +1859,16 @@ fn validate_inline_script_paths(
             if i < chars.len() {
                 i += 1;
             }
-            let trimmed = literal.trim();
-            let looks_sensitive_os_path = trimmed == "/"
-                || trimmed.starts_with("~/")
-                || trimmed.starts_with("~\\")
-                || trimmed.starts_with("$HOME/")
-                || trimmed.starts_with("${HOME}/")
-                || trimmed.starts_with("../")
-                || trimmed.starts_with("..\\")
-                || has_windows_drive_prefix(trimmed)
-                || trimmed.starts_with("\\\\")
+            let raw = literal.as_str();
+            let looks_sensitive_os_path = raw == "/"
+                || raw.starts_with("~/")
+                || raw.starts_with("~\\")
+                || raw.starts_with("$HOME/")
+                || raw.starts_with("${HOME}/")
+                || raw.starts_with("../")
+                || raw.starts_with("..\\")
+                || has_windows_drive_prefix(raw)
+                || raw.starts_with("\\\\")
                 || [
                     "/etc/",
                     "/var/",
@@ -1870,15 +1881,14 @@ fn validate_inline_script_paths(
                     "/tmp/",
                 ]
                 .iter()
-                .any(|p| trimmed.to_ascii_lowercase().starts_with(p));
-            let exists_rel = !trimmed.is_empty()
-                && !trimmed.starts_with('-')
-                && !is_url_token(trimmed)
-                && lexical_tool_path(trimmed, base_dir)
+                .any(|p| raw.to_ascii_lowercase().starts_with(p));
+            let exists_rel = !raw.is_empty()
+                && !is_url_token(raw)
+                && exact_lexical_path(raw, base_dir)
                     .ok()
                     .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
             if looks_sensitive_os_path || exists_rel {
-                validate_shell_path_token(trimmed, base_dir, ctx, false, false)?;
+                validate_shell_path_token(raw, base_dir, ctx, false, false)?;
             }
         } else {
             i += 1;
@@ -1995,7 +2005,7 @@ fn validate_native_shell_command_text(
                     }
                     let cmd_exists_locally = !is_url_token(text)
                         && !is_safe_system_executable_path(text)
-                        && lexical_tool_path(text, &current_dir)
+                        && exact_lexical_path(text, &current_dir)
                             .ok()
                             .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
                     if looks_like_filesystem_path(text) || cmd_exists_locally {

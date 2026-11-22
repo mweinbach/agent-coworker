@@ -1142,12 +1142,18 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
         std::fs::write(h.ws.join(".cowork/auth/mcp.json"), "{}").unwrap();
 
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link ")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join(" credential-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("-credential-link")).unwrap();
         std::os::unix::fs::symlink(&ssh_key, h.ws.join("src/secret-link")).unwrap();
         std::os::unix::fs::symlink(&git_hook, h.ws.join("hook-link")).unwrap();
         std::os::unix::fs::symlink(h.ws.join(".cowork"), h.ws.join("cfg-link")).unwrap();
 
         let blocked = [
             "cat credential-link",
+            "cat 'credential-link '",
+            "cat ' credential-link'",
+            "cat -- -credential-link",
             "cat ./credential-link",
             "cat src/secret-link",
             "cd src && cat secret-link",
@@ -1157,6 +1163,7 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
             "cp README.md hook-link",
             "grep -r token cfg-link",
             "python3 -c 'print(open(\"credential-link\").read())'",
+            "python3 -c 'print(open(\"credential-link \").read())'",
         ];
         for cmd in blocked {
             assert!(
@@ -1165,6 +1172,14 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
                 "yolo={yolo}: relative symlink/glob operand escaping boundary must be denied: {cmd}"
             );
         }
+        assert!(
+            !h.decide_silently(
+                CLAUDE_TOOL,
+                claude_tool("Read", json!({ "file_path": "credential-link " }))
+            )
+            .await,
+            "yolo={yolo}: exact filename with trailing space must be authorized on Read"
+        );
 
         // Benign relative workspace commands still pass.
         for ok_cmd in ["cat README.md", "cd src && cat ok.rs", "grep -r ok src"] {

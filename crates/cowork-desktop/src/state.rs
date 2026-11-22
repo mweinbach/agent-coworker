@@ -4140,6 +4140,16 @@ impl AppState {
                 {
                     obj.insert("threadId".to_string(), json!(thread_id));
                 }
+                if let Some(item) = params_owned.get("item")
+                    && item.get("type").and_then(Value::as_str) == Some("userMessage")
+                    && let Some(cid) = item
+                        .get("clientMessageId")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|c| !c.is_empty())
+                {
+                    seen_user_keys.insert(format!("cid:{cid}"));
+                }
                 self.apply_ws_notification_inner(&workspace_id, method, params_owned, ts_ms, false);
                 continue;
             }
@@ -4181,6 +4191,20 @@ impl AppState {
                         .thread_runtime_by_id
                         .entry(thread_id.to_string())
                         .or_default();
+                    // Reconcile a client-emitted `user_message` immediately following an ID-less
+                    // projected `item/started` (`userMessage`) for the same consumed steer.
+                    if let Some(ref c) = cid
+                        && let Some(FeedItem::Message {
+                            role: FeedMessageRole::User,
+                            content: prev_content,
+                            client_message_id: prev_cid @ None,
+                            ..
+                        }) = rt.feed.last_mut()
+                        && prev_content.trim() == content.trim()
+                    {
+                        *prev_cid = Some(c.clone());
+                        continue;
+                    }
                     rt.feed.push(FeedItem::Message {
                         id: format!("transcript-user-{idx}"),
                         role: FeedMessageRole::User,
@@ -7717,6 +7741,63 @@ impl AppState {
         }
     }
 
+    /// Returns whether `provider` is enabled for model selection in `ws`, honoring the
+    /// workspace's `lmStudioEnabled` preference for `"lmstudio"` even when a local LM Studio
+    /// server is reachable.
+    pub fn is_provider_enabled_for_workspace(
+        provider: &ProviderSummary,
+        ws: Option<&WorkspaceRecord>,
+    ) -> bool {
+        if !provider.configured {
+            return false;
+        }
+        if provider.id.eq_ignore_ascii_case("lmstudio") {
+            let lm_enabled = ws
+                .and_then(|w| w.defaults.get("lmStudioEnabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(provider.configured);
+            if !lm_enabled {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Resolves the workspace record whose provider enablement settings (`lmStudioEnabled`, etc.)
+    /// govern model selection, falling back to the grouped Chats or active management workspace
+    /// when `ws` is `None` (e.g., on the one-off quick-chat landing screen).
+    pub fn resolve_provider_settings_workspace<'a>(
+        &'a self,
+        ws: Option<&'a WorkspaceRecord>,
+    ) -> Option<&'a WorkspaceRecord> {
+        if let Some(record) = ws {
+            return Some(record);
+        }
+        if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL)
+            && let Some(chat_ws) = self
+                .workspaces
+                .iter()
+                .find(|w| !w.archived && w.one_off_chat)
+        {
+            return Some(chat_ws);
+        }
+        self.resolve_management_workspace_id()
+            .and_then(|id| self.workspaces.iter().find(|w| w.id == id && !w.archived))
+    }
+
+    fn is_lmstudio_allowed_for_workspace(&self, ws: Option<&WorkspaceRecord>) -> bool {
+        if let Some(lm_enabled) = ws
+            .and_then(|w| w.defaults.get("lmStudioEnabled"))
+            .and_then(Value::as_bool)
+        {
+            return lm_enabled;
+        }
+        self.provider_catalog
+            .iter()
+            .find(|p| p.id.eq_ignore_ascii_case("lmstudio"))
+            .is_none_or(|p| p.configured)
+    }
+
     /// Resolves `(provider, model)` from draft, thread, workspace, or provider catalog defaults.
     /// Shared by submission flows, `CreateThread`, and `views::chat::composer::resolve_composer_model`.
     pub fn resolve_submission_model(
@@ -7725,17 +7806,54 @@ impl AppState {
         draft: Option<&ComposerDraft>,
         ws: Option<&WorkspaceRecord>,
     ) -> Option<(String, String)> {
-        let preferred_provider = draft
+        let settings_ws = self.resolve_provider_settings_workspace(ws);
+        let lmstudio_allowed = self.is_lmstudio_allowed_for_workspace(settings_ws);
+        let allow_provider = |pid: &str, from_existing_thread: bool| {
+            from_existing_thread || !(pid.eq_ignore_ascii_case("lmstudio") && !lmstudio_allowed)
+        };
+
+        let draft_disallowed = draft
             .and_then(|d| d.provider.as_deref())
-            .or_else(|| thread.and_then(|t| t.provider.as_deref()))
-            .or_else(|| ws.and_then(|w| w.default_provider.as_deref()))
+            .map(str::trim)
+            .is_some_and(|p| !p.is_empty() && !allow_provider(p, false));
+        let thread_disallowed = thread.is_some_and(|t| {
+            t.provider
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|p| !p.is_empty() && !allow_provider(p, !t.draft))
+        });
+        let ws_disallowed = ws
+            .and_then(|w| w.default_provider.as_deref())
+            .map(str::trim)
+            .is_some_and(|p| !p.is_empty() && !allow_provider(p, false));
+
+        let preferred_provider = draft
+            .filter(|_| !draft_disallowed)
+            .and_then(|d| d.provider.as_deref())
+            .or_else(|| {
+                thread
+                    .filter(|_| !thread_disallowed)
+                    .and_then(|t| t.provider.as_deref())
+            })
+            .or_else(|| {
+                ws.filter(|_| !ws_disallowed)
+                    .and_then(|w| w.default_provider.as_deref())
+            })
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
         let preferred_model = draft
+            .filter(|_| !draft_disallowed)
             .and_then(|d| d.model.as_deref())
-            .or_else(|| thread.and_then(|t| t.model.as_deref()))
-            .or_else(|| ws.and_then(|w| w.default_model.as_deref()))
+            .or_else(|| {
+                thread
+                    .filter(|_| !thread_disallowed)
+                    .and_then(|t| t.model.as_deref())
+            })
+            .or_else(|| {
+                ws.filter(|_| !ws_disallowed)
+                    .and_then(|w| w.default_model.as_deref())
+            })
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
@@ -7761,7 +7879,11 @@ impl AppState {
             }
         }
 
-        for provider in self.provider_catalog.iter().filter(|p| p.configured) {
+        for provider in self
+            .provider_catalog
+            .iter()
+            .filter(|p| Self::is_provider_enabled_for_workspace(p, settings_ws))
+        {
             if let Some(mid) = self.default_model_by_provider.get(&provider.id)
                 && provider.models.iter().any(|m| {
                     m.id == *mid && m.enabled && !is_hidden_lmstudio_model_id(&provider.id, &m.id)
@@ -24628,6 +24750,196 @@ mod tests {
             })
             .collect();
         assert_eq!(user_texts, vec!["continue", "continue", "with id"]);
+    }
+
+    #[test]
+    fn replay_local_transcript_deduplicates_projected_user_items_and_client_entries() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-steer".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Steer replay".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        let entries = vec![
+            // Case 1: projected `item/started` with `clientMessageId` followed by client
+            // `user_message` emitted when the accepted steer was consumed.
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:01Z".to_string(),
+                thread_id: "th-steer".to_string(),
+                direction: "server".to_string(),
+                payload: json!({
+                    "method": "item/started",
+                    "params": {
+                        "threadId": "th-steer",
+                        "item": {
+                            "id": "item-user-1",
+                            "type": "userMessage",
+                            "clientMessageId": "steer-cid-1",
+                            "content": [{ "type": "text", "text": "Switch to strict mode" }]
+                        }
+                    }
+                }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:01Z".to_string(),
+                thread_id: "th-steer".to_string(),
+                direction: "client".to_string(),
+                payload: json!({
+                    "type": "user_message",
+                    "text": "Switch to strict mode",
+                    "clientMessageId": "steer-cid-1"
+                }),
+            },
+            // Case 2: projected `item/started` without `clientMessageId` immediately followed
+            // by client `user_message` carrying the steer's `clientMessageId`.
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:02Z".to_string(),
+                thread_id: "th-steer".to_string(),
+                direction: "server".to_string(),
+                payload: json!({
+                    "method": "item/started",
+                    "params": {
+                        "threadId": "th-steer",
+                        "item": {
+                            "id": "item-user-2",
+                            "type": "userMessage",
+                            "content": [{ "type": "text", "text": "Focus on tests" }]
+                        }
+                    }
+                }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:02Z".to_string(),
+                thread_id: "th-steer".to_string(),
+                direction: "client".to_string(),
+                payload: json!({
+                    "type": "user_message",
+                    "text": "Focus on tests",
+                    "clientMessageId": "steer-cid-2"
+                }),
+            },
+            // Case 3: client `user_message` before projected `item/started` with matching ID.
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:03Z".to_string(),
+                thread_id: "th-steer".to_string(),
+                direction: "client".to_string(),
+                payload: json!({
+                    "type": "user_message",
+                    "text": "Normal follow-up",
+                    "clientMessageId": "msg-cid-3"
+                }),
+            },
+            TranscriptLogEntry {
+                ts: "2026-01-01T00:00:03Z".to_string(),
+                thread_id: "th-steer".to_string(),
+                direction: "server".to_string(),
+                payload: json!({
+                    "method": "item/started",
+                    "params": {
+                        "threadId": "th-steer",
+                        "item": {
+                            "id": "item-user-3",
+                            "type": "userMessage",
+                            "clientMessageId": "msg-cid-3",
+                            "content": [{ "type": "text", "text": "Normal follow-up" }]
+                        }
+                    }
+                }),
+            },
+        ];
+
+        state.apply_store_event(StoreEvent::LocalTranscriptLoaded {
+            request_id: "req-steer".to_string(),
+            thread_id: "th-steer".to_string(),
+            result: Ok(entries),
+        });
+
+        let rt = state
+            .thread_runtime_by_id
+            .get("th-steer")
+            .expect("hydrated runtime");
+        let user_texts: Vec<&str> = rt
+            .feed
+            .iter()
+            .filter_map(|item| match item {
+                FeedItem::Message {
+                    role: FeedMessageRole::User,
+                    content,
+                    ..
+                } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            user_texts,
+            vec![
+                "Switch to strict mode",
+                "Focus on tests",
+                "Normal follow-up"
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_submission_model_respects_workspace_lmstudio_enabled_setting() {
+        let mut state = AppState::default();
+        let mut ws = WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1);
+        ws.defaults = json!({ "lmStudioEnabled": false });
+        state.workspaces.push(ws.clone());
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.provider_catalog = vec![
+            ProviderSummary {
+                id: "lmstudio".to_string(),
+                name: "LM Studio".to_string(),
+                configured: true,
+                models: vec![ProviderModelSummary {
+                    id: "llama-3.1-8b".to_string(),
+                    name: "Llama 3.1 8B".to_string(),
+                    enabled: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ProviderSummary {
+                id: "openai".to_string(),
+                name: "OpenAI".to_string(),
+                configured: true,
+                models: vec![ProviderModelSummary {
+                    id: "gpt-5.4".to_string(),
+                    name: "GPT-5.4".to_string(),
+                    enabled: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+
+        // Fallback model selection skips LM Studio when lmStudioEnabled is false.
+        assert_eq!(
+            state.resolve_submission_model(None, None, Some(&ws)),
+            Some(("openai".to_string(), "gpt-5.4".to_string()))
+        );
+
+        // Even if the workspace previously defaulted to lmstudio, disabling the integration
+        // falls back to an enabled provider instead of keeping lmstudio.
+        ws.default_provider = Some("lmstudio".to_string());
+        ws.default_model = Some("llama-3.1-8b".to_string());
+        assert_eq!(
+            state.resolve_submission_model(None, None, Some(&ws)),
+            Some(("openai".to_string(), "gpt-5.4".to_string()))
+        );
+
+        // Re-enabling lmStudioEnabled restores LM Studio eligibility.
+        ws.defaults = json!({ "lmStudioEnabled": true });
+        assert_eq!(
+            state.resolve_submission_model(None, None, Some(&ws)),
+            Some(("lmstudio".to_string(), "llama-3.1-8b".to_string()))
+        );
     }
 
     #[test]

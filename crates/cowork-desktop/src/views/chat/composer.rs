@@ -676,11 +676,14 @@ struct ProviderModelGroup<'a> {
     models: Vec<&'a ProviderModelSummary>,
 }
 
-fn configured_provider_groups(providers: &[ProviderSummary]) -> Vec<ProviderModelGroup<'_>> {
+fn configured_provider_groups<'a>(
+    providers: &'a [ProviderSummary],
+    ws: Option<&WorkspaceRecord>,
+) -> Vec<ProviderModelGroup<'a>> {
     providers
         .iter()
         .filter(|p| {
-            p.configured
+            AppState::is_provider_enabled_for_workspace(p, ws)
                 && cowork_config::ProviderName::parse(&p.id)
                     .map(|prov| prov.is_user_facing())
                     .unwrap_or(true)
@@ -1059,7 +1062,8 @@ fn build_model_selector(
     ctx: &FooterCtx<'_>,
     resolved: Option<&ResolvedComposerModel>,
 ) -> El {
-    let groups = configured_provider_groups(&s.provider_catalog);
+    let settings_ws = s.resolve_provider_settings_workspace(ctx.ws);
+    let groups = configured_provider_groups(&s.provider_catalog, settings_ws);
     let current_id = resolved.map(|r| encode_model_option_id(&r.provider_id, &r.model_id));
     let model_disabled = ctx.input_disabled || ctx.non_draft_locked;
     let is_open = s.chat_ui.model_combobox.is_open() && !model_disabled;
@@ -2606,7 +2610,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let groups = configured_provider_groups(&providers);
+        let groups = configured_provider_groups(&providers, None);
         assert_eq!(groups.len(), 2);
 
         let only_anthropic = filter_provider_groups(&groups, Some("anthropic"), "");
@@ -2617,5 +2621,36 @@ mod tests {
         let global_search = filter_provider_groups(&groups, Some("anthropic"), "gpt");
         assert_eq!(global_search.len(), 1);
         assert_eq!(global_search[0].0.id, "openai");
+    }
+
+    #[test]
+    fn configured_provider_groups_hides_lmstudio_when_workspace_disables_integration() {
+        let providers = vec![
+            sample_provider(),
+            ProviderSummary {
+                id: "lmstudio".into(),
+                name: "LM Studio".into(),
+                configured: true,
+                models: vec![ProviderModelSummary {
+                    id: "qwen2.5-coder".into(),
+                    name: "Qwen 2.5 Coder".into(),
+                    enabled: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+
+        let mut ws_disabled = WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1);
+        ws_disabled.defaults = serde_json::json!({ "lmStudioEnabled": false });
+        let disabled_groups = configured_provider_groups(&providers, Some(&ws_disabled));
+        assert_eq!(disabled_groups.len(), 1);
+        assert_eq!(disabled_groups[0].provider.id, "openai");
+
+        let mut ws_enabled = WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1);
+        ws_enabled.defaults = serde_json::json!({ "lmStudioEnabled": true });
+        let enabled_groups = configured_provider_groups(&providers, Some(&ws_enabled));
+        assert_eq!(enabled_groups.len(), 2);
+        assert!(enabled_groups.iter().any(|g| g.provider.id == "lmstudio"));
     }
 }

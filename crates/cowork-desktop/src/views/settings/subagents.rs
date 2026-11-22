@@ -307,6 +307,8 @@ fn open_create_dialog(s: &mut AppState) {
         .collect();
     s.settings_ui.subagent_draft_mcp_servers = HashSet::new();
     s.settings_ui.subagent_draft_skill_names = HashSet::new();
+    s.settings_ui.subagent_saving = false;
+    s.settings_ui.subagent_save_error = None;
     s.settings_ui.subagent_dialog_open = true;
 }
 
@@ -342,6 +344,8 @@ fn open_edit_dialog(s: &mut AppState, entry: &AgentProfileCatalogEntry) {
     s.settings_ui.subagent_draft_mcp_servers =
         profile.allowed_mcp_servers.iter().cloned().collect();
     s.settings_ui.subagent_draft_skill_names = profile.skill_names.iter().cloned().collect();
+    s.settings_ui.subagent_saving = false;
+    s.settings_ui.subagent_save_error = None;
     s.settings_ui.subagent_dialog_open = true;
 }
 
@@ -568,6 +572,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                                 s.settings_ui.subagent_delete_confirm = None;
                                 s.settings_ui.subagent_dialog_open = false;
                                 s.settings_ui.subagent_editing_id = None;
+                                s.settings_ui.subagent_saving = false;
+                                s.settings_ui.subagent_save_error = None;
+                                s.pending_agent_profile_upsert_rpc = None;
                             }
                             s.sync_active_workspace_agent_profiles();
                             s.dispatch(Action::Settings(
@@ -1342,6 +1349,15 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         }
 
         let ws_save = ws_id.clone();
+        let subagent_saving = s.settings_ui.subagent_saving;
+        if let Some(save_err) = s
+            .settings_ui
+            .subagent_save_error
+            .as_deref()
+            .filter(|msg| !msg.trim().is_empty())
+        {
+            scroll_inner = scroll_inner.child(callout_banner(StatusTone::Danger, save_err, k, t));
+        }
         let footer = row()
             .w_full()
             .justify_end()
@@ -1354,14 +1370,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .on_press(|s: &mut AppState| {
                         s.settings_ui.subagent_dialog_open = false;
                         s.settings_ui.subagent_editing_id = None;
+                        s.settings_ui.subagent_saving = false;
+                        s.settings_ui.subagent_save_error = None;
+                        s.pending_agent_profile_upsert_rpc = None;
                     })
                     .build(k),
             )
             .child(
-                Button::new("Save")
+                Button::new(if subagent_saving { "Saving..." } else { "Save" })
                     .variant(ButtonVariant::Contrast)
                     .control_size(ControlSize::Regular)
-                    .disabled(!can_save)
+                    .disabled(!can_save || subagent_saving)
                     .on_press(move |s: &mut AppState| {
                         let name = s.settings_ui.subagent_name_edit.text.trim().to_string();
                         let id = s
@@ -1432,12 +1451,13 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             default_context_mode: existing_meta
                                 .and_then(|e| e.profile.default_context_mode.clone()),
                         };
+                        // Keep the editor open and draft intact until the server acknowledges
+                        // `cowork/agentProfiles/upsert`, so transient disconnects or validation
+                        // failures remain recoverable and retryable.
                         s.dispatch(Action::Settings(SettingsAction::UpsertAgentProfile {
                             workspace_id: ws_save.clone(),
                             input,
                         }));
-                        s.settings_ui.subagent_dialog_open = false;
-                        s.settings_ui.subagent_editing_id = None;
                     })
                     .build(k),
             );
@@ -1449,6 +1469,9 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .on_close(|s: &mut AppState| {
                 s.settings_ui.subagent_dialog_open = false;
                 s.settings_ui.subagent_editing_id = None;
+                s.settings_ui.subagent_saving = false;
+                s.settings_ui.subagent_save_error = None;
+                s.pending_agent_profile_upsert_rpc = None;
             })
             .child(
                 col()

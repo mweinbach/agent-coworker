@@ -360,6 +360,7 @@ pub struct WorkspaceRuntime {
     pub effective_skills: Vec<Value>,
     pub skill_scopes: Vec<Value>,
     pub skills_loaded: bool,
+    pub skill_improvement_status: Option<Value>,
     pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub agent_profiles_loaded: bool,
     pub subagents: Vec<SubagentProfile>,
@@ -1231,6 +1232,8 @@ impl Default for AgentProfileUpsertInputWire {
 pub struct TaskSummaryView {
     pub id: String,
     pub workspace_id: String,
+    #[serde(default)]
+    pub source_session_id: Option<String>,
     pub title: String,
     pub status: String,
     pub schedule: Option<String>,
@@ -1803,7 +1806,6 @@ pub struct AppState {
     pub installed_plugin_entries: Vec<Value>,
     pub available_plugins: Vec<Value>,
     pub plugin_catalog_warnings: Vec<String>,
-    pub skill_improvement_status: Option<Value>,
     pub subagents: Vec<SubagentProfile>,
     pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub memory_entries: Vec<MemoryEntry>,
@@ -1872,6 +1874,7 @@ pub struct AppState {
     pub(crate) pending_removed_workspace_ids: HashSet<String>,
     pub(crate) pending_task_feedback_rpcs: HashMap<u64, (String, String)>,
     pub(crate) pending_task_create_rpc: Option<(u64, String)>,
+    pub(crate) pending_agent_profile_upsert_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
@@ -1965,7 +1968,6 @@ impl Default for AppState {
             installed_plugin_entries: Vec::new(),
             available_plugins: Vec::new(),
             plugin_catalog_warnings: Vec::new(),
-            skill_improvement_status: None,
             subagents: Vec::new(),
             agent_profiles_catalog: AgentProfilesCatalogState::default(),
             memory_entries: Vec::new(),
@@ -2027,6 +2029,7 @@ impl Default for AppState {
             pending_removed_workspace_ids: HashSet::new(),
             pending_task_feedback_rpcs: HashMap::new(),
             pending_task_create_rpc: None,
+            pending_agent_profile_upsert_rpc: None,
             active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
@@ -5144,6 +5147,17 @@ impl AppState {
                     {
                         self.pending_task_create_rpc = None;
                         self.shell_ui.task_create_submitting = false;
+                    }
+                    if self
+                        .pending_agent_profile_upsert_rpc
+                        .as_ref()
+                        .is_some_and(|(_, ws_id)| ws_id == &workspace_id)
+                    {
+                        self.pending_agent_profile_upsert_rpc = None;
+                        self.settings_ui.subagent_saving = false;
+                        self.settings_ui.subagent_save_error = Some(
+                            "Connection dropped while saving subagent; please retry.".to_string(),
+                        );
                     }
                     self.pending_task_questions_rpcs
                         .retain(|_, pending| pending.workspace_id != workspace_id);
@@ -9142,12 +9156,15 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let profile_payload = build_agent_profile_upsert_payload(&input);
-                let _ = self.send_ws_request(
+                let req_id = self.send_ws_request(
                     &workspace_id,
                     "cowork/agentProfiles/upsert",
                     json!({ "cwd": cwd, "profile": profile_payload }),
                     false,
                 );
+                self.pending_agent_profile_upsert_rpc = Some((req_id, workspace_id));
+                self.settings_ui.subagent_saving = true;
+                self.settings_ui.subagent_save_error = None;
             }
             SettingsAction::DeleteAgentProfile {
                 workspace_id,
@@ -10130,6 +10147,17 @@ impl AppState {
                     self.settings_ui.subagent_delete_confirm = None;
                     self.settings_ui.subagent_dialog_open = false;
                     self.settings_ui.subagent_editing_id = None;
+                    self.settings_ui.subagent_saving = false;
+                    self.settings_ui.subagent_save_error = None;
+                }
+                if self
+                    .pending_agent_profile_upsert_rpc
+                    .as_ref()
+                    .is_some_and(|(_, ws_id)| ws_id == &workspace_id)
+                {
+                    self.pending_agent_profile_upsert_rpc = None;
+                    self.settings_ui.subagent_saving = false;
+                    self.settings_ui.subagent_save_error = None;
                 }
                 self.sync_active_workspace_mcp_servers();
                 self.sync_active_workspace_plugins();
@@ -12213,6 +12241,18 @@ impl AppState {
             | "cowork/agentProfiles/workspaceAvailability/set" => {
                 let evt = payload.get("event").unwrap_or(&payload);
                 self.apply_agent_profiles_catalog_event(workspace_id, evt);
+                if method == "cowork/agentProfiles/upsert"
+                    && self
+                        .pending_agent_profile_upsert_rpc
+                        .as_ref()
+                        .is_none_or(|(id, _)| *id == request_id)
+                {
+                    self.pending_agent_profile_upsert_rpc = None;
+                    self.settings_ui.subagent_saving = false;
+                    self.settings_ui.subagent_save_error = None;
+                    self.settings_ui.subagent_dialog_open = false;
+                    self.settings_ui.subagent_editing_id = None;
+                }
             }
             "cowork/memory/list" | "cowork/memory/upsert" | "cowork/memory/delete" => {
                 let target = payload.get("event").unwrap_or(&payload);
@@ -12278,7 +12318,10 @@ impl AppState {
             "cowork/skills/improvement/status"
             | "cowork/skills/improvement/run"
             | "cowork/skills/improvement/restore" => {
-                self.skill_improvement_status = Some(payload);
+                self.workspace_runtime_by_id
+                    .entry(workspace_id.to_string())
+                    .or_default()
+                    .skill_improvement_status = Some(payload);
             }
             "cowork/backups/workspace/read"
             | "cowork/backups/workspace/checkpoint"
@@ -12328,6 +12371,7 @@ impl AppState {
                         arr.iter()
                             .filter_map(|v| parse_task_summary(v, workspace_id)),
                     );
+                    self.reconcile_source_task_locks_for_workspace(workspace_id);
                 }
             }
             "task/read"
@@ -12660,6 +12704,16 @@ impl AppState {
         {
             self.pending_task_create_rpc = None;
             self.shell_ui.task_create_submitting = false;
+        }
+        if method == "cowork/agentProfiles/upsert"
+            && self
+                .pending_agent_profile_upsert_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_agent_profile_upsert_rpc = None;
+            self.settings_ui.subagent_saving = false;
+            self.settings_ui.subagent_save_error = Some(err.message.clone());
         }
         if matches!(
             method,
@@ -15213,6 +15267,73 @@ impl AppState {
         }
     }
 
+    pub fn skill_improvement_status_for_workspace(&self, workspace_id: &str) -> Option<&Value> {
+        self.workspace_runtime_by_id
+            .get(workspace_id)
+            .and_then(|rt| rt.skill_improvement_status.as_ref())
+    }
+
+    fn reconcile_source_task_locks_for_workspace(&mut self, workspace_id: &str) {
+        let mut active_locks: HashMap<String, SourceTaskLock> = HashMap::new();
+        for task in self
+            .tasks
+            .iter()
+            .filter(|t| t.workspace_id == workspace_id && !t.is_terminal())
+        {
+            let Some(src_sid) = task
+                .source_session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            let lock = SourceTaskLock {
+                task_id: task.id.clone(),
+                task_title: task.title.clone(),
+                read_only: true,
+            };
+            active_locks.insert(src_sid.to_string(), lock.clone());
+            // Also key by local thread ID when a thread's canonical session_id differs.
+            for thread in self.threads.iter().filter(|th| {
+                th.workspace_id == workspace_id
+                    && (th.id == src_sid || th.session_id.as_deref() == Some(src_sid))
+            }) {
+                active_locks.insert(thread.id.clone(), lock.clone());
+            }
+        }
+
+        let ws_thread_ids: HashSet<String> = self
+            .threads
+            .iter()
+            .filter(|th| th.workspace_id == workspace_id)
+            .map(|th| th.id.clone())
+            .collect();
+        let ws_task_ids: HashSet<String> = self
+            .tasks
+            .iter()
+            .filter(|t| t.workspace_id == workspace_id)
+            .map(|t| t.id.clone())
+            .collect();
+
+        for (tid, rt) in self.thread_runtime_by_id.iter_mut() {
+            if let Some(lock) = active_locks.get(tid) {
+                rt.source_task = Some(lock.clone());
+            } else if rt.source_task.as_ref().is_some_and(|existing| {
+                ws_thread_ids.contains(tid) || ws_task_ids.contains(&existing.task_id)
+            }) {
+                rt.source_task = None;
+            }
+        }
+
+        for (tid, lock) in active_locks {
+            self.thread_runtime_by_id
+                .entry(tid)
+                .or_default()
+                .source_task = Some(lock);
+        }
+    }
+
     fn upsert_task_summary(&mut self, summary: TaskSummaryView) {
         if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == summary.id) {
             *existing = summary;
@@ -15325,6 +15446,7 @@ impl AppState {
             }
         }
         self.upsert_task_summary(task.summary.clone());
+        self.reconcile_source_task_locks_for_workspace(workspace_id);
         // The server deliberately leaves these sessions out of ordinary thread/list responses.
         for linked in &task.threads {
             if let Some(thread) = self
@@ -16247,6 +16369,10 @@ fn parse_task_summary(val: &Value, fallback_workspace_id: &str) -> Option<TaskSu
         if parsed.workspace_id.is_empty() {
             parsed.workspace_id = fallback_workspace_id.to_string();
         }
+        parsed.source_session_id = parsed
+            .source_session_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         return Some(parsed);
     }
     let id = val
@@ -16263,6 +16389,12 @@ fn parse_task_summary(val: &Value, fallback_workspace_id: &str) -> Option<TaskSu
     Some(TaskSummaryView {
         id,
         workspace_id,
+        source_session_id: val
+            .get("sourceSessionId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         title: val
             .get("title")
             .and_then(Value::as_str)
@@ -30182,5 +30314,253 @@ mod tests {
             .collect();
         assert!(!ws_ids_after_remove.contains(&"project-wt1"));
         assert!(ws_ids_after_remove.contains(&"project-wt2"));
+    }
+
+    #[test]
+    fn skill_improvement_status_stays_scoped_per_workspace() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+
+        state.apply_ws_response(
+            "ws-a",
+            1,
+            "cowork/skills/improvement/status",
+            Ok(json!({
+                "event": {
+                    "type": "skill_improvement_status",
+                    "excludedSkills": ["skill-a-excluded"],
+                    "skills": [{ "skillName": "skill-a-only", "writable": true }]
+                }
+            })),
+        );
+
+        assert!(
+            state
+                .skill_improvement_status_for_workspace("ws-a")
+                .is_some()
+        );
+        assert!(
+            state
+                .skill_improvement_status_for_workspace("ws-b")
+                .is_none(),
+            "Project A's skill improvement status must not leak into Project B"
+        );
+
+        // Late response from ws-a after switching to ws-b stays scoped to ws-a.
+        state.active_workspace_id = Some("ws-b".to_string());
+        state.apply_ws_response(
+            "ws-b",
+            2,
+            "cowork/skills/improvement/status",
+            Ok(json!({
+                "event": {
+                    "type": "skill_improvement_status",
+                    "excludedSkills": ["skill-b-excluded"],
+                    "skills": [{ "skillName": "skill-b-only", "writable": true }]
+                }
+            })),
+        );
+        assert_eq!(
+            state
+                .skill_improvement_status_for_workspace("ws-a")
+                .unwrap()["event"]["excludedSkills"],
+            json!(["skill-a-excluded"])
+        );
+        assert_eq!(
+            state
+                .skill_improvement_status_for_workspace("ws-b")
+                .unwrap()["event"]["excludedSkills"],
+            json!(["skill-b-excluded"])
+        );
+    }
+
+    #[test]
+    fn task_lifecycle_reconciles_and_clears_source_session_lock() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-src".to_string(),
+            session_id: Some("sess-src".to_string()),
+            workspace_id: "ws-1".to_string(),
+            title: "Original chat".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        // Task promotion via `task/created` locks the source conversation (matched by sessionId).
+        state.apply_ws_notification(
+            "ws-1",
+            "task/created",
+            json!({
+                "task": {
+                    "id": "task-42",
+                    "title": "Migrate DB",
+                    "status": "in_progress",
+                    "revision": 1,
+                    "sourceSessionId": "sess-src"
+                }
+            }),
+        );
+        let lock = state
+            .thread_runtime_by_id
+            .get("th-src")
+            .and_then(|rt| rt.source_task.as_ref())
+            .expect("source thread must be locked after task promotion");
+        assert_eq!(lock.task_id, "task-42");
+        assert_eq!(lock.task_title, "Migrate DB");
+        assert!(lock.read_only);
+
+        // Terminal task update clears the source-session lock.
+        state.apply_ws_notification(
+            "ws-1",
+            "task/updated",
+            json!({
+                "task": {
+                    "id": "task-42",
+                    "title": "Migrate DB",
+                    "status": "completed",
+                    "revision": 2,
+                    "sourceSessionId": "sess-src"
+                }
+            }),
+        );
+        assert!(
+            state
+                .thread_runtime_by_id
+                .get("th-src")
+                .and_then(|rt| rt.source_task.as_ref())
+                .is_none(),
+            "terminal task must release source-session lock"
+        );
+
+        // `task/list` restores active lock and clears stale locks on refresh.
+        state.apply_ws_response(
+            "ws-1",
+            10,
+            "task/list",
+            Ok(json!({
+                "tasks": [{
+                    "id": "task-42",
+                    "title": "Migrate DB (reopened)",
+                    "status": "awaiting_review",
+                    "revision": 3,
+                    "sourceSessionId": "sess-src"
+                }]
+            })),
+        );
+        let restored = state
+            .thread_runtime_by_id
+            .get("th-src")
+            .and_then(|rt| rt.source_task.as_ref())
+            .expect("active task in task/list must lock source thread");
+        assert_eq!(restored.task_title, "Migrate DB (reopened)");
+    }
+
+    #[test]
+    fn subagent_upsert_retains_draft_on_failure_and_closes_on_success() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.settings_ui.subagent_dialog_open = true;
+        state.settings_ui.subagent_editing_id = Some("reviewer".to_string());
+        state.settings_ui.subagent_prompt_edit = TextEdit::new("Custom security audit prompt");
+
+        let input = AgentProfileUpsertInputWire {
+            scope: "workspace".to_string(),
+            id: "reviewer".to_string(),
+            display_name: "Reviewer".to_string(),
+            description: "Audits changes".to_string(),
+            enabled: true,
+            base_role: "reviewer".to_string(),
+            prompt: "Custom security audit prompt".to_string(),
+            allowed_built_in_tools: vec!["read".to_string()],
+            allowed_mcp_servers: Vec::new(),
+            skill_names: Vec::new(),
+            model: None,
+            reasoning_effort: None,
+            default_task_type: None,
+            default_context_mode: None,
+        };
+        state.dispatch(Action::Settings(SettingsAction::UpsertAgentProfile {
+            workspace_id: "ws-1".to_string(),
+            input: input.clone(),
+        }));
+        let req_1 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/agentProfiles/upsert" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected cowork/agentProfiles/upsert request");
+        assert!(state.settings_ui.subagent_dialog_open);
+        assert!(state.settings_ui.subagent_saving);
+
+        // Save error keeps dialog open, preserves editing ID & custom prompt, and surfaces error.
+        state.apply_ws_response(
+            "ws-1",
+            req_1,
+            "cowork/agentProfiles/upsert",
+            Err(WsRpcError {
+                code: -32000,
+                message: "Disk full".to_string(),
+                data: None,
+            }),
+        );
+        assert!(state.settings_ui.subagent_dialog_open);
+        assert!(!state.settings_ui.subagent_saving);
+        assert_eq!(
+            state.settings_ui.subagent_editing_id.as_deref(),
+            Some("reviewer")
+        );
+        assert_eq!(
+            state.settings_ui.subagent_prompt_edit.text,
+            "Custom security audit prompt"
+        );
+        assert_eq!(
+            state.settings_ui.subagent_save_error.as_deref(),
+            Some("Disk full")
+        );
+
+        // Retry succeeds -> closes editor and clears editing/saving state.
+        state.dispatch(Action::Settings(SettingsAction::UpsertAgentProfile {
+            workspace_id: "ws-1".to_string(),
+            input,
+        }));
+        let req_2 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/agentProfiles/upsert" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected retry cowork/agentProfiles/upsert request");
+        state.apply_ws_response(
+            "ws-1",
+            req_2,
+            "cowork/agentProfiles/upsert",
+            Ok(json!({ "event": { "type": "agent_profiles_catalog", "profiles": [] } })),
+        );
+        assert!(!state.settings_ui.subagent_dialog_open);
+        assert!(!state.settings_ui.subagent_saving);
+        assert!(state.settings_ui.subagent_editing_id.is_none());
+        assert!(state.settings_ui.subagent_save_error.is_none());
     }
 }

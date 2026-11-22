@@ -305,6 +305,13 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 s.settings_ui.open_select_key = None;
                 if let Some((_, id)) = pairs.iter().find(|(lbl, _)| lbl == chosen) {
                     s.dispatch(Action::Navigate(NavAction::SelectWorkspace(id.clone())));
+                    if s.settings_ui.skill_improvement_expanded {
+                        s.dispatch(Action::Settings(
+                            SettingsAction::RefreshSkillImprovementStatus {
+                                workspace_id: id.clone(),
+                            },
+                        ));
+                    }
                 }
             })
             .build(k, &mut overlays);
@@ -624,8 +631,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     );
     let si_expanded = s.settings_ui.skill_improvement_expanded;
     let si_event = s
-        .skill_improvement_status
-        .as_ref()
+        .skill_improvement_status_for_workspace(&ws_id)
         .and_then(|v| v.get("event").or(Some(v)));
     let si_skills = extract_skill_improvement_skills(si_event);
     let si_pending = si_event

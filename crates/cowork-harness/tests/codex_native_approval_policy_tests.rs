@@ -1807,3 +1807,97 @@ async fn unsandboxed_native_shell_enforces_strict_command_allowlist_and_blocks_c
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_rejects_escaped_newlines_comments_and_lexer_differentials() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/connections.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"openai\":\"secret\"}\n").unwrap();
+        std::fs::create_dir_all(h.ws.join(".git")).unwrap();
+        std::fs::write(h.ws.join(".git/config"), "[core]\n").unwrap();
+        std::fs::create_dir_all(h.ws.join("safe")).unwrap();
+        std::fs::write(h.ws.join("safe/ok.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(h.ws.join("README.md"), "# demo\n").unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
+
+        let blocked = [
+            // Escaped newline line-continuation splitting `-exec` or `.cowork`
+            "find . -ex\\\nec sh -c 'echo pwn' \\;",
+            "find . \"-ex\\\nec\" sh -c 'echo pwn' \\;",
+            "cat ~/.co\\\nwork/auth/connections.json",
+            "cat ~/.co\\\r\nwork/auth/connections.json",
+            "sh -c 'find . -ex\\\nec echo pwn \\;'",
+            // POSIX `#` comment with quote attempting to swallow subsequent line
+            "echo hi # '\npython3 -c 'print(1)' # '",
+            "echo hi # '\ncat credential-link # '",
+            // Quote/backslash splitting of `/proc/self/environ`, credentials, flags, and commands
+            "cat /pr\\oc/se\\lf/env\\iron",
+            "cat /proc/se''lf/environ",
+            "cat ~/.co\"\"work/auth/connections.json",
+            "cat ~/.co\\work/auth/connections.json",
+            "c''url -K read-secret.curlrc",
+            "\\python3 -c 'print(1)'",
+            "f\\ind safe -ex''ec cat {} \\;",
+            // Non-numeric `>&` / `&>>` redirections to protected paths
+            "echo pwn >& .git/config",
+            "echo pwn >&.git/config",
+            "echo pwn &>> .git/config",
+            // Unclosed quotes, trailing backslash, incomplete redirect
+            "echo 'unclosed",
+            "echo \"unclosed",
+            "echo trailing\\",
+            "echo hi >",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: lexer differential bypass must be denied in Bash: {cmd:?}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: lexer differential bypass must be denied in ACP: {cmd:?}"
+            );
+        }
+
+        // Benign commands including valid FD dupes and mid-word `#` stay allowed.
+        for ok_cmd in [
+            "echo hi 2>&1",
+            "echo hi 2>/dev/null",
+            "echo foo#bar",
+            "find safe -name '*.rs'",
+            "cat README.md",
+        ] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "benign command must pass under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "benign command must remain approvable interactively: {ok_cmd}"
+                );
+            }
+        }
+    }
+}

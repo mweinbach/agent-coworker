@@ -1263,13 +1263,18 @@ enum ShellToken {
     },
 }
 
-fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
+fn tokenize_shell_command(command: &str) -> Result<Vec<ShellToken>, String> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = command.chars().collect();
     let mut i = 0;
 
     while i < chars.len() {
         let ch = chars[i];
+        // POSIX shell line-continuation removal (`\<LF>`) outside single quotes.
+        if ch == '\\' && i + 1 < chars.len() && chars[i + 1] == '\n' {
+            i += 2;
+            continue;
+        }
         if ch.is_whitespace() {
             if ch == '\n' {
                 tokens.push(ShellToken::Operator("\n".to_owned()));
@@ -1277,41 +1282,64 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
             i += 1;
             continue;
         }
-
-        // Multi-char operators: `&&`, `||`, `>>`, `>|`, `<>`, `<<`, `<<<`, `<(`, `>(`, `&>`, `1>`, `2>`, `1>>`, `2>>`.
-        if (ch == '1' || ch == '2')
-            && i + 1 < chars.len()
-            && chars[i + 1] == '>'
-            && (i == 0
-                || chars[i - 1].is_whitespace()
-                || matches!(chars[i - 1], ';' | '|' | '&' | '(' | '`'))
-        {
-            let mut op = String::new();
-            op.push(ch);
-            op.push('>');
-            i += 2;
-            if i < chars.len() && chars[i] == '>' {
-                op.push('>');
+        // POSIX shell comment: an unquoted `#` at the start of a word ignores through `<LF>`.
+        if ch == '#' {
+            while i < chars.len() && chars[i] != '\n' {
                 i += 1;
             }
-            tokens.push(ShellToken::Operator(op));
             continue;
         }
+
+        // FD-prefixed redirections at word start (`0<`, `1>`, `2>>`, `2>&`, `1>|`, `0<&`, etc.).
+        if ch.is_ascii_digit()
+            && (i == 0
+                || chars[i - 1].is_whitespace()
+                || matches!(chars[i - 1], ';' | '|' | '&' | '(' | ')' | '`'))
+        {
+            let mut j = i;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < chars.len() && matches!(chars[j], '>' | '<') {
+                let mut op: String = chars[i..=j].iter().collect();
+                let redir = chars[j];
+                i = j + 1;
+                if i < chars.len() {
+                    let next = chars[i];
+                    if (redir == '>' && matches!(next, '>' | '|' | '&'))
+                        || (redir == '<' && matches!(next, '>' | '<' | '&'))
+                    {
+                        op.push(next);
+                        i += 1;
+                        if op.ends_with("<<") && i < chars.len() && chars[i] == '<' {
+                            op.push('<');
+                            i += 1;
+                        }
+                    }
+                }
+                tokens.push(ShellToken::Operator(op));
+                continue;
+            }
+        }
+
+        // Multi-char operators: `&&`, `||`, `|&`, `>>`, `>|`, `>&`, `<>`, `<<`, `<<<`, `<&`, `<(`, `>(`, `&>`, `&>>`.
         if matches!(ch, '|' | '&' | '>' | '<' | ';' | '(' | ')' | '`') {
             let mut op = String::new();
             op.push(ch);
             i += 1;
             if i < chars.len() {
                 let next = chars[i];
-                if (ch == '|' && next == '|')
+                if (ch == '|' && matches!(next, '|' | '&'))
                     || (ch == '&' && matches!(next, '&' | '>'))
-                    || (ch == '>' && matches!(next, '>' | '|' | '('))
-                    || (ch == '<' && matches!(next, '>' | '<' | '('))
+                    || (ch == '>' && matches!(next, '>' | '|' | '(' | '&'))
+                    || (ch == '<' && matches!(next, '>' | '<' | '(' | '&'))
                 {
                     op.push(next);
                     i += 1;
-                    if op == "<<" && i < chars.len() && chars[i] == '<' {
-                        op.push('<');
+                    if (op == "<<" && i < chars.len() && chars[i] == '<')
+                        || (op == "&>" && i < chars.len() && chars[i] == '>')
+                    {
+                        op.push(chars[i]);
                         i += 1;
                     }
                 }
@@ -1331,21 +1359,47 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
             if c == '\'' {
                 quoted = true;
                 i += 1;
-                while i < chars.len() && chars[i] != '\'' {
+                let mut closed = false;
+                while i < chars.len() {
+                    if chars[i] == '\'' {
+                        i += 1;
+                        closed = true;
+                        break;
+                    }
                     word.push(chars[i]);
                     i += 1;
                 }
-                if i < chars.len() {
-                    i += 1;
+                if !closed {
+                    return Err("Unclosed single quote in native shell command.".to_owned());
                 }
             } else if c == '"' {
                 quoted = true;
                 i += 1;
-                while i < chars.len() && chars[i] != '"' {
-                    if chars[i] == '\\' && i + 1 < chars.len() {
+                let mut closed = false;
+                while i < chars.len() {
+                    if chars[i] == '"' {
                         i += 1;
-                        word.push(chars[i]);
-                        i += 1;
+                        closed = true;
+                        break;
+                    }
+                    if chars[i] == '\\' {
+                        if i + 1 >= chars.len() {
+                            return Err("Unclosed double quote in native shell command.".to_owned());
+                        }
+                        let next = chars[i + 1];
+                        if next == '\n' {
+                            // POSIX double-quoted line continuation removes `\<LF>`.
+                            i += 2;
+                            continue;
+                        }
+                        if matches!(next, '$' | '`' | '"' | '\\') {
+                            word.push(next);
+                        } else {
+                            // In POSIX shells, `\` inside `"..."` stays literal before other chars.
+                            word.push('\\');
+                            word.push(next);
+                        }
+                        i += 2;
                         continue;
                     }
                     if chars[i] == '$' {
@@ -1356,13 +1410,21 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                     word.push(chars[i]);
                     i += 1;
                 }
-                if i < chars.len() {
-                    i += 1;
+                if !closed {
+                    return Err("Unclosed double quote in native shell command.".to_owned());
                 }
-            } else if c == '\\' && i + 1 < chars.len() {
-                i += 1;
-                word.push(chars[i]);
-                i += 1;
+            } else if c == '\\' {
+                if i + 1 >= chars.len() {
+                    return Err("Trailing unescaped backslash in native shell command.".to_owned());
+                }
+                let next = chars[i + 1];
+                if next == '\n' {
+                    // POSIX unquoted line continuation removes `\<LF>` and keeps assembling word.
+                    i += 2;
+                    continue;
+                }
+                word.push(next);
+                i += 2;
             } else if c.is_whitespace()
                 || matches!(c, '|' | '&' | '>' | '<' | ';' | '(' | ')' | '`')
             {
@@ -1381,7 +1443,7 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
                 i += 1;
             }
         }
-        if !word.is_empty() {
+        if !word.is_empty() || quoted {
             tokens.push(ShellToken::Word {
                 text: word,
                 quoted,
@@ -1392,7 +1454,7 @@ fn tokenize_shell_command(command: &str) -> Vec<ShellToken> {
             });
         }
     }
-    tokens
+    Ok(tokens)
 }
 
 fn command_mentions_protected_credential_path(
@@ -2704,6 +2766,12 @@ fn validate_native_shell_command_text(
     if command.contains('\0') {
         return Err("Native shell command contains a NUL byte.".to_owned());
     }
+    if command.contains('\r') || command.contains("\\\n") {
+        return Err(
+            "Escaped line continuations and carriage returns are blocked in unsandboxed native shell execution."
+                .to_owned(),
+        );
+    }
     if let Some(reason) = command_mentions_protected_credential_path(command, ctx) {
         return Err(reason);
     }
@@ -2711,7 +2779,7 @@ fn validate_native_shell_command_text(
         return Err(reason);
     }
 
-    let tokens = tokenize_shell_command(command);
+    let tokens = tokenize_shell_command(command)?;
     // Track the set of all working directories that could be active at this point in the command
     // (restored on `)` subshell exit, preserved across pipelines/background jobs, and unioned
     // across conditional or potentially failing `cd` branches).
@@ -2725,20 +2793,34 @@ fn validate_native_shell_command_text(
     let mut current_cmd = String::new();
     let mut expect_write_target = false;
     let mut expect_read_target = false;
+    let mut expect_fd_dup_or_write = false;
+    let mut expect_fd_dup_only = false;
     let mut expect_subshell_script = false;
     let mut nested_shell_got_script = false;
     let mut saw_cd_arg = false;
     let mut cd_updated_this_cmd = false;
     let mut search_state = SimpleCommandSearchState::default();
 
+    let is_fd_dup_spec = |s: &str| -> bool {
+        s == "-"
+            || (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+            || (s.len() > 1
+                && s.ends_with('-')
+                && s[..s.len() - 1].chars().all(|c| c.is_ascii_digit()))
+    };
+
     let finish_simple_command = |current_cmd: &str,
                                  saw_cd_arg: bool,
                                  nested_shell_got_script: bool,
+                                 pending_redirect: bool,
                                  in_conditional_chain: bool,
                                  search_state: &SimpleCommandSearchState,
                                  possible_dirs: &mut Vec<PathBuf>,
                                  cd_updated_this_cmd: &mut bool|
      -> Result<(), String> {
+        if pending_redirect {
+            return Err("Incomplete shell redirection in native shell command.".to_owned());
+        }
         if current_cmd == "cd" && !saw_cd_arg {
             // Bare `cd` jumps to `$HOME`.
             let home_canon =
@@ -2767,18 +2849,28 @@ fn validate_native_shell_command_text(
     for token in &tokens {
         match token {
             ShellToken::Operator(op) => {
-                if matches!(op.as_str(), "`" | "<<" | "<<<" | "<(" | ">(") {
+                let op_body = op.trim_start_matches(|c: char| c.is_ascii_digit());
+                if matches!(op_body, "`" | "<<" | "<<<" | "<(" | ">(") {
                     return Err(format!(
                         "Dynamic shell operator '{op}' is blocked in unsandboxed native shell execution."
                     ));
                 }
-                if matches!(
-                    op.as_str(),
-                    ">" | ">>" | "1>" | "2>" | "1>>" | "2>>" | "&>" | ">|" | "<>"
-                ) {
+                if matches!(op_body, ">" | ">>" | "&>" | "&>>" | ">|" | "<>") {
                     expect_write_target = true;
                     expect_read_target = false;
-                } else if op == "<" {
+                    expect_fd_dup_or_write = false;
+                    expect_fd_dup_only = false;
+                } else if op_body == ">&" {
+                    expect_fd_dup_or_write = true;
+                    expect_write_target = false;
+                    expect_read_target = false;
+                    expect_fd_dup_only = false;
+                } else if op_body == "<&" {
+                    expect_fd_dup_only = true;
+                    expect_write_target = false;
+                    expect_read_target = false;
+                    expect_fd_dup_or_write = false;
+                } else if op_body == "<" {
                     if is_nested_posix_shell(&current_cmd) {
                         return Err(format!(
                             "Feeding stdin into shell '{current_cmd}' is blocked in unsandboxed native shell execution."
@@ -2786,6 +2878,8 @@ fn validate_native_shell_command_text(
                     }
                     expect_read_target = true;
                     expect_write_target = false;
+                    expect_fd_dup_or_write = false;
+                    expect_fd_dup_only = false;
                 } else if op == "(" {
                     if !at_command_pos {
                         return Err(
@@ -2805,6 +2899,8 @@ fn validate_native_shell_command_text(
                     current_cmd.clear();
                     expect_write_target = false;
                     expect_read_target = false;
+                    expect_fd_dup_or_write = false;
+                    expect_fd_dup_only = false;
                     expect_subshell_script = false;
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
@@ -2815,6 +2911,10 @@ fn validate_native_shell_command_text(
                         &current_cmd,
                         saw_cd_arg,
                         nested_shell_got_script,
+                        expect_write_target
+                            || expect_read_target
+                            || expect_fd_dup_or_write
+                            || expect_fd_dup_only,
                         in_conditional_chain,
                         &search_state,
                         &mut possible_dirs,
@@ -2834,6 +2934,8 @@ fn validate_native_shell_command_text(
                     current_cmd.clear();
                     expect_write_target = false;
                     expect_read_target = false;
+                    expect_fd_dup_or_write = false;
+                    expect_fd_dup_only = false;
                     expect_subshell_script = false;
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
@@ -2844,13 +2946,17 @@ fn validate_native_shell_command_text(
                         &current_cmd,
                         saw_cd_arg,
                         nested_shell_got_script,
+                        expect_write_target
+                            || expect_read_target
+                            || expect_fd_dup_or_write
+                            || expect_fd_dup_only,
                         in_conditional_chain,
                         &search_state,
                         &mut possible_dirs,
                         &mut cd_updated_this_cmd,
                     )?;
                     match op.as_str() {
-                        "|" => {
+                        "|" | "|&" => {
                             let entry = pipeline_entry_dirs
                                 .get_or_insert_with(|| segment_start_dirs.clone())
                                 .clone();
@@ -2895,6 +3001,8 @@ fn validate_native_shell_command_text(
                     current_cmd.clear();
                     expect_write_target = false;
                     expect_read_target = false;
+                    expect_fd_dup_or_write = false;
+                    expect_fd_dup_only = false;
                     expect_subshell_script = false;
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
@@ -2915,6 +3023,36 @@ fn validate_native_shell_command_text(
                         "Dynamic shell variable, command, or ANSI-C expansion is blocked in unsandboxed native shell execution."
                             .to_owned(),
                     );
+                }
+                // Defense-in-depth on unquoted/unescaped token text so quote/backslash splitting
+                // (e.g. `/pr\oc/se''lf/environ` or `~/.co""work/auth/...`) cannot evade raw checks.
+                if let Some(reason) = command_mentions_protected_credential_path(text, ctx) {
+                    return Err(reason);
+                }
+                if let Some(reason) = command_references_sensitive_provider_env(text) {
+                    return Err(reason);
+                }
+                if expect_fd_dup_or_write {
+                    expect_fd_dup_or_write = false;
+                    if !is_fd_dup_spec(text) {
+                        for dir in &possible_dirs {
+                            if *has_unquoted_glob && segment_has_glob_meta(text) {
+                                validate_shell_glob_operand(text, dir, ctx, "", true)?;
+                            } else {
+                                validate_shell_path_token(text, dir, ctx, true, false)?;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if expect_fd_dup_only {
+                    expect_fd_dup_only = false;
+                    if !is_fd_dup_spec(text) {
+                        return Err(format!(
+                            "Invalid file-descriptor redirection target '{text}' in native shell command."
+                        ));
+                    }
+                    continue;
                 }
                 if expect_write_target {
                     expect_write_target = false;
@@ -3203,6 +3341,7 @@ fn validate_native_shell_command_text(
         &current_cmd,
         saw_cd_arg,
         nested_shell_got_script,
+        expect_write_target || expect_read_target || expect_fd_dup_or_write || expect_fd_dup_only,
         in_conditional_chain,
         &search_state,
         &mut possible_dirs,

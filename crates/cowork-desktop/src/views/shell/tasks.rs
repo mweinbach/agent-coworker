@@ -1000,7 +1000,8 @@ fn build_artifact_review_card(task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -
         );
 
     for art in &task.artifacts {
-        card = card.child(artifact_row(art, &ws_id, &task_id, rev, k, t));
+        let detail = task.artifact_details_by_id.get(&art.id);
+        card = card.child(artifact_row(art, detail, &ws_id, &task_id, rev, k, t));
     }
 
     if let Some(detail) = task.active_artifact_detail.as_ref() {
@@ -1014,6 +1015,7 @@ fn build_artifact_review_card(task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -
 
 fn artifact_row(
     art: &TaskArtifactView,
+    detail: Option<&Value>,
     ws_id: &str,
     task_id: &str,
     rev: i64,
@@ -1025,15 +1027,25 @@ fn artifact_row(
     } else {
         art.title.as_str()
     };
-    let accepted =
-        art.accepted_version_id.is_some() && art.accepted_version_id == art.latest_version_id;
+    let latest_vid = art.latest_version_id.clone().or_else(|| {
+        detail
+            .and_then(|d| d.get("latestVersionId"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    let accepted_vid = art.accepted_version_id.clone().or_else(|| {
+        detail
+            .and_then(|d| d.get("acceptedVersionId"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    let accepted = accepted_vid.is_some() && accepted_vid == latest_vid;
     let ws_read = ws_id.to_owned();
     let tid_read = task_id.to_owned();
     let aid_read = art.id.clone();
     let ws_acc = ws_id.to_owned();
     let tid_acc = task_id.to_owned();
     let aid_acc = art.id.clone();
-    let latest_vid = art.latest_version_id.clone();
 
     let mut r = row()
         .key(format!("task-art-{}", art.id))

@@ -11431,6 +11431,7 @@ impl AppState {
                     .map(str::to_string);
                 if let Some(active) = self.active_task.as_mut() {
                     if let Some(aid) = artifact_id {
+                        reconcile_artifact_detail_into_list(&mut active.artifacts, &aid, &detail);
                         active.artifact_details_by_id.insert(aid, detail.clone());
                     }
                     active.active_artifact_detail = Some(detail);
@@ -13673,6 +13674,18 @@ impl AppState {
                     .entry(k.clone())
                     .or_insert_with(|| v.clone());
             }
+            for (aid, detail) in &task.artifact_details_by_id {
+                if task
+                    .artifacts
+                    .iter()
+                    .find(|art| art.id == *aid)
+                    .is_some_and(|art| {
+                        art.latest_version_id.is_none() && art.accepted_version_id.is_none()
+                    })
+                {
+                    reconcile_artifact_detail_into_list(&mut task.artifacts, aid, detail);
+                }
+            }
         }
         self.upsert_task_summary(task.summary.clone());
         // The server deliberately leaves these sessions out of ordinary thread/list responses.
@@ -14008,6 +14021,30 @@ fn parse_task_summary(val: &Value, fallback_workspace_id: &str) -> Option<TaskSu
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+fn reconcile_artifact_detail_into_list(
+    artifacts: &mut [TaskArtifactView],
+    artifact_id: &str,
+    detail: &Value,
+) {
+    let Some(art) = artifacts.iter_mut().find(|art| art.id == artifact_id) else {
+        return;
+    };
+    if let Some(latest_val) = detail.get("latestVersionId") {
+        art.latest_version_id = latest_val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(accepted_val) = detail.get("acceptedVersionId") {
+        art.accepted_version_id = accepted_val
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
 }
 
 fn parse_task_artifact(val: &Value) -> Option<TaskArtifactView> {
@@ -25018,5 +25055,74 @@ mod tests {
         assert_eq!(state.route().active_thread_id.as_deref(), Some("th-b"));
         assert_eq!(state.active_workspace_id.as_deref(), Some("ws-b"));
         assert_eq!(state.skills[0].name, "beta-skill");
+    }
+
+    #[test]
+    fn task_artifact_accept_reconciles_version_ids_onto_list_and_survives_task_updates() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.dispatch(Action::Navigate(NavAction::OpenTask("task-1".to_string())));
+
+        let canonical_task = json!({
+            "id": "task-1",
+            "title": "Ship report",
+            "status": "in_progress",
+            "revision": 2,
+            "artifacts": [{
+                "id": "art-1",
+                "title": "Report",
+                "path": "output/report.md",
+                "kind": "document"
+            }]
+        });
+        state.apply_task_record_update("ws-1", &canonical_task);
+        assert_eq!(
+            state.active_task.as_ref().unwrap().artifacts[0].accepted_version_id,
+            None
+        );
+
+        // `task/artifact/version/accept` returns canonical `task` (without version IDs on
+        // `TaskArtifact`) plus `detail` carrying `latestVersionId` and `acceptedVersionId`.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 21,
+            method: "task/artifact/version/accept".to_string(),
+            result: Ok(json!({
+                "task": canonical_task,
+                "detail": {
+                    "artifact": { "id": "art-1", "title": "Report", "path": "output/report.md" },
+                    "latestVersionId": "ver-2",
+                    "acceptedVersionId": "ver-2",
+                    "versions": [{ "id": "ver-2", "reviewStatus": "accepted" }]
+                }
+            })),
+        });
+        let art = &state.active_task.as_ref().unwrap().artifacts[0];
+        assert_eq!(art.latest_version_id.as_deref(), Some("ver-2"));
+        assert_eq!(art.accepted_version_id.as_deref(), Some("ver-2"));
+
+        // Subsequent canonical `task/updated` (still without version IDs on `TaskArtifact`)
+        // preserves reconciled acceptance state from `artifact_details_by_id`.
+        state.apply_task_record_update(
+            "ws-1",
+            &json!({
+                "id": "task-1",
+                "title": "Ship report",
+                "status": "in_progress",
+                "revision": 3,
+                "artifacts": [{
+                    "id": "art-1",
+                    "title": "Report",
+                    "path": "output/report.md",
+                    "kind": "document"
+                }]
+            }),
+        );
+        let art_after = &state.active_task.as_ref().unwrap().artifacts[0];
+        assert_eq!(art_after.latest_version_id.as_deref(), Some("ver-2"));
+        assert_eq!(art_after.accepted_version_id.as_deref(), Some("ver-2"));
     }
 }

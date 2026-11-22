@@ -346,15 +346,33 @@ pub fn build_chat_render_items<'a>(
     if let Some(last) = raw_groups.last_mut() {
         match last {
             ChatRenderItem::ActivityGroup(group) => {
-                group.is_live = thread_busy && group.items.iter().any(|it| item_is_streaming(it));
-                let has_failures = group.error_count > 0;
-                group.is_retryable = !thread_busy && has_failures && !group.has_pending_approval;
+                apply_last_group_flags(group, thread_busy);
             }
             ChatRenderItem::Row(_) => {}
         }
     }
 
     raw_groups
+}
+
+fn apply_last_group_flags(group: &mut ActivityGroup<'_>, thread_busy: bool) {
+    group.is_live = thread_busy && group.items.iter().any(|it| item_is_streaming(it));
+    let has_failures = group.error_count > 0;
+    group.is_retryable = !thread_busy && has_failures && !group.has_pending_approval;
+}
+
+/// Builds a single `ActivityGroup` directly from its member `FeedItem`s without re-scanning
+/// the full feed. Produces identical fields to `build_chat_render_items`.
+pub(super) fn build_activity_group_for_window<'a>(
+    items: Vec<&'a FeedItem>,
+    is_last_render_item: bool,
+    thread_busy: bool,
+) -> ActivityGroup<'a> {
+    let mut group = build_activity_group(items);
+    if is_last_render_item {
+        apply_last_group_flags(&mut group, thread_busy);
+    }
+    group
 }
 
 fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {

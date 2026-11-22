@@ -28,16 +28,41 @@ pub fn split_filename_extension(filename: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// Pre-normalized and canonicalized workspace root for repeated local-path checks.
+pub(super) struct CanonicalBase {
+    normalized: PathBuf,
+    canonical: PathBuf,
+}
+
+impl CanonicalBase {
+    pub(super) fn from_path(base_path: &str) -> Option<Self> {
+        let base_raw = base_path.trim();
+        if base_raw.is_empty() {
+            return None;
+        }
+        let base = Path::new(base_raw);
+        Some(Self {
+            normalized: normalize_lexical(base),
+            canonical: cowork_config::canonicalize_sync(base),
+        })
+    }
+}
+
 /// Resolves `raw_path` strictly inside `base_path`, blocking missing workspace roots, `..` traversal,
 /// non-file schemes, and symlinks pointing outside `base_path`.
 pub fn resolve_safe_local_path(raw_path: &str, base_path: Option<&str>) -> Option<PathBuf> {
+    let base = CanonicalBase::from_path(base_path?)?;
+    resolve_safe_local_path_with_base(raw_path, &base)
+}
+
+/// Like [`resolve_safe_local_path`], reusing a pre-canonicalized workspace root to avoid
+/// repeating `canonicalize_sync(base)` for every inline code span in a message.
+pub(super) fn resolve_safe_local_path_with_base(
+    raw_path: &str,
+    base: &CanonicalBase,
+) -> Option<PathBuf> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
-        return None;
-    }
-
-    let base_raw = base_path?.trim();
-    if base_raw.is_empty() {
         return None;
     }
 
@@ -56,18 +81,16 @@ pub fn resolve_safe_local_path(raw_path: &str, base_path: Option<&str>) -> Optio
         PathBuf::from(trimmed)
     };
 
-    let base = Path::new(base_raw);
-    let normalized_base = normalize_lexical(base);
     let lexical_target = if candidate.is_absolute() {
         normalize_lexical(&candidate)
     } else {
-        let mut joined = normalized_base.clone();
+        let mut joined = base.normalized.clone();
         for component in candidate.components() {
             match component {
                 Component::CurDir => {}
                 Component::Normal(seg) => joined.push(seg),
                 Component::ParentDir => {
-                    if joined == normalized_base || !joined.pop() {
+                    if joined == base.normalized || !joined.pop() {
                         return None;
                     }
                 }
@@ -77,13 +100,12 @@ pub fn resolve_safe_local_path(raw_path: &str, base_path: Option<&str>) -> Optio
         joined
     };
 
-    if !cowork_config::is_inside(&normalized_base, &lexical_target) {
+    if !cowork_config::is_inside(&base.normalized, &lexical_target) {
         return None;
     }
 
-    let canon_base = cowork_config::canonicalize_sync(base);
     let canon_target = cowork_config::canonicalize_sync(&lexical_target);
-    if canon_target == canon_base || !cowork_config::is_inside(&canon_base, &canon_target) {
+    if canon_target == base.canonical || !cowork_config::is_inside(&base.canonical, &canon_target) {
         return None;
     }
 

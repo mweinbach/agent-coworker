@@ -1,6 +1,7 @@
 //! Virtualized, bottom-sticky chat feed shared by `ChatView` and `AgentRunViewer`.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -21,13 +22,13 @@ use super::components::{
 use super::feed_row::{FeedRowContext, build_feed_row};
 use super::interaction::{build_interaction_card, interaction_card_key};
 use super::model::{
-    ChatRenderItem, MentionCatalog, build_chat_render_items, build_mention_catalog, day_bucket_key,
-    format_day_separator, item_id, prepare_feed, select_feed_window,
-    should_show_working_placeholder,
+    ActivityGroup, ChatRenderItem, MentionCatalog, build_activity_group_for_window,
+    build_chat_render_items, build_mention_catalog, day_bucket_key, format_day_separator, item_id,
+    prepare_feed, select_feed_window, should_show_working_placeholder,
 };
 use super::row_version::{
-    GroupFp, ItemFp, activity_ui_signature, catalog_signature, group_has_diff_state,
-    interactions_signature,
+    GroupFp, ItemFp, activity_ui_signature, group_has_diff_state, interactions_signature,
+    skills_plugins_signature,
 };
 use super::state::FEED_OLDER_PAGE_SIZE;
 
@@ -107,19 +108,19 @@ pub struct ChatFeedProps<'a> {
 enum RowSpec {
     /// A cheap row the view builds outright (banner, pager, day separator, placeholder, card).
     Ready { key: String, el: El },
-    /// A transcript item at `index` in the source feed; `version` memoizes a completed row.
+    /// A transcript item at `index` in the source feed; its memo version is hashed lazily on mount.
     Item {
         key: String,
         id: String,
         index: usize,
-        version: Option<u64>,
     },
-    /// The activity group at `index` among the window's render items.
+    /// An activity group whose member `FeedItem`s sit at `item_indices` in the source feed.
     Group {
         key: String,
         id: String,
-        index: usize,
-        version: Option<u64>,
+        render_index: usize,
+        item_indices: Vec<usize>,
+        is_last_render_item: bool,
     },
 }
 
@@ -144,7 +145,9 @@ struct FeedRows {
     thread_key: String,
     workspace_id: Option<String>,
     workspace_path: Option<String>,
-    catalog: MentionCatalog,
+    catalog: OnceCell<MentionCatalog>,
+    row_version_base: u64,
+    group_version_base: u64,
     external_cache: Option<Arc<ImageCache>>,
     is_agent_viewer: bool,
     copied_key: Option<String>,
@@ -153,6 +156,50 @@ struct FeedRows {
 }
 
 impl FeedRows {
+    fn resolve_group<'s>(
+        &self,
+        refs: &FeedRefs<'s>,
+        id: &str,
+        render_index: usize,
+        item_indices: &[usize],
+        is_last_render_item: bool,
+    ) -> Option<ActivityGroup<'s>> {
+        if !item_indices.is_empty() {
+            let mut items = Vec::with_capacity(item_indices.len());
+            let mut all_in_bounds = true;
+            for &idx in item_indices {
+                if let Some(item) = refs.feed.get(idx) {
+                    items.push(item);
+                } else {
+                    all_in_bounds = false;
+                    break;
+                }
+            }
+            if all_in_bounds {
+                let group =
+                    build_activity_group_for_window(items, is_last_render_item, self.thread_busy);
+                if group.id == id {
+                    return Some(group);
+                }
+            }
+        }
+
+        // Fallback if the feed shifted underneath the cached indices.
+        let prepared = prepare_feed(refs.feed, self.developer_mode);
+        let window = prepared.get(self.hidden_count..).unwrap_or(&[]);
+        let items = build_chat_render_items(window, self.thread_busy);
+        let is_this = |node: &ChatRenderItem<'_>| matches!(node, ChatRenderItem::ActivityGroup(g) if g.id == id);
+        if let Some(ChatRenderItem::ActivityGroup(group)) =
+            items.get(render_index).filter(|n| is_this(n))
+        {
+            return Some(group.clone());
+        }
+        items.into_iter().find_map(|node| match node {
+            ChatRenderItem::ActivityGroup(g) if g.id == id => Some(g),
+            _ => None,
+        })
+    }
+
     fn build(&self, s: &AppState, i: usize) -> El {
         let Some(spec) = self.rows.get(i) else {
             return col();
@@ -160,12 +207,7 @@ impl FeedRows {
         let (k, t) = (&self.kit, &self.tokens);
         match spec {
             RowSpec::Ready { el, .. } => el.clone(),
-            RowSpec::Item {
-                key,
-                id,
-                index,
-                version,
-            } => {
+            RowSpec::Item { key, id, index } => {
                 let refs = self.source.resolve(s);
                 let item = refs
                     .feed
@@ -175,38 +217,61 @@ impl FeedRows {
                 let Some(item) = item else {
                     return col().key(key.as_str());
                 };
-                let ctx = FeedRowContext {
-                    workspace_id: self.workspace_id.as_deref(),
-                    workspace_path: self.workspace_path.as_deref(),
-                    catalog: &self.catalog,
-                    external_cache: self.external_cache.clone(),
-                    is_agent_viewer: self.is_agent_viewer,
-                    copied_key: self.copied_key.as_deref(),
+                let version = (!is_streaming_row(item)).then(|| {
+                    let mut h = DefaultHasher::new();
+                    self.row_version_base.hash(&mut h);
+                    ItemFp(item).hash(&mut h);
+                    s.chat_ui
+                        .open_citation_sources
+                        .contains(id.as_str())
+                        .hash(&mut h);
+                    s.chat_ui.expanded_errors.contains(id.as_str()).hash(&mut h);
+                    h.finish()
+                });
+                let build = || {
+                    let catalog = self
+                        .catalog
+                        .get_or_init(|| build_mention_catalog(&s.skills, &s.plugins));
+                    let ctx = FeedRowContext {
+                        workspace_id: self.workspace_id.as_deref(),
+                        workspace_path: self.workspace_path.as_deref(),
+                        catalog,
+                        external_cache: self.external_cache.clone(),
+                        is_agent_viewer: self.is_agent_viewer,
+                        copied_key: self.copied_key.as_deref(),
+                    };
+                    build_feed_row(s, k, t, item, &ctx)
                 };
                 match version {
-                    Some(v) => memo(key.as_str(), *v, || build_feed_row(s, k, t, item, &ctx)),
-                    None => build_feed_row(s, k, t, item, &ctx),
+                    Some(v) => memo(key.as_str(), v, build),
+                    None => build(),
                 }
             }
             RowSpec::Group {
                 key,
                 id,
-                index,
-                version,
+                render_index,
+                item_indices,
+                is_last_render_item,
             } => {
+                let refs = self.source.resolve(s);
+                let Some(group) = self.resolve_group(
+                    &refs,
+                    id,
+                    *render_index,
+                    item_indices,
+                    *is_last_render_item,
+                ) else {
+                    return col().key(key.as_str());
+                };
+                let version =
+                    (!group.is_live && !group_has_diff_state(&s.chat_ui, &group)).then(|| {
+                        let mut h = DefaultHasher::new();
+                        self.group_version_base.hash(&mut h);
+                        GroupFp(&group).hash(&mut h);
+                        h.finish()
+                    });
                 let build = || {
-                    let refs = self.source.resolve(s);
-                    let prepared = prepare_feed(refs.feed, self.developer_mode);
-                    let window = prepared.get(self.hidden_count..).unwrap_or(&[]);
-                    let items = build_chat_render_items(window, self.thread_busy);
-                    let is_this = |node: &&ChatRenderItem<'_>| matches!(node, ChatRenderItem::ActivityGroup(g) if g.id == *id);
-                    let group = items
-                        .get(*index)
-                        .filter(is_this)
-                        .or_else(|| items.iter().find(is_this));
-                    let Some(ChatRenderItem::ActivityGroup(group)) = group else {
-                        return col().key(key.as_str());
-                    };
                     let ctx = ActivityCardContext {
                         thread_id: &self.thread_key,
                         workspace_id: self.workspace_id.as_deref(),
@@ -216,10 +281,10 @@ impl FeedRows {
                         external_cache: self.external_cache.clone(),
                         copied_key: self.copied_key.as_deref(),
                     };
-                    build_activity_group_card(s, k, t, group, &ctx)
+                    build_activity_group_card(s, k, t, &group, &ctx)
                 };
                 match version {
-                    Some(v) => memo(key.as_str(), *v, build),
+                    Some(v) => memo(key.as_str(), v, build),
                     None => build(),
                 }
             }
@@ -265,7 +330,6 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
     }
 
     let render_items = build_chat_render_items(visible_slice, props.thread_busy);
-    let catalog = build_mention_catalog(&s.skills, &s.plugins);
     let copied_key = s
         .chat_ui
         .copied_feedback
@@ -338,19 +402,22 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         super::math::raster_generation().hash(&mut h);
         h.finish()
     };
-    let row_version_base = (shared_version, catalog_signature(&catalog));
-    let group_version_base = (
-        shared_version,
-        activity_ui_signature(&s.chat_ui),
-        interactions_signature(refs.pending_interactions),
-        refs.agents,
-    );
-    let hash_version = |version: &dyn Fn(&mut DefaultHasher)| {
+    let row_version_base = {
         let mut h = DefaultHasher::new();
-        version(&mut h);
+        shared_version.hash(&mut h);
+        skills_plugins_signature(&s.skills, &s.plugins).hash(&mut h);
+        h.finish()
+    };
+    let group_version_base = {
+        let mut h = DefaultHasher::new();
+        shared_version.hash(&mut h);
+        activity_ui_signature(&s.chat_ui).hash(&mut h);
+        interactions_signature(refs.pending_interactions).hash(&mut h);
+        refs.agents.hash(&mut h);
         h.finish()
     };
 
+    let last_render_idx = render_items.len().saturating_sub(1);
     let mut prev_bucket: Option<(i32, u32)> = None;
     for (index, node) in render_items.iter().enumerate() {
         if let Some(ts) = render_item_timestamp(node)
@@ -372,36 +439,24 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         match node {
             ChatRenderItem::Row(item) => {
                 let id = item_id(item);
-                // A row whose content is still arriving changes every delta, so it isn't memoized.
-                let version = (!is_streaming_row(item)).then(|| {
-                    hash_version(&|h| {
-                        row_version_base.hash(h);
-                        ItemFp(item).hash(h);
-                        s.chat_ui.open_citation_sources.contains(id).hash(h);
-                        s.chat_ui.expanded_errors.contains(id).hash(h);
-                    })
-                });
                 rows.push(RowSpec::Item {
                     key: format!("row:{id}"),
                     id: id.to_string(),
                     index: feed_index(refs.feed, item),
-                    version,
                 });
             }
             ChatRenderItem::ActivityGroup(group) => {
-                // A live group shows elapsed time; one showing a diff reads its interactive state.
-                let version =
-                    (!group.is_live && !group_has_diff_state(&s.chat_ui, group)).then(|| {
-                        hash_version(&|h| {
-                            group_version_base.hash(h);
-                            GroupFp(group).hash(h);
-                        })
-                    });
+                let item_indices = group
+                    .items
+                    .iter()
+                    .map(|item| feed_index(refs.feed, item))
+                    .collect();
                 rows.push(RowSpec::Group {
                     key: format!("group:{}", group.id),
                     id: group.id.clone(),
-                    index,
-                    version,
+                    render_index: index,
+                    item_indices,
+                    is_last_render_item: index == last_render_idx,
                 });
             }
         }
@@ -439,6 +494,14 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
     // Rows are built by index at layout time, so a commit builds only the mounted window (the
     // viewport and its overscan) rather than every row in the loaded page.
     let row_count = rows.len();
+    let keys_version = {
+        let mut h = DefaultHasher::new();
+        row_count.hash(&mut h);
+        for spec in &rows {
+            spec.key().hash(&mut h);
+        }
+        h.finish()
+    };
     let feed_rows = Rc::new(FeedRows {
         rows,
         source: props.source.clone(),
@@ -448,7 +511,9 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
         thread_key: props.thread_key.to_string(),
         workspace_id: props.workspace_id.map(str::to_string),
         workspace_path: props.workspace_path.map(str::to_string),
-        catalog,
+        catalog: OnceCell::new(),
+        row_version_base,
+        group_version_base,
         external_cache: props.external_cache.clone(),
         is_agent_viewer: props.is_agent_viewer,
         copied_key: copied_key.map(str::to_string),
@@ -479,7 +544,8 @@ pub fn build_chat_feed(s: &AppState, k: &Kit, t: &ThemeTokens, props: &ChatFeedP
                 )
             },
             move |s: &AppState, i| feed_rows.build(s, i),
-        );
+        )
+        .virtual_rows_version(keys_version);
 
     let viewport = col()
         .key(props.viewport_key)

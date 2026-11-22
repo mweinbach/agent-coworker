@@ -11,9 +11,9 @@ use std::hash::{Hash, Hasher};
 use cowork_protocol::TurnAttachmentInputPart;
 use serde_json::Value;
 
-use crate::state::{ChatInteraction, FeedItem};
+use crate::state::{ChatInteraction, FeedItem, PluginSummary, SkillSummary};
 
-use super::model::{ActivityGroup, ActivityNode, MentionCatalog, item_id};
+use super::model::{ActivityGroup, ActivityNode, item_id};
 use super::state::ChatUiState;
 
 /// Hashes every field of a feed item a row's build can read. Inline attachment payloads hash
@@ -208,10 +208,21 @@ pub fn interactions_signature(pending: &[ChatInteraction]) -> u64 {
     h.finish()
 }
 
-/// The mention catalog user rows highlight `@names` against.
-pub fn catalog_signature(catalog: &MentionCatalog) -> u64 {
+/// Zero-allocation signature of the skill/plugin inputs `build_mention_catalog` reads.
+pub fn skills_plugins_signature(skills: &[SkillSummary], plugins: &[PluginSummary]) -> u64 {
     let mut h = DefaultHasher::new();
-    catalog.items.hash(&mut h);
+    skills.len().hash(&mut h);
+    for skill in skills {
+        if skill.enabled && !skill.name.trim().is_empty() {
+            (&skill.name, &skill.description, &skill.scope).hash(&mut h);
+        }
+    }
+    plugins.len().hash(&mut h);
+    for plugin in plugins {
+        if plugin.enabled && !plugin.name.trim().is_empty() {
+            (&plugin.name, plugin.display_label(), &plugin.version).hash(&mut h);
+        }
+    }
     h.finish()
 }
 

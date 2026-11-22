@@ -1,5 +1,6 @@
 //! Desktop Markdown wrapper over `rune_kit::Markdown` plus citation chips and sources strip.
 
+use std::cell::OnceCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -12,7 +13,10 @@ use crate::actions::{Action, NativeAction, ShellAction};
 use crate::state::AppState;
 use crate::theme::ThemeTokens;
 
-use super::attachments::{decode_image_from_uri, resolve_safe_local_path};
+use super::attachments::{
+    CanonicalBase, decode_image_from_uri, resolve_safe_local_path,
+    resolve_safe_local_path_with_base,
+};
 use super::icons;
 use super::math::{
     MathBlockSegment, MathChunk, MathParagraphKind, markdown_ends_with_list_item,
@@ -120,6 +124,18 @@ pub fn markdown_style(
 
 /// Checks whether inline code looks like a workspace-relative or local path safe to preview.
 pub fn resolve_workspace_code_link(raw_code: &str, base_path: Option<&str>) -> Option<String> {
+    let path_only = extract_workspace_code_path(raw_code)?;
+    let resolved = resolve_safe_local_path(path_only, base_path)?;
+    Some(format!("{WORKSPACE_FILE_SCHEME}{}", resolved.display()))
+}
+
+fn resolve_workspace_code_link_with_base(raw_code: &str, base: &CanonicalBase) -> Option<String> {
+    let path_only = extract_workspace_code_path(raw_code)?;
+    let resolved = resolve_safe_local_path_with_base(path_only, base)?;
+    Some(format!("{WORKSPACE_FILE_SCHEME}{}", resolved.display()))
+}
+
+fn extract_workspace_code_path(raw_code: &str) -> Option<&str> {
     let token = raw_code.trim();
     if token.is_empty()
         || token.len() > 260
@@ -158,12 +174,7 @@ pub fn resolve_workspace_code_link(raw_code: &str, base_path: Option<&str>) -> O
                     | "sql"
             )
         );
-    if !looks_like_path {
-        return None;
-    }
-
-    let resolved = resolve_safe_local_path(path_only, base_path)?;
-    Some(format!("{WORKSPACE_FILE_SCHEME}{}", resolved.display()))
+    looks_like_path.then_some(path_only)
 }
 
 fn strip_line_col_suffix(token: &str) -> (&str, Option<&str>) {
@@ -499,6 +510,7 @@ fn desktop_markdown_chunk(
     let ws_path_img = workspace_path.map(str::to_owned);
     let ws_path_img_decode = ws_path_img.clone();
     let ws_path_code = workspace_path.map(str::to_owned);
+    let cached_code_base: OnceCell<Option<CanonicalBase>> = OnceCell::new();
     let citations_help: Vec<CitationSource> = citations.to_vec();
     let hooks_link = hooks.clone();
 
@@ -534,7 +546,10 @@ fn desktop_markdown_chunk(
         .selectable(true)
         .scroll_wide(true)
         .code_link(t.accent, move |inline_code| {
-            resolve_workspace_code_link(inline_code, ws_path_code.as_deref())
+            let base = cached_code_base
+                .get_or_init(|| ws_path_code.as_deref().and_then(CanonicalBase::from_path))
+                .as_ref()?;
+            resolve_workspace_code_link_with_base(inline_code, base)
         })
         .link_style(move |dest| {
             if dest.starts_with(CITATION_SCHEME) {

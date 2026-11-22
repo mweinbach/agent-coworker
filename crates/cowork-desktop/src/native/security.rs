@@ -166,9 +166,38 @@ impl WorkspaceRootsController {
         if !cowork_config::is_inside(&chats_lexical, &lexical) || lexical == chats_lexical {
             bail!("One-off chat workspace path must be inside the one-off chats root");
         }
-        cowork_config::ensure_private_dir_sync(&lexical)
+        // Reject any existing symlink component (including dangling symlinks) beneath
+        // `one_off_chats_root` BEFORE creating directories or modifying permissions.
+        if let Ok(rel) = lexical.strip_prefix(&chats_lexical) {
+            let mut probe = canonical_chats.clone();
+            for component in rel.components() {
+                probe.push(component);
+                match fs::symlink_metadata(&probe) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        bail!("One-off chat workspace path must not traverse symlinks");
+                    }
+                    Ok(meta) if !meta.is_dir() => {
+                        bail!("One-off chat workspace path collides with a non-directory entry");
+                    }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(err) => {
+                        bail!("Unable to inspect one-off chat workspace path: {err}");
+                    }
+                }
+            }
+        }
+        // Verify the resolved path (canonicalized through the longest existing ancestor) stays
+        // strictly inside `canonical_chats` BEFORE invoking `ensure_private_dir_sync`.
+        let pre_canonical = canonicalize_sync(&lexical);
+        if !cowork_config::is_inside(&canonical_chats, &pre_canonical)
+            || pre_canonical == canonical_chats
+        {
+            bail!("One-off chat workspace resolves outside the one-off chats root");
+        }
+        cowork_config::ensure_private_dir_sync(&pre_canonical)
             .map_err(|err| anyhow::anyhow!("Unable to prepare one-off chat directory: {err}"))?;
-        let canonical = canonicalize_sync(&lexical);
+        let canonical = canonicalize_sync(&pre_canonical);
         if !cowork_config::is_inside(&canonical_chats, &canonical) || canonical == canonical_chats {
             bail!("One-off chat workspace resolves outside the one-off chats root");
         }
@@ -540,6 +569,58 @@ mod tests {
                 .approve_one_off_chat_workspace("ws-esc", &outside, &chats_root)
                 .is_err()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approve_one_off_chat_workspace_rejects_symlinks_before_writing_or_chmod() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let chats_root = temp.path().join("chats");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&chats_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let link = chats_root.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let dangling = chats_root.join("dangling");
+        std::os::unix::fs::symlink(outside.join("nonexistent-target"), &dangling).unwrap();
+
+        let mut controller = WorkspaceRootsController::new();
+
+        // Requesting a child beneath an escaping symlink must fail without creating outside/new.
+        let nested = link.join("new");
+        assert!(
+            controller
+                .approve_one_off_chat_workspace("ws-link-child", &nested, &chats_root)
+                .is_err()
+        );
+        assert!(
+            !outside.join("new").exists(),
+            "outside/new must never be created before canonical containment check"
+        );
+
+        // Requesting the escaping symlink itself must fail without chmod'ing outside to 0700.
+        assert!(
+            controller
+                .approve_one_off_chat_workspace("ws-link-self", &link, &chats_root)
+                .is_err()
+        );
+        let outside_mode = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            outside_mode, 0o755,
+            "outside target permissions must remain unchanged"
+        );
+
+        // Dangling symlinks inside chats_root must also be rejected without creating targets.
+        assert!(
+            controller
+                .approve_one_off_chat_workspace("ws-dangling", &dangling.join("sub"), &chats_root)
+                .is_err()
+        );
+        assert!(!outside.join("nonexistent-target").exists());
     }
 
     #[test]
